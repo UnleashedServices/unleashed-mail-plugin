@@ -166,16 +166,17 @@ let cancellable = observation.start(in: dbQueue, onError: { error in
 3. When using the callback-based API, store the cancellable and cancel it on deinit.
 4. For write-heavy paths, use `.removeDuplicates()` to avoid excessive UI updates.
 
-## DatabaseQueue vs DatabasePool
+## DatabaseQueue vs DatabasePool — UnleashedMail's split
 
-- **DatabaseQueue**: Use for single-writer scenarios (current default for UnleashedMail).
-- **DatabasePool**: Use if you need concurrent reads while writing. Requires WAL mode.
+**Production: `DatabasePool`.** UnleashedMail's prod database is a `DatabasePool` (`DatabaseService.useDatabasePool = true`). DatabasePool manages one writer SQLite connection plus a pool of readers; WAL mode is enabled. **All write operations are FIFO-serialized through a single writer dispatch queue** — only one thread writes at a time. A single `try await dbPool.write { db in ... }` block is fully atomic; read-modify-write inside that block is a safe primitive and should be the default tool when ordering matters.
 
-Stick with `DatabaseQueue` unless profiling shows read contention.
+**Tests: `DatabaseQueue`.** Tests use in-memory `DatabaseQueue` (`useDatabasePool = false`) because SQLCipher's reduced `kdf_iter` (set for test speed) is incompatible with the WAL reopen DatabasePool requires. This is a test-only constraint, not a design preference — do not extrapolate it to "we should switch prod to DatabaseQueue."
+
+**Choosing a primitive when ordering matters:** Prefer GRDB's atomic write block over a Swift-level serialization actor when the ordering invariant can be expressed as "later writes must observe a larger monotonic key than already-committed writes." Encode the invariant in a column, check it inside the `dbPool.write` block, and let GRDB's writer queue enforce the FIFO at the database boundary. Reach for a Swift-level serializer actor only when the invariant cannot be expressed in SQL or spans multiple uncoordinated tables.
 
 ## Testing
 
-Always test database code with an in-memory `DatabaseQueue`:
+Always test database code with an in-memory `DatabaseQueue`. This matches production's test-environment fallback because SQLCipher's reduced `kdf_iter` cannot reopen as WAL — not because `DatabaseQueue` is the production default.
 
 ```swift
 func makeTestDB() throws -> DatabaseQueue {
