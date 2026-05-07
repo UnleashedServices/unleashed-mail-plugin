@@ -63,7 +63,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
          │                    │                           │
          ▼                    ▼                           ▼
  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────────────┐
- │  PLANNING +    │  │  IMPLEMENTATION│  │      REVIEW ORCHESTRATOR             │
+│  PLANNING +    │  │ IMPLEMENTATION │  │      REVIEW ORCHESTRATOR             │
  │  PERSONAS      │  │  AGENTS        │  │      (swift-reviewer)                │
  │                │  │                │  │                                      │
  │ modern-        │  │ db-engineer    │  │  ┌─ security-reviewer                │
