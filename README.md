@@ -71,7 +71,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
  │ planner        │  │ ui-engineer    │  │  ├─ ux-perf-reviewer                 │
  │ smb-           │  │ ai-engineer    │  │  ├─ accessibility-auditor            │
  │ entrepreneur   │  │ tester         │  │  └─ provider parity audit            │
- │ enterprise-    │  │ code-simplifier│  │                                      │
+│ enterprise-    │  │code-simplifier │  │                                      │
  │ stakeholder    │  │                │  │                                      │
  └────────────────┘  └────────────────┘  └──────────────────────────────────────┘
          │                    │                           │
