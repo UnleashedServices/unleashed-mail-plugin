@@ -6,14 +6,51 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
+## What's New
+
+### v2.2.0
+
+- **New file: [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md)** — formalizes cross-agent boundaries. Source of truth when agents disagree on workflow contracts.
+- **20 agents (up from 15)** — adds `tester`, `code-simplifier`, `docs-engineer`, `ci-engineer`, `release-manager`.
+- **14 skills (up from 10)** — adds `error-handling`, `accessibility-patterns`, `swiftlint-config`, `spm-management`.
+- **Subagent dispatcher fix** — uses `Agent` (Claude Code's correct tool name), not `Task`. Fixed in 5 agent + 4 command/skill frontmatters.
+- **MCP portability** — Atlassian and Context7 whitelist all three install prefixes (standalone, VSCode-shipped, plugin-namespaced) so the plugin works regardless of MCP install.
+- **Project rule alignment** with the consumer project's `.claude/rules/*.md` system: `AccountScopedServiceProvider` for service resolution, `@State` (not computed property) for views, Curator design tokens, COREDEV-1578 Sendable matrix, image budget tiers, two-layer HTML pipeline (`HTMLSanitizer` + `HTMLRenderPipeline`), inline AI safety (`AISafetyPipeline` is PLANNED, not shipped), `BaseAIProvider` for Apple Intelligence, snake_case SQL columns, append-only migrations.
+- **Project knowledge corrected fleet-wide** — quoted scheme name (`"Unleashed Mail"`), `xcodebuild test` everywhere (this is `.xcodeproj`, not SwiftPM), version scheme `MAJOR.MINORRELEASE.YYMMBB` per `docs/VERSIONING.md`, branch convention `1.0X/feature-name`, version-bump automation acknowledged.
+- **Dangerous recommendations removed** — cert pinning for Google/Microsoft OAuth (they rotate certs), sandbox-disable workaround for Keychain prompts, append-only migrations no longer paired with rollback scripts.
+- **Cross-agent inconsistencies resolved** — GitHub Actions SHA-pinned everywhere, `jira-manager` ticket-before-code rule with manual fallback, diagnostic agents have explicit Ask-before checkpoints for entitlements/auth/dependencies/toolbar/keyboard.
+- **Hooks/scripts portability** — `test-runner.sh` removed from Bash hook (was running full test suite after every Bash command), null-delimited PII scan, no `xargs -a` (BSD-incompatible), no `<<<` here-strings (require writable `/tmp`), explicit refspec for `git fetch` so CI works on fresh clones.
+- **`jira-manager` knows the Atlassian site** — embedded `https://unleashedservices.atlassian.net/` and project key `COREDEV` so it stops using placeholder URLs.
+- **`smb-entrepreneur` and `enterprise-stakeholder`** — gain Grep+Glob so they can search project docs while stress-testing proposals.
+
+15 rounds of Codex review iteration before merge. See PR #2 for the audit detail.
+
 ## Installation
 
-```bash
-# From GitHub
-/plugin install https://github.com/npranson/unleashed-mail-plugin
+This repo is both the plugin **and** its own marketplace (the repo ships [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)).
 
-# Local development
-claude --plugin-dir /path/to/unleashed-mail-plugin
+```bash
+# 1. Add the marketplace (one-time)
+claude plugin marketplace add npranson/unleashed-mail-plugin
+
+# 2. Install the plugin
+claude plugin install unleashed-mail
+
+# 3. Restart Claude Code so the new agents/skills/commands load
+```
+
+To pull a newer version after upstream changes:
+
+```bash
+claude plugin marketplace update npranson-unleashed-mail-plugin
+claude plugin update unleashed-mail
+# Restart Claude Code
+```
+
+For local development against an unpushed clone:
+
+```bash
+claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no marketplace required
 ```
 
 ## Architecture
@@ -26,20 +63,26 @@ claude --plugin-dir /path/to/unleashed-mail-plugin
          │                    │                           │
          ▼                    ▼                           ▼
  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────────────────────┐
- │    PLANNER     │  │    CODING      │  │      REVIEW ORCHESTRATOR             │
- │                │  │    AGENTS      │  │      (swift-reviewer)                │
- │ modern-        │  │                │  │                                      │
- │ standards-     │  │ db-engineer    │  │  ┌─ security-reviewer                │
- │ planner        │  │ logic-engineer │  │  ├─ concurrency-reviewer             │
- │ (Context7 +    │  │ ui-engineer    │  │  ├─ ux-perf-reviewer                 │
- │  web search)   │  │                │  │  ├─ accessibility-auditor            │
- │                │  │                │  │  └─ provider parity audit            │
+ │  PLANNING +    │  │  IMPLEMENTATION│  │      REVIEW ORCHESTRATOR             │
+ │  PERSONAS      │  │  AGENTS        │  │      (swift-reviewer)                │
+ │                │  │                │  │                                      │
+ │ modern-        │  │ db-engineer    │  │  ┌─ security-reviewer                │
+ │ standards-     │  │ logic-engineer │  │  ├─ concurrency-reviewer             │
+ │ planner        │  │ ui-engineer    │  │  ├─ ux-perf-reviewer                 │
+ │ smb-           │  │ ai-engineer    │  │  ├─ accessibility-auditor            │
+ │ entrepreneur   │  │ tester         │  │  └─ provider parity audit            │
+ │ enterprise-    │  │ code-simplifier│  │                                      │
+ │ stakeholder    │  │                │  │                                      │
  └────────────────┘  └────────────────┘  └──────────────────────────────────────┘
          │                    │                           │
          ▼                    ▼                           ▼
- ┌──────────────────────────────────────────────────────────────────────────────┐
- │  jira-manager (ALWAYS parallel — ticket creation, updates, Epic linking)     │
- └──────────────────────────────────────────────────────────────────────────────┘
+ ┌────────────────────────────────┐  ┌──────────────────────────────────────────┐
+ │  PROJECT MANAGEMENT            │  │  DIAGNOSTIC (on-demand, Ask-before)      │
+ │  jira-manager (parallel)       │  │  xcode-build-fixer                       │
+ │  docs-engineer                 │  │  graph-api-debugger                      │
+ │  ci-engineer                   │  │                                          │
+ │  release-manager               │  │                                          │
+ └────────────────────────────────┘  └──────────────────────────────────────────┘
          │                    │                           │
          ▼                    ▼                           ▼
  ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -134,13 +177,17 @@ Agents are designed for **flexible parallel execution** in any combination. The 
 The plugin enforces these non-negotiable processes:
 
 1. **Planning document** — `docs/planning/FEATURE_NAME_PLAN.md` for every feature (no exceptions)
-2. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
-3. **Jira ticket hygiene** — Every change tracked, updated throughout, with Epic association
-4. **Provider parity** — Gmail ↔ Graph implementations stay in sync
-5. **Accessibility** — Every UI element gets a11y support (mandatory per CLAUDE.md)
-6. **Security invariants** — SQLCipher encryption, Keychain-only tokens, `account_email` filtering, PIIRedactor, HTML sanitization
-7. **SwiftLint compliance** — Fix violations when touching files (functions ≤50 lines, files ≤600 lines)
-8. **Dual implementations** — Changes applied to both variants (native + WebKit compose, simple + full email detail, docked + floating AI)
+2. **Plan review gate** — Every plan or debug session must be reviewed by **both** `/gemini-review` and `/codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge.
+3. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
+4. **Jira ticket hygiene** — Every change tracked at `https://unleashedservices.atlassian.net/` (project key `COREDEV`), updated throughout, with Epic association
+5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types
+6. **Accessibility** — Every UI element gets a11y support (mandatory per CLAUDE.md); use Curator design tokens
+7. **Security invariants** — SQLCipher encryption, Keychain-only tokens, `account_email` filtering, PIIRedactor, two-layer HTML sanitization (`HTMLSanitizer` + `HTMLRenderPipeline`)
+8. **SwiftLint compliance** — Fix violations when touching files (functions ≤50 lines, files ≤600 lines)
+9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, simple + full email detail, docked + floating AI)
+10. **Ask-before checkpoints** — Don't auto-edit Xcode project structure, entitlements, Info.plist, app lifecycle, menus, toolbar, keyboard shortcuts, auth/token handling, or framework/SwiftPM dependencies. Surface for user approval first.
+
+See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries that operationalize these processes.
 
 ## Environment Setup
 
