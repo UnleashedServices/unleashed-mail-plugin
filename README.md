@@ -42,7 +42,7 @@ claude plugin install unleashed-mail
 To pull a newer version after upstream changes:
 
 ```bash
-claude plugin marketplace update npranson-unleashed-mail-plugin
+claude plugin marketplace update npranson/unleashed-mail-plugin
 claude plugin update unleashed-mail
 # Restart Claude Code
 ```
