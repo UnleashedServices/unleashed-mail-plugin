@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.2.0
+# UnleashedMail — Claude Code Plugin v2.2.1
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.2.1
+
+- **Antigravity CLI migration** — Google retired Gemini CLI in May 2026; the dual-review gate now invokes Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Agent docs (`modern-standards-planner`, `release-manager`), `AGENT_CONTRACTS.md`, and `CLAUDE.md` updated. The `/gemini-review` slash command name is retained for backward compatibility — the underlying tool is Antigravity.
+- **Model name updated** — `gemini-3.1-pro` graduated out of preview. References to `gemini-3.1-pro-preview` removed.
 
 ### v2.2.0
 
@@ -87,10 +92,10 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
          ▼                    ▼                           ▼
  ┌──────────────────────────────────────────────────────────────────────────────┐
  │                     AUTO-TRIGGERING SKILLS (14)                              │
- │  swift-tdd · swiftui-mvvm · grdb-patterns · macos-debugging ·               │
- │  webview-composer · keychain-security · gmail-api · graph-api ·             │
- │  provider-parity · agent-orchestration · error-handling ·                   │
- │  accessibility-patterns · swiftlint-config · spm-management                 │
+ │  swift-tdd · swiftui-mvvm · grdb-patterns · macos-debugging  ·               │
+ │  webview-composer · keychain-security · gmail-api · graph-api  ·             │
+ │  provider-parity · agent-orchestration · error-handling  ·                   │
+ │  accessibility-patterns · swiftlint-config ·  spm-management                 │
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 

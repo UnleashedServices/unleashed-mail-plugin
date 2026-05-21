@@ -300,7 +300,7 @@ For critical bugs (per `AGENT_CONTRACTS.md §1`):
 1. Create a hotfix branch **off the matching version branch** (`1.0X.0000`) — not off a "last release tag"; the project doesn't tag releases this way
 2. Fix the bug with minimal changes
 3. Do **not** "bump patch version" — there is no patch segment in `MAJOR.MINORRELEASE.YYMMBB`. The build counter (`BB` byte) auto-bumps on the next Archive via `scripts/bump-build-number.sh`. If the calendar month has rolled, BB resets to `01` automatically. If a `MARKETING_VERSION` change is genuinely required (e.g., promoting Beta → RC), confirm with the user — that crosses Ask-before
-4. Run dual review (Gemini + Codex) on the hotfix before merging — same gate as features
+4. Run dual review (Antigravity + Codex) on the hotfix before merging — same gate as features
 5. Merge the hotfix to **both** the version branch AND `main` (per `AGENT_CONTRACTS.md §1`)
 
 ## Handoff

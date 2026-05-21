@@ -75,7 +75,7 @@ Use the project's `/create-feature-plan` skill to scaffold.
 
 Before any implementation begins:
 
-1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro-preview`)
+1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro`)
 2. Plan author runs `/codex-review` (uses `codex exec -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
 4. Iterate (typically 2–6 rounds) until both converge
