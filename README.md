@@ -8,11 +8,6 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
-### v2.2.1
-
-- **Antigravity CLI migration** — Google retired Gemini CLI in May 2026; the dual-review gate now invokes Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Agent docs (`modern-standards-planner`, `release-manager`), `AGENT_CONTRACTS.md`, and `CLAUDE.md` updated.
-- **Model name updated** — `gemini-3.1-pro` graduated out of preview. References to `gemini-3.1-pro-preview` removed.
-
 ### v2.2.2
 
 - **Review skills promoted into the plugin** — `gemini-review`, `codex-review`, and `create-feature-plan` were previously workspace-only skills referenced by the plugin's docs but not bundled. They now ship with the plugin under their namespaced slash commands: `/unleashed-mail:gemini-review`, `/unleashed-mail:codex-review`, `/unleashed-mail:create-feature-plan`.
@@ -20,6 +15,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 - **codex-review portability fix** — removed user-specific absolute path from the "working directory" note; references the workspace root abstractly so the skill is portable across installs.
 - **All plugin docs renamed slash-command refs** — `CLAUDE.md`, `README.md`, `AGENT_CONTRACTS.md`, `agents/modern-standards-planner.md` now reference the namespaced commands.
 - **Skill count: 17** (was 14) — adds `gemini-review`, `codex-review`, `create-feature-plan`.
+
+### v2.2.1
+
+- **Antigravity CLI migration** — Google retired Gemini CLI in May 2026; the dual-review gate now invokes Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Agent docs (`modern-standards-planner`, `release-manager`), `AGENT_CONTRACTS.md`, and `CLAUDE.md` updated.
+- **Model name updated** — `gemini-3.1-pro` graduated out of preview. References to `gemini-3.1-pro-preview` removed.
 
 ### v2.2.0
 
