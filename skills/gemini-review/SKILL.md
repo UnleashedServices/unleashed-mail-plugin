@@ -39,9 +39,19 @@ Example:
 
 Exit codes: agy's exit code propagates (0 = success; non-zero = failure).
 """
-import os, pty, select, re, shutil, signal, sys
+import os
+import pty
+import re
+import select
+import shutil
+import signal
+import sys
+import time
 
 ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
+SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
+POLL_INTERVAL_SEC = 0.1
+
 
 def main(workspace: str, prompt_file: str, out_path: str) -> int:
     agy = shutil.which("agy") or "/usr/local/bin/agy"
@@ -54,7 +64,9 @@ def main(workspace: str, prompt_file: str, out_path: str) -> int:
         # Child: become the agy process, inheriting only the PTY's slave end.
         os.close(master_fd)
         os.setsid()
-        os.dup2(slave_fd, 0); os.dup2(slave_fd, 1); os.dup2(slave_fd, 2)
+        os.dup2(slave_fd, 0)
+        os.dup2(slave_fd, 1)
+        os.dup2(slave_fd, 2)
         os.close(slave_fd)
         os.execv(args[0], args)
         # If execv fails the child must not return to caller's code:
@@ -63,9 +75,6 @@ def main(workspace: str, prompt_file: str, out_path: str) -> int:
     os.close(slave_fd)
     raw = bytearray()
     status = None  # raw wait-status; only assigned when we actually reap the child
-    SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
-    POLL_INTERVAL_SEC = 0.1
-    import time
     try:
         while True:
             try:

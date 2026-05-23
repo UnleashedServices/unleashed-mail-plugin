@@ -9,7 +9,7 @@ Required for any feature, refactor, or multi-step development — no exceptions.
 
 ## Location
 
-[`docs/planning/`](../../../docs/planning/) with filename `FEATURE_NAME_PLAN.md` (SCREAMING_SNAKE_CASE).
+[`docs/planning/`](../../docs/planning/) with filename `FEATURE_NAME_PLAN.md` (SCREAMING_SNAKE_CASE).
 
 ### Subfolders
 
@@ -18,7 +18,7 @@ Required for any feature, refactor, or multi-step development — no exceptions.
 - `backlog/` — plans queued but not active
 - `docs-archive/` — archived reference documentation
 
-The canonical template lives at [`docs/planning/TEMPLATE.md`](../../../docs/planning/TEMPLATE.md).
+The canonical template lives at [`docs/planning/TEMPLATE.md`](../../docs/planning/TEMPLATE.md).
 
 ## Template (copy into the new file)
 
