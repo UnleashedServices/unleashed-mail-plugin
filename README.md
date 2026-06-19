@@ -180,8 +180,8 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `accessibility-patterns` | Accessibility implementation patterns for macOS/SwiftUI |
 | `swiftlint-config` | SwiftLint rule configuration, violation remediation |
 | `spm-management` | Xcode-managed package dependencies (NOT root SwiftPM), version pinning, security audit |
-| `gemini-review` | Plan/debug review via Antigravity CLI (`agy`); includes Python PTY-wrapper recipe for non-TTY contexts |
-| `codex-review` | Read-only Codex CLI review for plans, debug sessions, and post-implementation audits |
+| `gemini-review` | Plan/debug review via Antigravity CLI (`agy`); routes through the shared [`scripts/pty-capture.py`](scripts/pty-capture.py) PTY wrapper for guaranteed non-TTY output capture |
+| `codex-review` | Read-only Codex CLI review for plans, debug, and post-implementation audits; routes through the same shared [`scripts/pty-capture.py`](scripts/pty-capture.py) wrapper so output is never lost when piped/backgrounded |
 | `create-feature-plan` | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template |
 
 ## Commands (3)
