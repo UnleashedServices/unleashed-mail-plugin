@@ -41,6 +41,26 @@ import time
 ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
 SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
 POLL_INTERVAL_SEC = 0.1
+SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
+
+
+def _signal_child(pid: int, sig: int) -> None:
+    """Deliver `sig` to the wrapped child, and best-effort to its process group.
+
+    `os.kill(pid, …)` is the reliable path — `pid` is our own child and a
+    session/group leader via `pty.fork()`. The process-group signal additionally
+    reaches helpers the child spawned, but macOS can spuriously raise `ESRCH`
+    from `killpg` even for a live group, so it is best-effort only and must never
+    prevent the direct kill of the leader.
+    """
+    try:
+        os.killpg(pid, sig)   # reach helpers (works on Linux; advisory on macOS)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        os.kill(pid, sig)     # reliable: terminate the leader itself
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def main(out_path: str, cmd: list[str]) -> int:
@@ -139,13 +159,10 @@ def main(out_path: str, cmd: list[str]) -> int:
             if done_pid == pid:
                 status = st
             else:
-                # Child still alive — terminate the whole PTY process group, not
-                # just the leader, so helpers it spawned don't outlive us.
-                # pty.fork() made the child a session/group leader (pgid == pid).
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
+                # Child still alive — ask it (and any helpers in its group) to
+                # terminate. Direct kill of the leader is reliable; the group
+                # signal is best-effort for descendants (see _signal_child).
+                _signal_child(pid, signal.SIGTERM)
                 grace_deadline = time.monotonic() + SIGTERM_GRACE_SEC
                 while time.monotonic() < grace_deadline:
                     try:
@@ -159,17 +176,44 @@ def main(out_path: str, cmd: list[str]) -> int:
                 if done_pid == pid:
                     status = st
                 else:
-                    # Grace period expired — force-kill the whole group
-                    # (uncatchable) and reap the leader.
-                    try:
-                        os.killpg(pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    try:
-                        _, st = os.waitpid(pid, 0)
-                        status = st
-                    except (ChildProcessError, ProcessLookupError):
-                        status = 0  # already reaped or process gone
+                    # Grace period expired — force-kill (uncatchable) and reap,
+                    # BOUNDED: a failed/denied signal must never block the wrapper
+                    # forever on a child that won't die. Closing the PTY below
+                    # hangs up the session as a final backstop.
+                    _signal_child(pid, signal.SIGKILL)
+                    kill_deadline = time.monotonic() + SIGKILL_REAP_SEC
+                    while time.monotonic() < kill_deadline:
+                        try:
+                            done_pid, st = os.waitpid(pid, os.WNOHANG)
+                        except (ChildProcessError, ProcessLookupError):
+                            done_pid, st = pid, 0
+                        if done_pid == pid:
+                            status = st
+                            break
+                        time.sleep(POLL_INTERVAL_SEC)
+                    if status is None:
+                        status = 0  # gave up reaping — do not hang
+        # Drain anything still buffered in the PTY before closing — bytes left
+        # unread when `select` was interrupted by a cancellation, plus any final
+        # diagnostics the child wrote while handling the signal. The normal-exit
+        # path drains in the read loop; this covers the SIGTERM/SIGHUP path so a
+        # cancellation doesn't lose the tail of the transcript. Bounded so
+        # cleanup can't hang.
+        drain_deadline = time.monotonic() + 0.5
+        while time.monotonic() < drain_deadline:
+            try:
+                r, _, _ = select.select([master_fd], [], [], 0.05)
+            except (InterruptedError, OSError):
+                break
+            if master_fd not in r:
+                break
+            try:
+                chunk = os.read(master_fd, 65536)
+                if not chunk:
+                    break
+                raw.extend(chunk)
+            except (InterruptedError, OSError):
+                break
         try:
             os.close(master_fd)
         except OSError:

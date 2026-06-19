@@ -25,7 +25,7 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 `agy -p` uses a TTY-only "text drip" typewriter-style streaming UI. When stdout is piped or redirected (`> file`, `| tee`, Claude's Bash tool environment), the drip has nowhere to render → **0 bytes captured**, even though agy itself completed the task successfully. The conversation file in `~/.gemini/antigravity-cli/conversations/*.pb` is encrypted/opaque and cannot be extracted from.
 
-**The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It opens a PTY (`pty.openpty()` + `os.fork`) so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
+**The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs the command under a controlling PTY via `pty.fork()` so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
 
 Interface: `pty-capture.py <out-path> -- <command> [args...]`. For agy:
 
@@ -39,7 +39,7 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
 - **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
 - **Capture preserved on `SIGTERM`/`SIGHUP`** — a wrapper-level SIGTERM or SIGHUP (CI timeout, process manager, terminal close / SSH disconnect) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** before exiting. Output is never lost; the child is never orphaned.
-- **Process-group teardown** — the bounded ladder signals the child's whole process group (`os.killpg`; the child is a session/group leader via `pty.fork()`), so helpers it spawned die with it instead of lingering after a CI/Monitor cancellation.
+- **Teardown reaches helpers, never hangs** — the leader is killed directly with `os.kill(pid, …)` (reliable: it's our own child); the child's process group is signalled best-effort for any helpers (`os.killpg`, tolerant of macOS's spurious `ESRCH`), and closing the PTY hangs up the session as a final backstop. The SIGKILL reap is **bounded** — a denied/failed signal can never block the wrapper forever (the prior unbounded `waitpid(pid, 0)` could deadlock against a `SIGTERM`-trapping child whose group `killpg` had ESRCH'd).
 - **Signal-safe cleanup** — `finally` resets SIGTERM/SIGHUP to `SIG_DFL` before reaping, so a second signal arriving mid-cleanup can't re-enter the handler and abort the reap or the write.
 - **`try / finally` block** — guarantees `master_fd` close + child reaping + output write even on `KeyboardInterrupt`, SIGTERM/SIGHUP, or exception.
 - **Capture failure is never silent** — if persisting the transcript fails (bad dir, permissions, full disk) the wrapper writes a diagnostic to its own stderr and forces a non-zero exit, rather than reporting the child's (often `0`) status with no output.
@@ -48,8 +48,8 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 - **Output dir auto-created** — `os.makedirs(exist_ok=True)` on the out-path parent, so a missing directory doesn't raise `FileNotFoundError`.
 - **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file.
 - **`InterruptedError` → `continue`** (not `break`) — signals during `select`/`read` (e.g., SIGWINCH from terminal resize, SIGCHLD when child exits) retry the loop instead of terminating a healthy child.
-- **Bounded termination ladder** — finally block requests SIGTERM (to the group), waits up to `SIGTERM_GRACE_SEC` (5 s, configurable) polling with `WNOHANG`, then escalates to SIGKILL + blocking reap. Wrapper cannot hang indefinitely if `agy` ignores SIGTERM.
-- **Drain on natural exit is bounded** — after the child exits, the post-exit drain loop runs for up to 0.5 s rather than potentially looping forever on a never-EOF'ing PTY master.
+- **Bounded termination ladder** — finally requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s) polling with `WNOHANG`, then escalates to SIGKILL with a further bounded (`SIGKILL_REAP_SEC`, 2 s) `WNOHANG` reap — never an unbounded blocking wait. Worst case for a CLI that fully ignores SIGTERM is ~grace + reap, then exit.
+- **Drain before close on every path** — the read loop drains on natural exit, and the cancellation (`SIGTERM`/`SIGHUP`) path drains the PTY again after reaping and before closing, so final diagnostics the CLI emits while handling the signal (and bytes buffered when `select` was interrupted) still reach `<out-path>`. Both drains are bounded (≤ 0.5 s).
 
 **Things that do NOT work from non-TTY context:**
 - `agy -p "..." > /tmp/out.txt` — 0 bytes
