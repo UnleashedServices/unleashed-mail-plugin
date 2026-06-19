@@ -60,8 +60,10 @@ def main(out_path: str, cmd: list[str]) -> int:
         # Child: become the wrapped command. os.execvp resolves it on $PATH.
         try:
             os.execvp(cmd[0], cmd)
-        except OSError:
-            pass
+        except OSError as e:
+            # stderr is wired to the PTY slave, so this diagnostic lands in the
+            # captured output. Raw os.write avoids post-fork stdio buffering.
+            os.write(2, f"pty-capture: failed to execute '{cmd[0]}': {e}\n".encode())
         # If exec fails the child must not return to caller's code:
         os._exit(127)
     # Parent.
@@ -155,12 +157,25 @@ def main(out_path: str, cmd: list[str]) -> int:
             os.close(master_fd)
         except OSError:
             pass
-    # status is now always assigned (0 if reap raced) — propagate exit code.
+        # Always persist what we captured — even when unwinding from a
+        # SIGTERM-driven SystemExit — so the output file exists and holds the
+        # partial transcript. Best-effort: a write failure must not mask the
+        # original exit/exception.
+        try:
+            out_dir = os.path.dirname(out_path)
+            if out_dir:
+                os.makedirs(out_dir, exist_ok=True)
+            # PTYs translate \n -> \r\n (ONLCR); normalize to Unix newlines.
+            cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
+            with open(out_path, 'wb') as f:
+                f.write(cleaned)
+        except OSError:
+            pass
+    # status is always assigned (0 if reap raced). Normalize signal deaths
+    # (negative waitstatus exit codes) to the Unix 128+signum convention.
     exit_status = os.waitstatus_to_exitcode(status) if status is not None else 1
-    # PTYs translate \n -> \r\n (ONLCR); normalize back to clean Unix newlines.
-    cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
-    with open(out_path, 'wb') as f:
-        f.write(cleaned)
+    if exit_status < 0:
+        exit_status = 128 - exit_status
     return exit_status
 
 

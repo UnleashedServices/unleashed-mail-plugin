@@ -35,13 +35,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
-Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (Codex rounds 1 + 2 verified):
+Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across three Codex + Gemini review rounds):
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
 - **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
-- **`SIGTERM` → `SystemExit`** — a wrapper-level SIGTERM (CI timeout, process manager) still runs `finally`, so the child is reaped, never orphaned.
-- **`try / finally` block** — guarantees `master_fd` close + child reaping even on `KeyboardInterrupt`, SIGTERM, or exception.
-- **`os.waitstatus_to_exitcode`** — the child's exit code propagates; failures aren't silently swallowed.
-- **`os._exit(127)` in child on `execvp` failure** — prevents the failed child from running parent cleanup code.
+- **Capture preserved on `SIGTERM`** — a wrapper-level SIGTERM (CI timeout, process manager) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** to the output file before exiting. Output is never lost; the child is never orphaned.
+- **`try / finally` block** — guarantees `master_fd` close + child reaping + output write even on `KeyboardInterrupt`, SIGTERM, or exception.
+- **Exit-code fidelity** — `os.waitstatus_to_exitcode` propagates the child's code; a signal death (negative status) is normalized to the Unix `128 + signum` convention rather than a masked 8-bit value.
+- **`execvp` failure is diagnosable** — the child writes `pty-capture: failed to execute …` to its PTY stderr (captured in the output file) and `os._exit(127)`, instead of leaving an empty file.
+- **Output dir auto-created** — `os.makedirs(exist_ok=True)` on the out-path parent, so a missing directory doesn't raise `FileNotFoundError`.
 - **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file.
 - **`InterruptedError` → `continue`** (not `break`) — signals during `select`/`read` (e.g., SIGWINCH from terminal resize, SIGCHLD when child exits) retry the loop instead of terminating a healthy child.
 - **Bounded termination ladder** — finally block requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s, configurable) polling with `WNOHANG`, then escalates to SIGKILL + blocking reap. Wrapper cannot hang indefinitely if `agy` ignores SIGTERM.
