@@ -262,5 +262,12 @@ if __name__ == "__main__":
     sep = argv.index("--")
     pre = argv[:sep]          # tokens before `--` (the out-path, optional)
     command = argv[sep + 1:]  # the command to run in the PTY
+    # At most one token may precede `--`. Rejecting extras avoids silently
+    # dropping a misplaced flag — or worse, treating it as the out-path.
+    if len(pre) > 1:
+        raise SystemExit(
+            "usage: pty-capture.py [out-path] -- <command> [args...]\n"
+            f"error: too many arguments before '--': {pre}"
+        )
     out = pre[0] if pre else "/tmp/pty-out.txt"
     sys.exit(main(out, command))
