@@ -22,13 +22,34 @@ Docs: https://developers.openai.com/codex/cli/reference
 - **Model:** `~/.codex/config.toml` sets `model = "gpt-5.5"` and `model_reasoning_effort = "xhigh"` (verified 2026-04-29). Both inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded).
 - **One-off override (rarely needed):** `codex exec -c model=gpt-5.5 -c model_reasoning_effort=xhigh -s read-only "PROMPT"` — no dedicated `--reasoning-effort` flag; use generic `-c key=value`.
 
+## ⚠️ Always capture output via the PTY wrapper (eliminates 0-byte / STDN failures)
+
+`codex exec` only reliably emits its result to a **real terminal**. When stdout is piped, redirected (`> file`, `| tee`), or the process is backgrounded — Claude Code's Bash tool, `run_in_background`, CI — codex can finish successfully yet write **0 bytes**. That is the recurring failure: the run "worked" but nothing was captured. The `-o PATH` flag mitigates it but is easy to forget and does not cover every backgrounded case.
+
+**Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
+
+```bash
+# Put the prompt in a workspace file, then run codex through the wrapper.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/codex-out.txt -- \
+    codex exec -s read-only "$(cat .codex-prompt.md)"
+# Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
+
+# Skill-based audit through the wrapper:
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/security.txt -- \
+    codex exec -s read-only "/security-reviewer [FILES]"
+```
+
+Interface: `pty-capture.py <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
+
 ## Monitor, not Bash background (user-confirmed preference)
 
 > **Source:** user auto-memory `feedback_codex_monitor_pattern.md` — this is a project-specific operational preference the user has confirmed, not a rule from the original `.claude/prompts/codex-review.md` (workspace-only artifact).
 
-For non-trivial `codex exec` runs, route the process through the `Monitor` tool. Reason on this project: `Bash run_in_background` has produced 0-byte outputs on long Codex runs, while `Monitor` has been reliable.
+For non-trivial `codex exec` runs, route the process through the `Monitor` tool. Reason on this project: `Bash run_in_background` has produced 0-byte outputs on long Codex runs, while `Monitor` has been reliable. **Combine the two:** run the PTY wrapper above *under* `Monitor` (`pty-capture.py /tmp/out.txt -- codex exec …`) so a long run is both reliably scheduled and reliably captured — the wrapper guarantees the bytes land in the file, `Monitor` guarantees you don't block on it.
 
 ## Invocation patterns
+
+> **Capture:** the forms below show the codex *command shape*. From any non-TTY context (Claude Code's Bash tool, CI, backgrounded runs) wrap each with `pty-capture.py <out> -- …` per the PTY-wrapper section above so output is never lost. The `-o PATH` forms are the in-terminal fallback.
 
 ```bash
 # Plan / debug review (non-interactive, read-only)

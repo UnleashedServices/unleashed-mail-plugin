@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.2.3
+# UnleashedMail — Claude Code Plugin v2.2.4
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,12 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.2.4
+
+- **One shared PTY wrapper for both review CLIs** — new committed script [`scripts/pty-capture.py`](scripts/pty-capture.py) runs any command inside a pseudo-terminal, ANSI-strips its output, writes it to `<out-path>`, and propagates the child's exit code. It generalizes the agy-only `pty.openpty()` recipe that previously lived inline in `gemini-review`. Interface: `pty-capture.py <out-path> -- <command> [args...]`.
+- **`codex-review` now routes through the wrapper** — `codex exec` emits **0 bytes** when piped, redirected, or backgrounded (the recurring "STDN"/nothing-captured failure). Running every invocation as `pty-capture.py <out> -- codex exec …` guarantees capture with **no `-o` flag to forget**; pairs with the existing `Monitor` guidance.
+- **`gemini-review` points at the same committed script** — its agy invocations now call `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`. The inline Python is retained as the reference implementation; the committed, command-agnostic script is the canonical artifact both skills invoke.
 
 ### v2.2.3
 
