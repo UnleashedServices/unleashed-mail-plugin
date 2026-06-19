@@ -72,11 +72,23 @@ def main(out_path: str, cmd: list[str]) -> int:
     # If the wrapper itself is asked to terminate — CI timeout, process manager,
     # or terminal hangup / SSH disconnect — turn the signal into a SystemExit so
     # the `finally` block still runs: it reaps the child and persists whatever we
-    # captured instead of orphaning agy/codex. signum is delivered as the handler
-    # argument, so the loop carries no closure-over-loop-variable hazard.
-    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
-        if _sig is not None:
-            signal.signal(_sig, lambda signum, frame: sys.exit(128 + signum))
+    # captured instead of orphaning agy/codex.
+    _term_signals = [s for s in (signal.SIGTERM, getattr(signal, "SIGHUP", None))
+                     if s is not None]
+
+    def _on_term_signal(signum, frame):
+        # Disarm both handlers immediately so a second signal arriving while we
+        # unwind into cleanup can't re-enter this handler and abort the reap or
+        # the output write — it takes the default action (terminate) instead.
+        for s in _term_signals:
+            try:
+                signal.signal(s, signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+        sys.exit(128 + signum)
+
+    for _sig in _term_signals:
+        signal.signal(_sig, _on_term_signal)
     # pty.fork() forks with the child attached to a NEW controlling terminal: it
     # performs setsid(), the TIOCSCTTY ioctl, and wires the slave to
     # stdin/stdout/stderr. That controlling TTY is what lets terminal-oriented
@@ -103,7 +115,7 @@ def main(out_path: str, cmd: list[str]) -> int:
         rows = int(os.environ.get("LINES") or 24)
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ,
                     struct.pack("HHHH", rows, cols, 0, 0))
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         pass
     raw = bytearray()
     status = None  # raw wait-status; only assigned when we actually reap the child
