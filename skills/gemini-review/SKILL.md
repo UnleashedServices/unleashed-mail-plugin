@@ -25,168 +25,32 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 `agy -p` uses a TTY-only "text drip" typewriter-style streaming UI. When stdout is piped or redirected (`> file`, `| tee`, Claude's Bash tool environment), the drip has nowhere to render → **0 bytes captured**, even though agy itself completed the task successfully. The conversation file in `~/.gemini/antigravity-cli/conversations/*.pb` is encrypted/opaque and cannot be extracted from.
 
-**The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): Python `pty.openpty()` + `os.fork`. Reference impl below — keep at `/tmp/agy-pty-wrap.py` or commit a copy under `scripts/`.
+**The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs the command under a controlling PTY via `pty.fork()` so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
 
-```python
-#!/usr/bin/env python3
-"""Run agy in a PTY so its text-drip print mode renders, then ANSI-strip output.
+Interface: `pty-capture.py <out-path> -- <command> [args...]`. For agy:
 
-Usage:
-    python3 agy-pty-wrap.py <workspace-abs-path> <prompt-file-relative-to-workspace> [out-path]
-
-Example:
-    python3 agy-pty-wrap.py /Users/me/project .agy-prompt.md /tmp/agy-out.txt
-
-Exit codes: agy's exit code propagates (0 = success; non-zero = failure).
-"""
-import os
-import pty
-import re
-import select
-import shutil
-import signal
-import sys
-import time
-
-ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
-SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
-POLL_INTERVAL_SEC = 0.1
-
-
-def main(workspace: str, prompt_file: str, out_path: str) -> int:
-    agy = shutil.which("agy") or "/usr/local/bin/agy"
-    if not os.path.isabs(workspace):
-        raise SystemExit(f"workspace must be absolute, got: {workspace}")
-    args = [agy, "--add-dir", workspace, "-p", f"Read and follow {prompt_file}"]
-    master_fd, slave_fd = pty.openpty()
-    pid = os.fork()
-    if pid == 0:
-        # Child: become the agy process, inheriting only the PTY's slave end.
-        os.close(master_fd)
-        os.setsid()
-        os.dup2(slave_fd, 0)
-        os.dup2(slave_fd, 1)
-        os.dup2(slave_fd, 2)
-        os.close(slave_fd)
-        os.execv(args[0], args)
-        # If execv fails the child must not return to caller's code:
-        os._exit(127)
-    # Parent.
-    os.close(slave_fd)
-    raw = bytearray()
-    status = None  # raw wait-status; only assigned when we actually reap the child
-    try:
-        while True:
-            try:
-                r, _, _ = select.select([master_fd], [], [], 0.5)
-            except InterruptedError:
-                # Signal during select (e.g., SIGWINCH, SIGCHLD when the PTY
-                # child of agy exits) — the call was interrupted, not failed.
-                # Retry without tearing down the (healthy) main child.
-                continue
-            except OSError:
-                # Real PTY error — break and let finally clean up.
-                break
-            if master_fd in r:
-                try:
-                    chunk = os.read(master_fd, 65536)
-                    if not chunk:
-                        break  # EOF on PTY; child likely exited — finally reaps
-                    raw.extend(chunk)
-                except InterruptedError:
-                    continue
-                except OSError:
-                    break
-            try:
-                done_pid, st = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                done_pid, st = pid, 0
-            if done_pid == pid:
-                status = st
-                # Drain remaining buffered output (one short sweep, bounded).
-                deadline = time.monotonic() + 0.5
-                while time.monotonic() < deadline:
-                    try:
-                        r, _, _ = select.select([master_fd], [], [], 0.05)
-                    except (InterruptedError, OSError):
-                        break
-                    if master_fd not in r:
-                        break
-                    try:
-                        chunk = os.read(master_fd, 65536)
-                        if not chunk:
-                            break
-                        raw.extend(chunk)
-                    except (InterruptedError, OSError):
-                        break
-                break
-    finally:
-        # Ensure the child is reaped on all paths with a bounded grace period
-        # so the wrapper cannot hang forever if agy ignores SIGTERM.
-        if status is None:
-            try:
-                done_pid, st = os.waitpid(pid, os.WNOHANG)
-            except (ChildProcessError, ProcessLookupError):
-                done_pid, st = pid, 0
-            if done_pid == pid:
-                status = st
-            else:
-                # Child still alive — request graceful termination.
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
-                grace_deadline = time.monotonic() + SIGTERM_GRACE_SEC
-                while time.monotonic() < grace_deadline:
-                    try:
-                        done_pid, st = os.waitpid(pid, os.WNOHANG)
-                    except (ChildProcessError, ProcessLookupError):
-                        done_pid, st = pid, 0
-                        break
-                    if done_pid == pid:
-                        break
-                    time.sleep(POLL_INTERVAL_SEC)
-                if done_pid == pid:
-                    status = st
-                else:
-                    # Grace period expired — force-kill (uncatchable) and reap.
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    try:
-                        _, st = os.waitpid(pid, 0)
-                        status = st
-                    except (ChildProcessError, ProcessLookupError):
-                        status = 0  # already reaped or process gone
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-    # status is now always assigned (0 if reap raced) — propagate exit code.
-    exit_status = os.waitstatus_to_exitcode(status) if status is not None else 1
-    cleaned = ANSI_RE.sub(b'', bytes(raw))
-    with open(out_path, 'wb') as f:
-        f.write(cleaned)
-    return exit_status
-
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        raise SystemExit("usage: agy-pty-wrap.py <workspace-abs> <prompt-file> [out-path]")
-    ws = sys.argv[1]
-    pf = sys.argv[2]
-    op = sys.argv[3] if len(sys.argv) > 3 else "/tmp/agy-out.txt"
-    sys.exit(main(ws, pf, op))
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+# Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
-Hardening contract (Codex rounds 1 + 2 verified):
-- **Explicit workspace + prompt args** — no `Path.cwd()` assumption; callable from any directory.
-- **`try / finally` block** — guarantees `master_fd` close + `agy` reaping even on `KeyboardInterrupt` or exception.
-- **`os.waitstatus_to_exitcode`** — agy's exit code propagates; failures aren't silently swallowed.
-- **`os._exit(127)` in child on `execv` failure** — prevents the failed child from running parent cleanup code.
+Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
+- **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
+- **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
+- **Sane PTY window size** — a fresh PTY in a non-TTY context reports `0x0`; the wrapper sets `TIOCSWINSZ` (inherits `COLUMNS`/`LINES`, else 80×24) so width-aware CLIs don't wrap to nothing or emit empty/garbled transcripts.
+- **Capture preserved on `SIGTERM`/`SIGHUP`** — a wrapper-level SIGTERM or SIGHUP (CI timeout, process manager, terminal close / SSH disconnect) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** before exiting. Output is never lost; the child is never orphaned.
+- **Teardown reaches helpers, never hangs** — the leader is killed directly with `os.kill(pid, …)` (reliable: it's our own child); the child's process group is signalled best-effort for any helpers (`os.killpg`, tolerant of macOS's spurious `ESRCH`), and closing the PTY hangs up the session as a final backstop. The SIGKILL reap is **bounded** — a denied/failed signal can never block the wrapper forever (the prior unbounded `waitpid(pid, 0)` could deadlock against a `SIGTERM`-trapping child whose group `killpg` had ESRCH'd).
+- **Signal-safe cleanup** — the SIGTERM/SIGHUP handler disarms itself (`SIG_DFL`) before raising, and `finally` also resets the handlers, so a second signal — arriving while unwinding into cleanup, or during normal-path cleanup — can't re-enter the handler and abort the reap or the write.
+- **`try / finally` block** — guarantees `master_fd` close + child reaping + output write even on `KeyboardInterrupt`, SIGTERM/SIGHUP, or exception.
+- **Capture failure is never silent** — if persisting the transcript fails (bad dir, permissions, full disk) the wrapper writes a diagnostic to its own stderr and forces a non-zero exit, rather than reporting the child's (often `0`) status with no output.
+- **Exit-code fidelity** — `os.waitstatus_to_exitcode` propagates the child's code; a signal death (negative status) is normalized to the Unix `128 + signum` convention rather than a masked 8-bit value.
+- **`execvp` failure is diagnosable** — the child writes `pty-capture: failed to execute …` to its PTY stderr (captured in the output file) and `os._exit(127)`, instead of leaving an empty file.
+- **Output dir auto-created** — `os.makedirs(exist_ok=True)` on the out-path parent, so a missing directory doesn't raise `FileNotFoundError`.
+- **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file.
 - **`InterruptedError` → `continue`** (not `break`) — signals during `select`/`read` (e.g., SIGWINCH from terminal resize, SIGCHLD when child exits) retry the loop instead of terminating a healthy child.
-- **Bounded termination ladder** — finally block requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s, configurable) polling with `WNOHANG`, then escalates to SIGKILL + blocking reap. Wrapper cannot hang indefinitely if `agy` ignores SIGTERM.
-- **Drain on natural exit is bounded** — after the child exits, the post-exit drain loop runs for up to 0.5 s rather than potentially looping forever on a never-EOF'ing PTY master.
+- **Bounded termination ladder** — finally requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s) polling with `WNOHANG`, then escalates to SIGKILL with a further bounded (`SIGKILL_REAP_SEC`, 2 s) `WNOHANG` reap — never an unbounded blocking wait. Worst case for a CLI that fully ignores SIGTERM is ~grace + reap, then exit.
+- **Drain before close on every path** — the read loop drains on natural exit, and the cancellation (`SIGTERM`/`SIGHUP`) path drains the PTY again after reaping and before closing, so final diagnostics the CLI emits while handling the signal (and bytes buffered when `select` was interrupted) still reach `<out-path>`. Both drains are bounded (≤ 0.5 s).
 
 **Things that do NOT work from non-TTY context:**
 - `agy -p "..." > /tmp/out.txt` — 0 bytes
@@ -212,9 +76,10 @@ Read $(pwd)/docs/planning/FEATURE_PLAN.md
 and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NITS / REQUEST_CHANGES.
 EOF
 
-# 2. Invoke agy via the PTY wrapper, passing the required arguments:
-#    <workspace-abs> <prompt-file-relative-to-workspace> [out-path]
-/usr/bin/python3 /tmp/agy-pty-wrap.py "$(pwd)" .agy-prompt.md /tmp/agy-out.txt
+# 2. Invoke agy through the shared PTY wrapper:
+#    pty-capture.py <out-path> -- <command> [args...]
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
 # Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
