@@ -96,7 +96,11 @@ Add comments to the ticket at each milestone:
    - Any follow-up work identified (and create sub-tasks if needed)
 
 2. **Transition ticket** to appropriate status:
-   - "In Review" if PR is created
+   - "In Review" if PR is created — also add the GitHub PR URL as a comment on the ticket:
+     ```
+     PR: https://github.com/npranson/unleashed-mail/pull/NNN
+     ```
+     Obtain the PR URL from `gh pr view --json url -q .url` or from context if already known.
    - "Done" if merged
 
 3. **Create follow-up tickets** for:

@@ -179,10 +179,10 @@ Categorize as **CRITICAL** (runs at startup) or **DEFERRABLE** (background after
 
 ## Repository Conventions
 
-- **Branch naming**: `1.0X/feature-name` off the matching version branch (`1.0X.0000`); hotfixes off the version branch and merged to BOTH the version branch AND `main`
+- **Branch naming**: `1.0X/COREDEV-XXXX-short-description` off the matching version branch (`1.0X.0000`); use the Epic ticket key when a branch covers multiple child tickets. Hotfixes off the version branch, merged to BOTH the version branch AND `main`
 - **Versioning**: `MAJOR.MINORRELEASE.YYMMBB` per `docs/VERSIONING.md`. `MARKETING_VERSION` (e.g., `1.02`) is manual; `CURRENT_PROJECT_VERSION` (e.g., `1.02.260501`) has its `BB` byte **auto-bumped** by `scripts/bump-build-number.sh` (Scheme Pre-Action on Archive) and auto-committed by `scripts/post-archive-commit-bump.sh` (Post-Action). Current: `1.02.260501` (Beta).
 - **Trunk**: `main` is the integration trunk
-- **Commit messages**: conventional commits (`feat:`, `fix:`, `chore:`, `refactor:`, `test:`, `docs:`); include Jira ticket where applicable: `feat(COREDEV-1234): ...`
+- **Commit messages**: `type(COREDEV-XXXX): description` — ticket is **mandatory**, not optional. Use the Epic ticket key when a commit spans multiple child tickets. Type prefixes: `feat`, `fix`, `chore`, `refactor`, `test`, `docs`
 - **Build**: `xcodebuild -scheme "Unleashed Mail"` — quote the scheme name (it contains a space)
 - **Source paths**: `Unleashed Mail/Sources/...` and `Unleashed MailTests/...` (also contain spaces; quote in shell)
 
