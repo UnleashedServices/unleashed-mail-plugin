@@ -240,7 +240,7 @@ Fix violations of the project's enforced rules.
 - Unused declarations and imports
 
 **Lone exception — do NOT auto-fix:**
-- Legacy `NSRegularExpression` ("old regex"). All regex is being migrated to Swift `Regex`/`RegexBuilder` under a dedicated, tracked effort (`.claude/rules/swift-regex-sendable.md`). Converting it piecemeal during an unrelated change risks Sendable-conformance regressions — do not rewrite it here. If a custom lint rule flags such a site, suppress only that line with `// swiftlint:disable:next <rule>  // <migration ticket>` (so the `swiftlint --strict` gate stays green) and let `jira-manager` track it under the migration epic. (Note: no such custom rule ships in `.swiftlint.yml` today — this exception is forward-looking until it does.)
+- Legacy `NSRegularExpression` ("old regex"). All regex is being migrated to Swift `Regex`/`RegexBuilder` under a dedicated, tracked effort (`.claude/rules/swift-regex-sendable.md`). Converting it piecemeal during an unrelated change risks Sendable-conformance regressions — do not rewrite it here. If the `no_legacy_nsregex` rule flags such a site, suppress only that line with `// swiftlint:disable:next no_legacy_nsregex - <migration ticket>` (use the ` - ` rationale delimiter — a trailing `//` comment is parsed as invalid rule ids and fails `--strict`) and let `jira-manager` track it under the migration epic. (The rule ships as a sample in the `swiftlint-config` skill but is **not yet enabled** in the app's `.swiftlint.yml` — rollout is tracked by the regex-migration epic.)
 
 ### Pass 5: Error Handling and Logging
 

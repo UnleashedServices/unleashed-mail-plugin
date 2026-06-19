@@ -140,12 +140,16 @@ custom_rules:
 > **Legacy regex backlog — introduce with a baseline.** `no_legacy_nsregex` fires on
 > every existing `NSRegularExpression` site (hundreds across the codebase). Because the
 > merge gate runs `swiftlint --strict` (warnings become errors), adding this rule alone
-> would fail the gate everywhere. Land it together with a SwiftLint baseline
-> (`swiftlint --write-baseline swiftlint-baseline.json`) and run the gate as
-> `swiftlint --strict --baseline swiftlint-baseline.json`, so only **new** occurrences
-> fail while the migration epic burns down the existing ones. Do **not** migrate regex
-> sites piecemeal — Swift `Regex` has Sendable-conformance caveats (see
-> `.claude/rules/swift-regex-sendable.md`); leave them for the dedicated migration.
+> would fail the gate everywhere. Land it together with a SwiftLint baseline (baselines are
+> native to SwiftLint ≥ 0.55): generate it once with
+> `swiftlint lint --write-baseline swiftlint-baseline.json`, then run the gate as
+> `swiftlint lint --strict --baseline swiftlint-baseline.json`, so only **new** occurrences
+> fail while the migration epic burns down the existing ones. To defer an individual site
+> instead, suppress that line with `// swiftlint:disable:next no_legacy_nsregex - <ticket>`
+> (use the ` - ` rationale delimiter — a trailing `//` comment is parsed as invalid rule ids
+> and fails `--strict`). Do **not** migrate regex sites piecemeal — Swift `Regex` has
+> Sendable-conformance caveats (see `.claude/rules/swift-regex-sendable.md`); leave them for
+> the dedicated migration.
 
 ## Installation and Usage
 
