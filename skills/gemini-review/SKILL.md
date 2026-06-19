@@ -35,17 +35,20 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
-Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across three Codex + Gemini review rounds):
+Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
 - **Controlling TTY via `pty.fork()`** — the child gets a real controlling terminal (`setsid()` + `TIOCSCTTY` handled by the stdlib), so CLIs that open `/dev/tty` (agy's text-drip, codex) render instead of failing with `ENXIO`. A plain `openpty()` + `dup2()` does not acquire one.
-- **Capture preserved on `SIGTERM`** — a wrapper-level SIGTERM (CI timeout, process manager) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** to the output file before exiting. Output is never lost; the child is never orphaned.
-- **`try / finally` block** — guarantees `master_fd` close + child reaping + output write even on `KeyboardInterrupt`, SIGTERM, or exception.
+- **Capture preserved on `SIGTERM`/`SIGHUP`** — a wrapper-level SIGTERM or SIGHUP (CI timeout, process manager, terminal close / SSH disconnect) is turned into a `SystemExit` whose unwinding still runs `finally`, which reaps the child **and writes the partial transcript** before exiting. Output is never lost; the child is never orphaned.
+- **Process-group teardown** — the bounded ladder signals the child's whole process group (`os.killpg`; the child is a session/group leader via `pty.fork()`), so helpers it spawned die with it instead of lingering after a CI/Monitor cancellation.
+- **Signal-safe cleanup** — `finally` resets SIGTERM/SIGHUP to `SIG_DFL` before reaping, so a second signal arriving mid-cleanup can't re-enter the handler and abort the reap or the write.
+- **`try / finally` block** — guarantees `master_fd` close + child reaping + output write even on `KeyboardInterrupt`, SIGTERM/SIGHUP, or exception.
+- **Capture failure is never silent** — if persisting the transcript fails (bad dir, permissions, full disk) the wrapper writes a diagnostic to its own stderr and forces a non-zero exit, rather than reporting the child's (often `0`) status with no output.
 - **Exit-code fidelity** — `os.waitstatus_to_exitcode` propagates the child's code; a signal death (negative status) is normalized to the Unix `128 + signum` convention rather than a masked 8-bit value.
 - **`execvp` failure is diagnosable** — the child writes `pty-capture: failed to execute …` to its PTY stderr (captured in the output file) and `os._exit(127)`, instead of leaving an empty file.
 - **Output dir auto-created** — `os.makedirs(exist_ok=True)` on the out-path parent, so a missing directory doesn't raise `FileNotFoundError`.
 - **Unix newlines** — the PTY's `\r\n` (ONLCR) is normalized to `\n` in the captured file.
 - **`InterruptedError` → `continue`** (not `break`) — signals during `select`/`read` (e.g., SIGWINCH from terminal resize, SIGCHLD when child exits) retry the loop instead of terminating a healthy child.
-- **Bounded termination ladder** — finally block requests SIGTERM, waits up to `SIGTERM_GRACE_SEC` (5 s, configurable) polling with `WNOHANG`, then escalates to SIGKILL + blocking reap. Wrapper cannot hang indefinitely if `agy` ignores SIGTERM.
+- **Bounded termination ladder** — finally block requests SIGTERM (to the group), waits up to `SIGTERM_GRACE_SEC` (5 s, configurable) polling with `WNOHANG`, then escalates to SIGKILL + blocking reap. Wrapper cannot hang indefinitely if `agy` ignores SIGTERM.
 - **Drain on natural exit is bounded** — after the child exits, the post-exit drain loop runs for up to 0.5 s rather than potentially looping forever on a never-EOF'ing PTY master.
 
 **Things that do NOT work from non-TTY context:**

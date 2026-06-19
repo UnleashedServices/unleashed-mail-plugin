@@ -46,10 +46,14 @@ POLL_INTERVAL_SEC = 0.1
 def main(out_path: str, cmd: list[str]) -> int:
     if not cmd:
         raise SystemExit("no command given after `--`")
-    # If the wrapper itself is asked to terminate (CI timeout, process manager),
-    # turn SIGTERM into a SystemExit so the `finally` block still runs and reaps
-    # the child instead of leaving agy/codex orphaned in the background.
-    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
+    # If the wrapper itself is asked to terminate — CI timeout, process manager,
+    # or terminal hangup / SSH disconnect — turn the signal into a SystemExit so
+    # the `finally` block still runs: it reaps the child and persists whatever we
+    # captured instead of orphaning agy/codex. signum is delivered as the handler
+    # argument, so the loop carries no closure-over-loop-variable hazard.
+    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if _sig is not None:
+            signal.signal(_sig, lambda signum, frame: sys.exit(128 + signum))
     # pty.fork() forks with the child attached to a NEW controlling terminal: it
     # performs setsid(), the TIOCSCTTY ioctl, and wires the slave to
     # stdin/stdout/stderr. That controlling TTY is what lets terminal-oriented
@@ -69,6 +73,7 @@ def main(out_path: str, cmd: list[str]) -> int:
     # Parent.
     raw = bytearray()
     status = None  # raw wait-status; only assigned when we actually reap the child
+    capture_error = None  # set if persisting the transcript fails (surfaced below)
     try:
         while True:
             try:
@@ -115,6 +120,15 @@ def main(out_path: str, cmd: list[str]) -> int:
                         break
                 break
     finally:
+        # Restore default disposition first so a SIGTERM/SIGHUP arriving DURING
+        # cleanup can't re-enter the handler and abort reaping or the output
+        # write midway. The bounded ladder below still cannot hang.
+        for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+            if _sig is not None:
+                try:
+                    signal.signal(_sig, signal.SIG_DFL)
+                except (ValueError, OSError):
+                    pass
         # Ensure the child is reaped on all paths with a bounded grace period
         # so the wrapper cannot hang forever if the child ignores SIGTERM.
         if status is None:
@@ -125,9 +139,11 @@ def main(out_path: str, cmd: list[str]) -> int:
             if done_pid == pid:
                 status = st
             else:
-                # Child still alive — request graceful termination.
+                # Child still alive — terminate the whole PTY process group, not
+                # just the leader, so helpers it spawned don't outlive us.
+                # pty.fork() made the child a session/group leader (pgid == pid).
                 try:
-                    os.kill(pid, signal.SIGTERM)
+                    os.killpg(pid, signal.SIGTERM)
                 except (ProcessLookupError, PermissionError):
                     pass
                 grace_deadline = time.monotonic() + SIGTERM_GRACE_SEC
@@ -143,9 +159,10 @@ def main(out_path: str, cmd: list[str]) -> int:
                 if done_pid == pid:
                     status = st
                 else:
-                    # Grace period expired — force-kill (uncatchable) and reap.
+                    # Grace period expired — force-kill the whole group
+                    # (uncatchable) and reap the leader.
                     try:
-                        os.kill(pid, signal.SIGKILL)
+                        os.killpg(pid, signal.SIGKILL)
                     except (ProcessLookupError, PermissionError):
                         pass
                     try:
@@ -159,8 +176,9 @@ def main(out_path: str, cmd: list[str]) -> int:
             pass
         # Always persist what we captured — even when unwinding from a
         # SIGTERM-driven SystemExit — so the output file exists and holds the
-        # partial transcript. Best-effort: a write failure must not mask the
-        # original exit/exception.
+        # partial transcript. A write failure must not mask the original
+        # exit/exception, but it must not pass silently either: capturing IS the
+        # job, so record it and surface a non-zero exit below.
         try:
             out_dir = os.path.dirname(out_path)
             if out_dir:
@@ -169,13 +187,24 @@ def main(out_path: str, cmd: list[str]) -> int:
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
             with open(out_path, 'wb') as f:
                 f.write(cleaned)
-        except OSError:
-            pass
+        except OSError as e:
+            capture_error = e
+            try:
+                sys.stderr.write(
+                    f"pty-capture: failed to write capture to '{out_path}': {e}\n"
+                )
+                sys.stderr.flush()
+            except OSError:
+                pass
     # status is always assigned (0 if reap raced). Normalize signal deaths
     # (negative waitstatus exit codes) to the Unix 128+signum convention.
     exit_status = os.waitstatus_to_exitcode(status) if status is not None else 1
     if exit_status < 0:
         exit_status = 128 - exit_status
+    # Capturing is the contract: if persisting the transcript failed, never
+    # report success — that would silently reintroduce the missing-output bug.
+    if capture_error is not None and exit_status == 0:
+        exit_status = 1
     return exit_status
 
 
