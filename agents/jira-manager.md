@@ -102,7 +102,7 @@ Add comments to the ticket at each milestone:
 3. **Create follow-up tickets** for:
    - Technical debt identified during implementation
    - Deferred parity stubs (`// TODO: PARITY`)
-   - SwiftLint violations discovered but out-of-scope to fix
+   - SwiftLint violations in files **not modified** by this change (pre-existing tech debt). Violations in any file the change *does* modify must be fixed as part of the change — they are never deferred to a ticket (see `CLAUDE.md` code-style rule + the `swiftlint --strict` merge gate). **One exception:** legacy `NSRegularExpression` ("old regex") is *not* migrated inline even in a modified file — if a custom lint rule flags it, the touching change suppresses that line with `// swiftlint:disable:next <rule> // <ticket>` and you track the site under the Swift `Regex`/`RegexBuilder` migration epic instead (no such custom rule ships today)
    - Ideas or improvements noted during development
 
 ## Planning Document Integration

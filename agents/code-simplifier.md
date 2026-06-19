@@ -239,6 +239,9 @@ Fix violations of the project's enforced rules.
 - `private_over_fileprivate`
 - Unused declarations and imports
 
+**Lone exception — do NOT auto-fix:**
+- Legacy `NSRegularExpression` ("old regex"). All regex is being migrated to Swift `Regex`/`RegexBuilder` under a dedicated, tracked effort (`.claude/rules/swift-regex-sendable.md`). Converting it piecemeal during an unrelated change risks Sendable-conformance regressions — do not rewrite it here. If a custom lint rule flags such a site, suppress only that line with `// swiftlint:disable:next <rule>  // <migration ticket>` (so the `swiftlint --strict` gate stays green) and let `jira-manager` track it under the migration epic. (Note: no such custom rule ships in `.swiftlint.yml` today — this exception is forward-looking until it does.)
+
 ### Pass 5: Error Handling and Logging
 
 Ensure robust, consistent error handling.

@@ -157,7 +157,7 @@ Categorize as **CRITICAL** (runs at startup) or **DEFERRABLE** (background after
 - Files >400 lines (warning), >600 lines (error) — split into `+Feature.swift` extensions
 - Types ≤300 lines (warning), ≤500 lines (error)
 - Logging: `Logger.debug("msg", category: .network)` — categories: `.network`, `.auth`, `.ui`, `.database`, `.storeKit`, `.ai`, `.general`
-- **When touching a file with SwiftLint violations, fix them as part of the change**
+- **When touching a file with SwiftLint violations, fix them as part of the change** — one exception: do **not** migrate legacy `NSRegularExpression` ("old regex") inline. All regex is moving to Swift `Regex`/`RegexBuilder` as a dedicated, tracked effort (see `.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a custom lint rule flags such a site in a file you touch, suppress only that line with `// swiftlint:disable:next <rule>  // <migration ticket>` (keeps the `swiftlint --strict` gate green) rather than converting it. (No such custom rule ships today — see the regex-migration epic.)
 
 ## AI Architecture Standards
 

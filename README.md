@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.2.2
+# UnleashedMail — Claude Code Plugin v2.2.3
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -8,10 +8,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
-### v2.2.1
+### v2.2.3
 
-- **Antigravity CLI migration** — Google retired Gemini CLI in May 2026; the dual-review gate now invokes Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Agent docs (`modern-standards-planner`, `release-manager`), `AGENT_CONTRACTS.md`, and `CLAUDE.md` updated.
-- **Model name updated** — `gemini-3.1-pro` graduated out of preview. References to `gemini-3.1-pro-preview` removed.
+- **SwiftLint "fix-when-touched" rule disambiguated** — the rule "fix violations in files you modify" (`CLAUDE.md`, `code-simplifier` Pass 4) read as a conflict with `jira-manager`'s "ticket out-of-scope violations" guidance. "Out-of-scope" now explicitly means **files the change does not modify**; any violation in a modified file is fixed as part of the change and never deferred to a ticket — consistent with the `swiftlint --strict` merge gate.
+- **Legacy-regex migration exception** — the one carve-out from fix-when-touched: legacy `NSRegularExpression` ("old regex") is **not** migrated inline. It's owned by the dedicated Swift `Regex`/`RegexBuilder` migration (`.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If a lint rule flags a site in a touched file, it's suppressed with `// swiftlint:disable:next … // <ticket>` (keeps `--strict` green) and tracked under the migration epic. Documented in `CLAUDE.md`, `code-simplifier`, and `jira-manager`.
+- **`swiftlint-config` skill gains `no_legacy_nsregex`** — a sample custom rule flagging `NSRegularExpression`, with guidance to introduce it alongside a SwiftLint **baseline** (`swiftlint --strict --baseline swiftlint-baseline.json`) so the existing backlog (hundreds of sites) doesn't break the strict gate while the migration burns it down.
 
 ### v2.2.2
 
@@ -20,6 +21,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 - **codex-review portability fix** — removed user-specific absolute path from the "working directory" note; references the workspace root abstractly so the skill is portable across installs.
 - **All plugin docs renamed slash-command refs** — `CLAUDE.md`, `README.md`, `AGENT_CONTRACTS.md`, `agents/modern-standards-planner.md` now reference the namespaced commands.
 - **Skill count: 17** (was 14) — adds `gemini-review`, `codex-review`, `create-feature-plan`.
+
+### v2.2.1
+
+- **Antigravity CLI migration** — Google retired Gemini CLI in May 2026; the dual-review gate now invokes Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Agent docs (`modern-standards-planner`, `release-manager`), `AGENT_CONTRACTS.md`, and `CLAUDE.md` updated.
+- **Model name updated** — `gemini-3.1-pro` graduated out of preview. References to `gemini-3.1-pro-preview` removed.
 
 ### v2.2.0
 
@@ -200,7 +206,7 @@ The plugin enforces these non-negotiable processes:
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types
 6. **Accessibility** — Every UI element gets a11y support (mandatory per CLAUDE.md); use Curator design tokens
 7. **Security invariants** — SQLCipher encryption, Keychain-only tokens, `account_email` filtering, PIIRedactor, two-layer HTML sanitization (`HTMLSanitizer` + `HTMLRenderPipeline`)
-8. **SwiftLint compliance** — Fix violations when touching files (functions ≤50 lines, files ≤600 lines)
+8. **SwiftLint compliance** — Fix violations in any file you modify (functions ≤50 lines, files ≤600 lines); violations in *unmodified* files are ticketed, not fixed in-flight. Lone exception: legacy `NSRegularExpression` is left for the Swift `Regex`/`RegexBuilder` migration (suppressed + ticketed, not converted inline)
 9. **Dual implementations** — Changes applied to both variants (native + WebKit compose, simple + full email detail, docked + floating AI)
 10. **Ask-before checkpoints** — Don't auto-edit Xcode project structure, entitlements, Info.plist, app lifecycle, menus, toolbar, keyboard shortcuts, auth/token handling, or framework/SwiftPM dependencies. Surface for user approval first.
 
@@ -223,7 +229,7 @@ The plugin includes PostToolUse hooks that run automatically:
 | Hook | Trigger | Behavior |
 |---|---|---|
 | `swift-lint-check.sh` | After Write/Edit | Syntax check, SwiftLint, `try!`/`as!` detection, token logging — **blocks on critical violations** |
-| `swift-build-verify.sh` | After Bash | Detects build/test commands and reminds to verify results |
+| `swift-build-verify.sh` | After Write/Edit & Bash | Detects build/test commands and reminds to verify results |
 
 ## Baked-In Knowledge
 
