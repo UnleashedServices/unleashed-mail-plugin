@@ -69,6 +69,11 @@ class TestParseFinding(unittest.TestCase):
         self.assertEqual(parse_finding(good(file="Sources\\A.swift")).file, "Sources/A.swift")
         self.assertEqual(parse_finding(good(file=".\\A.swift")).file, "A.swift")
 
+    def test_non_decimal_digit_string_rejected(self):
+        # '²'.isdigit() is True but int('²') raises — isdecimal rejects it cleanly
+        with self.assertRaises(SchemaError):
+            parse_finding(good(line="²", lineEnd="1"))
+
     def test_float_line_rejected(self):
         # 1.9 must NOT silently truncate to line 1
         with self.assertRaises(SchemaError):
