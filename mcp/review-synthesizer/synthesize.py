@@ -224,8 +224,9 @@ def synthesize(
     quarantined: Optional[list[tuple[dict, str]]] = None,
 ) -> Review:
     changed_files = {canonical_path(c) for c in changed_files}  # canonical on both sides
-    gating = [f for f in findings if in_gating_scope(f, changed_files)]
-    pre = [f for f in findings if not in_gating_scope(f, changed_files)]
+    gating, pre = [], []
+    for f in findings:  # single pass — in_gating_scope was computed twice per finding
+        (gating if in_gating_scope(f, changed_files) else pre).append(f)
     clusters = cluster_findings(gating, same_defect=same_defect)
     quarantined = quarantined or []
     verdict = decide_verdict(clusters, verify)

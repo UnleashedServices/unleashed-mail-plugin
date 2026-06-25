@@ -65,6 +65,10 @@ class TestParseFinding(unittest.TestCase):
         self.assertEqual(parse_finding(good(file="./Sources/A.swift")).file, "Sources/A.swift")
         self.assertEqual(parse_finding(good(file="././A.swift")).file, "A.swift")
 
+    def test_backslashes_normalized_to_forward_slashes(self):
+        self.assertEqual(parse_finding(good(file="Sources\\A.swift")).file, "Sources/A.swift")
+        self.assertEqual(parse_finding(good(file=".\\A.swift")).file, "A.swift")
+
     def test_float_line_rejected(self):
         # 1.9 must NOT silently truncate to line 1
         with self.assertRaises(SchemaError):

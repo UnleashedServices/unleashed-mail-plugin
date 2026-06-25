@@ -149,7 +149,7 @@ def canonical_path(p: str) -> str:
     --name-only` output: trim whitespace and strip leading `./` (reviewers copying
     from `find .` / `grep … .` produce `./Unleashed Mail/…`). Used on BOTH the
     finding's `file` and the `changed_files` set, so the scope compare can't miss."""
-    p = p.strip()
+    p = p.strip().replace("\\", "/")  # normalize Windows separators to forward slashes
     while p.startswith("./"):
         p = p[2:]
     return p
