@@ -61,17 +61,21 @@ _Nothing yet — add new changes here._
   bundled stdlib MCP server.
 
 ### Fixed (PR review — Codex / Gemini / Copilot)
-- **`synthesize_review` validates its inputs and fails closed.** A non-array `findings`
-  or a non-`list[str]` `changed_files` is rejected with JSON-RPC `-32602` instead of
-  being coerced — previously a string `changed_files` `set()`-coerced to characters,
-  mis-scoping every finding to pre-existing and letting a real blocker reach a
-  provisional APPROVE.
+- **`synthesize_review` validates its inputs and fails closed.** `findings` and
+  `changed_files` are required and type-checked; a missing, non-array `findings` or a
+  missing/non-`list[str]` `changed_files` is rejected with JSON-RPC `-32602` instead of
+  being coerced or defaulted — previously a string (or omitted) `changed_files`
+  collapsed the scope set, mis-scoping every finding to pre-existing and letting a real
+  blocker reach a provisional APPROVE.
+- **Malformed JSON-RPC `params` (e.g. an array) returns `-32602`**, not a `-32603` crash.
 - **Protocol-version negotiation** — `initialize` returns a version the server actually
   supports instead of echoing an arbitrary client-supplied one.
 - **`id: null` is a request, not a notification** — it now receives a reply (JSON-RPC).
 - **The verify gate gates on ANY blocker in a cluster**, not just the ownership-routed
   lead (consistent with `blockersToVerify`).
-- **Deterministic file-descriptor close** (`with open(..., encoding="utf-8")`) in the CLI.
+- **The standalone CLI `_load` quarantines** unreadable / malformed / wrong-shape
+  findings files instead of crashing; deterministic file-descriptor close
+  (`with open(..., encoding="utf-8")`).
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 

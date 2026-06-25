@@ -292,9 +292,16 @@ def render_markdown(review: Review) -> str:
 def _load(paths: list[str]) -> tuple[list[Finding], list[tuple[dict, str]]]:
     findings, bad = [], []
     for path in paths:
-        with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
-        items = raw["findings"] if isinstance(raw, dict) else raw
+        try:
+            with open(path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:  # quarantine the file, don't crash
+            bad.append(({"_file": path}, f"could not read/parse file: {exc}"))
+            continue
+        items = raw.get("findings") if isinstance(raw, dict) else raw
+        if not isinstance(items, list):  # not a findings array nor {findings: [...]}
+            bad.append(({"_file": path}, "expected a JSON array or an object with a 'findings' array"))
+            continue
         for d in items:
             try:
                 findings.append(parse_finding(d))

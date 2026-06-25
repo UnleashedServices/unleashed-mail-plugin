@@ -92,11 +92,16 @@ def _blockers_to_verify(review) -> list[dict]:
 
 
 def _call_synthesize(arguments: dict) -> dict:
-    findings_in = arguments.get("findings", [])
+    # Both are required by inputSchema; a MISSING one is a malformed call, not a
+    # reason to silently APPROVE — a missing changed_files defaults to [] and would
+    # mis-scope every finding to pre-existing, hiding real blockers behind an APPROVE.
+    if "findings" not in arguments or "changed_files" not in arguments:
+        raise _RpcError(-32602, "findings and changed_files are required")
+    findings_in = arguments["findings"]
     if not isinstance(findings_in, list):
         # A lone finding object would iterate as dict KEYS and quarantine silently.
         raise _RpcError(-32602, "findings must be an array")
-    changed_files = arguments.get("changed_files", [])
+    changed_files = arguments["changed_files"]
     if not isinstance(changed_files, list) or not all(isinstance(p, str) for p in changed_files):
         # Fail CLOSED: a string/None would set()-coerce to characters/empty and
         # silently push every real finding to pre-existing -> a provisional APPROVE.
@@ -134,6 +139,10 @@ class _RpcError(Exception):
 
 def _handle(method: str, params: dict):
     """Return a result dict, or None for notifications (no reply)."""
+    if not isinstance(params, dict):
+        # JSON-RPC permits array params, but every method here is by-name; reject a
+        # non-object `params` with Invalid Params instead of crashing on .get() (-32603).
+        raise _RpcError(-32602, "params must be an object")
     if method == "initialize":
         # Echo the client's version only if we actually support it; otherwise reply
         # with the version we DO speak (per MCP spec) instead of pretending to match.

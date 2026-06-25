@@ -66,6 +66,12 @@ class TestProtocol(unittest.TestCase):
                        "params": {"name": "nope", "arguments": {}}}])
         self.assertEqual(out[0]["error"]["code"], -32602)
 
+    def test_array_params_rejected_as_invalid_params(self):
+        # JSON-RPC allows array params; this by-name server must reject them with
+        # -32602, not crash on params.get() into a -32603 internal error.
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1, 2, 3]}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
+
     def test_non_object_message_does_not_crash(self):
         out, proc = rpc(["[]", {"jsonrpc": "2.0", "id": 1, "method": "ping"}])
         self.assertEqual(out[0]["result"], {})            # server still alive after bare []
@@ -145,6 +151,19 @@ class TestSynthesizeTool(unittest.TestCase):
                        "params": {"name": "synthesize_review",
                                   "arguments": {"findings": good(),
                                                 "changed_files": ["A.swift"]}}}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
+
+    def test_missing_changed_files_is_rejected(self):
+        # required by schema; defaulting to [] would mis-scope a real blocker to APPROVE
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "synthesize_review",
+                                  "arguments": {"findings": [good()]}}}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
+
+    def test_missing_findings_is_rejected(self):
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "synthesize_review",
+                                  "arguments": {"changed_files": ["A.swift"]}}}])
         self.assertEqual(out[0]["error"]["code"], -32602)
 
 

@@ -1,6 +1,8 @@
 """Deterministic synthesis: dedup, ownership routing, scope, verdict, render."""
+import json
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -142,6 +144,40 @@ class TestRender(unittest.TestCase):
         report = S.render_report(r)
         self.assertIn("Pre-existing", report)
         self.assertIn("Quarantined", report)
+
+
+_VALID_RAW = dict(severity="warning", confidence="high", sourceAgent="x", category="logic",
+                  file="A.swift", line=10, lineEnd=12, finding="f", evidence="e", fix="x")
+
+
+class TestCliLoad(unittest.TestCase):
+    """`_load` (standalone CLI path) must quarantine bad files, never crash."""
+
+    def _write(self, d, name, content):
+        path = os.path.join(d, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return path
+
+    def test_malformed_json_file_is_quarantined_not_raised(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = self._write(d, "bad.json", "{ not valid json ")
+            good = self._write(d, "good.json", json.dumps([_VALID_RAW]))
+            findings, quarantined = S._load([bad, good])   # must not raise
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(len(quarantined), 1)
+
+    def test_wrong_top_level_shape_is_quarantined(self):
+        with tempfile.TemporaryDirectory() as d:
+            wrong = self._write(d, "w.json", json.dumps({"notFindings": 1}))
+            findings, quarantined = S._load([wrong])
+            self.assertEqual((len(findings), len(quarantined)), (0, 1))
+
+    def test_object_with_findings_array_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            obj = self._write(d, "o.json", json.dumps({"findings": [_VALID_RAW]}))
+            findings, quarantined = S._load([obj])
+            self.assertEqual((len(findings), len(quarantined)), (1, 0))
 
 
 if __name__ == "__main__":
