@@ -33,9 +33,18 @@ from schema import Finding, SEVERITY_EMOJI, SEVERITY_RANK, parse_finding
 # scope filter
 # --------------------------------------------------------------------------- #
 
+# Orchestrator-owned GLOBAL gates: build/lint/test, provider parity, and test
+# coverage aren't tied to a changed file (their `file` is a scheme/target/label),
+# so they must gate regardless of the diff — otherwise a red build emitted as a
+# `verification` blocker is scoped out to pre-existing and the verdict is APPROVE.
+_ALWAYS_GATING_FAMILIES = {"verification", "parity", "test-coverage"}
+
 def in_gating_scope(f: Finding, changed_files: set[str]) -> bool:
     # structural-pipeline findings gate even outside the diff (the reviewer traced
-    # them); everything else must be in the changeset.
+    # them); the orchestrator's global gates always gate; everything else must be
+    # in the changeset.
+    if f.family in _ALWAYS_GATING_FAMILIES:
+        return True
     return f.scope == "structural-pipeline" or f.file in changed_files
 
 

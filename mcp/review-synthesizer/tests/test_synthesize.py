@@ -105,6 +105,23 @@ class TestScope(unittest.TestCase):
         r = S.synthesize([f(file="Z.swift")], self.CHANGED)
         self.assertEqual((len(r.clusters), len(r.pre_existing)), (0, 1))
 
+    def test_verification_blocker_gates_even_outside_diff(self):
+        # a red build is emitted with file = scheme/target, not a changed path —
+        # it must gate, not be scoped out to pre-existing.
+        r = S.synthesize([f(category="verification", sourceAgent="swift-reviewer",
+                            severity="blocker", file="Unleashed Mail (scheme)",
+                            finding="xcodebuild build FAILED")],
+                         self.CHANGED, verify=lambda x: True)
+        self.assertEqual((len(r.clusters), len(r.pre_existing)), (1, 0))
+        self.assertEqual(r.verdict.decision, "REQUEST_CHANGES")
+
+    def test_parity_and_coverage_gate_outside_diff(self):
+        for cat in ("parity", "test-coverage"):
+            r = S.synthesize([f(category=cat, severity="blocker", file="(global)",
+                               finding="gate")], self.CHANGED, verify=lambda x: True)
+            self.assertEqual(len(r.pre_existing), 0, cat)
+            self.assertEqual(r.verdict.decision, "REQUEST_CHANGES", cat)
+
 
 class TestVerdict(unittest.TestCase):
     def _mixed(self):

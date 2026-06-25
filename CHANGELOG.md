@@ -87,6 +87,11 @@ _Nothing yet — add new changes here._
 - **Corrected the plugin MCP tool name** to `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`
   — Claude Code preserves hyphens in plugin/server names (only chars outside `[A-Za-z0-9_-]`
   become `_`), so the earlier all-underscore form would not have matched the real tool.
+- **Orchestrator global gates always gate (P1).** `verification` (build/lint/test),
+  `parity`, and `test-coverage` findings aren't tied to a changed file — their `file`
+  is a scheme/target/label — so they now gate regardless of the diff. Previously a red
+  build emitted as a `verification` blocker was scoped out to pre-existing and the
+  provisional verdict came back `APPROVE` with no `blockersToVerify`.
 - **MCP robustness (per spec):** the `findings` input schema is permissive (`items:
   object`) so a malformed row reaches the server and is quarantined instead of being
   rejected client-side (which would defeat quarantine); the tool result mirrors the
