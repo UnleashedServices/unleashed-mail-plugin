@@ -135,14 +135,16 @@ class TestSynthesizeTool(unittest.TestCase):
         res = self._call([good(sourceAgent=123)], ["A.swift"])
         self.assertFalse(res["isError"])                  # NOT a -32603 protocol error
         self.assertEqual(res["structuredContent"]["quarantined"], 1)
+        # fail closed: a quarantined row could hide a blocker -> never a clean APPROVE
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "NEEDS_DISCUSSION")
 
     def test_non_object_finding_rows_are_quarantined(self):
         # null / string / nested-array rows must reach the server and quarantine, not crash
         res = self._call([good(), None, "oops", [1, 2]], ["A.swift"])
         self.assertFalse(res["isError"])
-        self.assertEqual(res["structuredContent"]["quarantined"], 3)
-        # fail closed: a quarantined row could hide a blocker -> never a clean APPROVE
-        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "NEEDS_DISCUSSION")
+        self.assertEqual(res["structuredContent"]["quarantined"], 3)   # the 3 non-objects
+        # good() is a real in-scope blocker, so the verdict still gates
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "REQUEST_CHANGES")
 
     def test_out_of_scope_finding_is_pre_existing(self):
         res = self._call([good(file="Z.swift")], ["A.swift"])
