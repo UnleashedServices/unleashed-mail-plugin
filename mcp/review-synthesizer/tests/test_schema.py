@@ -56,6 +56,10 @@ class TestParseFinding(unittest.TestCase):
         f = parse_finding(good(line=" 42 ", lineEnd="42\n"))
         self.assertEqual((f.line, f.lineEnd), (42, 42))
 
+    def test_file_path_is_stored_trimmed(self):
+        # "A.swift " must equal "A.swift" in $CHANGED, or a changeset blocker mis-scopes
+        self.assertEqual(parse_finding(good(file="  A.swift  ")).file, "A.swift")
+
     def test_float_line_rejected(self):
         # 1.9 must NOT silently truncate to line 1
         with self.assertRaises(SchemaError):

@@ -166,7 +166,8 @@ def parse_finding(d: dict) -> Finding:
         raise SchemaError(f"bad confidence: {d['confidence']!r}")
     if d["category"] not in CATEGORY_FAMILY:
         raise SchemaError(f"unknown category: {d['category']!r}")
-    if not d["file"].strip():
+    file = d["file"].strip()  # store trimmed — else "A.swift " != "A.swift" in $CHANGED
+    if not file:
         raise SchemaError("file must be non-empty")
     scope = d.get("scope", "changeset")
     if not isinstance(scope, str) or scope not in SCOPES:
@@ -190,6 +191,6 @@ def parse_finding(d: dict) -> Finding:
     return Finding(
         severity=d["severity"], confidence=d["confidence"],
         sourceAgent=d["sourceAgent"], category=d["category"],
-        file=d["file"], line=line, lineEnd=line_end,
+        file=file, line=line, lineEnd=line_end,
         finding=d["finding"], evidence=d["evidence"], fix=d["fix"], scope=scope,
     )
