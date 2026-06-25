@@ -115,6 +115,19 @@ class TestVerdict(unittest.TestCase):
     def test_clean_approve(self):
         self.assertEqual(S.synthesize([], set()).verdict.decision, "APPROVE")
 
+    def test_cluster_gates_if_any_blocker_verifies_not_just_lead(self):
+        # two blockers cluster (same family, overlapping lines); the lead fails
+        # verification but the other passes -> the cluster must still gate.
+        cs = S.cluster_findings([
+            f(category="data-race", sourceAgent="concurrency-reviewer", severity="blocker",
+              line=10, lineEnd=20, finding="race A"),
+            f(category="data-race", sourceAgent="concurrency-reviewer", severity="blocker",
+              line=12, lineEnd=18, finding="race B")])
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(sum(1 for x in cs[0].findings if x.severity == "blocker"), 2)
+        v = S.decide_verdict(cs, lambda b: b.finding == "race B")  # only the non-lead one
+        self.assertEqual(v.decision, "REQUEST_CHANGES")
+
 
 class TestRender(unittest.TestCase):
     def test_render_report_omits_verdict_sections(self):

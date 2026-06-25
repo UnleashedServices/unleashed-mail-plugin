@@ -34,7 +34,13 @@ class TestProtocol(unittest.TestCase):
         result = out[0]["result"]
         self.assertEqual(result["serverInfo"]["name"], "review-synthesizer")
         self.assertIn("tools", result["capabilities"])
-        self.assertEqual(result["protocolVersion"], "2025-06-18")  # echoes the client's
+        self.assertEqual(result["protocolVersion"], "2025-06-18")  # echoes the client's (supported)
+
+    def test_initialize_unsupported_version_falls_back(self):
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                       "params": {"protocolVersion": "2024-01-01", "capabilities": {}}}])
+        # must NOT echo an unsupported version — reply with the one we actually speak
+        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-06-18")
 
     def test_tools_list(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
@@ -67,6 +73,14 @@ class TestProtocol(unittest.TestCase):
 
     def test_non_json_line_does_not_crash(self):
         out, _ = rpc(["this is not json", {"jsonrpc": "2.0", "id": 1, "method": "ping"}])
+        self.assertEqual(out[0]["result"], {})
+
+    def test_explicit_null_id_is_a_request_and_gets_a_reply(self):
+        # a notification has NO id member; `id: null` is still a request -> reply
+        out, _ = rpc([{"jsonrpc": "2.0", "id": None, "method": "ping"}])
+        self.assertEqual(len(out), 1)
+        self.assertIn("id", out[0])
+        self.assertIsNone(out[0]["id"])
         self.assertEqual(out[0]["result"], {})
 
 
@@ -108,6 +122,30 @@ class TestSynthesizeTool(unittest.TestCase):
     def test_empty_findings_approve(self):
         res = self._call([], ["A.swift"])
         self.assertEqual(res["structuredContent"]["provisionalVerdict"], "APPROVE")
+
+    def test_changed_files_as_string_is_rejected(self):
+        # a newline-joined string would set()-coerce to characters -> every finding
+        # mis-scoped to pre-existing -> a real blocker could get a provisional APPROVE
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "synthesize_review",
+                                  "arguments": {"findings": [good()],
+                                                "changed_files": "A.swift\nB.swift"}}}])
+        self.assertEqual(out[0]["error"]["code"], -32602)   # fail CLOSED, not silent APPROVE
+
+    def test_changed_files_with_non_string_element_is_rejected(self):
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "synthesize_review",
+                                  "arguments": {"findings": [good()],
+                                                "changed_files": ["A.swift", 7]}}}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
+
+    def test_findings_as_non_list_is_rejected(self):
+        # a lone finding object would iterate as dict KEYS and quarantine silently
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "synthesize_review",
+                                  "arguments": {"findings": good(),
+                                                "changed_files": ["A.swift"]}}}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
 
 
 if __name__ == "__main__":

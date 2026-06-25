@@ -1,7 +1,0 @@
-Unleashed Mail/Sources/Services/HTML/HTMLRenderPipeline.swift
-Unleashed Mail/Sources/Services/Auth/TokenManager.swift
-Unleashed Mail/Sources/Services/Sync/GmailSyncWorker.swift
-Unleashed Mail/Sources/Views/Compose/HTMLWebViewEditor.swift
-Unleashed Mail/Sources/Views/Email/SimpleEmailWebView.swift
-Unleashed Mail/Sources/ViewModels/InboxViewModel.swift
-Unleashed Mail.xcodeproj

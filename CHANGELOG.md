@@ -26,16 +26,15 @@ _Nothing yet — add new changes here._
   drop), a provisional verdict, and `blockersToVerify` for the agent to confirm.
   Declared in the root `.mcp.json`; exposed to `swift-reviewer` as
   `mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review`.
-- **Unit tests** for the synthesizer (`mcp/review-synthesizer/tests/`, 46 stdlib
+- **Unit tests** for the synthesizer (`mcp/review-synthesizer/tests/`, 52 stdlib
   `unittest` cases): schema edge cases, dedup/ownership/scope/verdict, render
-  (findings-only, no leaked verdict), and the MCP JSON-RPC protocol (initialize /
-  tools.list / tools.call / ping, non-object & non-JSON resilience, quarantine-not-crash).
-  Run: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
+  (findings-only, no leaked verdict), tool-input validation, and the MCP JSON-RPC
+  protocol (initialize / tools.list / tools.call / ping, non-object & non-JSON
+  resilience, quarantine-not-crash). Run:
+  `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
 - **Bundled test fixtures** at `mcp/review-synthesizer/samples/` (sample findings +
-  `changed_files.txt`); the standalone `synthesize.py` CLI and the README examples use
-  them, replacing the earlier references to the superseded `prototypes/` sandbox.
-- **Prototype/exploration** under `prototypes/hybrid-review-synthesizer/` plus
-  `mcp/review-synthesizer/README.md` documenting the hybrid architecture, the
+  `changed_files.txt`); the standalone `synthesize.py` CLI and the README examples use them.
+- **Design notes** in `mcp/review-synthesizer/README.md` — the hybrid architecture, the
   server↔agent division of labour, and the authoritative dedup rules.
 
 ### Changed
@@ -60,6 +59,21 @@ _Nothing yet — add new changes here._
   sections document the synthesizer step and the verify-gate split.
 - **`.gitignore`** now ignores Python bytecode (`__pycache__/`, `*.py[cod]`) for the
   bundled stdlib MCP server.
+
+### Fixed (PR review — Codex / Gemini / Copilot)
+- **`synthesize_review` validates its inputs and fails closed.** A non-array `findings`
+  or a non-`list[str]` `changed_files` is rejected with JSON-RPC `-32602` instead of
+  being coerced — previously a string `changed_files` `set()`-coerced to characters,
+  mis-scoping every finding to pre-existing and letting a real blocker reach a
+  provisional APPROVE.
+- **Protocol-version negotiation** — `initialize` returns a version the server actually
+  supports instead of echoing an arbitrary client-supplied one.
+- **`id: null` is a request, not a notification** — it now receives a reply (JSON-RPC).
+- **The verify gate gates on ANY blocker in a cluster**, not just the ownership-routed
+  lead (consistent with `blockersToVerify`).
+- **Deterministic file-descriptor close** (`with open(..., encoding="utf-8")`) in the CLI.
+- Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
+  duplicate of the shipped server; its design is captured in the server's README.
 
 ## [2.2.4]
 

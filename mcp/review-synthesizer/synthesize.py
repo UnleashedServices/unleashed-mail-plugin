@@ -54,6 +54,8 @@ def _overlap(a: Finding, b: Finding) -> bool:
 # places a different-family pair is allowed to cluster.
 _OWNERSHIP_MERGE_PAIRS = [
     ({"token-race"}, {"credential", "oauth", "keychain"}),          # security owns
+    # a slow WebView render and an HTML-sanitization concern on the same method are
+    # one defect (unsanitized/oversized content drives the render cost) — sec owns:
     ({"perceived-perf"}, {"html-sanitization", "webview"}),         # security owns
 ]
 
@@ -174,8 +176,11 @@ def decide_verdict(clusters: list[Cluster], verify: Callable[[Finding], bool]) -
     confirmed, unconfirmed = [], []
     for c in clusters:
         if c.severity == "blocker":
-            # verify the actual blocker finding, not the ownership-routed primary
-            (confirmed if verify(c.lead_blocker) else unconfirmed).append(c)
+            # A cluster can hold more than one blocker (cluster-not-collapse), so it
+            # gates if ANY of its blockers verifies — not just the lead one. (The MCP
+            # path passes verify=lambda f: True; this matters for real verifiers.)
+            blockers = [f for f in c.findings if f.severity == "blocker"]
+            (confirmed if any(verify(b) for b in blockers) else unconfirmed).append(c)
     if confirmed:
         return Verdict("REQUEST_CHANGES", confirmed, unconfirmed)
     if unconfirmed:
@@ -251,7 +256,7 @@ def _aux_sections(review: Review) -> list[str]:
     if review.quarantined:
         out += ["### Quarantined (schema-invalid)",
                 "_Failed schema validation on ingest — fix the reviewer; never silently dropped._"]
-        out += [f"- {err}  ·  `{json.dumps(raw)[:90]}…`" for raw, err in review.quarantined]
+        out += [f"- {err}  ·  `{json.dumps(raw)[:90]}...`" for raw, err in review.quarantined]
         out += [""]
     return out
 
@@ -287,7 +292,8 @@ def render_markdown(review: Review) -> str:
 def _load(paths: list[str]) -> tuple[list[Finding], list[tuple[dict, str]]]:
     findings, bad = [], []
     for path in paths:
-        raw = json.load(open(path))
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
         items = raw["findings"] if isinstance(raw, dict) else raw
         for d in items:
             try:
@@ -319,7 +325,10 @@ def main(argv: list[str]) -> int:
     if not paths:  # default demo uses the bundled fixtures
         paths = sorted(glob.glob(os.path.join(here, "samples", "*.json")))
 
-    changed = {ln.strip() for ln in open(changed_path) if ln.strip()} if os.path.exists(changed_path) else set()
+    changed: set[str] = set()
+    if os.path.exists(changed_path):
+        with open(changed_path, encoding="utf-8") as fh:
+            changed = {ln.strip() for ln in fh if ln.strip()}
     findings, bad = _load(paths)
     review = synthesize(findings, changed, quarantined=bad)
     print(render_markdown(review))

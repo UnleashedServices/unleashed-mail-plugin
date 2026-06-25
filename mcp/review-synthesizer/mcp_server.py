@@ -30,6 +30,7 @@ from schema import FINDING_JSON_SCHEMA, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_VERSION})
 SERVER_INFO = {"name": "review-synthesizer", "version": "0.1.0"}
 
 TOOL = {
@@ -91,13 +92,22 @@ def _blockers_to_verify(review) -> list[dict]:
 
 
 def _call_synthesize(arguments: dict) -> dict:
+    findings_in = arguments.get("findings", [])
+    if not isinstance(findings_in, list):
+        # A lone finding object would iterate as dict KEYS and quarantine silently.
+        raise _RpcError(-32602, "findings must be an array")
+    changed_files = arguments.get("changed_files", [])
+    if not isinstance(changed_files, list) or not all(isinstance(p, str) for p in changed_files):
+        # Fail CLOSED: a string/None would set()-coerce to characters/empty and
+        # silently push every real finding to pre-existing -> a provisional APPROVE.
+        raise _RpcError(-32602, "changed_files must be an array of strings")
     findings, quarantined = [], []
-    for d in arguments.get("findings", []):
+    for d in findings_in:
         try:
             findings.append(parse_finding(d))
         except Exception as exc:  # noqa: BLE001 - quarantine, never drop
             quarantined.append((d, str(exc)))
-    changed = set(arguments.get("changed_files", []))
+    changed = set(changed_files)
     # PROVISIONAL: assume every blocker is real (verify=lambda f: True). The caller
     # confirms blockersToVerify against the repo, then computes the final verdict.
     review = synthesize(findings, changed, quarantined=quarantined, verify=lambda f: True)
@@ -125,8 +135,13 @@ class _RpcError(Exception):
 def _handle(method: str, params: dict):
     """Return a result dict, or None for notifications (no reply)."""
     if method == "initialize":
+        # Echo the client's version only if we actually support it; otherwise reply
+        # with the version we DO speak (per MCP spec) instead of pretending to match.
+        requested = params.get("protocolVersion")
+        negotiated = (requested if isinstance(requested, str)
+                      and requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION)
         return {
-            "protocolVersion": params.get("protocolVersion", PROTOCOL_VERSION),
+            "protocolVersion": negotiated,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": SERVER_INFO,
         }
@@ -162,18 +177,21 @@ def main() -> int:
         if not isinstance(msg, dict):  # e.g. a bare `[]` — don't crash on msg.get()
             _log("ignored non-object JSON-RPC message")
             continue
+        # A notification is a request with NO `id` member; an explicit `id: null`
+        # is still a request and must get a reply. Distinguish by membership, not None.
+        has_id = "id" in msg
         mid = msg.get("id")
         try:
             result = _handle(msg.get("method", ""), msg.get("params") or {})
         except _RpcError as e:
-            if mid is not None:
+            if has_id:
                 _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})
             continue
         except Exception as e:  # noqa: BLE001 - tool/internal failure
-            if mid is not None:
+            if has_id:
                 _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
             continue
-        if mid is not None and result is not None:  # requests reply; notifications don't
+        if has_id and result is not None:  # requests reply; notifications don't
             _send({"jsonrpc": "2.0", "id": mid, "result": result})
     return 0
 
