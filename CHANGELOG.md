@@ -87,6 +87,12 @@ _Nothing yet — add new changes here._
 - **Corrected the plugin MCP tool name** to `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`
   — Claude Code preserves hyphens in plugin/server names (only chars outside `[A-Za-z0-9_-]`
   become `_`), so the earlier all-underscore form would not have matched the real tool.
+- **MCP robustness (per spec):** the `findings` input schema is permissive (`items:
+  object`) so a malformed row reaches the server and is quarantined instead of being
+  rejected client-side (which would defeat quarantine); the tool result mirrors the
+  provisional verdict + `blockersToVerify` into the text `content` (not only
+  `structuredContent`) for clients that don't surface structured output; and the stdio
+  loop uses `readline()` to avoid the read-ahead buffering that can deadlock a pipe.
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 

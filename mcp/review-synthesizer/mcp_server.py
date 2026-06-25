@@ -26,7 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
 
-from schema import FINDING_JSON_SCHEMA, parse_finding  # noqa: E402
+from schema import parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -51,8 +51,14 @@ TOOL = {
         "properties": {
             "findings": {
                 "type": "array",
-                "description": "Every reviewer's findings + your parity/test/verification rows.",
-                "items": FINDING_JSON_SCHEMA,
+                "description": (
+                    "Every reviewer's findings + your parity/test/verification rows. Each item is a "
+                    "finding object: severity, confidence, sourceAgent, category, file, line, lineEnd, "
+                    "scope?, finding, evidence, fix. Items are deliberately UNVALIDATED here (just "
+                    "`object`) so a malformed row reaches the server and is quarantined — a strict "
+                    "item schema would let a schema-aware client reject it client-side and defeat that."
+                ),
+                "items": {"type": "object"},
             },
             "changed_files": {
                 "type": "array",
@@ -126,9 +132,21 @@ def _call_synthesize(arguments: dict) -> dict:
         "preExisting": len(review.pre_existing),
         "quarantined": len(review.quarantined),
     }
+    # Mirror the verify data into a SECOND text block as well as structuredContent —
+    # not every MCP client surfaces structuredContent, and the Step-5 caller needs the
+    # provisional verdict + blockersToVerify either way. content[0] stays the table.
+    verify_text = ("Provisional verify data (the caller runs the verify gate and "
+                   "finalises the verdict):\n```json\n"
+                   + json.dumps({"provisionalVerdict": structured["provisionalVerdict"],
+                                 "blockersToVerify": structured["blockersToVerify"]}, indent=2)
+                   + "\n```")
     return {
-        # findings table only — no verdict / Needs-Confirmation (the caller owns those)
-        "content": [{"type": "text", "text": render_report(review)}],
+        # content[0] = findings table only (no verdict — the caller owns that);
+        # content[1] = the verify data mirrored from structuredContent for text-only clients.
+        "content": [
+            {"type": "text", "text": render_report(review)},
+            {"type": "text", "text": verify_text},
+        ],
         "structuredContent": structured,
         "isError": False,
     }
@@ -177,7 +195,13 @@ def _send(obj: dict) -> None:
 
 def main() -> int:
     _log("ready (stdio)")
-    for line in sys.stdin:
+    # readline() loop, NOT `for line in sys.stdin` — the file iterator's read-ahead
+    # buffering can deadlock a bidirectional pipe protocol (it blocks filling its
+    # buffer before yielding a line). readline returns each line as soon as it lands.
+    while True:
+        line = sys.stdin.readline()
+        if not line:        # EOF — client closed the pipe
+            break
         line = line.strip()
         if not line:
             continue

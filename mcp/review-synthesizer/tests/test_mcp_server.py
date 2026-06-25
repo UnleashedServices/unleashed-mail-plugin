@@ -47,6 +47,9 @@ class TestProtocol(unittest.TestCase):
         tools = out[0]["result"]["tools"]
         self.assertEqual([t["name"] for t in tools], ["synthesize_review"])
         self.assertEqual(set(tools[0]["inputSchema"]["properties"]), {"findings", "changed_files"})
+        # findings items must stay PERMISSIVE so malformed rows reach the server and
+        # are quarantined — a strict item schema would let a client reject them first.
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["findings"]["items"], {"type": "object"})
 
     def test_ping(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])
@@ -110,6 +113,14 @@ class TestSynthesizeTool(unittest.TestCase):
         self.assertNotIn("## Verdict", text)              # agent owns the verdict
         self.assertNotIn("## Needs Confirmation", text)
         self.assertIn("### All Issues (Consolidated)", text)
+
+    def test_verify_data_mirrored_into_text_content(self):
+        # not every client reads structuredContent — content[1] carries the verify data
+        res = self._call([good()], ["A.swift"])
+        self.assertEqual(len(res["content"]), 2)
+        self.assertIn("provisionalVerdict", res["content"][1]["text"])
+        self.assertIn("blockersToVerify", res["content"][1]["text"])
+        self.assertNotIn("## Verdict", res["content"][0]["text"])   # table block stays clean
 
     def test_blockers_to_verify_shape(self):
         res = self._call([good()], ["A.swift"])
