@@ -60,6 +60,11 @@ class TestParseFinding(unittest.TestCase):
         # "A.swift " must equal "A.swift" in $CHANGED, or a changeset blocker mis-scopes
         self.assertEqual(parse_finding(good(file="  A.swift  ")).file, "A.swift")
 
+    def test_leading_dotslash_is_stripped(self):
+        # reviewers copying from `find .` / `grep … .` produce ./-prefixed paths
+        self.assertEqual(parse_finding(good(file="./Sources/A.swift")).file, "Sources/A.swift")
+        self.assertEqual(parse_finding(good(file="././A.swift")).file, "A.swift")
+
     def test_float_line_rejected(self):
         # 1.9 must NOT silently truncate to line 1
         with self.assertRaises(SchemaError):

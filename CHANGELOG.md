@@ -111,6 +111,10 @@ _Nothing yet — add new changes here._
   the report emoji survive a non-UTF-8 locale (minimal CI containers); the server
   README's fallback scope rule and the `agent-orchestration` skill are updated to match
   the always-gate and missing-reviewer behaviours above.
+- **Reviewer paths are canonicalised before scoping** — leading/trailing whitespace and
+  a leading `./` are stripped on both the finding's `file` and the `$CHANGED` set, so
+  `./Unleashed Mail/…` or `A.swift ` matches `git diff --name-only` output instead of
+  mis-scoping a real changeset blocker to pre-existing.
 - **CLI fails closed on a bad `--changed`** — an explicit but missing/typo'd path now
   exits `2` instead of scoping every finding to pre-existing and exiting `0` APPROVE. The
   stdio server also pins `stderr` and uses `errors="replace"` so a malformed byte on the

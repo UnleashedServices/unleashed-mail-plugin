@@ -144,6 +144,17 @@ class SchemaError(ValueError):
     """Raised when an ingested finding does not satisfy the schema."""
 
 
+def canonical_path(p: str) -> str:
+    """Canonicalise a repo-relative path so a reviewer's value matches `git diff
+    --name-only` output: trim whitespace and strip leading `./` (reviewers copying
+    from `find .` / `grep … .` produce `./Unleashed Mail/…`). Used on BOTH the
+    finding's `file` and the `changed_files` set, so the scope compare can't miss."""
+    p = p.strip()
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def parse_finding(d: dict) -> Finding:
     """Validate a raw dict (e.g. from a markdown reviewer's JSON) into a Finding.
 
@@ -166,7 +177,7 @@ def parse_finding(d: dict) -> Finding:
         raise SchemaError(f"bad confidence: {d['confidence']!r}")
     if d["category"] not in CATEGORY_FAMILY:
         raise SchemaError(f"unknown category: {d['category']!r}")
-    file = d["file"].strip()  # store trimmed — else "A.swift " != "A.swift" in $CHANGED
+    file = canonical_path(d["file"])  # trim ws + leading ./ so it matches $CHANGED
     if not file:
         raise SchemaError("file must be non-empty")
     scope = d.get("scope", "changeset")

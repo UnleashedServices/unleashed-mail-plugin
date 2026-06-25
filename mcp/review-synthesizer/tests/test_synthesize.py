@@ -105,6 +105,16 @@ class TestScope(unittest.TestCase):
         r = S.synthesize([f(file="Z.swift")], self.CHANGED)
         self.assertEqual((len(r.clusters), len(r.pre_existing)), (0, 1))
 
+    def test_path_normalization_matches_scope_on_both_sides(self):
+        # finding uses a ./ prefix, $CHANGED is clean -> still gates
+        r = S.synthesize([f(category="logic", severity="blocker", file="./A.swift")],
+                         self.CHANGED, verify=lambda x: True)
+        self.assertEqual((len(r.clusters), len(r.pre_existing)), (1, 0))
+        # clean finding, $CHANGED carries the ./ -> still gates
+        r2 = S.synthesize([f(category="logic", severity="blocker", file="A.swift")],
+                          {"./A.swift"}, verify=lambda x: True)
+        self.assertEqual((len(r2.clusters), len(r2.pre_existing)), (1, 0))
+
     def test_verification_blocker_gates_even_outside_diff(self):
         # a red build is emitted with file = scheme/target, not a changed path —
         # it must gate, not be scoped out to pre-existing.

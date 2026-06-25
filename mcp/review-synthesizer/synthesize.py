@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from schema import Finding, SEVERITY_EMOJI, SEVERITY_RANK, parse_finding
+from schema import Finding, SEVERITY_EMOJI, SEVERITY_RANK, canonical_path, parse_finding
 
 # --------------------------------------------------------------------------- #
 # scope filter
@@ -223,6 +223,7 @@ def synthesize(
     verify: Callable[[Finding], bool] = default_verify,
     quarantined: Optional[list[tuple[dict, str]]] = None,
 ) -> Review:
+    changed_files = {canonical_path(c) for c in changed_files}  # canonical on both sides
     gating = [f for f in findings if in_gating_scope(f, changed_files)]
     pre = [f for f in findings if not in_gating_scope(f, changed_files)]
     clusters = cluster_findings(gating, same_defect=same_defect)
