@@ -178,10 +178,11 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 ### Order of operations
 
 1. `code-simplifier` runs first (clean before review)
-2. `swift-reviewer` orchestrates: spawns 4 sub-reviewers in parallel + `jira-manager`
+2. `swift-reviewer` orchestrates: spawns 4 sub-reviewers in parallel + `jira-manager`. Each sub-reviewer returns a structured **JSON findings array** (not prose)
 3. `swift-reviewer` runs provider parity audit itself
-4. `swift-reviewer` synthesizes verdict
-5. `jira-manager` logs verdict to Jira
+4. `swift-reviewer` calls the **`synthesize_review` MCP tool** (bundled `review-synthesizer` server) to dedup / scope-filter / ownership-merge the collected JSON findings in code — pure compute, no repo access
+5. `swift-reviewer` owns the **verify gate**: it opens each `blockersToVerify` `file:line`, confirms the blocker against the code, and only then decides the final verdict (unconfirmed blockers → NEEDS DISCUSSION, not REQUEST CHANGES). If the tool is unavailable it applies the documented rules in `mcp/review-synthesizer/README.md` manually
+6. `jira-manager` logs verdict to Jira
 
 ### Base branch detection
 
@@ -200,7 +201,7 @@ null-delimited (`-print0` / `-0`) or quoted paths.
 - Build green (`xcodebuild build`)
 - SwiftLint green (`swiftlint --strict`)
 - Tests green (`xcodebuild test`)
-- All sub-reviewer verdicts collected and synthesized
+- All sub-reviewer JSON findings collected, run through the `synthesize_review` MCP tool (or the documented fallback rules), and every gating blocker confirmed via the verify gate before REQUEST CHANGES
 
 ## 6. CI / GitHub Actions Pinning
 

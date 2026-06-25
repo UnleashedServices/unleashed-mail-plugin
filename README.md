@@ -1,12 +1,19 @@
-# UnleashedMail — Claude Code Plugin v2.2.4
+# UnleashedMail — Claude Code Plugin v2.3.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
-**20 agents · 17 skills · 3 commands**
+**20 agents · 17 skills · 3 commands · 1 MCP server**
 
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.3.0
+
+- **Deterministic review-synthesizer MCP server** — the plugin now bundles a local, zero-dependency stdio MCP server ([`mcp/review-synthesizer/`](mcp/review-synthesizer/), declared in [`.mcp.json`](.mcp.json)) that performs the review orchestrator's Step-5 synthesis **in code** instead of LLM prose. It validates the sub-reviewers' JSON findings, scope-filters (changeset + `structural-pipeline`), and dedups via category-family + line-overlap with cross-family ownership routing — **cluster-and-cross-link, never silently dropping a fix** — then returns a provisional verdict plus `blockersToVerify`. `swift-reviewer` calls it via `mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review`, then owns the verify gate. The server has **no repo access, no network, no secrets** — pure compute. See [MCP Servers](#mcp-servers-1).
+- **Review-agent overhaul** — the four sub-reviewers now emit a structured **JSON findings array** (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope · finding · evidence · fix`) instead of a prose table, so `swift-reviewer` cross-references and deduplicates on `file:line`, not paraphrase. `concurrency-reviewer` broadened to the **correctness owner** (logic/error-handling); provider-parity, test-coverage, and build/lint/test emit gating `verification` rows; a **verify gate** confirms each blocker against the code before REQUEST CHANGES (unconfirmable → NEEDS DISCUSSION); and **structural-pipeline** review widens scope to the whole pipeline (not just the diff) when key subsystems — API calls, AI flows, syncs — change. All five review agents now run on `opus`.
+- **46 unit tests** for the synthesizer ([`mcp/review-synthesizer/tests/`](mcp/review-synthesizer/tests/), stdlib `unittest`, no deps) covering schema validation/quarantine, dedup/ownership/scope/verdict, render, and the full JSON-RPC protocol via subprocess. Run: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
+- **Reviewed to convergence** by Codex (`gpt-5.5`) and Gemini (`gemini-3.1-pro`) over four rounds until both approved. A new [`CHANGELOG.md`](CHANGELOG.md) tracks releases going forward.
 
 ### v2.2.4
 
@@ -121,13 +128,15 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
+> After the four reviewers return their JSON findings, `swift-reviewer` calls the bundled **`review-synthesizer`** MCP server (`synthesize_review`) for deterministic dedup / scope / ownership-merge — cluster-and-cross-link, never silently dropping a fix — then runs its **verify gate** (confirm each blocker against the code) before issuing the verdict. See [MCP Servers](#mcp-servers-1).
+
 ## Agents (20)
 
 ### Review Agents (run in parallel via orchestrator)
 
 | Agent | Specialization |
 |---|---|
-| `swift-reviewer` | **Orchestrator** — spawns all 4 reviewers, runs parity audit, synthesizes unified verdict |
+| `swift-reviewer` | **Orchestrator** — spawns all 4 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict |
 | `security-reviewer` | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher |
 | `concurrency-reviewer` | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced) |
 | `ux-perf-reviewer` | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX |
@@ -237,6 +246,18 @@ The plugin includes PostToolUse hooks that run automatically:
 |---|---|---|
 | `swift-lint-check.sh` | After Write/Edit | Syntax check, SwiftLint, `try!`/`as!` detection, token logging — **blocks on critical violations** |
 | `swift-build-verify.sh` | After Write/Edit & Bash | Detects build/test commands and reminds to verify results |
+
+## MCP Servers (1)
+
+The plugin bundles one local, zero-dependency **stdio MCP server**, declared in [`.mcp.json`](.mcp.json) and launched by Claude Code as a subprocess:
+
+| Server | Tool | Purpose |
+|---|---|---|
+| `review-synthesizer` | `synthesize_review` | Deterministic Step-5 synthesis for the [code-review pipeline](AGENT_CONTRACTS.md). Validates the sub-reviewers' JSON findings, filters to changed + `structural-pipeline` scope, dedups via category-family + line-overlap with cross-family ownership routing (**cluster-and-cross-link — never silently drops a fix**), and returns a provisional verdict + `blockersToVerify`. `swift-reviewer` then confirms each blocker against the code (the verify gate) and issues the final verdict. |
+
+- **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.
+- **Agent tool name:** `mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review` (in `swift-reviewer`'s `allowed-tools`). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
+- **Source + tests:** [`mcp/review-synthesizer/`](mcp/review-synthesizer/) — run `python3 -m unittest discover -s mcp/review-synthesizer/tests` (46 cases, stdlib only).
 
 ## Baked-In Knowledge
 

@@ -24,11 +24,26 @@ allowed-tools: Agent, Read, Grep, Glob, Bash
 
 | Agent | Focus | Depends On | Can Parallel With |
 |---|---|---|---|
-| `security-reviewer` | Credentials, OAuth, injection, CI | Changeset | All other reviewers |
-| `concurrency-reviewer` | Races, actors, deprecated APIs | Changeset | All other reviewers |
-| `ux-perf-reviewer` | Responsiveness, rendering, query perf | Changeset | All other reviewers |
-| `accessibility-auditor` | VoiceOver, keyboard nav, a11y labels | Changeset | All other reviewers |
-| `swift-reviewer` | Orchestrator + parity audit | Reviewer outputs | Runs after reviewers complete |
+| `security-reviewer` | Credentials, OAuth, injection, CI | Changeset (+ whole pipeline on structural changes) | All other reviewers |
+| `concurrency-reviewer` | **Correctness/logic**, races, actors, deprecated APIs | Changeset (+ whole pipeline on structural changes) | All other reviewers |
+| `ux-perf-reviewer` | Responsiveness, rendering, query perf | Changeset (+ whole pipeline on structural changes) | All other reviewers |
+| `accessibility-auditor` | VoiceOver, keyboard nav, a11y labels | Changeset (+ whole pipeline on structural changes) | All other reviewers |
+| `swift-reviewer` | Orchestrator + parity & test-coverage audit | Reviewer outputs | Runs after reviewers complete |
+
+> **Ownership notes.** `concurrency-reviewer` is the **correctness owner** — general
+> logic/error-handling bugs that the other three reviewers explicitly punt land here.
+> Judgment-based code style beyond SwiftLint is owned by `code-simplifier` (runs first,
+> per AGENT_CONTRACTS §5) + `swiftlint --strict`, not the reviewers. `swift-reviewer`
+> owns provider-parity, test-coverage, and build/lint/test (`verification`) findings and
+> emits them as structured rows (categories `parity` / `test-coverage` / `verification`)
+> so they are first-class in dedup and the verdict.
+>
+> **One orchestrator, one entry point.** Invoking `swift-reviewer` runs the whole
+> pipeline: it spawns the four reviewers itself (Step 2), runs its own parity / test /
+> verification audits, then synthesizes (Step 5). The "Stage 4 → Stage 5" split in the
+> diagrams below is swift-reviewer's *internal* sequence — you may also run the four
+> reviewers yourself and hand their JSON to swift-reviewer for synthesis. Either way
+> there is exactly one orchestrator and one verdict.
 
 ### Planning & Support Agents
 
@@ -159,11 +174,23 @@ Handoff: Logic layer complete
 
 ### All reviewers → swift-reviewer
 
-```
+Each reviewer returns its prose report **plus a fenced `json` findings array** (the
+machine-readable handoff defined in each reviewer's "Structured Findings" section).
+The orchestrator parses the JSON — not the prose — and deduplicates on `file` +
+overlapping `line`…`lineEnd` + **same root cause** (same category-family is necessary
+but not sufficient), per `swift-reviewer` Step 5. A malformed or prose-only block is
+recovered per Step 5 (lenient self-repair first → re-run a fresh reviewer → **fail
+closed** → `verification` blocker → NEEDS DISCUSSION), never synthesized from prose
+alone. The orchestrator folds in its own `parity` / `test-coverage` / `verification`
+rows (same schema) and runs a verify gate on every blocker before the verdict.
+
+```text
 Handoff: Review complete
 - Severity: [highest severity found]
-- Findings: [count by severity]
-- Report: [structured review output]
+- Findings: [count by severity, with confidence]
+- Structured Findings: a fenced json array of objects, each
+    { severity, confidence, sourceAgent, category, file, line, lineEnd, finding, evidence, fix }
+- Report: [prose review + the JSON array]
 ```
 
 ## Context Sharing
