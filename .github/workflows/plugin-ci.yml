@@ -1,0 +1,65 @@
+# Plugin CI — Phase 0, Item 7 (COREDEV-2322)
+# Treats the unleashed-mail PLUGIN's own assets as software. Linux-only, no Xcode:
+# the Swift app is built by Xcode Cloud, not here. Actions are pinned to commit SHAs
+# (AGENT_CONTRACTS.md §6 — never @vN tags).
+#
+# Rollout note: leave this OFF "required checks" in branch protection until it has had
+# one clean green run on a PR (warn-first); then mark it required.
+name: plugin-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Byte-compile the review-synthesizer MCP
+        run: python3 -m py_compile mcp/review-synthesizer/*.py
+
+      - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
+        run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
+
+      - name: Validate version sync (strict)
+        run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
+
+      - name: Validate plugin assembly (strict)
+        run: python3 scripts/validate-plugin-assembly.py --root . --strict
+
+      - name: ShellCheck plugin scripts
+        run: shellcheck -s bash -S warning scripts/*.sh .githooks/pre-commit
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### plugin-ci"
+            echo ""
+            echo "| Gate | Status |"
+            echo "| --- | --- |"
+            echo "| py_compile (review-synthesizer) | ${{ job.status }} |"
+            echo "| unittest discover (synthesizer suite) | ${{ job.status }} |"
+            echo "| version-sync (strict) | ${{ job.status }} |"
+            echo "| plugin-assembly (strict) | ${{ job.status }} |"
+            echo "| shellcheck (-S warning) | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

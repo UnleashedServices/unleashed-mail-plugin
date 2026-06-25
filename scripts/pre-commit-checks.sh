@@ -79,6 +79,21 @@ else
     echo "⏭️  Skipping tests (not in Unleashed Mail Xcode project)"
 fi
 
+# --- 3b. Plugin self-validation (plugin repo only — COREDEV-2322 Phase 0) ---
+# Runs when NOT in the Xcode app project, i.e. in the unleashed-mail plugin repo.
+# Warn mode here (advisory, never blocks the commit); CI runs these in --strict.
+if [ "$HAS_XCODEPROJ" = false ]; then
+    SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+    if [ -f "$SCRIPTS_DIR/validate-version-sync.sh" ]; then
+        echo "🧩 Validating plugin version sync..."
+        VERSION_SYNC_ENFORCE=warn bash "$SCRIPTS_DIR/validate-version-sync.sh" || true
+    fi
+    if [ -f "$SCRIPTS_DIR/validate-plugin-assembly.py" ] && command -v python3 >/dev/null; then
+        echo "🧩 Validating plugin assembly (frontmatter + manifests)..."
+        python3 "$SCRIPTS_DIR/validate-plugin-assembly.py" || true
+    fi
+fi
+
 # --- 4. PII check in staged files (universal) ---
 echo "🔒 Checking for PII in new/modified files..."
 if command -v git >/dev/null; then
