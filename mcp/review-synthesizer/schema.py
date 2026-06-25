@@ -179,8 +179,8 @@ def parse_finding(d: dict) -> Finding:
             raise SchemaError("line/lineEnd must be integers (got bool)")
         if isinstance(v, int):
             return v
-        if isinstance(v, str) and v.isdigit():
-            return int(v)
+        if isinstance(v, str) and v.strip().isdigit():
+            return int(v.strip())   # tolerate surrounding whitespace, e.g. " 42 " / "42\n"
         raise SchemaError(f"line/lineEnd must be integers (got {type(v).__name__})")
     line, line_end = _as_line(d["line"]), _as_line(d["lineEnd"])
     if line < 0 or line_end < 0:

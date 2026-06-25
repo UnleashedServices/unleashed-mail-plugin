@@ -10,7 +10,7 @@ description: >
   a pull request, when the user says "review", "check my code", "is this ready
   to merge", or after any significant code change is complete.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review
+allowed-tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client
@@ -371,7 +371,7 @@ MCP synthesizer, so it cannot silently drop a finding or mis-merge two distinct
 ones. Pass it the findings you recovered above (it quarantines any still-invalid row
 rather than dropping it):
 
-> Call `mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review` with
+> Call `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` with
 > `{ "findings": [ …all four reviewers' rows + your parity/test/verification rows… ],
 > "changed_files": [ …every path in $CHANGED… ] }`
 

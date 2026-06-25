@@ -52,6 +52,10 @@ class TestParseFinding(unittest.TestCase):
         f = parse_finding(good(line="42", lineEnd="42"))   # reviewer-recall tolerance
         self.assertEqual((f.line, f.lineEnd), (42, 42))
 
+    def test_whitespace_around_digit_string_is_tolerated(self):
+        f = parse_finding(good(line=" 42 ", lineEnd="42\n"))
+        self.assertEqual((f.line, f.lineEnd), (42, 42))
+
     def test_float_line_rejected(self):
         # 1.9 must NOT silently truncate to line 1
         with self.assertRaises(SchemaError):

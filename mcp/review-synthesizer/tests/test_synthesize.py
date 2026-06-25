@@ -62,6 +62,14 @@ class TestDedup(unittest.TestCase):
         self.assertIn("related:", finding)
         self.assertEqual(finding.count("error-handling"), 1)   # not "error-handling, error-handling"
 
+    def test_extra_fix_identical_to_primary_is_not_repeated(self):
+        cs = S.cluster_findings([f(category="logic", line=10, lineEnd=20, fix="SAME"),
+                                 f(category="error-handling", line=11, lineEnd=19, fix="SAME")])
+        self.assertEqual(len(cs), 1)
+        _, fix = S._issue_and_fix(cs[0])
+        self.assertEqual(fix.count("SAME"), 1)        # primary's fix once; identical extra skipped
+        self.assertNotIn("·also· SAME", fix)
+
 
 class TestOwnershipRouting(unittest.TestCase):
     def test_a11y_authoritative(self):
@@ -202,6 +210,15 @@ class TestCliLoad(unittest.TestCase):
             obj = self._write(d, "o.json", json.dumps({"findings": [_VALID_RAW]}))
             findings, quarantined = S._load([obj])
             self.assertEqual((len(findings), len(quarantined)), (1, 0))
+
+    def test_help_flag_prints_usage_and_exits_zero(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = S.main(["--help"])
+        self.assertEqual(rc, 0)
+        self.assertIn("usage:", buf.getvalue())
 
 
 if __name__ == "__main__":

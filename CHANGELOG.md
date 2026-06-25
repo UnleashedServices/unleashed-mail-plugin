@@ -25,7 +25,7 @@ _Nothing yet — add new changes here._
   overlap and cross-family ownership routing (cluster-and-cross-link, never silently
   drop), a provisional verdict, and `blockersToVerify` for the agent to confirm.
   Declared in the root `.mcp.json`; exposed to `swift-reviewer` as
-  `mcp__plugin_unleashed_mail_review_synthesizer__synthesize_review`.
+  `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`.
 - **Unit tests** for the synthesizer (`mcp/review-synthesizer/tests/`, 52 stdlib
   `unittest` cases): schema edge cases, dedup/ownership/scope/verdict, render
   (findings-only, no leaked verdict), tool-input validation, and the MCP JSON-RPC

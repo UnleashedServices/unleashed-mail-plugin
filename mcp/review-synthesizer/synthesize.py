@@ -239,7 +239,11 @@ def _issue_and_fix(c: Cluster) -> tuple[str, str]:
     if extra:  # cross-link the other fixes in the cluster — nothing is dropped
         cats = ", ".join(dict.fromkeys(f.category for f in extra))  # de-dup, keep order
         finding += f"  _(+{len(extra)} related: {cats})_"
-        fix += "".join(f"  ·also· {f.fix}" for f in extra)
+        seen = {p.fix}                          # don't repeat the primary's fix...
+        for f in extra:
+            if f.fix not in seen:               # ...or the same extra fix twice
+                seen.add(f.fix)
+                fix += f"  ·also· {f.fix}"
     return finding, fix
 
 def _consolidated_table(review: Review) -> list[str]:
@@ -330,6 +334,12 @@ def main(argv: list[str]) -> int:
     i = 0
     while i < len(argv):
         a = argv[i]
+        if a in ("-h", "--help"):
+            print("usage: synthesize.py [FINDINGS.json ...] [--changed CHANGED.txt]\n"
+                  "  Synthesize reviewer findings into a consolidated report + a provisional\n"
+                  "  verdict. With no findings args, runs against ./samples/. "
+                  "Exit code: 0 = APPROVE, 1 = gating.")
+            return 0
         if a == "--changed":
             changed_path = argv[i + 1] if i + 1 < len(argv) else None
             i += 2
