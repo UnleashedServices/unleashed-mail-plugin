@@ -8,3 +8,7 @@ firebase-debug.log
 # Transient review prompt files (per-invocation, not source of truth)
 .agy-prompt.md
 .codex-prompt.md
+
+# Python bytecode (MCP review-synthesizer is stdlib Python)
+__pycache__/
+*.py[cod]

@@ -1,0 +1,20 @@
+[
+  {
+    "severity": "blocker", "confidence": "high", "sourceAgent": "accessibility-auditor",
+    "category": "dual-impl-parity",
+    "file": "Unleashed Mail/Sources/Views/Compose/HTMLWebViewEditor.swift",
+    "line": 0, "lineEnd": 0,
+    "finding": "WebKit compose editor has no accessibilityLabel; the native editor does — dual-impl parity gap",
+    "evidence": "no .accessibilityLabel on the WKWebView; NativeRichTextEditor sets one",
+    "fix": "Add .accessibilityLabel(\"Compose email\") to the WKWebView"
+  },
+  {
+    "severity": "warning", "confidence": "high", "sourceAgent": "accessibility-auditor",
+    "category": "totally-made-up-category",
+    "file": "Unleashed Mail/Sources/Views/Compose/HTMLWebViewEditor.swift",
+    "line": 0, "lineEnd": 0,
+    "finding": "This row has an invalid category and will be quarantined, not silently dropped",
+    "evidence": "demonstrates the ingest validator",
+    "fix": "n/a"
+  }
+]
