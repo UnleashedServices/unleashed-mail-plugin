@@ -191,7 +191,9 @@ def main() -> int:
         has_id = "id" in msg
         mid = msg.get("id")
         try:
-            result = _handle(msg.get("method", ""), msg.get("params") or {})
+            # default only when `params` is ABSENT; a present `[]`/null reaches the
+            # dict-guard in _handle and is rejected (don't let `or {}` mask them).
+            result = _handle(msg.get("method", ""), msg.get("params", {}))
         except _RpcError as e:
             if has_id:
                 _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})

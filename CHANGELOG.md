@@ -76,6 +76,11 @@ _Nothing yet — add new changes here._
 - **The standalone CLI `_load` quarantines** unreadable / malformed / wrong-shape
   findings files instead of crashing; deterministic file-descriptor close
   (`with open(..., encoding="utf-8")`).
+- **Consolidated-table cells are escaped** — a `|` or newline in a reviewer's
+  `finding`/`fix` no longer injects spurious columns/rows into the Markdown table.
+- **Accessibility ownership ties resolve to `accessibility-auditor`** regardless of
+  input order — a `ux-perf` row tagged `a11y` no longer outranks the auditor.
+- **Empty-array JSON-RPC `params` is rejected** (`-32602`) instead of being coerced to `{}`.
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 

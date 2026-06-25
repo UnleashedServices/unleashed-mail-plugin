@@ -92,7 +92,11 @@ def route_owner(findings: list[Finding]) -> Finding:
     a11y = [f for f in findings
             if f.category in _A11Y_CATEGORIES or f.sourceAgent == "accessibility-auditor"]
     if a11y:                                   # accessibility-auditor is authoritative
-        return _highest(a11y)
+        top = max(SEVERITY_RANK[f.severity] for f in a11y)
+        tied = [f for f in a11y if SEVERITY_RANK[f.severity] == top]
+        # on a severity tie the auditor wins, regardless of input order (e.g. a
+        # ux-perf row with category:"a11y" must not outrank the auditor's row).
+        return next((f for f in tied if f.sourceAgent == "accessibility-auditor"), tied[0])
     sec = [f for f in findings if f.family == "security"]
     if sec and (any(f.category == "token-race" for f in findings)
                 or any(f.category in ("html-sanitization", "webview") for f in sec)):
@@ -221,6 +225,13 @@ def synthesize(
 # rendering (mirrors swift-reviewer.md ## Output Format)
 # --------------------------------------------------------------------------- #
 
+def _cell(s: str) -> str:
+    """Keep free-text reviewer content from breaking the Markdown table: a literal
+    `|` would add a column and a newline would add a row. Escape pipes, flatten
+    newlines to `<br>`."""
+    return (s.replace("|", "\\|")
+            .replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>"))
+
 def _issue_and_fix(c: Cluster) -> tuple[str, str]:
     p = c.primary
     finding, fix = p.finding, p.fix
@@ -243,7 +254,7 @@ def _consolidated_table(review: Review) -> list[str]:
         for i, c in enumerate(ordered, 1):
             finding, fix = _issue_and_fix(c)
             out.append(f"| {i} | {SEVERITY_EMOJI[c.severity]} | {c.primary.bucket} | "
-                       f"`{c.primary.loc}` | {finding} | {fix} |")
+                       f"`{_cell(c.primary.loc)}` | {_cell(finding)} | {_cell(fix)} |")
     return out + [""]
 
 def _aux_sections(review: Review) -> list[str]:

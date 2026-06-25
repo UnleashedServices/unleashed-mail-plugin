@@ -72,6 +72,11 @@ class TestProtocol(unittest.TestCase):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": [1, 2, 3]}])
         self.assertEqual(out[0]["error"]["code"], -32602)
 
+    def test_empty_array_params_rejected(self):
+        # `[]` is falsy — must not be coerced to `{}` and silently accepted
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": []}])
+        self.assertEqual(out[0]["error"]["code"], -32602)
+
     def test_non_object_message_does_not_crash(self):
         out, proc = rpc(["[]", {"jsonrpc": "2.0", "id": 1, "method": "ping"}])
         self.assertEqual(out[0]["result"], {})            # server still alive after bare []

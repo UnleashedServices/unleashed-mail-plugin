@@ -65,6 +65,13 @@ class TestOwnershipRouting(unittest.TestCase):
               f(category="token-race", sourceAgent="concurrency-reviewer", line=44, lineEnd=48)]
         self.assertEqual(S.route_owner(fs).family, "security")
 
+    def test_a11y_tie_prefers_accessibility_auditor_over_input_order(self):
+        # ux-perf row tagged a11y listed BEFORE the auditor row, same severity:
+        # the auditor must still own it (documented authority), not input order.
+        fs = [f(category="color-contrast", sourceAgent="ux-perf-reviewer", severity="warning", finding="ux"),
+              f(category="color-contrast", sourceAgent="accessibility-auditor", severity="warning", finding="audit")]
+        self.assertEqual(S.route_owner(fs).sourceAgent, "accessibility-auditor")
+
 
 class TestScope(unittest.TestCase):
     CHANGED = {"A.swift"}
@@ -144,6 +151,14 @@ class TestRender(unittest.TestCase):
         report = S.render_report(r)
         self.assertIn("Pre-existing", report)
         self.assertIn("Quarantined", report)
+
+    def test_table_cells_escape_pipes_and_newlines(self):
+        # a literal `|` would add a table column; a newline would add a row
+        r = S.synthesize([f(severity="warning", finding="has | pipe", fix="line1\nline2")], {"A.swift"})
+        report = S.render_report(r)
+        self.assertIn("has \\| pipe", report)
+        self.assertIn("line1<br>line2", report)
+        self.assertNotIn("line1\nline2", report)   # raw newline must not survive into the row
 
 
 _VALID_RAW = dict(severity="warning", confidence="high", sourceAgent="x", category="logic",
