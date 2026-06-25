@@ -47,9 +47,10 @@ class TestProtocol(unittest.TestCase):
         tools = out[0]["result"]["tools"]
         self.assertEqual([t["name"] for t in tools], ["synthesize_review"])
         self.assertEqual(set(tools[0]["inputSchema"]["properties"]), {"findings", "changed_files"})
-        # findings items must stay PERMISSIVE so malformed rows reach the server and
-        # are quarantined — a strict item schema would let a client reject them first.
-        self.assertEqual(tools[0]["inputSchema"]["properties"]["findings"]["items"], {"type": "object"})
+        # findings items must stay FULLY permissive (accept any JSON, even non-objects)
+        # so every malformed row reaches the server and is quarantined individually — a
+        # stricter item schema would let a client reject the whole call first.
+        self.assertEqual(tools[0]["inputSchema"]["properties"]["findings"]["items"], {})
 
     def test_ping(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])
@@ -134,6 +135,12 @@ class TestSynthesizeTool(unittest.TestCase):
         res = self._call([good(sourceAgent=123)], ["A.swift"])
         self.assertFalse(res["isError"])                  # NOT a -32603 protocol error
         self.assertEqual(res["structuredContent"]["quarantined"], 1)
+
+    def test_non_object_finding_rows_are_quarantined(self):
+        # null / string / nested-array rows must reach the server and quarantine, not crash
+        res = self._call([good(), None, "oops", [1, 2]], ["A.swift"])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["quarantined"], 3)
         # fail closed: a quarantined row could hide a blocker -> never a clean APPROVE
         self.assertEqual(res["structuredContent"]["provisionalVerdict"], "NEEDS_DISCUSSION")
 

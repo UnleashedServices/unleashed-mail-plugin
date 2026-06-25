@@ -54,11 +54,12 @@ TOOL = {
                 "description": (
                     "Every reviewer's findings + your parity/test/verification rows. Each item is a "
                     "finding object: severity, confidence, sourceAgent, category, file, line, lineEnd, "
-                    "scope?, finding, evidence, fix. Items are deliberately UNVALIDATED here (just "
-                    "`object`) so a malformed row reaches the server and is quarantined — a strict "
-                    "item schema would let a schema-aware client reject it client-side and defeat that."
+                    "scope?, finding, evidence, fix. Items are deliberately UNVALIDATED here (accept "
+                    "ANY JSON) so a malformed row — even a non-object like null/string/array — reaches "
+                    "the server and is quarantined individually; a stricter item schema would let a "
+                    "schema-aware client reject the whole call client-side and defeat that."
                 ),
-                "items": {"type": "object"},
+                "items": {},   # empty schema = accept any JSON value (object-or-not)
             },
             "changed_files": {
                 "type": "array",
