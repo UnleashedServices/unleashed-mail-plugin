@@ -357,9 +357,13 @@ findings, **re-run that reviewer** with an explicit "emit one valid JSON array, 
 else" instruction — the `Agent` tool spawns a *fresh* subagent (there is no live
 session to "ask again"), so the choice is re-run or self-repair, never a follow-up
 message. If it still can't be recovered, or the reviewer never returned, **fail
-closed**: record a `blocker` (`category: verification`, `sourceAgent: "swift-reviewer"`)
-for the missing review and route the verdict to NEEDS DISCUSSION — never silently
-synthesize without it. A clean reviewer emits `[]`. Finally, spot-check that any 🔴 in a
+closed**: a missing reviewer is an *uncertainty* (the review is incomplete), not a
+confirmed defect — list it as a **Needs Confirmation** item named for the missing
+reviewer and set the final verdict to **NEEDS DISCUSSION**; never silently synthesize
+without it. Do **not** tag it `category: verification` — that family is reserved for
+checks you actually ran (build/lint/test/parity/coverage), which the verify gate treats
+as confirmed-by-construction (REQUEST CHANGES); a "didn't run" is the opposite of that.
+A clean reviewer emits `[]`. Finally, spot-check that any 🔴 in a
 reviewer's *prose* appears as a `blocker` row in its JSON; if one is missing, recover it
 before merging.
 

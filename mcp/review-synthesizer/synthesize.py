@@ -249,13 +249,17 @@ def _cell(s: str) -> str:
             .replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>"))
 
 def _issue_and_fix(c: Cluster) -> tuple[str, str]:
-    p = c.primary
-    finding, fix = p.finding, p.fix
-    extra = [f for f in c.findings if f is not p]
-    if extra:  # cross-link the other fixes in the cluster — nothing is dropped
+    # Lead the Issue/Fix text with the finding that DRIVES the cluster's severity, so a
+    # 🔴 row reads as the actual blocker — not an ownership-routed lower-severity finding
+    # (e.g. a security `keychain` warning that owns a `token-race` blocker). The table's
+    # bucket/loc stay ownership-routed (c.primary); every other finding cross-links here.
+    lead = _highest(c.findings)
+    finding, fix = lead.finding, lead.fix
+    extra = [f for f in c.findings if f is not lead]
+    if extra:  # cross-link the other findings/fixes — nothing is dropped
         cats = ", ".join(dict.fromkeys(f.category for f in extra))  # de-dup, keep order
         finding += f"  _(+{len(extra)} related: {cats})_"
-        seen = {p.fix}                          # don't repeat the primary's fix...
+        seen = {lead.fix}                       # don't repeat the lead's fix...
         for f in extra:
             if f.fix not in seen:               # ...or the same extra fix twice
                 seen.add(f.fix)

@@ -95,6 +95,12 @@ _Nothing yet — add new changes here._
   verify gate also now treats these self-emitted rows as confirmed-by-construction (it
   ran the command) — it gates them without trying to `Read` a scheme:0 location and never
   downgrades them to NEEDS DISCUSSION.
+- **The consolidated row leads with the blocker's text** in an ownership-routed cluster
+  (e.g. a security `keychain` warning that owns a `token-race` blocker) — a 🔴 row no
+  longer reads as the lower-severity owner with the blocker hidden behind a category name.
+- **A missing reviewer routes to NEEDS DISCUSSION as an uncertainty, not a `verification`
+  blocker** — reconciles the fail-closed path with the verification-gate carve-out (which
+  treats `verification` rows as confirmed-by-construction → REQUEST CHANGES).
 - **MCP robustness (per spec):** the `findings` input schema is permissive (`items:
   object`) so a malformed row reaches the server and is quarantined instead of being
   rejected client-side (which would defeat quarantine); the tool result mirrors the

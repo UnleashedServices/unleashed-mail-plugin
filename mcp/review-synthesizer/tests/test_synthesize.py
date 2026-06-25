@@ -194,6 +194,19 @@ class TestRender(unittest.TestCase):
         self.assertIn("Pre-existing", report)
         self.assertIn("Quarantined", report)
 
+    def test_blocker_text_surfaces_in_ownership_routed_row(self):
+        # a security keychain WARNING owns a token-race BLOCKER (ownership pair) — the
+        # 🔴 row must lead with the blocker's text, not the routed warning's.
+        r = S.synthesize([
+            f(category="keychain", sourceAgent="security-reviewer", severity="warning",
+              line=40, lineEnd=52, finding="keychain warning here", fix="rotate"),
+            f(category="token-race", sourceAgent="concurrency-reviewer", severity="blocker",
+              line=44, lineEnd=48, finding="TOKEN RACE blocker here", fix="add actor")],
+            {"A.swift"}, verify=lambda x: True)
+        report = S.render_report(r)
+        self.assertIn("TOKEN RACE blocker here", report)
+        self.assertIn("keychain", report)   # the routed warning is still cross-linked
+
     def test_table_cells_escape_pipes_and_newlines(self):
         # a literal `|` would add a table column; a newline would add a row
         r = S.synthesize([f(severity="warning", finding="has | pipe", fix="line1\nline2")], {"A.swift"})
