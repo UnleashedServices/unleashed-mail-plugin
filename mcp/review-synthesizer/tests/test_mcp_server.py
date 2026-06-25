@@ -123,6 +123,8 @@ class TestSynthesizeTool(unittest.TestCase):
         res = self._call([good(sourceAgent=123)], ["A.swift"])
         self.assertFalse(res["isError"])                  # NOT a -32603 protocol error
         self.assertEqual(res["structuredContent"]["quarantined"], 1)
+        # fail closed: a quarantined row could hide a blocker -> never a clean APPROVE
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "NEEDS_DISCUSSION")
 
     def test_out_of_scope_finding_is_pre_existing(self):
         res = self._call([good(file="Z.swift")], ["A.swift"])

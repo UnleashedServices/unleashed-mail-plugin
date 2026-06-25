@@ -141,6 +141,14 @@ class TestVerdict(unittest.TestCase):
     def test_clean_approve(self):
         self.assertEqual(S.synthesize([], set()).verdict.decision, "APPROVE")
 
+    def test_quarantined_findings_force_needs_discussion(self):
+        # a malformed row could have hidden a blocker -> never a clean APPROVE
+        bad = [({"bad": 1}, "schema error")]
+        self.assertEqual(S.synthesize([f(severity="warning")], {"A.swift"},
+                                      quarantined=bad).verdict.decision, "NEEDS_DISCUSSION")
+        self.assertEqual(S.synthesize([], {"A.swift"},
+                                      quarantined=bad).verdict.decision, "NEEDS_DISCUSSION")
+
     def test_cluster_gates_if_any_blocker_verifies_not_just_lead(self):
         # two blockers cluster (same family, overlapping lines); the lead fails
         # verification but the other passes -> the cluster must still gate.

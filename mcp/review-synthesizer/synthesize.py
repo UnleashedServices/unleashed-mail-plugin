@@ -217,8 +217,15 @@ def synthesize(
     gating = [f for f in findings if in_gating_scope(f, changed_files)]
     pre = [f for f in findings if not in_gating_scope(f, changed_files)]
     clusters = cluster_findings(gating, same_defect=same_defect)
+    quarantined = quarantined or []
     verdict = decide_verdict(clusters, verify)
-    return Review(clusters, verdict, pre, quarantined or [])
+    if quarantined and verdict.decision.startswith("APPROVE"):
+        # Fail CLOSED: an unparseable row could have hidden a real blocker (e.g. a
+        # typo'd category on a blocker finding). Never APPROVE while findings are
+        # quarantined — force NEEDS_DISCUSSION so the caller fixes the reviewer.
+        verdict = Verdict("NEEDS_DISCUSSION",
+                          verdict.confirmed_blockers, verdict.needs_confirmation)
+    return Review(clusters, verdict, pre, quarantined)
 
 
 # --------------------------------------------------------------------------- #

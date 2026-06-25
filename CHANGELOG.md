@@ -81,6 +81,12 @@ _Nothing yet — add new changes here._
 - **Accessibility ownership ties resolve to `accessibility-auditor`** regardless of
   input order — a `ux-perf` row tagged `a11y` no longer outranks the auditor.
 - **Empty-array JSON-RPC `params` is rejected** (`-32602`) instead of being coerced to `{}`.
+- **Quarantined findings fail closed** — a schema-invalid row (e.g. a typo'd `category`
+  on a real blocker) forces `NEEDS_DISCUSSION` instead of letting the provisional verdict
+  be a clean `APPROVE`, so a parse slip can't silently turn a blocker into an approval.
+- **Corrected the plugin MCP tool name** to `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`
+  — Claude Code preserves hyphens in plugin/server names (only chars outside `[A-Za-z0-9_-]`
+  become `_`), so the earlier all-underscore form would not have matched the real tool.
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 
