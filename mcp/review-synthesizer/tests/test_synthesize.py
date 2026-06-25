@@ -258,6 +258,14 @@ class TestCliLoad(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("usage:", buf.getvalue())
 
+    def test_explicit_missing_changed_file_fails_closed(self):
+        # a typo'd --changed must NOT silently scope everything out and exit 0 APPROVE
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()):
+            rc = S.main(["--changed", "/no/such/changed_file_xyz.txt"])
+        self.assertEqual(rc, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -350,6 +350,7 @@ def main(argv: list[str]) -> int:
     here = os.path.dirname(os.path.abspath(__file__))
     # Parse args without treating `--changed`'s VALUE as a findings file.
     changed_path = None
+    changed_explicit = False
     paths: list[str] = []
     i = 0
     while i < len(argv):
@@ -358,9 +359,10 @@ def main(argv: list[str]) -> int:
             print("usage: synthesize.py [FINDINGS.json ...] [--changed CHANGED.txt]\n"
                   "  Synthesize reviewer findings into a consolidated report + a provisional\n"
                   "  verdict. With no findings args, runs against ./samples/. "
-                  "Exit code: 0 = APPROVE, 1 = gating.")
+                  "Exit code: 0 = APPROVE, 1 = gating, 2 = bad args.")
             return 0
         if a == "--changed":
+            changed_explicit = True
             changed_path = argv[i + 1] if i + 1 < len(argv) else None
             i += 2
             continue
@@ -369,6 +371,11 @@ def main(argv: list[str]) -> int:
             continue
         paths.append(a)
         i += 1
+    # Fail CLOSED on an explicit but unusable --changed: an empty `changed` set would
+    # reclassify every changeset finding as pre-existing and exit 0 APPROVE on a typo.
+    if changed_explicit and (changed_path is None or not os.path.exists(changed_path)):
+        print(f"error: --changed file not found: {changed_path!r}", file=sys.stderr)
+        return 2
     if changed_path is None:
         changed_path = os.path.join(here, "samples", "changed_files.txt")
     if not paths:  # default demo uses the bundled fixtures

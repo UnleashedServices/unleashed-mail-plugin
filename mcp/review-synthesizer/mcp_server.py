@@ -194,11 +194,13 @@ def _send(obj: dict) -> None:
 
 
 def main() -> int:
-    # The protocol + the report emoji (🔴🟡🔵) are UTF-8; pin the streams so a non-UTF-8
-    # locale (minimal CI containers, some Windows/POSIX) can't raise UnicodedecodeError.
-    for stream in (sys.stdin, sys.stdout):
+    # The protocol + the report emoji (🔴🟡🔵) are UTF-8; pin all three streams so a
+    # non-UTF-8 locale (minimal CI containers, some Windows/POSIX) can't raise a
+    # UnicodeError. errors="replace" degrades a malformed byte on stdin to U+FFFD
+    # (then json.loads drops the line) rather than crashing readline().
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8")
+            stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):  # not a TextIOWrapper / already detached
             pass
     _log("ready (stdio)")

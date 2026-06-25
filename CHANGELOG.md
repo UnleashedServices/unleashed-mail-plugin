@@ -111,6 +111,10 @@ _Nothing yet — add new changes here._
   the report emoji survive a non-UTF-8 locale (minimal CI containers); the server
   README's fallback scope rule and the `agent-orchestration` skill are updated to match
   the always-gate and missing-reviewer behaviours above.
+- **CLI fails closed on a bad `--changed`** — an explicit but missing/typo'd path now
+  exits `2` instead of scoping every finding to pre-existing and exiting `0` APPROVE. The
+  stdio server also pins `stderr` and uses `errors="replace"` so a malformed byte on the
+  pipe degrades to U+FFFD rather than crashing `readline()`.
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 
