@@ -339,6 +339,11 @@ assert_contains "multi-action: clean build -> build" "$(. "$_DIR/lib/log.sh"; bu
 assert_contains "multi-action: clean test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild clean test -scheme X')" 'xcodebuild-test'
 assert_contains "scheme value named build ignored" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild test -scheme build')" 'xcodebuild-test'
 
+# 25f. A QUOTED flag value with spaces + an embedded action word isn't mistaken for an action (codex PR).
+assert_contains "quoted scheme 'My build app' archive -> other" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -scheme "My build app" archive')" 'xcodebuild-other'
+assert_contains "quoted scheme 'Nightly build' test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -scheme "Nightly build" test')" 'xcodebuild-test'
+assert_contains "quoted derivedDataPath '/tmp/test dir' build -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -derivedDataPath "/tmp/test dir" build')" 'xcodebuild-build'
+
 # 26. Log rotation: 600 lines -> capped to 250 after the next write.
 ROT="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
 rm -f "$ROT" 2>/dev/null

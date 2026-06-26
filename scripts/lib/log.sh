@@ -71,7 +71,23 @@ build_class() {
     case "$cmd" in
         *xcodebuild*)
             local -a _toks=()
-            read -ra _toks <<<"$cmd"
+            local _split="" _line
+            # Quote-aware tokenisation (python3 shlex) so a value-taking flag's VALUE with spaces
+            # (e.g. -scheme "My build app") is ONE token, not split into a bare `build`/`test` token
+            # that looks like an action (codex PR review). Fall back to a whitespace split if python3
+            # is absent or shlex errors (unbalanced quotes) — best-effort, still consistent.
+            if command -v python3 >/dev/null 2>&1; then
+                _split="$(printf '%s' "$cmd" | python3 -c 'import shlex, sys
+try:
+    sys.stdout.write("\n".join(shlex.split(sys.stdin.read())))
+except Exception:
+    sys.exit(1)' 2>/dev/null)" || _split=""
+            fi
+            if [ -n "$_split" ]; then
+                while IFS= read -r _line; do _toks+=("$_line"); done <<<"$_split"
+            else
+                read -ra _toks <<<"$cmd"
+            fi
             for tok in "${_toks[@]}"; do
                 if [ "$seen" = 1 ]; then
                     case "$prev" in
