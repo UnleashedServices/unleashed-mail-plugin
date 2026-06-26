@@ -34,7 +34,11 @@ SNAP="$(context_snapshot_path)"   # per-checkout snapshot (repo-hash namespaced)
 # leaving the file for the next PreCompact to overwrite. Fail-open on any clock/stat error.
 NOW="$(date +%s 2>/dev/null)" || NOW=0
 case "$NOW" in ''|*[!0-9]*|0) exit 0 ;; esac
-if [ "$(uname 2>/dev/null)" = "Darwin" ]; then
+# Feature-detect the mtime flavor rather than branching on `uname == Darwin`: BSD stat (macOS,
+# FreeBSD, NetBSD — not all report "Darwin") uses `-f %m`, GNU stat uses `-c %Y`. Probe `-f %m`
+# first (it errors out on GNU because `%m` is treated as a missing file operand) and fall back to
+# `-c %Y`. ($SNAP already exists — checked above — so the probe reflects the stat flavor, not absence.)
+if stat -f %m "$SNAP" >/dev/null 2>&1; then
     MTIME="$(stat -f %m "$SNAP" 2>/dev/null)"
 else
     MTIME="$(stat -c %Y "$SNAP" 2>/dev/null)"

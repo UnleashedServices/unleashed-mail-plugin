@@ -236,9 +236,10 @@ def capture(capture_root: str, slug: str, agent: str, message: str) -> str:
             json.dump(sanitized, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.replace(tmp, dest)
-    except Exception:
+    except (OSError, TypeError):
         # Never leave a partial tmp on a write/replace failure (gemini PR review). Fail-open:
         # capture is observe-only, so a failed write just returns "invalid"; the hook exits 0.
+        # (OSError = fs failures incl. IsADirectoryError; TypeError = a non-serializable value.)
         try:
             os.remove(tmp)
         except OSError:
@@ -269,15 +270,18 @@ def _extract_assistant_text(obj: object) -> str:
 
 
 def read_last_assistant_from_transcript(path: str) -> str:
-    """Best-effort: return the LAST assistant text from a JSONL subagent transcript. `errors=
-    "replace"` (consistent with main's stdin read) + catching ValueError keep a transcript with
-    invalid UTF-8 bytes from raising an uncaught UnicodeDecodeError during iteration — a bad line
-    is skipped, never fatal (gemini PR review)."""
+    """Best-effort: return the LAST assistant text from a JSONL subagent transcript. Read the file
+    as BYTES and decode each line STRICTLY, skipping any line with invalid UTF-8 — so a corrupt
+    line neither raises an uncaught UnicodeDecodeError (gemini PR review) nor decodes to U+FFFD and
+    becomes `last`, shadowing an earlier valid findings message (codex PR review)."""
     last = ""
     try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
+        with open(path, "rb") as fh:
+            for raw in fh:
+                try:
+                    line = raw.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    continue  # skip a line with invalid UTF-8 entirely — don't let it become `last`
                 if not line:
                     continue
                 try:
@@ -287,7 +291,7 @@ def read_last_assistant_from_transcript(path: str) -> str:
                 text = _extract_assistant_text(obj)
                 if text:
                     last = text
-    except (OSError, ValueError):
+    except OSError:
         return ""
     return last
 

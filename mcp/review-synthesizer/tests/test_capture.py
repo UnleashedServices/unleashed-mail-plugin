@@ -306,16 +306,29 @@ class TestTranscriptFallback(unittest.TestCase):
     def test_missing_file_empty(self):
         self.assertEqual(C.read_last_assistant_from_transcript("/no/such/transcript"), "")
 
+    def _asst(self, text):
+        return {"type": "assistant", "message": {"role": "assistant",
+                "content": [{"type": "text", "text": text}]}}
+
     def test_invalid_utf8_does_not_raise(self):
         # A transcript with invalid UTF-8 bytes must not raise UnicodeDecodeError (gemini PR).
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "t.jsonl")
-            good = {"type": "assistant", "message": {"role": "assistant",
-                    "content": [{"type": "text", "text": "valid line"}]}}
             with open(path, "wb") as fh:
-                fh.write(b"\xff\xfe invalid bytes not json\n")        # garbage line
-                fh.write((json.dumps(good) + "\n").encode("utf-8"))  # a good line after it
+                fh.write(b"\xff\xfe invalid bytes not json\n")                    # garbage first
+                fh.write((json.dumps(self._asst("valid line")) + "\n").encode())  # good after
             self.assertEqual(C.read_last_assistant_from_transcript(path), "valid line")
+
+    def test_corrupt_line_does_not_shadow_earlier_good(self):
+        # A corrupt line AFTER a good one must be SKIPPED (not decoded to U+FFFD and kept as
+        # `last`), so the earlier valid findings message still wins (codex PR review).
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.jsonl")
+            with open(path, "wb") as fh:
+                fh.write((json.dumps(self._asst("GOOD findings")) + "\n").encode())
+                fh.write(b'{"type":"assistant","message":{"role":"assistant","content":'
+                         b'[{"type":"text","text":"\xff\xfe corrupt"}]}}\n')
+            self.assertEqual(C.read_last_assistant_from_transcript(path), "GOOD findings")
 
 
 if __name__ == "__main__":
