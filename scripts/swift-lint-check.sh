@@ -1,8 +1,22 @@
 #!/bin/bash
 # PostToolUse hook: validate Swift files after Write/Edit operations.
 # Exits non-zero to BLOCK the write if critical violations are found.
+#
+# COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
+# CLAUDE_TOOL_ARG_* fallback) and a per-kind lint marker is written for the Stop-gate.
 
-FILE_PATH="${CLAUDE_TOOL_ARG_file_path:-${CLAUDE_TOOL_ARG_path:-}}"
+_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=scripts/lib/hook-io.sh
+[ -f "$_DIR/lib/hook-io.sh" ] && . "$_DIR/lib/hook-io.sh"
+# shellcheck source=scripts/lib/marker.sh
+[ -f "$_DIR/lib/marker.sh" ] && . "$_DIR/lib/marker.sh"
+
+if command -v hook_io_read >/dev/null 2>&1; then
+    hook_io_read
+    FILE_PATH="$(hook_file_path)"
+else
+    FILE_PATH="${CLAUDE_TOOL_ARG_file_path:-${CLAUDE_TOOL_ARG_path:-}}"
+fi
 
 # Only process .swift files
 if [[ "$FILE_PATH" != *.swift ]]; then
@@ -96,5 +110,16 @@ case "$FILE_PATH" in
         esac
         ;;
 esac
+
+# --- COREDEV-2324: write the lint marker for the Stop-gate (real verdict only) ---
+# Only when swiftlint actually ran, so we never fake a "pass" when the linter is
+# absent. EXIT_CODE reflects the hook's real block decision for this .swift file.
+if command -v marker_write >/dev/null 2>&1 && command -v swiftlint >/dev/null 2>&1; then
+    if [ "$EXIT_CODE" -eq 0 ]; then
+        marker_write lint pass
+    else
+        marker_write lint fail
+    fi
+fi
 
 exit $EXIT_CODE

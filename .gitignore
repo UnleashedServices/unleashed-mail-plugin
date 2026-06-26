@@ -12,3 +12,9 @@ firebase-debug.log
 # Python bytecode (MCP review-synthesizer is stdlib Python)
 __pycache__/
 *.py[cod]
+
+# Hook state/logs (COREDEV-2324). Markers + warn-logs live under the plugin data
+# dir (~/.claude/unleashed-mail), outside the repo — these entries are defensive,
+# in case state ever lands in-tree. (*.jsonl / reviews/ arrive with Phase 2.)
+.state/
+logs/
