@@ -167,7 +167,10 @@ class TestRoundSelection(unittest.TestCase):
             slug = "COREDEV-2325"
             for a in C.VALID_AGENTS:
                 self.assertEqual(C.capture(root, slug, a, fenced([raw()]), "id-cycle1-%s" % a), "written")
-            self.assertEqual(C.select_round(root, slug, "security-reviewer", "id-cycle1-security-reviewer"), 1)
+            rd = os.path.join(root, slug, "round-1")
+            for a in C.VALID_AGENTS:  # all four reviewers of the cycle landed in round-1
+                self.assertTrue(os.path.isfile(os.path.join(rd, a + ".json")))
+            self.assertFalse(os.path.isdir(os.path.join(root, slug, "round-2")))
 
     def test_duplicate_same_agent_id_is_skipped_not_advanced(self):
         # A true duplicate (SAME agent_id) is dedup-skipped, never advanced into a polluting new
@@ -194,14 +197,29 @@ class TestRoundSelection(unittest.TestCase):
                 "written")
             self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))
 
+    def test_delayed_duplicate_skipped_after_round_advanced(self):
+        # A duplicate of cycle-1's reviewer arriving AFTER a re-review opened round-2 must still be
+        # recognised (its id was seen in round-1) and skipped — not written into a new round-3 with
+        # stale findings (codex PR review).
+        with tempfile.TemporaryDirectory() as root:
+            slug = "COREDEV-2325"
+            for a in C.VALID_AGENTS:
+                C.capture(root, slug, a, fenced([raw()]), "id1-%s" % a)            # round-1
+            C.capture(root, slug, "security-reviewer", fenced([raw()]), "id2-security-reviewer")  # -> round-2
+            self.assertTrue(os.path.isdir(os.path.join(root, slug, "round-2")))
+            self.assertEqual(  # delayed duplicate of cycle-1's security (id1) -> skipped
+                C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1-security-reviewer"),
+                "skipped")
+            self.assertFalse(os.path.isdir(os.path.join(root, slug, "round-3")))
+
     def test_explicit_round_override(self):
         with tempfile.TemporaryDirectory() as root:
             slug = "COREDEV-2325"
             C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1")
             os.environ["UNLEASHED_REVIEW_ROUND"] = "2"
-            try:
+            try:  # a re-review (new subagent id) with the orchestrator forcing round 2
                 self.assertEqual(
-                    C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1"), "written")
+                    C.capture(root, slug, "security-reviewer", fenced([raw()]), "id2"), "written")
             finally:
                 del os.environ["UNLEASHED_REVIEW_ROUND"]
             self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))

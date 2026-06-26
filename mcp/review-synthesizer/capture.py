@@ -39,7 +39,7 @@ _TILDE = re.compile(r"~[A-Za-z0-9._-]+")
 _BEARER = re.compile(r"bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)
 _JWT = re.compile(r"eyJ[A-Za-z0-9._-]{10,}")
 _SECRET = re.compile(r"(?:sk-|pk_)[A-Za-z0-9._-]{8,}")
-_APIKEY = re.compile(r"[Aa][Pp][Ii][\s_-]?[Kk][Ee][Yy]\s*[:=]\s*[A-Za-z0-9._-]+")
+_APIKEY = re.compile(r"api[\s_-]?key\s*[:=]\s*[A-Za-z0-9._-]+", re.IGNORECASE)
 
 EVIDENCE_CAP = 500
 FILE_CAP = 300
@@ -169,18 +169,32 @@ def _read_agentid(round_dir: str, agent: str) -> str:
         return ""
 
 
+def _seen_agent_ids(base: str, agent: str) -> "set[str]":
+    """Every subagent id recorded for `agent` across ALL rounds under `base`, so a duplicate
+    SubagentStop is recognised no matter how many rounds have since opened (codex PR review)."""
+    seen = set()
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return seen
+    for name in names:
+        if re.match(r"round-(\d+)$", name):
+            aid = _read_agentid(os.path.join(base, name), agent)
+            if aid:
+                seen.add(aid)
+    return seen
+
+
 def select_round(capture_root: str, slug: str, agent: str = "", agent_id: str = "") -> int:
     """The target round. Deterministic override first: `UNLEASHED_REVIEW_ROUND` (a positive int the
     orchestrator may set per cycle). Otherwise: the highest existing `round-N` under `<root>/<slug>`,
-    advancing to the NEXT round when this reviewer's slot in the highest round was filled by a
-    DIFFERENT subagent (a distinct `agent_id`).
+    advancing to the NEXT round when this reviewer's slot in the highest round is already filled.
 
-    `agent_id` (from the SubagentStop event — distinct per subagent, identical on a true duplicate)
-    is the deterministic, timing-independent signal that separates a duplicate (same id -> stay in
-    the round, then dedup-skip) from a re-review (new id -> new round). So a quick re-review is never
-    dropped and a stray duplicate never pollutes a new round, regardless of timing. When agent_id is
-    unavailable the round stays put (highest-or-1) and `UNLEASHED_REVIEW_ROUND` is the explicit
-    fallback. Defaults to 1 when there is no prior round."""
+    Duplicates are filtered out earlier by `capture()`'s cross-round `agent_id` check, so a filled
+    slot here can only mean a NEW subagent re-ran the reviewer (a re-review) -> a fresh round. With
+    `agent_id` this is fully deterministic and timing-independent. When agent_id is unavailable the
+    round stays put (highest-or-1) with `UNLEASHED_REVIEW_ROUND` as the explicit fallback. Defaults
+    to 1 when there is no prior round."""
     override = os.environ.get("UNLEASHED_REVIEW_ROUND", "")
     if override.isdigit() and int(override) > 0:
         return int(override)
@@ -195,10 +209,8 @@ def select_round(capture_root: str, slug: str, agent: str = "", agent_id: str = 
         pass
     if highest == 0:
         return 1
-    if agent and agent_id:
-        prev_id = _read_agentid(os.path.join(base, "round-%d" % highest), agent)
-        if prev_id and prev_id != agent_id:
-            return highest + 1  # a different subagent for this reviewer -> a fresh re-review cycle
+    if agent and agent_id and os.path.exists(os.path.join(base, "round-%d" % highest, agent + ".json")):
+        return highest + 1
     return highest
 
 
@@ -229,18 +241,21 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
     rejected | skipped | no-fence | invalid | written."""
     if agent not in VALID_AGENTS:
         return "rejected"
+    base = os.path.join(capture_root, slug)
+    # A true duplicate: the same agent_id already captured for this reviewer in ANY round (immediate
+    # or delayed across round advances) -> skip without writing or advancing (codex PR review).
+    if agent_id and agent_id in _seen_agent_ids(base, agent):
+        return "skipped"
     round_n = select_round(capture_root, slug, agent, agent_id)
     try:
         dest = safe_join(capture_root, slug, round_n, agent)
     except ValueError:
         return "rejected"
     dest_dir = os.path.dirname(dest)
-    if is_final_capture(dest):
-        # A valid capture already exists for this round/agent. Skip only if it's the SAME subagent
-        # (a true duplicate) — or if there's no agent_id to tell a duplicate from a re-review.
-        prev_id = _read_agentid(dest_dir, agent)
-        if not agent_id or not prev_id or prev_id == agent_id:
-            return "skipped"
+    # Absent-id fallback dedup: with no agent_id to tell a duplicate from a re-review, skip if a
+    # valid capture already occupies this slot.
+    if not agent_id and is_final_capture(dest):
+        return "skipped"
     block = extract_last_json_block(message)
     if block is None:
         return "no-fence"
