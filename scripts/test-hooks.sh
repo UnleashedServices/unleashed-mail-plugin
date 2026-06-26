@@ -10,6 +10,13 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$_DIR/sensitive-file-guard.sh"
 STOP="$_DIR/stop-quality-marker-gate.sh"
 BUILD_VERIFY="$_DIR/swift-build-verify.sh"
+# Phase 2 (COREDEV-2325) observability hooks.
+STOP_FAIL_LOG="$_DIR/stop-failure-log.sh"
+DENY_LOG="$_DIR/permission-denied-log.sh"
+BUILD_FAIL_LOG="$_DIR/build-failure-log.sh"
+PRECOMPACT="$_DIR/precompact-snapshot.sh"
+SESSION_RESTORE="$_DIR/sessionstart-restore.sh"
+CAPTURE="$_DIR/capture-reviewer-verdict.sh"
 
 # Isolated, throwaway plugin-data dir for markers/logs/sentinels.
 TMPROOT="$(mktemp -d 2>/dev/null || mktemp -d -t hooktests)"
@@ -20,6 +27,9 @@ trap cleanup EXIT
 # Marker helpers (same path math the hooks use) so tests and hooks agree on paths.
 # shellcheck source=scripts/lib/marker.sh
 . "$_DIR/lib/marker.sh"
+# Context helpers (Phase 2) so capture tests resolve the same reviews/<slug> path.
+# shellcheck source=scripts/lib/context.sh
+. "$_DIR/lib/context.sh"
 
 PASS=0
 FAIL=0
@@ -228,6 +238,239 @@ assert_contains "build fail -> block" "$OUT" '"decision":"block"'
 if [ -f "$INVOKED" ]; then fail "Stop hook invoked a heavy tool: $(cat "$INVOKED" 2>/dev/null)"; else ok; fi
 ELAPSED=$(( T1 - T0 ))
 if [ "$ELAPSED" -lt 5 ]; then ok; else fail "Stop hook too slow (${ELAPSED}s) — must not run a build"; fi
+
+echo "== Item 10 diagnostic logs (StopFailure / PermissionDenied / PostToolUseFailure) =="
+
+# JSON-encode a string for safe embedding in a synthetic stdin payload.
+json_str() { python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.argv[1]))' "$1"; }
+
+# 21. StopFailure logs ONLY the coarse enum; raw error_message text never persists.
+rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
+printf '{"error_type":"rate_limit","error_message":"failed at /Users/john.doe/secret token sk-abc1234567"}' \
+    | bash "$STOP_FAIL_LOG" 2>/dev/null
+ERRLOG="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
+assert_contains "stopfailure logs enum" "$(cat "$ERRLOG" 2>/dev/null)" '"type":"rate_limit"'
+assert_not_contains "stopfailure no error_message PII" "$(cat "$ERRLOG" 2>/dev/null)" 'john.doe'
+assert_not_contains "stopfailure no secret" "$(cat "$ERRLOG" 2>/dev/null)" 'sk-abc'
+
+# 22. StopFailure defensive .error fallback.
+printf '{"error":"overloaded"}' | bash "$STOP_FAIL_LOG" 2>/dev/null
+assert_contains "stopfailure .error fallback" "$(tail -1 "$ERRLOG" 2>/dev/null)" '"type":"overloaded"'
+
+# 22b. A path/email IN error_type itself is REDACTED (not just delimiter-stripped) — the
+#      tr -cd clamp alone would keep the username/email payload, so it must redact first.
+printf '{"error_type":"server_error /Users/john.doe/x contact nick@corp.com"}' | bash "$STOP_FAIL_LOG" 2>/dev/null
+assert_not_contains "stopfailure redacts path in error_type" "$(tail -1 "$ERRLOG" 2>/dev/null)" 'john.doe'
+assert_not_contains "stopfailure redacts email in error_type" "$(tail -1 "$ERRLOG" 2>/dev/null)" 'corp.com'
+
+# 23. PermissionDenied logs tool + sanitized reason; tool_input is NEVER read.
+printf '{"tool_name":"Edit","reason":"blocked path /Users/john.doe/x","tool_input":{"file_path":"/Users/john.doe/SECRETFILE"}}' \
+    | bash "$DENY_LOG" 2>/dev/null
+DENYLOG="$CLAUDE_PLUGIN_DATA/logs/denied-commands.jsonl"
+assert_contains "denied logs tool" "$(cat "$DENYLOG" 2>/dev/null)" '"tool":"Edit"'
+assert_not_contains "denied no tool_input value" "$(cat "$DENYLOG" 2>/dev/null)" 'SECRETFILE'
+assert_not_contains "denied reason redacts /Users" "$(cat "$DENYLOG" 2>/dev/null)" 'john.doe'
+
+# 23b. PermissionDenied: a spaced "API key: VALUE" secret in reason is redacted.
+rm -f "$DENYLOG" 2>/dev/null
+printf '{"tool_name":"Bash","reason":"denied API key: ABCDEFGHIJKLMNOP exposed"}' | bash "$DENY_LOG" 2>/dev/null
+assert_not_contains "denied redacts spaced api key" "$(cat "$DENYLOG" 2>/dev/null)" 'ABCDEFGHIJKLMNOP'
+
+# 23b2. An uppercase BEARER token in reason is redacted (case-insensitive).
+rm -f "$DENYLOG" 2>/dev/null
+printf '{"tool_name":"Bash","reason":"used BEARER opaqueTOKEN1234567890abcdef now"}' | bash "$DENY_LOG" 2>/dev/null
+assert_not_contains "denied redacts uppercase BEARER" "$(cat "$DENYLOG" 2>/dev/null)" 'opaqueTOKEN'
+
+# 23c. PermissionDenied: a NESTED tool_input.tool_name must never be read/persisted as the tool.
+rm -f "$DENYLOG" 2>/dev/null
+printf '{"tool_input":{"tool_name":"john.doe@corp.com"},"reason":"x"}' | bash "$DENY_LOG" 2>/dev/null
+assert_not_contains "denied ignores nested tool_input.tool_name" "$(cat "$DENYLOG" 2>/dev/null)" 'john.doe'
+
+# 23d. hook_str stays TOP-LEVEL-ONLY even with no jq/python3 (a grep fallback would read the
+#      nested tool_input.tool_name — the exact leak path). command()->fail simulates no engines.
+OUT="$(HOOK_STDIN='{"tool_input":{"tool_name":"john.doe@corp.com"}}' bash -c '. "'"$_DIR"'/lib/hook-io.sh"; command() { return 1; }; hook_str tool_name' 2>/dev/null)"
+assert_empty "hook_str top-level-only without jq/py3" "$OUT"
+
+# 23e. hook_str python fallback (no jq) reads+writes UNICODE under a non-UTF-8 locale (LC_ALL=C):
+#      stdin.buffer in + stdout.buffer out, so neither the decode nor the encode raises.
+OUT="$(HOOK_STDIN='{"reason":"café leak"}' LC_ALL=C PYTHONUTF8=0 bash -c '. "'"$_DIR"'/lib/hook-io.sh"; command() { if [ "$1" = "-v" ] && [ "$2" = "jq" ]; then return 1; fi; builtin command "$@"; }; hook_str reason' 2>/dev/null)"
+assert_contains "hook_str unicode under C locale (no jq)" "$OUT" "café"
+
+# 24. PermissionDenied: nested tool_input.reason must NOT be read as top-level reason.
+rm -f "$DENYLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"reason":"NESTED_LEAK /Users/john.doe/z"}}' \
+    | bash "$DENY_LOG" 2>/dev/null
+assert_contains "denied no top reason -> unknown" "$(cat "$DENYLOG" 2>/dev/null)" '"reason":"unknown"'
+assert_not_contains "denied does not read nested reason" "$(cat "$DENYLOG" 2>/dev/null)" 'NESTED_LEAK'
+
+# 25. PostToolUseFailure logs only the build CLASS + failed=true; raw command never persists.
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build -archivePath /Users/john.doe/A.xcarchive CODE_SIGN_IDENTITY=secret"},"error":"BUILD FAILED"}' \
+    | bash "$BUILD_FAIL_LOG" 2>/dev/null
+BUILDLOG="$CLAUDE_PLUGIN_DATA/logs/build-log.jsonl"
+assert_contains "build-fail class" "$(cat "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-build","failed":true'
+assert_not_contains "build-fail no archivePath" "$(cat "$BUILDLOG" 2>/dev/null)" 'archivePath'
+assert_not_contains "build-fail no signing identity" "$(cat "$BUILDLOG" 2>/dev/null)" 'CODE_SIGN'
+
+# 25b. `build-for-testing` classes as BUILD on BOTH failure and success — no success/failure split.
+rm -f "$BUILDLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build-for-testing -scheme X"},"error":"failed"}' | bash "$BUILD_FAIL_LOG" 2>/dev/null
+assert_contains "build-for-testing FAIL -> build class" "$(cat "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-build","failed":true'
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build-for-testing -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
+assert_contains "build-for-testing SUCCESS -> build class" "$(tail -1 "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-build","failed":false'
+
+# 25c. `test-without-building` classes as TEST on BOTH failure and success (codex PR — mirror case).
+rm -f "$BUILDLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test-without-building -scheme X"},"error":"failed"}' | bash "$BUILD_FAIL_LOG" 2>/dev/null
+assert_contains "test-without-building FAIL -> test class" "$(cat "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":true'
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test-without-building -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
+assert_contains "test-without-building SUCCESS -> test class" "$(tail -1 "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":false'
+
+# 25d. A -derivedDataPath/-scheme VALUE named "build"/"test" must not flip the class (action-token
+#      classification, codex PR review) — and fail/success stay consistent via the shared classifier.
+rm -f "$BUILDLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test -derivedDataPath build -scheme X"},"error":"x"}' | bash "$BUILD_FAIL_LOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test -derivedDataPath build -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
+assert_contains "test -derivedDataPath build FAIL -> test" "$(sed -n '1p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":true'
+assert_contains "test -derivedDataPath build SUCCESS -> test" "$(sed -n '2p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":false'
+
+# 25e. Value-less flag before the action, and multi-action `clean build`/`clean test` (codex PR).
+assert_contains "value-less flag: -quiet test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -quiet test -scheme X')" 'xcodebuild-test'
+assert_contains "multi-action: clean build -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild clean build -scheme X')" 'xcodebuild-build'
+assert_contains "multi-action: clean test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild clean test -scheme X')" 'xcodebuild-test'
+assert_contains "scheme value named build ignored" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild test -scheme build')" 'xcodebuild-test'
+
+# 25f. A QUOTED flag value with spaces + an embedded action word isn't mistaken for an action (codex PR).
+assert_contains "quoted scheme 'My build app' archive -> other" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -scheme "My build app" archive')" 'xcodebuild-other'
+assert_contains "quoted scheme 'Nightly build' test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -scheme "Nightly build" test')" 'xcodebuild-test'
+assert_contains "quoted derivedDataPath '/tmp/test dir' build -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -derivedDataPath "/tmp/test dir" build')" 'xcodebuild-build'
+
+# 25g. Compound shell forms (operators/punctuation) still classify by the xcodebuild action (codex PR).
+assert_contains "compound: build; echo -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild build; echo done')" 'xcodebuild-build'
+assert_contains "compound: if test; then -> test" "$(. "$_DIR/lib/log.sh"; build_class 'if xcodebuild test; then echo ok; fi')" 'xcodebuild-test'
+assert_contains "compound: (xcodebuild test) -> test" "$(. "$_DIR/lib/log.sh"; build_class '(xcodebuild test)')" 'xcodebuild-test'
+assert_contains "compound: build && echo -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild build && echo')" 'xcodebuild-build'
+
+# 26. Log rotation: 600 lines -> capped to 250 after the next write.
+ROT="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
+rm -f "$ROT" 2>/dev/null
+mkdir -p "$CLAUDE_PLUGIN_DATA/logs"
+i=0; while [ "$i" -lt 600 ]; do printf '{"ts":"x","type":"unknown"}\n' >> "$ROT"; i=$((i+1)); done
+printf '{"error_type":"server_error"}' | bash "$STOP_FAIL_LOG" 2>/dev/null
+ROTN="$(wc -l < "$ROT" 2>/dev/null | tr -d '[:space:]')"
+if [ "$ROTN" = "250" ]; then ok; else fail "rotation -> expected 250 lines, got $ROTN"; fi
+
+# 27. Kill switches emit nothing.
+assert_empty "failure-log off -> nothing" "$(printf '{"error_type":"server_error"}' | UNLEASHED_FAILURE_LOG=off bash "$STOP_FAIL_LOG" 2>/dev/null)"
+assert_empty "deny-log off -> nothing" "$(printf '{"tool_name":"Edit","reason":"x"}' | UNLEASHED_DENY_LOG=off bash "$DENY_LOG" 2>/dev/null)"
+
+# 27b. Open-failure must be STDERR-CLEAN: make the log path a directory so the append open
+#      fails, and assert nothing (esp. the PII-bearing path) leaks to stderr.
+rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
+mkdir -p "$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
+ERROUT="$(printf '{"error_type":"server_error"}' | bash "$STOP_FAIL_LOG" 2>&1 1>/dev/null)"
+assert_empty "open-fail -> stderr clean (no path leak)" "$ERROUT"
+rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
+
+# 27c. Append succeeds but the line-count READ fails (write-only log file) -> still stderr-clean
+#      (the `wc -l 2>/dev/null < "$path"` read-open error must not leak the path).
+rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
+mkdir -p "$CLAUDE_PLUGIN_DATA/logs"
+: > "$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
+chmod 200 "$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"   # write-only: append OK, read fails
+ERROUT="$(printf '{"error_type":"overloaded"}' | bash "$STOP_FAIL_LOG" 2>&1 1>/dev/null)"
+assert_empty "read-probe-fail -> stderr clean (no path leak)" "$ERROUT"
+chmod 600 "$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl" 2>/dev/null
+rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
+
+echo "== Item 5 PreCompact snapshot + SessionStart restore =="
+SNAP="$(context_snapshot_path)"   # per-checkout: <base>/.state/work-context-snapshot-<repohash>.json
+# Per-repo namespacing (codex PR review): the snapshot path + reviews dir carry the repo hash.
+REPOHASH="$(context_repo_hash)"
+assert_contains "snapshot path is repo-namespaced" "$SNAP" "$REPOHASH"
+assert_contains "reviews dir is repo-namespaced" "$(context_reviews_dir)" "$REPOHASH"
+
+# 28. Snapshot derives a PII-safe ticket/slug; raw branch is never persisted.
+rm -f "$SNAP" 2>/dev/null
+( cd "$_DIR/.." && printf '{"trigger":"auto"}' | bash "$PRECOMPACT" 2>/dev/null )
+if [ -f "$SNAP" ]; then ok; else fail "precompact -> snapshot written"; fi
+if is_valid_json "$(cat "$SNAP" 2>/dev/null)"; then ok; else fail "snapshot -> valid JSON"; fi
+assert_contains "snapshot has ticket" "$(cat "$SNAP" 2>/dev/null)" '"ticket"'
+assert_not_contains "snapshot no raw branch suffix" "$(cat "$SNAP" 2>/dev/null)" 'observability'
+
+# 28b. Plan resolves from the REPO ROOT even when PreCompact fires from a subdirectory (codex PR).
+rm -f "$SNAP" 2>/dev/null
+( cd "$_DIR" && printf '{}' | bash "$PRECOMPACT" 2>/dev/null )   # cwd = scripts/ (a repo subdir)
+assert_not_contains "plan found from repo root (cwd=subdir)" "$(cat "$SNAP" 2>/dev/null)" '"plan":"unknown"'
+
+# 29. Restore on source=compact within 10 min -> additionalContext + snapshot deleted.
+OUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_contains "restore -> additionalContext" "$OUT" '"additionalContext"'
+assert_contains "restore -> SessionStart event" "$OUT" '"hookEventName":"SessionStart"'
+if is_valid_json "$OUT"; then ok; else fail "restore -> valid JSON"; fi
+if [ -f "$SNAP" ]; then fail "restore-once -> snapshot deleted"; else ok; fi
+
+# 30. Restore source=clear -> silent, no replay (clear not in restore set).
+( cd "$_DIR/.." && printf '{}' | bash "$PRECOMPACT" 2>/dev/null )
+OUT="$(printf '{"source":"clear"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_empty "restore clear -> silent" "$OUT"
+if [ -f "$SNAP" ]; then ok; else fail "clear -> snapshot preserved"; fi
+
+# 31. Stale snapshot (>10 min) -> silent exit, file left in place.
+backdate "$SNAP" 660
+OUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_empty "stale snapshot -> silent" "$OUT"
+if [ -f "$SNAP" ]; then ok; else fail "stale -> file left for next precompact"; fi
+
+# 31b. Restore emits VALID JSON even with a unicode snapshot under a non-UTF-8 locale.
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-2325","branch_slug":"COREDEV-2325","plan":"docs/planning/café_PLAN.md","round":"1","snapshot_time":%s}\n' "$(date +%s)" > "$SNAP"
+OUT="$(printf '{"source":"compact"}' | LC_ALL=C bash "$SESSION_RESTORE" 2>/dev/null)"
+if is_valid_json "$OUT"; then ok; else fail "restore unicode under C locale -> valid JSON"; fi
+
+# 32. Snapshot kill switch.
+rm -f "$SNAP" 2>/dev/null
+( cd "$_DIR/.." && printf '{}' | UNLEASHED_COMPACT_SNAPSHOT=off bash "$PRECOMPACT" 2>/dev/null )
+if [ -f "$SNAP" ]; then fail "snapshot kill switch -> no write"; else ok; fi
+
+echo "== Item 6 SubagentStop reviewer capture =="
+SLUG="$(context_branch_slug "$(context_branch)")"
+REVDIR="$(context_reviews_dir)/$SLUG/round-1"
+SEC_MSG='Review done.
+
+```json
+[{"severity":"blocker","confidence":"high","sourceAgent":"SPOOFED","category":"keychain","file":"/Users/john.doe/App/TokenManager.swift","line":40,"lineEnd":52,"finding":"token","evidence":"secret at /Users/john.doe/.ssh/id_rsa","fix":"mail john.doe@corp.com"}]
+```'
+
+# 33. Capture a security-reviewer message -> sanitized, normalized, no PII, consumable.
+rm -rf "$(context_reviews_dir)" 2>/dev/null
+printf '{"agent_type":"security-reviewer","last_assistant_message":%s}' "$(json_str "$SEC_MSG")" \
+    | bash "$CAPTURE" 2>/dev/null
+SECF="$REVDIR/security-reviewer.json"
+if [ -f "$SECF" ]; then ok; else fail "capture -> security-reviewer.json written"; fi
+assert_not_contains "capture no PII path" "$(cat "$SECF" 2>/dev/null)" 'john.doe'
+assert_not_contains "capture no email" "$(cat "$SECF" 2>/dev/null)" 'corp.com'
+assert_contains "capture normalizes sourceAgent" "$(cat "$SECF" 2>/dev/null)" '"sourceAgent": "security-reviewer"'
+assert_not_contains "capture drops spoofed sourceAgent" "$(cat "$SECF" 2>/dev/null)" 'SPOOFED'
+
+# 34. Dedup: replay -> no second write. Backdate the file, replay; a skip leaves the
+#     old mtime, a rewrite stamps it to ~now (multi-second delta is reliable).
+file_mtime() { if [ "$(uname 2>/dev/null)" = "Darwin" ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi; }
+backdate "$SECF" 120
+MT0="$(file_mtime "$SECF")"
+printf '{"agent_type":"security-reviewer","last_assistant_message":%s}' "$(json_str "$SEC_MSG")" \
+    | bash "$CAPTURE" 2>/dev/null
+MT1="$(file_mtime "$SECF")"
+if [ "$MT0" = "$MT1" ]; then ok; else fail "dedup -> replay must not rewrite (mtime changed $MT0 -> $MT1)"; fi
+
+# 35. swift-reviewer is EXCLUDED (it consumes the synthesizer).
+printf '{"agent_type":"swift-reviewer","last_assistant_message":"```json\\n[]\\n```"}' | bash "$CAPTURE" 2>/dev/null
+if [ -e "$REVDIR/swift-reviewer.json" ]; then fail "swift-reviewer must be excluded"; else ok; fi
+
+# 36. Capture kill switch.
+rm -rf "$(context_reviews_dir)" 2>/dev/null
+printf '{"agent_type":"security-reviewer","last_assistant_message":"```json\\n[]\\n```"}' \
+    | UNLEASHED_CAPTURE_REVIEWERS=off bash "$CAPTURE" 2>/dev/null
+if [ -e "$REVDIR/security-reviewer.json" ]; then fail "capture kill switch -> no write"; else ok; fi
 
 echo ""
 echo "hook tests: ${PASS} passed, ${FAIL} failed"
