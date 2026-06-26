@@ -74,7 +74,8 @@ PLAN="$(_snap_field plan)";           [ -n "$PLAN" ]   || PLAN="unknown"
 ROUND="$(_snap_field round)";         [ -n "$ROUND" ]  || ROUND="unknown"
 
 HINT="Context restored after compaction — resume prior work: ticket=${TICKET}, branch=${SLUG}, plan=${PLAN}, round=${ROUND}. Re-read the plan/ticket before continuing."
-HINT="$(hook_redact_pii "$HINT" | cut -c1-400)"
+HINT="$(hook_redact_pii "$HINT")"
+HINT="${HINT:0:400}"   # bash substring (char-aware, no cut subprocess / BSD `cut -c` quirk)
 
 hook_emit_session_context "$HINT"
 

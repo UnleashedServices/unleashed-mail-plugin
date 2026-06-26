@@ -29,7 +29,8 @@ if [ -d docs/planning ]; then
     _plan="$(ls -t docs/planning/*_PLAN.md 2>/dev/null | head -1)"
     [ -n "$_plan" ] && PLAN="$_plan"
 fi
-PLAN="$(hook_redact_pii "$PLAN" | cut -c1-200)"
+PLAN="$(hook_redact_pii "$PLAN")"
+PLAN="${PLAN:0:200}"   # bash substring (char-aware, no cut subprocess / BSD `cut -c` quirk)
 [ -n "$PLAN" ] || PLAN="unknown"
 
 # Round = newest reviews/<slug>/round-N bucket, else "unknown" (enriched once Item 6 captures).

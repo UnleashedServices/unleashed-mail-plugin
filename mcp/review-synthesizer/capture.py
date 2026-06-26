@@ -157,12 +157,14 @@ def safe_join(capture_root: str, slug: str, round_n: int, agent: str) -> str:
 
 
 def select_round(capture_root: str, slug: str) -> int:
-    """The target round: `UNLEASHED_REVIEW_ROUND` if it is a positive integer, else the highest
-    existing `round-N` under `<root>/<slug>` — UNLESS that round already holds a capture file for
-    EVERY specialist reviewer (a completed cycle), in which case the NEXT round begins. This lets a
-    re-review after fixes land in a fresh round rather than being dedup-skipped into the stale one
-    (codex PR review). A new cycle's parallel reviewers all see the prior round still complete, so
-    they agree on the same next round. Defaults to 1."""
+    """The target round comes from an EXPLICIT signal, never inferred: `UNLEASHED_REVIEW_ROUND` if
+    set to a positive int — the orchestrator sets this per review cycle so a re-review after fixes
+    lands in a fresh round — else the highest existing `round-N` under `<root>/<slug>`, else 1.
+
+    Round boundaries are the orchestrator's to set, not this producer hook's to guess: auto-
+    advancing on a "completed" round was removed because a stray/duplicate SubagentStop arriving
+    after the final reviewer would advance into the next round and pollute it (codex PR review).
+    Within a round, dedup (`is_final_capture`) makes duplicates idempotent."""
     override = os.environ.get("UNLEASHED_REVIEW_ROUND", "")
     if override.isdigit() and int(override) > 0:
         return int(override)
@@ -175,15 +177,7 @@ def select_round(capture_root: str, slug: str) -> int:
                 highest = max(highest, int(m.group(1)))
     except OSError:
         pass
-    if highest == 0:
-        return 1
-    # A round is a "completed cycle" once a file exists for every specialist reviewer (a clean
-    # reviewer's empty [] still counts as having reported). Existence — not is_final_capture — so a
-    # round of all-clean reviewers still rolls over instead of being re-filled forever.
-    round_dir = os.path.join(base, "round-%d" % highest)
-    if all(os.path.exists(os.path.join(round_dir, "%s.json" % a)) for a in VALID_AGENTS):
-        return highest + 1
-    return highest
+    return highest if highest > 0 else 1
 
 
 def is_final_capture(path: str) -> bool:

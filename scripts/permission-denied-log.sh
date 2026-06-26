@@ -32,8 +32,8 @@ TOOL="$(printf '%s' "$TOOL" | LC_ALL=C tr -cd 'A-Za-z0-9_.-' | cut -c1-40)"
 [ -n "$TOOL" ] || exit 0
 
 # reason is FREE TEXT -> redact PII, cap, json-escape. tool_input is never read.
-REASON="$(hook_str reason)"
-REASON="$(hook_redact_pii "$REASON" | cut -c1-200)"
+REASON="$(hook_redact_pii "$(hook_str reason)")"
+REASON="${REASON:0:200}"   # bash substring (char-aware, no cut subprocess / BSD `cut -c` quirk)
 [ -n "$REASON" ] || REASON="unknown"
 REASON_JSON="$(json_escape "$REASON")"
 
