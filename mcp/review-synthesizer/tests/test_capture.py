@@ -197,6 +197,20 @@ class TestRoundSelection(unittest.TestCase):
                 "written")
             self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))
 
+    def test_rerun_reuses_bad_slot_instead_of_advancing(self):
+        # If the existing same-round slot is empty/invalid, a rerun (new id) OVERWRITES it in the
+        # same round rather than splitting into a new round and leaving the bad slot (codex PR review).
+        with tempfile.TemporaryDirectory() as root:
+            slug = "COREDEV-2325"
+            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([]), "id1"), "written")
+            dest = os.path.join(root, slug, "round-1", "security-reviewer.json")
+            with open(dest, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh), [])   # an empty (clean) capture occupies the slot
+            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()]), "id2"), "written")
+            self.assertFalse(os.path.isdir(os.path.join(root, slug, "round-2")))  # reused, not advanced
+            with open(dest, encoding="utf-8") as fh:
+                self.assertEqual(len(json.load(fh)), 1)
+
     def test_delayed_duplicate_skipped_after_round_advanced(self):
         # A duplicate of cycle-1's reviewer arriving AFTER a re-review opened round-2 must still be
         # recognised (its id was seen in round-1) and skipped — not written into a new round-3 with

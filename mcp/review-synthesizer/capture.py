@@ -209,7 +209,10 @@ def select_round(capture_root: str, slug: str, agent: str = "", agent_id: str = 
         pass
     if highest == 0:
         return 1
-    if agent and agent_id and os.path.exists(os.path.join(base, "round-%d" % highest, agent + ".json")):
+    # Advance only when the highest round's slot already holds a VALID capture (a real prior
+    # review). If the slot is empty/corrupt/schema-dropped junk, stay in the round so the rerun
+    # OVERWRITES it instead of splitting the review across rounds (codex PR review).
+    if agent and agent_id and is_final_capture(os.path.join(base, "round-%d" % highest, agent + ".json")):
         return highest + 1
     return highest
 
