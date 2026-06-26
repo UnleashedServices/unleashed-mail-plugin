@@ -13,8 +13,10 @@ firebase-debug.log
 __pycache__/
 *.py[cod]
 
-# Hook state/logs (COREDEV-2324). Markers + warn-logs live under the plugin data
-# dir (~/.claude/unleashed-mail), outside the repo — these entries are defensive,
-# in case state ever lands in-tree. (*.jsonl / reviews/ arrive with Phase 2.)
+# Hook state/logs (COREDEV-2324/2325). Markers, diagnostic logs, compaction snapshots,
+# and reviewer captures live under the plugin data dir (~/.claude/unleashed-mail),
+# outside the repo — these entries are defensive, in case state ever lands in-tree.
 .state/
 logs/
+*.jsonl
+reviews/

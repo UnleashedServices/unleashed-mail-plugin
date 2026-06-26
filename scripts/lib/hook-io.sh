@@ -183,3 +183,59 @@ hook_emit_block() {
     reason="$(json_escape "$1")"
     printf '{"decision":"block","reason":%s}\n' "$reason"
 }
+
+# --- Phase 2 (COREDEV-2325) additions ---------------------------------------
+
+# A TOP-LEVEL string field, read STRUCTURALLY via jq -> python3 ONLY (never grep).
+# A regex `"key":"…"` scan would also match a NESTED `tool_input.<key>` (e.g. a
+# `tool_input.reason`), which would violate the "never read tool_input" invariant —
+# so for PII-sensitive top-level reads (reason/source/agent_type/error_type/…) we
+# only use a real JSON parser and return empty (fail-open) when neither exists. $1 = key.
+hook_str() {
+    local key="$1" v=""
+    if command -v jq >/dev/null 2>&1; then
+        v="$(printf '%s' "$HOOK_STDIN" | jq -r --arg k "$key" '.[$k] | select(type == "string")' 2>/dev/null)"
+    fi
+    if [ -z "$v" ] && command -v python3 >/dev/null 2>&1; then
+        v="$(printf '%s' "$HOOK_STDIN" | _HOOK_STR_KEY="$key" python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if isinstance(d, dict):
+    v = d.get(os.environ.get("_HOOK_STR_KEY", ""))
+    if isinstance(v, str):
+        sys.stdout.write(v)
+' 2>/dev/null)"
+    fi
+    printf '%s' "$v"
+}
+
+# Redact PII from a free-text string before it is persisted to a log/snapshot/capture.
+# Collapses: emails; home-dir usernames (/Users/<n>, /home/<n>, ~<n>) so a
+# `/Users/<name>/…` path or `-archivePath` cannot leak the user; full dot-segmented
+# JWT/Bearer tokens (not just the first segment); sk-/pk_ secrets; api keys. Then
+# folds newlines/tabs to spaces. BSD/GNU-portable `sed -E` (POSIX classes, no `\s`),
+# `LC_ALL=C`. The Python `redact_pii` in mcp/review-synthesizer/capture.py mirrors
+# these patterns 1:1. The caller caps length and json_escapes. $1 = string.
+hook_redact_pii() {
+    printf '%s' "$1" | LC_ALL=C sed -E \
+        -e 's#[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}#[redacted-email]#g' \
+        -e 's#/Users/[^/[:space:]"]+#/Users/[redacted]#g' \
+        -e 's#/home/[^/[:space:]"]+#/home/[redacted]#g' \
+        -e 's#~[A-Za-z0-9._-]+#~[redacted]#g' \
+        -e 's#[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[A-Za-z0-9._-]{20,}#[redacted-token]#g' \
+        -e 's#eyJ[A-Za-z0-9._-]{10,}#[redacted-jwt]#g' \
+        -e 's#(sk-|pk_)[A-Za-z0-9._-]{8,}#[redacted-secret]#g' \
+        -e 's#[Aa][Pp][Ii][[:space:]_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*[A-Za-z0-9._-]+#[redacted-key]#g' \
+        2>/dev/null | tr '\n\r\t' '   '
+}
+
+# SessionStart: inject a one-line, non-blocking resume hint as additionalContext.
+# SessionStart cannot block; this is the documented post-compaction context point. $1 = message.
+hook_emit_session_context() {
+    local ctx
+    ctx="$(json_escape "$1")"
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}\n' "$ctx"
+}
