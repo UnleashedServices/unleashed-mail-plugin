@@ -28,13 +28,18 @@ if [ "$HAS_XCODEPROJ" = true ]; then
         LINT_OUTPUT=$(swiftlint --quiet 2>&1)
         LINT_EXIT=$?
 
+        # This is the FULL-PROJECT lint, so its verdict is authoritative (no per-file
+        # masking) — it's the writer that clears the per-file hook's fail-closed lint
+        # marker so the Stop-gate sentinel can release (codex + gemini PR #12).
         if [ $LINT_EXIT -ne 0 ]; then
             echo "❌ SwiftLint errors found:"
             echo "$LINT_OUTPUT"
             echo "💡 Run 'swiftlint --fix' to auto-fix some issues"
             EXIT_CODE=1
+            command -v marker_write >/dev/null 2>&1 && marker_write lint fail
         else
             echo "✅ SwiftLint passed"
+            command -v marker_write >/dev/null 2>&1 && marker_write lint pass
         fi
     else
         echo "⚠️  SwiftLint not installed — install with 'brew install swiftlint'"

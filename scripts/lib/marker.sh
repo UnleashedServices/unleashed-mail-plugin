@@ -99,7 +99,11 @@ marker_write() {
     if [ "$status" = "pass" ]; then
         local _k _any_fail=0
         for _k in lint build; do
-            [ "$(marker_status "$_k")" = "fail" ] && _any_fail=1
+            # Only a fail marker for THIS commit keeps the sentinel; a stale fail from
+            # an older commit shouldn't (gemini PR #12).
+            if [ "$(marker_status "$_k")" = "fail" ] && [ "$(marker_commit "$_k")" = "$commit" ]; then
+                _any_fail=1
+            fi
         done
         if [ "$_any_fail" = 0 ]; then
             rm -f "$dir/stop-last-blocked-${hash}" 2>/dev/null || true
