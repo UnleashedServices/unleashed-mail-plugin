@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Read-only; run AFTER both /unleashed-mail:gemini-review and /unleashed-mail:codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Bash, Grep
+allowed-tools: Read, Grep
 ---
 
 # Plan-Review Synthesis
@@ -55,7 +55,7 @@ Map each reviewer's raw verdict to one canonical token:
 1. **Either or both transcripts `MISSING`** → you **cannot** claim `APPROVE`:
    - **Both** missing → `REQUEST_CHANGES` (the gate did not run at all).
    - One missing, the other `REQUEST_CHANGES` → `REQUEST_CHANGES`.
-   - One missing, the other approves → `DISAGREEMENT` (a lone approval can't carry the gate).
+   - One missing, the other approves (`APPROVE`/`APPROVE_WITH_NOTES`) → `DISAGREEMENT` (a lone approval can't carry the gate).
    Always **low** confidence, with an explicit note naming the reviewer(s) that did not return.
 2. **One side approves (`APPROVE`/`APPROVE_WITH_NOTES`) and the other is `REQUEST_CHANGES`** →
    `DISAGREEMENT`. Surface both positions; **do not average** to a middle verdict.

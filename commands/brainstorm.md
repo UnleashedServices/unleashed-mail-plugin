@@ -72,8 +72,9 @@ Then a recommendation line — **`Option X (Recommended)`** — one sentence on 
 trade-off being accepted.
 
 **Parity-Impact is mandatory — never drop that row.** Every sync / compose / push / storage fork has a
-provider-parity dimension (CLAUDE.md). A "Gmail-only quick win" must still show its Graph cost (e.g. a
-tracked `// TODO: PARITY` stub), not omit the column.
+provider-parity dimension (CLAUDE.md). Gmail and Graph share one **Parity-Impact** cell per option (not
+separate columns), so a "Gmail-only quick win" must still show its Graph cost (e.g. a tracked
+`// TODO: PARITY` stub) **inside that cell**, rather than omitting the other provider's analysis.
 
 **Worked examples (real unleashed forks):**
 

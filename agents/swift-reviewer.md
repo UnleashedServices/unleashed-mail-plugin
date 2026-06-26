@@ -142,7 +142,13 @@ reviewers trace the rest and tag findings outside the diff with `scope:
 
 **If the four reviewers' JSON arrays were already provided to you** (an external
 orchestrator ran them per SKILL.md), skip spawning and go straight to Step 3 — do not
-re-run them. Otherwise spawn **all four** review agents simultaneously using the
+re-run them. **Each pre-collected array must arrive with its reviewer's Output Contract
+`Status:`** (`COMPLETE | BLOCKED | PARTIAL`): a bare findings array is ambiguous, because an
+empty `[]` could be a clean pass *or* a `BLOCKED` reviewer reduced to `[]` (e.g. if a capture
+step persisted only the JSON array and dropped the status line). If any reviewer's array
+arrives **without** a status, re-run that reviewer; if it cannot be re-run, treat it as
+`BLOCKED` — a Needs-Confirmation uncertainty that routes the verdict to NEEDS DISCUSSION (Step
+5), never a clean `[]`. Otherwise spawn **all four** review agents simultaneously using the
 `Agent` tool, plus `jira-manager` to log the review. Pass each agent the list of
 changed files and a brief summary.
 
