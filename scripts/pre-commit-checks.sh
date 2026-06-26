@@ -9,6 +9,12 @@ echo "🔍 Running pre-commit checks..."
 
 EXIT_CODE=0
 
+# COREDEV-2324: shared marker writer for the Stop-gate (build marker). Sourced
+# defensively — absence must not break the commit hook.
+_PCC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=scripts/lib/marker.sh
+[ -f "$_PCC_DIR/lib/marker.sh" ] && . "$_PCC_DIR/lib/marker.sh"
+
 # Detect whether we're in the UnleashedMail Xcode project
 HAS_XCODEPROJ=false
 if [ -d "Unleashed Mail.xcodeproj" ]; then
@@ -22,13 +28,18 @@ if [ "$HAS_XCODEPROJ" = true ]; then
         LINT_OUTPUT=$(swiftlint --quiet 2>&1)
         LINT_EXIT=$?
 
+        # This is the FULL-PROJECT lint, so its verdict is authoritative (no per-file
+        # masking) — it's the writer that clears the per-file hook's fail-closed lint
+        # marker so the Stop-gate sentinel can release (codex + gemini PR #12).
         if [ $LINT_EXIT -ne 0 ]; then
             echo "❌ SwiftLint errors found:"
             echo "$LINT_OUTPUT"
             echo "💡 Run 'swiftlint --fix' to auto-fix some issues"
             EXIT_CODE=1
+            command -v marker_write >/dev/null 2>&1 && marker_write lint fail
         else
             echo "✅ SwiftLint passed"
+            command -v marker_write >/dev/null 2>&1 && marker_write lint pass
         fi
     else
         echo "⚠️  SwiftLint not installed — install with 'brew install swiftlint'"
@@ -50,8 +61,10 @@ if [ "$HAS_XCODEPROJ" = true ]; then
         echo "❌ Build failed:"
         echo "$BUILD_OUTPUT" | tail -30
         EXIT_CODE=1
+        command -v marker_write >/dev/null 2>&1 && marker_write build fail
     else
         echo "✅ Build succeeded"
+        command -v marker_write >/dev/null 2>&1 && marker_write build pass
     fi
 else
     echo "⏭️  Skipping build check (not in Unleashed Mail Xcode project)"
