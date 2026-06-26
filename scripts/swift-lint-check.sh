@@ -31,6 +31,9 @@ if command -v swiftc &> /dev/null; then
     if [ $? -ne 0 ]; then
         echo "❌ Swift syntax error in $FILE_PATH — BLOCKED"
         echo "$RESULT" | head -10
+        # Record the fail marker before the early exit so the Stop-gate sees it —
+        # a syntax error is a real lint failure (codex PR #12).
+        command -v marker_write >/dev/null 2>&1 && marker_write lint fail
         exit 1
     fi
 fi
@@ -111,14 +114,16 @@ case "$FILE_PATH" in
         ;;
 esac
 
-# --- COREDEV-2324: write the lint marker for the Stop-gate (real verdict only) ---
-# Only when swiftlint actually ran, so we never fake a "pass" when the linter is
-# absent. EXIT_CODE reflects the hook's real block decision for this .swift file.
-if command -v marker_write >/dev/null 2>&1 && command -v swiftlint >/dev/null 2>&1; then
-    if [ "$EXIT_CODE" -eq 0 ]; then
-        marker_write lint pass
-    else
+# --- COREDEV-2324: write the lint marker for the Stop-gate ---
+# Decouple the FAIL marker from swiftlint (gemini PR #12): ANY failed check
+# (swiftlint errors, try!, as!, token-logging, or the syntax check above) must leave
+# a lint=fail marker so the Stop-gate sees it. Write lint=pass ONLY when swiftlint
+# actually ran clean — never fake a "pass" when the linter is absent.
+if command -v marker_write >/dev/null 2>&1; then
+    if [ "$EXIT_CODE" -ne 0 ]; then
         marker_write lint fail
+    elif command -v swiftlint >/dev/null 2>&1; then
+        marker_write lint pass
     fi
 fi
 

@@ -37,7 +37,10 @@ _marker_bash_hash() {
 }
 
 # 12-hex sha1 of the repo's absolute path. The path is hashed, never surfaced.
+# Cached per-process: the Stop hook calls this several times per invocation (gemini PR #12).
+_MARKER_REPO_HASH_CACHE=""
 marker_repo_hash() {
+    [ -n "$_MARKER_REPO_HASH_CACHE" ] && { printf '%s' "$_MARKER_REPO_HASH_CACHE"; return 0; }
     local root="" h=""
     root="$(git rev-parse --show-toplevel 2>/dev/null)" || root=""
     [ -n "$root" ] || root="$PWD"
@@ -58,7 +61,8 @@ marker_repo_hash() {
     # Final resort: a pure-bash hash of the path — PII-free (never path characters),
     # always available. Guarantees a non-empty, per-repo discriminator.
     [ -n "$h" ] || h="$(_marker_bash_hash "$root")"
-    printf '%s' "${h:0:12}"
+    _MARKER_REPO_HASH_CACHE="${h:0:12}"
+    printf '%s' "$_MARKER_REPO_HASH_CACHE"
 }
 
 # Absolute path of a marker file. $1 = kind (lint|build).
