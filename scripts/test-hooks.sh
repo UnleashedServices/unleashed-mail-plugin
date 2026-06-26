@@ -311,6 +311,13 @@ assert_contains "build-fail class" "$(cat "$BUILDLOG" 2>/dev/null)" '"class":"xc
 assert_not_contains "build-fail no archivePath" "$(cat "$BUILDLOG" 2>/dev/null)" 'archivePath'
 assert_not_contains "build-fail no signing identity" "$(cat "$BUILDLOG" 2>/dev/null)" 'CODE_SIGN'
 
+# 25b. `build-for-testing` classes as BUILD on BOTH failure and success — no success/failure split.
+rm -f "$BUILDLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build-for-testing -scheme X"},"error":"failed"}' | bash "$BUILD_FAIL_LOG" 2>/dev/null
+assert_contains "build-for-testing FAIL -> build class" "$(cat "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-build","failed":true'
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build-for-testing -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
+assert_contains "build-for-testing SUCCESS -> build class" "$(tail -1 "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-build","failed":false'
+
 # 26. Log rotation: 600 lines -> capped to 250 after the next write.
 ROT="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
 rm -f "$ROT" 2>/dev/null

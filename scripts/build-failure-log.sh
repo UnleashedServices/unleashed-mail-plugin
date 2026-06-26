@@ -35,12 +35,16 @@ CMD="$(hook_command)"
 # Derive the command CLASS only — the raw command is never read into the log.
 CLASS=""
 case "$CMD" in
-    *xcodebuild*test*)   CLASS="xcodebuild-test" ;;
-    *xcodebuild*build*)  CLASS="xcodebuild-build" ;;
-    *xcodebuild*)        CLASS="xcodebuild-other" ;;
-    *"swift test"*)      CLASS="swift-test" ;;
-    *"swift build"*)     CLASS="swift-build" ;;
-    *)                   exit 0 ;;
+    # `build-for-testing` BUILDS tests without running them (Apple TN2339) -> a build action; match
+    # it before the generic *test* arm so the same command isn't classed as `xcodebuild-test` on
+    # failure but `xcodebuild-build` on success (codex PR review) — keep both hooks in lockstep.
+    *xcodebuild*build-for-testing*) CLASS="xcodebuild-build" ;;
+    *xcodebuild*test*)              CLASS="xcodebuild-test" ;;
+    *xcodebuild*build*)             CLASS="xcodebuild-build" ;;
+    *xcodebuild*)                   CLASS="xcodebuild-other" ;;
+    *"swift test"*)                 CLASS="swift-test" ;;
+    *"swift build"*)                CLASS="swift-build" ;;
+    *)                              exit 0 ;;
 esac
 
 log_append "build-log.jsonl" "$(printf '{"ts":"%s","kind":"build","class":"%s","failed":true}' "$(log_ts)" "$CLASS")"
