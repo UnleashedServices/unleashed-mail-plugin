@@ -333,6 +333,12 @@ printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test -derivedDat
 assert_contains "test -derivedDataPath build FAIL -> test" "$(sed -n '1p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":true'
 assert_contains "test -derivedDataPath build SUCCESS -> test" "$(sed -n '2p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":false'
 
+# 25e. Value-less flag before the action, and multi-action `clean build`/`clean test` (codex PR).
+assert_contains "value-less flag: -quiet test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild -quiet test -scheme X')" 'xcodebuild-test'
+assert_contains "multi-action: clean build -> build" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild clean build -scheme X')" 'xcodebuild-build'
+assert_contains "multi-action: clean test -> test" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild clean test -scheme X')" 'xcodebuild-test'
+assert_contains "scheme value named build ignored" "$(. "$_DIR/lib/log.sh"; build_class 'xcodebuild test -scheme build')" 'xcodebuild-test'
+
 # 26. Log rotation: 600 lines -> capped to 250 after the next write.
 ROT="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
 rm -f "$ROT" 2>/dev/null

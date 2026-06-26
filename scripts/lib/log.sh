@@ -67,7 +67,7 @@ log_ts() {
 # $1 = the command string. The action is the first bare (non-flag, not a flag's value) token after
 # `xcodebuild` matching a known action; build-for-testing -> build, test-without-building -> test.
 build_class() {
-    local cmd="$1" tok prev="" act="" seen=0
+    local cmd="$1" tok prev="" seen=0 has_test=0 has_build=0
     case "$cmd" in
         *xcodebuild*)
             local -a _toks=()
@@ -75,21 +75,27 @@ build_class() {
             for tok in "${_toks[@]}"; do
                 if [ "$seen" = 1 ]; then
                     case "$prev" in
-                        -*) ;;  # a flag's value -> not the action token
+                        # Skip the VALUE of a value-taking flag (so a -scheme/-derivedDataPath/path
+                        # value named like an action isn't mistaken for one). Value-LESS flags
+                        # (-quiet, -verbose, …) are NOT here, so an action right after one is still
+                        # seen. xcodebuild allows MULTIPLE actions, so collect all (don't stop at a
+                        # leading `clean`); test outranks build outranks other (codex PR review).
+                        -scheme|-target|-project|-workspace|-configuration|-sdk|-destination|-arch|-derivedDataPath|-resultBundlePath|-archivePath|-exportPath|-exportOptionsPlist|-xcconfig|-toolchain|-testPlan|-only-testing|-skip-testing|-resultBundleVersion) ;;
                         *)
                             case "$tok" in
-                                build|build-for-testing)    act="xcodebuild-build"; break ;;
-                                test|test-without-building) act="xcodebuild-test";  break ;;
-                                analyze|archive|clean|install|installsrc|install-src|docbuild)
-                                                            act="xcodebuild-other"; break ;;
-                            esac
+                                test|test-without-building) has_test=1 ;;
+                                build|build-for-testing)    has_build=1 ;;
+                            esac  # any other action (clean/analyze/archive/…) -> falls through to other
                             ;;
                     esac
                 fi
                 case "$tok" in *xcodebuild*) seen=1 ;; esac
                 prev="$tok"
             done
-            printf '%s' "${act:-xcodebuild-other}"
+            if   [ "$has_test"  = 1 ]; then printf 'xcodebuild-test'
+            elif [ "$has_build" = 1 ]; then printf 'xcodebuild-build'
+            else                            printf 'xcodebuild-other'
+            fi
             ;;
         *"swift test"*)  printf 'swift-test' ;;
         *"swift build"*) printf 'swift-build' ;;
