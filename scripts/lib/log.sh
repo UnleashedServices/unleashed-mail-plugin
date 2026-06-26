@@ -58,3 +58,41 @@ log_ts() {
     t="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
     printf '%s' "${t:-unknown}"
 }
+
+# Classify a build/test command into a stable telemetry CLASS by its xcodebuild ACTION TOKEN — not a
+# substring of the whole command, so a -scheme / -derivedDataPath / path value that happens to be
+# "build" or "test" can't flip the class. SHARED by build-failure-log.sh + swift-build-verify.sh so
+# one command ALWAYS classes the same on success and failure (codex PR review — no class split skews
+# the build/test failure-rate telemetry). Prints the class, or nothing for a non-build/test command.
+# $1 = the command string. The action is the first bare (non-flag, not a flag's value) token after
+# `xcodebuild` matching a known action; build-for-testing -> build, test-without-building -> test.
+build_class() {
+    local cmd="$1" tok prev="" act="" seen=0
+    case "$cmd" in
+        *xcodebuild*)
+            local -a _toks=()
+            read -ra _toks <<<"$cmd"
+            for tok in "${_toks[@]}"; do
+                if [ "$seen" = 1 ]; then
+                    case "$prev" in
+                        -*) ;;  # a flag's value -> not the action token
+                        *)
+                            case "$tok" in
+                                build|build-for-testing)    act="xcodebuild-build"; break ;;
+                                test|test-without-building) act="xcodebuild-test";  break ;;
+                                analyze|archive|clean|install|installsrc|install-src|docbuild)
+                                                            act="xcodebuild-other"; break ;;
+                            esac
+                            ;;
+                    esac
+                fi
+                case "$tok" in *xcodebuild*) seen=1 ;; esac
+                prev="$tok"
+            done
+            printf '%s' "${act:-xcodebuild-other}"
+            ;;
+        *"swift test"*)  printf 'swift-test' ;;
+        *"swift build"*) printf 'swift-build' ;;
+        *) ;;
+    esac
+}

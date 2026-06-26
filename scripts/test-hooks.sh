@@ -325,6 +325,14 @@ assert_contains "test-without-building FAIL -> test class" "$(cat "$BUILDLOG" 2>
 printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test-without-building -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
 assert_contains "test-without-building SUCCESS -> test class" "$(tail -1 "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":false'
 
+# 25d. A -derivedDataPath/-scheme VALUE named "build"/"test" must not flip the class (action-token
+#      classification, codex PR review) — and fail/success stay consistent via the shared classifier.
+rm -f "$BUILDLOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test -derivedDataPath build -scheme X"},"error":"x"}' | bash "$BUILD_FAIL_LOG" 2>/dev/null
+printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild test -derivedDataPath build -scheme X"}}' | bash "$BUILD_VERIFY" >/dev/null 2>&1
+assert_contains "test -derivedDataPath build FAIL -> test" "$(sed -n '1p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":true'
+assert_contains "test -derivedDataPath build SUCCESS -> test" "$(sed -n '2p' "$BUILDLOG" 2>/dev/null)" '"class":"xcodebuild-test","failed":false'
+
 # 26. Log rotation: 600 lines -> capped to 250 after the next write.
 ROT="$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl"
 rm -f "$ROT" 2>/dev/null

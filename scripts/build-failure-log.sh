@@ -32,21 +32,10 @@ TOOL="$(hook_str tool_name)"
 case "$TOOL" in Bash|"") ;; *) exit 0 ;; esac
 
 CMD="$(hook_command)"
-# Derive the command CLASS only — the raw command is never read into the log.
-CLASS=""
-case "$CMD" in
-    # The two xcodebuild actions that contain BOTH "build" and "test" keywords (Apple TN2339) must be
-    # matched explicitly, before the generic arms, so a command can't change class on success vs.
-    # failure (codex PR review) — keep this list identical to scripts/swift-build-verify.sh.
-    *xcodebuild*build-for-testing*)     CLASS="xcodebuild-build" ;;  # builds tests, doesn't run them
-    *xcodebuild*test-without-building*) CLASS="xcodebuild-test" ;;   # runs pre-built tests
-    *xcodebuild*test*)                  CLASS="xcodebuild-test" ;;
-    *xcodebuild*build*)                 CLASS="xcodebuild-build" ;;
-    *xcodebuild*)                       CLASS="xcodebuild-other" ;;
-    *"swift test"*)                     CLASS="swift-test" ;;
-    *"swift build"*)                    CLASS="swift-build" ;;
-    *)                                  exit 0 ;;
-esac
+# Derive the command CLASS via the SHARED classifier (lockstep with swift-build-verify.sh) — the raw
+# command is never read into the log. Empty class = not a build/test command -> nothing to log.
+CLASS="$(build_class "$CMD")"
+[ -n "$CLASS" ] || exit 0
 
 log_append "build-log.jsonl" "$(printf '{"ts":"%s","kind":"build","class":"%s","failed":true}' "$(log_ts)" "$CLASS")"
 exit 0
