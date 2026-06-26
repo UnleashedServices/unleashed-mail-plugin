@@ -47,7 +47,10 @@ jobs:
         run: python3 scripts/validate-plugin-assembly.py --root . --strict
 
       - name: ShellCheck plugin scripts
-        run: shellcheck -s bash -S warning scripts/*.sh .githooks/pre-commit
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+
+      - name: Hook stdin-simulation tests (COREDEV-2324)
+        run: bash scripts/test-hooks.sh
 
       - name: Job summary
         if: ${{ always() }}

@@ -1,8 +1,22 @@
 #!/bin/bash
 # PostToolUse hook: validate Swift files after Write/Edit operations.
 # Exits non-zero to BLOCK the write if critical violations are found.
+#
+# COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
+# CLAUDE_TOOL_ARG_* fallback) and a per-kind lint marker is written for the Stop-gate.
 
-FILE_PATH="${CLAUDE_TOOL_ARG_file_path:-${CLAUDE_TOOL_ARG_path:-}}"
+_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=scripts/lib/hook-io.sh
+[ -f "$_DIR/lib/hook-io.sh" ] && . "$_DIR/lib/hook-io.sh"
+# shellcheck source=scripts/lib/marker.sh
+[ -f "$_DIR/lib/marker.sh" ] && . "$_DIR/lib/marker.sh"
+
+if command -v hook_io_read >/dev/null 2>&1; then
+    hook_io_read
+    FILE_PATH="$(hook_file_path)"
+else
+    FILE_PATH="${CLAUDE_TOOL_ARG_file_path:-${CLAUDE_TOOL_ARG_path:-}}"
+fi
 
 # Only process .swift files
 if [[ "$FILE_PATH" != *.swift ]]; then
@@ -17,6 +31,9 @@ if command -v swiftc &> /dev/null; then
     if [ $? -ne 0 ]; then
         echo "❌ Swift syntax error in $FILE_PATH — BLOCKED"
         echo "$RESULT" | head -10
+        # Record the fail marker before the early exit so the Stop-gate sees it —
+        # a syntax error is a real lint failure (codex PR #12).
+        command -v marker_write >/dev/null 2>&1 && marker_write lint fail
         exit 1
     fi
 fi
@@ -96,5 +113,15 @@ case "$FILE_PATH" in
         esac
         ;;
 esac
+
+# --- COREDEV-2324: write the lint marker for the Stop-gate ---
+# This is a per-FILE PostToolUse hook, so it must NOT write lint=pass: one clean file
+# can't prove the whole repo lints, and overwriting a global fail would let the
+# Stop-gate be bypassed (gemini + codex PR #12). Write only lint=fail — fail-closed is
+# the safe default for a gate. The pass/clear comes from a full-project lint (the
+# pre-commit build marker, which clears the sentinel) or when HEAD/TTL moves on.
+if command -v marker_write >/dev/null 2>&1 && [ "$EXIT_CODE" -ne 0 ]; then
+    marker_write lint fail
+fi
 
 exit $EXIT_CODE
