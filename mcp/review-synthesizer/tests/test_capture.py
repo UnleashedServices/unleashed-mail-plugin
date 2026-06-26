@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -163,47 +162,46 @@ class TestSelectRound(unittest.TestCase):
 
 
 class TestRoundSelection(unittest.TestCase):
-    def test_within_cycle_window_stays_same_round(self):
-        # A cycle's four reviewers (and an immediate duplicate) land within the window -> same round.
+    def test_cycle_reviewers_share_a_round(self):
         with tempfile.TemporaryDirectory() as root:
             slug = "COREDEV-2325"
             for a in C.VALID_AGENTS:
-                self.assertEqual(C.capture(root, slug, a, fenced([raw()])), "written")
-            self.assertEqual(C.select_round(root, slug), 1)
+                self.assertEqual(C.capture(root, slug, a, fenced([raw()]), "id-cycle1-%s" % a), "written")
+            self.assertEqual(C.select_round(root, slug, "security-reviewer", "id-cycle1-security-reviewer"), 1)
 
-    def test_duplicate_within_window_is_skipped_not_advanced(self):
-        # A duplicate SubagentStop (arrives within seconds) must be dedup-skipped, NOT advanced into
-        # a new round where it would pollute a real re-review (codex PR review).
+    def test_duplicate_same_agent_id_is_skipped_not_advanced(self):
+        # A true duplicate (SAME agent_id) is dedup-skipped, never advanced into a polluting new
+        # round — regardless of timing (codex PR review).
         with tempfile.TemporaryDirectory() as root:
             slug = "COREDEV-2325"
             for a in C.VALID_AGENTS:
-                C.capture(root, slug, a, fenced([raw()]))
-            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()])), "skipped")
+                C.capture(root, slug, a, fenced([raw()]), "id1-%s" % a)
+            self.assertEqual(
+                C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1-security-reviewer"),
+                "skipped")
             self.assertFalse(os.path.isdir(os.path.join(root, slug, "round-2")))
 
-    def test_capture_after_cycle_window_starts_new_round(self):
-        # A re-review cycle arrives long after the prior round -> a fresh round (persisted mtime
-        # signal), so its findings aren't dedup-skipped into the stale round (codex PR review).
+    def test_re_review_new_agent_id_starts_new_round(self):
+        # A re-review = a NEW subagent (distinct agent_id) for the same reviewer type -> fresh round,
+        # deterministically and WITHOUT any timing dependence (the quick-re-review case codex flagged).
         with tempfile.TemporaryDirectory() as root:
             slug = "COREDEV-2325"
             for a in C.VALID_AGENTS:
-                C.capture(root, slug, a, fenced([raw()]))
-            rd = os.path.join(root, slug, "round-1")
-            old = time.time() - (C.CYCLE_WINDOW_SEC + 60)
-            for f in os.listdir(rd):
-                os.utime(os.path.join(rd, f), (old, old))
-            self.assertEqual(C.select_round(root, slug), 2)
-            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()])), "written")
+                C.capture(root, slug, a, fenced([raw()]), "id1-%s" % a)
+            # immediately (no waiting) a re-run with a new id must land in round-2, not be skipped
+            self.assertEqual(
+                C.capture(root, slug, "security-reviewer", fenced([raw()]), "id2-security-reviewer"),
+                "written")
             self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))
 
-    def test_explicit_round_override_starts_fresh_round(self):
-        # The orchestrator can still force a round deterministically via UNLEASHED_REVIEW_ROUND.
+    def test_explicit_round_override(self):
         with tempfile.TemporaryDirectory() as root:
             slug = "COREDEV-2325"
-            C.capture(root, slug, "security-reviewer", fenced([raw()]))
+            C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1")
             os.environ["UNLEASHED_REVIEW_ROUND"] = "2"
             try:
-                self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()])), "written")
+                self.assertEqual(
+                    C.capture(root, slug, "security-reviewer", fenced([raw()]), "id1"), "written")
             finally:
                 del os.environ["UNLEASHED_REVIEW_ROUND"]
             self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))

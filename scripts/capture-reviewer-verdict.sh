@@ -36,14 +36,17 @@ esac
 
 SLUG="$(context_branch_slug "$(context_branch)")"
 ROOT="$(context_reviews_dir)"
+# agent_id (distinct per subagent, identical on a true duplicate) lets capture.py tell a duplicate
+# SubagentStop from a genuine re-review deterministically — see select_round.
+AGENT_ID="$(hook_str agent_id)"
 
 MSG="$(hook_str last_assistant_message)"
 if [ -n "$MSG" ]; then
-    printf '%s' "$MSG" | python3 "$CAPTURE_PY" --root "$ROOT" --slug "$SLUG" --agent "$AGENT" >/dev/null 2>&1 || true
+    printf '%s' "$MSG" | python3 "$CAPTURE_PY" --root "$ROOT" --slug "$SLUG" --agent "$AGENT" --agent-id "$AGENT_ID" >/dev/null 2>&1 || true
 else
     TP="$(hook_str agent_transcript_path)"
     if [ -n "$TP" ] && [ -f "$TP" ]; then
-        python3 "$CAPTURE_PY" --root "$ROOT" --slug "$SLUG" --agent "$AGENT" --transcript "$TP" >/dev/null 2>&1 || true
+        python3 "$CAPTURE_PY" --root "$ROOT" --slug "$SLUG" --agent "$AGENT" --agent-id "$AGENT_ID" --transcript "$TP" >/dev/null 2>&1 || true
     fi
 fi
 exit 0

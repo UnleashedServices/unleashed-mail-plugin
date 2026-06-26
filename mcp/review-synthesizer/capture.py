@@ -26,7 +26,6 @@ import json
 import os
 import re
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -157,28 +156,31 @@ def safe_join(capture_root: str, slug: str, round_n: int, agent: str) -> str:
     return dest
 
 
-CYCLE_WINDOW_SEC = 600  # captures within this of the latest round's newest file belong to the same
-                        # review cycle; a later capture starts a new round. Override via env.
+def _agentid_path(round_dir: str, agent: str) -> str:
+    return os.path.join(round_dir, agent + ".agentid")
 
 
-def _cycle_window_sec() -> int:
-    raw = os.environ.get("UNLEASHED_REVIEW_CYCLE_SEC", "")
-    return int(raw) if raw.isdigit() and int(raw) > 0 else CYCLE_WINDOW_SEC
+def _read_agentid(round_dir: str, agent: str) -> str:
+    """The subagent id recorded alongside this agent's capture in `round_dir`, or "" if none."""
+    try:
+        with open(_agentid_path(round_dir, agent), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
 
 
-def select_round(capture_root: str, slug: str) -> int:
+def select_round(capture_root: str, slug: str, agent: str = "", agent_id: str = "") -> int:
     """The target round. Deterministic override first: `UNLEASHED_REVIEW_ROUND` (a positive int the
-    orchestrator may set per cycle). Otherwise derive it from a PERSISTED SIGNAL — the mtime of the
-    newest capture in the highest existing round (codex PR review):
+    orchestrator may set per cycle). Otherwise: the highest existing `round-N` under `<root>/<slug>`,
+    advancing to the NEXT round when this reviewer's slot in the highest round was filled by a
+    DIFFERENT subagent (a distinct `agent_id`).
 
-      * within the cycle window of that newest capture -> the SAME round. A review cycle's four
-        reviewers run in parallel (seconds–minutes apart) and a duplicate SubagentStop arrives
-        within seconds, so both stay in the round (the duplicate is then dedup-skipped);
-      * past the window -> a NEW round, because a later capture is a fresh re-review cycle whose
-        findings must not be dedup-skipped into the stale round.
-
-    Defaults to 1 when there is no prior round. This avoids both relying on an unset env var and the
-    stray-duplicate pollution that an unconditional 'completed round' auto-advance caused."""
+    `agent_id` (from the SubagentStop event — distinct per subagent, identical on a true duplicate)
+    is the deterministic, timing-independent signal that separates a duplicate (same id -> stay in
+    the round, then dedup-skip) from a re-review (new id -> new round). So a quick re-review is never
+    dropped and a stray duplicate never pollutes a new round, regardless of timing. When agent_id is
+    unavailable the round stays put (highest-or-1) and `UNLEASHED_REVIEW_ROUND` is the explicit
+    fallback. Defaults to 1 when there is no prior round."""
     override = os.environ.get("UNLEASHED_REVIEW_ROUND", "")
     if override.isdigit() and int(override) > 0:
         return int(override)
@@ -193,18 +195,10 @@ def select_round(capture_root: str, slug: str) -> int:
         pass
     if highest == 0:
         return 1
-    newest = 0.0
-    round_dir = os.path.join(base, "round-%d" % highest)
-    try:
-        for f in os.listdir(round_dir):
-            try:
-                newest = max(newest, os.path.getmtime(os.path.join(round_dir, f)))
-            except OSError:
-                pass
-    except OSError:
-        pass
-    if newest > 0.0 and (time.time() - newest) > _cycle_window_sec():
-        return highest + 1
+    if agent and agent_id:
+        prev_id = _read_agentid(os.path.join(base, "round-%d" % highest), agent)
+        if prev_id and prev_id != agent_id:
+            return highest + 1  # a different subagent for this reviewer -> a fresh re-review cycle
     return highest
 
 
@@ -230,18 +224,23 @@ def is_final_capture(path: str) -> bool:
     return False
 
 
-def capture(capture_root: str, slug: str, agent: str, message: str) -> str:
+def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: str = "") -> str:
     """Capture one reviewer message. Returns a status string (for tests/logging):
     rejected | skipped | no-fence | invalid | written."""
     if agent not in VALID_AGENTS:
         return "rejected"
-    round_n = select_round(capture_root, slug)
+    round_n = select_round(capture_root, slug, agent, agent_id)
     try:
         dest = safe_join(capture_root, slug, round_n, agent)
     except ValueError:
         return "rejected"
+    dest_dir = os.path.dirname(dest)
     if is_final_capture(dest):
-        return "skipped"  # dedup — a non-empty capture already exists for this round/agent
+        # A valid capture already exists for this round/agent. Skip only if it's the SAME subagent
+        # (a true duplicate) — or if there's no agent_id to tell a duplicate from a re-review.
+        prev_id = _read_agentid(dest_dir, agent)
+        if not agent_id or not prev_id or prev_id == agent_id:
+            return "skipped"
     block = extract_last_json_block(message)
     if block is None:
         return "no-fence"
@@ -250,7 +249,6 @@ def capture(capture_root: str, slug: str, agent: str, message: str) -> str:
     except ValueError:
         return "invalid"
     sanitized = [s for s in (sanitize_finding(it, agent) for it in items) if s is not None]
-    dest_dir = os.path.dirname(dest)
     tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
         os.makedirs(dest_dir, exist_ok=True)
@@ -258,6 +256,14 @@ def capture(capture_root: str, slug: str, agent: str, message: str) -> str:
             json.dump(sanitized, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.replace(tmp, dest)
+        # Record the subagent id AFTER the findings land (so a stale id never points at no capture);
+        # best-effort — a missing id just degrades the next round-selection to "same round".
+        if agent_id:
+            try:
+                with open(_agentid_path(dest_dir, agent), "w", encoding="utf-8") as fh:
+                    fh.write(agent_id)
+            except OSError:
+                pass
     except (OSError, TypeError):
         # Never leave a partial tmp on a write/replace failure (gemini PR review). Fail-open:
         # capture is observe-only, so a failed write just returns "invalid"; the hook exits 0.
@@ -325,6 +331,7 @@ def main(argv: "list[str]") -> int:
     p.add_argument("--root", required=True)
     p.add_argument("--slug", required=True)
     p.add_argument("--agent", required=True)
+    p.add_argument("--agent-id", dest="agent_id", default="")
     p.add_argument("--transcript", default=None)
     a = p.parse_args(argv)
     if a.transcript:
@@ -334,7 +341,7 @@ def main(argv: "list[str]") -> int:
         # can't raise UnicodeDecodeError on a unicode reviewer message (gemini PR review class).
         message = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     if message:
-        capture(a.root, a.slug, a.agent, message)
+        capture(a.root, a.slug, a.agent, message, a.agent_id)
     return 0
 
 
