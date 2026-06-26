@@ -12,12 +12,28 @@
 # stable 12-hex HASH of the branch (PII-free, never path characters). Every probe is
 # `2>/dev/null` and fail-open.
 
-# Plugin data base + the two Phase-2 subdirs (shared by Item 5 snapshot & Item 6 capture).
+# Plugin data base + Phase-2 state paths (shared by Item 5 snapshot & Item 6 capture).
 # ${HOME:-} so a missing HOME under `set -u` never aborts a hook. Quoted by every caller
 # (CLAUDE_PLUGIN_DATA may contain a space). Lives OUTSIDE the repo, never /tmp.
+#
+# Snapshot + reviews are NAMESPACED PER CHECKOUT via a repo-root hash (like Phase-1 marker.sh)
+# so a PreCompact snapshot or reviewer capture in repo A can never be restored into / mixed with
+# repo B, even when two checkouts share a branch/ticket slug (codex PR review). The repo-root path
+# is hashed only — never written/emitted (the hash is PII-free; see _context_hash).
 context_base()        { printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"; }
 context_state_dir()   { printf '%s/.state' "$(context_base)"; }
-context_reviews_dir() { printf '%s/reviews' "$(context_base)"; }
+
+# 12-hex hash of the repo root (or $PWD when not in a repo) — the per-checkout discriminator.
+context_repo_hash() {
+    local root=""
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" || root=""
+    [ -n "$root" ] || root="$PWD"
+    _context_hash "$root"
+}
+
+# Per-checkout reviews dir + snapshot file (both keyed by the repo hash).
+context_reviews_dir()   { printf '%s/reviews/%s' "$(context_base)" "$(context_repo_hash)"; }
+context_snapshot_path() { printf '%s/work-context-snapshot-%s.json' "$(context_state_dir)" "$(context_repo_hash)"; }
 
 # Current branch name, or "" if cwd is not a git repo. Used ONLY internally to derive the
 # safe tokens below — the raw value is never returned to a persisting/injecting caller.

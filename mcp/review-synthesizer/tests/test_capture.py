@@ -306,6 +306,17 @@ class TestTranscriptFallback(unittest.TestCase):
     def test_missing_file_empty(self):
         self.assertEqual(C.read_last_assistant_from_transcript("/no/such/transcript"), "")
 
+    def test_invalid_utf8_does_not_raise(self):
+        # A transcript with invalid UTF-8 bytes must not raise UnicodeDecodeError (gemini PR).
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.jsonl")
+            good = {"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "valid line"}]}}
+            with open(path, "wb") as fh:
+                fh.write(b"\xff\xfe invalid bytes not json\n")        # garbage line
+                fh.write((json.dumps(good) + "\n").encode("utf-8"))  # a good line after it
+            self.assertEqual(C.read_last_assistant_from_transcript(path), "valid line")
+
 
 if __name__ == "__main__":
     unittest.main()

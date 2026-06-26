@@ -50,9 +50,8 @@ fi
 SNAPTIME="$(date +%s 2>/dev/null)" || SNAPTIME=0
 case "$SNAPTIME" in ''|*[!0-9]*) SNAPTIME=0 ;; esac
 
-DIR="$(context_state_dir)"
-mkdir -p "$DIR" 2>/dev/null || exit 0
-SNAP="$DIR/work-context-snapshot.json"
+mkdir -p "$(context_state_dir)" 2>/dev/null || exit 0
+SNAP="$(context_snapshot_path)"   # per-checkout: .state/work-context-snapshot-<repohash>.json
 TMP="${SNAP}.tmp.$$"
 # Self-disarming EXIT trap: any early exit removes the partial tmp; disarmed after the mv.
 trap 'rm -f "$TMP" 2>/dev/null' EXIT

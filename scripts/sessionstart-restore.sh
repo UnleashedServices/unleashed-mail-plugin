@@ -27,7 +27,7 @@ case "$SOURCE" in
     *) exit 0 ;;
 esac
 
-SNAP="$(context_state_dir)/work-context-snapshot.json"
+SNAP="$(context_snapshot_path)"   # per-checkout snapshot (repo-hash namespaced)
 [ -f "$SNAP" ] || exit 0
 
 # Freshness via the snapshot FILE's mtime (BSD/GNU split). Stale (>=600s) -> silent exit,

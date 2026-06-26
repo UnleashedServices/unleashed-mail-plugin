@@ -344,7 +344,11 @@ chmod 600 "$CLAUDE_PLUGIN_DATA/logs/error-log.jsonl" 2>/dev/null
 rm -rf "$CLAUDE_PLUGIN_DATA/logs" 2>/dev/null
 
 echo "== Item 5 PreCompact snapshot + SessionStart restore =="
-SNAP="$(marker_dir)/work-context-snapshot.json"   # marker_dir == <base>/.state
+SNAP="$(context_snapshot_path)"   # per-checkout: <base>/.state/work-context-snapshot-<repohash>.json
+# Per-repo namespacing (codex PR review): the snapshot path + reviews dir carry the repo hash.
+REPOHASH="$(context_repo_hash)"
+assert_contains "snapshot path is repo-namespaced" "$SNAP" "$REPOHASH"
+assert_contains "reviews dir is repo-namespaced" "$(context_reviews_dir)" "$REPOHASH"
 
 # 28. Snapshot derives a PII-safe ticket/slug; raw branch is never persisted.
 rm -f "$SNAP" 2>/dev/null

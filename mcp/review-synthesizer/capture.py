@@ -269,10 +269,13 @@ def _extract_assistant_text(obj: object) -> str:
 
 
 def read_last_assistant_from_transcript(path: str) -> str:
-    """Best-effort: return the LAST assistant text from a JSONL subagent transcript."""
+    """Best-effort: return the LAST assistant text from a JSONL subagent transcript. `errors=
+    "replace"` (consistent with main's stdin read) + catching ValueError keep a transcript with
+    invalid UTF-8 bytes from raising an uncaught UnicodeDecodeError during iteration — a bad line
+    is skipped, never fatal (gemini PR review)."""
     last = ""
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -284,7 +287,7 @@ def read_last_assistant_from_transcript(path: str) -> str:
                 text = _extract_assistant_text(obj)
                 if text:
                     last = text
-    except OSError:
+    except (OSError, ValueError):
         return ""
     return last
 
