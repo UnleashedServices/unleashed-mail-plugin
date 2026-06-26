@@ -39,9 +39,11 @@ MCP_JSON="$ROOT/.mcp.json"
 # plugin.json is the comparison anchor.
 PLUGIN_VERSION="$(grep -m1 -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$PLUGIN_JSON" 2>/dev/null \
                   | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
-# Anchor to the first Markdown H1 heading so an unrelated "Plugin vX.Y.Z" elsewhere in
-# the README can't spoof the H1 drift gate (codex PR #11).
-README_H1="$(grep -m1 -E '^#[[:space:]].*Plugin v[0-9]+\.[0-9]+\.[0-9]+' "$README" 2>/dev/null | grep -oE 'Plugin v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/Plugin v//' || true)"
+# Read THE first Markdown H1 line (the title), then require the version to be in IT — so
+# a later heading like `# Legacy Plugin vX.Y.Z` can't satisfy the gate when the real
+# title drops the version (codex PR #11).
+README_H1_LINE="$(grep -m1 -E '^#[[:space:]]' "$README" 2>/dev/null || true)"
+README_H1="$(printf '%s\n' "$README_H1_LINE" | grep -oE 'Plugin v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/Plugin v//' || true)"
 README_WHATSNEW="$(grep -m1 -oE '^### v[0-9]+\.[0-9]+\.[0-9]+' "$README" 2>/dev/null | sed 's/^### v//' || true)"
 
 [[ -n "$PLUGIN_VERSION"  ]] || fail "could not parse version from plugin.json"
@@ -60,7 +62,7 @@ COUNTS_LINE="$(grep -m1 -E '^\*\*[0-9]+ agents' "$README" 2>/dev/null || true)"
 
 # BSD wc left-pads with spaces — coerce to an integer via arithmetic ($(( )) ).
 count_files() { local n; n="$(find "$1" -mindepth "${3:-1}" -maxdepth "${4:-1}" -name "$2" 2>/dev/null | wc -l || true)"; echo "$(( n ))"; }
-readme_count() { grep -oE "[0-9]+ $1" <<<"$COUNTS_LINE" | head -1 | grep -oE '^[0-9]+' || true; }
+readme_count() { printf '%s\n' "$COUNTS_LINE" | grep -oE "[0-9]+ $1" | head -1 | grep -oE '^[0-9]+' || true; }
 
 DISK_AGENTS="$(count_files "$ROOT/agents" '*.md')"
 DISK_SKILLS="$(count_files "$ROOT/skills" 'SKILL.md' 1 2)"
@@ -79,7 +81,7 @@ check_count "commands" "$DISK_COMMANDS"
 # MCP-server count: whenever .mcp.json is part of the plugin, the README token must
 # be present AND match — a dropped token is real drift (codex PR #11). utf-8-sig is
 # BOM-safe (gemini PR #11). (allow the optional plural "servers")
-README_MCP="$(grep -oE '[0-9]+ MCP servers?' <<<"$COUNTS_LINE" | head -1 | grep -oE '^[0-9]+' || true)"
+README_MCP="$(printf '%s\n' "$COUNTS_LINE" | grep -oE '[0-9]+ MCP servers?' | head -1 | grep -oE '^[0-9]+' || true)"
 if [[ -f "$MCP_JSON" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     DISK_MCP="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1], encoding="utf-8-sig")).get("mcpServers",{})))' "$MCP_JSON" 2>/dev/null || echo "")"
