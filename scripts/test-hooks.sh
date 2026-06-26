@@ -291,6 +291,11 @@ assert_not_contains "denied ignores nested tool_input.tool_name" "$(cat "$DENYLO
 OUT="$(HOOK_STDIN='{"tool_input":{"tool_name":"john.doe@corp.com"}}' bash -c '. "'"$_DIR"'/lib/hook-io.sh"; command() { return 1; }; hook_str tool_name' 2>/dev/null)"
 assert_empty "hook_str top-level-only without jq/py3" "$OUT"
 
+# 23e. hook_str python fallback (no jq) reads+writes UNICODE under a non-UTF-8 locale (LC_ALL=C):
+#      stdin.buffer in + stdout.buffer out, so neither the decode nor the encode raises.
+OUT="$(HOOK_STDIN='{"reason":"café leak"}' LC_ALL=C PYTHONUTF8=0 bash -c '. "'"$_DIR"'/lib/hook-io.sh"; command() { if [ "$1" = "-v" ] && [ "$2" = "jq" ]; then return 1; fi; builtin command "$@"; }; hook_str reason' 2>/dev/null)"
+assert_contains "hook_str unicode under C locale (no jq)" "$OUT" "café"
+
 # 24. PermissionDenied: nested tool_input.reason must NOT be read as top-level reason.
 rm -f "$DENYLOG" 2>/dev/null
 printf '{"tool_name":"Bash","tool_input":{"reason":"NESTED_LEAK /Users/john.doe/z"}}' \
@@ -367,6 +372,12 @@ backdate "$SNAP" 660
 OUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
 assert_empty "stale snapshot -> silent" "$OUT"
 if [ -f "$SNAP" ]; then ok; else fail "stale -> file left for next precompact"; fi
+
+# 31b. Restore emits VALID JSON even with a unicode snapshot under a non-UTF-8 locale.
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-2325","branch_slug":"COREDEV-2325","plan":"docs/planning/café_PLAN.md","round":"1","snapshot_time":%s}\n' "$(date +%s)" > "$SNAP"
+OUT="$(printf '{"source":"compact"}' | LC_ALL=C bash "$SESSION_RESTORE" 2>/dev/null)"
+if is_valid_json "$OUT"; then ok; else fail "restore unicode under C locale -> valid JSON"; fi
 
 # 32. Snapshot kill switch.
 rm -f "$SNAP" 2>/dev/null

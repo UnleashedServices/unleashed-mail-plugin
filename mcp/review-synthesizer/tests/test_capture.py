@@ -161,6 +161,61 @@ class TestSelectRound(unittest.TestCase):
                 del os.environ["UNLEASHED_REVIEW_ROUND"]
 
 
+class TestRoundAdvance(unittest.TestCase):
+    def test_completed_round_advances(self):
+        # When round-1 holds a capture for ALL four reviewers, a re-review must land in round-2
+        # (not be dedup-skipped into the stale round-1) — codex PR review.
+        with tempfile.TemporaryDirectory() as root:
+            slug = "COREDEV-2325"
+            for a in C.VALID_AGENTS:
+                self.assertEqual(C.capture(root, slug, a, fenced([raw()])), "written")
+            self.assertEqual(C.select_round(root, slug), 2)
+            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()])), "written")
+            self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-2", "security-reviewer.json")))
+            self.assertTrue(os.path.isfile(os.path.join(root, slug, "round-1", "security-reviewer.json")))
+
+    def test_incomplete_round_does_not_advance(self):
+        with tempfile.TemporaryDirectory() as root:
+            slug = "COREDEV-2325"
+            C.capture(root, slug, "security-reviewer", fenced([raw()]))  # only 1 of 4
+            self.assertEqual(C.select_round(root, slug), 1)  # stays in round-1
+
+
+class TestWriteFailureCleanup(unittest.TestCase):
+    def test_tmp_cleaned_when_replace_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            slug = "COREDEV-2325"
+            dest_dir = os.path.join(root, slug, "round-1")
+            os.makedirs(dest_dir)
+            # dest is a DIRECTORY -> os.replace(tmp, dest) raises -> tmp must be cleaned up.
+            os.mkdir(os.path.join(dest_dir, "security-reviewer.json"))
+            self.assertEqual(C.capture(root, slug, "security-reviewer", fenced([raw()])), "invalid")
+            leftovers = [f for f in os.listdir(dest_dir) if ".tmp." in f]
+            self.assertEqual(leftovers, [], "tmp file left on disk after write failure")
+
+
+class TestLocaleRobustness(unittest.TestCase):
+    def test_capture_handles_unicode_under_c_locale(self):
+        # Under LANG=C + PYTHONUTF8=0 the old `sys.stdin.read()` would UnicodeDecodeError on a
+        # unicode message; the bytes read (`sys.stdin.buffer`) is locale-independent (gemini PR).
+        import subprocess
+        with tempfile.TemporaryDirectory() as root:
+            msg = fenced([raw(finding="café résumé keychain leak")])
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONIOENCODING="")
+            r = subprocess.run(
+                [sys.executable, os.path.join(here, "capture.py"),
+                 "--root", root, "--slug", "COREDEV-2325", "--agent", "security-reviewer"],
+                input=msg.encode("utf-8"), env=env, capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+            dest = os.path.join(root, "COREDEV-2325", "round-1", "security-reviewer.json")
+            self.assertTrue(os.path.isfile(dest), r.stderr.decode("utf-8", "replace"))
+            with open(dest, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertEqual(len(data), 1)
+            self.assertIn("café", data[0]["finding"])
+
+
 class TestCaptureEndToEnd(unittest.TestCase):
     def test_writes_and_is_consumable_and_dedups(self):
         with tempfile.TemporaryDirectory() as root:

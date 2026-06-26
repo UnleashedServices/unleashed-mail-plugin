@@ -200,13 +200,13 @@ hook_str() {
         v="$(printf '%s' "$HOOK_STDIN" | _HOOK_STR_KEY="$key" python3 -c '
 import json, os, sys
 try:
-    d = json.load(sys.stdin)
+    d = json.load(sys.stdin.buffer)  # bytes in -> json auto-detects UTF-8; locale-independent
 except Exception:
     sys.exit(0)
 if isinstance(d, dict):
     v = d.get(os.environ.get("_HOOK_STR_KEY", ""))
     if isinstance(v, str):
-        sys.stdout.write(v)
+        sys.stdout.buffer.write(v.encode("utf-8"))  # bytes out: avoid ASCII-locale encode error
 ' 2>/dev/null)"
     fi
     printf '%s' "$v"

@@ -157,9 +157,12 @@ def safe_join(capture_root: str, slug: str, round_n: int, agent: str) -> str:
 
 
 def select_round(capture_root: str, slug: str) -> int:
-    """The target round: `UNLEASHED_REVIEW_ROUND` if it is a positive integer, else the
-    highest existing `round-N` under `<root>/<slug>`, else 1. (Auto-advance across review
-    cycles is a documented future enrichment tied to Item 5's round context.)"""
+    """The target round: `UNLEASHED_REVIEW_ROUND` if it is a positive integer, else the highest
+    existing `round-N` under `<root>/<slug>` — UNLESS that round already holds a capture file for
+    EVERY specialist reviewer (a completed cycle), in which case the NEXT round begins. This lets a
+    re-review after fixes land in a fresh round rather than being dedup-skipped into the stale one
+    (codex PR review). A new cycle's parallel reviewers all see the prior round still complete, so
+    they agree on the same next round. Defaults to 1."""
     override = os.environ.get("UNLEASHED_REVIEW_ROUND", "")
     if override.isdigit() and int(override) > 0:
         return int(override)
@@ -172,7 +175,15 @@ def select_round(capture_root: str, slug: str) -> int:
                 highest = max(highest, int(m.group(1)))
     except OSError:
         pass
-    return highest if highest > 0 else 1
+    if highest == 0:
+        return 1
+    # A round is a "completed cycle" once a file exists for every specialist reviewer (a clean
+    # reviewer's empty [] still counts as having reported). Existence — not is_final_capture — so a
+    # round of all-clean reviewers still rolls over instead of being re-filled forever.
+    round_dir = os.path.join(base, "round-%d" % highest)
+    if all(os.path.exists(os.path.join(round_dir, "%s.json" % a)) for a in VALID_AGENTS):
+        return highest + 1
+    return highest
 
 
 def is_final_capture(path: str) -> bool:
@@ -218,14 +229,20 @@ def capture(capture_root: str, slug: str, agent: str, message: str) -> str:
         return "invalid"
     sanitized = [s for s in (sanitize_finding(it, agent) for it in items) if s is not None]
     dest_dir = os.path.dirname(dest)
+    tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        tmp = "%s.tmp.%d" % (dest, os.getpid())
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(sanitized, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.replace(tmp, dest)
-    except OSError:
+    except Exception:
+        # Never leave a partial tmp on a write/replace failure (gemini PR review). Fail-open:
+        # capture is observe-only, so a failed write just returns "invalid"; the hook exits 0.
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return "invalid"
     return "written"
 
@@ -284,7 +301,9 @@ def main(argv: "list[str]") -> int:
     if a.transcript:
         message = read_last_assistant_from_transcript(a.transcript)
     else:
-        message = sys.stdin.read()
+        # Read stdin as BYTES + decode UTF-8 explicitly so a non-UTF-8 locale (e.g. LANG=C in CI)
+        # can't raise UnicodeDecodeError on a unicode reviewer message (gemini PR review class).
+        message = sys.stdin.buffer.read().decode("utf-8", errors="replace")
     if message:
         capture(a.root, a.slug, a.agent, message)
     return 0

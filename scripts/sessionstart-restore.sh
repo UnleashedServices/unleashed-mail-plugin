@@ -52,11 +52,13 @@ _snap_field() {
     elif command -v python3 >/dev/null 2>&1; then
         _SNAP_F="$f" python3 -c 'import json, os, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    with open(sys.argv[1], encoding="utf-8") as fh:  # explicit UTF-8 in: locale-independent
+        d = json.load(fh)
     v = d.get(os.environ.get("_SNAP_F", ""), "unknown")
-    sys.stdout.write("unknown" if v is None else str(v))
+    out = "unknown" if v is None else str(v)
+    sys.stdout.buffer.write(out.encode("utf-8"))       # bytes out: avoid ASCII-locale encode error
 except Exception:
-    sys.stdout.write("unknown")' "$SNAP" 2>/dev/null
+    sys.stdout.buffer.write(b"unknown")' "$SNAP" 2>/dev/null
     else
         printf 'unknown'
     fi
