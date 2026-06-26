@@ -29,10 +29,11 @@ hook_io_read() {
     _HOOK_IO_READ_DONE=1
     if [ -t 0 ]; then
         HOOK_STDIN='{}'
-    elif command -v timeout >/dev/null 2>&1; then
-        HOOK_STDIN="$(timeout 3 cat 2>/dev/null)"
     else
-        HOOK_STDIN="$(cat 2>/dev/null)"
+        # Pure-bash, timeout-bounded slurp of all stdin (NUL delimiter reads through
+        # newlines). Avoids a GNU `timeout` dependency and any hang on an open pipe
+        # (gemini PR #12). `read` returns non-zero at EOF but still populates the var.
+        IFS= read -r -t 3 -d '' HOOK_STDIN 2>/dev/null || true
     fi
     [ -n "$HOOK_STDIN" ] || HOOK_STDIN='{}'
 }

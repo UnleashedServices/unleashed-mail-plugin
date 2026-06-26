@@ -35,7 +35,8 @@ _marker_bash_hash() {
         if [ "$ch" = "'" ]; then
             c=39
         else
-            c="$(printf '%d' "'$ch" 2>/dev/null)"
+            c=0
+            printf -v c '%d' "'$ch" 2>/dev/null || true  # printf -v: no per-char subshell (gemini PR #12)
         fi
         h=$(( (h * 33 + ${c:-0}) & 0xffffffff ))
         i=$(( i + 1 ))
@@ -92,10 +93,17 @@ marker_write() {
     printf '{"status":"%s","kind":"%s","ts":"%s","commit":"%s","repo_hash":"%s"}\n' \
         "$status" "$kind" "$ts" "$commit" "$hash" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
     mv "$tmp" "$path" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
-    # On a pass, clear the Stop-gate's last-blocked sentinel for this repo so a later
-    # regression on the same commit can block again (gemini PR #12).
+    # On a pass, clear the Stop-gate's last-blocked sentinel so a later regression on
+    # the same commit can block again (gemini PR #12) — but ONLY when no marker kind is
+    # still failing, so a build pass can't unblock a still-failing lint marker (codex PR #12).
     if [ "$status" = "pass" ]; then
-        rm -f "$dir/stop-last-blocked-${hash}" 2>/dev/null || true
+        local _k _any_fail=0
+        for _k in lint build; do
+            [ "$(marker_status "$_k")" = "fail" ] && _any_fail=1
+        done
+        if [ "$_any_fail" = 0 ]; then
+            rm -f "$dir/stop-last-blocked-${hash}" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -106,7 +114,9 @@ marker_field() {
     [ -f "$path" ] || return 0
     # Fast path: the marker is a known single-line JSON — parse with bash's built-in
     # regex to avoid spawning jq/python3 on every call (gemini PR #12, perf).
-    if read -r line < "$path" 2>/dev/null && [[ "$line" =~ \"$field\":\"([^\"]+)\" ]]; then
+    # Anchor the key to a JSON delimiter ({ or ,) so searching "status" can't match
+    # a future field like "custom_status" (gemini PR #12).
+    if read -r line < "$path" 2>/dev/null && [[ "$line" =~ [{,][[:space:]]*\"$field\":\"([^\"]+)\" ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
         return 0
     fi
