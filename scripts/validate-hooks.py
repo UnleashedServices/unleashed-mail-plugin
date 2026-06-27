@@ -65,7 +65,21 @@ KNOWN_TOOLS = {
 # A matcher of the simple `Tool|Tool|…` alternation form (no regex metacharacters): each
 # token must be a real tool name, so this is where tool-name typos are caught.
 SIMPLE_ALT = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\|[A-Za-z][A-Za-z0-9]*)*$")
-SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9._-]+)")
+# Captures the scripts/<path> a hook command runs — allows subdirs (e.g. scripts/lib/x.sh).
+SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9._/-]+)")
+
+
+def _is_shell_script(path: Path) -> bool:
+    """True if `path` is a shell script (by extension or shebang). `bash -n` is run only on
+    real shell scripts so a `python3 scripts/x.py` hook command's target can't false-positive."""
+    if path.suffix in (".sh", ".bash"):
+        return True
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            first = handle.readline()
+    except OSError:
+        return False
+    return first.startswith("#!") and ("sh" in first or "bash" in first)
 
 
 def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) -> None:
@@ -182,31 +196,39 @@ def main() -> int:
                 if not isinstance(cmd, str) or not cmd.strip():
                     problems.append(f"{whereh}: `command` missing/empty")
                     continue
-                m = SCRIPT_REF.search(cmd)
-                if not m:
+                matches = list(SCRIPT_REF.finditer(cmd))
+                if not matches:
                     problems.append(f"{whereh}: command references no scripts/<file> ({cmd!r})")
                     continue
-                spath = root / "scripts" / m.group(1)
-                if not spath.is_file():
-                    problems.append(f"{whereh}: references missing script scripts/{m.group(1)}")
-                elif spath.stat().st_size == 0:
-                    problems.append(f"{whereh}: references empty script scripts/{m.group(1)}")
-                else:
-                    referenced.add(spath)
+                # A command may run more than one script (e.g. `… && …`) — validate each.
+                for m in matches:
+                    rel = m.group(1)
+                    spath = root / "scripts" / rel
+                    if not spath.is_file():
+                        problems.append(f"{whereh}: references missing script scripts/{rel}")
+                    elif spath.stat().st_size == 0:
+                        problems.append(f"{whereh}: references empty script scripts/{rel}")
+                    else:
+                        referenced.add(spath)
 
-    # `bash -n` every referenced shell script (parse check tied to the manifest).
+    # `bash -n` every referenced SHELL script (parse check tied to the manifest). Non-shell
+    # targets (e.g. a `python3 scripts/x.py` hook command) are skipped — bash -n would
+    # false-positive on them.
     bash = shutil.which("bash")
     parsed = 0
     if bash:
         for spath in sorted(referenced):
+            rel = spath.relative_to(root)
+            if not _is_shell_script(spath):
+                continue
             try:
                 res = subprocess.run([bash, "-n", str(spath)], capture_output=True, text=True)
             except OSError as exc:
-                problems.append(f"scripts/{spath.name}: could not run bash -n ({exc})")
+                problems.append(f"{rel}: could not run bash -n ({exc})")
                 continue
             parsed += 1
             if res.returncode != 0:
-                problems.append(f"scripts/{spath.name}: bash -n failed ({res.stderr.strip()})")
+                problems.append(f"{rel}: bash -n failed ({res.stderr.strip()})")
     else:
         print("  (note: bash not found — skipped `bash -n` parse checks)")
 
