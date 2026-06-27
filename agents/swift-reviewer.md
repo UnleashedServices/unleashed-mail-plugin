@@ -326,7 +326,7 @@ BUILD=$?; [ "$BUILD" -eq 0 ] && echo "✅ build" || echo "❌ build FAILED (exit
 #   baseline so only NEW violations fail (existing NSRegularExpression backlog baselined — COREDEV-2290)
 # --diff-filter=ACMR drops deleted/renamed-away paths (never lint a nonexistent file); the empty
 # guard avoids BSD/macOS xargs (`-r`/--no-run-if-empty is GNU-only) and a bare run on no input.
-CHANGED_SWIFT=$(git diff --name-only --diff-filter=ACMR "${BASE:-origin/main}"...HEAD -- '*.swift')
+CHANGED_SWIFT=$(git diff --name-only --diff-filter=ACMR "${BASE_BRANCH:-origin/main}"...HEAD -- '*.swift')
 if [ -n "$CHANGED_SWIFT" ]; then
   printf '%s\n' "$CHANGED_SWIFT" | tr '\n' '\0' | xargs -0 swiftlint --strict --quiet 2>&1 | tail -20; CHANGED_LINT=$?
 else
