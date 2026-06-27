@@ -63,8 +63,9 @@ These are hard constraints — violating any of them is a 🔴 BLOCKER:
 
 Adding a new cloud AI provider (e.g., a new LLM backend). Providers inherit `BaseAIProvider`,
 conform to `AIProviderProtocol` (`complete(_:)` / `stream(_:)` / `completeStructured(_:)`), and own
-their `URLSession` today. *Illustrative — the `endpoint` wiring and the `convertMessage` /
-`convertTool` / `parseResponse` provider helpers are real internals elided here for brevity:*
+their `URLSession` today. *Illustrative pseudocode — the per-provider helper methods
+(`convertMessage` / `convertTool` / `parseResponse`) and the `endpoint` wiring are real internals,
+elided for brevity:*
 
 ```swift
 // PLANNED: a future `HTTPBasedAIProvider` base (COREDEV-1837) will absorb the URLSession/SSE
@@ -94,13 +95,9 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
         return try parseResponse(data, response)
     }
 
-    func stream(_ request: AIProviderRequest) -> AsyncThrowingStream<AIProviderChunk, Error> {
-        // SSE via `session.bytes(for:)`, parsing `data:` lines into AIProviderChunk
-    }
-
-    func completeStructured(_ request: AIProviderStructuredRequest) async throws -> AIProviderResponse {
-        // like complete(_:), but requests a JSON-schema-constrained response (third protocol requirement)
-    }
+    // The other two AIProviderProtocol requirements follow the same shape (bodies elided):
+    //   func stream(_:) -> AsyncThrowingStream<AIProviderChunk, Error>           // SSE via session.bytes(for:)
+    //   func completeStructured(_: AIProviderStructuredRequest) async throws -> AIProviderResponse
 
     // Per-provider request assembly — signature DIFFERS by provider:
     // OpenAI/Anthropic use (from:streaming:); Gemini uses (from:apiVersion:).
