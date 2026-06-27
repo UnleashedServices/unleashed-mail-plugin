@@ -35,20 +35,25 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Supported Claude Code hook events. Source: https://code.claude.com/docs/en/hooks.md and
-# https://code.claude.com/docs/en/plugins-reference.md (verified 2026-06-27, Claude Code
-# 2.1.x). An event NOT in this set will silently never fire. If CI fails here on an event
-# you intend to use, confirm it against the docs above and add it in the SAME PR.
+# Supported Claude Code hook events — the COMPLETE documented set (30). Source:
+# https://code.claude.com/docs/en/hooks.md and https://code.claude.com/docs/en/plugins-reference.md
+# § "Hooks" (re-verified against the docs 2026-06-27, Claude Code 2.1.x). An event NOT in this
+# set will silently never fire. If CI fails here on an event you intend to use, confirm it
+# against the docs above and add it in the SAME PR.
 KNOWN_EVENTS = {
     "SessionStart", "SessionEnd", "Setup",
     "UserPromptSubmit", "UserPromptExpansion",
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch",
     "PermissionRequest", "PermissionDenied",
     "Notification", "MessageDisplay",
-    "Stop", "StopFailure",
     "SubagentStart", "SubagentStop",
-    "PreCompact", "PostCompact",
+    "TaskCreated", "TaskCompleted", "TeammateIdle",
+    "Stop", "StopFailure",
+    "InstructionsLoaded", "ConfigChange",
     "CwdChanged", "FileChanged",
+    "WorktreeCreate", "WorktreeRemove",
+    "PreCompact", "PostCompact",
+    "Elicitation", "ElicitationResult",
 }
 
 # Events whose `matcher` selects a TOOL by name — a typo'd tool name = a dead hook.
@@ -83,8 +88,8 @@ def _is_shell_script(path: Path) -> bool:
 
 
 def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) -> None:
-    """Validate a hook matcher. Empty == match-all (always valid)."""
-    if matcher == "":
+    """Validate a hook matcher. Empty or "*" == match-all (always valid)."""
+    if matcher in ("", "*"):  # "*" is the documented match-all token, not a regex
         return
     # Claude Code matches `matcher` as a regex, so it must compile (catches `^(Read`,
     # unbalanced groups, etc.). Checked for EVERY event, not just tool-matcher ones.
