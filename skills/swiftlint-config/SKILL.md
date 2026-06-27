@@ -279,7 +279,7 @@ custom_rules:
   no_direct_urlsession:
     name: "No direct URLSession"
     regex: "URLSession\\."
-    message: "Use HTTPBasedAIProvider or service protocols instead of direct URLSession"
+    message: "Use a provider conforming to AIProviderProtocol / a service protocol (NetworkService) instead of ad-hoc URLSession"
     severity: error
 
   actor_isolation_check:
