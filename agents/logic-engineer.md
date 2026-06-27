@@ -58,7 +58,7 @@ Key rules from project CLAUDE.md and `.claude/rules/`:
 - `@Sendable` on data crossing actor boundaries
 
 ### AI Architecture (Non-Negotiable)
-- **HTTP providers (cloud LLMs)** inherit `HTTPBasedAIProvider`; **on-device providers (Apple Intelligence)** inherit `BaseAIProvider` (project-sanctioned exception)
+- **Cloud providers** inherit `BaseAIProvider` + conform to `AIProviderProtocol`; **on-device** (Apple Intelligence) conforms to `AIProviderProtocol` directly (project-sanctioned exception). The unified `HTTPBasedAIProvider` base is **PLANNED** (COREDEV-1837), not yet built.
 - **Tool execution** → `ToolRegistry` only (not legacy switch blocks in `ExecutionService`)
 - **Prompts** → `PromptRegistry` only (no inline prompt strings)
 - **Safety (transitional)** → `AISafetyPipeline` is **PLANNED, not yet shipped**. Until it ships, safety is inline (`PIIRedactor`, `LLMInputSanitizer`). New safety checks co-locate with existing inline validators. See `.claude/rules/ai-architecture.md`.

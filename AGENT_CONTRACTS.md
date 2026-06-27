@@ -143,10 +143,14 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 
 ### Provider abstraction
 
-- HTTP-based providers (cloud LLMs) inherit `HTTPBasedAIProvider`, override `prepareHeaders()`,
-  `buildRequestBody()`, `parseResponse()`, `parseStreamChunk()`
-- **On-device providers (Apple Intelligence) inherit `BaseAIProvider` directly** — they don't have
-  HTTP semantics. This is an explicit project-sanctioned exception.
+- **Today** — cloud providers inherit `BaseAIProvider` and conform to `AIProviderProtocol`
+  (`complete(_:)` / `stream(_:)` / `completeStructured(_:)`); each owns its `URLSession` and a
+  per-provider `buildRequestBody(...)`.
+- **On-device providers (Apple Intelligence) conform to `AIProviderProtocol` directly** (no
+  `BaseAIProvider`) — they don't have HTTP semantics. This is an explicit project-sanctioned exception.
+- **PLANNED (COREDEV-1837, not yet built)** — a unified `HTTPBasedAIProvider` base will absorb the
+  per-provider URLSession/SSE boilerplate. Do not write code that inherits it today (same status as
+  `AISafetyPipeline` below).
 
 ### Tool dispatch
 

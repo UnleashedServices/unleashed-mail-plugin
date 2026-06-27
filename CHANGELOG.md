@@ -72,6 +72,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   SubagentStop hook contract are untouched).
 
 ### Fixed
+- **`ai-engineer` doc drift — removed two non-existent Swift symbols from the agent docs**
+  (COREDEV-2331, parent COREDEV-1834; surfaced during the `prompt-review` plan-review). `agents/ai-engineer.md`
+  documented the GARI provider/tool API using `HTTPBasedAIProvider` and `AIToolDefinition`, **neither of
+  which exists in `Sources/`** — an engineer (or the `ai-engineer` agent) following the docs literally
+  would emit non-compiling code. Fixed across the plugin: `HTTPBasedAIProvider` is now consistently
+  labelled **PLANNED (COREDEV-1837), not yet built** — same treatment `AISafetyPipeline` already had —
+  while today's reality (cloud providers inherit `BaseAIProvider` + conform to `AIProviderProtocol`,
+  own their `URLSession`, and use a per-provider `buildRequestBody(...)`) is stated plainly; the
+  fabricated `AIToolDefinition` is replaced with the real `AITool` schema + `ToolHandlerProtocol` /
+  `Set<AgentTool>` / `ToolCall` model registered via `ToolRegistry.register(_:)`. Adjacent fabricated
+  examples (`AIAgentPipeline(provider:…)`/`execute(operation:…)`, the closure-handler registration, the
+  test snippets) were corrected to the real `configure(...)` + `execute(input:configuration:)` shape so
+  no doc snippet emits non-compiling code. Swept the same drift from `CLAUDE.md`, `agents/logic-engineer.md`,
+  `AGENT_CONTRACTS.md`, `README.md`, the `swiftlint-config` sample lint message, and the `prompt-review`
+  agent's own guardrail. Docs-only — no behaviour, version, or asset-count change. Plan-review gate:
+  codex + gemini both `APPROVE`.
 - **`<agent>.status` sidecar write hardened** (`capture.py`, PR #16 review) — `_write_status` now
   builds the payload as `{**status, "agent": agent}` (explicit `agent` **last**) instead of
   `dict(agent=agent, **status)`, so the trusted hook-allowlisted `agent` can never be collided-over

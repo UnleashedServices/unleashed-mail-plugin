@@ -11,7 +11,7 @@ You are working on **UnleashedMail**, a native macOS email client.
 - **Platform**: macOS 15.0+ (Sequoia), ARM64 only
 - **Auth**: Google OAuth 2.0 (manual), MSAL for Microsoft (automatic token cache), Keychain storage
 - **APIs**: Gmail REST API with Pub/Sub push; Microsoft Graph Mail API with webhook subscriptions / delta queries
-- **AI**: Multi-provider AI agent (GARI) with `HTTPBasedAIProvider` (cloud) or `BaseAIProvider` (Apple Intelligence), `ToolRegistry`, `PromptRegistry`. `AISafetyPipeline` is **PLANNED, not yet shipped** — current safety is inline (`PIIRedactor`, `LLMInputSanitizer`).
+- **AI**: Multi-provider AI agent (GARI) — cloud providers inherit `BaseAIProvider` + conform to `AIProviderProtocol` (Apple Intelligence conforms directly), with `ToolRegistry`, `PromptRegistry`. The unified `HTTPBasedAIProvider` base and the `AISafetyPipeline` are both **PLANNED, not yet shipped** (COREDEV-1837 / COREDEV-833) — current safety is inline (`PIIRedactor`, `LLMInputSanitizer`).
 - **CI**: GitHub Actions (Xcode 16.3+, Swift 6.1 toolchain), Xcode Cloud
 - **Lint**: SwiftLint (enforced — `.swiftlint.yml`)
 - **Project type**: Xcode project (`.xcodeproj`), package dependencies managed inside Xcode — **not** a SwiftPM package. Use `xcodebuild` (not `swift build`/`swift test`).
@@ -161,8 +161,8 @@ Categorize as **CRITICAL** (runs at startup) or **DEFERRABLE** (background after
 
 ## AI Architecture Standards
 
-- **HTTP providers (cloud LLMs)** inherit `HTTPBasedAIProvider`, override `prepareHeaders()`, `buildRequestBody()`, `parseResponse()`, `parseStreamChunk()` — no manual URLSession
-- **On-device providers (Apple Intelligence)** inherit `BaseAIProvider` directly — they have no HTTP semantics. Project-sanctioned exception.
+- **Cloud providers (today)** inherit `BaseAIProvider` and conform to `AIProviderProtocol` (`complete(_:)` / `stream(_:)` / `completeStructured(_:)`); each owns its `URLSession` (default `NetworkService.shared.session`) and a per-provider `buildRequestBody(...)`. A unified `HTTPBasedAIProvider` base that would absorb the URLSession/SSE boilerplate is **PLANNED (COREDEV-1837), not yet built** — do not write code that inherits it.
+- **On-device providers (Apple Intelligence)** conform to `AIProviderProtocol` directly (no `BaseAIProvider`) — they have no HTTP semantics. Project-sanctioned exception.
 - **Single dispatch path** — `ToolRegistry` is the ONLY mechanism for tool execution
 - **No inline prompts** — all prompts in `PromptRegistry`, versioned for A/B testing
 - **Safety pipeline (transitional)** — `AISafetyPipeline` is **PLANNED, not yet shipped**. Until it ships, safety checks are inline (`PIIRedactor`, `LLMInputSanitizer`). New safety checks co-locate with existing inline validators and are documented for future migration. See `.claude/rules/ai-architecture.md` and COREDEV-833 audit finding SEC-4.

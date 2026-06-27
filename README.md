@@ -157,7 +157,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `db-engineer` | GRDB 7+ schema (snake_case columns), SQLCipher, migrations (CRITICAL/DEFERRABLE), Record types, async observation, append-only |
 | `logic-engineer` | Service protocols, Gmail + Graph impls via `AccountScopedServiceProvider`, ViewModels, AI pipeline routing, sync, mocks |
 | `ui-engineer` | SwiftUI views (macOS 15+), AppKit bridging, WKWebView composer, Curator design tokens, `@State`-resolved services, a11y, dual-impl updates |
-| `ai-engineer` | GARI AI pipeline — HTTPBasedAIProvider (cloud) + BaseAIProvider (Apple Intelligence), ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline |
+| `ai-engineer` | GARI AI pipeline — cloud providers (`BaseAIProvider` + `AIProviderProtocol`) + Apple Intelligence, ToolRegistry, PromptRegistry, inline safety (PIIRedactor + LLMInputSanitizer), AIAgentPipeline (unified `HTTPBasedAIProvider` base PLANNED, COREDEV-1837) |
 | `tester` | Test strategy, MockServices.swift extension, `KeychainManager.resetInMemoryStore()` discipline, account-isolation invariants |
 | `code-simplifier` | 16-pass conservative simplification with deletion guardrails (selectors, IBActions, reflection-loaded code preserved) |
 
