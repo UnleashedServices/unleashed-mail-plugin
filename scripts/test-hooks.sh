@@ -17,6 +17,7 @@ BUILD_FAIL_LOG="$_DIR/build-failure-log.sh"
 PRECOMPACT="$_DIR/precompact-snapshot.sh"
 SESSION_RESTORE="$_DIR/sessionstart-restore.sh"
 CAPTURE="$_DIR/capture-reviewer-verdict.sh"
+ROUND_START="$_DIR/capture-reviewer-round-start.sh"   # COREDEV-2326 SubagentStart producer
 
 # Isolated, throwaway plugin-data dir for markers/logs/sentinels.
 TMPROOT="$(mktemp -d 2>/dev/null || mktemp -d -t hooktests)"
@@ -523,6 +524,114 @@ if command -v zsh >/dev/null 2>&1; then
     ZSCRIPT=". \"$_DIR/lib/context.sh\"; context_latest_round_dir \"$TMPROOT/zsh-no-rounds/slug\" security-reviewer"
     ZOUT="$(zsh -c "$ZSCRIPT" 2>&1)"
     if [ -z "$ZOUT" ]; then ok; else fail "zsh NOMATCH: latest_round_dir no-match must be clean+empty (got '$ZOUT')"; fi
+fi
+
+echo "== COREDEV-2326 review-round binding (producer + consumer) =="
+
+# context_highest_round — decimal-normalized highest round-<N> dir number (codex r2 Nit A).
+HR="$TMPROOT/hr/slug"
+mkdir -p "$HR/round-1" "$HR/round-2" "$HR/round-10" "$HR/round-abc"
+if [ "$(context_highest_round "$HR")" = "10" ]; then ok; else fail "highest_round: picks 10"; fi
+if [ "$(context_highest_round "$TMPROOT/hr/none")" = "0" ]; then ok; else fail "highest_round: empty -> 0"; fi
+HR2="$TMPROOT/hr2/slug"; mkdir -p "$HR2/round-09"
+# round-09 must parse base-10 as 9 (so a caller's +1 is 10, never an `09: value too great for base` error)
+if [ "$(context_highest_round "$HR2")" = "9" ]; then ok; else fail "highest_round: round-09 -> 9 base-10"; fi
+
+# bind / lookup / clear round-trip. bind+lookup derive the slug from the current branch (same process),
+# so they always agree; foreign-slug rejection is exercised with a hand-written binding below.
+RSLUG="$(context_branch_slug "$(context_branch)")"
+RDIR="$(context_reviews_dir)/$RSLUG"
+clean_rounds() { rm -rf "$(context_reviews_dir)" 2>/dev/null; rm -f "$(context_state_dir)"/review-round-*.json 2>/dev/null; }
+clean_rounds
+R="$(context_review_round_bind security-reviewer aidA sess1)"
+if [ "$R" = "1" ]; then ok; else fail "bind: fresh slug -> round 1 (got '$R')"; fi
+if [ "$(context_review_round_lookup security-reviewer aidA sess1)" = "1" ]; then ok; else fail "lookup: matching binding -> 1"; fi
+if [ -z "$(context_review_round_lookup concurrency-reviewer aidA sess1)" ]; then ok; else fail "lookup: agent mismatch -> empty"; fi
+if [ -z "$(context_review_round_lookup security-reviewer aidA OTHERSESS)" ]; then ok; else fail "lookup: session mismatch (both set) -> empty"; fi
+if [ "$(context_review_round_lookup security-reviewer aidA '')" = "1" ]; then ok; else fail "lookup: empty session (soft) -> 1"; fi
+if [ -z "$(context_review_round_lookup security-reviewer aidUnbound sess1)" ]; then ok; else fail "lookup: unbound agent_id -> empty (cross-agent isolation)"; fi
+context_review_round_clear aidA
+if [ -z "$(context_review_round_lookup security-reviewer aidA sess1)" ]; then ok; else fail "clear: consume-once -> lookup empty"; fi
+
+# bind advances after a round dir exists.
+clean_rounds
+mkdir -p "$RDIR/round-1"
+if [ "$(context_review_round_bind security-reviewer aidB sess1)" = "2" ]; then ok; else fail "bind: advances to 2 after round-1 dir"; fi
+# bind-level decimal-normalization (codex r2 Nit A): an existing round-09 -> bind 10, not octal.
+clean_rounds
+mkdir -p "$RDIR/round-09"
+if [ "$(context_review_round_bind security-reviewer aid09 sess1)" = "10" ]; then ok; else fail "bind: round-09 present -> round 10 (not octal)"; fi
+
+# foreign-slug binding is rejected on read.
+clean_rounds
+BPF="$(context_round_binding_path aidForeign)"; mkdir -p "$(dirname "$BPF")"
+printf '{"round":3,"agent":"security-reviewer","slug":"SOME-OTHER-SLUG","session_id":"s","time":%s}\n' "$(date +%s)" > "$BPF"
+if [ -z "$(context_review_round_lookup security-reviewer aidForeign s)" ]; then ok; else fail "lookup: foreign slug -> empty"; fi
+
+# stale binding (by the stored `time`, not file mtime) is rejected; TTL=0 disables the freshness check.
+BPS="$(context_round_binding_path aidStale)"; mkdir -p "$(dirname "$BPS")"
+OLDT=$(( $(date +%s) - 7200 ))
+printf '{"round":4,"agent":"security-reviewer","slug":"%s","session_id":"s","time":%s}\n' "$RSLUG" "$OLDT" > "$BPS"
+if [ -z "$(UNLEASHED_REVIEW_ROUND_TTL=3600 context_review_round_lookup security-reviewer aidStale s)" ]; then ok; else fail "lookup: stale binding (TTL) -> empty"; fi
+if [ "$(UNLEASHED_REVIEW_ROUND_TTL=0 context_review_round_lookup security-reviewer aidStale s)" = "4" ]; then ok; else fail "lookup: TTL=0 disables freshness -> honored"; fi
+
+# Hook-level helpers: SubagentStart binds, SubagentStop captures into the bound round.
+mk_round_msg() { printf 'Review.\n\n```json\n[{"severity":"warning","confidence":"high","sourceAgent":"x","category":"keychain","file":"a.swift","line":1,"lineEnd":2,"finding":"f","evidence":"e","fix":"x"}]\n```\n'; }
+start_bind()    { printf '{"agent_type":"%s","agent_id":"%s","session_id":"sess1"}' "$1" "$2" | bash "$ROUND_START" 2>/dev/null; }
+stop_capture()  { printf '{"agent_type":"%s","agent_id":"%s","session_id":"sess1","last_assistant_message":%s}' "$1" "$2" "$(json_str "$(mk_round_msg)")" | bash "$CAPTURE" 2>/dev/null; }
+
+# Producer excludes non-reviewers and swift-reviewer.
+clean_rounds
+printf '{"agent_type":"jira-manager","agent_id":"jm1","session_id":"s"}' | bash "$ROUND_START" 2>/dev/null
+if [ ! -f "$(context_round_binding_path jm1)" ]; then ok; else fail "producer: ignores non-reviewer (jira-manager)"; fi
+printf '{"agent_type":"swift-reviewer","agent_id":"sr1","session_id":"s"}' | bash "$ROUND_START" 2>/dev/null
+if [ ! -f "$(context_round_binding_path sr1)" ]; then ok; else fail "producer: excludes swift-reviewer"; fi
+
+# Start→Stop share one agent_id end-to-end (codex r2 Nit B): with round-1..3 present, the binding
+# (highest+1=4 frozen at start) drives the bucket, NOT inference (which would pick 3).
+clean_rounds
+mkdir -p "$RDIR/round-1" "$RDIR/round-2" "$RDIR/round-3"
+start_bind security-reviewer same1
+stop_capture security-reviewer same1
+if [ -f "$RDIR/round-4/security-reviewer.json" ]; then ok; else fail "Start/Stop same agent_id -> bound round 4 (not inferred 3)"; fi
+if [ ! -f "$(context_round_binding_path same1)" ]; then ok; else fail "consume-once: binding cleared after capture"; fi
+
+# THE INTERLEAVING FIX: a late cycle-1 reviewer lands in its ORIGINATING round even after a later
+# cycle advanced. Without the binding, pure inference would mis-bucket the straggler into the new round.
+clean_rounds
+for pair in security-reviewer:a1 concurrency-reviewer:b1 ux-perf-reviewer:c1 accessibility-auditor:d1; do
+    start_bind "${pair%%:*}" "${pair##*:}"            # cycle 1: all four bound at round 1
+done
+stop_capture security-reviewer a1                     # a1 stops -> round 1
+if [ -f "$RDIR/round-1/security-reviewer.json" ]; then ok; else fail "interleave: a1 -> round-1"; fi
+start_bind security-reviewer a2                       # re-review: new id a2 -> binds round 2
+stop_capture security-reviewer a2
+if [ -f "$RDIR/round-2/security-reviewer.json" ]; then ok; else fail "interleave: a2 re-review -> round-2"; fi
+stop_capture concurrency-reviewer b1                  # delayed cycle-1 peer (bound round 1) stops now
+if [ -f "$RDIR/round-1/concurrency-reviewer.json" ]; then ok; else fail "interleave: b1 straggler -> round-1 (THE FIX)"; fi
+if [ ! -f "$RDIR/round-2/concurrency-reviewer.json" ]; then ok; else fail "interleave: b1 must NOT land in round-2"; fi
+
+# Kill switch: with the signal off the consumer ignores the binding and falls back to inference.
+clean_rounds
+start_bind security-reviewer k1                       # binding says round 1
+mkdir -p "$RDIR/round-5"                              # inference would pick 5 (highest, slot empty)
+printf '{"agent_type":"security-reviewer","agent_id":"k1","session_id":"sess1","last_assistant_message":%s}' "$(json_str "$(mk_round_msg)")" \
+    | UNLEASHED_REVIEW_ROUND_SIGNAL=off bash "$CAPTURE" 2>/dev/null
+if [ -f "$RDIR/round-5/security-reviewer.json" ]; then ok; else fail "kill switch: SIGNAL=off -> inference (round-5)"; fi
+
+# An explicitly-exported UNLEASHED_REVIEW_ROUND is never clobbered by the binding.
+clean_rounds
+start_bind security-reviewer e1                       # binding says round 1
+printf '{"agent_type":"security-reviewer","agent_id":"e1","session_id":"sess1","last_assistant_message":%s}' "$(json_str "$(mk_round_msg)")" \
+    | UNLEASHED_REVIEW_ROUND=9 bash "$CAPTURE" 2>/dev/null
+if [ -f "$RDIR/round-9/security-reviewer.json" ]; then ok; else fail "explicit UNLEASHED_REVIEW_ROUND not clobbered (round-9)"; fi
+clean_rounds
+
+# zsh portability: the new round-dir scan + sweep run in the zsh Bash-tool context — a round-less /
+# binding-less base must be clean+empty under NOMATCH, not 'no matches found'. Skipped where zsh absent.
+if command -v zsh >/dev/null 2>&1; then
+    ZHR=". \"$_DIR/lib/context.sh\"; context_highest_round \"$TMPROOT/zsh-hr/slug\""
+    if [ "$(zsh -c "$ZHR" 2>&1)" = "0" ]; then ok; else fail "zsh NOMATCH: highest_round no-rounds -> 0"; fi
 fi
 
 echo ""
