@@ -324,7 +324,14 @@ BUILD=$?; [ "$BUILD" -eq 0 ] && echo "✅ build" || echo "❌ build FAILED (exit
 # SwiftLint — both arms of the merge gate (AGENT_CONTRACTS §5):
 #   (1) changed .swift files strict (warnings→errors); (2) whole-repo strict with the committed
 #   baseline so only NEW violations fail (existing NSRegularExpression backlog baselined — COREDEV-2290)
-git diff --name-only "${BASE:-origin/main}"...HEAD -- '*.swift' | tr '\n' '\0' | xargs -0r swiftlint --strict --quiet 2>&1 | tail -20; CHANGED_LINT=$?
+# --diff-filter=ACMR drops deleted/renamed-away paths (never lint a nonexistent file); the empty
+# guard avoids BSD/macOS xargs (`-r`/--no-run-if-empty is GNU-only) and a bare run on no input.
+CHANGED_SWIFT=$(git diff --name-only --diff-filter=ACMR "${BASE:-origin/main}"...HEAD -- '*.swift')
+if [ -n "$CHANGED_SWIFT" ]; then
+  printf '%s\n' "$CHANGED_SWIFT" | tr '\n' '\0' | xargs -0 swiftlint --strict --quiet 2>&1 | tail -20; CHANGED_LINT=$?
+else
+  CHANGED_LINT=0
+fi
 swiftlint lint --strict --baseline swiftlint-baseline.json --quiet 2>&1 | tail -20; BASELINE_LINT=$?
 LINT=$(( CHANGED_LINT | BASELINE_LINT )); [ "$LINT" -eq 0 ] && echo "✅ lint" || echo "❌ lint FAILED (changed=$CHANGED_LINT baseline=$BASELINE_LINT)"
 
