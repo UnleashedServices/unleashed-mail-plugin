@@ -182,11 +182,13 @@ swiftlint --reporter html > swiftlint-report.html
 ### CI Integration
 
 ```yaml
-# .github/workflows/ci.yml
+# .github/workflows/ci.yml — whole-repo (baselined) arm of the gate
 - name: Run SwiftLint
   run: |
     brew install swiftlint
-    # Whole-repo gate uses the committed baseline so only NEW violations fail (COREDEV-2290)
+    # Whole-repo gate uses the committed baseline so only NEW violations fail (COREDEV-2290).
+    # NOTE: this is only ONE arm — the full merge gate ALSO runs `swiftlint --strict <changed files>`
+    # on touched files (warnings→errors). See agents/ci-engineer.md for the complete two-arm job.
     swiftlint lint --strict --baseline swiftlint-baseline.json --reporter github-actions-logging
 ```
 

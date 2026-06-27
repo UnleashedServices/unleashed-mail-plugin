@@ -85,11 +85,18 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@<40-char-sha>  # actions/checkout v4.x — replace with actual SHA
+        with:
+          fetch-depth: 0  # needed to diff changed files against the PR base branch
       - name: Install SwiftLint
         run: brew install swiftlint
-      - name: Run SwiftLint
-        # Whole-repo gate uses the committed baseline so only NEW violations fail (COREDEV-2290);
-        # changed-file strictness (`swiftlint --strict <files>`) is enforced separately on touched files.
+      # Both arms of the merge gate (AGENT_CONTRACTS §5) — keep BOTH; the baseline arm alone
+      # would let a touched file with a pre-existing (baselined) warning pass.
+      - name: SwiftLint — changed files (strict; warnings→errors on touched files)
+        run: |
+          set -o pipefail
+          CHANGED=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD -- '*.swift')
+          if [ -n "$CHANGED" ]; then printf '%s\n' "$CHANGED" | tr '\n' '\0' | xargs -0 swiftlint --strict --reporter github-actions-logging; else echo "no changed Swift files"; fi
+      - name: SwiftLint — whole repo (baselined; only NEW violations fail — COREDEV-2290)
         run: swiftlint lint --strict --baseline swiftlint-baseline.json --reporter github-actions-logging
 
   build:
@@ -119,7 +126,9 @@ For Apple-managed CI:
 # ci_post_xcodebuild.sh (Xcode Cloud post-build script)
 #!/bin/bash
 
-# Run additional checks (whole-repo gate uses the committed baseline — only NEW violations fail, COREDEV-2290)
+# Run additional checks — whole-repo baseline arm (only NEW violations fail, COREDEV-2290).
+# This post-build script is the whole-repo half; the changed-file `swiftlint --strict <files>`
+# arm runs in the PR `lint` job above (don't rely on the baseline arm alone).
 swiftlint lint --strict --baseline swiftlint-baseline.json
 
 # Generate test coverage report
