@@ -144,16 +144,43 @@ reviewers trace the rest and tag findings outside the diff with `scope:
 orchestrator ran them per SKILL.md), skip spawning and go straight to Step 3 — do not
 re-run them. The `Status:` line is part of each reviewer's report, so when you have a reviewer's
 **full output** (prose + JSON) read it and apply the BLOCKED/PARTIAL handling from Step 5.
-**The shipped `SubagentStop` capture path (`mcp/review-synthesizer/capture.py`) currently persists
-only the sanitized findings array — not the `Status:` line** (tracked: COREDEV-2328). So a
-pre-collected array with **no status is the expected shape from that capture path**, not evidence
-that a reviewer was BLOCKED — **do not fail closed on it**: take the findings at face value (an empty
-`[]` is the reviewer's clean result; a non-empty array is its findings), exactly as before Item 12.
-Item 12's stronger guarantee — that a `BLOCKED` reviewer can't masquerade as a clean `[]` —
-therefore holds wherever the status travels with the findings (the live subagent runs you spawn
-below, or once COREDEV-2328 persists it through capture); for a status-stripped captured array it
-degrades to the pre-Item-12 behaviour, never worse. When a status **is** present and reads `BLOCKED`
-or `PARTIAL`, apply Step 5's handling.
+
+**Reading a captured reviewer's status (COREDEV-2328).** The shipped `SubagentStop` capture path
+(`mcp/review-synthesizer/capture.py`) now persists each reviewer's Output-Contract `Status:` as a
+**sibling `<agent>.status` JSON** beside its `<agent>.json` findings (self-describing `agent` +
+`status` + any BLOCKED/PARTIAL detail fields, PII-redacted). When you work from pre-collected
+captured arrays, read each reviewer's status from the **same round** as its findings:
+
+```bash
+# Read pre-collected reviewer captures' persisted status (COREDEV-2328). CLAUDE_PLUGIN_ROOT is set
+# in the plugin runtime; fall back to the repo-relative path if unset (as the review skills do).
+CTX="${CLAUDE_PLUGIN_ROOT:-.}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
+. "$CTX"
+BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"
+for agent in security-reviewer concurrency-reviewer ux-perf-reviewer accessibility-auditor; do
+    rd="$(context_latest_round_dir "$BASE" "$agent")"   # highest round holding this agent's findings
+    [ -n "$rd" ] || continue
+    echo "=== $agent ==="
+    [ -f "$rd/$agent.status" ] && cat "$rd/$agent.status" 2>/dev/null   # status FIRST (read status first)
+    cat "$rd/$agent.json" 2>/dev/null                                   # then the findings array (same round)
+done
+```
+
+**Trust a `<agent>.status` only when it validates** — it parses as JSON **and** its `agent` equals
+the reviewer **and** its `status` is one of `COMPLETE | BLOCKED | PARTIAL`. Then:
+
+- **status present** → apply Step 5's handling: `BLOCKED` → a **Needs Confirmation** item (quote its
+  `blockerDescription`) → **NEEDS DISCUSSION**; `PARTIAL` → keep the findings + a non-gating
+  `verification` **warning** naming its `remaining`; `COMPLETE` → the JSON array is authoritative.
+- **status absent / unparseable / mismatched** (a capture written before COREDEV-2328, a reviewer
+  whose message had no recognizable `Status:` trailer, or a corrupt sidecar) → **do not fail
+  closed**: take the findings at face value (an empty `[]` is the reviewer's clean result; a
+  non-empty array is its findings), exactly as before Item 12.
+
+Item 12's stronger guarantee — that a `BLOCKED` reviewer can't masquerade as a clean `[]` — now
+holds on the capture path too **whenever a recognizable status was persisted**; for a status-less or
+unrecognizable captured array it degrades to the pre-Item-12 behaviour, **never worse** (a
+merely-absent sidecar never forces a false fail-closed).
 
 Otherwise spawn **all four** review agents simultaneously using the
 `Agent` tool, plus `jira-manager` to log the review. Pass each agent the list of
