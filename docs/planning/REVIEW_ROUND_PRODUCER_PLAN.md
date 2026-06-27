@@ -88,10 +88,15 @@ New functions:
 - **`context_round_binding_path <agent_id>`** — the binding path above (hashes `agent_id` via
   `_context_hash`, so it is path-safe + PII-free).
 
-- **`context_review_round_bind <agent_type> <agent_id> [session_id]`** *(producer)* — compute
-  `round = context_highest_round(<reviews dir>/<slug>) + 1`, atomically persist the binding
-  (tmp + `mv`), and best-effort **sweep** binding files older than the TTL (bounded `.state/` GC).
-  Prints the round. Fail-open.
+- **`context_review_round_bind <agent_type> <agent_id> [session_id]`** *(producer)* — compute the
+  round by **mirroring `capture.select_round`'s non-override path** (reusing `capture.is_final_capture`
+  so the predicate is single-sourced): first cycle = 1; advance to `highest + 1` **only** when the
+  highest round's slot for this agent already holds a **final** capture; otherwise **reuse** the
+  highest round — so a same-round **repair** re-run (swift-reviewer's recovery rule) overwrites the
+  stale empty/dropped slot instead of splitting the cycle (codex PR #17 P2). When finality can't be
+  determined (no `python3`/`capture.py`) it defaults to **advance** (never overwrites a real prior
+  capture). Atomically persist the binding (tmp + `mv`); best-effort **sweep** binding files older than
+  the TTL (bounded `.state/` GC). Prints the round. Fail-open.
 
 - **`context_review_round_lookup <agent_type> <agent_id> [session_id]`** *(consumer-read)* — read
   this subagent's binding and print its `round` **only when it validates**: parses; `agent` matches
@@ -184,11 +189,14 @@ hooks (same precedent as COREDEV-2328). The strict version-sync validator is una
   a late cycle-1 straggler lands in round 1 even after cycle 2 advanced. Deterministic, not
   timing-dependent. *Invariant:* a subagent's `agent_id` is stable across its `SubagentStart` and
   `SubagentStop` (CC docs: *"Unique identifier for the subagent"*) — verified, load-bearing.
-- **Round-number assignment:** `highest_round_dir + 1` gives first-cycle = 1 and each re-review +1.
-  The four reviewers of a cycle spawn in one parallel batch **before any of them captures**, so all
-  four `SubagentStart`s read the same `highest` and bind the same round. A new cycle starts only
-  after the prior panel completes (the orchestrator needs all four results to synthesize and decide
-  to re-review), so the prior round's dirs exist before the next cycle binds → clean advance.
+- **Round-number assignment** mirrors `capture.select_round` (advance past a **final** prior slot,
+  else reuse): first-cycle = 1; each genuine re-review +1; a same-round **repair** re-run reuses the
+  round and overwrites the empty/dropped slot (codex PR #17 P2 — keeps producer and capture
+  consistent). The four reviewers of a cycle spawn in one parallel batch **before any of them
+  captures**, so all four `SubagentStart`s read `highest = 0` (or a non-final slot) and bind the same
+  round. A new cycle starts only after the prior panel completes (the orchestrator needs all four
+  results to synthesize and decide to re-review), so the prior round's final dirs exist before the
+  next cycle binds → clean advance.
   *Sole degradation:* if a re-review were somehow spawned **before any capture of the prior cycle
   existed**, the two cycles would share a round — observe-only, non-fatal, and not a flow the
   orchestrator produces (documented, not silently assumed).
@@ -254,6 +262,13 @@ verified against the live CC hooks docs (see §2); any contract claim is re-chec
   live docs. Nit A: `context_highest_round` must return a decimal-normalized int (a `round-09` → bind
   10) — pinned in §2.1 + a §6.1 bind test. Nit B: pin the Start/Stop same-`agent_id` invariant with a
   hook fixture — added as §6.5. **Codex gate satisfied.**
+- **PR #17 bot review → codex `COMMENTED` (1 × P2), gemini clean.** codex P2: the producer's naive
+  `highest + 1` regressed `capture.py`'s `is_final_capture` reuse — a same-round repair re-run would
+  split the cycle into `round-2` instead of overwriting the empty `round-1` slot. **Fixed:**
+  `context_review_round_bind` now mirrors `capture.select_round` (advance only past a final slot;
+  reuse otherwise), reusing `capture.is_final_capture` via a new `_context_round_advance` helper.
+  Added a repair-reuse + per-agent-reuse regression test (hook tests 130 → **132**). gemini posted
+  two summary-only passes with no findings.
 - **rev 2 → gemini: APPROVE** (after the user re-authed `agy`). Confirmed every r1 item resolved and
   validated the design (interleaving elimination, `agent_id` stability, round assignment,
   consume-once + TTL, read-side validation, capture.py dedup interaction), raising **no new issues**.

@@ -29,9 +29,12 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   binding, a missing `python3`/`date`, or `UNLEASHED_REVIEW_ROUND_SIGNAL=off` all fall back to the
   shipped `capture.py` inference; an explicitly-set `UNLEASHED_REVIEW_ROUND` is never clobbered. No
   change to `capture.py`'s consumption logic, the findings-array shape, or the SubagentStop contract.
-  PII-free (only a slug token, opaque ids, an int, and an epoch are persisted). Tests: `test-hooks.sh`
-  104 → **130** (interleaving fix, stale/cross-agent isolation, decimal-normalization, consume-once,
-  kill switch, explicit-not-clobbered, producer exclusions, zsh-NOMATCH) and `test_capture.py`
+  PII-free (only a slug token, opaque ids, an int, and an epoch are persisted). The round number
+  mirrors `capture.select_round` (advance past a final prior slot, else reuse), so a same-round repair
+  re-run overwrites the empty slot rather than splitting the cycle. Tests: `test-hooks.sh`
+  104 → **132** (interleaving fix, repair/per-agent reuse, stale/cross-agent isolation, decimal
+  arithmetic, consume-once, kill switch, explicit-not-clobbered, producer exclusions, zsh-NOMATCH) and
+  `test_capture.py`
   143 → **144** (override↔dedup round-trip). Plan-review: codex `APPROVE_WITH_NOTES` + gemini
   `APPROVE` (`docs/planning/REVIEW_ROUND_PRODUCER_PLAN.md`). No version or asset-count change (hooks
   are not counted by the version-sync validator).

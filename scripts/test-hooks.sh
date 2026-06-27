@@ -542,6 +542,9 @@ if [ "$(context_highest_round "$HR2")" = "9" ]; then ok; else fail "highest_roun
 RSLUG="$(context_branch_slug "$(context_branch)")"
 RDIR="$(context_reviews_dir)/$RSLUG"
 clean_rounds() { rm -rf "$(context_reviews_dir)" 2>/dev/null; rm -f "$(context_state_dir)"/review-round-*.json 2>/dev/null; }
+# Seed a round dir with a FINAL (schema-valid) capture for an agent, so bind's is_final-aware advance
+# treats it as a completed prior round. $1 = round dir, $2 = agent.
+seed_final() { mkdir -p "$1" 2>/dev/null; printf '%s' '[{"severity":"warning","confidence":"high","sourceAgent":"x","category":"keychain","file":"a.swift","line":1,"lineEnd":2,"finding":"f","evidence":"e","fix":"x"}]' > "$1/$2.json"; }
 clean_rounds
 R="$(context_review_round_bind security-reviewer aidA sess1)"
 if [ "$R" = "1" ]; then ok; else fail "bind: fresh slug -> round 1 (got '$R')"; fi
@@ -553,14 +556,27 @@ if [ -z "$(context_review_round_lookup security-reviewer aidUnbound sess1)" ]; t
 context_review_round_clear aidA
 if [ -z "$(context_review_round_lookup security-reviewer aidA sess1)" ]; then ok; else fail "clear: consume-once -> lookup empty"; fi
 
-# bind advances after a round dir exists.
+# bind advances past a FINAL prior round (mirrors capture.select_round).
 clean_rounds
-mkdir -p "$RDIR/round-1"
-if [ "$(context_review_round_bind security-reviewer aidB sess1)" = "2" ]; then ok; else fail "bind: advances to 2 after round-1 dir"; fi
-# bind-level decimal-normalization (codex r2 Nit A): an existing round-09 -> bind 10, not octal.
+seed_final "$RDIR/round-1" security-reviewer
+if [ "$(context_review_round_bind security-reviewer aidB sess1)" = "2" ]; then ok; else fail "bind: advances to 2 past a final round-1"; fi
+# bind-level decimal arithmetic (codex r2 Nit A): context_highest_round returns a base-10 int (the
+# `round-09 -> 9` scan test above), so bind's +1 is decimal (9 -> 10), never an octal `09:` error.
+# (capture.py writes `round-<N>` without leading zeros and bind mirrors capture.select_round's
+# `round-%d` path reconstruction, so a synthetic leading-zero dir is out of scope by construction.)
 clean_rounds
-mkdir -p "$RDIR/round-09"
-if [ "$(context_review_round_bind security-reviewer aid09 sess1)" = "10" ]; then ok; else fail "bind: round-09 present -> round 10 (not octal)"; fi
+seed_final "$RDIR/round-9" security-reviewer
+if [ "$(context_review_round_bind security-reviewer aid9 sess1)" = "10" ]; then ok; else fail "bind: final round-9 -> round 10 (decimal +1)"; fi
+# REPAIR REUSE (codex PR #17 P2): when the highest round's slot is EMPTY/non-final (a dropped/empty
+# first capture that swift-reviewer's recovery re-runs), bind must REUSE the round so the repair
+# overwrites the stale slot — NOT advance and split the cycle. Naive highest+1 would (wrongly) give 2.
+clean_rounds
+mkdir -p "$RDIR/round-1"; printf '%s' '[]' > "$RDIR/round-1/security-reviewer.json"   # empty == non-final
+if [ "$(context_review_round_bind security-reviewer aidRepair sess1)" = "1" ]; then ok; else fail "bind: reuse round-1 when prior slot is empty/non-final (repair)"; fi
+# ...but a DIFFERENT agent whose slot in the highest round is absent also reuses (its prior slot is not final).
+clean_rounds
+seed_final "$RDIR/round-1" security-reviewer
+if [ "$(context_review_round_bind concurrency-reviewer aidC sess1)" = "1" ]; then ok; else fail "bind: per-agent reuse when this agent's slot is absent in highest round"; fi
 
 # foreign-slug binding is rejected on read.
 clean_rounds
@@ -587,13 +603,16 @@ if [ ! -f "$(context_round_binding_path jm1)" ]; then ok; else fail "producer: i
 printf '{"agent_type":"swift-reviewer","agent_id":"sr1","session_id":"s"}' | bash "$ROUND_START" 2>/dev/null
 if [ ! -f "$(context_round_binding_path sr1)" ]; then ok; else fail "producer: excludes swift-reviewer"; fi
 
-# Start→Stop share one agent_id end-to-end (codex r2 Nit B): with round-1..3 present, the binding
-# (highest+1=4 frozen at start) drives the bucket, NOT inference (which would pick 3).
+# Start→Stop share one agent_id end-to-end (codex r2 Nit B): a SubagentStart freezes the round, the
+# SubagentStop with the SAME agent_id consumes it. With three FINAL prior rounds, bind advances to 4
+# at start and the capture lands in round-4 at stop.
 clean_rounds
-mkdir -p "$RDIR/round-1" "$RDIR/round-2" "$RDIR/round-3"
+seed_final "$RDIR/round-1" security-reviewer
+seed_final "$RDIR/round-2" security-reviewer
+seed_final "$RDIR/round-3" security-reviewer
 start_bind security-reviewer same1
 stop_capture security-reviewer same1
-if [ -f "$RDIR/round-4/security-reviewer.json" ]; then ok; else fail "Start/Stop same agent_id -> bound round 4 (not inferred 3)"; fi
+if [ -f "$RDIR/round-4/security-reviewer.json" ]; then ok; else fail "Start/Stop same agent_id end-to-end -> bound round 4"; fi
 if [ ! -f "$(context_round_binding_path same1)" ]; then ok; else fail "consume-once: binding cleared after capture"; fi
 
 # THE INTERLEAVING FIX: a late cycle-1 reviewer lands in its ORIGINATING round even after a later

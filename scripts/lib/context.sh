@@ -202,17 +202,62 @@ _context_round_sweep() {
     done
 }
 
-# PRODUCER: freeze and persist the round for a reviewer subagent at spawn. round = highest existing
-# round-dir + 1 (first cycle = 1; each later cycle +1). The four reviewers of one cycle spawn in a
-# single parallel batch BEFORE any of them captures, so all four read the same `highest` and bind the
-# same round. Atomic write (tmp + mv). Sweeps expired bindings first. Prints the round. Fail-open.
+# Locate the synthesizer package (capture.py + schema.py) relative to this lib, so the producer can
+# REUSE capture.is_final_capture for its advance decision (single-sourcing that subtle predicate).
+# BASH_SOURCE[0] is this file even inside a function (defining file). $0 fallback for non-bash sourcing.
+_context_capture_dir() {
+    local d
+    d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || d="."
+    printf '%s/../../mcp/review-synthesizer' "$d"
+}
+
+# Should the producer ADVANCE past `$2` (the highest existing round) for `$3` (agent), or REUSE it?
+# Echoes "0" (REUSE) ONLY when capture.is_final_capture confirms the highest round's slot for this
+# agent is NON-final (empty / schema-dropped / missing) — mirroring capture.select_round's non-override
+# path, so a same-round REPAIR re-run (swift-reviewer's recovery rule) overwrites the stale empty slot
+# instead of splitting the cycle into a new round (codex PR #17 review). Echoes "1" (ADVANCE) otherwise,
+# INCLUDING when finality can't be determined (no python3/capture.py) — the safe default never
+# overwrites a genuine prior capture. $1 = base, $2 = highest, $3 = agent.
+_context_round_advance() {
+    local base="${1:-}" highest="${2:-0}" agent="${3:-}" capdir out
+    command -v python3 >/dev/null 2>&1 || { printf '1'; return 0; }
+    capdir="$(_context_capture_dir)"
+    [ -f "$capdir/capture.py" ] || { printf '1'; return 0; }
+    out="$(UNLEASHED_FC_CAPDIR="$capdir" python3 -c '
+import os, sys
+capdir = os.environ.get("UNLEASHED_FC_CAPDIR", "")
+if capdir:
+    sys.path.insert(0, capdir)
+try:
+    import capture
+except Exception:
+    sys.stdout.write("1"); sys.exit(0)   # cannot import -> ADVANCE (never overwrite a real capture)
+sys.stdout.write("1" if capture.is_final_capture(sys.argv[1]) else "0")
+' "$base/round-$highest/$agent.json" 2>/dev/null)"
+    case "$out" in 0) printf '0' ;; *) printf '1' ;; esac   # any odd/empty output -> ADVANCE (safe)
+}
+
+# PRODUCER: freeze and persist the round for a reviewer subagent at spawn. The round MIRRORS
+# capture.select_round's non-override path so the producer and the capture stay consistent: first cycle
+# = 1; advance to highest+1 only when the highest round's slot for this agent already holds a FINAL
+# capture; otherwise REUSE the highest round (a same-round repair re-run overwrites an empty/dropped
+# slot rather than splitting the cycle — codex PR #17). The four reviewers of one cycle spawn in a
+# single parallel batch BEFORE any capture, so all four read highest=0 and bind round 1. Atomic write
+# (tmp + mv). Sweeps expired bindings first. Prints the round. Fail-open.
 # $1 = agent_type, $2 = agent_id, $3 = session_id (optional).
 context_review_round_bind() {
-    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base round now path dir
+    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now path dir
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
     slug="$(context_branch_slug "$(context_branch)")"
     base="$(context_reviews_dir)/$slug"
-    round=$(( $(context_highest_round "$base") + 1 ))
+    highest="$(context_highest_round "$base")"
+    if [ "$highest" -eq 0 ]; then
+        round=1
+    elif [ "$(_context_round_advance "$base" "$highest" "$agent")" = "0" ]; then
+        round="$highest"                                       # reuse: prior slot is empty/non-final
+    else
+        round=$(( highest + 1 ))                               # advance: prior slot is a final capture
+    fi
     now="$(date +%s 2>/dev/null || echo 0)"
     # session_id is an opaque CC id; hard-restrict to a JSON-safe charset (and cap) so the bash-written
     # JSON can never be malformed by an unexpected value. agent is hook-allowlisted; slug is a safe token.
