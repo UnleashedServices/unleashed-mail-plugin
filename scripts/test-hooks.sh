@@ -4,6 +4,13 @@
 # Pure bash, no Xcode — runs in the plugin repo and in Linux CI. Each case pipes
 # synthetic stdin to a hook and asserts on its stdout/exit. All hook state is
 # isolated in a temp CLAUDE_PLUGIN_DATA so the real ~/.claude is never touched.
+#
+# COVERAGE NOTE (COREDEV-2338): this harness exercises hook *behavior* but hardcodes the
+# hook-script paths it drives — it does NOT prove hooks/hooks.json actually points at those
+# scripts (that manifest<->script linkage, event names, and matcher tokens are gated by
+# scripts/validate-hooks.py). Known behavioral gap: the PostToolUse `swift-lint-check.sh`
+# hook is not simulated here (it needs SwiftLint + a Swift-file context unavailable on the
+# Linux CI runner); its manifest wiring is still validated by validate-hooks.py.
 set -uo pipefail
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
