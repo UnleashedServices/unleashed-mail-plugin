@@ -327,7 +327,7 @@ BUILD=$?; [ "$BUILD" -eq 0 ] && echo "✅ build" || echo "❌ build FAILED (exit
 # Arm (1) reuses $CHANGED from Step 1 (same session — the test-coverage check below relies on it too),
 # keeping only *.swift paths that still exist (a deleted/renamed-away file has nothing to lint); the
 # empty-set guard skips xargs entirely (BSD/macOS-safe — no GNU-only `-r`).
-CHANGED_SWIFT=$(printf '%s\n' "$CHANGED" | grep -E '\.swift$' | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done)
+CHANGED_SWIFT=$(printf '%s\n' "$CHANGED" | { grep -E '\.swift$' || true; } | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done)
 if [ -n "$CHANGED_SWIFT" ]; then
   printf '%s\n' "$CHANGED_SWIFT" | tr '\n' '\0' | xargs -0 swiftlint --strict --quiet 2>&1 | tail -20; CHANGED_LINT=$?
 else

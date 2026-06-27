@@ -91,7 +91,10 @@ jobs:
         run: brew install swiftlint
       # Both arms of the merge gate (AGENT_CONTRACTS §5) — keep BOTH; the baseline arm alone
       # would let a touched file with a pre-existing (baselined) warning pass.
+      # Changed-file arm only runs on PRs — `github.base_ref` is empty on `push` events
+      # (would make `origin/...HEAD` an invalid ref). The whole-repo baseline arm below runs on both.
       - name: SwiftLint — changed files (strict; warnings→errors on touched files)
+        if: github.event_name == 'pull_request'
         run: |
           set -o pipefail
           CHANGED=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD -- '*.swift')
