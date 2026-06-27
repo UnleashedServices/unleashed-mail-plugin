@@ -2,7 +2,7 @@
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
-**20 agents · 18 skills · 3 commands · 1 MCP server**
+**21 agents · 18 skills · 3 commands · 1 MCP server**
 
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
@@ -110,8 +110,8 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
  │ standards-     │  │ logic-engineer │  │  ├─ concurrency-reviewer             │
  │ planner        │  │ ui-engineer    │  │  ├─ ux-perf-reviewer                 │
  │ smb-           │  │ ai-engineer    │  │  ├─ accessibility-auditor            │
- │ entrepreneur   │  │ tester         │  │  └─ provider parity audit            │
-│ enterprise-    │  │code-simplifier │  │                                      │
+ │ entrepreneur   │  │ tester         │  │  ├─ prompt-review                    │
+│ enterprise-    │  │code-simplifier │  │   └─ provider parity audit            │
  │ stakeholder    │  │                │  │                                      │
  └────────────────┘  └────────────────┘  └──────────────────────────────────────┘
          │                    │                           │
@@ -135,19 +135,20 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-> After the four reviewers return their JSON findings, `swift-reviewer` calls the bundled **`review-synthesizer`** MCP server (`synthesize_review`) for deterministic dedup / scope / ownership-merge — cluster-and-cross-link, never silently dropping a fix — then runs its **verify gate** (confirm each blocker against the code) before issuing the verdict. See [MCP Servers](#mcp-servers-1).
+> After the five reviewers return their JSON findings, `swift-reviewer` calls the bundled **`review-synthesizer`** MCP server (`synthesize_review`) for deterministic dedup / scope / ownership-merge — cluster-and-cross-link, never silently dropping a fix — then runs its **verify gate** (confirm each blocker against the code) before issuing the verdict. See [MCP Servers](#mcp-servers-1).
 
-## Agents (20)
+## Agents (21)
 
 ### Review Agents (run in parallel via orchestrator)
 
 | Agent | Specialization |
 |---|---|
-| `swift-reviewer` | **Orchestrator** — spawns all 4 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict |
+| `swift-reviewer` | **Orchestrator** — spawns all 5 reviewers, runs parity audit, calls the deterministic `synthesize_review` MCP tool to dedup/merge their JSON findings, then owns the **verify gate** + unified verdict |
 | `security-reviewer` | Credential exposure, OAuth/MSAL flaws, WKWebView injection (HTMLSanitizer + HTMLRenderPipeline), CI pipeline, entitlements, SQLCipher |
 | `concurrency-reviewer` | Data races, actor isolation, async/await, GRDB threading, COREDEV-1578 Sendable matrix, deprecated APIs (Swift 6 enforced) |
 | `ux-perf-reviewer` | Main-thread responsiveness, SwiftUI rendering, query perf, image budget tiers, perceived speed, error UX |
 | `accessibility-auditor` | VoiceOver, keyboard nav, Dynamic Type, color contrast, focus management, Curator design system, dual-impl a11y parity |
+| `prompt-review` | AI prompt/call-site safety (static, read-only): jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress, inline prompts outside PromptRegistry, unscoped tools, PII-in-logs |
 
 ### Coding & Implementation Agents
 
@@ -208,7 +209,7 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 |---|---|
 | `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket |
 | `/unleashed-mail:implement` | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates |
-| `/unleashed-mail:pr-review` | All 4 reviewers + a11y + parity in parallel → unified verdict → Jira logged |
+| `/unleashed-mail:pr-review` | All 5 reviewers (incl. prompt-review) + parity in parallel → unified verdict → Jira logged |
 
 ## Parallel Execution
 
