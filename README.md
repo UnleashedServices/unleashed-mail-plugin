@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.3.1
+# UnleashedMail — Claude Code Plugin v2.4.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,14 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.4.0
+
+- **`prompt-review` — a 5th specialist reviewer (GARI prompt / call-site safety).** A read-only static reviewer of AI prompts and provider call sites (jailbreak/injection surface, missing refusal paths, format/context leaks, unsanitized ingress of untrusted email/web content, inline prompts outside `PromptRegistry`, unscoped tools, PII-in-logs), fully wired into the `swift-reviewer` panel and the deterministic `review-synthesizer` pipeline (new **`ai-safety`** category family + `prompt-review` ownership). **Agent count: 21** (was 20). (COREDEV-2329 / COREDEV-2330)
+- **Cross-family AI-safety ↔ security consolidation** — overlapping `prompt-review` and security/correctness findings on the *same lines* now merge into one `prompt-review`-owned row (category-level `_OWNERSHIP_MERGE_PAIRS`), never dropping a fix and never hiding a co-located security blocker. (COREDEV-2332)
+- **Reviewer-capture round binding** — a `SubagentStart` producer hook freezes each reviewer's round at spawn (keyed by `agent_id`) so captures land in their *originating* cycle under interleaved timing; observe-only and fail-open. (COREDEV-2326)
+- **Reviewer Output-Contract status persisted through capture** — each reviewer's `COMPLETE | BLOCKED | PARTIAL` status is written to a sibling `<agent>.status` JSON, so a captured `BLOCKED` reviewer can't read as a clean `[]` pass. (COREDEV-2328)
+- **`ai-engineer` doc-drift fix** — removed the non-existent `HTTPBasedAIProvider` / `AIToolDefinition` symbols from the agent docs, `CLAUDE.md`, and contracts; examples now use the real `BaseAIProvider` + `AIProviderProtocol` / `AITool` + `ToolHandlerProtocol` model, with `HTTPBasedAIProvider` relabelled **PLANNED** (COREDEV-1837). (COREDEV-2331)
 
 ### v2.3.1
 

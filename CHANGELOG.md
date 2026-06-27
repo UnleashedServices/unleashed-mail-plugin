@@ -13,6 +13,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-06-27
+
 ### Added
 - **`prompt-review` — static AI-prompt / call-site reviewer, fully wired into the review pipeline**
   (COREDEV-2330 agent + COREDEV-2329 wiring; under Epic COREDEV-2126 GARI safety). A read-only 5th
