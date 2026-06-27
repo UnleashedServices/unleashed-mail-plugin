@@ -19,6 +19,12 @@ dropped/malformed finding is handled by ``swift-reviewer`` Step-5 recovery in-se
     plus a numeric round, and is re-checked with a portable real-path traversal guard
     (``os.path.realpath`` — NOT GNU ``realpath -m``) so a write can never escape the
     capture root.
+  * A sibling ``<agent>.status`` JSON (COREDEV-2328) records the reviewer's Output-Contract
+    ``Status:`` (COMPLETE | BLOCKED | PARTIAL + BLOCKED/PARTIAL detail fields) so a captured
+    ``BLOCKED`` can't read as a clean ``[]``. It sits BESIDE the findings array (not inside it),
+    leaving ``is_final_capture``/``synthesize._load`` untouched; every persisted detail field is
+    PII-redacted + capped; ``agent`` is the allowlisted name; and it is written/cleared best-effort
+    AFTER the findings land (never fails the findings capture).
 """
 from __future__ import annotations
 
@@ -251,6 +257,150 @@ def is_final_capture(path: str) -> bool:
     return False
 
 
+# --- Output-Contract status sidecar (COREDEV-2328) ---------------------------------------
+# Persist the reviewer's `Status:` (COMPLETE | BLOCKED | PARTIAL + BLOCKED/PARTIAL detail fields)
+# as a sibling `<agent>.status` JSON so `swift-reviewer` can honour a BLOCKED capture instead of
+# reading its `[]` as a clean pass — WITHOUT touching the findings array shape (``synthesize._load``,
+# ``is_final_capture``, and every existing consumer still see a bare list). Observe-only, fail-open,
+# PII-redacted, exactly like the findings capture above.
+STATUS_VALUES = ("COMPLETE", "BLOCKED", "PARTIAL")
+STATUS_FIELD_CAP = EVIDENCE_CAP
+
+# A status line. REQUIRES a separator (so `StatusCOMPLETE`/`Status COMPLETE` never match); markers
+# tolerated on both sides but NOT backtick (so the contract's own inline-code examples
+# `` `Status: X` `` are not matched); end-anchored (rejects the `| BLOCKED | PARTIAL` template echo).
+# Single-class quantifiers around a REQUIRED separator literal -> linear / ReDoS-safe.
+_STATUS_LINE = re.compile(
+    r"^[ \t>*_#-]*status[ \t>*_#]*[:=–—-][ \t>*_#-]*(COMPLETE|BLOCKED|PARTIAL)[ \t>*_#.-]*$",
+    re.IGNORECASE,
+)
+# A code-fence marker line: group 1 = the run (>=3 backticks OR tildes), group 2 = info / trailing.
+_FENCE_MARK = re.compile(r"^[ \t>]*(`{3,}|~{3,})[ \t]*(.*)$")
+
+# BLOCKED/PARTIAL detail fields: contract label -> persisted key. Require a `:`/`=` separator;
+# capture the rest of the (single) line. Backtick excluded, mirroring the status line.
+_STATUS_FIELDS = (
+    ("blocker description", "blockerDescription"),
+    ("what was attempted", "whatWasAttempted"),
+    ("completed", "completed"),
+    ("remaining", "remaining"),
+    ("confidence", "confidence"),
+)
+
+
+def _compile_field(label: str) -> "re.Pattern[str]":
+    words = r"[ \t]+".join(re.escape(w) for w in label.split())
+    return re.compile(r"^[ \t>*_#-]*" + words + r"[ \t>*_#]*[:=][ \t>*_#-]*(.+)$", re.IGNORECASE)
+
+
+_FIELD_RES = [(_compile_field(label), key) for label, key in _STATUS_FIELDS]
+
+
+def _match_field(line: str) -> "tuple[str, str] | None":
+    """Return ``(key, raw_value)`` for a single detail-field line, else None."""
+    for rx, key in _FIELD_RES:
+        m = rx.match(line)
+        if m:
+            return key, m.group(1)
+    return None
+
+
+def extract_status(text: object) -> "dict | None":
+    """Parse the reviewer's Output-Contract status from the report's TRUE pre-fence trailer.
+
+    Walks UP from the final ```` ```json ```` fence over only blank + detail-field lines to a
+    top-level ``Status:`` line; ANY other content — prose, or a line inside a code fence
+    (CommonMark family/length-aware, terminated OR not) — ends the trailer and yields None. So a
+    ``Status:`` buried in an earlier example / code block can never be persisted as the status.
+    Returns ``{"status": <UPPER>, ...detail fields}`` (every field PII-redacted + capped) or None.
+    """
+    if not isinstance(text, str):
+        return None
+    fences = list(_FENCE.finditer(text))
+    region = text[: fences[-1].start()] if fences else text
+    lines = region.splitlines()
+    # Flag code-fenced lines top-down, family + length aware: a ``` fence closes only on a same-family
+    # run >= the opener with no info string, so a `~~~` inside a ``` block (or vice versa) is content.
+    in_code = [False] * len(lines)
+    open_char, open_len = "", 0
+    for i, ln in enumerate(lines):
+        m = _FENCE_MARK.match(ln)
+        run = m.group(1) if m else ""
+        info = m.group(2).strip() if m else ""
+        if not open_char:
+            if run:
+                in_code[i] = True
+                open_char, open_len = run[0], len(run)
+        else:
+            in_code[i] = True
+            if run and run[0] == open_char and len(run) >= open_len and not info:
+                open_char, open_len = "", 0
+    # Walk up the contiguous top-level trailer to the status line.
+    status, status_i, i = None, -1, len(lines) - 1
+    while i >= 0:
+        if in_code[i]:
+            break
+        ln = lines[i]
+        if not ln.strip():
+            i -= 1
+            continue
+        m = _STATUS_LINE.match(ln)
+        if m:
+            status, status_i = m.group(1).upper(), i
+            break
+        if _match_field(ln) is not None:
+            i -= 1
+            continue
+        break
+    if status is None:
+        return None
+    out = {"status": status}
+    for ln in lines[status_i + 1:]:
+        field = _match_field(ln)
+        if field is not None and field[0] not in out:
+            out[field[0]] = cap(redact_pii(field[1]), STATUS_FIELD_CAP)
+    return out
+
+
+def _status_path(round_dir: str, agent: str) -> str:
+    return os.path.join(round_dir, agent + ".status")
+
+
+def _write_status(round_dir: str, agent: str, status: dict) -> None:
+    """Best-effort sibling `<agent>.status` write (tmp+replace, trailing newline). The self-describing
+    `agent` is the hook-allowlisted name (never transcript text). Fully fail-open — NEVER raises, so
+    it can't flip ``capture()``'s already-successful "written" result. Swallows OSError (fs failures),
+    TypeError (a non-serializable value), and ValueError — incl. ``UnicodeEncodeError`` should a
+    detail field carry an unencodable lone surrogate (not reachable via the shipped hook input, which
+    decodes with ``errors="replace"``, but kept robust for any caller)."""
+    dest = _status_path(round_dir, agent)
+    tmp = "%s.tmp.%d" % (dest, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            # `agent` LAST so the trusted hook-allowlisted name always wins over any (transcript-
+            # derived) `status` key; a dict literal also can't raise on a key collision the way
+            # `dict(agent=..., **status)` can. Today `status` never carries an `agent` key (pinned
+            # `_STATUS_FIELDS`), so this is behaviourally identical — just collision-proof and keeps
+            # the "agent is never transcript text" invariant if the schema ever grows. (PR #16 review.)
+            json.dump({**status, "agent": agent}, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(tmp, dest)
+    except (OSError, TypeError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _clear_status(round_dir: str, agent: str) -> None:
+    """Best-effort removal of any existing `<agent>.status` so a status-less overwrite of a reused
+    slot never inherits a prior occupant's status. Fully fail-open — NEVER raises."""
+    try:
+        os.remove(_status_path(round_dir, agent))
+    except OSError:
+        pass
+
+
 def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: str = "") -> str:
     """Capture one reviewer message. Returns a status string (for tests/logging):
     rejected | skipped | no-fence | invalid | written."""
@@ -300,6 +450,15 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
         except OSError:
             pass
         return "invalid"
+    # Status sidecar (COREDEV-2328) — runs only after the findings replace SUCCEEDED, OUTSIDE the
+    # try/except above, so a status-side issue can never flip this into "invalid". Clear any prior
+    # occupant's status FIRST, then write the freshly-extracted one (if any): a write failure OR a
+    # status-less overwrite leaves the sidecar ABSENT (face value), never a stale BLOCKED/PARTIAL.
+    # `_clear_status`/`_write_status` never raise.
+    _clear_status(dest_dir, agent)
+    status = extract_status(message)
+    if status:
+        _write_status(dest_dir, agent, status)
     return "written"
 
 

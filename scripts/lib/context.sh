@@ -110,3 +110,25 @@ context_branch_slug() {
         printf 'unknown'
     fi
 }
+
+# Highest round-<N> dir under $1 that holds $2's findings (`<agent>.json`), by NUMERIC round.
+# Portable (no GNU sort/realpath; safe with spaces/hyphens in $1). Prints the dir, or nothing.
+# $1 = <reviews_dir>/<slug>, $2 = agent. Used by swift-reviewer Step 2 to pair a reviewer's
+# persisted `.status` with the SAME round's findings (COREDEV-2328); mirrors the producer side in
+# mcp/review-synthesizer/capture.py.
+context_latest_round_dir() {
+    local base="${1:-}" agent="${2:-}" best="" best_n=-1 d n
+    [ -n "$base" ] && [ -n "$agent" ] || return 0
+    # zsh aborts an UNMATCHED glob (NOMATCH) before the loop body; under zsh, neutralize it
+    # function-locally so an empty/round-less base is handled by the `[ -d ]` guard exactly as bash
+    # does (the swift-reviewer Step-2 recipe is pasted into a zsh Bash-tool context). No-op in bash.
+    [ -n "${ZSH_VERSION:-}" ] && setopt local_options no_nomatch 2>/dev/null || true
+    for d in "$base"/round-*/; do
+        [ -d "$d" ] || continue                              # unmatched glob stays literal -> skipped
+        d="${d%/}"; n="${d##*/round-}"
+        case "$n" in ''|*[!0-9]*|??????*) continue ;; esac    # numeric, <=5 digits (no huge-suffix -gt error)
+        [ -f "$d/$agent.json" ] || continue
+        [ "$n" -gt "$best_n" ] && { best_n="$n"; best="$d"; }
+    done
+    [ -n "$best" ] && printf '%s' "$best"
+}

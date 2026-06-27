@@ -472,6 +472,59 @@ printf '{"agent_type":"security-reviewer","last_assistant_message":"```json\\n[]
     | UNLEASHED_CAPTURE_REVIEWERS=off bash "$CAPTURE" 2>/dev/null
 if [ -e "$REVDIR/security-reviewer.json" ]; then fail "capture kill switch -> no write"; else ok; fi
 
+echo "== COREDEV-2328 context_latest_round_dir =="
+# Pure-function tests for the Step-2 round-lookup helper: highest NUMERIC round holding the agent's
+# findings, robust to hyphenated base paths and oversized suffixes (no GNU sort, no -gt overflow).
+LRD="$TMPROOT/lrd-COREDEV-2328/slug-with-hyphens"   # hyphens in the base (codex r1)
+mkdir -p "$LRD/round-1" "$LRD/round-2" "$LRD/round-10"
+: > "$LRD/round-1/security-reviewer.json"
+: > "$LRD/round-2/security-reviewer.json"
+: > "$LRD/round-10/security-reviewer.json"
+GOT="$(context_latest_round_dir "$LRD" security-reviewer)"
+if [ "$GOT" = "$LRD/round-10" ]; then ok; else fail "latest_round_dir: round-10 > round-2 (got '$GOT')"; fi
+
+# a round missing THIS agent's .json is ignored (round-10 holds a different agent -> picks round-3)
+LRD2="$TMPROOT/lrd2/slug"
+mkdir -p "$LRD2/round-3" "$LRD2/round-10"
+: > "$LRD2/round-3/concurrency-reviewer.json"
+: > "$LRD2/round-10/security-reviewer.json"
+GOT2="$(context_latest_round_dir "$LRD2" concurrency-reviewer)"
+if [ "$GOT2" = "$LRD2/round-3" ]; then ok; else fail "latest_round_dir: skip round missing the agent json (got '$GOT2')"; fi
+
+# no qualifying round -> empty output
+GOT3="$(context_latest_round_dir "$TMPROOT/lrd-empty/slug" security-reviewer)"
+if [ -z "$GOT3" ]; then ok; else fail "latest_round_dir: empty when no round (got '$GOT3')"; fi
+
+# a non-numeric / oversized (>5-digit) round suffix is ignored without a bash -gt error (codex r2)
+LRD3="$TMPROOT/lrd3/slug"
+mkdir -p "$LRD3/round-2" "$LRD3/round-99999999999999" "$LRD3/round-abc"
+: > "$LRD3/round-2/security-reviewer.json"
+: > "$LRD3/round-99999999999999/security-reviewer.json"
+: > "$LRD3/round-abc/security-reviewer.json"
+GOT4="$(context_latest_round_dir "$LRD3" security-reviewer 2>/dev/null)"
+if [ "$GOT4" = "$LRD3/round-2" ]; then ok; else fail "latest_round_dir: ignore oversized/non-numeric suffix (got '$GOT4')"; fi
+
+# leading-zero round suffixes are decimal, NOT octal: the comparison is the POSIX `test` builtin
+# `[ "$n" -gt … ]` (base-10 strtoimax), not `(( … ))` arithmetic — so round-08/round-09 never raise
+# a `value too great for base` error and still order numerically. (Gemini PR #16 review verified a
+# non-issue; pinned here so a future refactor to `(( ))` arithmetic can't silently regress it.)
+LRD5="$TMPROOT/lrd5/slug"
+mkdir -p "$LRD5/round-1" "$LRD5/round-08" "$LRD5/round-09"
+: > "$LRD5/round-1/security-reviewer.json"
+: > "$LRD5/round-08/security-reviewer.json"
+: > "$LRD5/round-09/security-reviewer.json"
+GOT5="$(context_latest_round_dir "$LRD5" security-reviewer 2>/dev/null)"
+if [ "$GOT5" = "$LRD5/round-09" ]; then ok; else fail "latest_round_dir: leading-zero rounds are base-10 not octal (got '$GOT5')"; fi
+
+# zsh portability: the swift-reviewer Step-2 recipe runs in a zsh Bash-tool context, where an
+# unmatched glob aborts (NOMATCH). A round-less base must return clean+empty, not 'no matches found'.
+# Skipped where zsh is absent (e.g. Linux CI).
+if command -v zsh >/dev/null 2>&1; then
+    ZSCRIPT=". \"$_DIR/lib/context.sh\"; context_latest_round_dir \"$TMPROOT/zsh-no-rounds/slug\" security-reviewer"
+    ZOUT="$(zsh -c "$ZSCRIPT" 2>&1)"
+    if [ -z "$ZOUT" ]; then ok; else fail "zsh NOMATCH: latest_round_dir no-match must be clean+empty (got '$ZOUT')"; fi
+fi
+
 echo ""
 echo "hook tests: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

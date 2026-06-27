@@ -401,5 +401,205 @@ class TestTranscriptFallback(unittest.TestCase):
             self.assertEqual(C.read_last_assistant_from_transcript(path), "GOOD findings")
 
 
+# --- Output-Contract status sidecar (COREDEV-2328) ---------------------------------------
+def jfence(findings=None):
+    return "```json\n" + json.dumps(findings if findings is not None else []) + "\n```\n"
+
+
+def status_msg(trailer, findings=None):
+    """A report whose Output-Contract `trailer` (Status: + detail fields) sits IMMEDIATELY before
+    the json findings fence (unlike `fenced`, which injects 'prose before')."""
+    return "some findings prose here\n\n" + trailer.rstrip("\n") + "\n" + jfence(findings)
+
+
+class TestExtractStatus(unittest.TestCase):
+    def _s(self, text):
+        r = C.extract_status(text)
+        return r["status"] if r else None
+
+    def test_complete_blocked_partial(self):
+        self.assertEqual(self._s("Status: COMPLETE\n" + jfence()), "COMPLETE")
+        self.assertEqual(self._s("Status: BLOCKED\n" + jfence()), "BLOCKED")
+        self.assertEqual(self._s("Status: PARTIAL\n" + jfence()), "PARTIAL")
+
+    def test_marker_variants_lowercase_dashes_trailing_period(self):
+        for line in ("**Status:** COMPLETE", "**Status**: COMPLETE", "- Status: COMPLETE",
+                     "> Status: COMPLETE", "Status: complete", "Status — COMPLETE", "Status: COMPLETE."):
+            self.assertEqual(self._s(line + "\n" + jfence()), "COMPLETE", line)
+
+    def test_rejects_concatenation_and_bare_space(self):
+        for line in ("StatusCOMPLETE", "statusBlocked", "Status COMPLETE"):
+            self.assertIsNone(self._s(line + "\n" + jfence()), line)
+
+    def test_rejects_template_echo(self):
+        self.assertIsNone(self._s("Status: COMPLETE | BLOCKED | PARTIAL\n" + jfence()))
+
+    def test_rejects_inline_code_contract_examples(self):
+        for line in ("`Status: BLOCKED`", "- `Status: COMPLETE`", "I emit `Status: BLOCKED` when blocked."):
+            self.assertIsNone(self._s(line + "\n" + jfence()), line)
+
+    def test_fence_aware_terminated_unterminated_mixed_marker(self):
+        self.assertIsNone(self._s("```text\nStatus: BLOCKED\n" + jfence()))                  # unterminated
+        self.assertIsNone(self._s("ex\n```text\nStatus: BLOCKED\n```\nprose\n" + jfence()))  # terminated
+        self.assertIsNone(self._s("```text\n~~~\nStatus: BLOCKED\n" + jfence()))             # mixed marker
+        self.assertIsNone(self._s("~~~text\nStatus: BLOCKED\n~~~\nprose\n" + jfence()))      # tilde fence
+
+    def test_well_formed_code_fence_then_real_trailer(self):
+        self.assertEqual(self._s("Bad:\n```swift\nlet x = 1\n```\nStatus: COMPLETE\n" + jfence("[]")), "COMPLETE")
+        # a ~~~ inside a ``` block is content; a real top-level status after the close still wins
+        self.assertEqual(self._s("```text\n~~~ not a close ~~~\ncode\n```\nStatus: COMPLETE\n" + jfence()), "COMPLETE")
+
+    def test_status_less_and_prose_buried_example(self):
+        self.assertIsNone(self._s("...findings...\nAll checks passed.\n" + jfence()))
+        self.assertIsNone(self._s("...\n```swift\ncode\n```\n" + jfence()))      # ends in a code block
+        self.assertEqual(  # an earlier prose example loses to the real trailer status
+            self._s("I emit Status: COMPLETE normally.\n...\nStatus: BLOCKED\nBlocker Description: x\n" + jfence()),
+            "BLOCKED")
+
+    def test_no_fence_no_status_returns_none(self):
+        self.assertIsNone(C.extract_status("no fence, no status here"))
+        self.assertIsNone(C.extract_status(None))
+
+    def test_detail_fields_captured(self):
+        self.assertEqual(
+            C.extract_status("Status: BLOCKED\nBlocker Description: could not read\nWhat Was Attempted: git diff\n" + jfence()),
+            {"status": "BLOCKED", "blockerDescription": "could not read", "whatWasAttempted": "git diff"})
+        self.assertEqual(
+            C.extract_status("Status: PARTIAL\nCompleted: auth\nRemaining: sync\nConfidence: 70\n" + jfence()),
+            {"status": "PARTIAL", "completed": "auth", "remaining": "sync", "confidence": "70"})
+
+    def test_detail_fields_pii_redacted_and_capped(self):
+        r = C.extract_status("Status: BLOCKED\nBlocker Description: mail john.doe@corp.com at /Users/john.doe/.ssh\n" + jfence())
+        self.assertNotIn("john.doe", r["blockerDescription"])
+        # PII in a malformed Confidence value is redacted too (codex r6)
+        r2 = C.extract_status("Status: PARTIAL\nConfidence: 80 (contact john.doe@corp.com)\n" + jfence())
+        self.assertNotIn("john.doe@corp.com", r2["confidence"])
+        long = C.extract_status("Status: BLOCKED\nBlocker Description: " + "A" * 5000 + "\n" + jfence())
+        self.assertLessEqual(len(long["blockerDescription"]), C.STATUS_FIELD_CAP)
+
+    def test_redos_safe_linear(self):
+        import time
+        # ReDoS guard: the marker / separator / keyword classes are single quantifiers separated by a
+        # REQUIRED literal, so pathological padding stays linear. (The `:` IS a real separator — these
+        # inputs fail the match on a trailing non-keyword char, not on a missing separator.)
+        for p in ("Status:" + " " * 70000 + "x",             # post-separator class
+                  ">" * 70000 + "status: COMPLETE x",         # leading-marker class + trailing prose
+                  "Status: " + "*" * 70000 + "COMPLETEx"):    # pre-keyword class
+            t0 = time.time()
+            self.assertIsNone(self._s(p), p[:18])
+            self.assertLess(time.time() - t0, 0.1, p[:18])
+
+    def test_duplicate_label_first_wins_and_blank_lines_tolerated(self):
+        # first-match-per-label de-dup + blank lines interleaved between detail fields are tolerated.
+        r = C.extract_status("Status: PARTIAL\nRemaining: first\n\nRemaining: second\nCompleted: done\n" + jfence())
+        self.assertEqual(r, {"status": "PARTIAL", "remaining": "first", "completed": "done"})
+
+    def test_multiline_field_wrap_aborts_trailer(self):
+        # a label-less wrapped continuation line is "other content" -> trailer aborts -> face value.
+        self.assertIsNone(self._s("Status: BLOCKED\nBlocker Description: line one\nline two wrap\n" + jfence()))
+
+
+class TestStatusSidecar(unittest.TestCase):
+    def _cap(self, root, msg, agent="security-reviewer", agent_id="id1"):
+        return C.capture(root, "COREDEV-2328", agent, msg, agent_id)
+
+    def _round1(self, root):
+        return os.path.join(root, "COREDEV-2328", "round-1")
+
+    def _json(self, path):
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_blocked_writes_findings_and_status_sidecar(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, status_msg("Status: BLOCKED\nBlocker Description: x", [])), "written")
+            rd = self._round1(root)
+            with open(os.path.join(rd, "security-reviewer.json")) as fh:
+                self.assertEqual(json.load(fh), [])
+            with open(os.path.join(rd, "security-reviewer.status")) as fh:
+                blob = fh.read()
+            self.assertTrue(blob.endswith("\n"))                 # trailing newline (gemini r3)
+            self.assertEqual(json.loads(blob),
+                             {"agent": "security-reviewer", "status": "BLOCKED", "blockerDescription": "x"})
+
+    def test_complete_with_findings_writes_both(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._cap(root, status_msg("Status: COMPLETE", [raw()]))
+            rd = self._round1(root)
+            self.assertEqual(len(self._json(os.path.join(rd, "security-reviewer.json"))), 1)
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.status"))["status"], "COMPLETE")
+
+    def test_no_status_message_writes_no_sidecar(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._cap(root, fenced([raw()]))   # no Status line ('prose before' before the fence)
+            rd = self._round1(root)
+            self.assertTrue(os.path.isfile(os.path.join(rd, "security-reviewer.json")))
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
+
+    def test_stale_status_cleared_on_statusless_overwrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._cap(root, status_msg("Status: BLOCKED\nBlocker Description: x", []), agent_id="id1")
+            st = os.path.join(self._round1(root), "security-reviewer.status")
+            self.assertTrue(os.path.isfile(st))
+            # a status-less rerun with REAL findings reuses the empty slot -> stale .status removed
+            self.assertEqual(self._cap(root, fenced([raw()]), agent_id="id2"), "written")
+            self.assertEqual(len(self._json(os.path.join(self._round1(root), "security-reviewer.json"))), 1)
+            self.assertFalse(os.path.exists(st))
+
+    def test_skipped_duplicate_preserves_existing_status_sidecar(self):
+        # A true duplicate SubagentStop (same agent_id) returns "skipped" via capture()'s early
+        # return BEFORE _clear_status/_write_status, so a previously-persisted BLOCKED/PARTIAL
+        # sidecar MUST survive the replay untouched (NOT wiped, NOT downgraded). Without that
+        # ordering a duplicate replay would silently clear a captured BLOCKED -> it could later
+        # read as a clean [], defeating the whole point of COREDEV-2328. (PR #16 review.)
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(
+                self._cap(root, status_msg("Status: BLOCKED\nBlocker Description: x", []), agent_id="id1"),
+                "written")
+            st = os.path.join(self._round1(root), "security-reviewer.status")
+            self.assertEqual(self._json(st)["status"], "BLOCKED")
+            # Replay the SAME agent_id with a would-be COMPLETE/clean message: it must be skipped,
+            # and the existing BLOCKED sidecar must remain exactly as written.
+            self.assertEqual(
+                self._cap(root, status_msg("Status: COMPLETE", []), agent_id="id1"),
+                "skipped")
+            self.assertTrue(os.path.isfile(st))
+            self.assertEqual(self._json(st)["status"], "BLOCKED")
+
+    def test_sidecar_excluded_by_json_glob_and_quarantined_if_loaded(self):
+        import glob
+        with tempfile.TemporaryDirectory() as root:
+            self._cap(root, status_msg("Status: BLOCKED\nBlocker Description: x", [raw()]))
+            rd = self._round1(root)
+            # the synthesizer discovers findings via a `*.json` glob (synthesize.py CLI) -> .status excluded
+            jsons = sorted(glob.glob(os.path.join(rd, "*.json")))
+            self.assertEqual([os.path.basename(p) for p in jsons], ["security-reviewer.json"])
+            # even if a caller fed the .status in, it is QUARANTINED (not a finding, not a crash)
+            findings, quarantined = S._load(jsons + [os.path.join(rd, "security-reviewer.status")])
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(len(quarantined), 1)
+
+    def test_sidecar_has_no_pii(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._cap(root, status_msg(
+                "Status: BLOCKED\nBlocker Description: leak /Users/john.doe/.ssh mail john.doe@corp.com", []))
+            with open(os.path.join(self._round1(root), "security-reviewer.status")) as fh:
+                blob = fh.read()
+            for needle in ("john.doe", "corp.com"):
+                self.assertNotIn(needle, blob)
+
+    def test_write_status_survives_unencodable_detail_field(self):
+        # A lone surrogate in a detail field makes json.dump->utf-8 raise UnicodeEncodeError (a
+        # ValueError); _write_status must swallow it so capture() still returns "written", the findings
+        # are persisted, the sidecar is simply absent (face value), and no tmp file leaks.
+        with tempfile.TemporaryDirectory() as root:
+            msg = status_msg("Status: BLOCKED\nBlocker Description: \ud800 lone surrogate", [raw()])
+            self.assertEqual(self._cap(root, msg), "written")
+            rd = self._round1(root)
+            self.assertTrue(os.path.isfile(os.path.join(rd, "security-reviewer.json")))
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
+            self.assertEqual([f for f in os.listdir(rd) if ".tmp." in f], [])
+
+
 if __name__ == "__main__":
     unittest.main()

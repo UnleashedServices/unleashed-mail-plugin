@@ -13,7 +13,34 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
-_Nothing yet — add new changes here._
+### Changed
+- **Reviewer Output-Contract status is now persisted through the SubagentStop capture path**
+  (`mcp/review-synthesizer/capture.py`, COREDEV-2328). Each captured reviewer's `Status:`
+  (`COMPLETE | BLOCKED | PARTIAL` + BLOCKED/PARTIAL detail fields) is written to a self-describing
+  **sibling `<agent>.status` JSON** beside its `<agent>.json` findings — PII-redacted, observe-only,
+  fail-open; the findings-array shape and all its consumers (`is_final_capture`, `synthesize._load`)
+  are unchanged. Extraction is **CommonMark-fence-aware** and constrained to the report's top-level
+  Output-Contract trailer (a `Status:` inside a code fence or behind prose is never taken) and
+  ReDoS-safe. `swift-reviewer` Step 2 now reads the sidecar from the same round as the findings (via
+  a new portable, unit-tested `context_latest_round_dir` helper in `scripts/lib/context.sh`),
+  validates the sidecar's `agent`+`status`, and honours `BLOCKED`/`PARTIAL` on the pre-collected
+  capture path too — degrading to face value when the sidecar is absent/corrupt/unrecognized (never
+  a false fail-closed). Closes the Item-12 gap where a captured `BLOCKED` reviewer could read as a
+  clean `[]`. No version or asset-count change (the `synthesize.py`/`schema.py` interface and the
+  SubagentStop hook contract are untouched).
+
+### Fixed
+- **`<agent>.status` sidecar write hardened** (`capture.py`, PR #16 review) — `_write_status` now
+  builds the payload as `{**status, "agent": agent}` (explicit `agent` **last**) instead of
+  `dict(agent=agent, **status)`, so the trusted hook-allowlisted `agent` can never be collided-over
+  or silently overwritten by a future transcript-derived `status` key (today the pinned
+  `_STATUS_FIELDS` carry none — behaviourally identical, just collision-proof). Added a regression
+  test asserting a duplicate (skipped) SubagentStop **preserves** an existing `BLOCKED`/`PARTIAL`
+  sidecar untouched (`test_capture.py`, 142 → 143), pinning the early-return ordering that the
+  Item-12 guarantee depends on. Added a `context_latest_round_dir` leading-zero test
+  (`test-hooks.sh`, 103 → 104) that locks the base-10 (non-octal) `[ -gt ]` round comparison —
+  `round-08`/`round-09` order numerically and never raise a `value too great for base` error — so a
+  future refactor to `(( … ))` arithmetic can't silently regress it.
 
 ## [2.3.1] — 2026-06-26
 
