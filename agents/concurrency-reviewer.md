@@ -320,3 +320,27 @@ finding; emit `[]` if clean. JSON escaping handles pipes, backticks, and newline
 > `token-race` on a credential site overlaps `security-reviewer` by design — the
 > orchestrator merges it into the security finding (Step 5 dedup), so the overlap
 > must be present in your JSON to be reconciled.
+
+## Output Contract
+
+**Return status:** COMPLETE | BLOCKED | PARTIAL
+
+Emit **one** of these values on a `Status:` line **immediately before** your JSON findings array (an
+actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template). Keep the fenced
+`json` array the **final block** of your report (per *Structured Findings* above), so it stays trivially
+parseable and matches the handoff template in `skills/agent-orchestration/SKILL.md`. The orchestrator
+reads the status **first, then** the array — so a reviewer that *couldn't run* returns `BLOCKED` + `[]`
+instead of an empty `[]` that reads as a clean pass. Status (did-the-review-finish) is orthogonal to the
+findings verdict (is-the-code-OK). Use these exact `key: value` fields:
+
+- **COMPLETE** — review ran fully; the JSON findings array is authoritative (`[]` if clean):
+  - `Status: COMPLETE`
+- **BLOCKED** — could not review; emit `[]` for findings:
+  - `Status: BLOCKED`
+  - `Blocker Description: <what blocked the review>`
+  - `What Was Attempted: <the steps you tried>`
+- **PARTIAL** — reviewed only some files; findings cover ONLY the completed scope:
+  - `Status: PARTIAL`
+  - `Completed: <files/scope reviewed>`
+  - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
+  - `Confidence: <0-100>`

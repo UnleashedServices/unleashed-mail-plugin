@@ -142,7 +142,20 @@ reviewers trace the rest and tag findings outside the diff with `scope:
 
 **If the four reviewers' JSON arrays were already provided to you** (an external
 orchestrator ran them per SKILL.md), skip spawning and go straight to Step 3 — do not
-re-run them. Otherwise spawn **all four** review agents simultaneously using the
+re-run them. The `Status:` line is part of each reviewer's report, so when you have a reviewer's
+**full output** (prose + JSON) read it and apply the BLOCKED/PARTIAL handling from Step 5.
+**The shipped `SubagentStop` capture path (`mcp/review-synthesizer/capture.py`) currently persists
+only the sanitized findings array — not the `Status:` line** (tracked: COREDEV-2328). So a
+pre-collected array with **no status is the expected shape from that capture path**, not evidence
+that a reviewer was BLOCKED — **do not fail closed on it**: take the findings at face value (an empty
+`[]` is the reviewer's clean result; a non-empty array is its findings), exactly as before Item 12.
+Item 12's stronger guarantee — that a `BLOCKED` reviewer can't masquerade as a clean `[]` —
+therefore holds wherever the status travels with the findings (the live subagent runs you spawn
+below, or once COREDEV-2328 persists it through capture); for a status-stripped captured array it
+degrades to the pre-Item-12 behaviour, never worse. When a status **is** present and reads `BLOCKED`
+or `PARTIAL`, apply Step 5's handling.
+
+Otherwise spawn **all four** review agents simultaneously using the
 `Agent` tool, plus `jira-manager` to log the review. Pass each agent the list of
 changed files and a brief summary.
 
@@ -366,6 +379,31 @@ as confirmed-by-construction (REQUEST CHANGES); a "didn't run" is the opposite o
 A clean reviewer emits `[]`. Finally, spot-check that any 🔴 in a
 reviewer's *prose* appears as a `blocker` row in its JSON; if one is missing, recover it
 before merging.
+
+#### Read each reviewer's Output Contract status first
+
+Every specialist reviewer emits an Output Contract `Status:` line — `COMPLETE | BLOCKED |
+PARTIAL` — just before its JSON findings array. It is **orthogonal** to the findings: it
+reports whether the review *finished*, not whether the code is OK. Read it **before** you trust
+the `[]`:
+
+- **COMPLETE** → the JSON array is authoritative; proceed normally.
+- **BLOCKED** → the reviewer *could not run* (missing files, unreadable diff, tooling
+  failure). This is the **explicit** form of the missing-reviewer case above — treat it
+  identically: a `BLOCKED` reviewer is an *uncertainty* (the review is incomplete for that
+  domain), not a confirmed defect and not a clean pass. List it as a **Needs Confirmation**
+  item named for the blocked reviewer (quote its *Blocker Description*) and set the verdict to
+  **NEEDS DISCUSSION**. Do **not** mint a `category: verification` blocker for it — that family
+  is reserved for the global checks *you* actually ran (build/lint/test/parity/coverage) and is
+  treated as confirmed-by-construction (REQUEST CHANGES); a "couldn't run" is the opposite.
+- **PARTIAL** → keep the findings it returned (they cover only its *Completed* scope) **and**
+  record a `category: verification` **warning** (`severity: warning`, `sourceAgent:
+  "swift-reviewer"`, `file` = the reviewer's domain or a named *Remaining* file, `line: 0`)
+  noting that the named reviewer covered only part of the changeset, and listing the *Remaining*
+  files. A verification **warning** keeps the scope gap visible in the Build / Lint / Tests
+  bucket **without** gating — only a verification *blocker* gates. If any *Remaining* file is
+  **structural** (Step 1b), the unreviewed-pipeline risk is higher: escalate that gap to a
+  **Needs Confirmation** item → NEEDS DISCUSSION rather than a mere warning.
 
 #### Synthesize via the deterministic tool
 

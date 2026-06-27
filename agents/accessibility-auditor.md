@@ -266,3 +266,27 @@ newlines in `finding`/`fix`, so escape newlines as `\n` and use single backticks
 > (tagged `a11y`) and `concurrency-reviewer` may flag a `.foregroundColor` deprecation
 > that is also a contrast/Curator concern; on a same-site match the orchestrator keeps
 > **your** row (Step 5 dedup), so be precise with `file`/`line`/`lineEnd`.
+
+## Output Contract
+
+**Return status:** COMPLETE | BLOCKED | PARTIAL
+
+Emit **one** of these values on a `Status:` line **immediately before** your JSON findings array (an
+actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template). Keep the fenced
+`json` array the **final block** of your report (per *Structured Findings* above), so it stays trivially
+parseable and matches the handoff template in `skills/agent-orchestration/SKILL.md`. The orchestrator
+reads the status **first, then** the array — so a reviewer that *couldn't run* returns `BLOCKED` + `[]`
+instead of an empty `[]` that reads as a clean pass. Status (did-the-review-finish) is orthogonal to the
+findings verdict (is-the-code-OK). Use these exact `key: value` fields:
+
+- **COMPLETE** — review ran fully; the JSON findings array is authoritative (`[]` if clean):
+  - `Status: COMPLETE`
+- **BLOCKED** — could not review; emit `[]` for findings:
+  - `Status: BLOCKED`
+  - `Blocker Description: <what blocked the review>`
+  - `What Was Attempted: <the steps you tried>`
+- **PARTIAL** — reviewed only some files; findings cover ONLY the completed scope:
+  - `Status: PARTIAL`
+  - `Completed: <files/scope reviewed>`
+  - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
+  - `Confidence: <0-100>`
