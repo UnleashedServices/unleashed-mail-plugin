@@ -140,6 +140,10 @@ the four reviewers' handoff + Output-Contract sections.
   - **`_OWNERSHIP_MERGE_PAIRS`** (gemini, nice-to-have): NOT adding an `ai-safety`↔`security` merge
     pair — the synthesizer conservatively emits two rows for an overlapping `pii-log-leak`/`privacy`
     finding, which is safe and avoids cross-owner merge surprises; revisit if reports get noisy.
+    **→ Followed up in COREDEV-2332**: added the genuine same-defect *category*-pairs
+    (`pii-log-leak`↔`privacy`, `unsanitized-ingress`↔`{webview, html-sanitization}`,
+    `unscoped-tool`↔`privacy`) — category-level, not family-level, so unrelated rows (e.g.
+    `jailbreak-surface`↔`oauth`, `unsanitized-ingress`↔`network`) still stay separate.
 - **Gate satisfied** — proceeding to implementation on PR #18.
 
 ## 11. Plan-review gate (mandatory before edits)
