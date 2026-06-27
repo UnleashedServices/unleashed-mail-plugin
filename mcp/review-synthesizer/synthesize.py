@@ -66,6 +66,16 @@ _OWNERSHIP_MERGE_PAIRS = [
     # a slow WebView render and an HTML-sanitization concern on the same method are
     # one defect (unsanitized/oversized content drives the render cost) — sec owns:
     ({"perceived-perf"}, {"html-sanitization", "webview"}),         # security owns
+    # ai-safety ↔ security (COREDEV-2332): the SAME raw untrusted content on the SAME
+    # lines, reviewed from two angles. prompt-review OWNS the merged cluster (route_owner
+    # checks ai-safety before security). Deliberately CATEGORY-pair-level, not family-
+    # level — a family merge would cluster e.g. an unrelated `jailbreak-surface` with a
+    # nearby `oauth`. `network` (ATS/TLS/cert) is intentionally NOT paired: it is not
+    # untrusted-content sanitization, so an `unsanitized-ingress`↔`network` overlap stays
+    # two clusters.
+    ({"pii-log-leak"}, {"privacy"}),                                # same un-redacted PII log line
+    ({"unsanitized-ingress"}, {"webview", "html-sanitization"}),    # same raw content → LLM + WKWebView sinks
+    ({"unscoped-tool"}, {"privacy"}),                               # same cross-account data leak
 ]
 
 def _ownership_pair(a: Finding, b: Finding) -> bool:

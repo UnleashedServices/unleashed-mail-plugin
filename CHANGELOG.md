@@ -56,6 +56,20 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   are not counted by the version-sync validator).
 
 ### Changed
+- **review-synthesizer now consolidates overlapping AI-safety ↔ security findings into one
+  `prompt-review`-owned row** (`mcp/review-synthesizer/synthesize.py`, COREDEV-2332; follow-up to
+  COREDEV-2329, parent COREDEV-2126). When `prompt-review` and another reviewer flag the **same
+  defect on the same lines** in their own taxonomies — `pii-log-leak` vs `privacy`,
+  `unsanitized-ingress` vs `webview`/`html-sanitization`, `unscoped-tool` vs `privacy` — the
+  consolidated report previously showed **two** rows and the `ai-safety` ownership branch never
+  fired. Added those as **category-level** `_OWNERSHIP_MERGE_PAIRS` (not family-level — an unrelated
+  `jailbreak-surface`↔`oauth` or `unsanitized-ingress`↔`network` overlap deliberately stays two
+  rows), so the pair now clusters into a single row routed to `prompt-review` while every fix is
+  still cross-linked (cluster-not-collapse — no finding is ever dropped), and a co-located **security
+  blocker still leads the row text and still gates the verdict**. Tests: `test_synthesize.py`
+  151 → **159** (per-pair positive, `network`/unrelated negatives, non-overlap, mixed-severity
+  blocker-survives). No version or asset-count change (synthesizer-internal). Plan-review gate: codex
+  + gemini both `APPROVE`.
 - **Reviewer Output-Contract status is now persisted through the SubagentStop capture path**
   (`mcp/review-synthesizer/capture.py`, COREDEV-2328). Each captured reviewer's `Status:`
   (`COMPLETE | BLOCKED | PARTIAL` + BLOCKED/PARTIAL detail fields) is written to a self-describing

@@ -71,6 +71,77 @@ class TestDedup(unittest.TestCase):
         self.assertNotIn("·also· SAME", fix)
 
 
+class TestAISafetyOwnershipMerge(unittest.TestCase):
+    """COREDEV-2332: ai-safety↔security category pairs cluster on the SAME lines and
+    route to prompt-review, without over-clustering or hiding a security blocker."""
+
+    def _overlap(self, ai_cat, sec_cat):
+        # same file (default A.swift), overlapping lines (10-20 vs 12-18)
+        return S.cluster_findings([
+            f(category=ai_cat, sourceAgent="prompt-review", line=10, lineEnd=20, finding="ai"),
+            f(category=sec_cat, sourceAgent="security-reviewer", line=12, lineEnd=18, finding="sec")])
+
+    def test_pii_log_leak_privacy_clusters_owned_by_prompt_review(self):
+        cs = self._overlap("pii-log-leak", "privacy")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(len(cs[0].findings), 2)                 # nothing dropped
+        self.assertEqual(cs[0].primary.sourceAgent, "prompt-review")
+
+    def test_unsanitized_ingress_webview_clusters_owned_by_prompt_review(self):
+        cs = self._overlap("unsanitized-ingress", "webview")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].primary.sourceAgent, "prompt-review")
+
+    def test_unsanitized_ingress_html_sanitization_clusters_owned_by_prompt_review(self):
+        # the html-sanitization sibling sink (codex r1 blocker — must be covered)
+        cs = self._overlap("unsanitized-ingress", "html-sanitization")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].primary.sourceAgent, "prompt-review")
+
+    def test_unscoped_tool_privacy_clusters_owned_by_prompt_review(self):
+        cs = self._overlap("unscoped-tool", "privacy")
+        self.assertEqual(len(cs), 1)
+        self.assertEqual(cs[0].primary.sourceAgent, "prompt-review")
+
+    def test_unrelated_ai_security_pair_does_not_cluster(self):
+        # jailbreak-surface (ai-safety) + oauth (security) overlapping -> NOT a pair ->
+        # two clusters. Proves we did a category-pair, not a family-level, merge.
+        cs = self._overlap("jailbreak-surface", "oauth")
+        self.assertEqual(len(cs), 2)
+
+    def test_network_is_not_an_ingress_pair(self):
+        # `network` is ATS/TLS/cert, not untrusted-content sanitization -> must NOT merge.
+        cs = self._overlap("unsanitized-ingress", "network")
+        self.assertEqual(len(cs), 2)
+
+    def test_valid_pair_on_non_overlapping_lines_stays_separate(self):
+        cs = S.cluster_findings([
+            f(category="pii-log-leak", sourceAgent="prompt-review", line=10, lineEnd=12),
+            f(category="privacy", sourceAgent="security-reviewer", line=40, lineEnd=42)])
+        self.assertEqual(len(cs), 2)
+
+    def test_mixed_severity_security_blocker_survives_under_prompt_review_ownership(self):
+        # prompt-review owns DISPLAY routing, but a security BLOCKER in the merged cluster
+        # must still lead the row text and still gate the verdict — the merge can never
+        # hide a security blocker behind ai-safety display ownership.
+        r = S.synthesize([
+            f(category="pii-log-leak", sourceAgent="prompt-review", severity="suggestion",
+              line=10, lineEnd=20, finding="ai pii note", fix="redact"),
+            f(category="privacy", sourceAgent="security-reviewer", severity="blocker",
+              line=12, lineEnd=18, finding="SEC BLOCKER leak", fix="scope it")],
+            {"A.swift"}, verify=lambda x: True)
+        self.assertEqual(len(r.clusters), 1)
+        c = r.clusters[0]
+        self.assertEqual(c.primary.sourceAgent, "prompt-review")     # display owner (ai-safety)
+        self.assertEqual(c.primary.bucket, "AI Prompt Safety")
+        self.assertEqual(c.severity, "blocker")                      # cluster severity = the blocker
+        self.assertEqual(c.lead_blocker.sourceAgent, "security-reviewer")
+        self.assertEqual(r.verdict.decision, "REQUEST_CHANGES")      # the security blocker still gates
+        report = S.render_report(r)
+        self.assertIn("SEC BLOCKER leak", report)                    # blocker text leads the row
+        self.assertIn("AI Prompt Safety", report)                    # prompt-review's display bucket
+
+
 class TestOwnershipRouting(unittest.TestCase):
     def test_a11y_authoritative(self):
         fs = [f(category="curator-tokens", sourceAgent="accessibility-auditor", severity="warning"),
