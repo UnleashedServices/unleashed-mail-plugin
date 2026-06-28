@@ -82,6 +82,8 @@ KNOWN_TOOLS = {
 EXACT_MATCHER = re.compile(r"^[A-Za-z0-9_ ,|]+$")
 # Captures the scripts/<path> a hook command runs — allows subdirs (e.g. scripts/lib/x.sh).
 SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9._/-]+)")
+# Shell interpreters whose script targets are shell scripts (drives `bash -n` selection).
+SHELL_INTERPRETERS = {"sh", "bash", "zsh", "dash", "ksh"}
 
 
 def _is_shell_script(path: Path) -> bool:
@@ -112,7 +114,7 @@ def _is_shell_script(path: Path) -> bool:
     else:
         interp = parts[0].rsplit("/", 1)[-1]
     interp = re.sub(r"[0-9.\-]+$", "", interp)  # strip version suffix: bash3.2 -> bash
-    return interp in {"sh", "bash", "zsh", "dash", "ksh"}
+    return interp in SHELL_INTERPRETERS
 
 
 def validate_matcher(event: str, matcher: str, where: str,
@@ -220,6 +222,7 @@ def main() -> int:
     events = 0
     invocations = 0
     referenced: set[Path] = set()
+    shell_targets: set[Path] = set()  # scripts invoked via a shell — always bash -n'd (L294)
 
     for event, entries in hooks.items():
         events += 1
@@ -277,16 +280,32 @@ def main() -> int:
                 if not matches:
                     problems.append(f"{whereh}: command/args reference no scripts/<file> ({cmd!r})")
                     continue
+                scripts_dir = str((root / "scripts").resolve())
+                # A simple (non-compound) shell invocation makes its targets shell scripts even
+                # without a .sh extension/shebang → they must be bash -n'd (codex L294). For a
+                # compound command (&&/||/;/|) fall back to per-file detection so a `python3` arm
+                # isn't bash -n'd.
+                first_tok = cmd.strip().split()[0] if cmd.strip() else ""
+                force_shell = (first_tok.rsplit("/", 1)[-1] in SHELL_INTERPRETERS
+                               and not re.search(r"[;&|]", scan))
                 # A command may run more than one script (e.g. `… && …`) — validate each.
                 for m in matches:
                     rel = m.group(1)
                     spath = root / "scripts" / rel
+                    # Containment: the ref must resolve to a real file UNDER scripts/, not escape
+                    # it via `..`/absolute (codex L84 — `scripts/../README.md` would otherwise pass).
+                    if not (str(spath.resolve()) + os.sep).startswith(scripts_dir + os.sep):
+                        problems.append(
+                            f"{whereh}: script ref scripts/{rel} escapes the scripts/ directory")
+                        continue
                     if not spath.is_file():
                         problems.append(f"{whereh}: references missing script scripts/{rel}")
                     elif spath.stat().st_size == 0:
                         problems.append(f"{whereh}: references empty script scripts/{rel}")
                     else:
                         referenced.add(spath)
+                        if force_shell:
+                            shell_targets.add(spath)
 
     # `bash -n` every referenced SHELL script (parse check tied to the manifest). Non-shell
     # targets (e.g. a `python3 scripts/x.py` hook command) are skipped — bash -n would
@@ -296,7 +315,7 @@ def main() -> int:
     if bash:
         for spath in sorted(referenced):
             rel = spath.relative_to(root)
-            if not _is_shell_script(spath):
+            if not (_is_shell_script(spath) or spath in shell_targets):
                 continue
             try:
                 res = subprocess.run([bash, "-n", str(spath)], capture_output=True, text=True)
