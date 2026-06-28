@@ -112,6 +112,10 @@ if [ "$HAS_XCODEPROJ" = false ]; then
         echo "🧩 Validating plugin assembly (frontmatter + manifests)..."
         python3 "$SCRIPTS_DIR/validate-plugin-assembly.py" || true
     fi
+    if [ -f "$SCRIPTS_DIR/validate-hooks.py" ] && command -v python3 >/dev/null; then
+        echo "🧩 Validating hooks manifest (events + matchers + script refs)..."
+        python3 "$SCRIPTS_DIR/validate-hooks.py" || true
+    fi
 fi
 
 # --- 4. PII check in staged files (universal) ---

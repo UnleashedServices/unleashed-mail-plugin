@@ -49,6 +49,9 @@ jobs:
       - name: ShellCheck plugin scripts
         run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
 
+      - name: Validate hooks manifest (strict)
+        run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
+
       - name: Hook stdin-simulation tests (COREDEV-2324)
         run: bash scripts/test-hooks.sh
 
@@ -65,4 +68,6 @@ jobs:
             echo "| version-sync (strict) | ${{ job.status }} |"
             echo "| plugin-assembly (strict) | ${{ job.status }} |"
             echo "| shellcheck (-S warning) | ${{ job.status }} |"
+            echo "| hooks-manifest (strict) | ${{ job.status }} |"
+            echo "| hook stdin-simulation tests | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
