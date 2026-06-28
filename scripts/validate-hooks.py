@@ -71,9 +71,10 @@ KNOWN_TOOLS = {
     "Write", "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "ExitPlanMode",
 }
 
-# A matcher of the simple `Tool|Tool|…` alternation form (no regex metacharacters): each
-# token must be a real tool name, so this is where tool-name typos are caught.
-SIMPLE_ALT = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\|[A-Za-z][A-Za-z0-9]*)*$")
+# Per the hooks reference "Matcher value" table: a matcher of ONLY [A-Za-z0-9_ ,|] is an exact
+# string or a `|`/`,`-separated list of exact strings (optional surrounding whitespace); a value
+# containing ANY other character is a JavaScript regex. This is where tool-name typos are caught.
+EXACT_MATCHER = re.compile(r"^[A-Za-z0-9_ ,|]+$")
 # Captures the scripts/<path> a hook command runs — allows subdirs (e.g. scripts/lib/x.sh).
 SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9._/-]+)")
 
@@ -110,31 +111,41 @@ def _is_shell_script(path: Path) -> bool:
 
 
 def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) -> None:
-    """Validate a hook matcher. Empty or "*" == match-all (always valid)."""
-    if matcher in ("", "*"):  # "*" is the documented match-all token, not a regex
+    """Validate a hook matcher against the documented grammar (hooks reference "Matcher value"
+    table): "" / "*" = match-all; a value of only [A-Za-z0-9_ ,|] is an exact string or a
+    `|`/`,`-separated list of exact strings (optional surrounding whitespace); anything else is
+    a JavaScript regex."""
+    if matcher in ("", "*"):
         return
-    # Claude Code matches `matcher` as a regex, so it must compile (catches `^(Read`,
-    # unbalanced groups, etc.). Checked for EVERY event, not just tool-matcher ones.
-    try:
-        re.compile(matcher)
-    except re.error as exc:
-        problems.append(f"{where}: matcher {matcher!r} is not a valid regex ({exc})")
-        return
-    if event not in TOOL_MATCHER_EVENTS:
-        # Stop / SessionStart / SubagentStart|Stop / … take empty or agent-type/source
-        # matchers (open-ended) — a compilable value is all we can assert.
-        return
-    # Tool-name typo trap, ONLY for the simple `Tool|Tool|…` form. A matcher that uses
-    # regex syntax (anchors, groups, `.`, `*`, …) is taken as an intentional pattern and
-    # only compile-checked above — we cannot distinguish a regex typo (`Edti.*`) from
-    # intent, so grouped regexes like `^(Read|Write)$` are accepted, never falsely rejected.
-    if not SIMPLE_ALT.match(matcher):
-        return
-    for token in matcher.split("|"):
-        if token not in KNOWN_TOOLS:
+    if EXACT_MATCHER.match(matcher):
+        # Exact string or exact-string list. Tool-name typo trap, but ONLY where matchers
+        # select a tool (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied).
+        # Split on `|` and `,` (optional whitespace); MCP tool names (mcp__server__tool) are
+        # exact and allowed through without enumeration.
+        if event not in TOOL_MATCHER_EVENTS:
+            return
+        for raw in re.split(r"[|,]", matcher):
+            token = raw.strip()
+            if not token or token in KNOWN_TOOLS or token.startswith("mcp__"):
+                continue
             problems.append(
                 f"{where}: matcher token {token!r} is not a known tool — it will match nothing "
                 f"(known: {', '.join(sorted(KNOWN_TOOLS))}; if it is a new tool, add it to KNOWN_TOOLS)")
+        return
+    # Otherwise it is a JavaScript regex (NOT Python `re`). Validate with node when available —
+    # Python's engine would both reject valid JS (e.g. `(?<n>…)`) and accept Python-only syntax
+    # (`(?P<n>…)`). Without node we cannot faithfully check a JS regex, so we accept it (a
+    # documented limitation rather than a false failure).
+    node = shutil.which("node")
+    if not node:
+        return
+    try:
+        res = subprocess.run([node, "-e", "new RegExp(process.argv[1])", matcher],
+                             capture_output=True, text=True)
+    except OSError:
+        return
+    if res.returncode != 0:
+        problems.append(f"{where}: matcher {matcher!r} is not a valid JavaScript regex")
 
 
 def main() -> int:
@@ -223,9 +234,16 @@ def main() -> int:
                 if not isinstance(cmd, str) or not cmd.strip():
                     problems.append(f"{whereh}: `command` missing/empty")
                     continue
-                matches = list(SCRIPT_REF.finditer(cmd))
+                # Scan the command AND any exec-form `args` (command:"bash",
+                # args:["${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"]) — in exec form the script path
+                # lives in args, so command alone has no scripts/<file>.
+                hook_args = hook.get("args")
+                scan = cmd
+                if isinstance(hook_args, list):
+                    scan = cmd + " " + " ".join(a for a in hook_args if isinstance(a, str))
+                matches = list(SCRIPT_REF.finditer(scan))
                 if not matches:
-                    problems.append(f"{whereh}: command references no scripts/<file> ({cmd!r})")
+                    problems.append(f"{whereh}: command/args reference no scripts/<file> ({cmd!r})")
                     continue
                 # A command may run more than one script (e.g. `… && …`) — validate each.
                 for m in matches:
