@@ -56,15 +56,19 @@ KNOWN_EVENTS = {
     "Elicitation", "ElicitationResult",
 }
 
-# Events whose `matcher` selects a TOOL by name — a typo'd tool name = a dead hook.
-TOOL_MATCHER_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+# Events whose `matcher` selects a TOOL by name (per the hooks-reference matcher table) — a
+# typo'd tool name = a dead hook. The permission events filter on tool name too.
+TOOL_MATCHER_EVENTS = {
+    "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied",
+}
 
-# Core Claude Code tool names a tool-matcher may reference. MCP tools use the
+# Core Claude Code tool names a tool-matcher may reference. The subagent dispatcher is `Agent`
+# (NOT `Task` — `Task` is stale/invalid per AGENT_CONTRACTS.md §9). MCP tools use the
 # `mcp__server__tool` form and are matched via regex (the regex branch below), so they are
 # allowed through without being enumerated here. If a new core tool is added, list it here.
 KNOWN_TOOLS = {
-    "Task", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit", "Write",
-    "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "ExitPlanMode",
+    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit",
+    "Write", "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "ExitPlanMode",
 }
 
 # A matcher of the simple `Tool|Tool|…` alternation form (no regex metacharacters): each
@@ -75,16 +79,34 @@ SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9._/-]+)")
 
 
 def _is_shell_script(path: Path) -> bool:
-    """True if `path` is a shell script (by extension or shebang). `bash -n` is run only on
-    real shell scripts so a `python3 scripts/x.py` hook command's target can't false-positive."""
+    """True if `path` is a shell script (by extension or shebang interpreter). `bash -n` runs
+    only on real shell scripts so a `python3 scripts/x.py` hook command's target can't
+    false-positive. The shebang is PARSED (not substring-scanned), so a path/arg merely
+    CONTAINING 'sh'/'bash' (e.g. `#!/usr/bin/shared/python`, a comment mentioning bash) is
+    correctly excluded."""
     if path.suffix in (".sh", ".bash"):
         return True
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as handle:
-            first = handle.readline()
+            first = handle.readline(1024)  # bounded: a shebang lives in the first line
     except OSError:
         return False
-    return first.startswith("#!") and ("sh" in first or "bash" in first)
+    if not first.startswith("#!"):
+        return False
+    parts = first[2:].split()
+    if not parts:
+        return False
+    # Resolve the interpreter: `#!/usr/bin/env [-S] <interp> …` -> <interp>;
+    # `#!/bin/bash …` -> basename of the first token.
+    if parts[0].rsplit("/", 1)[-1] == "env":
+        parts = parts[1:]
+        while parts and parts[0].startswith("-"):  # skip env opts like `-S`
+            parts = parts[1:]
+        interp = parts[0] if parts else ""
+    else:
+        interp = parts[0].rsplit("/", 1)[-1]
+    interp = re.sub(r"[0-9.\-]+$", "", interp)  # strip version suffix: bash3.2 -> bash
+    return interp in {"sh", "bash", "zsh", "dash", "ksh"}
 
 
 def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) -> None:
