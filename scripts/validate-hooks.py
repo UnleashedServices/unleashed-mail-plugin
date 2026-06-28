@@ -107,7 +107,7 @@ def _is_shell_script(path: Path) -> bool:
         parts = parts[1:]
         while parts and parts[0].startswith("-"):  # skip env opts like `-S`
             parts = parts[1:]
-        interp = parts[0] if parts else ""
+        interp = parts[0].rsplit("/", 1)[-1] if parts else ""  # basename even an absolute env arg
     else:
         interp = parts[0].rsplit("/", 1)[-1]
     interp = re.sub(r"[0-9.\-]+$", "", interp)  # strip version suffix: bash3.2 -> bash
@@ -247,6 +247,9 @@ def main() -> int:
                 # args:["${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"]) — in exec form the script path
                 # lives in args, so command alone has no scripts/<file>.
                 hook_args = hook.get("args")
+                if "args" in hook and not (isinstance(hook_args, list)
+                                           and all(isinstance(a, str) for a in hook_args)):
+                    problems.append(f"{whereh}: `args`, when present, must be a list of strings")
                 scan = cmd
                 if isinstance(hook_args, list):
                     scan = cmd + " " + " ".join(a for a in hook_args if isinstance(a, str))
