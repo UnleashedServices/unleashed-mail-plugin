@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -124,19 +125,28 @@ def validate_matcher(event: str, matcher: str, where: str,
         return
     if EXACT_MATCHER.match(matcher):
         # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
-        # (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied). An unrecognized
-        # token is a WARNING, not a failure — CC tool names aren't canonically enumerable, so a
-        # real typo and a valid-but-unlisted tool can't be told apart. Split on `|`/`,`
-        # (optional whitespace); MCP names (mcp__server__tool) pass implicitly.
+        # (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied). CC tool names
+        # aren't canonically enumerable, so we can't simply reject every unknown token. Instead:
+        # a token that is a NEAR-MATCH of a known tool is almost certainly a typo (`Bsh`→`Bash`)
+        # → hard FAIL; a token FAR from every known tool is probably a valid/new/unlisted tool
+        # (`PowerShell`, a plugin tool) → non-blocking WARNING. Split on `|`/`,` (optional
+        # whitespace); MCP names (mcp__server__tool) pass implicitly.
         if event not in TOOL_MATCHER_EVENTS:
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
             if not token or token in KNOWN_TOOLS or token.startswith("mcp__"):
                 continue
-            warnings.append(
-                f"{where}: matcher token {token!r} is not a recognized tool — if it is a typo the "
-                f"hook will match nothing; if it is a valid/new tool, add it to KNOWN_TOOLS")
+            near = difflib.get_close_matches(token, KNOWN_TOOLS, n=1, cutoff=0.7)
+            if near:
+                problems.append(
+                    f"{where}: matcher token {token!r} is not a known tool (did you mean "
+                    f"{near[0]!r}?) — it will match nothing; if {token!r} is a real new tool, "
+                    f"add it to KNOWN_TOOLS")
+            else:
+                warnings.append(
+                    f"{where}: matcher token {token!r} is not a recognized tool — if a typo the "
+                    f"hook will match nothing; if a valid/new tool, add it to KNOWN_TOOLS")
         return
     # Otherwise it is a JavaScript regex (NOT Python `re`). Validate with node when available —
     # Python's engine would both reject valid JS (e.g. `(?<n>…)`) and accept Python-only syntax
