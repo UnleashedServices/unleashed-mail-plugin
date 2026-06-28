@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -62,13 +63,16 @@ TOOL_MATCHER_EVENTS = {
     "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied",
 }
 
-# Core Claude Code tool names a tool-matcher may reference. The subagent dispatcher is `Agent`
-# (NOT `Task` — `Task` is stale/invalid per AGENT_CONTRACTS.md §9). MCP tools use the
-# `mcp__server__tool` form and are matched via regex (the regex branch below), so they are
-# allowed through without being enumerated here. If a new core tool is added, list it here.
+# Known Claude Code tool names, used to WARN (never hard-fail) on a likely-typo'd tool matcher.
+# Claude Code does not publish a canonical/enumerable built-in tool list, and the set is
+# environment- and plugin-dependent (MCP tools, OS-specific tools like PowerShell, plugin-
+# contributed tools), so an unrecognized tool token is a non-blocking warning — a real typo and
+# a valid-but-unlisted tool are indistinguishable here. The subagent dispatcher is `Agent`, not
+# `Task` (AGENT_CONTRACTS.md §9). MCP tools (`mcp__server__tool`) are allowed through implicitly.
 KNOWN_TOOLS = {
-    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit",
-    "Write", "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "ExitPlanMode",
+    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit", "Write",
+    "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", "Monitor",
+    "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete",
 }
 
 # Per the hooks reference "Matcher value" table: a matcher of ONLY [A-Za-z0-9_ ,|] is an exact
@@ -110,7 +114,8 @@ def _is_shell_script(path: Path) -> bool:
     return interp in {"sh", "bash", "zsh", "dash", "ksh"}
 
 
-def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) -> None:
+def validate_matcher(event: str, matcher: str, where: str,
+                     problems: list[str], warnings: list[str]) -> None:
     """Validate a hook matcher against the documented grammar (hooks reference "Matcher value"
     table): "" / "*" = match-all; a value of only [A-Za-z0-9_ ,|] is an exact string or a
     `|`/`,`-separated list of exact strings (optional surrounding whitespace); anything else is
@@ -118,30 +123,33 @@ def validate_matcher(event: str, matcher: str, where: str, problems: list[str]) 
     if matcher in ("", "*"):
         return
     if EXACT_MATCHER.match(matcher):
-        # Exact string or exact-string list. Tool-name typo trap, but ONLY where matchers
-        # select a tool (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied).
-        # Split on `|` and `,` (optional whitespace); MCP tool names (mcp__server__tool) are
-        # exact and allowed through without enumeration.
+        # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
+        # (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied). An unrecognized
+        # token is a WARNING, not a failure — CC tool names aren't canonically enumerable, so a
+        # real typo and a valid-but-unlisted tool can't be told apart. Split on `|`/`,`
+        # (optional whitespace); MCP names (mcp__server__tool) pass implicitly.
         if event not in TOOL_MATCHER_EVENTS:
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
             if not token or token in KNOWN_TOOLS or token.startswith("mcp__"):
                 continue
-            problems.append(
-                f"{where}: matcher token {token!r} is not a known tool — it will match nothing "
-                f"(known: {', '.join(sorted(KNOWN_TOOLS))}; if it is a new tool, add it to KNOWN_TOOLS)")
+            warnings.append(
+                f"{where}: matcher token {token!r} is not a recognized tool — if it is a typo the "
+                f"hook will match nothing; if it is a valid/new tool, add it to KNOWN_TOOLS")
         return
     # Otherwise it is a JavaScript regex (NOT Python `re`). Validate with node when available —
     # Python's engine would both reject valid JS (e.g. `(?<n>…)`) and accept Python-only syntax
-    # (`(?P<n>…)`). Without node we cannot faithfully check a JS regex, so we accept it (a
-    # documented limitation rather than a false failure).
+    # (`(?P<n>…)`). The matcher is passed via env (no argv-index ambiguity; safe for a leading
+    # `-`). Without node we cannot faithfully check a JS regex, so we accept it (documented).
     node = shutil.which("node")
     if not node:
         return
     try:
-        res = subprocess.run([node, "-e", "new RegExp(process.argv[1])", matcher],
-                             capture_output=True, text=True)
+        res = subprocess.run(
+            [node, "-e", "new RegExp(process.env.HOOK_MATCHER)"],
+            capture_output=True, text=True, env={**os.environ, "HOOK_MATCHER": matcher},
+        )
     except OSError:
         return
     if res.returncode != 0:
@@ -159,6 +167,7 @@ def main() -> int:
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
     manifest = root / "hooks" / "hooks.json"
     problems: list[str] = []
+    warnings: list[str] = []
 
     # A plugin need not ship hooks — absence is valid by default. Under --require-manifest
     # (CI for a plugin known to ship hooks) a missing manifest is a problem: deleting it
@@ -212,7 +221,7 @@ def main() -> int:
             if not isinstance(matcher, str):
                 problems.append(f"{where}: `matcher` must be a string")
             else:
-                validate_matcher(event, matcher, where, problems)
+                validate_matcher(event, matcher, where, problems, warnings)
             hlist = entry.get("hooks")
             if not isinstance(hlist, list) or not hlist:
                 problems.append(f"{where}: `hooks` must be a non-empty list")
@@ -279,8 +288,13 @@ def main() -> int:
 
     summary = (f"{events} events, {invocations} invocations, "
                f"{len(referenced)} scripts, {parsed} parse-checked")
+
+    for warning in warnings:
+        print(f"  ⚠️  {warning}")
+
     if not problems:
-        print(f"✅ OK — hooks manifest ({summary})")
+        suffix = f" — {len(warnings)} warning(s)" if warnings else ""
+        print(f"✅ OK — hooks manifest ({summary}){suffix}")
         return 0
 
     print(f"hooks: {len(problems)} problem(s) [{summary}]:")
