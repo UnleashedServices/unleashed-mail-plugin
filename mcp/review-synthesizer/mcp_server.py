@@ -29,8 +29,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/sy
 from schema import parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
-PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_VERSION})
+# Advertise the current finalized MCP revision, but still negotiate the prior one so older
+# clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
+# framing, tools/list, tools/call shapes) changed between these revisions.
+PROTOCOL_VERSION = "2025-11-25"
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({"2025-11-25", "2025-06-18"})
 SERVER_INFO = {"name": "review-synthesizer", "version": "0.1.0"}
 
 TOOL = {
