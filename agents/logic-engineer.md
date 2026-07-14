@@ -326,7 +326,7 @@ final class MockDraftService: DraftServiceProtocol {
     var saveDraftCallCount = 0
     var deleteDraftCallCount = 0
     var sendDraftCallCount = 0
-    var shouldThrow: MailProviderError?
+    var shouldThrow: EmailServiceError?
 
     func saveDraft(_ draft: MailDraft) async throws -> MailDraft {
         saveDraftCallCount += 1

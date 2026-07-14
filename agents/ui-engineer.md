@@ -262,7 +262,7 @@ enum ViewState<T> {
     case idle
     case loading
     case loaded(T)
-    case error(MailProviderError)
+    case error(EmailServiceError)
 }
 ```
 
