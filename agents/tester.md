@@ -132,7 +132,7 @@ final class InboxViewModelTests: XCTestCase {
 
     func test_fetchEmails_setsErrorOnFailure() async throws {
         // Arrange
-        mockService.shouldThrow = .networkError(underlying: URLError(.notConnectedToInternet))
+        mockService.shouldThrow = .networkError(URLError(.notConnectedToInternet))
 
         // Act
         await sut.fetchEmails()
