@@ -10,7 +10,6 @@ description: >
   a pull request, when the user says "review", "check my code", "is this ready
   to merge", or after any significant code change is complete.
 model: inherit
-memory: project
 tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
 ---
 
