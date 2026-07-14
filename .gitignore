@@ -5,6 +5,10 @@ firebase-debug.log
 .DS_Store
 **/.DS_Store
 
+# Claude Code local settings — machine-specific, may hold tokens/paths. Never commit
+# (COREDEV-2486, audit critic.1: same accidental-commit class as the firebase-debug.log incident).
+.claude/settings.local.json
+
 # Transient review prompt files (per-invocation, not source of truth)
 .agy-prompt.md
 .codex-prompt.md

@@ -7,7 +7,7 @@ description: >
   optimizing pipelines, or managing deployments. Invoke automatically when CI fails,
   adding new build steps, updating dependencies, or preparing releases.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent, WebFetch, WebSearch
+tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch
 ---
 
 You are a **CI/CD engineer** managing UnleashedMail's build and deployment pipelines.

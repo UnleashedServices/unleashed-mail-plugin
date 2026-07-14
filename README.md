@@ -95,7 +95,7 @@ This repo is both the plugin **and** its own marketplace (the repo ships [`.clau
 
 ```bash
 # 1. Add the marketplace (one-time)
-claude plugin marketplace add npranson/unleashed-mail-plugin
+claude plugin marketplace add UnleashedServices/unleashed-mail-plugin
 
 # 2. Install the plugin
 claude plugin install unleashed-mail
@@ -106,7 +106,7 @@ claude plugin install unleashed-mail
 To pull a newer version after upstream changes:
 
 ```bash
-claude plugin marketplace update npranson/unleashed-mail-plugin
+claude plugin marketplace update UnleashedServices/unleashed-mail-plugin
 claude plugin update unleashed-mail
 # Restart Claude Code
 ```

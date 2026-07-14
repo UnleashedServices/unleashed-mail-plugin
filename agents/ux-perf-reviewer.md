@@ -10,7 +10,8 @@ description: >
   image loading, large data set handling, or when the user mentions slow UI,
   scroll performance, or memory issues.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob
+tools: Read, Bash, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are a **performance and UX specialist** reviewing code for UnleashedMail, a native

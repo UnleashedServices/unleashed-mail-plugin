@@ -480,6 +480,19 @@ printf '{"agent_type":"security-reviewer","last_assistant_message":"```json\\n[]
     | UNLEASHED_CAPTURE_REVIEWERS=off bash "$CAPTURE" 2>/dev/null
 if [ -e "$REVDIR/security-reviewer.json" ]; then fail "capture kill switch -> no write"; else ok; fi
 
+# 37. COREDEV-2486 (audit hooks-scripts.4): a PLUGIN-SCOPED agent_type
+#     (`unleashed-mail:security-reviewer`, how plugin-shipped subagents actually surface) must
+#     normalize to the bare name and still capture — the pipeline was a silent no-op before.
+rm -rf "$(context_reviews_dir)" 2>/dev/null
+printf '{"agent_type":"unleashed-mail:security-reviewer","last_assistant_message":%s}' "$(json_str "$SEC_MSG")" \
+    | bash "$CAPTURE" 2>/dev/null
+if [ -f "$REVDIR/security-reviewer.json" ]; then ok; else fail "plugin-scoped agent_type -> normalized + captured"; fi
+
+# 38. COREDEV-2486: SubagentStart with a plugin-scoped agent_type binds the round under the BARE
+#     name, so the (also-normalized) SubagentStop looks it up successfully.
+printf '{"agent_type":"unleashed-mail:prompt-review","agent_id":"scoped1","session_id":"sess1"}' | bash "$ROUND_START" 2>/dev/null
+if [ -n "$(context_review_round_lookup prompt-review scoped1 sess1)" ]; then ok; else fail "plugin-scoped SubagentStart binds under bare name"; fi
+
 echo "== COREDEV-2328 context_latest_round_dir =="
 # Pure-function tests for the Step-2 round-lookup helper: highest NUMERIC round holding the agent's
 # findings, robust to hyphenated base paths and oversized suffixes (no GNU sort, no -gt overflow).

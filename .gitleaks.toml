@@ -1,0 +1,28 @@
+# gitleaks configuration for unleashed-mail-plugin.
+#
+# The CI `secret-scan` job runs `gitleaks git` over the FULL history (history-aware) to
+# prevent a recurrence of the accidental-commit class that produced the firebase-debug.log
+# incident (COREDEV-2486 / audit critic.1).
+#
+# History is intentionally NOT rewritten (team decision: rotate + scan, not filter-repo). The
+# ONE already-public, accepted historical exposure is allowlisted below so the scan can pass on
+# history while still failing on any OTHER secret — new or historical. See SECURITY.md.
+title = "unleashed-mail-plugin"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Accepted historical exposure — see SECURITY.md (firebase-debug.log + GCP project id, rotated/treated-as-public)"
+# The deleted debug log (endpoints/OAuth scopes) is treated as public; exempt it wherever it
+# appears in history by path.
+paths = [
+  # Anchored so it exempts ONLY the exact file (root or any dir), never a path that merely
+  # contains the substring (e.g. firebase-debug.log.bak / firebase-debug.logger.swift).
+  '''(^|/)firebase-debug\.log$''',
+]
+# The GCP project id committed in edc27bf and replaced with a placeholder in HEAD. A project id
+# is not a credential, but pin it explicitly so a rule that flags it can't wedge the scan.
+regexes = [
+  '''emailwithai-476119''',
+]

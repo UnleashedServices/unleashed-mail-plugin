@@ -9,7 +9,7 @@ description: >
   navigation, adding toolbar items, implementing loading/error/empty states,
   modifying the email composer UI, or any task that changes what the user sees.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **UI engineer** working on UnleashedMail's presentation layer.

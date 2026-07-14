@@ -9,7 +9,8 @@ description: >
   handling, WKWebView HTML loading, evaluateJavaScript calls, CI/CD workflows,
   entitlements files, or any code that handles secrets or user credentials.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob
+tools: Read, Bash, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are a **security specialist** reviewing code for UnleashedMail, a native macOS

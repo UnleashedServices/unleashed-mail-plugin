@@ -135,7 +135,7 @@ If the second provider's API doesn't support the feature natively:
 // GraphMailProvider.swift
 func snooze(id: String, until: Date) async throws {
     // TODO: PARITY — Graph API does not support native snooze.
-    // Tracked: https://github.com/npranson/UnleashedMail/issues/XXX
+    // Tracked: https://github.com/UnleashedServices/UnleashedMail/issues/XXX
     throw MailProviderError.unsupportedOperation(provider: .microsoftGraph, operation: "snooze")
 }
 ```

@@ -10,7 +10,7 @@ description: >
   a pull request, when the user says "review", "check my code", "is this ready
   to merge", or after any significant code change is complete.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
+tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client

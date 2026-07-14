@@ -9,7 +9,8 @@ description: >
   publishers, ValueObservation callbacks, DispatchQueue usage, token refresh logic,
   WKWebView calls from background threads, or any code crossing isolation boundaries.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob
+tools: Read, Bash, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are a **correctness & concurrency specialist** reviewing code for UnleashedMail,

@@ -10,7 +10,7 @@ description: >
   API calls, building sync logic, handling errors, creating mock implementations,
   or when a feature needs both provider implementations.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **logic engineer** working on UnleashedMail's service and ViewModel layers.

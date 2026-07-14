@@ -29,6 +29,11 @@ command -v python3 >/dev/null 2>&1 || exit 0
 hook_io_read
 
 AGENT="$(hook_str agent_type)"
+# COREDEV-2486 (audit hooks-scripts.4): plugin-shipped subagents surface with a
+# plugin-scoped agent_type (e.g. "unleashed-mail:security-reviewer"), not the bare
+# frontmatter name. Strip any "<plugin>:" prefix so the bare-name case below matches
+# under normal plugin install; capture.py's VALID_AGENTS allowlist is bare-name too.
+AGENT="${AGENT##*:}"
 case "$AGENT" in
     security-reviewer|concurrency-reviewer|ux-perf-reviewer|accessibility-auditor|prompt-review) ;;
     *) exit 0 ;;   # EXCLUDE swift-reviewer + everything else

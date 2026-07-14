@@ -239,3 +239,23 @@ hook_emit_session_context() {
     ctx="$(json_escape "$1")"
     printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}\n' "$ctx"
 }
+
+# PostToolUse: feed advisory context to Claude next to the tool result (non-blocking).
+# COREDEV-2486 (audit hooks-scripts.3): PostToolUse plain stdout is NEVER shown to the
+# model (only UserPromptSubmit/UserPromptExpansion/SessionStart stdout is), so advisories
+# must travel via additionalContext. Delivered "next to the tool result"; JSON output is
+# only processed on exit 0, so callers emit this then `exit 0`. $1 = message.
+hook_emit_posttool_context() {
+    local ctx
+    ctx="$(json_escape "$1")"
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}\n' "$ctx"
+}
+
+# PostToolUse: feed a blocking finding back to Claude. PostToolUse cannot undo a write,
+# but a top-level {"decision":"block","reason":...} surfaces the reason to the model
+# (docs-supported for PostToolUse). JSON output requires exit 0. $1 = reason.
+hook_emit_posttool_block() {
+    local reason
+    reason="$(json_escape "$1")"
+    printf '{"decision":"block","reason":%s}\n' "$reason"
+}

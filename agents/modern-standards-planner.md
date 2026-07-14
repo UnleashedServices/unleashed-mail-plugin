@@ -11,7 +11,6 @@ description: >
   major refactor, or when the user asks about current best practices for any
   technology in the stack.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent, WebFetch, WebSearch, mcp__claude_ai_Context7__resolve-library-id, mcp__claude_ai_Context7__query-docs, mcp__context7__resolve-library-id, mcp__context7__query-docs, mcp__plugin_context7_context7__resolve-library-id, mcp__plugin_context7_context7__query-docs
 ---
 
 > **MCP prefix portability:** Context7 may be exposed under three prefixes —

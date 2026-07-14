@@ -7,7 +7,7 @@ description: >
   up automated testing workflows. Invoke automatically when adding new features,
   refactoring code, fixing bugs, or when test failures occur.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **test engineer** working on UnleashedMail's test suite. You own test strategy,
