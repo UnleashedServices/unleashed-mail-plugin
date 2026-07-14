@@ -8,7 +8,7 @@ description: >
   when creating or modifying SwiftUI views, building UI components, working on
   navigation, adding toolbar items, implementing loading/error/empty states,
   modifying the email composer UI, or any task that changes what the user sees.
-model: opus
+model: inherit
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
