@@ -39,8 +39,14 @@ class TestProtocol(unittest.TestCase):
     def test_initialize_unsupported_version_falls_back(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
                        "params": {"protocolVersion": "2024-01-01", "capabilities": {}}}])
-        # must NOT echo an unsupported version — reply with the one we actually speak
-        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-06-18")
+        # must NOT echo an unsupported version — reply with the current one we speak
+        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-11-25")
+
+    def test_initialize_current_revision_negotiates(self):
+        # The current finalized revision (2025-11-25) negotiates cleanly (COREDEV-2488).
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                       "params": {"protocolVersion": "2025-11-25", "capabilities": {}}}])
+        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-11-25")
 
     def test_tools_list(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])

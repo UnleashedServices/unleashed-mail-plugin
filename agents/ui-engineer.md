@@ -140,8 +140,8 @@ NavigationSplitView {
     }
 }
 
-// ✅ toolbarVisibility (not navigationBarHidden — deprecated)
-.toolbarVisibility(.hidden, for: .navigationBar)
+// ✅ toolbarVisibility — on macOS target .windowToolbar (.navigationBar is iOS-only, unavailable on macOS)
+.toolbarVisibility(.hidden, for: .windowToolbar)
 
 // ✅ ContentUnavailableView for empty states
 ContentUnavailableView("No Messages", systemImage: "tray",
