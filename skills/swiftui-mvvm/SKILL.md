@@ -139,19 +139,26 @@ Selection state lives in a shared `@Observable NavigationState` object injected 
 
 ```
 Unleashed Mail/Sources/
-├── Views/
-│   ├── Compose/
-│   ├── Inbox/
-│   ├── MessageDetail/
-│   └── Sidebar/
-├── ViewModels/
-│   ├── ComposeViewModel.swift
-│   ├── InboxViewModel.swift
-│   └── ...
-├── Services/
-│   ├── Protocols/
-│   └── Implementations/
-├── Models/
-├── Database/
-└── Utilities/
+├── Components/          # Reusable UI (incl. Shared/ Curator components)
+├── Models/             # Sendable structs / enums
+├── Services/           # API clients, auth, database
+│   ├── AI/
+│   ├── Database/
+│   ├── Drafting/
+│   └── Triage/
+├── Utilities/          # Extensions, helpers, CuratorTheme, APIEndpoints
+├── ViewModels/         # @Observable @MainActor
+└── Views/              # SwiftUI views by feature (Compose/, Inbox/, MessageDetail/, Sidebar/, …)
 ```
+
+## Curator Design System (styling)
+
+Views use Curator tokens, never raw SwiftUI primitives (CLAUDE.md · `docs/BRAND_STANDARDS.md`):
+
+- **Colors:** `Color.curator*` (`.curatorOnSurface`, `.curatorOnSurfaceVariant`, `.curatorPrimary`, `.curatorSecondary`, `.curatorError`) — never `Color.blue`/`.primary`/`.accentColor`.
+- **Fonts:** `.font(.system(size: CuratorTheme.Typography.bodySize))` or `CuratorTheme.scaledFont(size:weight:scale:)` — never `.font(.body)`/`.headline`.
+- **Spacing / radii:** `CuratorTheme.Spacing.*` / `CuratorTheme.Radius.*` — never hardcoded numbers.
+- **Sheets:** `.curatorSheetBackground()` — never raw `.background(...)`.
+- **Dividers:** `CuratorDivider()` / `CuratorDivider.vertical(height:)` — never `Divider()`.
+- **Selection rows / settings:** `CuratorRadioOption(title:description:isSelected:action:)`, `CuratorSettingsSection(_:description:content:)`.
+- Use `.foregroundStyle()` — `.foregroundColor()` is deprecated.
