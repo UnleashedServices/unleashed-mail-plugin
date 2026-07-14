@@ -9,6 +9,8 @@ description: >
   tables, writing GRDB queries, setting up ValueObservation, adding indexes, or
   when a feature requires persistent storage.
 model: inherit
+skills:
+  - grdb-patterns
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
