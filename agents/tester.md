@@ -61,7 +61,7 @@ final class MockEmailService: EmailServiceProtocol {
     var stubbedEmails: [Email] = []
     var fetchInboxCallCount = 0
     var sendCallCount = 0
-    var shouldThrow: MailProviderError?
+    var shouldThrow: EmailServiceError?
 
     func fetchInbox() async throws -> [Email] {
         fetchInboxCallCount += 1
