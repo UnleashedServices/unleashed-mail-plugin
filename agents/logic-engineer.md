@@ -9,7 +9,7 @@ description: >
   when creating ViewModels, defining service protocols, implementing Gmail or Graph
   API calls, building sync logic, handling errors, creating mock implementations,
   or when a feature needs both provider implementations.
-model: opus
+model: inherit
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
