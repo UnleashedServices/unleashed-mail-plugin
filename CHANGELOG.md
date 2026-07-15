@@ -13,6 +13,17 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Changed
+- **`swift-reviewer` Step 4 extracted to a shipped, unit-tested script** (COREDEV-2489 / Item 5):
+  the inline build / lint / test block moved to [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh)
+  (reads the Step-1 `$CHANGED` list on stdin; `✅`/`❌` per gate; exits non-zero if any hard gate failed).
+  Saves ~4–5k tokens/review-spawn and makes the gate logic testable — `scripts/tests/test_build_verify.py`
+  covers it with mocked `xcodebuild`/`swiftlint` (runs in CI without a toolchain). `pr-review` now relies
+  on that single Step-4 run instead of launching its own `xcodebuild test`, **deduping the double
+  test-suite run**. Only the self-contained Step-4 block was extracted; the `$CHANGED`/`$BASE_BRANCH`
+  state-sharing steps stay inline, and a **canary** (`scripts/review/README.md`) covers the live-review
+  verification neither the gate nor unit tests can do autonomously.
+
 ### Added
 - **Plan Review Gate now produces a persisted, plan-digest-bound Combined-verdict artifact**
   (COREDEV-2489 / Item 11, R5-gated): `scripts/review-verdict.py write` records the Combined verdict
