@@ -69,6 +69,7 @@ fi
 
 # --- 2. SwiftLint check (if available) ---
 SWIFTLINT_RAN=0
+LINT_OUTPUT=""
 if command -v swiftlint &> /dev/null; then
     SWIFTLINT_RAN=1
     # COREDEV-2486 (audit hooks-scripts.1): `--path` was deprecated in SwiftLint 0.48 and REMOVED
@@ -161,7 +162,14 @@ _waives() {
     # (gemini, #43 review; reproduced). Rule IDs never contain " - ", so cutting there is lossless.
     _rules="${_tail%% - *}"
     _norm=" $(printf '%s' "$_rules" | tr ',' ' ' | tr -s '[:space:]' ' ') "
-    [ "${_norm#* $_rule }" != "$_norm" ] && return 0
+    # QUOTE the needle: inside ${..} an unquoted $_rule expands as a GLOB, not a literal, so a rule
+    # token containing `*`/`?` would false-match. NOT live and NOT covered by a test: every caller
+    # passes a literal, so the property is unobservable from the hook's surface (a directive naming
+    # `force_*` is the HAYSTACK and behaves identically either way — a test of it passes under the
+    # unquoted form too, so it would pin nothing). Kept as hardening because this expansion class has
+    # bitten this repo three times and CI's `shellcheck -S warning` cannot see it; plain shellcheck
+    # reports SC2295. bash 3.2-verified.
+    [ "${_norm#* "$_rule" }" != "$_norm" ] && return 0
     return 1
 }
 
@@ -177,10 +185,26 @@ _waives() {
 # When swiftlint ran (stage 2) it is authoritative: it honours the directives, and BOTH rules are
 # default-error rules (`force_try` / `force_cast`), so a genuinely UNWAIVED site still surfaces as
 # `: error:` and stage 2 already blocks on it. Detection is preserved; the false-positive class is not.
-if [ "$SWIFTLINT_RAN" -eq 0 ] && [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
+# SILENCE IS NOT PROOF. `SWIFTLINT_RAN` only says the binary executed — it does NOT say these rules
+# policed THIS file. The repo config can disable them (`disabled_rules`/`only_rules`) or exclude the
+# path (`excluded:` — the consumer app excludes GRDB/SwiftSoup/Vendor/build/.build), and swiftlint then
+# exits 0 with NO output, indistinguishable from a clean file. Gating the fallback on SWIFTLINT_RAN
+# therefore dropped the net for exactly the files swiftlint never policed (codex, #43 review).
+#
+# Only a real FINDING proves the rule was enforced. Per-rule, because force_try and force_cast are
+# independent: one being enforced says nothing about the other.
+#
+# Safe to widen now ONLY because the greps became waiver-aware: the 120 measured false positives came
+# from waived sites, and `_waives` filters those directly, so suppression is no longer load-bearing.
+_lint_proved() {
+    [ "$SWIFTLINT_RAN" -eq 1 ] || return 1
+    printf '%s' "$LINT_OUTPUT" | grep -qE "\($1\)"
+}
+if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
     # No toolchain: keep a coarse net, but honour an explicit waiver on the preceding line so the
     # fallback cannot demand a policy-violating edit either. -A1 pairs directive->site.
-    TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+    TRY_BANG=""
+    _lint_proved force_try || TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
             # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
@@ -199,11 +223,12 @@ if [ "$SWIFTLINT_RAN" -eq 0 ] && [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PAT
             if ! _waives "$prev" force_try; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$TRY_BANG" ]; then
-        add_block "❌ Found 'try!' in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
+        add_block "❌ Found 'try!' in production code (swiftlint did not enforce force_try here — grep fallback) — $FILE_PATH:
 $TRY_BANG"
     fi
 
-    FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+    FORCE_CAST=""
+    _lint_proved force_cast || FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
             # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
@@ -218,7 +243,7 @@ $TRY_BANG"
             if ! _waives "$prev" force_cast; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$FORCE_CAST" ]; then
-        add_block "❌ Found 'as!' (force cast) in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
+        add_block "❌ Found 'as!' (force cast) in production code (swiftlint did not enforce force_cast here — grep fallback) — $FILE_PATH:
 $FORCE_CAST"
     fi
 fi

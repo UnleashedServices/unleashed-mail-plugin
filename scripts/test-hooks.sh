@@ -758,6 +758,28 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 5 (codex): SILENCE IS NOT PROOF OF ENFORCEMENT ==
+# The fallback was gated on SWIFTLINT_RAN, i.e. "the binary executed". But the repo config can disable
+# these rules (`disabled_rules`/`only_rules`) or exclude the path (`excluded:` — the consumer app
+# excludes GRDB/SwiftSoup/Vendor/build/.build). swiftlint then exits 0 with NO output, which is
+# byte-identical to a clean file — so the net was dropped for exactly the files it never policed.
+mkdir -p "$LINTDIR/silentbin"
+printf '#!/bin/sh\nexit 0\n' > "$LINTDIR/silentbin/swiftlint"   # ran fine, enforced nothing
+chmod +x "$LINTDIR/silentbin/swiftlint"
+lint_run_silent() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/silentbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run_silent "$LINTDIR/Unwaived.swift")"
+assert_contains "lint: swiftlint ran but enforced NOTHING -> unwaived try! still BLOCKS" "$OUT" '"decision":"block"'
+# ...and the waiver is still honoured on that same path (the fix must not resurrect the 120 false positives).
+OUT="$(lint_run_silent "$LINTDIR/Waived.swift")"
+assert_not_contains "lint: silent swiftlint -> waived try! still NOT flagged" "$OUT" "try!"
+# When swiftlint DID report the rule it is authoritative — no duplicate grep report.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_not_contains "lint: swiftlint reported force_try -> no duplicate grep-fallback message" "$OUT" "grep fallback"
+
 # == COREDEV-2494 review round 4 (gemini): the RATIONALE is not a rule list ==
 # This project MANDATES a trailing rationale after a ` - ` delimiter (CLAUDE.md: "note the ` - `
 # rationale delimiter"), and the app has them in the wild. Scanning the whole tail meant
