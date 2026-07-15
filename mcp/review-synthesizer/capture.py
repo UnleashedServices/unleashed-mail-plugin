@@ -404,7 +404,7 @@ def _clear_status(round_dir: str, agent: str) -> None:
 
 def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: str = "") -> str:
     """Capture one reviewer message. Returns a status string (for tests/logging):
-    rejected | skipped | no-fence | invalid | written."""
+    rejected | skipped | no-fence | invalid | written | status-only."""
     if agent not in VALID_AGENTS:
         return "rejected"
     base = os.path.join(capture_root, slug)

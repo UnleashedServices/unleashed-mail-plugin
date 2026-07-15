@@ -117,7 +117,7 @@ class TestSynthesizeTool(unittest.TestCase):
         # and yield a bogus provisional APPROVE -> must be rejected -32602, never synthesized. Covers
         # the [] case AND the blank/'.'-only entries that canonicalize to "" — the list-truthiness
         # bypass an adversarial pass found ([""] / ["   "] / ["\t"] / ["./"]) (Item 17).
-        for changed in ([], [""], ["   "], ["\t"], ["./"], ["", "  "]):
+        for changed in ([], [""], ["   "], ["\t"], ["./"], ["."], ["/"], ["./."], ["", "  "]):
             out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": "synthesize_review",
                                       "arguments": {"findings": [good()], "changed_files": changed}}}])
