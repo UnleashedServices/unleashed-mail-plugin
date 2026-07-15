@@ -1,4 +1,5 @@
 ---
+name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion
 disable-model-invocation: true

@@ -14,8 +14,9 @@ separate repo). You are working on the *plugin's own assets* here — treat them
 ## What ships (auto-discovered by Claude Code)
 
 ```
-agents/      21 subagents (*.md)                 skills/     18 skills (*/SKILL.md)
-commands/    3 slash commands (*.md)             hooks/      hooks.json (10 events)
+agents/      21 subagents (*.md)                 skills/     21 skills (*/SKILL.md)
+hooks/       hooks.json (10 events)              (incl. workflow skills brainstorm/implement/pr-review,
+                                                  disable-model-invocation — commands merged into skills)
 mcp/review-synthesizer/  1 bundled stdio MCP server (.mcp.json)
 scripts/     hook scripts + validators + lib/    docs/       planning/ (+ audits/ on later branches)
 .claude-plugin/  plugin.json + marketplace.json
@@ -51,7 +52,7 @@ gate blocks with `{"decision":"block","reason":…}`. Use the helpers in `script
 ```bash
 python3 scripts/validate-plugin-assembly.py --root . --strict     # frontmatter + manifests + agent keys
 python3 scripts/validate-hooks.py --root . --strict --require-manifest
-VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json == README == counts (21/18/3/1)
+VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json == README == counts (21/21/0/1)
 bash scripts/test-hooks.sh                                         # hook stdin-contract harness
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
