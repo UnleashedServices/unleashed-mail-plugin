@@ -215,7 +215,7 @@ func withRetry<T: Sendable>(
 ### Graceful Degradation
 
 ```swift
-func loadMessages() async {
+func loadMessages(accountEmail: String) async {
     do {
         // Try to load from API
         let messages = try await api.fetchMessages()
@@ -225,7 +225,10 @@ func loadMessages() async {
         Logger.debug("Network unavailable, using cached messages", category: .network)
         do {
             self.messages = try await dbQueue.read { db in
-                try MailMessage.fetchAll(db)
+                // Scope EVERY query by account_email — never fetch across accounts (CLAUDE.md invariant).
+                try MailMessage
+                    .filter(Column("account_email") == accountEmail)
+                    .fetchAll(db)
             }
         } catch {
             Logger.debug("Cache fallback also failed: \(error)", category: .database)

@@ -22,6 +22,7 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [ "${UNLEASHED_STOP_GATE:-on}" = "off" ] && exit 0
 MODE="${UNLEASHED_STOP_GATE_MODE:-warn}"
+[ "$MODE" = "off" ] && exit 0   # `_MODE=off` also disables (parity with the README kill-switch cell)
 TTL="${UNLEASHED_STOP_GATE_TTL_SEC:-600}"
 # Reject a non-numeric TTL so the later `[ "$AGE" -lt "$TTL" ]` never errors to stderr.
 case "$TTL" in

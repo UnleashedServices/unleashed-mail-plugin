@@ -285,12 +285,23 @@ The `.env` file is gitignored and will not be distributed with the plugin.
 
 ## Hooks
 
-The plugin includes PostToolUse hooks that run automatically:
+The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch (the always-on lint-feedback hook `swift-lint-check.sh` is the exception; it only feeds advisories to the model). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
-| Hook | Trigger | Behavior |
-|---|---|---|
-| `swift-lint-check.sh` | After Write/Edit | Syntax check, SwiftLint, `try!`/`as!` detection, token logging — **blocks on critical violations** |
-| `swift-build-verify.sh` | After Write/Edit & Bash | Detects build/test commands and reminds to verify results |
+| Event | Script | Behavior | Default | Kill switch |
+|---|---|---|---|---|
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `warn` = advisory to you; `ask` = permission prompt | `warn` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `warn`/`ask`/`off` |
+| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | — |
+| PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
+| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once if a lint-fail marker is set. `warn` = silent log; `enforce` = block | `warn` | `UNLEASHED_STOP_GATE_MODE` = `warn`/`enforce`/`off` |
+| StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
+| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
+| PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
+| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | `UNLEASHED_COMPACT_SNAPSHOT=off` |
+| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | `UNLEASHED_COMPACT_RESTORE=off` |
+| SubagentStart | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer | on | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off` |
+| SubagentStop | `capture-reviewer-verdict.sh` | Captures each reviewer's findings for the synthesizer | on | `UNLEASHED_CAPTURE_REVIEWERS=off` |
+
+> **PostToolUse hooks run *after* the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
 
 ## MCP Servers (1)
 

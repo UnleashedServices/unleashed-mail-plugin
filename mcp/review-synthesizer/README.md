@@ -81,7 +81,7 @@ The server returns `blockersToVerify` precisely because it cannot read the repo.
 
 ```bash
 # smoke test the handshake (should print a JSON-RPC reply naming the server):
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{}}}' \
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}' \
   | python3 mcp_server.py
 # run the synthesizer standalone (no MCP) against the bundled fixtures:
 python3 synthesize.py samples/*.json --changed samples/changed_files.txt

@@ -122,6 +122,7 @@ EOF
 
 [ "${UNLEASHED_SENSITIVE_GUARD:-on}" = "off" ] && exit 0
 MODE="${UNLEASHED_SENSITIVE_GUARD_MODE:-warn}"
+[ "$MODE" = "off" ] && exit 0   # `_MODE=off` also disables (parity with the README kill-switch cell)
 
 hook_io_read
 TOOL="$(hook_tool_name)"
