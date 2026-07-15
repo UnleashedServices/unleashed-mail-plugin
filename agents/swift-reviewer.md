@@ -313,45 +313,21 @@ These rows join the merged list and the verdict on equal footing with reviewer r
 
 Per `AGENT_CONTRACTS.md §5`, all three must pass:
 
+This step is the shipped, unit-tested [`scripts/review/build-verify.sh`](../scripts/review/build-verify.sh)
+(AGENT_CONTRACTS §5). Pipe the Step-1 `$CHANGED` list to it on **stdin**; it runs the build, the two-arm
+SwiftLint merge gate (changed-`.swift` `--strict` + whole-repo `--strict --baseline`), the test suite,
+and the missing-test scan — printing `✅`/`❌` per gate and **exiting non-zero if any hard gate failed**:
+
 ```bash
-set -o pipefail   # REQUIRED: without it, `| tail` returns tail's 0 and masks a failing
-                  # xcodebuild/swiftlint. Keep this line if you copy the block verbatim.
-
-# Build — must succeed (paths contain spaces; quote scheme)
-xcodebuild build -scheme "Unleashed Mail" -destination 'platform=macOS' 2>&1 | tail -10
-BUILD=$?; [ "$BUILD" -eq 0 ] && echo "✅ build" || echo "❌ build FAILED (exit $BUILD)"
-
-# SwiftLint — both arms of the merge gate (AGENT_CONTRACTS §5):
-#   (1) changed .swift files strict (warnings→errors); (2) whole-repo strict with the committed
-#   baseline so only NEW violations fail (existing NSRegularExpression backlog baselined — COREDEV-2290)
-# Arm (1) reuses $CHANGED from Step 1 (same session — the test-coverage check below relies on it too),
-# keeping only *.swift paths that still exist (a deleted/renamed-away file has nothing to lint); the
-# empty-set guard skips xargs entirely (BSD/macOS-safe — no GNU-only `-r`).
-CHANGED_SWIFT=$(printf '%s\n' "$CHANGED" | { grep -E '\.swift$' || true; } | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done)
-if [ -n "$CHANGED_SWIFT" ]; then
-  printf '%s\n' "$CHANGED_SWIFT" | tr '\n' '\0' | xargs -0 swiftlint --strict --quiet 2>&1 | tail -20; CHANGED_LINT=$?
-else
-  CHANGED_LINT=0
-fi
-swiftlint lint --strict --baseline swiftlint-baseline.json --quiet 2>&1 | tail -20; BASELINE_LINT=$?
-LINT=$(( CHANGED_LINT | BASELINE_LINT )); [ "$LINT" -eq 0 ] && echo "✅ lint" || echo "❌ lint FAILED (changed=$CHANGED_LINT baseline=$BASELINE_LINT)"
-
-# Tests — must pass
-xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS' 2>&1 | tail -30
-TEST=$?; [ "$TEST" -eq 0 ] && echo "✅ tests" || echo "❌ tests FAILED (exit $TEST)"
-
-# Check for new source files without corresponding tests (uses $CHANGED from Step 1)
-# `printf | while` form is portable; here-strings (`<<<`) need a writable /tmp.
-printf '%s\n' "$CHANGED" | while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    case "$f" in
-        "Unleashed Mail/Sources/"*.swift)
-            test_path="$(echo "$f" | sed 's|Unleashed Mail/Sources/|Unleashed MailTests/|;s|\.swift$|Tests.swift|')"
-            [ -f "$test_path" ] || echo "⚠️  Missing test file: $test_path → source $f"
-            ;;
-    esac
-done
+# $CHANGED is from Step 1. The script reads it on stdin (no shared-shell-state assumption), so
+# pr-review relies on THIS same run — it does not invoke the script itself (one test run, not two).
+printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh"
+BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed (read the ✅/❌ above)
 ```
+
+> The verification logic (gate aggregation, changed-`.swift` filtering, missing-test scan) lives in the
+> script and is covered by `scripts/tests/test_build_verify.py` (mocked `xcodebuild`/`swiftlint`, so it
+> runs in CI without a toolchain). Override `SCHEME` / `DESTINATION` / `BASELINE` via env if needed.
 
 **Emit build / lint / test outcomes as structured rows** with
 `"category": "verification"`. For each `❌` above (or a command that could not run at
