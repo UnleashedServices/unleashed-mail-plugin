@@ -20,8 +20,12 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # Defensive fallbacks if the shared lib is unavailable (it ships alongside this hook).
 # Degraded mode emits to stderr; JSON feedback requires hook-io.sh.
-command -v hook_emit_posttool_block >/dev/null 2>&1 || hook_emit_posttool_block() { printf '%s\n' "$1" >&2; }
-command -v hook_emit_posttool_context >/dev/null 2>&1 || hook_emit_posttool_context() { printf '%s\n' "$1" >&2; }
+if ! command -v hook_emit_posttool_block >/dev/null 2>&1; then
+    hook_emit_posttool_block() { printf '%s\n' "$1" >&2; }
+fi
+if ! command -v hook_emit_posttool_context >/dev/null 2>&1; then
+    hook_emit_posttool_context() { printf '%s\n' "$1" >&2; }
+fi
 
 if command -v hook_io_read >/dev/null 2>&1; then
     hook_io_read

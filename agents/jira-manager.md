@@ -9,13 +9,14 @@ description: >
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
 model: sonnet
-disallowedTools: Write, Edit, Agent
+disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent
 ---
 
 > **MCP prefix portability:** Atlassian MCP tools may be exposed under three different
 > prefixes depending on the user's setup — `mcp__claude_ai_Atlassian__*` (VSCode-shipped),
 > `mcp__atlassian__*` (standalone), or `mcp__plugin_atlassian_atlassian__*` (Anthropic-marketplace
-> plugin). All three are whitelisted; whichever the user has installed will resolve. See
+> plugin). This agent **omits `tools:`** so it inherits whichever prefix is installed (a `tools:`
+> allowlist would block an unlisted one); `disallowedTools` keeps it non-mutating. See
 > `AGENT_CONTRACTS.md §10`.
 
 You are the **Jira ticket manager** for UnleashedMail. You enforce the project's

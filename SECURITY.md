@@ -11,8 +11,9 @@ You should receive an acknowledgement within a few business days.
 
 CI runs a history-aware [gitleaks](https://github.com/gitleaks/gitleaks) scan
 (`.github/workflows/plugin-ci.yml`, the `secret-scan` job) over the **full git history**
-on every push and pull request. The ruleset extends the gitleaks default; the configuration
-and the accepted-exposure allowlist live in [`.gitleaks.toml`](.gitleaks.toml).
+on every push to `main` and every pull request **targeting `main`** (the workflow's
+`push`/`pull_request` triggers filter on `main`). The ruleset extends the gitleaks default;
+the configuration and the accepted-exposure allowlist live in [`.gitleaks.toml`](.gitleaks.toml).
 
 Run it locally before pushing:
 

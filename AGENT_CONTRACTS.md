@@ -266,21 +266,25 @@ Each agent type has minimum tool requirements:
 
 | Agent kind | Required tools |
 |------------|---------------|
-| Reviewers (read-only) | Read, Bash, Grep, Glob |
+| Reviewers (read-only) | Read, Bash, Grep, Glob — **exception:** `prompt-review` is `Read, Grep, Glob` (Bash deliberately dropped; it inspects AI call sites, not shell state) |
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
 | Orchestrator (swift-reviewer) | + Agent (subagent dispatch) |
 | Diagnostic | + WebFetch (look up vendor docs mid-debug) |
-| Planner (modern-standards-planner) | + WebFetch, WebSearch, Context7 MCP, Agent |
+| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools` |
 | Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | + Atlassian MCP (multi-prefix whitelist) |
+| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent` keeps it non-mutating |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
 
 ## 10. MCP Tool Prefixes
 
-MCP tool names are install-specific. Plugin agents that whitelist MCP tools should use a
-**multi-prefix** whitelist to remain portable:
+MCP tool names are install-specific (the prefix depends on how the MCP server was installed).
+An agent that sets a `tools:` allowlist would have to enumerate every possible prefix and would
+still break on an unlisted one — so **agents that need MCP tools OMIT `tools:` entirely** (inheriting
+all tools, including whatever MCP prefix is installed) and restrict with `disallowedTools:` instead.
+The prefixes below are the ones a given server surfaces under, for reference (e.g. when reading a
+tool name in a transcript), **not** a whitelist to hardcode:
 
 - Atlassian (jira-manager):
   - `mcp__claude_ai_Atlassian__*` (VSCode-shipped MCP)
@@ -310,7 +314,7 @@ not block implementation).
   `Unleashed Mail/Sources/Services/CLAUDE.md`, `Unleashed Mail/Sources/Views/CLAUDE.md`,
   `Unleashed Mail/Sources/Models/CLAUDE.md`, `Unleashed Mail/Sources/Utilities/CLAUDE.md`,
   `Unleashed Mail/Sources/Components/CLAUDE.md`, `Unleashed Mail/Sources/ViewModels/CLAUDE.md`
-- Review skills (shipped with the plugin, current v2.4.1): the **canonical** workspace invocation is the
+- Review skills (shipped with the plugin): the **canonical** workspace invocation is the
   bare `/gemini-review` / `/codex-review` / `/create-feature-plan` — the host app ships local copies and
   prefers them over the plugin's generic ones. The plugin also bundles them namespaced as
   `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review` / `/unleashed-mail:create-feature-plan`

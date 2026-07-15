@@ -111,6 +111,18 @@ claude plugin update unleashed-mail
 # Restart Claude Code
 ```
 
+> **Migrating from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was
+> renamed to `UnleashedServices/unleashed-mail-plugin`, and Claude Code's plugin-rename migration
+> does not cover marketplace-name changes — an install keyed as
+> `unleashed-mail@npranson-unleashed-mail-plugin` will stop resolving. Re-point it once:
+>
+> ```bash
+> claude plugin marketplace remove npranson-unleashed-mail-plugin
+> claude plugin marketplace add UnleashedServices/unleashed-mail-plugin
+> claude plugin install unleashed-mail   # reinstall under the new marketplace
+> # Restart Claude Code
+> ```
+
 For local development against an unpushed clone:
 
 ```bash
@@ -289,7 +301,7 @@ The plugin bundles one local, zero-dependency **stdio MCP server**, declared in 
 | `review-synthesizer` | `synthesize_review` | Deterministic Step-5 synthesis for the [code-review pipeline](AGENT_CONTRACTS.md). Validates the sub-reviewers' JSON findings, filters to changed + `structural-pipeline` scope, dedups via category-family + line-overlap with cross-family ownership routing (**cluster-and-cross-link — never silently drops a fix**), and returns a provisional verdict + `blockersToVerify`. `swift-reviewer` then confirms each blocker against the code (the verify gate) and issues the final verdict. |
 
 - **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.
-- **Agent tool name:** `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` (in `swift-reviewer`'s `allowed-tools`). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
+- **Agent tool name:** `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` (inherited by `swift-reviewer`, whose `tools:` list includes it). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
 - **Source + tests:** [`mcp/review-synthesizer/`](mcp/review-synthesizer/) — run `python3 -m unittest discover -s mcp/review-synthesizer/tests` (159 cases, stdlib only).
 
 ## Baked-In Knowledge

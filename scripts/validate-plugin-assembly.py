@@ -56,7 +56,7 @@ KNOWN_TOOLS = {
 }
 
 
-def check_agent_fields(rel, fm: dict[str, str], problems: list[str]) -> None:
+def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
     """Agent-only frontmatter validation: unknown keys, model alias, tool-name typos.
 
     Skills/commands are intentionally exempt — `allowed-tools` is a real key for them.
@@ -84,7 +84,7 @@ def check_agent_fields(rel, fm: dict[str, str], problems: list[str]) -> None:
         for entry in (t.strip() for t in val.split(",")):
             if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
                 continue
-            near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.8)
+            near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
             if near:
                 problems.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of `{near[0]}`")
 
