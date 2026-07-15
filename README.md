@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.4.2
+# UnleashedMail — Claude Code Plugin v2.5.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,30 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.5.0
+
+- **Plugin-audit remediation (Epic COREDEV-2485)** — 17 PRs of fleet-wide correctness work merged via the
+  `alpha` integration branch. Highlights: agent frontmatter moved to the real `tools:`/`disallowedTools:`
+  schema (the stale `allowed-tools:` key was silently ignored, so agents ran **unrestricted**); SwiftLint
+  `--path` → positional; PostToolUse hooks corrected to the documented feedback contract; reviewer-capture
+  hooks matched on plugin-scoped names; distribution identity canonicalised to `UnleashedServices`;
+  gitleaks added to CI; `claude plugin validate` wired in; commands merged into skills (3 → 0);
+  `swift-reviewer` Step 4 extracted to the unit-tested [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh);
+  a plan-digest-bound Combined-verdict artifact ([`scripts/review-verdict.py`](scripts/review-verdict.py))
+  now makes the Plan Review Gate deterministic and blocks approve-then-edit.
+- **Review-gate honesty (COREDEV-2493)** — `AGENT_CONTRACTS.md` §2 promised a user-authorized `WAIVED:`
+  path that **nothing implemented**, so the gate hard-wedged — the exact outcome §2 forbade. Removed
+  rather than built: "only the user may waive" is not enforceable when the agent is the process running
+  the script. §2 now documents the recovery that actually exists.
+- **Fixed: the review CLIs on a stock Mac** — `scripts/pty-capture.py` used a PEP-604 union in a
+  module-level `def`, crashing on macOS's system Python 3.9.6 and taking **both** mandatory review gates
+  down on a fresh install (COREDEV-2494).
+- **Fixed: `swift-lint-check.sh` ignored `swiftlint:disable` directives** — 15/15 sampled hits on the
+  consumer app's core files were false positives, pressuring the model to strip waivers the project's own
+  CLAUDE.md *requires* (COREDEV-2494).
+- **Fixed: the gitleaks allowlist was blanket, not per-commit** — a new secret in `firebase-debug.log`
+  scanned clean. Now scoped to the two commits that file ever existed in (COREDEV-2494).
 
 ### v2.4.2
 

@@ -690,6 +690,41 @@ if command -v zsh >/dev/null 2>&1; then
     if [ "$(zsh -c "$ZHR" 2>&1)" = "0" ]; then ok; else fail "zsh NOMATCH: highest_round no-rounds -> 0"; fi
 fi
 
+
+# == COREDEV-2494: swift-lint-check.sh honours `swiftlint:disable` + has a kill switch ==
+# The old COVERAGE NOTE said this hook can't be simulated because it "needs SwiftLint … unavailable on
+# the Linux CI runner". That only ever applied to the swiftlint-PRESENT path — the grep FALLBACK path is
+# precisely what a toolchain-less runner takes, so it IS testable, and it is the path that was wrong:
+# the greps filtered only lines that are THEMSELVES comments, so `// swiftlint:disable:next force_try`
+# never protected the line below. Measured on the consumer app: 120/273 production `try!` sites carry
+# that waiver -> 120 false positives, each telling the model to strip a waiver CLAUDE.md REQUIRES.
+LINT_CHECK="$_DIR/swift-lint-check.sh"
+LINTDIR="$TMPROOT/lint"; mkdir -p "$LINTDIR/nobin"
+printf 'import Foundation\nstruct A {\n    // swiftlint:disable:next force_try\n    private static let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Waived.swift"
+printf 'import Foundation\nstruct B {\n    private static let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Unwaived.swift"
+printf 'import Foundation\nstruct C {\n    // swiftlint:disable:next force_cast\n    let x = y as! String\n}\n' > "$LINTDIR/WaivedCast.swift"
+
+# Force the fallback: an empty PATH dir hides swiftlint/swiftc (mirrors the Linux runner).
+lint_run() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/nobin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run "$LINTDIR/Waived.swift")"
+assert_not_contains "lint fallback: swiftlint:disable:next force_try -> NOT flagged" "$OUT" "try!"
+OUT="$(lint_run "$LINTDIR/WaivedCast.swift")"
+assert_not_contains "lint fallback: swiftlint:disable:next force_cast -> NOT flagged" "$OUT" "as!"
+# ...but a genuinely UNWAIVED force-try must STILL block — the fix must not disable detection.
+OUT="$(lint_run "$LINTDIR/Unwaived.swift")"
+assert_contains "lint fallback: unwaived try! -> still BLOCKS" "$OUT" "try!"
+# Kill switch: this was the only hook that emitted decision:block with no way to turn it off.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | UNLEASHED_LINT_CHECK=off bash "$LINT_CHECK" 2>/dev/null)"
+assert_empty "lint: UNLEASHED_LINT_CHECK=off -> silent" "$OUT"
+# Non-Swift files are ignored entirely.
+printf 'x' > "$LINTDIR/notes.md"
+OUT="$(lint_run "$LINTDIR/notes.md")"
+assert_empty "lint: non-.swift file -> no output" "$OUT"
+
 echo ""
 echo "hook tests: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

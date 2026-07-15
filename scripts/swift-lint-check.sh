@@ -12,6 +12,11 @@
 # COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
 # CLAUDE_TOOL_ARG_* fallback) and a per-kind lint marker is written for the Stop-gate.
 
+# Kill switch (COREDEV-2494) — this was the ONE hook without one, despite emitting `decision:block`
+# and arming the Stop gate. Every other hook here honours a `UNLEASHED_*` off switch; a blocking hook
+# with no escape is exactly the thing a user needs to be able to turn off.
+[ "${UNLEASHED_LINT_CHECK:-on}" = "off" ] && exit 0
+
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/hook-io.sh
 [ -f "$_DIR/lib/hook-io.sh" ] && . "$_DIR/lib/hook-io.sh"
@@ -63,7 +68,9 @@ $(printf '%s' "$RESULT" | head -10)"
 fi
 
 # --- 2. SwiftLint check (if available) ---
+SWIFTLINT_RAN=0
 if command -v swiftlint &> /dev/null; then
+    SWIFTLINT_RAN=1
     # COREDEV-2486 (audit hooks-scripts.1): `--path` was deprecated in SwiftLint 0.48 and REMOVED
     # in 0.56 (current is 0.65). Use the positional form; capturing the exit code lets a future CLI
     # break surface as an advisory instead of silently disabling the stage.
@@ -92,22 +99,46 @@ $(printf '%s' "$LINT_OUTPUT" | head -3)"
     fi
 fi
 
-# --- 3. try! in production code (BLOCKS) ---
-# grep -n prefixes "NN:", so filter comments on the POST-linenumber text (the old
-# `grep -v '^\s*//'` could never match a numbered line). Use POSIX classes (BSD/GNU-safe).
-if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
-    TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//')
+# --- 3 & 4. try! / as! greps: FALLBACK ONLY, when SwiftLint did not run (COREDEV-2494).
+#
+# These greps cannot see `// swiftlint:disable:next force_try` — they filter only lines that are
+# THEMSELVES comments, so a directive on line N never protects line N+1. Measured against the consumer
+# app: 120 of 273 production `try!` sites carry that exact waiver, so the greps produced 120 FALSE
+# POSITIVES and told the model "❌ Found 'try!' in production code" for code the project's own CLAUDE.md
+# REQUIRES to be waived (the regex-migration epic — piecemeal NSRegularExpression conversion risks
+# Sendable regressions). The hook then poisons a `lint=fail` marker that blocks Stop.
+#
+# When swiftlint ran (stage 2) it is authoritative: it honours the directives, and BOTH rules are
+# default-error rules (`force_try` / `force_cast`), so a genuinely UNWAIVED site still surfaces as
+# `: error:` and stage 2 already blocks on it. Detection is preserved; the false-positive class is not.
+if [ "$SWIFTLINT_RAN" -eq 0 ] && [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
+    # No toolchain: keep a coarse net, but honour an explicit waiver on the preceding line so the
+    # fallback cannot demand a policy-violating edit either. -A1 pairs directive->site.
+    TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+        | while IFS= read -r hit; do
+            n="${hit%%:*}"
+            prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
+            # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
+            # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
+            if [ "${prev#*swiftlint:disable}" = "$prev" ]; then printf '%s\n' "$hit"; fi
+        done)
     if [ -n "$TRY_BANG" ]; then
-        add_block "❌ Found 'try!' in production code — $FILE_PATH:
+        add_block "❌ Found 'try!' in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
 $TRY_BANG"
     fi
-fi
 
-# --- 4. Force cast detection (BLOCKS) ---
-if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
-    FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//')
+    FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+        | while IFS= read -r hit; do
+            n="${hit%%:*}"
+            prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
+            # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
+            # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
+            if [ "${prev#*swiftlint:disable}" = "$prev" ]; then printf '%s\n' "$hit"; fi
+        done)
     if [ -n "$FORCE_CAST" ]; then
-        add_block "❌ Found 'as!' (force cast) in production code — $FILE_PATH:
+        add_block "❌ Found 'as!' (force cast) in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
 $FORCE_CAST"
     fi
 fi

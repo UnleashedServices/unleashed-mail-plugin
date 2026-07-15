@@ -9,9 +9,13 @@ name: plugin-ci
 
 on:
   push:
-    branches: [main]
+    # `alpha` is the integration branch releases are cut from — it MUST be gated. Until COREDEV-2494
+    # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
+    # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
+    # added actionlint — neither ever executed on the branch they were added to.
+    branches: [main, alpha]
   pull_request:
-    branches: [main]
+    branches: [main, alpha]
   workflow_dispatch:
 
 permissions:

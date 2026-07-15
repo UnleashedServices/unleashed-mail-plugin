@@ -33,6 +33,12 @@ Examples
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path> (default /tmp/pty-out.txt).
 """
+# REQUIRED for macOS's stock /usr/bin/python3 (3.9.6): `main()`'s `timeout: float | None` is a PEP-604
+# union evaluated AT IMPORT in a module-level def, so 3.9 raises `TypeError: unsupported operand type(s)
+# for |: 'type' and 'NoneType'` before anything runs — which would take BOTH mandatory review gates down
+# on a stock Mac (this plugin's likeliest host). Matches the 7 other shipped .py files. (COREDEV-2494)
+from __future__ import annotations
+
 import fcntl
 import os
 import pty
