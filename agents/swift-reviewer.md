@@ -141,47 +141,110 @@ reviewers trace the rest and tag findings outside the diff with `scope:
 
 ### Step 2: Launch Specialized Reviewers in Parallel
 
-**If the five reviewers' JSON arrays were already provided to you** (an external
-orchestrator ran them per SKILL.md), skip spawning and go straight to Step 3 — do not
-re-run them. The `Status:` line is part of each reviewer's report, so when you have a reviewer's
-**full output** (prose + JSON) read it and apply the BLOCKED/PARTIAL handling from Step 5.
+**If the five reviewers' FULL HANDOFFS were already provided to you** (an external orchestrator ran
+them per SKILL.md — prose + JSON + a readable `Status:`, per `skills/agent-orchestration/SKILL.md`),
+skip spawning those reviewers and go straight to Step 3. Read each `Status:` yourself and apply the
+BLOCKED/PARTIAL handling from Step 5.
 
-**Reading a captured reviewer's status (COREDEV-2328).** The shipped `SubagentStop` capture path
-(`mcp/review-synthesizer/capture.py`) now persists each reviewer's Output-Contract `Status:` as a
-**sibling `<agent>.status` JSON** beside its `<agent>.json` findings (self-describing `agent` +
-`status` + any BLOCKED/PARTIAL detail fields, PII-redacted). When you work from pre-collected
-captured arrays, read each reviewer's status from the **same round** as its findings:
+> **THE STATUS IS THE ATTRIBUTION (COREDEV-2490).** Skipping the *spawn* is only licensed when someone
+> vouched that the reviewer **ran** — and that vouching is carried by the `Status:`, **never** by the
+> array. **A bare JSON array is NOT a handoff**, whether you read it off disk or it arrived in your
+> prompt: it carries no status, so nobody vouched. Any reviewer you hold only a bare array for is
+> **UNRESOLVED** — put it on the Step-2 roster below and re-dispatch it. The array is evidence of
+> *findings*; only a status is evidence of *completion*. Conflating the two is the bug this fixes.
+
+**Positive attribution: classify every UNRESOLVED reviewer (COREDEV-2490).** A reviewer is
+**RESOLVED** only if you hold its report *with a readable `Status:`* — either the `Agent` tool returned
+it to you in this session, or a caller handed you a full handoff. **Everything else is UNRESOLVED**,
+including a reviewer you hold only a bare array for.
+
+**Name the reviewers you HOLD — the script classifies everyone else.** Type the names literally, in the
+command: they are a positive assertion, and a name you do not type is a reviewer you do not vouch for.
+
+**UNCOMMENT one line per reviewer whose report — WITH a readable `Status:` — you actually hold from this
+session.** The fence below is **empty by default on purpose**: run it verbatim and it classifies all five.
 
 ```bash
-# Read pre-collected reviewer captures' persisted status (COREDEV-2328). CLAUDE_PLUGIN_ROOT is set
-# in the plugin runtime; fall back to the repo-relative path if unset (as the review skills do).
+# UNCOMMENT a line ONLY for a reviewer whose report + readable `Status:` you HOLD from this session.
+# Every line left commented is a reviewer you are NOT vouching for -> it gets classified.
+# Type names literally; do NOT reference a shell variable — every Bash block is a fresh shell, so a
+# name you reasoned out earlier CANNOT survive into this pipeline.
+printf '%s\n' \
+    "" \
+    `#  security-reviewer` \
+    `#  concurrency-reviewer` \
+    `#  ux-perf-reviewer` \
+    `#  accessibility-auditor` \
+    `#  prompt-review` \
+  | bash "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/reviewer-roster.sh"
+ROSTER=$?
+echo "ROSTER=$ROSTER"   # echo it: a shell var cannot survive this block
+# 0 = every reviewer asserted held, nothing to act on · 2 = RATCHET only · 3 = ≥1 UNATTRIBUTED ·
+# 4 = a held name was unknown/duplicated (an INPUT error — treat as uncertainty, never as a pass)
+```
+
+To assert one, replace `` `#  security-reviewer` `` with `security-reviewer`. The script echoes
+`ROSTER-INPUT: held = …`, so the transcript records exactly what you claimed.
+
+> **The DEFAULT must be safe, and it is the one thing a model is most likely to run.** An earlier cut
+> pre-filled all five names and told you to *delete* the ones you don't hold — so executing the fence
+> verbatim asserted all five and exited 0, reinstating the fail-open at the one place most likely to be
+> copied unedited. A ready-made happy path is not a fail-closed default. **Adding an assertion must be a
+> deliberate act; omitting one must cost nothing.**
+
+> **THE POLARITY IS DELIBERATE.** Silence must classify everyone, because a silent exit 0 is
+> indistinguishable from the happy path. An earlier cut of this recipe piped `"${UNRESOLVED[@]}"` — a
+> variable **nothing ever assigned** — so it emitted one blank line and exited 0: the gate silently never
+> fired, and a reviewer whose spawn had failed read as a clean pass, with `reviewer-roster.sh` itself
+> entirely correct. An adversarial pass reproduced exactly that. Only a **positive, in-band assertion**
+> of what you hold may shrink the roster.
+
+It prints one directive per line:
+
+| Line | Meaning | What you do |
+|---|---|---|
+| `RATCHET <agent> BLOCKED <desc>` | a valid BLOCKED sidecar — the **only** on-disk state that is honoured | Step 5's BLOCKED handling: Needs Confirmation quoting `<desc>` → **NEEDS DISCUSSION** |
+| `UNATTRIBUTED <agent> <reason>` | **everything else** — COMPLETE, PARTIAL, absent, corrupt, mismatched, no round dir | **re-dispatch that reviewer once** (Step 5's recovery ladder) and use its fresh report |
+| `REMAINING <agent> <files>` | a persisted PARTIAL's structural scope — **information, never attribution** | preserve it until a fresh report demonstrably covers that scope |
+
+> **THE INVARIANT.** A persisted capture may **RATCHET** a review toward caution. It may **never
+> CERTIFY** completion. Only an in-session reviewer report can produce a clean pass. **A captured `[]`
+> is never a clean pass, and a captured `COMPLETE` never certifies one.** The script never prints
+> `TRUST` — by design, no on-disk artifact earns it.
+>
+> Why: `context_latest_round_dir` selects the highest round holding a reviewer's `.json` and **silently
+> skips rounds where it wrote nothing**, so absence at round N resolves to *presence* at round N-1 — the
+> reader never sees the round the producer failed in. No artifact the producer writes can signal on the
+> path where the producer is failing, so trust cannot live on disk.
+
+**Any other roster outcome is uncertainty, never "nothing to act on":** an exit code other than 0/2/3,
+output that disagrees with the exit code, a malformed line, or a **non-empty** roster that somehow exits
+0 ⇒ treat every reviewer on that roster as the missing-reviewer case → **NEEDS DISCUSSION**.
+
+**Collect candidate findings from captures (they only ever ADD).** Captured arrays are still worth
+reading — they cannot certify, but they can contribute findings:
+
+```bash
 CTX="${CLAUDE_PLUGIN_ROOT:-.}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
 . "$CTX"
 BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"
 for agent in security-reviewer concurrency-reviewer ux-perf-reviewer accessibility-auditor prompt-review; do
-    rd="$(context_latest_round_dir "$BASE" "$agent")"   # highest round holding this agent's findings
-    [ -n "$rd" ] || continue
-    echo "=== $agent ==="
-    [ -f "$rd/$agent.status" ] && cat "$rd/$agent.status" 2>/dev/null   # status FIRST (read status first)
-    cat "$rd/$agent.json" 2>/dev/null                                   # then the findings array (same round)
+    rd="$(context_latest_round_dir "$BASE" "$agent")"
+    if [ -z "$rd" ]; then echo "=== $agent: NO CAPTURE (unresolved) ==="; continue; fi
+    echo "=== $agent (candidate findings — NOT a completion signal) ==="
+    cat "$rd/$agent.json" 2>/dev/null
 done
 ```
 
-**Trust a `<agent>.status` only when it validates** — it parses as JSON **and** its `agent` equals
-the reviewer **and** its `status` is one of `COMPLETE | BLOCKED | PARTIAL`. Then:
+Note it **announces** a missing capture rather than skipping it — the old loop's `[ -n "$rd" ] || continue`
+silently swallowed a wholly-missing reviewer, so the gap never reached the gate.
 
-- **status present** → apply Step 5's handling: `BLOCKED` → a **Needs Confirmation** item (quote its
-  `blockerDescription`) → **NEEDS DISCUSSION**; `PARTIAL` → keep the findings + a non-gating
-  `verification` **warning** naming its `remaining`; `COMPLETE` → the JSON array is authoritative.
-- **status absent / unparseable / mismatched** (a capture written before COREDEV-2328, a reviewer
-  whose message had no recognizable `Status:` trailer, or a corrupt sidecar) → **do not fail
-  closed**: take the findings at face value (an empty `[]` is the reviewer's clean result; a
-  non-empty array is its findings), exactly as before Item 12.
-
-Item 12's stronger guarantee — that a `BLOCKED` reviewer can't masquerade as a clean `[]` — now
-holds on the capture path too **whenever a recognizable status was persisted**; for a status-less or
-unrecognizable captured array it degrades to the pre-Item-12 behaviour, **never worse** (a
-merely-absent sidecar never forces a false fail-closed).
+**MERGE, never replace — within this review.** When you re-dispatch an UNATTRIBUTED reviewer, its fresh
+report supplies the **status**; it does **not** supplant the captured findings. Retain every schema-valid
+captured finding and union it with the fresh array (normal dedup applies): a fresh `COMPLETE` + `[]` from
+a reviewer that missed what the capture caught must not erase it from this review's output. *Across*
+reviews the newest round supersedes — that is what rounds are for, and unioning across rounds would
+resurrect findings that were legitimately fixed.
 
 Otherwise spawn **all five** review agents simultaneously using the
 `Agent` tool, plus `jira-manager` to log the review. Pass each agent the list of
@@ -355,6 +418,10 @@ Collect the JSON findings arrays from all five specialist agents, plus the `pari
 `test-coverage`, and `verification` rows you produced in Steps 3–4. Work from the
 **JSON arrays, not the prose reports** — that keeps synthesis compact (avoids
 re-ingesting five long reports) and is the source of truth for dedup and the verdict.
+**But the arrays are the source of truth for FINDINGS only — never for whether the reviewer RAN**
+(COREDEV-2490). That is the `Status:`/roster's job, and it is decided before you get here. Reading a
+reviewer's array rather than its prose does **not** make it attributed; holding *only* an array does
+**not** make it a completed review.
 Combine everything into one coherent review with a single verdict.
 
 #### Structured Findings contract
@@ -390,7 +457,12 @@ or indentation for code. An array **missing required fields** (`severity`,
 only slightly off (a stray newline, trailing comma, or a field you can infer from the
 reviewer's prose), **repair it yourself** from the report you already have — don't
 discard real findings over a syntax slip. Only when you genuinely cannot recover the
-findings, **re-run that reviewer** with an explicit "emit one valid JSON array, nothing
+findings, **re-run that reviewer** — **consulting the SAME per-review dispatch ledger as the roster's
+re-dispatch: at most ONE spawn per reviewer per review, whichever path asks for it** (COREDEV-2490;
+without this, an attribution retry that returns a readable status but malformed JSON would license a
+second spawn and quietly break the "one re-dispatch each" bound). If that reviewer's single retry is
+already spent, do NOT spawn again: treat it as the missing-reviewer case → Needs Confirmation → NEEDS
+DISCUSSION. Re-run with an explicit "emit one valid JSON array, nothing
 else" instruction — the `Agent` tool spawns a *fresh* subagent (there is no live
 session to "ask again"), so the choice is re-run or self-repair, never a follow-up
 message. If it still can't be recovered, or the reviewer never returned, **fail

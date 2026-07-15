@@ -1,7 +1,100 @@
 # COREDEV-2490 — the capture fail-open: Positive-Attribution Roster Gate
 
-**Status:** DRAFT v5 — R5 gate. No code until both APPROVE / APPROVE_WITH_NOTES.
+**Status:** v9 — APPROVED at R10 (`GATE OK — APPROVE [gemini=APPROVE, codex=APPROVE]`), then AMENDED by
+the mandated adversarial pass, which found a real fail-open in the INVOCATION. Re-gated at R11.
 **Epic:** COREDEV-2485 · **Bug:** COREDEV-2490 · Branch off the audit stack tip.
+
+## Adversarial pass (post-approval, MANDATED by this plan) — it found a real fail-open
+
+The plan requires an adversarial pass and says a hole would be *"a design break, not a tuning miss"*.
+It found one — **not in the script, in the INVOCATION**, and it is the reason this section exists:
+
+**`UNRESOLVED` was never assigned.** The consumer recipe piped `"${UNRESOLVED[@]}"` to the roster, but
+that variable had **five prose mentions, one use, and zero assignments** — and `swift-reviewer.md`
+itself documents why it never could have one: *"a shell var cannot survive this block"*, so a name the
+model reasons out cannot reach a later Bash block. An unset array still emits **one blank line**, the
+loop skips it, and the script **exits 0** — byte-identical to the documented happy path. Reproduced: a
+reviewer whose spawn silently failed read as a **clean pass**, with `reviewer-roster.sh` entirely
+correct. The same slip via `argv` (`roster.sh <name> </dev/null`) did the same thing.
+
+**Fix — invert the polarity, and make the RECIPE's default safe too.** stdin now carries the reviewers
+the orchestrator **HOLDS**; the script classifies the **complement**. The shipped fence is **empty by
+default** — every reviewer name is commented out, so **executing it verbatim classifies all five** and
+only deliberate uncommenting shrinks the roster. (R11, codex: the first cut of the fence pre-filled all
+five and said "delete the ones you don't hold" — which reinstated the fail-open at the one place a model
+is likeliest to copy unedited. *A ready-made happy path is not a fail-closed default.* This defect has
+now moved up a level four times — prose, then a stray sentence, then an unassigned variable, then the
+recipe's default — which is itself the finding: **the default is the control.**) Silence therefore classifies **all five** and fails CLOSED; only a
+**positive, in-band assertion** can shrink the roster. A held name that is unknown or duplicated is
+**exit 4** (an input error routed to the same uncertainty branch), so a typo cannot silently resolve a
+reviewer; the consumed list is echoed as `ROSTER-INPUT: held = …` for the transcript. Both invocation
+slips are now dead: the unset-variable case AND the argv case classify everyone.
+
+*The design is named **positive attribution**; it took an adversarial pass to notice the principle was
+not applied to its own invocation. The default was "everything is fine" — the exact bug class this
+ticket exists to kill.*
+
+**What the pass could NOT break** (real signal, executed not asserted): *"The core invariant is
+genuinely sound — I could not construct ANY filesystem state that certifies. Everything degrades to
+UNATTRIBUTED + exit 3."* All five earlier fixes re-verified closed. Two further findings were confirmed
+as **safe-direction only**: a >5-digit round dir is invisible to the reader (`context.sh:129` caps at 5
+digits while `capture.py` does not) and an `agent_id`-less capture can be skipped — both lose a RATCHET,
+neither can certify, **because COMPLETE never certifies**. That rule is load-bearing, not
+belt-and-braces. Also hardened: `_printable` now applies to `RATCHET`'s description and `REMAINING`'s
+payload — the only transcript-derived (prompt-injectable) fields, previously emitted raw.
+
+## R5 — three fixes accepted; one blocker ACCEPTED AS FACT but its proposed FIX REJECTED
+
+gemini confirmed 3 of 4 R4 blockers closed ("the design is robust against the LLM misassembling the
+roster"; "the cost pricing is finally honest"). Four items remained. v6 answers all four.
+
+### R5-1 (codex, BLOCKER): cross-review erasure — **fact accepted, fix rejected, claim narrowed**
+
+Codex is right about the mechanism, and **I reproduced it independently** rather than take it on trust:
+round-1 holds a schema-valid finding F → the roster re-dispatches (new `agent_id`) → `select_round`
+(`capture.py:234`) sees `is_final_capture(round-1)` and returns **round-2** → the hook writes `[]` there →
+the next review's `context_latest_round_dir` selects round-2 → **F is gone from disk**. Verified with a
+real finding lifted from `samples/security-reviewer.json` (my first attempt used a hand-written finding
+that was **not** schema-valid, so `select_round` never advanced and the test proved nothing — worth
+recording, because it is exactly how this reproduction gets faked).
+
+**But its proposed fix — "union applicable captured findings across rounds" — is WRONG and v6 rejects
+it.** Rounds exist *to supersede*: round N+1 is a re-review of possibly-**fixed** code. Unioning across
+rounds resurrects every finding that was legitimately fixed, **forever** — permanent false positives in
+the exact bucket humans learn to ignore. That is worse than the bug.
+
+**The severity is also lower than stated, and this is checkable rather than rhetorical.** Codex wrote
+that after erasure "another fresh COMPLETE + `[]` can then produce a clean pass". Walk it under v6's own
+invariant:
+
+| | v6 | today (no roster) |
+|---|---|---|
+| Review B reads round-2 `[]` + `COMPLETE` | **does not certify** → UNATTRIBUTED → **re-dispatch** → a fresh, attributed, in-session report decides | **face value → CLEAN PASS**, no re-dispatch |
+
+So the erasure costs **corroboration, not safety** — nothing on disk ever certifies, so no false clean
+follows from it — and on this precise vector **v6 is strictly better than the status quo**. The clean
+pass codex describes is a *fresh reviewer's actual opinion*, which is the system working; the alternative
+is a design where a finding can never be fixed.
+
+**Therefore v6 narrows the claim instead of the mechanism** (the honest half of codex's note): *captures
+add findings within the review that reads them; across reviews the newest round supersedes.* The
+unqualified "they never subtract" is deleted — it was never true and could not be made true without
+resurrecting fixed findings. Cross-review retention is out of scope and tracked separately.
+
+### R5-2 (gemini, precise): the roster must FORWARD PARTIAL's `remaining`
+*"It cannot preserve safety metadata it never sees."* Correct: v5 told the consumer to preserve a
+persisted PARTIAL's structural `remaining`, while the roster printed only a reason and the rewrite of
+`:148-184` removed the `.status` read. v6 makes the roster the **single sidecar reader** and has it
+forward the payload (below).
+
+### R5-3 (codex): "no documented contract is reversed" was OVERCLAIMED — mine
+v6 **does** reverse the **consumer's** face-value contract at `AGENT_CONTRACTS.md:205`. That is the
+entire point of the ticket. The accurate, narrower claim: **no PRODUCER/capture contract is reversed** —
+`capture.py`'s "Observe-only, fail-open" stays literally true and is now *relied upon*.
+
+### R5-4 (codex): the one-retry ledger conflicted with surviving recovery prose
+`swift-reviewer.md:389` still commands another fresh run for unrecoverable findings, which licenses a
+second retry. v6 rewrites `:389` to consult the **same** per-review ledger (below).
 
 ## R4 (both `REQUEST_CHANGES`) — the SPINE survived; the SPECIFICATION did not
 
@@ -104,6 +197,24 @@ NOT hold.** Empty stdin (the normal path) ⇒ exit 0, no output. Names not in `V
 
 `<reason>` ∈ `complete-does-not-certify` · `partial-does-not-certify` · `no-sidecar` · `corrupt-sidecar` ·
 `agent-mismatch` · `unknown-status` · `no-round-dir` · `unreadable`.
+
+**The roster is the SINGLE reader of `<agent>.status` (R5-2).** Nothing else parses a sidecar, so
+"trust the sidecar" prose cannot creep back into an agent file. Because it is the only reader, it must
+**forward** any safety payload it finds, or that payload is unreachable — *"it cannot preserve safety
+metadata it never sees."* So a PARTIAL emits its structural scope alongside the directive:
+
+```
+UNATTRIBUTED accessibility-auditor partial-does-not-certify
+REMAINING    accessibility-auditor Compose/HTMLWebViewEditor.swift Compose/NativeRichTextEditor.swift
+```
+A `REMAINING` line is emitted **only** for a parsed PARTIAL whose `remaining` is a non-empty **string**
+(the producer persists every status field as a capped string — `capture.py:362`
+`cap(redact_pii(field[1]), STATUS_FIELD_CAP)`; it is **never** a list, and a non-string value is
+malformed input that is dropped rather than coerced). It is always
+paired with that agent's `UNATTRIBUTED` line, and never changes the exit code. It is *information for the
+consumer to preserve*, never an attribution. The same applies to `RATCHET`'s `<blockerDescription>` —
+already forwarded, same reason. (PII-redaction and the field cap are the writer's job and already
+applied; the roster forwards bytes verbatim.)
 Exit: `0` nothing to act on · `2` ratchet only · `3` ≥1 UNATTRIBUTED (dominates).
 **The script never prints `TRUST`. By design no on-disk artifact earns it.**
 
@@ -124,7 +235,7 @@ UNATTRIBUTED is **work, not an alert**.
 > BLOCKED gates". A held PARTIAL is *normally* a non-gating warning, but **structural remaining scope
 > escalates it to NEEDS DISCUSSION** (`swift-reviewer.md:423-430`). That does not change the ratchet
 > decision — a persisted PARTIAL still cannot certify, so it is still UNATTRIBUTED — but it **does** mean
-> a persisted PARTIAL carries real safety payload (its findings + its `remaining` list). Hence the
+> a persisted PARTIAL carries real safety payload (its findings + its `remaining` **string**). Hence the
 > retain-and-merge rule above: we discard PARTIAL's **attribution**, never its **information**.
 
 `context_latest_round_dir` is reused **as-is** — no freshness heuristic, no mtime, no "reject rounds older
@@ -139,14 +250,26 @@ not detected**.
   **in-session**: that IS the held report. Roster ⇒ **empty stdin ⇒ exit 0 ⇒ zero re-dispatch, zero
   added cost.** Reading the array rather than the prose for synthesis (`:354-357`) does **not** make it
   unattributed — the report was returned to this agent, in this session.
-- **Path B — arrays "already provided to you" (`:143-147`), an external orchestrator having run them.**
-  Attribution is **transitive from the caller**: arrays handed to swift-reviewer **in its prompt** are
-  attributed (a caller vouches). What is **NOT** attributed is anything swift-reviewer **scavenges off
-  disk itself** — that is precisely today's fail-open, and it is what the roster governs.
+- **Path B — "already provided to you" (`:143-147`), an external orchestrator having run them.**
+  Attribution is **transitive from the caller — but ONLY when the caller hands over a FULL HANDOFF**:
+  the reviewer's report **including a readable `Status:`**, per the handoff contract at
+  `agent-orchestration/SKILL.md:205` (prose + array + status). **A bare array is NOT a handoff**, no
+  matter who supplied it: it carries no status, so nobody has vouched that the reviewer *ran*.
+  Prompt-supplied bare arrays are **UNRESOLVED** and go on the roster.
 
-> **Attribution is about who vouches, never about where bytes came from.** In-session `Agent` result →
-> swift-reviewer vouches. Arrays supplied in-prompt → the caller vouches. Bytes swift-reviewer reads off
-> disk with nobody vouching → **UNATTRIBUTED**.
+> **Attribution is about who vouches THAT THE REVIEWER RAN — and the vouching is carried by the
+> `Status:`, never by the array.** In-session `Agent` result → swift-reviewer vouches. A caller-supplied
+> **full handoff with a readable status** → the caller vouches. A bare array — from disk **or from the
+> prompt** — → **UNATTRIBUTED**. The array is evidence of *findings*; only a status is evidence of
+> *completion*. Conflating the two is the entire bug.
+
+> **R6 correction (codex, BLOCKER — and it was my own contradiction).** v5/v6-draft said "arrays handed
+> to swift-reviewer in its prompt are attributed" while *also* saying "a bare JSON array is NOT a held
+> report". Codex's vector needs no misbehaviour, only that contradiction: `security-reviewer` returns
+> `BLOCKED` + `[]`; the external orchestrator passes only the five arrays; swift-reviewer follows
+> "caller vouches", builds an **empty roster**, re-dispatches nothing, and reads five empty arrays as
+> **clean**. The R4 contradictory-prose defect had survived in a new form, one level up. Resolved by the
+> rule above: **the status is the attribution.** Nothing else is.
 
 - **(a) REWRITE, do not merely delete (R4 blocker 1).**
   - **`:148-184`** — delete the face-value rule (`:176-184`), the "trust a `<agent>.status` only when it
@@ -156,7 +279,8 @@ not detected**.
     certify"* and must stop silently swallowing a wholly-missing reviewer via `[ -n "$rd" ] || continue`
     (`:163`) — a missing round dir now goes **on the roster**.
   - **`:144-147`** — *"skip spawning … do not re-run them"* is rewritten: skipping the **spawn** is fine
-    when a caller vouches for the arrays; it is **not** licence to treat scavenged disk arrays as a
+    when the caller supplied a **full handoff including a readable `Status:`**; it is **not** licence to
+    treat bare arrays — scavenged from disk **or handed over in the prompt** — as a
     completed review. An unattributed reviewer **is** re-dispatched, and this rule **supersedes** the
     do-not-re-run text.
   - **`:354-357`** — *"Work from the JSON arrays, not the prose reports … source of truth"* is rewritten:
@@ -177,19 +301,29 @@ not detected**.
     **NEEDS DISCUSSION**.
   - `UNATTRIBUTED` → **re-dispatch that one reviewer** via the `Agent` tool (Step 5's existing recovery
     ladder, `:392-402`). **At most one re-dispatch per reviewer per review** — keep a per-review dispatch
-    ledger so the bound is auditable, not merely asserted. Still no readable report → missing-reviewer
-    uncertainty → Needs Confirmation → **NEEDS DISCUSSION**. **Not** `category: verification` (that
-    family is reserved for checks the orchestrator itself ran).
-  - **MERGE, never replace (R4 blocker 2 — v4 violated its own invariant here).** The fresh report
-    supplies the **status** (the attribution). It does **NOT** supplant the captured findings: **retain
-    every schema-valid captured finding and union it with the fresh report's array** (existing dedup
-    applies). A fresh `COMPLETE` + `[]` from a reviewer that missed what the capture caught must **not**
-    erase it. Likewise a persisted **PARTIAL**'s findings *and* its structural `remaining` metadata are
-    **preserved** until a fresh report demonstrably covers that scope — because a held PARTIAL with
-    structural remaining **does** escalate to NEEDS DISCUSSION (`:423-430`), so that metadata is safety
-    information, not bookkeeping.
-    *This is the invariant's other half, and v4 broke it: captures **add** findings or **add** caution.
-    They never subtract either — including when a re-dispatch disagrees with them.*
+    ledger (reviewer → count) and **name each spawn in the report**, so the bound is auditable rather
+    than asserted. Still no readable report → missing-reviewer uncertainty → Needs Confirmation →
+    **NEEDS DISCUSSION**. **Not** `category: verification` (that family is reserved for checks the
+    orchestrator itself ran).
+  - **`:389` must consult the SAME ledger (R5-4).** Step 5's existing recovery paragraph independently
+    commands another fresh run for unrecoverable findings — so an attribution retry that returns a
+    readable status but malformed JSON currently licenses a **second** spawn, disproving "one
+    re-dispatch each". Rewrite `:389` to check the ledger first: **one spawn per reviewer per review,
+    whichever path asks for it.** (Bounded, not recursive either way — the capture hook is telemetry and
+    never dispatches, `hooks/hooks.json:133-139` — but the bound must be true as written.)
+  - **MERGE, never replace — WITHIN THIS REVIEW (R4 blocker 2; scope corrected at R5-1).** The fresh
+    report supplies the **status** (the attribution). It does **NOT** supplant the captured findings:
+    **retain every schema-valid captured finding and union it with the fresh report's array** (existing
+    dedup applies). A fresh `COMPLETE` + `[]` from a reviewer that missed what the capture caught must
+    **not** erase it *from this review's output*. Likewise a persisted **PARTIAL**'s findings *and* the
+    `REMAINING` scope the roster forwarded are preserved until a fresh report demonstrably covers that
+    scope — a held PARTIAL with structural remaining **does** escalate to NEEDS DISCUSSION (`:423-430`),
+    so that metadata is safety information, not bookkeeping.
+    > **Scope, stated exactly (R5-1).** The claim is: *captures add findings **within the review that
+    > reads them**.* It is **NOT** "captures never subtract, ever". Across reviews the newest round
+    > **supersedes** — that is what rounds are *for*, and unioning across rounds would resurrect every
+    > finding that was legitimately **fixed** between rounds, forever. The unqualified v5 wording was
+    > false; this is the true, narrower claim, and the difference is load-bearing rather than cosmetic.
   - **New fourth bullet** closing the gap left by deleting `:176-184`: *"No readable `Status:` in a report
     you hold → re-dispatch once, then treat as the missing-reviewer case → NEEDS DISCUSSION. Never face
     value."*
@@ -218,8 +352,17 @@ One comment amendment at `:261-266` so producer and consumer docs cannot drift. 
 *"Observe-only, fail-open"* stays **literally true — we now rely on it** — and gains: *"— and the consumer
 only ever ratchets on it: a BLOCKED sidecar is honored; nothing on disk certifies (COREDEV-2490)."*
 `_write_status`'s *"NEVER raises so it can't flip `capture()`'s already-successful written result"*
-remains true and load-bearing. **No documented contract is reversed** — the exact opposite of v3, which
-reversed two.
+remains true and load-bearing.
+
+> **Precisely which contracts move (R5-3 — v5 overclaimed here, and it was my error).**
+> - **PRODUCER / capture contract: NOT reversed.** `capture.py`'s "Observe-only, fail-open" stays
+>   literally true and is now *relied upon* — a best-effort write that silently fails is exactly what
+>   this design expects and tolerates. Zero functional Python change. v3 reversed this; v6 does not.
+> - **CONSUMER contract: DELIBERATELY reversed.** `AGENT_CONTRACTS.md:205`'s *"an absent/corrupt/
+>   unrecognized sidecar degrades to face value (never a false fail-closed)"* is **the bug**, and
+>   reversing it is the entire point of this ticket. Saying "no documented contract is reversed" was
+>   simply false. It is amended in the same commit so the docs never describe a control the code no
+>   longer implements — the exact defect class COREDEV-2493 just fixed.
 
 ## Back-compat: the split is DELETED, not implemented
 
@@ -233,7 +376,12 @@ cannot answer.**
 
 - **Path A (the common case): zero.** All five reports held in-session ⇒ empty roster ⇒ exit 0 ⇒ no
   re-dispatch. This is the alert-fatigue defence and it is asserted as a test.
-- **Path B with a vouching caller: zero.** Arrays supplied in-prompt are attributed.
+- **Path B with a vouching caller: zero — but ONLY for a FULL HANDOFF.** A caller-supplied report
+  **with a readable `Status:`** is attributed (the caller vouches that the reviewer ran). **Bare
+  prompt-supplied arrays are UNATTRIBUTED** and cost one re-dispatch each — they carry no status, so
+  nobody vouched. *(This sentence previously read "arrays supplied in-prompt are attributed", which was
+  the exact losing rule the rest of v7 reverses — codex caught it surviving here at R7. The status is
+  the attribution; the array never is.)*
 - **Scavenged-from-disk reviewers: one re-dispatch each, every review.** v4 called this "self-clearing";
   **it is not.** A freshly captured COMPLETE stays UNATTRIBUTED **by design**, so the next review that
   scavenges instead of holding a report pays again. That is the deliberate price of the invariant: disk
@@ -276,10 +424,31 @@ cannot answer.**
   **never** a clean pass — including the reproduced unwritable-dir case.
 - **Noise:** the normal path (all five reports held) ⇒ empty stdin ⇒ exit 0, **zero re-dispatches**. This
   is the alert-fatigue defence and must be asserted.
+- **`REMAINING` forwarding (R5-2):** a parsed PARTIAL with a non-empty `remaining` **string** emits a
+  `REMAINING` line
+  paired with its `UNATTRIBUTED` line and does not change the exit code; a PARTIAL **without** one emits
+  no `REMAINING`; a corrupt sidecar emits neither.
+- **Workflow-level vectors (R5-5 — shell tests cannot prove a MODEL decided correctly):**
+  1. **Caller-supplied BARE arrays ⇒ UNRESOLVED ⇒ re-dispatch** (assertion REVERSED at R6 — the v6-draft
+     asserted the opposite and that assertion *was* the bug). Codex's exact vector: a `BLOCKED`
+     reviewer's `[]` among five prompt-supplied bare arrays must **NOT** produce a clean pass. A
+     caller-supplied **full handoff with a readable `Status:`** ⇒ attributed ⇒ **zero** re-dispatch.
+     The distinguishing input is the **status**, not the array. Also assert the rewritten
+     `:144-147`/`:354-357` never license "scavenged disk arrays = a completed review".
+  2. **Retain-and-merge**, in-review: a captured non-empty finding + a fresh `COMPLETE`+`[]` ⇒ the
+     captured finding **survives in this review's output**.
+  3. **The shared retry ledger:** an attribution retry returning readable status + malformed JSON must
+     **not** trigger a second spawn via `:389`.
+  4. **Cross-review supersession is EXPECTED, not a bug** (R5-1): after a re-dispatch advances the round,
+     the next review reads `[]`+`COMPLETE` ⇒ **UNATTRIBUTED ⇒ re-dispatch**, never a clean pass. Assert
+     the *outcome* (no false clean), and assert that we do **not** union across rounds — a finding fixed
+     between rounds must **not** resurface.
 - **Adversarial verification** (Workflow, ≥2 attackers, the pattern that caught real holes in #38/#39 and
-  killed v1–v3): (i) any filesystem/timing state where a BLOCKED-or-unknown reviewer still reads clean —
-  now a *design* break, not a tuning miss; (ii) any state causing an unbounded re-dispatch loop.
-- Full MCP suite + scripts suite + `shellcheck` green; `bash -n` under **bash 3.2** for the new script.
+  killed v1–v4): (i) any filesystem/timing state where a BLOCKED-or-unknown reviewer still reads clean —
+  now a *design* break, not a tuning miss; (ii) any state causing an unbounded or double re-dispatch;
+  (iii) any way `REMAINING`/`blockerDescription` forwarding can be turned into an attribution.
+- Full MCP suite + scripts suite + `shellcheck` green; `bash -n` under **bash 3.2** for the new script
+  (`case`-in-`$( )` is a live trap here — it bit COREDEV-2492 *and* COREDEV-2494 today).
 
 ## Risk
 **LOW-MEDIUM**, and materially lower than v1–v3. Zero producer/Python behaviour change; ~80 lines of new
