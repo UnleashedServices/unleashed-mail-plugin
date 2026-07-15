@@ -559,6 +559,48 @@ class TestStatusSidecar(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(rd, "security-reviewer.json")))
             self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
 
+    def test_no_fence_blocked_persists_empty_findings_and_status(self):
+        # A BLOCKED reviewer that emits its Output-Contract Status but NO ```json fence must still
+        # persist an empty findings capture + the .status sidecar, so it reads as BLOCKED — never as
+        # a clean absent reviewer (COREDEV-2328 / Item 17).
+        with tempfile.TemporaryDirectory() as root:
+            msg = "could not complete the review\n\nStatus: BLOCKED\nBlocker Description: x\n"
+            self.assertEqual(self._cap(root, msg), "status-only")
+            rd = self._round1(root)
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.json")), [])
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.status"))["status"], "BLOCKED")
+
+    def test_no_fence_partial_persists_status(self):
+        with tempfile.TemporaryDirectory() as root:
+            msg = "reviewed part of the diff\n\nStatus: PARTIAL\nRemaining: A.swift\n"
+            self.assertEqual(self._cap(root, msg), "status-only")
+            rd = self._round1(root)
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.status"))["status"], "PARTIAL")
+
+    def test_no_fence_complete_writes_nothing(self):
+        # A COMPLETE with no findings fence is malformed — do NOT fabricate a clean-looking [] capture;
+        # leave it absent so swift-reviewer's missing-reviewer path handles it (fail closed).
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, "all good\n\nStatus: COMPLETE\n"), "no-fence")
+            rd = self._round1(root)
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.json")))
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
+
+    def test_no_fence_no_status_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, "just prose, no fence, no status line"), "no-fence")
+            rd = self._round1(root)
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.json")))
+
+    def test_no_fence_blocked_does_not_clobber_real_findings(self):
+        # A real findings capture must survive a later no-fence BLOCKED rerun (never downgraded to []).
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, fenced([raw()]), agent_id="id1"), "written")
+            rd = self._round1(root)
+            self.assertEqual(len(self._json(os.path.join(rd, "security-reviewer.json"))), 1)
+            self._cap(root, "prose\n\nStatus: BLOCKED\nBlocker Description: y\n", agent_id="id2")
+            self.assertEqual(len(self._json(os.path.join(rd, "security-reviewer.json"))), 1)
+
     def test_stale_status_cleared_on_statusless_overwrite(self):
         with tempfile.TemporaryDirectory() as root:
             self._cap(root, status_msg("Status: BLOCKED\nBlocker Description: x", []), agent_id="id1")

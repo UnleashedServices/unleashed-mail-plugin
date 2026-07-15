@@ -105,5 +105,13 @@ class TestParseFinding(unittest.TestCase):
             self.assertIn(fam, DISPLAY_BUCKET, f"{cat} → family {fam} has no display bucket")
 
 
+class TestNoDeadStrictToolForm(unittest.TestCase):
+    def test_report_finding_tool_removed(self):
+        # The strict-tool `REPORT_FINDING_TOOL` form was dead (its only consumer, a `reviewers.py`
+        # API-tool-call path, never existed). Removed in Item 17 — guard against re-introduction.
+        import schema
+        self.assertFalse(hasattr(schema, "REPORT_FINDING_TOOL"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
 
-from schema import parse_finding  # noqa: E402
+from schema import canonical_path, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
@@ -119,6 +119,19 @@ def _call_synthesize(arguments: dict) -> dict:
         # Fail CLOSED: a string/None would set()-coerce to characters/empty and
         # silently push every real finding to pre-existing -> a provisional APPROVE.
         raise _RpcError(-32602, "changed_files must be an array of strings")
+    # Fail CLOSED on an EFFECTIVELY-empty changeset carrying findings. `changed_files: []` — or a
+    # list whose entries all canonicalize to "" (`[""]`, `["   "]`, `["./"]`) — scopes EVERY finding
+    # to pre-existing (nothing is in-scope), so the synthesizer would return a provisional APPROVE
+    # while blockers exist. Canonicalize with the SAME function synthesize() scopes against so the
+    # two sides agree: a plain `not changed_files` list-truthiness check let `[""]`/`["./"]` slip a
+    # real blocker straight to APPROVE (adversarial verify, Item 17). An empty changeset legitimately
+    # has nothing to review and therefore no findings; a genuinely clean review sends findings: [].
+    if findings_in and not {p for p in (canonical_path(c) for c in changed_files) if p}:
+        raise _RpcError(
+            -32602,
+            "changed_files is empty (or all-blank/'.'-only) but findings were provided; refusing "
+            "to synthesize (every finding would mis-scope to pre-existing and yield a bogus APPROVE)",
+        )
     findings, quarantined = [], []
     for d in findings_in:
         try:

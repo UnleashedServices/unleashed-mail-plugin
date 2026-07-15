@@ -13,7 +13,21 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **Review-synthesizer fail-open hardening** (COREDEV-2489 / Item 17, R5-gated):
+  - `synthesize_review` now **fails closed** on non-empty `findings` with an empty
+    `changed_files: []` (it would otherwise scope every finding to pre-existing and return a
+    bogus provisional APPROVE). A genuinely clean review still sends `findings: []`.
+  - A **BLOCKED/PARTIAL reviewer with no `json` fence** now persists an empty findings capture +
+    its `.status` sidecar (`capture.py`), so a can't-review reviewer reads as BLOCKED, never as a
+    clean/absent reviewer (COREDEV-2328). COMPLETE-with-no-fence and no-status messages still write
+    nothing, and a real findings capture is never clobbered to `[]`.
+
 ### Added
+- **`.env.example`** (COREDEV-2489 / Item 17): placeholders-only template documenting the one real
+  plugin key (`GCP_PROJECT_ID`, used by `gmail-api-integration`) plus a note that `gemini-review`
+  uses its own CLI OAuth. `.gitignore` gains `!.env.example` (the `.env.*` rule was ignoring it —
+  real `.env`/`.env.*` stay ignored).
 - **CI now runs the authoritative `claude plugin validate`** (COREDEV-2489 / P2-14):
   a Node 22 (`actions/setup-node`, SHA-pinned) + `@anthropic-ai/claude-code` (version-pinned)
   step validates both the marketplace manifest (`claude plugin validate .`) and the plugin
@@ -28,6 +42,9 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   phantom row naming an agent that doesn't exist.
 
 ### Changed
+- **Removed dead `REPORT_FINDING_TOOL`** from the review-synthesizer (COREDEV-2489 / Item 17): the
+  strict-tool form's only consumer would have been a `reviewers.py` API-tool-call path that never
+  existed; dropped the constant + the stale `synthesize.py` reference to it.
 - **`provider-parity` skill rewritten to the app's real parity model** (COREDEV-2489 / P1b-content):
   replaced the illustrative `MailProviderProtocol`/`MailMessage`/`MailProviderError` family with the
   actual **`EmailServiceProtocol`** (both `GmailService` and `MicrosoftGraphService` conform), the
