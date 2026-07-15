@@ -155,7 +155,6 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
     if not reg.is_file():
         problems.append(f"{rel}: missing (the agent registry lives here)")
         return
-<<<<<<< HEAD
     try:
         content = reg.read_text(encoding="utf-8-sig")
     except OSError as e:
@@ -168,27 +167,16 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
     in_section = False
     rows: list[str] = []
     for ln in content.splitlines():
-=======
-    # Capture the "## Agent Registry" section: its heading through the next top-level "## ".
-    # Sub-headings ("### …") stay inside the section; only a new "## " ends it.
-    in_section = False
-    registered: set[str] = set()
-    for ln in reg.read_text(encoding="utf-8-sig").splitlines():
->>>>>>> a9210d4 (refactor(COREDEV-2489): P1c-10 complete agent registry to 21 + set-equality CI gate)
         if ln.startswith("## "):
             in_section = ln.strip() == "## Agent Registry"
             continue
         if in_section:
             m = REGISTRY_ROW.match(ln)
             if m:
-<<<<<<< HEAD
                 rows.append(m.group(1))
     registered = set(rows)
     for name in sorted({n for n in rows if rows.count(n) > 1}):
         problems.append(f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables")
-=======
-                registered.add(m.group(1))
->>>>>>> a9210d4 (refactor(COREDEV-2489): P1c-10 complete agent registry to 21 + set-equality CI gate)
     for name in sorted(agent_names - registered):
         problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
     for name in sorted(registered - agent_names):

@@ -21,11 +21,7 @@ allowed-tools: Agent, Read, Grep, Glob, Bash
 | `ui-engineer` | Views | `logic-engineer` ViewModel interface | `jira-manager`, `db-engineer` (next feature) |
 | `ai-engineer` | GARI AI pipeline (providers, tools, prompts) | `db-engineer`/`logic-engineer` for persistence + service wiring | `jira-manager` |
 | `tester` | XCTest units + regression tests | The agent whose code it covers (interface defined first) | `jira-manager`; the implementer of the next unit |
-<<<<<<< HEAD
 | `code-simplifier` | Simplification / judgment-based style **pre-pass** | Implementation complete | `jira-manager` (runs solo as a clean-up pass *before* the 5 reviewers — AGENT_CONTRACTS §5) |
-=======
-| `code-simplifier` | Simplification / judgment-based style **pre-pass** | Implementation complete | Runs **first in review** — a clean-up pass *before* the 5 reviewers (AGENT_CONTRACTS §5) |
->>>>>>> a9210d4 (refactor(COREDEV-2489): P1c-10 complete agent registry to 21 + set-equality CI gate)
 
 ### Review Agents (evaluate code)
 
