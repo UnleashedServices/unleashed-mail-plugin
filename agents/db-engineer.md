@@ -50,7 +50,7 @@ Key rules:
 ## GRDB 7+ Modern Patterns
 
 Use async/await database access (GRDB 7 enforces Swift 6 concurrency safety). The full async
-read/write/observation patterns — including `ValueObservation.trackingConstantRegion` and the
+read/write/observation patterns — including the `ValueObservation.tracking` +
 `for try await … observation.values(in: dbQueue)` loop — are in the **preloaded `grdb-patterns`
 skill** (this agent preloads it via `skills:`); follow those and don't restate them here.
 
