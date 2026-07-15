@@ -106,15 +106,6 @@ REPORT_FINDINGS_SCHEMA = {
     "required": ["findings"],
 }
 
-# Strict-tool form: the model calls report_finding once per finding. Either this
-# OR the structured-output form makes the API enforce the schema.
-REPORT_FINDING_TOOL = {
-    "name": "report_finding",
-    "description": "Report exactly one code-review finding. Call once per finding.",
-    "strict": True,
-    "input_schema": FINDING_JSON_SCHEMA,
-}
-
 
 @dataclass
 class Finding:

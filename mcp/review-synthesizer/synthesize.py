@@ -1,7 +1,7 @@
 """Deterministic review synthesizer — the coded half of the hybrid.
 
-Input:  validated Finding objects (from the markdown reviewers' JSON, or from
-        API tool calls — see reviewers.py).
+Input:  validated Finding objects (from the markdown reviewers' JSON fences,
+        captured + schema-checked by capture.py).
 Output: a consolidated review (clustered, ownership-routed) and a verdict —
         computed in plain Python, not by an LLM parsing a markdown table.
 

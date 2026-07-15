@@ -424,6 +424,32 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
         return "skipped"
     block = extract_last_json_block(message)
     if block is None:
+        # No findings fence. A BLOCKED/PARTIAL reviewer still carries an Output-Contract
+        # `Status:` — persist an EMPTY findings capture + the status sidecar (COREDEV-2328) so a
+        # can't-review reviewer is read as BLOCKED, never as a clean []. Restricted to
+        # BLOCKED/PARTIAL (a COMPLETE with no fence is malformed -> stays absent -> the
+        # missing-reviewer path in swift-reviewer Step 5) and it never overwrites a real capture.
+        status = extract_status(message)
+        if (status and status.get("status") in ("BLOCKED", "PARTIAL")
+                and not is_final_capture(dest)):
+            tmp = "%s.tmp.%d" % (dest, os.getpid())
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump([], fh, ensure_ascii=False, indent=2)
+                    fh.write("\n")
+                os.replace(tmp, dest)
+            except OSError:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return "no-fence"
+            if agent_id:
+                _add_agentid(dest_dir, agent, agent_id)
+            _clear_status(dest_dir, agent)
+            _write_status(dest_dir, agent, status)
+            return "status-only"
         return "no-fence"
     try:
         items = validate_findings(block)
