@@ -15,7 +15,10 @@ so the recurring "0-byte / nothing captured" failure cannot happen.
 
 Usage
 -----
-    python3 pty-capture.py <out-path> -- <command> [args...]
+    python3 pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]
+
+`--timeout` bounds the wall-clock run: on expiry the child is terminated (bounded ladder),
+the partial transcript is still written, and the wrapper exits 124 (the timeout(1) convention).
 
 Examples
 --------
@@ -66,7 +69,7 @@ def _signal_child(pid: int, sig: int) -> None:
         pass
 
 
-def main(out_path: str, cmd: list[str]) -> int:
+def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
     if not cmd:
         raise SystemExit("no command given after `--`")
     # If the wrapper itself is asked to terminate — CI timeout, process manager,
@@ -120,8 +123,22 @@ def main(out_path: str, cmd: list[str]) -> int:
     raw = bytearray()
     status = None  # raw wait-status; only assigned when we actually reap the child
     capture_error = None  # set if persisting the transcript fails (surfaced below)
+    timed_out = False  # set if the wall-clock --timeout elapses before the child exits
+    start = time.monotonic()
     try:
         while True:
+            # Wall-clock timeout: agy's print-timeout (5 min) exceeds Claude's default Bash
+            # timeout, and a wedged CLI would otherwise run until an external SIGTERM. On
+            # timeout, break so `finally` reaps the child (bounded ladder) and persists the
+            # partial transcript; the exit code becomes 124 (the timeout(1) convention).
+            if timeout is not None and time.monotonic() - start >= timeout:
+                timed_out = True
+                try:
+                    sys.stderr.write(f"pty-capture: timed out after {timeout:g}s; terminating child\n")
+                    sys.stderr.flush()
+                except OSError:
+                    pass
+                break
             try:
                 r, _, _ = select.select([master_fd], [], [], 0.5)
             except InterruptedError:
@@ -275,6 +292,8 @@ def main(out_path: str, cmd: list[str]) -> int:
     # report success — that would silently reintroduce the missing-output bug.
     if capture_error is not None and exit_status == 0:
         exit_status = 1
+    if timed_out:
+        exit_status = 124  # conventional timeout exit code; partial transcript already written
     return exit_status
 
 
@@ -286,14 +305,34 @@ if __name__ == "__main__":
             "usage: pty-capture.py <out-path> -- <command> [args...]"
         )
     sep = argv.index("--")
-    pre = argv[:sep]          # tokens before `--` (the out-path, optional)
+    pre = argv[:sep]          # tokens before `--` (optional out-path + --timeout N)
     command = argv[sep + 1:]  # the command to run in the PTY
-    # At most one token may precede `--`. Rejecting extras avoids silently
-    # dropping a misplaced flag — or worse, treating it as the out-path.
-    if len(pre) > 1:
+    # Parse an optional `--timeout SECONDS` and at most one out-path token. Rejecting
+    # extras avoids silently dropping a misplaced flag — or worse, treating it as the out-path.
+    timeout = None
+    positional = []
+    i = 0
+    while i < len(pre):
+        if pre[i] == "--timeout":
+            if i + 1 >= len(pre):
+                raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [out-path] -- <cmd>\n"
+                                 "error: --timeout requires a value")
+            try:
+                timeout = float(pre[i + 1])
+            except ValueError:
+                raise SystemExit(f"error: --timeout: invalid number '{pre[i + 1]}'")
+            if not (0 < timeout < float("inf")):
+                # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the
+                # deadline check `elapsed >= timeout` is always False -> the timeout silently no-ops.
+                raise SystemExit("error: --timeout must be a positive, finite number of seconds")
+            i += 2
+        else:
+            positional.append(pre[i])
+            i += 1
+    if len(positional) > 1:
         raise SystemExit(
-            "usage: pty-capture.py [out-path] -- <command> [args...]\n"
-            f"error: too many arguments before '--': {pre}"
+            "usage: pty-capture.py [--timeout SECONDS] [out-path] -- <command> [args...]\n"
+            f"error: too many arguments before '--': {positional}"
         )
-    out = pre[0] if pre else "/tmp/pty-out.txt"
-    sys.exit(main(out, command))
+    out = positional[0] if positional else "/tmp/pty-out.txt"
+    sys.exit(main(out, command, timeout))

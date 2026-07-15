@@ -27,10 +27,10 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 **The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs the command under a controlling PTY via `pty.fork()` so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
 
-Interface: `pty-capture.py <out-path> -- <command> [args...]`. For agy:
+Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. For agy:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
@@ -78,7 +78,7 @@ EOF
 
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/agy-out.txt -- \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
 # Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```

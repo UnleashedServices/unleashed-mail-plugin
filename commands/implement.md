@@ -8,19 +8,27 @@ disable-model-invocation: true
 
 This command orchestrates implementation across specialized coding agents.
 
-## Phase 1: Design Check
+## Phase 1: Design Gate (fail-closed)
 
-Check if a planning document exists for this feature:
+Implementation without a **reviewed** plan violates CLAUDE.md's mandatory Plan Review Gate.
+Check for a plan and its approval **before writing any code**:
 
 ```bash
 ls docs/planning/*PLAN*.md 2>/dev/null
 ```
 
-If no plan exists, run `/unleashed-mail:brainstorm` first — implementation without a tracked plan
-violates project CLAUDE.md.
+- **No plan?** STOP and hand back to the user: *"No planning doc found — run `/unleashed-mail:brainstorm`
+  first (it's `disable-model-invocation: true`, so it's user-run only), then `/gemini-review` +
+  `/codex-review`. Those two are model-invocable, but per the AGENT_CONTRACTS §2 gate I run them under
+  the plan-review workflow rather than self-approving here."* Do NOT proceed to Phase 2.
+- **Plan exists but not gated?** Confirm it carries an approved **Combined verdict** — both `/gemini-review`
+  and `/codex-review` returned APPROVE / APPROVE_WITH_NOTES (see `/unleashed-mail:review-synthesis`). If it
+  doesn't, STOP and ask the user to run the gate to convergence first.
+- **Plan exists and gated?** Read it, re-verify the modern-standards recommendations are still current (via
+  Context7), then proceed.
 
-If a plan exists, read it and confirm the modern standards planner's recommendations
-are still current.
+This is a **workflow-level** fail-closed check — `implement` declines to proceed without a reviewed plan; a
+command cannot mechanically enforce a tool boundary on its own.
 
 ## Phase 2: Implementation Plan
 
