@@ -84,6 +84,28 @@ Before any implementation begins:
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
 
+### Preflight & waiver (when a review CLI is unavailable)
+
+The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
+machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
+loop with no escape.
+
+- **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
+  isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
+  --timeout 30 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `Pong!` (bare
+  `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
+  codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
+  is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+- **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
+  `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
+- **Waiver — explicit, scoped, recorded (never automatic):** only the **user** (not an agent, and not an
+  absent CLI) may waive an unavailable reviewer. A valid waiver is **user-authorized**, carries a **stated
+  reason**, is **time/session-scoped** (not standing), is **bound to the specific plan** (its content
+  digest), and is **recorded in the Combined-verdict block** as `WAIVED: <reviewer> | <reason> |
+  <session/plan>` (ASCII pipes, not em dashes — safer for terminal entry + regex parsing by
+  `/unleashed-mail:review-synthesis`). The remaining reviewer's verdict still applies; a subagent must
+  never self-waive.
+
 ### Diagnostic agent scope (`xcode-build-fixer`, `graph-api-debugger`)
 
 Diagnostic agents do have `Write` and `Edit` tools — they apply **mechanical, low-risk fixes**
