@@ -31,8 +31,12 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. For agy:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE — at 600s the wrapper SIGTERMs agy 8 minutes BEFORE its
+# print-timeout could fire, so you'd get a masked exit 124 instead of agy's diagnosable
+# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
@@ -79,8 +83,12 @@ EOF
 
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE — at 600s the wrapper SIGTERMs agy 8 minutes BEFORE its
+# print-timeout could fire, so you'd get a masked exit 124 instead of agy's diagnosable
+# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
@@ -91,7 +99,7 @@ The drip animation renders to a real TTY directly. Read the output in your termi
 ```bash
 # Plan review — agy -p with workspace flag in same invocation.
 # Run from the project root so "$(pwd)" resolves to the workspace.
-agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 
 # For record-keeping: use the PTY wrapper above instead of `> file`.
 # A redirect like `agy ... > /tmp/review.md` will produce 0 bytes because
