@@ -322,7 +322,10 @@ and the missing-test scan — printing `✅`/`❌` per gate and **exiting non-ze
 # $CHANGED is from Step 1. The script reads it on stdin (no shared-shell-state assumption), so
 # pr-review relies on THIS same run — it does not invoke the script itself (one test run, not two).
 printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh"
-BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed (read the ✅/❌ above)
+BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed
+# ECHO it: a shell variable cannot survive this block, so an un-echoed assignment never reaches you.
+# 127 = the script itself did not run — which "no ❌ printed" would otherwise look identical to.
+echo "BUILD_VERIFY=$BUILD_VERIFY"
 ```
 
 > The verification logic (gate aggregation, changed-`.swift` filtering, missing-test scan) lives in the

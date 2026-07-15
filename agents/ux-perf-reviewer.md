@@ -267,7 +267,8 @@ finding; emit `[]` if clean. JSON escaping handles pipes, backticks, and newline
 **Return status:** COMPLETE | BLOCKED | PARTIAL
 
 Emit **one** of these values on a `Status:` line **immediately before** your JSON findings array (an
-actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template). Keep the fenced
+actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template), with only blank
+or detail-field lines between it and the final fenced `json` array. Keep the fenced
 `json` array the **final block** of your report (per *Structured Findings* above), so it stays trivially
 parseable and matches the handoff template in `skills/agent-orchestration/SKILL.md`. The orchestrator
 reads the status **first, then** the array — so a reviewer that *couldn't run* returns `BLOCKED` + `[]`

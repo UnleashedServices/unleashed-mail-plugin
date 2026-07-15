@@ -35,7 +35,7 @@ internal protocol EmailServiceProtocol: AnyObject, Sendable {
     func getCurrentUser() async throws -> User
 
     // Messages — batch-oriented; both providers normalize to the shared `Email` model.
-    func fetchMessages(folderId: String, maxResults: Int, pageToken: PaginationToken?)
+    func fetchMessages(folderId: String, maxResults: Int, paginationToken: PaginationToken?)
         async throws -> (emails: [Email], nextToken: PaginationToken)
     func fetchMessage(id: String, forceRefresh: Bool) async throws -> Email
     func batchFetchMessages(ids: [String], onEmailFetched: ((Email) async -> Void)?)
@@ -85,7 +85,7 @@ account's data from leaking into another.
 ```swift
 // Provider-agnostic call — the ONLY pattern ViewModels/services use:
 let service = try serviceProvider.activeService()          // -> any EmailServiceProtocol
-let (emails, next) = try await service.fetchMessages(folderId: "INBOX", maxResults: 50, pageToken: nil)
+let (emails, next) = try await service.fetchMessages(folderId: "INBOX", maxResults: 50, paginationToken: nil)
 
 // Provider-specific escape hatch (throws if the active account is the wrong provider):
 let gmail = try serviceProvider.gmailServiceGuarded()

@@ -76,8 +76,9 @@ jobs:
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
-          # Marketplace manifest schema (top-level entry point):
-          claude plugin validate .
+          # Marketplace manifest schema (top-level entry point). --strict promotes warnings to
+          # failures; verified green on the pinned CLI above before enabling (COREDEV-2494).
+          claude plugin validate --strict .
           # Deep plugin validation — agents/skills/hooks schemas. Exits 0 on the expected
           # "root CLAUDE.md is a contributor doc, not shipped context" warning, non-zero on a
           # real schema error. House conventions (missing name/description, agent-key hygiene,

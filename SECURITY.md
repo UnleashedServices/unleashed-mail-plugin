@@ -38,4 +38,10 @@ public and rotated on the provider side:
 Both are allowlisted in `.gitleaks.toml` so the scan passes on the existing history while still
 failing on any **new** secret — or any *other* historical secret not on the allowlist.
 
+The `firebase-debug.log` exemption is **commit-scoped** to the only two commits that file ever
+existed in (`edc27bf` added it, `1f18944` removed it), so a new secret committed into that exact
+filename **is still caught**. Until COREDEV-2494 it was a blanket path exemption, which made this
+paragraph's guarantee untrue for precisely the filename most likely to reappear from a `firebase`
+CLI run. Any change to that exemption must keep it commit-scoped.
+
 Tracking: COREDEV-2486 (2026-07-14 plugin audit, finding `critic.1`).

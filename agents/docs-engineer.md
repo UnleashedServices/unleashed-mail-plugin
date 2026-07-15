@@ -136,14 +136,14 @@ Ensure all public APIs have comprehensive `///` comments:
 /// This service handles OAuth flows for Gmail and Microsoft Graph,
 /// token refresh, and account management.
 ///
-/// - Note: All operations are asynchronous and may throw `AuthError`.
+/// - Note: All operations are asynchronous and may throw `MicrosoftAuthError`.
 public protocol AuthServiceProtocol {
-    /// Signs in to an email account using OAuth.
+    /// Returns a valid access token for the account, refreshing it if it has expired.
     ///
-    /// - Parameter accountType: The type of account (Gmail or Outlook)
-    /// - Returns: The authenticated account
-    /// - Throws: `AuthError` if authentication fails
-    func signIn(accountType: AccountType) async throws -> Account
+    /// - Parameter email: The account's email address
+    /// - Returns: A valid OAuth access token
+    /// - Throws: `MicrosoftAuthError` if the token cannot be refreshed
+    func getValidAccessToken(for email: String) async throws -> String
 }
 ```
 
@@ -219,15 +219,14 @@ Update `docs/planning/FEATURE_NAME_PLAN.md` as features progress:
 Allow users to snooze emails for later review.
 
 ## Implementation
-- Added `snooze(until:)` method to `MailProviderProtocol`
+- Added `snooze(until:)` method to `EmailServiceProtocol`
 - Implemented in both Gmail and Graph providers
 - Added UI in message actions menu
 
 ## Files Changed
-- `Unleashed Mail/Sources/Services/MailProviderProtocol.swift`
-- `Unleashed Mail/Sources/Services/Gmail/GmailMailProvider.swift`
-- `Unleashed Mail/Sources/Services/Graph/GraphMailProvider.swift`
-- `Unleashed Mail/Sources/Views/MessageActionsView.swift`
+- `Unleashed Mail/Sources/Services/EmailServiceProtocol.swift`
+- `Unleashed Mail/Sources/Services/GmailService+EmailService.swift`
+- `Unleashed Mail/Sources/Services/MicrosoftGraphService.swift`
 
 ## Testing
 - Unit tests for snooze logic

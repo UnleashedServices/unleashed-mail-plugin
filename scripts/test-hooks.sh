@@ -146,6 +146,15 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"mv a.swift b.swift"}
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_empty "benign mv -> no decision" "$OUT"
 
+# 7b. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
+# other case here overrides explicitly, so nothing exercised the shipped default. Mutation-proved: with
+# this test absent, flipping the default to `:-warn` leaves the whole suite byte-identical + exit 0 —
+# silently downgrading the Keychain/OAuth/entitlements BLOCKING confirmation to a non-blocking advisory
+# with CI green. `env -u` beats a hostile exported var from the caller's environment.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
+    | env -u UNLEASHED_SENSITIVE_GUARD_MODE bash "$GUARD" 2>/dev/null)"
+assert_contains "default mode (unset) -> ask" "$OUT" '"permissionDecision":"ask"'
+
 # 8. Warn mode -> systemMessage advisory, NO permissionDecision.
 OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
     | UNLEASHED_SENSITIVE_GUARD_MODE=warn bash "$GUARD" 2>/dev/null)"
