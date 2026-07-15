@@ -1,7 +1,13 @@
 # Plugin Audit — Design-Heavy Remediation Plan (P1b-design / P1a-2 / P1c / P2)
 
 **Status:** v7 — R5 CONVERGED into per-item decisions (both reviewers agree on substance; the R5 `REQUEST_CHANGES` were about the plan text, now resolved here). **Since v5, the lower-risk items shipped as PRs #27–#37 (see table).** R5 outcome on the four remaining:
-- **Item 5 (swift-reviewer shell→scripts) → DEFER (needs a human).** Both: script-resolution/dry-run/unit-tests cannot verify model orchestration; without an installed-plugin E2E harness this needs a supervised live canary. Not implementable autonomously.
+- **Item 5 (swift-reviewer shell→scripts) → ATTEMPTED (PR #40), user-directed.** Scoped to the one
+  self-contained block: extracted Step 4 to `scripts/review/build-verify.sh` (reads `$CHANGED` on stdin;
+  9 mocked-tool unit tests run in CI without Xcode); swift-reviewer 591→567 lines; `pr-review` deduped
+  onto the single Step-4 run. The `$CHANGED`/`$BASE_BRANCH` state-sharing steps stay inline. **Live
+  orchestration still needs a canary** (`scripts/review/README.md`) — unit tests prove the script logic,
+  not swift-reviewer's E2E behavior. Both reviewers were right that full autonomous verification is
+  impossible; the extraction is isolated + trivially revertible if the canary shows drift.
 - **Item 11-residual → BUILT (PR #39).** `scripts/review-verdict.py` (write/verify) persists a plan-raw-byte-digest-bound Combined-verdict artifact (0700/0600/no-symlink/atomic); `review-synthesis` writes it, `implement`'s Design Gate verifies it → approve-then-edit blocked deterministically. Dropped the PreToolUse token per the gate. Adversarially verified: digest + fs-security held; a reviewer-quorum bypass (verify ignored reviewer names/statuses → dup-gemini / both-REQUEST_CHANGES / foo+bar faked GATE OK) was found + fixed (`_quorum_problem` enforces gemini+codex distinct + each approving, at write AND verify). 24 tests.
 - **Item 13 (progressive disclosure) → DROP.** Both: a mechanical size-based split of the 4 non-preloaded skills is churn (extra round-trips, no context economy); only worthwhile with genuine task-to-reference routing, which is out of scope. `microsoft-graph-integration` (the only preloaded one) must keep its relied-upon facts in the body anyway.
 - **Item 17 → IMPLEMENT (with 2 codex refinements):** add `!.env.example` to `.gitignore` (`.env.*` currently ignores it — verified), and **lock the dead `REPORT_FINDING_TOOL` decision to REMOVAL** (don't leave the wiring to autonomous choice). The two fail-closed MCP fixes are sound.
