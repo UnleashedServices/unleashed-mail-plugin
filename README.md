@@ -2,7 +2,7 @@
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
-**21 agents · 18 skills · 3 commands · 1 MCP server**
+**21 agents · 21 skills · 0 commands · 1 MCP server**
 
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
@@ -227,9 +227,12 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `create-feature-plan` | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template |
 | `review-synthesis` | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation |
 
-## Commands (3)
+## Workflow skills (3)
 
-| Command | Usage |
+These three orchestration workflows ship as `disable-model-invocation` **skills** (custom commands
+have merged into skills) — you invoke them exactly as before, and Claude won't auto-trigger them:
+
+| Skill | Usage |
 |---|---|
 | `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket |
 | `/unleashed-mail:implement` | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates |
