@@ -1,8 +1,14 @@
 # Plugin Audit — Design-Heavy Remediation Plan (P1b-design / P1a-2 / P1c / P2)
 
-**Status:** DRAFT v5 — in plan-review gate. R1 gemini RC / codex MISSING; R2 gemini APPROVE / codex RC; R3 gemini APPROVE / codex RC; R4 gemini `APPROVE_WITH_NOTES` / codex `REQUEST_CHANGES` ("v4 resolves the round-3 findings; phase order sound" — remaining items are new, deeper rigor). v5 folds in R4. No code changes until both APPROVE / APPROVE_WITH_NOTES.
+**Status:** v7 — R5 CONVERGED into per-item decisions (both reviewers agree on substance; the R5 `REQUEST_CHANGES` were about the plan text, now resolved here). **Since v5, the lower-risk items shipped as PRs #27–#37 (see table).** R5 outcome on the four remaining:
+- **Item 5 (swift-reviewer shell→scripts) → DEFER (needs a human).** Both: script-resolution/dry-run/unit-tests cannot verify model orchestration; without an installed-plugin E2E harness this needs a supervised live canary. Not implementable autonomously.
+- **Item 11-residual → BUILD MINUS THE PreToolUse TOKEN.** Both: the digest/session/reviewer binding + secure `0700` handoff design is sound; the PreToolUse token is unnecessary for the cooperative-workflow threat model — drop it; workflow-level fail-closed (shipped #30) suffices. SubagentStop schema check must **block** approval-artifact creation on failure (not observe-only).
+- **Item 13 (progressive disclosure) → DROP.** Both: a mechanical size-based split of the 4 non-preloaded skills is churn (extra round-trips, no context economy); only worthwhile with genuine task-to-reference routing, which is out of scope. `microsoft-graph-integration` (the only preloaded one) must keep its relied-upon facts in the body anyway.
+- **Item 17 → IMPLEMENT (with 2 codex refinements):** add `!.env.example` to `.gitignore` (`.env.*` currently ignores it — verified), and **lock the dead `REPORT_FINDING_TOOL` decision to REMOVAL** (don't leave the wiring to autonomous choice). The two fail-closed MCP fixes are sound.
 **Epic:** COREDEV-2485 · **Ticket:** COREDEV-2489 · **Date:** 2026-07-14
 **Source of truth:** `docs/audits/2026-07-14-plugin-audit.md` + `-findings.md`
+
+> **v6 preload-coverage finding (reshapes Item 13).** Of the 5 largest skills, **only `microsoft-graph-integration` is preloaded** (by `graph-api-debugger`); `swiftlint-config`, `accessibility-patterns`, `provider-parity`, `error-handling` are **not** preloaded by any agent (verified against every `agents/*.md skills:` list). So progressive disclosure is **low-risk** for those four (they only load on invocation) and the "keep preloaded facts in the body" constraint binds **only** on `microsoft-graph-integration`. `provider-parity` was just rewritten (PR #37) — exclude it from this pass to avoid churn.
 
 > **Document order = execution order** (P1b-design → P1a-2 → P1c → P2), **except P1b-5 (keychain), which is a parallel independent PR lane** gated on app evidence so it never stalls Items 6–8. Item IDs are stable across revisions.
 
@@ -13,6 +19,19 @@
 | #24 | COREDEV-2486 | P0 — fleet-wide silent-failure fixes |
 | #25 | COREDEV-2487 | P1a — model tiering, 5 skill preloads, agent memory + swift-reviewer memory hotfix `23ca4a1` |
 | #26 | COREDEV-2488 | P1b/P2 mechanical |
+| #27 | COREDEV-2489 | P1b content-truth: Items 4/6/7 (grdb snake_case, error-enum→`EmailServiceError`, Curator) |
+| #28 | COREDEV-2489 | Item 8 — plugin `CLAUDE.md` → plugin-dev instructions |
+| #29 | COREDEV-2489 | P1a-2 Item 1 (db-engineer dedup slice) |
+| #30 | COREDEV-2489 | P1c Item 9 (implement fail-closed gate) + Item 11-partial (`pty-capture --timeout`) |
+| #31 | COREDEV-2489 | P2 Item 14-partial (actionlint + pty-capture CI) |
+| #32 | COREDEV-2489 | Item 12 — enforcement defaults (ask/enforce) |
+| #33 | COREDEV-2489 | Item 11-waiver — external-review preflight + scoped/recorded waiver |
+| #34 | COREDEV-2489 | Item 16 — commands → skills (21/21/0/1) |
+| #35 | COREDEV-2489 | Item 10 — registry→21 + set-equality CI |
+| #36 | COREDEV-2489 | Item 14-partial — `claude plugin validate` in CI (Node 22 pinned) |
+| #37 | COREDEV-2489 | Item 6/15 — `provider-parity` rewritten to real types + `allowed-tools` tightened |
+
+**Genuinely remaining after #24–#37 (v6 scope):** Item **5-P1a-2** (swift-reviewer shell→scripts), Item **11-residual** (persisted Combined-verdict artifact w/ digest binding + SubagentStop schema enforcement + secure handoff dir + optional PreToolUse token), Item **13** (progressive disclosure — reshaped by the finding above), Item **17** (docs/MCP fail-open fixes + `.env.example`), and the remaining-findings catalog (pr-review double-test, PostToolUse hook hardening, pre-commit hardening).
 
 **Baseline-sync prerequisite (codex r3):** implementation of THIS plan must branch from an integrated baseline that contains the merged PRs #24–#26 (including hotfix `23ca4a1`). Do NOT implement from an ancestor branch that predates the hotfix — assert `memory:` is absent from swift-reviewer and re-run the full gate suite on the *integrated* branch, not on independently-green ancestors. Locked decisions: owner = UnleashedServices; secrets = rotate + scan (no history rewrite).
 
@@ -108,4 +127,4 @@ Not yet folded into a numbered item above; each is either added to the phase not
 - **R2** — gemini `APPROVE`; codex `REQUEST_CHANGES` (8, incl. the swift-reviewer memory regression → fixed as item 0) → v3.
 - **R3** — gemini `APPROVE` (semantics/security/sequencing all pass); codex `REQUEST_CHANGES` ("most round-2 concerns resolved") — 6 findings: baseline-sync/memory-still-in-branch, CLAUDE.md context layers, Stop-hook contract (block+reason not additionalContext), 4th MailProviderError source (error-handling skill), approval-digest binding + secure temp dir, actionlint-not-in-CI; + nits (Skill-tool term, P1b-5 lane, 21/21/0/1 counts, machine-readable registry). **All addressed in v4.**
 - **R4** — gemini `APPROVE_WITH_NOTES` (notes were mostly already-shipped-#26 false-positives + real completeness gaps: pre-commit hardening, pr-review double-test, MCP cleanup); codex `REQUEST_CHANGES` ("v4 resolves round-3; phase order sound") — new deeper findings: 9/11 producer-before-consumer ordering, honest skill-enforcement, AGENT_CONTRACTS not auto-injected, MCP fail-open + SubagentStop schema, item-5 quarantine-must-remove, min CC >=2.1.172, waiver-is-a-decision, remaining-findings catalog. **All folded into v5.**
-- **R5** — _pending — re-gate both on v5._
+- **R5** — re-gate both on v6. gemini `REQUEST_CHANGES`, codex `REQUEST_CHANGES` — but **convergent on substance**: Item 5 → defer (needs human/live canary; neither can verify model orchestration from script tests); Item 11 → sound **minus the PreToolUse token** (over-engineering for the cooperative threat model); Item 13 → churn, **drop** (mechanical split of non-preloaded skills adds round-trips, no context economy); Item 17 → fixes sound, requires `!.env.example` in `.gitignore` (`.env.*` ignores it — verified) + lock `REPORT_FINDING_TOOL` to removal. **v7 records these decisions.** Item 17 implemented per both reviewers' explicit conditions; Item 11 is design-approved (build minus token) pending scope confirmation; Items 5 + 13 are not autonomous work.
