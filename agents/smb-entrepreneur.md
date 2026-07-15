@@ -8,6 +8,7 @@ description: >
   edge cases. Use during brainstorming and planning — not execution.
 model: sonnet
 tools: Read, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are an **SMB founder and power user** evaluating UnleashedMail as your primary

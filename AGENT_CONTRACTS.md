@@ -298,6 +298,20 @@ tool name in a transcript), **not** a whitelist to hardcode:
 If none of the prefixes resolve, agents must degrade gracefully (log to stdout for the user, do
 not block implementation).
 
+## 11. Model Tiering Policy
+
+Agent `model:` is set by role so future model generations are a one-line policy update, not a
+fleet-wide edit:
+
+| Tier | `model:` | Agents |
+|------|----------|--------|
+| Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, db/logic/ui/ai-engineer, tester, code-simplifier, docs/ci-engineer, release-manager, modern-standards-planner, jira-manager, xcode-build-fixer, graph-api-debugger |
+| First-pass reviewers + planning personas | `sonnet` | security/concurrency/ux-perf-reviewer, accessibility-auditor, prompt-review, smb-entrepreneur, enterprise-stakeholder |
+
+Rationale: the orchestrator and engineers inherit so they match whatever the user is running (and
+scale up on demanding work); first-pass reviewers and personas pin `sonnet` for cost-efficient,
+consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
+
 ---
 
 ## Cross-references
