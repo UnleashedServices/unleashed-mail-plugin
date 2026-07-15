@@ -18,8 +18,9 @@ ls docs/planning/*PLAN*.md 2>/dev/null
 ```
 
 - **No plan?** STOP and hand back to the user: *"No planning doc found — run `/unleashed-mail:brainstorm`
-  first (then `/gemini-review` + `/codex-review`). I can't auto-invoke those: they're
-  `disable-model-invocation: true` user-run commands."* Do NOT proceed to Phase 2.
+  first (it's `disable-model-invocation: true`, so it's user-run only), then `/gemini-review` +
+  `/codex-review`. Those two are model-invocable, but per the AGENT_CONTRACTS §2 gate I run them under
+  the plan-review workflow rather than self-approving here."* Do NOT proceed to Phase 2.
 - **Plan exists but not gated?** Confirm it carries an approved **Combined verdict** — both `/gemini-review`
   and `/codex-review` returned APPROVE / APPROVE_WITH_NOTES (see `/unleashed-mail:review-synthesis`). If it
   doesn't, STOP and ask the user to run the gate to convergence first.

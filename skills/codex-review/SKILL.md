@@ -35,11 +35,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/codex-
 # Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
 
 # Skill-based audit through the wrapper:
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/security.txt -- \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/security.txt -- \
     codex exec -s read-only "/security-reviewer [FILES]"
 ```
 
-Interface: `pty-capture.py <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
+Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
 
 ## Monitor, not Bash background (user-confirmed preference)
 

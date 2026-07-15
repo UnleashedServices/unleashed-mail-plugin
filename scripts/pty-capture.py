@@ -321,8 +321,10 @@ if __name__ == "__main__":
                 timeout = float(pre[i + 1])
             except ValueError:
                 raise SystemExit(f"error: --timeout: invalid number '{pre[i + 1]}'")
-            if timeout <= 0:
-                raise SystemExit("error: --timeout must be > 0")
+            if not (0 < timeout < float("inf")):
+                # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the
+                # deadline check `elapsed >= timeout` is always False -> the timeout silently no-ops.
+                raise SystemExit("error: --timeout must be a positive, finite number of seconds")
             i += 2
         else:
             positional.append(pre[i])
