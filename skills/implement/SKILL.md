@@ -23,15 +23,33 @@ if [ -f "$ARGUMENTS" ]; then
     PLAN="$ARGUMENTS"
 else
     KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
-    # Substring match via prefix-strip — NOT `case`: bash 3.2 (what macOS ships) fails to parse a
-    # `case … esac` nested inside a `while` inside `$( )`. This form parses on 3.2 and bash 5+.
-    PLAN=$(ls docs/planning/*PLAN*.md 2>/dev/null | while IFS= read -r p; do
+    # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
+    # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
+    # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).
+    #
+    # THE `-n "$KEY"` GUARD IS LOAD-BEARING — DO NOT "SIMPLIFY" IT AWAY. `[[ "$b" == *""* ]]` matches
+    # EVERY plan, so without it an empty $ARGUMENTS silently resolves to the first plan on disk and
+    # satisfies the Design Gate: a fail-OPEN. (The old prefix-strip form was only *accidentally*
+    # fail-closed on an empty key; this makes the property explicit.)
+    MATCHES=$(ls docs/planning/*PLAN*.md 2>/dev/null | while IFS= read -r p; do
         b=$(basename "$p" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
-        if [ "${b#*$KEY}" != "$b" ]; then printf '%s\n' "$p"; fi
-    done | head -1)
+        if [[ -n "$KEY" && "$b" == *"$KEY"* ]]; then printf '%s\n' "$p"; fi
+    done)
+    N=$(printf '%s' "$MATCHES" | grep -c . )
+    # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
+    # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated
+    # — defeating this block's whole purpose. Make the human disambiguate.
+    if [ "$N" -gt 1 ]; then
+        { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "$MATCHES"; } >&2
+        exit 2
+    fi
+    PLAN="$MATCHES"
 fi
 if [ -z "$PLAN" ]; then
-    echo "No plan matches '$ARGUMENTS'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null
+    # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
+    # plan exists — so a FAILED resolution reported success.
+    { echo "No plan matches '$ARGUMENTS'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
+    exit 1
 else
     echo "Plan: $PLAN"
     # Verify the persisted, digest-bound verdict for THAT plan:

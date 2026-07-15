@@ -57,6 +57,19 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
            if str(r.get("status", "")).strip().upper() not in APPROVING]
     if bad:
         return "an APPROVING combined verdict requires EVERY reviewer to approve; got " + ", ".join(bad)
+    # An APPROVING artifact must EVIDENCE each approval. Without this, `--reviewer gemini=APPROVE`
+    # with no `:TRANSCRIPT` at all produced a GATE OK — the caller's bare assertion, with nothing
+    # recorded that anyone could later audit. Non-approving verdicts deliberately skip this: a
+    # MISSING/failed reviewer legitimately HAS no transcript, and that record is the point.
+    #
+    # HONEST BOUND: this does NOT stop a determined caller (`printf x > f.txt` yields a non-empty
+    # digest and passes). It raises the floor against an accidental one and completes the audit
+    # trail. Content validation would be the real control — see COREDEV-2497.
+    missing_t = [str(r.get("name")) for r in reviewers
+                 if not str(r.get("transcriptSha256", "")).strip()]
+    if missing_t:
+        return ("an APPROVING combined verdict requires a transcript per reviewer; missing for "
+                + ", ".join(sorted(missing_t)))
     return None
 
 
@@ -113,6 +126,12 @@ def _parse_reviewer(spec: str) -> dict:
     if transcript:
         if not os.path.isfile(transcript):
             raise SystemExit(f"review-verdict: reviewer {name!r} transcript not found: {transcript}")
+        if os.path.getsize(transcript) == 0:
+            # An EMPTY transcript is a FAILED review, never a review. Only `isfile` was checked, so a
+            # 0-byte file recorded transcriptSha256 = e3b0c442…855 (the empty-string digest) and
+            # sailed through — the exact "a missing/empty transcript is never APPROVE" rule this
+            # artifact exists to record. `agy` writes precisely 0 bytes from a non-TTY on failure.
+            raise SystemExit(f"review-verdict: reviewer {name!r} transcript is EMPTY: {transcript}")
         out["transcriptSha256"] = _sha256_bytes(transcript)
     return out
 
