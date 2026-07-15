@@ -34,8 +34,21 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Byte-compile the review-synthesizer MCP
-        run: python3 -m py_compile mcp/review-synthesizer/*.py
+      - name: Byte-compile Python (MCP + load-bearing scripts)
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py
+
+      - name: pty-capture.py smoke test (--timeout + capture)
+        run: |
+          set -euo pipefail
+          out="$(mktemp)"
+          # A wedged child must time out (exit 124) with the partial transcript preserved.
+          rc=0; python3 scripts/pty-capture.py --timeout 1 "$out" -- bash -c 'echo captured; sleep 5' || rc=$?
+          test "$rc" = "124" || { echo "expected exit 124, got $rc"; exit 1; }
+          grep -q "captured" "$out" || { echo "partial transcript not preserved"; cat "$out"; exit 1; }
+          # A fast command completes normally and captures its output.
+          python3 scripts/pty-capture.py "$out" -- echo ok
+          grep -q "ok" "$out" || { echo "fast-path capture missing"; exit 1; }
+          echo "pty-capture: --timeout=124 + capture OK"
 
       - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
@@ -48,6 +61,21 @@ jobs:
 
       - name: ShellCheck plugin scripts
         run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+
+      - name: Install actionlint (pinned + checksum-verified)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Lint GitHub Actions workflows (actionlint)
+        run: actionlint -color
 
       - name: Validate hooks manifest (strict)
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
@@ -63,11 +91,13 @@ jobs:
             echo ""
             echo "| Gate | Status |"
             echo "| --- | --- |"
-            echo "| py_compile (review-synthesizer) | ${{ job.status }} |"
+            echo "| py_compile (MCP + scripts) | ${{ job.status }} |"
+            echo "| pty-capture smoke (--timeout) | ${{ job.status }} |"
             echo "| unittest discover (synthesizer suite) | ${{ job.status }} |"
             echo "| version-sync (strict) | ${{ job.status }} |"
             echo "| plugin-assembly (strict) | ${{ job.status }} |"
             echo "| shellcheck (-S warning) | ${{ job.status }} |"
+            echo "| actionlint | ${{ job.status }} |"
             echo "| hooks-manifest (strict) | ${{ job.status }} |"
             echo "| hook stdin-simulation tests | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
