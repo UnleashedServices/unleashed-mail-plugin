@@ -7,7 +7,7 @@ description: >
   generating changelogs, or submitting to app stores. Invoke automatically when
   merging to main, completing epics, or when release criteria are met.
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **release manager** handling UnleashedMail's versioning, releases, and

@@ -9,13 +9,14 @@ description: >
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
 model: sonnet
-allowed-tools: Read, Bash, Grep, Glob, Agent, mcp__claude_ai_Atlassian__getAccessibleAtlassianResources, mcp__claude_ai_Atlassian__createJiraIssue, mcp__claude_ai_Atlassian__editJiraIssue, mcp__claude_ai_Atlassian__getJiraIssue, mcp__claude_ai_Atlassian__addCommentToJiraIssue, mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql, mcp__claude_ai_Atlassian__getTransitionsForJiraIssue, mcp__claude_ai_Atlassian__transitionJiraIssue, mcp__claude_ai_Atlassian__getVisibleJiraProjects, mcp__claude_ai_Atlassian__lookupJiraAccountId, mcp__claude_ai_Atlassian__getJiraProjectIssueTypesMetadata, mcp__atlassian__getAccessibleAtlassianResources, mcp__atlassian__createJiraIssue, mcp__atlassian__editJiraIssue, mcp__atlassian__getJiraIssue, mcp__atlassian__addCommentToJiraIssue, mcp__atlassian__searchJiraIssuesUsingJql, mcp__atlassian__getTransitionsForJiraIssue, mcp__atlassian__transitionJiraIssue, mcp__plugin_atlassian_atlassian__getAccessibleAtlassianResources, mcp__plugin_atlassian_atlassian__createJiraIssue, mcp__plugin_atlassian_atlassian__editJiraIssue, mcp__plugin_atlassian_atlassian__getJiraIssue, mcp__plugin_atlassian_atlassian__addCommentToJiraIssue, mcp__plugin_atlassian_atlassian__searchJiraIssuesUsingJql, mcp__plugin_atlassian_atlassian__getTransitionsForJiraIssue, mcp__plugin_atlassian_atlassian__transitionJiraIssue
+disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent
 ---
 
 > **MCP prefix portability:** Atlassian MCP tools may be exposed under three different
 > prefixes depending on the user's setup — `mcp__claude_ai_Atlassian__*` (VSCode-shipped),
 > `mcp__atlassian__*` (standalone), or `mcp__plugin_atlassian_atlassian__*` (Anthropic-marketplace
-> plugin). All three are whitelisted; whichever the user has installed will resolve. See
+> plugin). This agent **omits `tools:`** so it inherits whichever prefix is installed (a `tools:`
+> allowlist would block an unlisted one); `disallowedTools` keeps it non-mutating. See
 > `AGENT_CONTRACTS.md §10`.
 
 You are the **Jira ticket manager** for UnleashedMail. You enforce the project's
@@ -98,7 +99,7 @@ Add comments to the ticket at each milestone:
 2. **Transition ticket** to appropriate status:
    - "In Review" if PR is created — also add the GitHub PR URL as a comment on the ticket:
      ```
-     PR: https://github.com/npranson/unleashed-mail/pull/NNN
+     PR: https://github.com/UnleashedServices/unleashed-mail/pull/NNN
      ```
      Obtain the PR URL from `gh pr view --json url -q .url` or from context if already known.
    - "Done" if merged

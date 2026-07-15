@@ -9,7 +9,7 @@ description: >
   tables, writing GRDB queries, setting up ValueObservation, adding indexes, or
   when a feature requires persistent storage.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **database engineer** working on UnleashedMail's GRDB.swift data layer.

@@ -9,7 +9,8 @@ description: >
   UI component change, when adding buttons/controls/images, when modifying
   navigation or layout, or when touching WKWebView rendering code.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob
+tools: Read, Bash, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are an **accessibility specialist** auditing code for UnleashedMail, a native macOS

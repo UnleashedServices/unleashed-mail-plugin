@@ -13,6 +13,18 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Added
+- **P0 audit remediation** (COREDEV-2486): fixed six fleet-wide silent-failure classes — sub-agent
+  `tools:`/`disallowedTools:` frontmatter (removing the silently-ignored `allowed-tools` key), positional
+  SwiftLint invocation, the PostToolUse JSON contract, plugin-scoped reviewer-capture prefixing,
+  gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
+
+### Changed
+- Org/marketplace renamed to `UnleashedServices/unleashed-mail-plugin` — see the README install
+  section for the one-time migration from the old `npranson-unleashed-mail-plugin` marketplace.
+- `AGENT_CONTRACTS.md` §9/§10 updated to the omit-`tools:`-to-inherit-MCP mechanism (portable across
+  install prefixes; restricted via `disallowedTools`), with `prompt-review`'s deliberate Bash drop noted.
+
 ## [2.4.2] — 2026-06-27
 
 Hook-manifest integrity gate (COREDEV-2338). Surfaced while auditing whether the plugin's hooks

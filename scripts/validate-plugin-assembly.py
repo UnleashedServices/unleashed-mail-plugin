@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -33,6 +34,59 @@ from pathlib import Path
 
 KEBAB = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TOP_KEY = re.compile(r"^([A-Za-z0-9_-]+):(.*)$")  # column-0 key: value
+
+# Documented sub-agent frontmatter fields (code.claude.com/docs/en/sub-agents, 2026-07-14).
+# `allowed-tools` is DELIBERATELY absent: it is a skills/commands key, NOT a sub-agent key —
+# using it in an agent silently nullifies every tool restriction (the agent inherits ALL tools).
+# This whole check exists to stop that recurring (audit pm-diagnostic.1 / orchestration.1).
+KNOWN_AGENT_KEYS = {
+    "name", "description", "tools", "disallowedTools", "model", "permissionMode",
+    "maxTurns", "skills", "mcpServers", "hooks", "memory", "background",
+    "effort", "isolation", "color", "initialPrompt",
+}
+MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
+# Built-in tool names an agent may list. The MCP namespace is install-defined and NOT
+# enumerable, so `mcp__*` entries are always accepted; an unknown non-mcp entry is accepted
+# too (it may be a newer tool), but a CLOSE typo of a known tool is flagged — a misspelled
+# tool name silently disables that tool (mirrors validate-hooks.py's difflib guard).
+KNOWN_TOOLS = {
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "BashOutput",
+    "Glob", "Grep", "Agent", "Task", "WebFetch", "WebSearch", "TodoWrite",
+    "Skill", "SlashCommand", "ExitPlanMode", "KillShell", "AskUserQuestion",
+}
+
+
+def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
+    """Agent-only frontmatter validation: unknown keys, model alias, tool-name typos.
+
+    Skills/commands are intentionally exempt — `allowed-tools` is a real key for them.
+    """
+    for key in fm:
+        if key in KNOWN_AGENT_KEYS:
+            continue
+        hint = ""
+        if key == "allowed-tools":
+            hint = (" — `allowed-tools` is a skills/commands key; sub-agents use "
+                    "`tools`/`disallowedTools`. As written the restriction is silently "
+                    "ignored and the agent inherits ALL tools.")
+        problems.append(f"{rel}: unknown agent frontmatter key `{key}`{hint}")
+
+    model = fm.get("model", "")
+    # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not.
+    if model and model not in MODEL_ALIASES and not re.match(r"^[a-z]+-[a-z0-9-]*\d", model):
+        problems.append(
+            f"{rel}: `model: {model}` is not a known alias {sorted(MODEL_ALIASES)} or a model id")
+
+    for field in ("tools", "disallowedTools"):
+        val = fm.get(field, "")
+        if val in ("", ">", "|", ">-", "|-"):
+            continue
+        for entry in (t.strip() for t in val.split(",")):
+            if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
+                continue
+            near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
+            if near:
+                problems.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of `{near[0]}`")
 
 
 def parse_frontmatter(text: str) -> dict[str, str] | None:
@@ -97,7 +151,7 @@ def main() -> int:
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
     problems: list[str] = []
 
-    def check_frontmatter(path: Path, require_name: bool) -> None:
+    def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
         rel = path.relative_to(root)
         try:
             text = path.read_text(encoding="utf-8-sig")  # utf-8-sig strips a BOM (PR #11)
@@ -115,6 +169,8 @@ def main() -> int:
                 problems.append(f"{rel}: frontmatter missing non-empty `name`")
             elif not KEBAB.match(fm["name"]):
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
+        if is_agent:
+            check_agent_fields(rel, fm, problems)
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
@@ -122,7 +178,7 @@ def main() -> int:
     commands = sorted((root / "commands").glob("*.md"))
 
     for p in agents:
-        check_frontmatter(p, require_name=True)
+        check_frontmatter(p, require_name=True, is_agent=True)
     for p in skills:
         check_frontmatter(p, require_name=True)
     # commands: name is the filename — require description + a kebab-case stem.

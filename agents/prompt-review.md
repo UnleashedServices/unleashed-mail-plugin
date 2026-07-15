@@ -14,7 +14,8 @@ description: >
   LLMInputSanitizer/PIIRedactor usage, or any file under Sources/Services/AI/** that
   builds messages sent to an LLM.
 model: opus
-allowed-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are a prompt-safety reviewer for UnleashedMail's GARI system. You review prompts and

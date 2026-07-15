@@ -71,3 +71,42 @@ jobs:
             echo "| hooks-manifest (strict) | ${{ job.status }} |"
             echo "| hook stdin-simulation tests | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  secret-scan:
+    # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the
+    # accidental-commit class that leaked firebase-debug.log. History is NOT rewritten; the one
+    # accepted historical exposure is allowlisted in .gitleaks.toml (see SECURITY.md).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history — history-aware scan)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned + checksum-verified)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full git history for secrets
+        # .gitleaks.toml exempts ONLY the accepted historical exposure; any other secret fails.
+        run: gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### secret-scan"
+            echo ""
+            echo "| Gate | Status |"
+            echo "| --- | --- |"
+            echo "| gitleaks (full history) | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

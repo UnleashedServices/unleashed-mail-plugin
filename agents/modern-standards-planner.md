@@ -11,13 +11,13 @@ description: >
   major refactor, or when the user asks about current best practices for any
   technology in the stack.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent, WebFetch, WebSearch, mcp__claude_ai_Context7__resolve-library-id, mcp__claude_ai_Context7__query-docs, mcp__context7__resolve-library-id, mcp__context7__query-docs, mcp__plugin_context7_context7__resolve-library-id, mcp__plugin_context7_context7__query-docs
 ---
 
 > **MCP prefix portability:** Context7 may be exposed under three prefixes —
 > `mcp__claude_ai_Context7__*` (VSCode-shipped), `mcp__context7__*` (standalone),
-> or `mcp__plugin_context7_context7__*` (Anthropic-marketplace plugin). All three are
-> whitelisted; the resolved one wins. See `AGENT_CONTRACTS.md §10`.
+> or `mcp__plugin_context7_context7__*` (Anthropic-marketplace plugin). This agent **omits
+> `tools:`** so it inherits whichever prefix is installed (a `tools:` allowlist would block an
+> unlisted one). See `AGENT_CONTRACTS.md §10`.
 
 You are the **implementation planner** for UnleashedMail. Your role is to ensure
 that every implementation plan uses the most modern, recommended approaches for

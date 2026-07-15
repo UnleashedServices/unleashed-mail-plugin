@@ -1,10 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "npranson-unleashed-mail-plugin",
+  "name": "unleashedservices-unleashed-mail-plugin",
   "description": "Single-plugin marketplace for the unleashed-mail Claude Code plugin (multi-agent development plugin for UnleashedMail, a native macOS 15+ email client supporting Gmail and Microsoft Graph).",
   "owner": {
     "name": "Nick Ranson",
-    "url": "https://github.com/npranson"
+    "url": "https://github.com/UnleashedServices"
   },
   "plugins": [
     {
@@ -13,9 +13,9 @@
       "category": "development",
       "source": {
         "source": "github",
-        "repo": "npranson/unleashed-mail-plugin"
+        "repo": "UnleashedServices/unleashed-mail-plugin"
       },
-      "homepage": "https://github.com/npranson/unleashed-mail-plugin"
+      "homepage": "https://github.com/UnleashedServices/unleashed-mail-plugin"
     }
   ]
 }

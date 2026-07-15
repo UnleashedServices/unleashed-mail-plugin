@@ -9,7 +9,7 @@ description: >
   general code quality. Invoke after completing a feature, before a PR, when the
   user says "simplify", "clean up", or "refactor", or via the /simplify skill.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **code simplification and refinement specialist** for UnleashedMail, a native

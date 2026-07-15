@@ -9,7 +9,7 @@ description: >
   Invoke automatically when adding new features, changing APIs, modifying
   architecture, or when docs become outdated.
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **documentation engineer** maintaining UnleashedMail's documentation.
@@ -240,7 +240,7 @@ Allow users to snooze emails for later review.
 ## Developer Onboarding
 
 > The CONTRIBUTING.md you generate must point at the **app repo**, not at this plugin repo.
-> The plugin (`npranson/unleashed-mail-plugin`) provides agents/skills; the actual UnleashedMail
+> The plugin (`UnleashedServices/unleashed-mail-plugin`) provides agents/skills; the actual UnleashedMail
 > source code lives in a separate (private) repo. Verify the correct repo URL with the user
 > before publishing.
 

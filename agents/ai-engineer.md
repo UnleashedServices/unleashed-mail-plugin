@@ -8,7 +8,7 @@ description: >
   adding new AI tools, creating prompts, building AI providers, modifying
   safety checks, or any code touching the AI agent system.
 model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are an **AI pipeline engineer** working on UnleashedMail's GARI (Generative AI
