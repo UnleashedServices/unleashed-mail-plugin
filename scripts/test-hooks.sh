@@ -758,6 +758,27 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 3 (gemini): the policy is PRODUCTION-only ==
+# My stage-2 force_try/force_cast elevation had no test-file guard, so a `try!` in an XCTestCase started
+# BLOCKING — a regression vs alpha, which guards tests in all three places. Force-try in a test is
+# legitimate (a fixture that must fail loudly); CLAUDE.md restricts it in PRODUCTION code.
+mkdir -p "$LINTDIR/Tests"
+printf 'import XCTest\nfinal class T: XCTestCase { func t() { let r = try! NSRegularExpression(pattern: "x") } }\n' > "$LINTDIR/Tests/T.swift"
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/warnbin/../Tests/T.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_not_contains "lint: try! in a TEST file does NOT block (production-only policy)" "$OUT" '"decision":"block"'
+
+# == COREDEV-2494 review round 3 (codex): the directive's SCOPE must be honoured ==
+# The fallback only ever passes the PRECEDING line, so only `:next` (or a bare region-opening
+# `disable`) can waive the line below. Stripping `:previous`/`:this` identically meant
+# `// swiftlint:disable:this force_try` on line N-1 silently waived line N too.
+printf 'import Foundation\nstruct G {\n    // swiftlint:disable:this force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ScopeThis.swift"
+OUT="$(lint_run "$LINTDIR/ScopeThis.swift")"
+assert_contains "lint: disable:this on the PREVIOUS line does NOT waive this one" "$OUT" "try!"
+printf 'import Foundation\nstruct H {\n    // swiftlint:disable:previous force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ScopePrev.swift"
+OUT="$(lint_run "$LINTDIR/ScopePrev.swift")"
+assert_contains "lint: disable:previous does NOT waive the following line" "$OUT" "try!"
+
 # == COREDEV-2494 PR review round 2 (gemini): the waiver must match the rule as a WHOLE TOKEN ==
 # `${_tail#*$_rule}` was a SUBSTRING test, so `force_try_custom` / `some_force_try` falsely waived
 # `force_try`. Reproduced before fixing.

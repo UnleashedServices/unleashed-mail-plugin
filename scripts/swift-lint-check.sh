@@ -90,7 +90,14 @@ if command -v swiftlint &> /dev/null; then
     # `severity: error` is the only reason the error branch below catches these at all. Inheriting that
     # choice made a policy control silently configurable away: reported as a warning, an unwaived
     # `try!` produced an advisory with no `lint=fail` marker, so the Stop gate never armed. Reproduced.
-    FORCED=$(printf '%s' "$LINT_OUTPUT" | grep -E ": (error|warning):.*\((force_try|force_cast)\)" || true)
+    # PRODUCTION ONLY — the policy is "no force-try in PRODUCTION code" (CLAUDE.md), and force-try in a
+    # test is legitimate (a fixture that must fail loudly). The grep fallback below has always carried
+    # this guard; my stage-2 elevation did not, so a `try!` in an XCTestCase started BLOCKING — a
+    # regression against alpha, which guards tests in all three places (gemini, #43 review; reproduced).
+    FORCED=""
+    if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
+        FORCED=$(printf '%s' "$LINT_OUTPUT" | grep -E ": (error|warning):.*\((force_try|force_cast)\)" || true)
+    fi
     if [ -n "$FORCED" ]; then
         add_block "❌ Force try/cast in production code — $FILE_PATH:
 $(printf '%s' "$FORCED" | head -10)"
@@ -131,7 +138,14 @@ _waives() {
     # not a directive at all
     [ "${_line#*swiftlint:disable}" = "$_line" ] && return 1
     _tail="${_line#*swiftlint:disable}"
-    _tail="${_tail#:next}"; _tail="${_tail#:previous}"; _tail="${_tail#:this}"
+    # SCOPE MATTERS (codex, #43 review). The fallback only ever passes the PRECEDING line, so only
+    # `:next` (and a region-opening bare `swiftlint:disable`) can waive the line below it. Stripping
+    # `:previous`/`:this` identically meant `// swiftlint:disable:this force_try` on line N-1 — which
+    # waives line N-1 ONLY — silently waived line N as well. Reject the scopes that cannot reach here.
+    case "$_tail" in
+        :previous*|:this*) return 1 ;;
+    esac
+    _tail="${_tail#:next}"
     # blanket directive: nothing but whitespace after it -> waives everything
     _stripped="$(printf '%s' "$_tail" | tr -d '[:space:]')"
     [ -z "$_stripped" ] && return 0
