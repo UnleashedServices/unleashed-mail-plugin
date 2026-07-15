@@ -1,196 +1,94 @@
-# UnleashedMail Development Plugin
+# unleashed-mail — Claude Code Plugin (developer instructions)
 
-You are working on **UnleashedMail**, a native macOS email client.
+**This repo is a Claude Code _plugin_**, not the app. It ships the agents, skills, commands, hooks,
+and a bundled MCP server used to develop **UnleashedMail** (a native macOS email client, in a
+separate repo). You are working on the *plugin's own assets* here — treat them as software.
 
-## Tech Stack
+> **App-development knowledge lives in the shipped assets, not in this file.** Swift/SwiftUI/GRDB/
+> MSAL/Gmail/Graph/Curator conventions are carried by the plugin's `agents/*.md` and `skills/*/SKILL.md`
+> (and, at install time, by the consumer app repo's own `CLAUDE.md`). This plugin-root `CLAUDE.md` is
+> loaded only for sessions working **in this plugin repo** — per the Claude Code plugins reference it is
+> **not** injected into a consumer's session. Do not put app-domain rules here expecting installed agents
+> to read them; put those in a skill body (preloaded via `skills:`) or the agent itself.
 
-- **Language**: Swift 6.0+ (Swift 6 concurrency safety enforced)
-- **UI**: SwiftUI + AppKit (hybrid), WKWebView for email composition & rendering
-- **Database**: GRDB.swift 7+ with **SQLCipher (AES-256)** encryption — never unencrypted SQLite
-- **Architecture**: MVVM with `@Observable` · Actors for thread safety · async/await over Combine
-- **Platform**: macOS 15.0+ (Sequoia), ARM64 only
-- **Auth**: Google OAuth 2.0 (manual), MSAL for Microsoft (automatic token cache), Keychain storage
-- **APIs**: Gmail REST API with Pub/Sub push; Microsoft Graph Mail API with webhook subscriptions / delta queries
-- **AI**: Multi-provider AI agent (GARI) — cloud providers inherit `BaseAIProvider` + conform to `AIProviderProtocol` (Apple Intelligence conforms directly), with `ToolRegistry`, `PromptRegistry`. The unified `HTTPBasedAIProvider` base and the `AISafetyPipeline` are both **PLANNED, not yet shipped** (COREDEV-1837 / COREDEV-833) — current safety is inline (`PIIRedactor`, `LLMInputSanitizer`).
-- **CI**: GitHub Actions (Xcode 16.3+, Swift 6.1 toolchain), Xcode Cloud
-- **Lint**: SwiftLint (enforced — `.swiftlint.yml`)
-- **Project type**: Xcode project (`.xcodeproj`), package dependencies managed inside Xcode — **not** a SwiftPM package. Use `xcodebuild` (not `swift build`/`swift test`).
-
-## Source Layout
+## What ships (auto-discovered by Claude Code)
 
 ```
-Unleashed Mail/Sources/
-├── Components/     # Reusable UI components
-├── Models/         # Data structures (Sendable structs)
-├── Services/       # API clients, database, auth
-│   ├── AI/         # AI agent stages and orchestration
-│   ├── Database/   # Repositories, migrations, DatabaseService
-│   ├── Drafting/   # ProofreadService, draft composition
-│   └── Triage/     # Email triage and categorization
-├── Utilities/      # Extensions, helpers, APIEndpoints.swift
-├── ViewModels/     # @Observable classes with @MainActor
-└── Views/          # SwiftUI views by feature
+agents/      21 subagents (*.md)                 skills/     18 skills (*/SKILL.md)
+commands/    3 slash commands (*.md)             hooks/      hooks.json (10 events)
+mcp/review-synthesizer/  1 bundled stdio MCP server (.mcp.json)
+scripts/     hook scripts + validators + lib/    docs/       planning/ (+ audits/ on later branches)
+.claude-plugin/  plugin.json + marketplace.json
+AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 ```
 
-## Core Principles
+## Authoring rules (verified against code.claude.com/docs — the audit fixed real drift here)
 
-- **Provider parity is mandatory**: any mail feature implemented for Gmail must have a Graph counterpart (or an explicit, tracked `// TODO: PARITY` stub), and vice versa. ViewModels never reference concrete provider types.
-- Prefer value types (structs, enums) over reference types unless shared mutable state is required
-- Use Swift concurrency (async/await, actors) — avoid raw GCD/DispatchQueue in new code
-- All database access goes through GRDB's DatabaseQueue/DatabasePool — never raw SQLite, always SQLCipher-encrypted
-- **Filter by `account_email`** — every database query must scope to account (prevents cross-account data leaks)
-- WKWebView ↔ Swift communication uses WKScriptMessageHandler, not evaluateJavaScript fire-and-forget
-- **Never evaluate JS while user is typing** — check `isUserTyping` flag before WebView operations
-- Error handling must use typed Swift errors with `do-catch` + `Logger` — no `try?` silently swallowing
-- **No PII in logs** — use `PIIRedactor` for email addresses, subjects, content
-- Every public API surface gets documentation comments (`///`)
-- Tests use XCTest; aim for red-green-refactor TDD when building new features
-- **First emails within 3 seconds** — cache-first architecture, then API
-- **Never block main thread** — all I/O via async/await
-- **No work in SwiftUI `body`** — no networking, DB calls, or heavy computation
+**Sub-agent frontmatter** (`agents/*.md`) — keys are **camelCase**:
+- `tools:` (allowlist; **omit to inherit ALL tools incl. MCP**), `disallowedTools:` (deny-list). **There is
+  no `allowed-tools` for sub-agents** — that key is silently ignored (it's a skills/commands key). The CI
+  validator now rejects it.
+- If `tools:` is set, it is a strict allowlist: **MCP tools not listed are blocked**. To keep MCP access
+  under install-defined server prefixes (Atlassian, Context7), **omit `tools:`** and scope with
+  `disallowedTools:` (see jira-manager, modern-standards-planner).
+- `model:` ∈ `inherit`(default) | `sonnet` | `opus` | `haiku` | `fable` | a model id. Prefer `inherit`/`sonnet`
+  over hard-pinning `opus`.
+- `skills:` (YAML list) preloads a skill's **SKILL.md body** (not its `references/`) at startup.
+- **`memory:` (`user`/`project`/`local`) auto-enables Read/Write/Edit** — **never add it to a read-only agent**
+  (it silently re-grants write access; this bit swift-reviewer once).
 
-## Mandatory Processes
+**Skills/commands** use kebab `allowed-tools:` — a **pre-approval grant, not a restriction** (`allowed-tools`
+itself never denies; to *remove* tools for a skill's active window use the separate `disallowed-tools:`
+key, cleared on the next user message). Don't grant unscoped `Bash, Write, Edit` on a pure-knowledge skill.
 
-### Ask Before Modifying
+**Hooks** (`hooks/hooks.json` + `scripts/*.sh`): PostToolUse runs **after** the tool and cannot block —
+feed the model via top-level `{"decision":"block","reason":…}` or `hookSpecificOutput.additionalContext`,
+and **exit 0** (JSON is only read on exit 0). Plain stdout is invisible to the model on PostToolUse. The Stop
+gate blocks with `{"decision":"block","reason":…}`. Use the helpers in `scripts/lib/hook-io.sh`.
 
-- Xcode project structure, entitlements, or Info.plist
-- App lifecycle, menus, toolbar, or keyboard shortcuts
-- Authentication flows or token handling
-- Adding frameworks, libraries, or SwiftPM dependencies
+## Validate before committing (all run in `.github/workflows/plugin-ci.yml`)
 
-### Planning (No Exceptions)
+```bash
+python3 scripts/validate-plugin-assembly.py --root . --strict     # frontmatter + manifests + agent keys
+python3 scripts/validate-hooks.py --root . --strict --require-manifest
+VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json == README == counts (21/18/3/1)
+bash scripts/test-hooks.sh                                         # hook stdin-contract harness
+python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
+shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+```
 
-Create `docs/planning/FEATURE_NAME_PLAN.md` for any feature, refactoring, or multi-step development.
+The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
+version-sync/assembly/hooks validators + a PII scan. It does **not** build/test the Swift app (this is a
+Linux-friendly plugin repo — no Xcode).
 
-### Plan Review Gate (Mandatory before implementation)
+## Mandatory processes
 
-Every plan or debug session must be reviewed by **both** Antigravity and Codex CLI before implementation begins:
+- **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
+  reviewed by **both** `/gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/codex-review`
+  (`codex exec -s read-only`) before implementation. Route non-TTY runs through `scripts/pty-capture.py`.
+  Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
+  the two transcripts into a single auditable Combined verdict.
+- **Jira hygiene:** every change references a `COREDEV-XXXX` ticket (create one if none); update it with notes
+  through implementation, not just at the end; associate with the parent Epic.
+- **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,
+  Claude Code docs) — do not rely on training data.
+- **Parallel tool calls** for independent work.
 
-- `/gemini-review` — uses `gemini-3.1-pro` via Antigravity CLI (`agy`)
-- `/codex-review` — uses `codex exec -s read-only`
+## Repository conventions
 
-(Bare names are canonical in this workspace; the plugin also bundles them namespaced as `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review`.)
+- **Branches:** `feat/COREDEV-XXXX-short-description` (use the Epic key when spanning children). Work in a
+  dedicated `.claude/worktrees/<name>` worktree — never flip the main checkout's branch.
+- **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,
+  `refactor`, `test`, `docs`.
+- **Versioning:** `plugin.json` `version` (e.g. `2.4.2`) must stay in sync with the README H1 / What's-New
+  heading and the asset counts — enforced by `validate-version-sync.sh`. Bump + CHANGELOG on release.
+- **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
+- **Trunk:** `main` is the integration trunk; the canonical remote is `UnleashedServices/unleashed-mail-plugin`.
 
-Both must produce APPROVE / APPROVE_WITH_NOTES before code edits start. Iterate (typically 2–6 rounds) until both converge. Diagnostic agents (`xcode-build-fixer`, `graph-api-debugger`) propose fixes for the user to apply — they don't gate auto-fixes since the user is in the loop.
+## The bundled MCP server
 
-### Context7 Usage (Mandatory)
+`mcp/review-synthesizer/` is a zero-dependency stdio JSON-RPC server (`synthesize_review` tool) that
+deterministically merges the 5 reviewers' JSON findings for `swift-reviewer`'s Step-5. Pure compute, no repo
+access; the verify gate stays in `swift-reviewer`. Tests: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
 
-When performing code generation, setup/installation steps, configuration instructions, or library/API documentation lookup — you **must** use Context7 MCP tools. Do not rely on prior knowledge.
-
-### Jira Ticket Hygiene (Mandatory)
-
-- Update corresponding Jira ticket with development notes and status changes throughout implementation — not just at the end
-- If a fix or change has no existing Jira ticket, create one (Task or Bug) before starting work
-- Associate new tickets with a parent Epic if one exists for the feature area
-- Include in ticket updates: what was changed, key decisions made, files affected, follow-up work identified
-
-### Parallel Operations (Preferred)
-
-- Prefer parallel tool calls for independent operations
-- When exploring a feature area, read related files (model, service, view, tests) simultaneously
-- Agents should run in parallel when their outputs are independent
-
-## Security (Non-Negotiable)
-
-| Data | Storage | Never |
-|------|---------|-------|
-| OAuth tokens | Keychain | UserDefaults, files |
-| API keys | Keychain | Source code, Config.json |
-| Email database | SQLCipher (AES-256) | Unencrypted SQLite |
-| Encryption key | Keychain (`let`) | `var`, re-derivation |
-
-- Always sanitize HTML before WKWebView; preserve CID image refs first
-- Never remove or weaken security measures (Keychain, HTML sanitization, encryption)
-
-## Path-Scoped Project Rules
-
-The project loads `.claude/rules/*.md` automatically based on file path. When editing project files, the matching rule auto-loads — read it. Eight rules currently:
-
-> Rule paths in `.claude/rules/*.md` use the project-rooted form `"Unleashed Mail/Sources/..."`.
-> Globs match relative to the project root.
-
-| Rule | When loaded (relative to project root) |
-|------|-------------|
-| `ai-architecture.md` | `Unleashed Mail/Sources/Services/AI/**`, `AIAgent*`, `ServiceContainer+Wiring*` |
-| `api-endpoints.md` | `APIEndpoints*`, `*Service*`, `RateLimiter*`, `RetryPolicy*` |
-| `code-style.md` | `**/*.swift` (always loaded) |
-| `database.md` | `Unleashed Mail/Sources/Services/Database/**`, `*Migration*`, `*Repository*` |
-| `provider-isolation.md` | `Gmail*`, `MicrosoftGraph*`, `AccountScoped*`, sync workers |
-| `swift-regex-sendable.md` | `*Regex*`, `*Pattern*`, `PIIRedactor*` |
-| `swiftui-views.md` | `Unleashed Mail/Sources/Views/**`, `Unleashed Mail/Sources/ViewModels/**`, `Unleashed Mail/Sources/Components/**` |
-| `webview-editor.md` | `*WebView*`, `*EmailWeb*`, `HTML*` |
-
-**Rule auto-load matches by filename, not content.** When extracting `+Feature.swift` files, preserve the parent type's name so the right rule continues to load.
-
-## Service Resolution (Multi-Account)
-
-- **Services obtain providers via `AccountScopedServiceProvider.activeService()`** — never reference `gmailService` or `microsoftGraphService` concretes in new service code
-- Use `serviceProvider.gmailServiceGuarded()` for Gmail-only operations (throws if account is non-Google)
-- Use `serviceProvider.validateSupported(.operation)` as a guard at the top of provider-specific methods
-- **Views** resolve services via `@State` + `.task` + `.onChange` — **never** a computed property (TOCTOU race during account switches)
-
-## Dual Implementations (Must Update Both)
-
-Changes must be applied to both variants:
-- **AI Agent (GARI):** Docked panel (`AskAIWindowContentView`) + Floating window (`AskAIView`)
-- **Compose:** `NativeRichTextEditor` (macOS 26+) + `HTMLWebViewEditor` (macOS ≤25)
-
-> **Email detail is no longer dual:** `SimpleEmailWebView` is the sole production email-body renderer; the legacy `EmailWebView` was removed. Display-path work targets `SimpleEmailWebView` only.
-
-## Curator Design System
-
-All views use Curator tokens, not hardcoded primitives. Reference: `docs/BRAND_STANDARDS.md`.
-
-- Never hardcode fonts, colors, spacing, radii — use `CuratorTheme.*`, `Color.curator*`
-- Sheets: `.curatorSheetBackground()` — never raw `.background()`
-- Dividers: `CuratorDivider()` — never SwiftUI `Divider()`
-- Selection rows: `CuratorRadioOption` — never hand-rolled selection cells
-- Use `.foregroundStyle()` — `.foregroundColor()` is deprecated
-
-## Database Migrations
-
-Categorize as **CRITICAL** (runs at startup) or **DEFERRABLE** (background after UI loads). Default assumption: defer unless proven critical. Startup migrations block UI for 13+ seconds — deferring non-critical reduces launch to <2s.
-
-## Code Style (SwiftLint Enforced)
-
-- Explicit `internal`/`private` access control
-- `@MainActor` on UI code, `Sendable` on data crossing boundaries
-- `@Observable` over `ObservableObject` for new ViewModels
-- One type per file; functions ≤40 lines (warning), ≤50 lines (error)
-- Files >400 lines (warning), >600 lines (error) — split into `+Feature.swift` extensions
-- Types ≤300 lines (warning), ≤500 lines (error)
-- Logging: `Logger.debug("msg", category: .network)` — categories: `.network`, `.auth`, `.ui`, `.database`, `.storeKit`, `.ai`, `.general`
-- **When touching a file with SwiftLint violations, fix them as part of the change** — one exception: do **not** migrate legacy `NSRegularExpression` ("old regex") inline. All regex is moving to Swift `Regex`/`RegexBuilder` as a dedicated, tracked effort (see `.claude/rules/swift-regex-sendable.md`); piecemeal conversion risks Sendable-conformance regressions. If the `no_legacy_nsregex` rule flags such a site in a file you touch, suppress only that line with `// swiftlint:disable:next no_legacy_nsregex - <migration ticket>` — note the ` - ` rationale delimiter; a trailing `//` comment is parsed as bogus rule identifiers and fails `--strict`. (That rule is documented as a sample in the `swiftlint-config` skill but is **not yet enabled** in the app's `.swiftlint.yml` — rollout is tracked by the regex-migration epic.)
-
-## AI Architecture Standards
-
-- **Cloud providers (today)** inherit `BaseAIProvider` and conform to `AIProviderProtocol` (`complete(_:)` / `stream(_:)` / `completeStructured(_:)`); each owns its `URLSession` (default `NetworkService.shared.session`) and a per-provider `buildRequestBody(...)`. A unified `HTTPBasedAIProvider` base that would absorb the URLSession/SSE boilerplate is **PLANNED (COREDEV-1837), not yet built** — do not write code that inherits it.
-- **On-device providers (Apple Intelligence)** conform to `AIProviderProtocol` directly (no `BaseAIProvider`) — they have no HTTP semantics. Project-sanctioned exception.
-- **Single dispatch path** — `ToolRegistry` is the ONLY mechanism for tool execution
-- **No inline prompts** — all prompts in `PromptRegistry`, versioned for A/B testing
-- **Safety pipeline (transitional)** — `AISafetyPipeline` is **PLANNED, not yet shipped**. Until it ships, safety checks are inline (`PIIRedactor`, `LLMInputSanitizer`). New safety checks co-locate with existing inline validators and are documented for future migration. See `.claude/rules/ai-architecture.md` and COREDEV-833 audit finding SEC-4.
-- **`AIService` is deprecated** — route new AI functionality through `AIAgentPipeline`. Do not add new methods to `AIService.swift`.
-
-## Testing
-
-- Run tests before commits with `xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS'`
-- New features require unit tests; bug fixes require regression tests
-- Use mocks from `MockServices.swift`
-- Test naming: `test_action_condition_expectedResult()`
-- `KeychainManager` auto-uses in-memory store under XCTest (`TestEnvironment.isRunningTests`) — call `KeychainManager.resetInMemoryStore()` in `tearDown()`. Do not call `SecItem*` directly.
-- Test databases: `DatabaseQueue` only (no `DatabasePool`), `kdf_iter=4000` for speed, `waitForInitialized()` calls `initializeDatabase()` directly to avoid MainActor starvation
-
-## Repository Conventions
-
-- **Branch naming**: `1.0X/COREDEV-XXXX-short-description` off the matching version branch (`1.0X.0000`); use the Epic ticket key when a branch covers multiple child tickets. Hotfixes off the version branch, merged to BOTH the version branch AND `main`
-- **Versioning**: `MAJOR.MINORRELEASE.YYMMBB` per `docs/VERSIONING.md`. `MARKETING_VERSION` (e.g., `1.02`) is manual; `CURRENT_PROJECT_VERSION` has its `BB` byte **auto-bumped** by `scripts/bump-build-number.sh` from a **Run Script Build Phase on the app target** (install/Archive builds only — **not** a Scheme Pre-Action, which would bump one archive too late) and auto-committed by `scripts/post-archive-commit-bump.sh` (Scheme Post-Action). Current: `1.02.260601` (Beta) — `Config/Base.xcconfig` is authoritative.
-- **Trunk**: `main` is the integration trunk
-- **Commit messages**: `type(COREDEV-XXXX): description` — ticket is **mandatory**, not optional. Use the Epic ticket key when a commit spans multiple child tickets. Type prefixes: `feat`, `fix`, `chore`, `refactor`, `test`, `docs`
-- **Build**: `xcodebuild -scheme "Unleashed Mail"` — quote the scheme name (it contains a space)
-- **Source paths**: `Unleashed Mail/Sources/...` and `Unleashed MailTests/...` (also contain spaces; quote in shell)
-
-## Cross-Agent Workflow Contracts
-
-See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — defines the boundaries, handoffs, and shared conventions between agents (release/versioning, plan→implement, data→logic→ui handoff, AI pipeline ownership, code review, CI pinning, mandatory project gates, MCP tool prefixes).
-
-When two agents disagree about a boundary, `AGENT_CONTRACTS.md` is the source of truth.
+When two agents disagree about a boundary, **[`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) is the source of truth.**
