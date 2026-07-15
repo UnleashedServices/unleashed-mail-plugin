@@ -9,6 +9,8 @@ description: >
   Invoke automatically when adding new features, changing APIs, modifying
   architecture, or when docs become outdated.
 model: sonnet
+skills:
+  - create-feature-plan
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 

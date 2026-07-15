@@ -10,7 +10,9 @@ description: >
   approach for", "plan this feature", when starting a new feature, before any
   major refactor, or when the user asks about current best practices for any
   technology in the stack.
-model: opus
+model: inherit
+skills:
+  - create-feature-plan
 ---
 
 > **MCP prefix portability:** Context7 may be exposed under three prefixes —

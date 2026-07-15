@@ -6,7 +6,9 @@ description: >
   Invoke when writing tests, maintaining test suites, analyzing coverage, or setting
   up automated testing workflows. Invoke automatically when adding new features,
   refactoring code, fixing bugs, or when test failures occur.
-model: opus
+model: inherit
+skills:
+  - swift-tdd
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 

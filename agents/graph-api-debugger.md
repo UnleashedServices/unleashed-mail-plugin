@@ -7,7 +7,10 @@ description: >
   automatically when seeing MSAL errors, AADSTS error codes, 401/403/429
   responses from Graph API, interaction_required errors, delta sync failures,
   webhook subscription issues, or any Outlook/Microsoft 365 integration problem.
-model: opus
+model: inherit
+skills:
+  - microsoft-graph-integration
+memory: project
 tools: Read, Bash, Grep, Glob, Write, Edit, WebFetch, WebSearch
 ---
 

@@ -13,7 +13,7 @@ description: >
   PromptRegistry entries, AI provider call sites, tool handlers/schemas,
   LLMInputSanitizer/PIIRedactor usage, or any file under Sources/Services/AI/** that
   builds messages sent to an LLM.
-model: opus
+model: sonnet
 tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
