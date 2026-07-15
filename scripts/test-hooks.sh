@@ -725,6 +725,35 @@ printf 'x' > "$LINTDIR/notes.md"
 OUT="$(lint_run "$LINTDIR/notes.md")"
 assert_empty "lint: non-.swift file -> no output" "$OUT"
 
+# == COREDEV-2494 PR review: a BROKEN swiftlint CLI must not disarm the gate ==
+# `SWIFTLINT_RAN=1` was set on `command -v swiftlint` ALONE, so when the CLI failed before producing
+# findings (bad config / missing toolchain) the grep fallback was SKIPPED and an unwaived `try!` got a
+# non-blocking advisory with NO lint=fail marker -> Stop gate UNARMED. alpha's greps ran
+# unconditionally and DID block, so this PR had introduced a regression.
+mkdir -p "$LINTDIR/badbin"
+printf '#!/bin/sh\necho "error: unknown option" >&2\nexit 2\n' > "$LINTDIR/badbin/swiftlint"
+chmod +x "$LINTDIR/badbin/swiftlint"
+lint_run_broken() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/badbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run_broken "$LINTDIR/Unwaived.swift")"
+assert_contains "lint: broken swiftlint CLI -> unwaived try! still BLOCKS" "$OUT" '"decision":"block"'
+OUT="$(lint_run_broken "$LINTDIR/Waived.swift")"
+assert_not_contains "lint: broken CLI -> waived try! still NOT flagged" "$OUT" "try!"
+
+# == COREDEV-2494 PR review: the waiver must name the RULE ==
+# The fallback treated ANY preceding `swiftlint:disable` as a force_try waiver, so a directive for a
+# DIFFERENT rule suppressed a real violation. `swiftlint:disable:next no_legacy_nsregex` before a
+# `try! NSRegularExpression(...)` is a REAL pattern here (the regex-migration epic).
+printf 'import Foundation\nstruct C {\n    // swiftlint:disable:next no_legacy_nsregex\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/OtherRule.swift"
+OUT="$(lint_run "$LINTDIR/OtherRule.swift")"
+assert_contains "lint: a DIFFERENT rule's directive does NOT waive force_try" "$OUT" "try!"
+# ...but a blanket `swiftlint:disable:next` (no rule list) still waives everything.
+printf 'import Foundation\nstruct D {\n    // swiftlint:disable:next\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Blanket.swift"
+OUT="$(lint_run "$LINTDIR/Blanket.swift")"
+assert_not_contains "lint: a blanket directive waives force_try" "$OUT" "try!"
+
 echo ""
 echo "hook tests: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

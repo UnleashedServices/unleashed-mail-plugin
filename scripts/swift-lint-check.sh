@@ -96,8 +96,36 @@ $(printf '%s' "$LINT_OUTPUT" | grep ": warning:" | head -5)"
     if [ "$LINT_RC" -ne 0 ] && [ "$ERROR_COUNT" -eq 0 ] && [ "$WARNING_COUNT" -eq 0 ]; then
         add_advisory "⚠️  swiftlint exited $LINT_RC with no parsed findings — the lint stage may be misconfigured (check the SwiftLint CLI/version):
 $(printf '%s' "$LINT_OUTPUT" | head -3)"
+        # ...and DO NOT claim swiftlint ran (PR #43 review). `SWIFTLINT_RAN=1` was set on
+        # `command -v swiftlint` ALONE, so a broken CLI skipped the try!/as! grep fallback below and
+        # an unwaived `try!` got only this non-blocking advisory — no `lint=fail` marker, so the Stop
+        # gate was left UNARMED. On alpha the greps ran unconditionally and DID block, so that was a
+        # regression this PR introduced. Falling back to the greps restores alpha's behaviour exactly.
+        #
+        # Deliberately NOT `add_block` here: that would block EVERY Swift edit whenever the CLI is
+        # misconfigured, including clean files. Handing the decision back to the greps blocks only on a
+        # real, unwaived violation — fail-closed where it matters, quiet where it doesn't.
+        SWIFTLINT_RAN=0
     fi
 fi
+
+# Does $1 (a source line) waive rule $2? A directive waives only the rules it NAMES; a bare
+# `swiftlint:disable`/`:next` with no rule list is a blanket waiver. Prefix-strip, not `case`
+# (COREDEV-2492/2494: a `)` in a case pattern collides with an enclosing `$( )`, and bash 3.2 cannot
+# parse case-in-while-in-$() at all).
+_waives() {
+    _line="$1"; _rule="$2"
+    # not a directive at all
+    [ "${_line#*swiftlint:disable}" = "$_line" ] && return 1
+    _tail="${_line#*swiftlint:disable}"
+    _tail="${_tail#:next}"; _tail="${_tail#:previous}"; _tail="${_tail#:this}"
+    # blanket directive: nothing but whitespace after it -> waives everything
+    _stripped="$(printf '%s' "$_tail" | tr -d '[:space:]')"
+    [ -z "$_stripped" ] && return 0
+    # otherwise it must NAME the rule
+    [ "${_tail#*$_rule}" != "$_tail" ] && return 0
+    return 1
+}
 
 # --- 3 & 4. try! / as! greps: FALLBACK ONLY, when SwiftLint did not run (COREDEV-2494).
 #
@@ -121,7 +149,11 @@ if [ "$SWIFTLINT_RAN" -eq 0 ] && [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PAT
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
-            if [ "${prev#*swiftlint:disable}" = "$prev" ]; then printf '%s\n' "$hit"; fi
+            # The directive must name THIS rule (or be a blanket `swiftlint:disable` with no rule
+            # list). `swiftlint:disable:next no_legacy_nsregex` before a `try! NSRegularExpression(...)`
+            # is a REAL pattern in this codebase (the regex-migration epic) and must NOT be read as a
+            # force_try waiver (PR #43 review).
+            if ! _waives "$prev" force_try; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$TRY_BANG" ]; then
         add_block "❌ Found 'try!' in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
@@ -135,7 +167,7 @@ $TRY_BANG"
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
-            if [ "${prev#*swiftlint:disable}" = "$prev" ]; then printf '%s\n' "$hit"; fi
+            if ! _waives "$prev" force_cast; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$FORCE_CAST" ]; then
         add_block "❌ Found 'as!' (force cast) in production code (swiftlint unavailable — grep fallback) — $FILE_PATH:
