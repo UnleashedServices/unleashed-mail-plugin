@@ -32,8 +32,8 @@ Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]
 
 ```bash
 # --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
-# Wrapper 1200s (20m) > agy's 18m ON PURPOSE — at 600s the wrapper SIGTERMs agy 8 minutes BEFORE its
-# print-timeout could fire, so you'd get a masked exit 124 instead of agy's diagnosable
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
+# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
 # `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
@@ -84,8 +84,8 @@ EOF
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
 # --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
-# Wrapper 1200s (20m) > agy's 18m ON PURPOSE — at 600s the wrapper SIGTERMs agy 8 minutes BEFORE its
-# print-timeout could fire, so you'd get a masked exit 124 instead of agy's diagnosable
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
+# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
 # `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
