@@ -13,6 +13,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Enforcement hooks now default to their active modes** (COREDEV-2489 / audit hooks-scripts.5).
+  `sensitive-file-guard.sh` defaults to `ask` (was `warn`) — editing a sensitive file
+  (Keychain/OAuth/entitlements/DB/WebView) now surfaces a permission prompt; in non-interactive /
+  `dontAsk` / `-p` contexts the "ask" **denies** the operation that would prompt (the intended
+  fail-safe). Opt out with `UNLEASHED_SENSITIVE_GUARD_MODE=warn|off`. `stop-quality-marker-gate.sh`
+  defaults to `enforce` (was `warn`) — a lint-fail marker now blocks the turn once
+  (`decision:block`+`reason`, fail-open + TTL/commit-guarded). Opt out with
+  `UNLEASHED_STOP_GATE_MODE=warn|off`.
+
 ## [2.4.2] — 2026-06-27
 
 Hook-manifest integrity gate (COREDEV-2338). Surfaced while auditing whether the plugin's hooks

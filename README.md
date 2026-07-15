@@ -277,10 +277,10 @@ The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](ho
 
 | Event | Script | Behavior | Default | Kill switch |
 |---|---|---|---|---|
-| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `warn` = advisory to you; `ask` = permission prompt | `warn` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `warn`/`ask`/`off` |
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` |
 | PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | — |
 | PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
-| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once if a lint-fail marker is set. `warn` = silent log; `enforce` = block | `warn` | `UNLEASHED_STOP_GATE_MODE` = `warn`/`enforce`/`off` |
+| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` |
 | StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
 | PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
 | PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
