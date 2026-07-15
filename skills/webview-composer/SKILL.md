@@ -34,6 +34,7 @@ func getComposerHTML() async throws -> String {
     ) as? String ?? ""
 }
 
+@MainActor
 func execFormatCommand(_ command: String, value: String? = nil) async throws {
     // Never evaluate JS while the user is typing — a mid-keystroke DOM mutation resets
     // caret/IME state (CLAUDE.md). The composer sets isUserTyping from JS input events.

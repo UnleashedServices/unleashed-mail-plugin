@@ -285,7 +285,7 @@ The `.env` file is gitignored and will not be distributed with the plugin.
 
 ## Hooks
 
-The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every behavior-bearing hook has an environment kill switch. State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
+The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch (the always-on lint-feedback hook `swift-lint-check.sh` is the exception; it only feeds advisories to the model). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
 | Event | Script | Behavior | Default | Kill switch |
 |---|---|---|---|---|
@@ -294,10 +294,10 @@ The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](ho
 | PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
 | Stop | `stop-quality-marker-gate.sh` | Blocks the turn once if a lint-fail marker is set. `warn` = silent log; `enforce` = block | `warn` | `UNLEASHED_STOP_GATE_MODE` = `warn`/`enforce`/`off` |
 | StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
-| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
+| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
 | PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
-| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | — |
-| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | — |
+| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | `UNLEASHED_COMPACT_SNAPSHOT=off` |
+| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | `UNLEASHED_COMPACT_RESTORE=off` |
 | SubagentStart | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer | on | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off` |
 | SubagentStop | `capture-reviewer-verdict.sh` | Captures each reviewer's findings for the synthesizer | on | `UNLEASHED_CAPTURE_REVIEWERS=off` |
 
