@@ -103,6 +103,17 @@ Hotfix `23ca4a1` (PR #25) removed `memory:` from swift-reviewer (memory auto-ena
 
 ## Remaining audit findings — add or defer-with-ticket (do not claim full coverage)
 
+- **[NEW — adversarial verify of PR #38] `extract_status` fail-open (needs its own gate).** A
+  **fenced** BLOCKED reviewer whose `Status:` line carries an inline reason (`Status: BLOCKED - could
+  not access repo`) or trailing prose / synonym labels makes `capture.py::extract_status` return
+  `None`, so the `[]` findings file persists with NO `.status` sidecar and reads as a CLEAN pass —
+  defeating the COREDEV-2328 guarantee for ordinary LLM output. PRE-EXISTING (Item 17's no-fence
+  path degrades safely). Fix biases the parser toward detection (relax the enum end-anchor; optionally
+  scan the pre-fence region for the last top-level `Status:`), which is a security-parser change with
+  false-positive/negative tradeoffs → **gated follow-up, tracked as COREDEV-2490** (High). Do NOT fold
+  into an unrelated PR.
+
+
 Not yet folded into a numbered item above; each is either added to the phase noted or explicitly deferred with its own COREDEV ticket (codex R4 / gemini R4):
 - **`/pr-review` + `swift-reviewer` run the full `xcodebuild` test suite twice** — dedupe (P1c/Item 16).
 - **PostToolUse hook hardening:** the two per-edit hooks have no `timeout` (inherit 600s); `swift-build-verify.sh` is wired to Write|Edit where it's a guaranteed no-op; PreToolUse matches `MultiEdit` but PostToolUse doesn't (asymmetry) — (P2/Item 14).
@@ -127,4 +138,5 @@ Not yet folded into a numbered item above; each is either added to the phase not
 - **R2** — gemini `APPROVE`; codex `REQUEST_CHANGES` (8, incl. the swift-reviewer memory regression → fixed as item 0) → v3.
 - **R3** — gemini `APPROVE` (semantics/security/sequencing all pass); codex `REQUEST_CHANGES` ("most round-2 concerns resolved") — 6 findings: baseline-sync/memory-still-in-branch, CLAUDE.md context layers, Stop-hook contract (block+reason not additionalContext), 4th MailProviderError source (error-handling skill), approval-digest binding + secure temp dir, actionlint-not-in-CI; + nits (Skill-tool term, P1b-5 lane, 21/21/0/1 counts, machine-readable registry). **All addressed in v4.**
 - **R4** — gemini `APPROVE_WITH_NOTES` (notes were mostly already-shipped-#26 false-positives + real completeness gaps: pre-commit hardening, pr-review double-test, MCP cleanup); codex `REQUEST_CHANGES` ("v4 resolves round-3; phase order sound") — new deeper findings: 9/11 producer-before-consumer ordering, honest skill-enforcement, AGENT_CONTRACTS not auto-injected, MCP fail-open + SubagentStop schema, item-5 quarantine-must-remove, min CC >=2.1.172, waiver-is-a-decision, remaining-findings catalog. **All folded into v5.**
-- **R5** — re-gate both on v6. gemini `REQUEST_CHANGES`, codex `REQUEST_CHANGES` — but **convergent on substance**: Item 5 → defer (needs human/live canary; neither can verify model orchestration from script tests); Item 11 → sound **minus the PreToolUse token** (over-engineering for the cooperative threat model); Item 13 → churn, **drop** (mechanical split of non-preloaded skills adds round-trips, no context economy); Item 17 → fixes sound, requires `!.env.example` in `.gitignore` (`.env.*` ignores it — verified) + lock `REPORT_FINDING_TOOL` to removal. **v7 records these decisions.** Item 17 implemented per both reviewers' explicit conditions; Item 11 is design-approved (build minus token) pending scope confirmation; Items 5 + 13 are not autonomous work.
+- **R5** — re-gate both on v6. gemini `REQUEST_CHANGES`, codex `REQUEST_CHANGES` — but **convergent on substance**: Item 5 → defer (needs human/live canary; neither can verify model orchestration from script tests); Item 11 → sound **minus the PreToolUse token** (over-engineering for the cooperative threat model); Item 13 → churn, **drop** (mechanical split of non-preloaded skills adds round-trips, no context economy); Item 17 → fixes sound, requires `!.env.example` in `.gitignore` (`.env.*` ignores it — verified) + lock `REPORT_FINDING_TOOL` to removal. **v7 records these decisions.** Item 17 implemented per both reviewers' explicit conditions (PR #38); Item 11 is design-approved (build minus token) pending scope confirmation; Items 5 + 13 are not autonomous work.
+- **Post-impl adversarial verify (Item 17 / PR #38)** — 3 attackers, each targeting one fix. Found a real hole in the `changed_files` fail-close (list-truthiness let `[""]`/`["  "]`/`["./"]` bypass → canonicalized-set check, fixed + regression-tested) and a PRE-EXISTING `extract_status` fail-open (→ **COREDEV-2490**, gated follow-up). Dead-code removal held. This is why fixes get adversarially verified, not just unit-tested.
