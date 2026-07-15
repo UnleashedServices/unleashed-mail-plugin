@@ -155,18 +155,28 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
     if not reg.is_file():
         problems.append(f"{rel}: missing (the agent registry lives here)")
         return
+    try:
+        content = reg.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        problems.append(f"{rel}: cannot read ({e})")
+        return
     # Capture the "## Agent Registry" section: its heading through the next top-level "## ".
-    # Sub-headings ("### …") stay inside the section; only a new "## " ends it.
+    # Sub-headings ("### …") stay inside the section; only a new "## " ends it. Collect rows in a
+    # LIST (not a set) so a name registered twice — possibly with contradictory guidance in each
+    # row — is caught rather than silently collapsing.
     in_section = False
-    registered: set[str] = set()
-    for ln in reg.read_text(encoding="utf-8-sig").splitlines():
+    rows: list[str] = []
+    for ln in content.splitlines():
         if ln.startswith("## "):
             in_section = ln.strip() == "## Agent Registry"
             continue
         if in_section:
             m = REGISTRY_ROW.match(ln)
             if m:
-                registered.add(m.group(1))
+                rows.append(m.group(1))
+    registered = set(rows)
+    for name in sorted({n for n in rows if rows.count(n) > 1}):
+        problems.append(f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables")
     for name in sorted(agent_names - registered):
         problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
     for name in sorted(registered - agent_names):
@@ -202,6 +212,11 @@ def main() -> int:
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
         if is_agent:
             check_agent_fields(rel, fm, problems)
+            # The frontmatter `name` is the identifier Claude Code registers; if it diverges from the
+            # filename stem, the registry set-equality check (keyed on stems) would enforce the wrong
+            # identifier. Require them equal.
+            if has(fm, "name") and fm["name"] != path.stem:
+                problems.append(f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`")
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
