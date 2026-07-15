@@ -5,9 +5,10 @@
 # milliseconds, never the 13+ s a real build would. It blocks the turn (root-level
 # {"decision":"block"}) only when a marker is fail + fresh + commit-matches.
 #
-# Warn-first: the default mode logs a silent diagnostic line and exits 0 with no
-# stdout (on Stop, stdout/additionalContext are NOT passive, so warn must not use
-# them). Two loop guards prevent wedging a session.
+# Enforce-first (default): a lint-fail marker blocks the turn ONCE (`decision:block`+`reason`).
+# `warn` is the opt-in fallback — it logs a silent diagnostic line and exits 0 with no stdout
+# (on Stop, stdout/additionalContext are NOT passive, so warn must not use them). Two loop guards
+# prevent wedging a session.
 #
 # Kill switch:  UNLEASHED_STOP_GATE=off                  -> exit 0
 # Mode:         UNLEASHED_STOP_GATE_MODE=warn|enforce|off  -> default enforce (COREDEV-2489/P1c-12):
@@ -92,7 +93,7 @@ if [ "$MODE" = "enforce" ]; then
     fi
 fi
 
-# warn mode (default): silent diagnostic log only — no stdout, no decision.
+# warn mode (opt-in fallback): silent diagnostic log only — no stdout, no decision.
 LOGDIR="$(marker_base)/logs"
 mkdir -p "$LOGDIR" 2>/dev/null || exit 0
 printf '%s stop-gate would-block kind=%s age=%s commit=%s\n' \
