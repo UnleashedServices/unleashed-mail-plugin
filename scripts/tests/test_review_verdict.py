@@ -68,6 +68,28 @@ class ReviewVerdictTest(unittest.TestCase):
                 "--reviewer", "gemini=MISSING", "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_a_tampered_transcript_field_cannot_pass(self):
+        """gemini (#41 review): `.get(k, "")` returns the default only when the key is ABSENT, so an
+        explicit `"transcriptSha256": null` yielded None -> str(None) == "None" -> truthy -> PASSED.
+        A hand-tampered artifact is precisely this check's threat model, so the one shape an attacker
+        would hand-write must not be the one that slips through. Verify at BOTH write and verify."""
+        import json as _json
+        for bad in (None, "", "   ", 123, ["x"], {"a": 1}, True):
+            with self.subTest(transcriptSha256=bad):
+                self.assertEqual(self._write().returncode, 0)     # a legitimate artifact first
+                vf = self._verdict_file()
+                with open(vf) as fh:
+                    art = _json.load(fh)
+                art["verdict"] = "APPROVE"
+                for r in art["reviewers"]:
+                    r["status"] = "APPROVE"
+                    r["transcriptSha256"] = bad
+                with open(vf, "w") as fh:
+                    _json.dump(art, fh)
+                v = run("verify", "--plan", self.plan)
+                self.assertNotEqual(v.returncode, 0,
+                                    f"tampered transcriptSha256={bad!r} passed verify")
+
     def _verdict_file(self):
         return os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")
 

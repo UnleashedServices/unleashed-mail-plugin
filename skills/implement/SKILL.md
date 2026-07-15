@@ -53,7 +53,9 @@ if [ -z "$PLAN" ]; then
 else
     echo "Plan: $PLAN"
     # Verify the persisted, digest-bound verdict for THAT plan:
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" verify --plan "$PLAN"
+    # :-. so the recipe DOES what the prose below says — unset would otherwise resolve to the
+    # absolute /scripts/review-verdict.py and fail (gemini, #41 review). Matches the other skills.
+    python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" verify --plan "$PLAN"
 fi
 ```
 

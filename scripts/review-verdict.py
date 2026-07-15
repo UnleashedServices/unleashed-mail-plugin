@@ -65,8 +65,13 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
     # HONEST BOUND: this does NOT stop a determined caller (`printf x > f.txt` yields a non-empty
     # digest and passes). It raises the floor against an accidental one and completes the audit
     # trail. Content validation would be the real control — see COREDEV-2497.
+    # `isinstance(..., str)`, NOT `.get(k, "")`: the default applies only when the key is ABSENT, so an
+    # explicit `"transcriptSha256": null` returned None and `str(None)` -> "None", which is truthy and
+    # sailed straight through. A hand-tampered artifact is exactly the threat this check exists for, so
+    # the one shape an attacker would hand-write must not be the one that passes. (gemini, #41 review.)
     missing_t = [str(r.get("name")) for r in reviewers
-                 if not str(r.get("transcriptSha256", "")).strip()]
+                 if not (isinstance(r.get("transcriptSha256"), str)
+                         and r["transcriptSha256"].strip())]
     if missing_t:
         return ("an APPROVING combined verdict requires a transcript per reviewer; missing for "
                 + ", ".join(sorted(missing_t)))
