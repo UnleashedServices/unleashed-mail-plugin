@@ -11,8 +11,10 @@ You should receive an acknowledgement within a few business days.
 
 CI runs a history-aware [gitleaks](https://github.com/gitleaks/gitleaks) scan
 (`.github/workflows/plugin-ci.yml`, the `secret-scan` job) over the **full git history**
-on every push to `main` and every pull request **targeting `main`** (the workflow's
-`push`/`pull_request` triggers filter on `main`). The ruleset extends the gitleaks default;
+on every push to `main` or `alpha`, and every pull request **targeting `main` or `alpha`**
+(the workflow's `push`/`pull_request` triggers filter on those two branches). `alpha` is the
+integration branch releases are cut from; until COREDEV-2494 the triggers filtered on `main`
+alone, so PRs into `alpha` — which is most of them — ran no scan at all. The ruleset extends the gitleaks default;
 the configuration and the accepted-exposure allowlist live in [`.gitleaks.toml`](.gitleaks.toml).
 
 Run it locally before pushing:

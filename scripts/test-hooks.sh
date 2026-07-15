@@ -146,7 +146,7 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"mv a.swift b.swift"}
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_empty "benign mv -> no decision" "$OUT"
 
-# 7b. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
+# 7f. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
 # other case here overrides explicitly, so nothing exercised the shipped default. Mutation-proved: with
 # this test absent, flipping the default to `:-warn` leaves the whole suite byte-identical + exit 0 —
 # silently downgrading the Keychain/OAuth/entitlements BLOCKING confirmation to a non-blocking advisory
