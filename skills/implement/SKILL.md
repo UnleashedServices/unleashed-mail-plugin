@@ -143,21 +143,37 @@ fi
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
 - **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
   - *no artifact* → the gate never ran (or ran in another checkout); ask the user to run
-    `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence.
-    **If the gate can't run because a reviewer CLI is unavailable/unauthenticated**, that surfaces
-    HERE — as a missing artifact — because `verify` only ever inspects the artifact and can never
-    report on CLI availability. There is **no scripted waiver** (COREDEV-2493). First rule out a bad
-    invocation: a PTY-wrapped `agy -p "ping"` returning `Pong!` means the CLI is healthy and the review
-    call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a verdict).
-    If it is genuinely unavailable, STOP and present the recovery choices to the **user** —
-    install/authenticate the CLI, capture the review on another machine, or explicitly direct the work
-    outside `/implement`. That last one is a **workflow exception, not a passed gate**: record it in
-    the plan's progress log and do NOT emit an approving Combined verdict. Never select or infer the
-    exception yourself, and never self-waive. See AGENT_CONTRACTS §2.
-  - *not an approving verdict* → the plan was `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate.
+    `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence. If the gate
+    never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
+  - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate — **unless the
+    reason names a reviewer as `MISSING`**, in which case the reviewer never ran and there is no plan
+    problem to iterate: see **Unavailable reviewer** below.
   - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval
     (**approve-then-edit is blocked**); re-run the gate on the current plan.
   - *written for a different plan* → the artifact isn't this plan's; run the gate on `$PLAN`.
+
+**Unavailable reviewer.** There is **no scripted waiver** (COREDEV-2493), and `verify` can never report on
+CLI availability — it only ever inspects the artifact — so an unavailable reviewer reaches you as **one of
+two different failures**, depending on how far the user got:
+
+| What the user did | `verify` says | 
+|---|---|
+| Never ran `/unleashed-mail:review-synthesis` | *no artifact* |
+| Ran it, recording `<reviewer>=MISSING` | *not an approving verdict* … `<reviewer> recorded MISSING (never ran)` |
+
+Both are the **same situation**. Do not read the second as a plan problem — iterating the plan cannot clear
+a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remove).
+
+First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` returning `Pong!` means the CLI is healthy
+and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
+flag and re-run.
+
+If it is genuinely unavailable, STOP and present the recovery choices to the **user** — install/authenticate
+the CLI, capture the review on another machine, or explicitly direct the work outside `/implement`. That last
+one is a **workflow exception, not a passed gate**: record it in the plan's progress log and do NOT emit an
+approving Combined verdict. Never select or infer the exception yourself, and never self-waive.
+See AGENT_CONTRACTS §2.
 - **`verify` exits 0?** The artifact is an approving verdict bound to the plan's current bytes. Read the
   plan, re-verify the modern-standards recommendations are still current (via Context7), then proceed.
 

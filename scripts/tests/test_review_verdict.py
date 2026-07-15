@@ -294,6 +294,38 @@ class ReviewVerdictTest(unittest.TestCase):
                 "--reviewer", "gemini=MISSING", "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_verify_NAMES_a_MISSING_reviewer(self):
+        """An unavailable reviewer and a genuine disagreement must not read identically.
+
+        `/review-synthesis` records an absent reviewer as `<name>=MISSING` and writes a NON-APPROVING
+        artifact, so both land on verify's 'not an approving verdict' branch. Byte-identical messages
+        left an implementer unable to tell which `implement` recovery branch applied — so they follow
+        the first one that fits, 'iterate the plan + gate', which can never clear a reviewer that never
+        ran. That is the exact wedge COREDEV-2493 removes (codex, #42 review).
+        """
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("MISSING", out)
+        self.assertIn("codex", out)
+        self.assertIn("NOT a plan problem", out)
+
+    def test_verify_does_NOT_name_MISSING_on_a_genuine_disagreement(self):
+        """Both reviewers ran and disagreed — 'iterate the plan + gate' IS the right advice, and the
+        MISSING hint would be actively misleading. The hint must be earned, not unconditional."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}",
+                "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertNotIn("MISSING", out)
+        self.assertNotIn("NOT a plan problem", out)
+
     def test_a_tampered_transcript_field_cannot_pass(self):
         """gemini (#41 review): `.get(k, "")` returns the default only when the key is ABSENT, so an
         explicit `"transcriptSha256": null` yielded None -> str(None) == "None" -> truthy -> PASSED.

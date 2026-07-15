@@ -320,7 +320,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if not isinstance(art, dict) or art.get("schemaVersion") != SCHEMA_VERSION:
         return _fail(f"artifact schemaVersion != {SCHEMA_VERSION} (stale format — re-run the gate)")
     if art.get("verdict") not in APPROVING:
-        return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed")
+        # NAME the reviewers that never ran. Without this the message for "the two reviewers disagreed"
+        # and "a reviewer CLI was unavailable" is byte-identical, so an implementer cannot tell which
+        # `implement` recovery branch they are in and defaults to the wrong one — "iterate the plan +
+        # gate" — which cannot work, because there is no plan problem to iterate (codex, #42 review).
+        absent = sorted(
+            str(r.get("name")) for r in (art.get("reviewers") or [])
+            if isinstance(r, dict) and str(r.get("status", "")).strip().upper() == "MISSING"
+        )
+        hint = (f" — {', '.join(absent)} recorded MISSING (never ran): this is NOT a plan problem, so"
+                " iterating the plan cannot clear it; see 'Unavailable reviewer' in the implement skill"
+                if absent else "")
+        return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed{hint}")
     reviewers = art.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:
         return _fail("artifact does not record the required dual review")
