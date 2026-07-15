@@ -83,6 +83,19 @@ if command -v swiftlint &> /dev/null; then
     ERROR_COUNT=${ERROR_COUNT:-0}
     WARNING_COUNT=${WARNING_COUNT:-0}
 
+    # force_try / force_cast BLOCK at whatever severity SwiftLint assigned them (codex, #43 review).
+    # This hook enforces the PROJECT's policy ("no force-try in production", CLAUDE.md) and uses
+    # SwiftLint only as the ORACLE for "is there an UNWAIVED violation here". Severity is a per-repo
+    # config knob — `force_try: severity: warning` is explicitly supported — and the app's current
+    # `severity: error` is the only reason the error branch below catches these at all. Inheriting that
+    # choice made a policy control silently configurable away: reported as a warning, an unwaived
+    # `try!` produced an advisory with no `lint=fail` marker, so the Stop gate never armed. Reproduced.
+    FORCED=$(printf '%s' "$LINT_OUTPUT" | grep -E ": (error|warning):.*\((force_try|force_cast)\)" || true)
+    if [ -n "$FORCED" ]; then
+        add_block "❌ Force try/cast in production code — $FILE_PATH:
+$(printf '%s' "$FORCED" | head -10)"
+    fi
+
     if [ "$ERROR_COUNT" -gt 0 ]; then
         add_block "❌ SwiftLint errors in $FILE_PATH:
 $(printf '%s' "$LINT_OUTPUT" | grep ": error:" | head -10)"
@@ -122,8 +135,12 @@ _waives() {
     # blanket directive: nothing but whitespace after it -> waives everything
     _stripped="$(printf '%s' "$_tail" | tr -d '[:space:]')"
     [ -z "$_stripped" ] && return 0
-    # otherwise it must NAME the rule
-    [ "${_tail#*$_rule}" != "$_tail" ] && return 0
+    # otherwise it must NAME the rule — as a WHOLE token, not a substring. `${_tail#*$_rule}` matched
+    # `force_try_custom` and `some_force_try` too, so a directive for a DIFFERENT rule whose name merely
+    # CONTAINS this one silently waived a real violation (gemini, #43 review; reproduced). SwiftLint
+    # separates rule names with commas/whitespace, so pad and search for the delimited token.
+    _norm=" $(printf '%s' "$_tail" | tr ',' ' ' | tr -s '[:space:]' ' ') "
+    [ "${_norm#* $_rule }" != "$_norm" ] && return 0
     return 1
 }
 
@@ -145,7 +162,12 @@ if [ "$SWIFTLINT_RAN" -eq 0 ] && [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PAT
     TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
-            prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
+            # spawning a pointless `sed -n 0p` (gemini, #43 review). NOTE: gemini said this "prints an
+            # error to stderr on BSD and GNU sed" — on BSD sed it actually exits 0 SILENTLY (verified),
+            # so this is efficiency, not a bug: prev="" already yielded the correct not-waived answer.
+            prev=""
+            [ "$n" -gt 1 ] && prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
@@ -163,7 +185,12 @@ $TRY_BANG"
     FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
-            prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
+            # spawning a pointless `sed -n 0p` (gemini, #43 review). NOTE: gemini said this "prints an
+            # error to stderr on BSD and GNU sed" — on BSD sed it actually exits 0 SILENTLY (verified),
+            # so this is efficiency, not a bug: prev="" already yielded the correct not-waived answer.
+            prev=""
+            [ "$n" -gt 1 ] && prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".

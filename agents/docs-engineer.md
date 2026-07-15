@@ -136,13 +136,14 @@ Ensure all public APIs have comprehensive `///` comments:
 /// This service handles OAuth flows for Gmail and Microsoft Graph,
 /// token refresh, and account management.
 ///
-/// - Note: All operations are asynchronous and may throw `MicrosoftAuthError`.
+/// - Note: All operations are asynchronous and may throw if authentication fails.
 public protocol AuthServiceProtocol {
-    /// Returns a valid access token for the account, refreshing it if it has expired.
+    /// Gets a valid access token for a specific account, refreshing if necessary.
+    /// This ensures the correct account's token is returned for multi-account scenarios.
     ///
-    /// - Parameter email: The account's email address
-    /// - Returns: A valid OAuth access token
-    /// - Throws: `MicrosoftAuthError` if the token cannot be refreshed
+    /// - Parameter email: The email address of the account to get a token for
+    /// - Returns: A valid access token for the specified account
+    /// - Throws: If no valid token can be obtained for the specified account
     func getValidAccessToken(for email: String) async throws -> String
 }
 ```

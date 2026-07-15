@@ -742,6 +742,38 @@ assert_contains "lint: broken swiftlint CLI -> unwaived try! still BLOCKS" "$OUT
 OUT="$(lint_run_broken "$LINTDIR/Waived.swift")"
 assert_not_contains "lint: broken CLI -> waived try! still NOT flagged" "$OUT" "try!"
 
+# == COREDEV-2494 PR review round 2 (codex): severity is a config knob, policy is not ==
+# force_try/force_cast BLOCK at whatever severity SwiftLint assigned. The app's .swiftlint.yml sets
+# `force_try: severity: error` TODAY — which was the only reason the error branch caught them. SwiftLint
+# explicitly supports `force_try: severity: warning`; under that config an unwaived try! produced an
+# advisory with NO lint=fail marker, so the Stop gate never armed. Reproduced before fixing.
+mkdir -p "$LINTDIR/warnbin"
+cat > "$LINTDIR/warnbin/swiftlint" <<'SL'
+#!/bin/sh
+echo "/x/B.swift:2:30: warning: Force Try Violation: Force tries should be avoided. (force_try)"
+exit 0
+SL
+chmod +x "$LINTDIR/warnbin/swiftlint"
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
+
+# == COREDEV-2494 PR review round 2 (gemini): the waiver must match the rule as a WHOLE TOKEN ==
+# `${_tail#*$_rule}` was a SUBSTRING test, so `force_try_custom` / `some_force_try` falsely waived
+# `force_try`. Reproduced before fixing.
+printf 'import Foundation\nstruct E {\n    // swiftlint:disable:next force_try_custom\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/SubstringRule.swift"
+OUT="$(lint_run "$LINTDIR/SubstringRule.swift")"
+assert_contains "lint: force_try_custom does NOT waive force_try" "$OUT" "try!"
+# ...but a comma-separated list that really does name it still waives.
+printf 'import Foundation\nstruct F {\n    // swiftlint:disable:next no_legacy_nsregex, force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ListRule.swift"
+OUT="$(lint_run "$LINTDIR/ListRule.swift")"
+assert_not_contains "lint: a comma-list naming force_try DOES waive it" "$OUT" "try!"
+
+# == COREDEV-2494 PR review round 2 (gemini): a hit on LINE 1 has no preceding line ==
+printf 'let r = try! NSRegularExpression(pattern: "x")\n' > "$LINTDIR/Line1.swift"
+OUT="$(lint_run "$LINTDIR/Line1.swift")"
+assert_contains "lint: unwaived try! on line 1 -> blocks (no sed 0p)" "$OUT" "try!"
+
 # == COREDEV-2494 PR review: the waiver must name the RULE ==
 # The fallback treated ANY preceding `swiftlint:disable` as a force_try waiver, so a directive for a
 # DIFFERENT rule suppressed a real violation. `swiftlint:disable:next no_legacy_nsregex` before a
