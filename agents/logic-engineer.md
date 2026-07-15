@@ -162,7 +162,7 @@ final class DraftsViewModel {
                 self.state = .loaded(drafts)
             }
         } catch {
-            self.error = .databaseError(underlying: error)
+            self.error = .networkError(error)   // EmailServiceError has no DB case — a DB observation failure surfaces via the generic wrapper
         }
     }
 

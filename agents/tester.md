@@ -139,8 +139,9 @@ final class InboxViewModelTests: XCTestCase {
 
         // Assert
         XCTAssertTrue(sut.messages.isEmpty)
-        XCTAssertNotNil(sut.error)
-        XCTAssertEqual(sut.error, .networkError)
+        guard case .networkError = sut.error else {
+            return XCTFail("expected .networkError, got \(String(describing: sut.error))")
+        }
     }
 }
 ```

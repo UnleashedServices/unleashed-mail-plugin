@@ -82,7 +82,7 @@ Per CLAUDE.md, all database access uses SQLCipher (AES-256) — never unencrypte
 // ✅ Open encrypted database
 var config = Configuration()
 config.prepareDatabase { db in
-    try db.usePassphrase(try KeychainManager.shared.getDatabaseKey())
+    try db.usePassphrase(try EncryptionKeyManager.shared.databaseKey())  // SQLCipher key owner (see keychain-security skill) — distinct from OAuth-token Keychain items
 }
 let dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
 

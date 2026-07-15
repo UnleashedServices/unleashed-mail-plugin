@@ -198,7 +198,7 @@ HStack {
     Image(systemName: message.isStarred ? "star.fill" : "star")
     Text(message.subject)
 }
-.foregroundStyle(message.isStarred ? Color.starColor : Color.curatorOnSurfaceVariant)
+.foregroundStyle(message.isStarred ? Color.curatorAccent : Color.curatorOnSurfaceVariant)
 
 // ❌ Color only, and raw (.yellow/.primary) instead of Curator tokens
 Text(message.subject)

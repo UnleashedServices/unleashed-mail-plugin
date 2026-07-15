@@ -104,7 +104,7 @@ migrator.registerMigration("v1_createEmails") { db in
 migrator.registerMigration("v2_addAttachmentsTable") { db in
     try db.create(table: "attachment") { t in
         t.autoIncrementedPrimaryKey("id")
-        t.belongsTo("email", onDelete: .cascade).notNull()
+        t.belongsTo("email", onDelete: .cascade, column: "email_id").notNull()  // explicit snake_case FK (belongsTo defaults to camelCase `emailId`)
         t.column("filename", .text).notNull()
         t.column("mime_type", .text).notNull()
         t.column("size", .integer).notNull()
@@ -117,7 +117,9 @@ migrator.registerMigration("v2_addAttachmentsTable") { db in
 1. **NEVER modify an existing migration.** Always add a new one.
 2. Name migrations with a version prefix: `v1_`, `v2_`, etc.
 3. Always specify `.notNull()` and `.defaults(to:)` where appropriate.
-4. Foreign keys use `.belongsTo()` with explicit `onDelete` behavior.
+4. Foreign keys use `.belongsTo()` with explicit `onDelete` behavior **and an explicit `column:`** —
+   `belongsTo` defaults to a camelCase FK column (e.g. `emailId`), so pass `column: "email_id"` to keep
+   the SQL identifier snake_case (in sync with the model's `CodingKeys` raw values).
 5. Column names in `t.column(...)`/indexes are the **snake_case** SQL identifiers — keep them in sync with the model's `CodingKeys` raw values.
 
 ## Query Patterns
