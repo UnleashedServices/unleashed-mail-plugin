@@ -329,13 +329,26 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # a crash is not a pass — but a traceback is not a diagnosable failure, and the isinstance guard
         # below (which would have caught it) never ran because this hint is computed first.
         _revs = art.get("reviewers")
-        absent = sorted(
-            str(r.get("name")) for r in (_revs if isinstance(_revs, list) else [])
-            if isinstance(r, dict) and str(r.get("status", "")).strip().upper() == "MISSING"
-        )
-        hint = (f" — {', '.join(absent)} recorded MISSING (never ran): this is NOT a plan problem, so"
-                " iterating the plan cannot clear it; see 'Unavailable reviewer' in the implement skill"
-                if absent else "")
+        _revs = _revs if isinstance(_revs, list) else []
+        absent = sorted(str(r.get("name")) for r in _revs if isinstance(r, dict)
+                        and str(r.get("status", "")).strip().upper() == "MISSING")
+        # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
+        rejecting = sorted(f"{r.get('name')}={str(r.get('status', '')).strip().upper()}"
+                           for r in _revs if isinstance(r, dict)
+                           and str(r.get("status", "")).strip().upper() not in APPROVING
+                           and str(r.get("status", "")).strip().upper() != "MISSING")
+        if absent and rejecting:
+            # MIXED. Saying "not a plan problem" here would tell the implementer to ignore real,
+            # actionable feedback from the reviewer that DID run (codex, #42 review). Both are true and
+            # both must be resolved.
+            hint = (f" — TWO SEPARATE problems: {', '.join(rejecting)} (ran, wants plan changes — address"
+                    f" them) AND {', '.join(absent)} recorded MISSING (never ran — see 'Unavailable"
+                    " reviewer' in the implement skill). Resolving either one alone will NOT pass the gate")
+        elif absent:
+            hint = (f" — {', '.join(absent)} recorded MISSING (never ran): this is NOT a plan problem, so"
+                    " iterating the plan cannot clear it; see 'Unavailable reviewer' in the implement skill")
+        else:
+            hint = ""
         return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed{hint}")
     reviewers = art.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:

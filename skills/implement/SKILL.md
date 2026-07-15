@@ -145,9 +145,10 @@ fi
   - *no artifact* → the gate never ran (or ran in another checkout); ask the user to run
     `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence. If the gate
     never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
-  - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate — **unless the
-    reason names a reviewer as `MISSING`**, in which case the reviewer never ran and there is no plan
-    problem to iterate: see **Unavailable reviewer** below.
+  - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason
+    names a reviewer as `MISSING`, that reviewer never ran — see **Unavailable reviewer** below. Read the
+    whole reason before acting: a `MISSING` reviewer **and** a rejecting one is **two** problems, and
+    `verify` says so explicitly (`TWO SEPARATE problems: …`). Resolving either alone will not pass.
   - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval
     (**approve-then-edit is blocked**); re-run the gate on the current plan.
   - *written for a different plan* → the artifact isn't this plan's; run the gate on `$PLAN`.
@@ -163,6 +164,10 @@ two different failures**, depending on how far the user got:
 
 Both are the **same situation**. Do not read the second as a plan problem — iterating the plan cannot clear
 a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remove).
+
+**But do not over-correct**: if the OTHER reviewer ran and rejected, that rejection is a real plan problem
+and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …` — address the requested
+changes *and* recover the missing reviewer. Neither alone passes the gate.
 
 First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` returning `Pong!` means the CLI is healthy
 and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a

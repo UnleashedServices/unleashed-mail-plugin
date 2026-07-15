@@ -335,6 +335,22 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotIn("Traceback", out)
                 self.assertIn("GATE FAILED", out)
 
+    def test_mixed_MISSING_plus_rejection_does_not_mask_the_rejection(self):
+        """One reviewer MISSING + one REQUEST_CHANGES is TWO problems, not one.
+
+        The unconditional MISSING hint said "this is NOT a plan problem" even when the reviewer that
+        DID run wanted plan changes — telling the implementer to ignore real, actionable feedback and
+        go chase the unavailable CLI (codex, #42 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=REQUEST_CHANGES:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("codex", out)                    # the missing one is still named
+        self.assertIn("gemini=REQUEST_CHANGES", out)   # ...and the rejection is NOT masked
+        self.assertNotIn("NOT a plan problem", out)    # ...and we do NOT claim there is nothing to fix
+
     def test_verify_does_NOT_name_MISSING_on_a_genuine_disagreement(self):
         """Both reviewers ran and disagreed — 'iterate the plan + gate' IS the right advice, and the
         MISSING hint would be actively misleading. The hint must be earned, not unconditional."""
