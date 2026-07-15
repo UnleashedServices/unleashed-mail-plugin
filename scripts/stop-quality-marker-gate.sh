@@ -10,7 +10,9 @@
 # them). Two loop guards prevent wedging a session.
 #
 # Kill switch:  UNLEASHED_STOP_GATE=off                  -> exit 0
-# Mode:         UNLEASHED_STOP_GATE_MODE=warn|enforce     -> default warn
+# Mode:         UNLEASHED_STOP_GATE_MODE=warn|enforce|off  -> default enforce (COREDEV-2489/P1c-12):
+#               a lint-fail marker blocks the turn ONCE via {"decision":"block","reason":...} (the
+#               only model-visible Stop mechanism), fail-open + TTL/commit-guarded so it can't wedge.
 # TTL seconds:  UNLEASHED_STOP_GATE_TTL_SEC               -> default 600
 set -uo pipefail
 
@@ -21,7 +23,7 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_DIR/lib/marker.sh"
 
 [ "${UNLEASHED_STOP_GATE:-on}" = "off" ] && exit 0
-MODE="${UNLEASHED_STOP_GATE_MODE:-warn}"
+MODE="${UNLEASHED_STOP_GATE_MODE:-enforce}"
 [ "$MODE" = "off" ] && exit 0   # `_MODE=off` also disables (parity with the README kill-switch cell)
 TTL="${UNLEASHED_STOP_GATE_TTL_SEC:-600}"
 # Reject a non-numeric TTL so the later `[ "$AGE" -lt "$TTL" ]` never errors to stderr.

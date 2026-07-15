@@ -11,7 +11,9 @@
 # the loop. No-match / warn-mode / kill-switch-off emit no decision.
 #
 # Kill switch:  UNLEASHED_SENSITIVE_GUARD=off            -> emit nothing, exit 0
-# Mode:         UNLEASHED_SENSITIVE_GUARD_MODE=warn|ask  -> default warn (advisory)
+# Mode:         UNLEASHED_SENSITIVE_GUARD_MODE=warn|ask|off  -> default ask (permission prompt;
+#               COREDEV-2489/P1c-12). In non-interactive / dontAsk / -p contexts an "ask" DENIES
+#               the operation that would prompt — that is the intended fail-safe for sensitive files.
 set -uo pipefail
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -121,7 +123,7 @@ EOF
 }
 
 [ "${UNLEASHED_SENSITIVE_GUARD:-on}" = "off" ] && exit 0
-MODE="${UNLEASHED_SENSITIVE_GUARD_MODE:-warn}"
+MODE="${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}"
 [ "$MODE" = "off" ] && exit 0   # `_MODE=off` also disables (parity with the README kill-switch cell)
 
 hook_io_read
