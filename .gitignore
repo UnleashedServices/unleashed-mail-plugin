@@ -2,6 +2,8 @@ firebase-debug.log
 *.log
 .env
 .env.*
+# committed placeholders-only template (real .env / .env.* stay ignored above)
+!.env.example
 .DS_Store
 **/.DS_Store
 

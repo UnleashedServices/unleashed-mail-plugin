@@ -112,6 +112,30 @@ class TestSynthesizeTool(unittest.TestCase):
                                   "arguments": {"findings": findings, "changed_files": changed}}}])
         return out[0]["result"]
 
+    def test_empty_changed_files_with_findings_fails_closed(self):
+        # findings present + an EFFECTIVELY-empty changeset would scope every finding to pre-existing
+        # and yield a bogus provisional APPROVE -> must be rejected -32602, never synthesized. Covers
+        # the [] case AND the blank/'.'-only entries that canonicalize to "" — the list-truthiness
+        # bypass an adversarial pass found ([""] / ["   "] / ["\t"] / ["./"]) (Item 17).
+        for changed in ([], [""], ["   "], ["\t"], ["./"], ["."], ["/"], ["./."], ["", "  "]):
+            out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()], "changed_files": changed}}}])
+            self.assertEqual(out[0]["error"]["code"], -32602, f"changed_files={changed!r} must fail closed")
+            self.assertIn("refusing", out[0]["error"]["message"])
+
+    def test_real_changed_file_alongside_blanks_still_synthesizes(self):
+        # A real path mixed with blank entries is NOT empty after canonicalization -> proceed normally
+        # (the guard must not over-reject a legitimate changeset that happens to carry noise entries).
+        res = self._call([good()], ["", "A.swift", "./"])
+        self.assertFalse(res["isError"])
+
+    def test_empty_changed_files_with_no_findings_is_allowed(self):
+        # A genuinely clean review (findings []) with an empty changeset is legitimate, not an error.
+        res = self._call([], [])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "APPROVE")
+
     def test_provisional_verdict_and_findings_only_text(self):
         res = self._call([good()], ["A.swift"])
         self.assertFalse(res["isError"])

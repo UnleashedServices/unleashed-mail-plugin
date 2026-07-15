@@ -106,15 +106,6 @@ REPORT_FINDINGS_SCHEMA = {
     "required": ["findings"],
 }
 
-# Strict-tool form: the model calls report_finding once per finding. Either this
-# OR the structured-output form makes the API enforce the schema.
-REPORT_FINDING_TOOL = {
-    "name": "report_finding",
-    "description": "Report exactly one code-review finding. Call once per finding.",
-    "strict": True,
-    "input_schema": FINDING_JSON_SCHEMA,
-}
-
 
 @dataclass
 class Finding:
@@ -159,6 +150,12 @@ def canonical_path(p: str) -> str:
     p = p.strip().replace("\\", "/")  # normalize Windows separators to forward slashes
     while p.startswith("./"):
         p = p[2:]
+    # Collapse a path that is ONLY dots/slashes to "" — a current-dir placeholder (".", "/", "./.",
+    # ".//", "...") is never a real diff line, so it must not survive as a truthy scope key. Without
+    # this, `changed_files: ["."]` scopes every finding to pre-existing -> a bogus provisional APPROVE
+    # (the same fail-open the empty-changeset guard blocks for [""]/["./"]). (PR #38 review.)
+    if p.strip("./") == "":
+        return ""
     return p
 
 
