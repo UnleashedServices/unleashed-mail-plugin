@@ -142,6 +142,37 @@ def has(fm: dict[str, str], key: str) -> bool:
     return v not in ("", ">", "|", ">-", "|-")
 
 
+# The agent-orchestration skill's "## Agent Registry" section documents every agent in
+# markdown tables. Its first column (a `backtick`-wrapped agent name) must be EXACTLY the set
+# of agents/*.md stems — so a new/renamed/removed agent can't drift out of the orchestration
+# doc, and no table row can name an agent that doesn't exist (audit orchestration.2 / P1c-10).
+REGISTRY_ROW = re.compile(r"^\|\s*`([a-z][a-z0-9-]*)`\s*\|")
+
+
+def check_agent_registry(root: Path, agent_names: set[str], problems: list[str]) -> None:
+    reg = root / "skills" / "agent-orchestration" / "SKILL.md"
+    rel = "skills/agent-orchestration/SKILL.md"
+    if not reg.is_file():
+        problems.append(f"{rel}: missing (the agent registry lives here)")
+        return
+    # Capture the "## Agent Registry" section: its heading through the next top-level "## ".
+    # Sub-headings ("### …") stay inside the section; only a new "## " ends it.
+    in_section = False
+    registered: set[str] = set()
+    for ln in reg.read_text(encoding="utf-8-sig").splitlines():
+        if ln.startswith("## "):
+            in_section = ln.strip() == "## Agent Registry"
+            continue
+        if in_section:
+            m = REGISTRY_ROW.match(ln)
+            if m:
+                registered.add(m.group(1))
+    for name in sorted(agent_names - registered):
+        problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
+    for name in sorted(registered - agent_names):
+        problems.append(f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate unleashed-mail plugin assets.")
     ap.add_argument("--root", default=None, help="plugin repo root (default: parent of scripts/)")
@@ -179,6 +210,8 @@ def main() -> int:
 
     for p in agents:
         check_frontmatter(p, require_name=True, is_agent=True)
+    # The orchestration registry must list exactly the set of agents that exist.
+    check_agent_registry(root, {p.stem for p in agents}, problems)
     for p in skills:
         check_frontmatter(p, require_name=True)
     # commands: name is the filename — require description + a kebab-case stem.

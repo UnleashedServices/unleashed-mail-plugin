@@ -13,7 +13,20 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Added
+- **Agent-registry set-equality is now CI-enforced** (COREDEV-2489 / P1c-10):
+  `validate-plugin-assembly.py` parses the first column of every `## Agent Registry`
+  table in `agent-orchestration` and fails (strict) unless it is **exactly** the set of
+  `agents/*.md` — catching both a new/renamed agent missing from the registry and a
+  phantom row naming an agent that doesn't exist.
+
 ### Changed
+- **The `agent-orchestration` registry now documents all 21 agents** (COREDEV-2489 / P1c-10):
+  added `ai-engineer`, `tester`, `code-simplifier` (coding), `docs-engineer`, `ci-engineer`,
+  `release-manager` (support), and a new **Planning Personas** table (`smb-entrepreneur`,
+  `enterprise-stakeholder`). `code-simplifier`'s **pre-review pre-pass** placement
+  (runs first, cleans the changeset before the 5 reviewers — AGENT_CONTRACTS §5) is now
+  explicit in the registry and in Patterns A/B + the stage list.
 - **The 3 orchestration commands are now skills** (COREDEV-2489 / P2-16): `brainstorm`, `implement`,
   and `pr-review` moved from `commands/*.md` to `skills/<name>/SKILL.md` as `disable-model-invocation`
   skills (custom commands have merged into skills). The `/unleashed-mail:brainstorm | implement |
