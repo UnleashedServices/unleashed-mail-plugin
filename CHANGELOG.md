@@ -14,6 +14,13 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 ## [Unreleased]
 
 ### Added
+- **CI now runs the authoritative `claude plugin validate`** (COREDEV-2489 / P2-14):
+  a Node 22 (`actions/setup-node`, SHA-pinned) + `@anthropic-ai/claude-code` (version-pinned)
+  step validates both the marketplace manifest (`claude plugin validate .`) and the plugin
+  deeply (`claude plugin validate .claude-plugin/plugin.json` — agents/skills/hooks schemas).
+  Verified headless (no auth needed) and that it exits non-zero on real manifest/schema errors;
+  it exits 0 on the one expected warning (the root `CLAUDE.md` is a contributor doc, not shipped
+  context). House conventions stay enforced (more strictly) by `validate-plugin-assembly.py`.
 - **Agent-registry set-equality is now CI-enforced** (COREDEV-2489 / P1c-10):
   `validate-plugin-assembly.py` parses the first column of every `## Agent Registry`
   table in `agent-orchestration` and fails (strict) unless it is **exactly** the set of
