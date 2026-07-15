@@ -38,8 +38,13 @@ _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
 # BOTH, distinct, each approving — a reviewer can never stand in for the other, and the caller's
-# combined `verdict` can never override a reviewer that actually rejected. (A future user-authorized
-# waiver — AGENT_CONTRACTS §2 — would extend this with a recorded WAIVED marker, not weaken it.)
+# combined `verdict` can never override a reviewer that actually rejected.
+#
+# There is NO waiver status, by decision (COREDEV-2493): "only the user may waive" is unenforceable
+# here — the agent is the process running this script, so any waiver flag it could be asked to supply,
+# it can supply unprompted. An unavailable reviewer is handled OUT of band by the user (see
+# "Preflight & unavailable-reviewer recovery" in AGENT_CONTRACTS §2), and such an exception is recorded
+# in the plan's progress log WITHOUT an approving artifact — never as a gate-passing verdict here.
 REQUIRED_REVIEWERS = {"gemini", "codex"}
 
 

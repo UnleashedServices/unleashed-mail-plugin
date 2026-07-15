@@ -84,7 +84,7 @@ Before any implementation begins:
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
 
-### Preflight & waiver (when a review CLI is unavailable)
+### Preflight & unavailable-reviewer recovery
 
 The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
 machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
@@ -92,19 +92,38 @@ loop with no escape.
 
 - **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
   isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 30 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `Pong!` (bare
+  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `Pong!` (bare
   `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
   codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
   is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+  A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
+  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 18m`; a tiny transcript
+  (e.g. `Error: timeout waiting for response`) is a *failure*, never a verdict. Fix the invocation and
+  re-run; that is not a reviewer-unavailable situation.
 - **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
   `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
-- **Waiver — explicit, scoped, recorded (never automatic):** only the **user** (not an agent, and not an
-  absent CLI) may waive an unavailable reviewer. A valid waiver is **user-authorized**, carries a **stated
-  reason**, is **time/session-scoped** (not standing), is **bound to the specific plan** (its content
-  digest), and is **recorded in the Combined-verdict block** as `WAIVED: <reviewer> | <reason> |
-  <session/plan>` (ASCII pipes, not em dashes — safer for terminal entry + regex parsing by
-  `/unleashed-mail:review-synthesis`). The remaining reviewer's verdict still applies; a subagent must
-  never self-waive.
+- **Recovery — the user chooses; there is no scripted waiver (COREDEV-2493).** If either reviewer is
+  unavailable or unauthenticated, **stop**: a missing or empty transcript never counts as approval, and
+  **no scripted waiver is recognized**. The **user** chooses the recovery — install/authenticate the CLI,
+  obtain and capture the review on another machine, or explicitly direct work outside `/implement`. That
+  last choice is a **workflow exception, not a passed Plan Review Gate**: record it as such in the plan's
+  progress log and do **not** emit an approving Combined verdict. An agent may present these choices but
+  must **never select or infer the exception**, and must never self-waive.
+
+  > **Why there is no `WAIVED:` marker.** §2 previously promised a "user-authorized, scoped, recorded"
+  > waiver. Nothing implemented it, so the gate hard-wedged — the very outcome the promise forbade. It was
+  > removed rather than built because **"only the user may waive" is not enforceable here**: the agent is
+  > the process that would run the script, so any flag or marker it could be asked to supply, it can also
+  > supply unprompted (a TTY proves terminal attachment, not human presence — this repo's own
+  > `pty-capture.py` creates one). A mechanical control documented as user-authorized but forgeable would
+  > misdescribe the system. Note this does **not** make the rest of the gate cryptographically
+  > trustworthy — it is a cooperative attestation too — but it declines to add a *sanctioned* bypass to
+  > it. The audit record and the bypass are separable: record the exception in the plan (as
+  > `docs/planning/OCTO_ADOPTION_PLAN.md` does) **without** claiming the gate passed. A genuinely
+  > unforgeable waiver would need new trust infrastructure (an external signer holding a key outside the
+  > agent's authority, releasing a plan-digest-bound token on user presence) — disproportionate for a
+  > single-developer, non-CI workflow. Gated + decided at COREDEV-2493 (gemini `APPROVE`, codex
+  > `APPROVE_WITH_NOTES`).
 
 ### Diagnostic agent scope (`xcode-build-fixer`, `graph-api-debugger`)
 

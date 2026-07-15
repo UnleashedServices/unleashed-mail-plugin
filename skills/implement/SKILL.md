@@ -144,6 +144,14 @@ fi
 - **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
   - *no artifact* → the gate never ran (or ran in another checkout); ask the user to run
     `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence.
+  - *a reviewer CLI is unavailable/unauthenticated* → **there is no scripted waiver** (COREDEV-2493).
+    First rule out a bad invocation: a PTY-wrapped `agy -p "ping"` returning `Pong!` means the CLI is
+    healthy and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a
+    failure, not a verdict). If it is genuinely unavailable, STOP and present the recovery choices to
+    the **user** — install/authenticate the CLI, capture the review on another machine, or explicitly
+    direct the work outside `/implement`. That last one is a **workflow exception, not a passed gate**:
+    record it in the plan's progress log and do NOT emit an approving Combined verdict. Never select or
+    infer the exception yourself, and never self-waive. See AGENT_CONTRACTS §2.
   - *not an approving verdict* → the plan was `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate.
   - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval
     (**approve-then-edit is blocked**); re-run the gate on the current plan.
