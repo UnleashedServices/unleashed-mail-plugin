@@ -13,6 +13,18 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Added
+- **Plan Review Gate now produces a persisted, plan-digest-bound Combined-verdict artifact**
+  (COREDEV-2489 / Item 11, R5-gated): `scripts/review-verdict.py write` records the Combined verdict
+  bound to the plan's **raw-byte SHA-256** (+ dual-reviewer identities/statuses + transcript digests)
+  in a private `0700` `.verdicts/` dir beside the plan (git-ignored, `0600`, no-symlink, atomic).
+  `implement`'s Design Gate now runs `review-verdict.py verify` — a **deterministic** fail-closed check
+  that a dual-reviewer **approving** verdict exists AND the plan is byte-for-byte unchanged since
+  approval, so **approve-then-edit is blocked** (a prose eyeball couldn't catch that). `review-synthesis`
+  persists the artifact after emitting its block. 19 new tests (`scripts/tests/`, wired into CI). Per the
+  R5 gate this deliberately uses workflow-level fail-closed enforcement and **drops the heavier
+  PreToolUse-token approach** as over-engineering for this cooperative workflow.
+
 ### Fixed
 - **Review-synthesizer fail-open hardening** (COREDEV-2489 / Item 17, R5-gated):
   - `synthesize_review` now **fails closed** on non-empty `findings` with an empty

@@ -35,7 +35,7 @@ jobs:
           python-version: '3.12'
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         run: |
@@ -52,6 +52,9 @@ jobs:
 
       - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
+
+      - name: Run the scripts test suite (review-verdict gate artifact)
+        run: python3 -m unittest discover -s scripts/tests -v
 
       - name: Validate version sync (strict)
         run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
@@ -116,6 +119,7 @@ jobs:
             echo "| py_compile (MCP + scripts) | ${{ job.status }} |"
             echo "| pty-capture smoke (--timeout) | ${{ job.status }} |"
             echo "| unittest discover (synthesizer suite) | ${{ job.status }} |"
+            echo "| unittest discover (scripts suite) | ${{ job.status }} |"
             echo "| version-sync (strict) | ${{ job.status }} |"
             echo "| plugin-assembly (strict) | ${{ job.status }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ job.status }} |"
