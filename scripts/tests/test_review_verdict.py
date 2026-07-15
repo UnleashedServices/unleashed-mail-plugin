@@ -21,6 +21,12 @@ class ReviewVerdictTest(unittest.TestCase):
         self.plan = os.path.join(self.d, "FEATURE_NAME_PLAN.md")
         with open(self.plan, "w", encoding="utf-8") as fh:
             fh.write("# Plan\nDo the thing.\n")
+        # A non-empty transcript. An APPROVING artifact now requires one per reviewer (COREDEV-2492
+        # PR review): `--reviewer gemini=APPROVE` with no `:TRANSCRIPT` used to produce a GATE OK on
+        # the caller's bare assertion, and a 0-byte file passed because only `isfile` was checked.
+        self.tx = os.path.join(self.d, "transcript.txt")
+        with open(self.tx, "w", encoding="utf-8") as fh:
+            fh.write("reviewer said things\nVERDICT: APPROVE\n")
 
     def tearDown(self):
         import shutil
@@ -30,8 +36,37 @@ class ReviewVerdictTest(unittest.TestCase):
                reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES")):
         args = ["write", "--plan", self.plan, "--verdict", verdict]
         for r in reviewers:
+            # Attach the fixture transcript unless the case supplied its own path (or deliberately
+            # omits one to exercise the missing-transcript rule).
+            if ":" not in r:
+                r = f"{r}:{self.tx}"
             args += ["--reviewer", r]
         return run(*args)
+
+    def test_approving_artifact_requires_a_transcript_per_reviewer(self):
+        """An APPROVING verdict must EVIDENCE its approvals: `gemini=APPROVE` with no `:TRANSCRIPT`
+        used to write a GATE OK on the caller's bare assertion alone (codex, #41 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", "gemini=APPROVE", "--reviewer", "codex=APPROVE")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("requires a transcript per reviewer", r.stdout + r.stderr)
+
+    def test_empty_transcript_is_rejected(self):
+        """`agy` writes exactly 0 bytes from a non-TTY on failure, and only `isfile` was checked — so
+        a failed review recorded e3b0c442...855 (the empty-string digest) and passed."""
+        empty = os.path.join(self.d, "empty.txt")
+        open(empty, "w").close()
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{empty}", "--reviewer", f"codex=APPROVE:{self.tx}")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("EMPTY", r.stdout + r.stderr)
+
+    def test_non_approving_verdict_may_omit_a_transcript(self):
+        """Deliberate asymmetry: a MISSING reviewer legitimately HAS no transcript, and recording
+        that failure is the whole point of the artifact."""
+        r = run("write", "--plan", self.plan, "--verdict", "REQUEST_CHANGES",
+                "--reviewer", "gemini=MISSING", "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def _verdict_file(self):
         return os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")
