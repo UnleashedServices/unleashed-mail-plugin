@@ -84,6 +84,22 @@ Before any implementation begins:
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
 
+### Preflight & waiver (when a review CLI is unavailable)
+
+The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
+machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
+loop with no escape.
+
+- **Preflight (run first):** `command -v agy && agy -p "ping"` (expect `Pong!`) and `command -v codex &&
+  codex --version`. If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+- **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
+  `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
+- **Waiver — explicit, scoped, recorded (never automatic):** only the **user** (not an agent, and not an
+  absent CLI) may waive an unavailable reviewer. A valid waiver is **user-authorized**, carries a **stated
+  reason**, is **time/session-scoped** (not standing), is **bound to the specific plan** (its content
+  digest), and is **recorded in the Combined-verdict block** as `WAIVED: <reviewer> — <reason> —
+  <session/plan>`. The remaining reviewer's verdict still applies; a subagent must never self-waive.
+
 ### Diagnostic agent scope (`xcode-build-fixer`, `graph-api-debugger`)
 
 Diagnostic agents do have `Write` and `Edit` tools — they apply **mechanical, low-risk fixes**
