@@ -313,6 +313,28 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertIn("codex", out)
         self.assertIn("NOT a plan problem", out)
 
+    def test_a_tampered_non_list_reviewers_field_fails_cleanly_not_with_a_traceback(self):
+        """`art.get("reviewers") or []` rescues only FALSY junk — `5`/`true` are truthy and
+        non-iterable, so the MISSING-hint loop raised TypeError (gemini, #42 review). Fails closed
+        either way, but a GATE FAILED must be diagnosable, not a stack trace."""
+        for junk in (5, True, "str", {"a": 1}, None):
+            with self.subTest(reviewers=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                import glob
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a = json.load(fh)
+                a["reviewers"] = junk
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("GATE FAILED", out)
+
     def test_verify_does_NOT_name_MISSING_on_a_genuine_disagreement(self):
         """Both reviewers ran and disagreed — 'iterate the plan + gate' IS the right advice, and the
         MISSING hint would be actively misleading. The hint must be earned, not unconditional."""

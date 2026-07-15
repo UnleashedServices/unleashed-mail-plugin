@@ -324,8 +324,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # and "a reviewer CLI was unavailable" is byte-identical, so an implementer cannot tell which
         # `implement` recovery branch they are in and defaults to the wrong one — "iterate the plan +
         # gate" — which cannot work, because there is no plan problem to iterate (codex, #42 review).
+        # `or []` only rescues FALSY junk: a tampered `reviewers: 5` / `true` is truthy and non-iterable,
+        # so it reached the loop and raised TypeError (gemini, #42 review). It still exited non-zero —
+        # a crash is not a pass — but a traceback is not a diagnosable failure, and the isinstance guard
+        # below (which would have caught it) never ran because this hint is computed first.
+        _revs = art.get("reviewers")
         absent = sorted(
-            str(r.get("name")) for r in (art.get("reviewers") or [])
+            str(r.get("name")) for r in (_revs if isinstance(_revs, list) else [])
             if isinstance(r, dict) and str(r.get("status", "")).strip().upper() == "MISSING"
         )
         hint = (f" — {', '.join(absent)} recorded MISSING (never ran): this is NOT a plan problem, so"
