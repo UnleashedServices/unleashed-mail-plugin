@@ -79,6 +79,9 @@ jobs:
           # "root CLAUDE.md is a contributor doc, not shipped context" warning, non-zero on a
           # real schema error. House conventions (missing name/description, agent-key hygiene,
           # registry set-equality) are enforced more strictly by validate-plugin-assembly.py above.
+          # FOLLOW-UP (PR #36 review): (1) once the root-CLAUDE.md warning is resolved, add `--strict`
+          # here so an unrecognized/stale manifest field fails CI (not just warns); (2) integrity-verify
+          # the pinned @anthropic-ai/claude-code tarball (npm pack + sha512) like actionlint/gitleaks.
           claude plugin validate .claude-plugin/plugin.json
 
       - name: ShellCheck plugin scripts
