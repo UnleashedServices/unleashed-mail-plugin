@@ -17,7 +17,8 @@ separate repo). You are working on the *plugin's own assets* here — treat them
 agents/      21 subagents (*.md)                 skills/     18 skills (*/SKILL.md)
 commands/    3 slash commands (*.md)             hooks/      hooks.json (10 events)
 mcp/review-synthesizer/  1 bundled stdio MCP server (.mcp.json)
-scripts/     hook scripts + validators + lib/    docs/       planning/, audits/, standards
+scripts/     hook scripts + validators + lib/    docs/       planning/ (+ audits/ on later branches)
+.claude-plugin/  plugin.json + marketplace.json
 AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 ```
 
@@ -36,8 +37,9 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 - **`memory:` (`user`/`project`/`local`) auto-enables Read/Write/Edit** — **never add it to a read-only agent**
   (it silently re-grants write access; this bit swift-reviewer once).
 
-**Skills/commands** use kebab `allowed-tools:` — a **pre-approval grant, not a restriction** (skills cannot
-deny tools). Don't grant unscoped `Bash, Write, Edit` on a pure-knowledge skill.
+**Skills/commands** use kebab `allowed-tools:` — a **pre-approval grant, not a restriction** (`allowed-tools`
+itself never denies; to *remove* tools for a skill's active window use the separate `disallowed-tools:`
+key, cleared on the next user message). Don't grant unscoped `Bash, Write, Edit` on a pure-knowledge skill.
 
 **Hooks** (`hooks/hooks.json` + `scripts/*.sh`): PostToolUse runs **after** the tool and cannot block —
 feed the model via top-level `{"decision":"block","reason":…}` or `hookSpecificOutput.additionalContext`,
@@ -64,7 +66,8 @@ Linux-friendly plugin repo — no Xcode).
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
   reviewed by **both** `/gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/codex-review`
   (`codex exec -s read-only`) before implementation. Route non-TTY runs through `scripts/pty-capture.py`.
-  Iterate until both APPROVE / APPROVE_WITH_NOTES.
+  Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
+  the two transcripts into a single auditable Combined verdict.
 - **Jira hygiene:** every change references a `COREDEV-XXXX` ticket (create one if none); update it with notes
   through implementation, not just at the end; associate with the parent Epic.
 - **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,
