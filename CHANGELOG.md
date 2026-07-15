@@ -28,6 +28,17 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   phantom row naming an agent that doesn't exist.
 
 ### Changed
+- **`provider-parity` skill rewritten to the app's real parity model** (COREDEV-2489 / P1b-content):
+  replaced the illustrative `MailProviderProtocol`/`MailMessage`/`MailProviderError` family with the
+  actual **`EmailServiceProtocol`** (both `GmailService` and `MicrosoftGraphService` conform), the
+  declarative **`ServiceCapabilities`** descriptor (the real way feature differences are expressed —
+  incl. the current Gmail↔Microsoft capability table), **`AccountScopedServiceProvider.activeService()`**
+  / `validateSupported(.operation)` resolution, the **`ProviderOperation`** catalogue,
+  **`ProviderParityError.unsupportedForProvider(operation:provider:)`**, the shared **`Email`** model,
+  **`EmailServiceError`**, and the real regression-test entry points (`ProviderParityRegressionTests`
+  with `StubGoogleEmailService`/`StubMicrosoftEmailService`). The valuable Gmail↔Graph API-endpoint
+  mapping table is kept. Skill `allowed-tools` tightened to read-only (`Read, Grep, Glob, Bash`) — it
+  is a knowledge/audit skill and never edits code.
 - **The `agent-orchestration` registry now documents all 21 agents** (COREDEV-2489 / P1c-10):
   added `ai-engineer`, `tester`, `code-simplifier` (coding), `docs-engineer`, `ci-engineer`,
   `release-manager` (support), and a new **Planning Personas** table (`smb-entrepreneur`,
