@@ -73,7 +73,7 @@ cat > .agy-prompt.md <<EOF
 # Review task
 
 Read $(pwd)/docs/planning/FEATURE_PLAN.md
-and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NITS / REQUEST_CHANGES.
+and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
 EOF
 
 # 2. Invoke agy through the shared PTY wrapper:
@@ -136,8 +136,8 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 4. **Invoke** via PTY wrapper from non-TTY contexts, or directly from a real terminal.
 5. **Continue the conversation** with `agy -c` or `agy -i` for follow-up questions. Do not treat the first response as final.
 6. **Capture output** — if invoking from Claude Code's Bash tool, the PTY wrapper writes to `/tmp/agy-out.txt`. Read that file back into context.
-7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NITS.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/agy-out.txt` + `/tmp/codex-out.txt` into one auditable **Combined verdict** block before implementation. Make sure each review prompt asks the reviewer to finish with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NITS / REQUEST_CHANGES`) so the synthesis can read it deterministically.
+7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
+8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/agy-out.txt` + `/tmp/codex-out.txt` into one auditable **Combined verdict** block before implementation. Make sure each review prompt asks the reviewer to finish with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the synthesis can read it deterministically.
 
 Do not skip to save time. Do not treat as a rubber stamp.
 

@@ -27,6 +27,11 @@ import sys
 
 SCHEMA_VERSION = 1
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
+# SHA-256 of zero bytes. `agy` writes EXACTLY 0 bytes from a non-TTY when a review fails, so this digest
+# is the signature of a FAILED review, never a review. The parse-time size check only guards the WRITE
+# path — an artifact written before that check existed, or hand-edited after a zero-byte capture, still
+# carried this value and passed verify (codex, #41 review). Rejecting the constant closes both paths.
+_EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
 VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
@@ -75,6 +80,12 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
     if missing_t:
         return ("an APPROVING combined verdict requires a transcript per reviewer; missing for "
                 + ", ".join(sorted(missing_t)))
+    empty_t = [str(r.get("name")) for r in reviewers
+               if str(r.get("transcriptSha256", "")).strip().lower() == _EMPTY_SHA256]
+    if empty_t:
+        return ("an APPROVING combined verdict requires a NON-EMPTY transcript; the empty-file digest "
+                "was recorded for " + ", ".join(sorted(empty_t)) + " (a 0-byte capture is a FAILED "
+                "review — `agy` writes exactly 0 bytes from a non-TTY on failure)")
     return None
 
 

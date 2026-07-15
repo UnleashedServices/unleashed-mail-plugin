@@ -90,6 +90,26 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotEqual(v.returncode, 0,
                                     f"tampered transcriptSha256={bad!r} passed verify")
 
+    def test_the_empty_file_digest_is_rejected_at_verify(self):
+        """codex (#41 review): the 0-byte check at parse time guards only the WRITE path. An artifact
+        written before that check existed — or hand-edited after a zero-byte capture — carried
+        e3b0c442...855 (SHA-256 of nothing) and passed verify. `agy` writes EXACTLY 0 bytes from a
+        non-TTY when a review fails, so that digest is the signature of a FAILED review."""
+        import hashlib as _h, json as _json
+        self.assertEqual(self._write().returncode, 0)
+        vf = self._verdict_file()
+        with open(vf) as fh:
+            art = _json.load(fh)
+        art["verdict"] = "APPROVE"
+        for r in art["reviewers"]:
+            r["status"] = "APPROVE"
+            r["transcriptSha256"] = _h.sha256(b"").hexdigest()
+        with open(vf, "w") as fh:
+            _json.dump(art, fh)
+        v = run("verify", "--plan", self.plan)
+        self.assertNotEqual(v.returncode, 0, "the empty-file digest passed verify")
+        self.assertIn("NON-EMPTY transcript", v.stdout + v.stderr)
+
     def _verdict_file(self):
         return os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")
 

@@ -176,7 +176,9 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
    auditable Combined verdict — it also **persists** the artifact:
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+   # :-. — unset would resolve to the absolute /scripts/... and fail to persist the artifact, so
+   # /implement would then report "no artifact" (codex + gemini, #41 review). Matches implement.
+   python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
        --plan docs/planning/FEATURE_NAME_PLAN.md \
        --verdict <COMBINED_VERDICT> \
        --reviewer gemini=<STATUS>:/tmp/agy-out.txt \
