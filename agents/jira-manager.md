@@ -167,14 +167,14 @@ Invoke this agent at natural breakpoints — don't wait for all work to finish.
 
 If Atlassian MCP tools are unavailable or return errors:
 
-1. **Always surface the issue immediately** — print a clearly-marked banner to stdout asking the user to create the ticket manually. Don't fail silently. Per project policy, every code change must have a tracked ticket; if the MCP is unavailable, the user must be informed before code edits begin so they can create a ticket via the Jira UI.
+1. **Return a `BLOCKED` result immediately** — a subagent has no user channel (no `AskUserQuestion`), and a stdout banner is not seen by the user, so **end your turn with a result that begins `BLOCKED — Jira MCP unavailable`** carrying the pending ticket fields. The invoking session surfaces it to the user, who creates the ticket manually and supplies the key. Don't fail silently.
    ```
-   ⚠️ Jira MCP unavailable — cannot create the tracking ticket for this work.
-   Please create manually before proceeding:
+   BLOCKED — Jira MCP unavailable; cannot create the tracking ticket for this work.
+   User action needed before code edits begin:
      Type: Task | Summary: [title] | Description: [details] | Epic: [epic-key if known]
-   Reply with the ticket key (e.g. COREDEV-1234) so I can include it in the commit message.
+   Reply with the ticket key (e.g. COREDEV-1234) so it can go in the commit message.
    ```
-2. **Wait for user acknowledgement** for net-new work — the agent does NOT proceed past the first milestone without either (a) a successful MCP create, or (b) a user-supplied ticket key. This resolves the prior contradiction between "create ticket before starting" and "don't block implementation": the rule is "ticket exists before milestone 1 commits, even if the user supplies it manually."
+2. **The invoking session gates on that BLOCKED result** for net-new work — implementation does NOT proceed past the first milestone without either (a) a successful MCP create, or (b) a user-supplied ticket key. This resolves the "create ticket before starting" vs "don't block implementation" tension: the ticket exists before milestone 1 commits, even if the user supplies it manually.
 3. **Status updates only** — for ongoing work where the ticket already exists and only the comment/transition is failing, agent may continue and queue the update for retry rather than blocking. Distinguish "create" failure (blocking) from "update" failure (queueable).
 4. **Retry strategy** — transient errors (network timeout, 429): retry once after 5s.
 5. **Permission errors (403/401)** — inform the user their Atlassian MCP may need re-authentication. Do not attempt to bypass.
