@@ -320,7 +320,7 @@ and the missing-test scan — printing `✅`/`❌` per gate and **exiting non-ze
 
 ```bash
 # $CHANGED is from Step 1. The script reads it on stdin (no shared-shell-state assumption), so
-# pr-review can invoke the SAME script instead of spawning its own xcodebuild (one test run, not two).
+# pr-review relies on THIS same run — it does not invoke the script itself (one test run, not two).
 printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh"
 BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed (read the ✅/❌ above)
 ```

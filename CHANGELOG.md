@@ -17,7 +17,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 - **`swift-reviewer` Step 4 extracted to a shipped, unit-tested script** (COREDEV-2489 / Item 5):
   the inline build / lint / test block moved to [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh)
   (reads the Step-1 `$CHANGED` list on stdin; `✅`/`❌` per gate; exits non-zero if any hard gate failed).
-  Saves ~4–5k tokens/review-spawn and makes the gate logic testable — `scripts/tests/test_build_verify.py`
+  Saves ~0.3k tokens/review-spawn (~24 lines; 4–5k is the projected total once all four inline blocks are extracted) and makes the gate logic testable — `scripts/tests/test_build_verify.py`
   covers it with mocked `xcodebuild`/`swiftlint` (runs in CI without a toolchain). `pr-review` now relies
   on that single Step-4 run instead of launching its own `xcodebuild test`, **deduping the double
   test-suite run**. Only the self-contained Step-4 block was extracted; the `$CHANGED`/`$BASE_BRANCH`

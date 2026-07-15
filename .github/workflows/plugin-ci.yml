@@ -88,7 +88,7 @@ jobs:
           claude plugin validate .claude-plugin/plugin.json
 
       - name: ShellCheck plugin scripts
-        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 
       - name: Install actionlint (pinned + checksum-verified)
         env:

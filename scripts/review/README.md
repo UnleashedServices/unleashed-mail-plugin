@@ -1,7 +1,7 @@
 # `scripts/review/` — extracted review-orchestration scripts
 
 Shipped, unit-tested scripts extracted from `swift-reviewer`'s inline shell (audit Item 5). Moving the
-logic out of the agent body saves ~4–5k tokens per review spawn and makes it testable.
+logic out of the agent body saves ~0.3k tokens per review spawn (~24 lines; the 4–5k figure was the projected total for extracting all four inline blocks — this PR extracts only the Step-4 build gate) and makes it testable.
 
 ## `build-verify.sh` — Step 4 build / lint / test gate
 

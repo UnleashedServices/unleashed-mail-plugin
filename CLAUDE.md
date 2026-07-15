@@ -56,7 +56,7 @@ VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json
 bash scripts/test-hooks.sh                                         # hook stdin-contract harness
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
 python3 -m unittest discover -s scripts/tests                      # scripts suite (review-verdict gate)
-shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 ```
 
 The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
