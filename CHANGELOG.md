@@ -24,6 +24,10 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   section for the one-time migration from the old `npranson-unleashed-mail-plugin` marketplace.
 - `AGENT_CONTRACTS.md` §9/§10 updated to the omit-`tools:`-to-inherit-MCP mechanism (portable across
   install prefixes; restricted via `disallowedTools`), with `prompt-review`'s deliberate Bash drop noted.
+- **The 3 orchestration commands are now skills** (COREDEV-2489 / P2-16): `brainstorm`, `implement`,
+  and `pr-review` moved from `commands/*.md` to `skills/<name>/SKILL.md` as `disable-model-invocation`
+  skills (custom commands have merged into skills). The `/unleashed-mail:brainstorm | implement |
+  pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
 - **Enforcement hooks now default to their active modes** (COREDEV-2489 / audit hooks-scripts.5).
   `sensitive-file-guard.sh` defaults to `ask` (was `warn`) — editing a sensitive file
   (Keychain/OAuth/entitlements/DB/WebView) now surfaces a permission prompt; in non-interactive /

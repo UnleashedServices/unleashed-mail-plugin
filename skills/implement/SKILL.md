@@ -1,5 +1,7 @@
 ---
+name: implement
 description: Implement a feature using specialized coding agents (db, logic, UI) with TDD and modern standards
+argument-hint: [feature name or docs/planning/PLAN.md path]
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 disable-model-invocation: true
 ---
