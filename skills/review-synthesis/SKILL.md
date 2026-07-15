@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Read-only; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep
+allowed-tools: Read, Grep, Bash
 ---
 
 # Plan-Review Synthesis
@@ -106,6 +106,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
     --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
     --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
+
+For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
+(the artifact fails closed — `implement`'s verify blocks on a non-approving verdict), e.g. `--reviewer codex=MISSING`.
 
 This records the plan's **raw-byte SHA-256** (+ the two transcript digests) in a private `.verdicts/`
 dir beside the plan (git-ignored session state). It writes the artifact for ANY combined verdict —

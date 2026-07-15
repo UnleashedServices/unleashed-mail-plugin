@@ -28,7 +28,7 @@ import sys
 SCHEMA_VERSION = 1
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
-VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT"}
+VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
 # BOTH, distinct, each approving — a reviewer can never stand in for the other, and the caller's
 # combined `verdict` can never override a reviewer that actually rejected. (A future user-authorized
@@ -87,6 +87,17 @@ def _ensure_secure_dir(d: str) -> None:
     else:
         os.makedirs(d, mode=0o700, exist_ok=True)
     os.chmod(d, 0o700)
+    # Make the dir self-ignoring so the "per-session, never committed" guarantee holds in ANY consumer
+    # repo — the plugin's own .gitignore does not apply where the plugin is loaded from the cache (e.g.
+    # the app repo's docs/planning/.verdicts/), where a routine `git add docs/` would otherwise commit an
+    # approving artifact and satisfy `implement`'s verify in every clone (PR #39 review).
+    gi = os.path.join(d, ".gitignore")
+    if not os.path.exists(gi):
+        try:
+            with open(gi, "w", encoding="utf-8") as fh:
+                fh.write("*\n")
+        except OSError:
+            pass
 
 
 def _parse_reviewer(spec: str) -> dict:
@@ -161,6 +172,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         return _fail(f"plan not found: {plan}")
     dest = _verdict_path(plan)
+    # Refuse a symlinked .verdicts dir too (write already does) — otherwise `dest` could resolve to a
+    # regular file OUTSIDE the plan directory through the link and satisfy the gate (PR #39 review).
+    if os.path.islink(os.path.dirname(dest)):
+        return _fail(f"refusing symlinked verdict dir: {os.path.dirname(dest)}")
     if os.path.islink(dest) or not os.path.isfile(dest):
         return _fail(f"no Combined-verdict artifact for this plan (run the gate first): {dest}")
     try:
@@ -181,6 +196,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     problem = _quorum_problem(art.get("verdict"), reviewers)
     if problem:
         return _fail("approval not backed by a genuine dual review — " + problem)
+    # The artifact must have been written FOR this plan — a copied/renamed artifact whose bytes happen
+    # to match a different plan must not satisfy the gate (PR #39 review). Compare basenames (relpath is
+    # CWD-dependent; the artifact is co-located with its plan, so the basename is the stable binding).
+    if os.path.basename(str(art.get("planPath", ""))) != os.path.basename(plan):
+        return _fail(f"artifact was written for a different plan ({art.get('planPath')!r}), not {plan}")
     current = _sha256_bytes(plan)
     if current != art.get("planSha256"):
         return _fail("plan has CHANGED since approval (digest mismatch) — re-run the gate on the "
