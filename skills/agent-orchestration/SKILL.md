@@ -19,6 +19,9 @@ allowed-tools: Agent, Read, Grep, Glob, Bash
 | `db-engineer` | Database | Nothing (runs first) | `jira-manager` |
 | `logic-engineer` | Services/ViewModels | `db-engineer` output | `jira-manager`, `ui-engineer` (if protocol is defined first) |
 | `ui-engineer` | Views | `logic-engineer` ViewModel interface | `jira-manager`, `db-engineer` (next feature) |
+| `ai-engineer` | GARI AI pipeline (providers, tools, prompts) | `db-engineer`/`logic-engineer` for persistence + service wiring | `jira-manager` |
+| `tester` | XCTest units + regression tests | The agent whose code it covers (interface defined first) | `jira-manager`; the implementer of the next unit |
+| `code-simplifier` | Simplification / judgment-based style **pre-pass** | Implementation complete | `jira-manager` (runs solo as a clean-up pass *before* the 5 reviewers — AGENT_CONTRACTS §5) |
 
 ### Review Agents (evaluate code)
 
@@ -52,8 +55,28 @@ allowed-tools: Agent, Read, Grep, Glob, Bash
 |---|---|---|---|
 | `modern-standards-planner` | Research current best practices | Feature description | `jira-manager` |
 | `jira-manager` | Ticket lifecycle | Nothing | Everything — always parallel |
+| `docs-engineer` | Docs / READMEs / planning-doc upkeep | Change landed or planned | `jira-manager`, reviewers |
+| `ci-engineer` | CI workflows, SHA pins, gates | CI / workflow changes | `jira-manager` |
+| `release-manager` | Versioning, CHANGELOG, release cut | Work merged / ready to tag | `jira-manager` |
 | `xcode-build-fixer` | Build failure diagnosis | Build error output | Nothing (reactive) |
 | `graph-api-debugger` | Graph/MSAL debugging | Error context | Nothing (reactive) |
+
+### Planning Personas (requirements discovery — produce no code)
+
+Run these during **brainstorming / planning only**, never execution. They surface
+requirements and edge cases from a stakeholder's point of view and hand off to the
+planner + `jira-manager`.
+
+| Agent | Perspective | Depends On | Can Parallel With |
+|---|---|---|---|
+| `smb-entrepreneur` | SMB founder / inbox power-user: productivity, cost, real-world workflow | Feature idea | `enterprise-stakeholder`, `modern-standards-planner`, `jira-manager` |
+| `enterprise-stakeholder` | IT director / CTO: compliance, security, scale, admin control | Feature idea | `smb-entrepreneur`, `modern-standards-planner`, `jira-manager` |
+
+> **Registry is complete + CI-enforced.** These tables list **all 21 agents**.
+> `scripts/validate-plugin-assembly.py` parses the first column of every registry
+> table and fails if it is not exactly equal to `agents/*.md` — so a new agent (or a
+> renamed/removed one) cannot land without updating this registry, and a phantom row
+> cannot reference an agent that does not exist.
 
 ## Parallel Execution Rules
 
@@ -72,8 +95,9 @@ Do NOT wait for one to finish before starting another if they don't depend on ea
 ```
 Stage 1 (parallel):  db-engineer + jira-manager + modern-standards-planner
 Stage 2 (parallel):  logic-engineer (Gmail) + logic-engineer (Graph) + jira-manager update
-Stage 3 (parallel):  ui-engineer + jira-manager update
-Stage 4 (parallel):  security-reviewer + concurrency-reviewer + ux-perf-reviewer + accessibility-auditor + prompt-review
+Stage 3 (parallel):  ui-engineer + tester (writes/updates XCTest) + jira-manager update
+Stage 4a (pre-pass): code-simplifier cleans the changeset BEFORE review (AGENT_CONTRACTS §5)
+Stage 4b (parallel): security-reviewer + concurrency-reviewer + ux-perf-reviewer + accessibility-auditor + prompt-review
 Stage 5 (serial):    swift-reviewer orchestrator synthesizes
 ```
 
@@ -106,21 +130,26 @@ The user can request any combination:
 
 ```
 1. modern-standards-planner + jira-manager (parallel)
+   (optionally preceded by smb-entrepreneur + enterprise-stakeholder for requirements discovery)
    ↓
 2. db-engineer + jira-manager milestone (parallel)
    ↓
-3. logic-engineer + jira-manager milestone (parallel)
+3. logic-engineer (+ ai-engineer if the change touches GARI) + jira-manager milestone (parallel)
    ↓
-4. ui-engineer + jira-manager milestone (parallel)
+4. ui-engineer + tester (units/regression) + jira-manager milestone (parallel)
    ↓
-5. security-reviewer + concurrency-reviewer + ux-perf-reviewer + accessibility-auditor + prompt-review (parallel)
+5. code-simplifier pre-pass (clean the changeset before review)
    ↓
-6. swift-reviewer (synthesizes) + jira-manager final update (parallel)
+6. security-reviewer + concurrency-reviewer + ux-perf-reviewer + accessibility-auditor + prompt-review (parallel)
+   ↓
+7. swift-reviewer (synthesizes) + docs-engineer + jira-manager final update (parallel)
 ```
 
 ### Pattern B: Review Only
 
 ```
+0. code-simplifier pre-pass (clean the changeset first, AGENT_CONTRACTS §5)
+   ↓
 1. security-reviewer + concurrency-reviewer + ux-perf-reviewer + accessibility-auditor + prompt-review (all parallel)
    ↓
 2. swift-reviewer synthesizes + jira-manager logs review results

@@ -142,6 +142,47 @@ def has(fm: dict[str, str], key: str) -> bool:
     return v not in ("", ">", "|", ">-", "|-")
 
 
+# The agent-orchestration skill's "## Agent Registry" section documents every agent in
+# markdown tables. Its first column (a `backtick`-wrapped agent name) must be EXACTLY the set
+# of agents/*.md stems — so a new/renamed/removed agent can't drift out of the orchestration
+# doc, and no table row can name an agent that doesn't exist (audit orchestration.2 / P1c-10).
+REGISTRY_ROW = re.compile(r"^\|\s*`([a-z][a-z0-9-]*)`\s*\|")
+
+
+def check_agent_registry(root: Path, agent_names: set[str], problems: list[str]) -> None:
+    reg = root / "skills" / "agent-orchestration" / "SKILL.md"
+    rel = "skills/agent-orchestration/SKILL.md"
+    if not reg.is_file():
+        problems.append(f"{rel}: missing (the agent registry lives here)")
+        return
+    try:
+        content = reg.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        problems.append(f"{rel}: cannot read ({e})")
+        return
+    # Capture the "## Agent Registry" section: its heading through the next top-level "## ".
+    # Sub-headings ("### …") stay inside the section; only a new "## " ends it. Collect rows in a
+    # LIST (not a set) so a name registered twice — possibly with contradictory guidance in each
+    # row — is caught rather than silently collapsing.
+    in_section = False
+    rows: list[str] = []
+    for ln in content.splitlines():
+        if ln.startswith("## "):
+            in_section = ln.strip() == "## Agent Registry"
+            continue
+        if in_section:
+            m = REGISTRY_ROW.match(ln)
+            if m:
+                rows.append(m.group(1))
+    registered = set(rows)
+    for name in sorted({n for n in rows if rows.count(n) > 1}):
+        problems.append(f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables")
+    for name in sorted(agent_names - registered):
+        problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
+    for name in sorted(registered - agent_names):
+        problems.append(f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate unleashed-mail plugin assets.")
     ap.add_argument("--root", default=None, help="plugin repo root (default: parent of scripts/)")
@@ -171,6 +212,11 @@ def main() -> int:
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
         if is_agent:
             check_agent_fields(rel, fm, problems)
+            # The frontmatter `name` is the identifier Claude Code registers; if it diverges from the
+            # filename stem, the registry set-equality check (keyed on stems) would enforce the wrong
+            # identifier. Require them equal.
+            if has(fm, "name") and fm["name"] != path.stem:
+                problems.append(f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`")
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
@@ -179,6 +225,8 @@ def main() -> int:
 
     for p in agents:
         check_frontmatter(p, require_name=True, is_agent=True)
+    # The orchestration registry must list exactly the set of agents that exist.
+    check_agent_registry(root, {p.stem for p in agents}, problems)
     for p in skills:
         check_frontmatter(p, require_name=True)
     # commands: name is the filename — require description + a kebab-case stem.
