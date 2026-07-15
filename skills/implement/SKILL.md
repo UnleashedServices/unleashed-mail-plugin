@@ -31,11 +31,17 @@ else
     # EVERY plan, so without it an empty $ARGUMENTS silently resolves to the first plan on disk and
     # satisfies the Design Gate: a fail-OPEN. (The old prefix-strip form was only *accidentally*
     # fail-closed on an empty key; this makes the property explicit.)
-    MATCHES=$(ls docs/planning/*PLAN*.md 2>/dev/null | while IFS= read -r p; do
+    # A direct glob, NOT `ls | while read` — parsing ls breaks on a filename with spaces/newlines, and
+    # the subshell also swallowed any variable set inside it (gemini, #41 review). bash 3.2-safe.
+    MATCHES=""
+    for p in docs/planning/*PLAN*.md; do
+        [ -e "$p" ] || continue                     # unmatched glob stays literal -> skip
         b=$(basename "$p" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
-        if [[ -n "$KEY" && "$b" == *"$KEY"* ]]; then printf '%s\n' "$p"; fi
-    done)
-    N=$(printf '%s' "$MATCHES" | grep -c . )
+        if [[ -n "$KEY" && "$b" == *"$KEY"* ]]; then
+            MATCHES="${MATCHES}${p}"$'\n'
+        fi
+    done
+    N=$(printf '%s' "$MATCHES" | grep -c . || true)
     # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
     # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated
     # — defeating this block's whole purpose. Make the human disambiguate.
@@ -43,7 +49,7 @@ else
         { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "$MATCHES"; } >&2
         exit 2
     fi
-    PLAN="$MATCHES"
+    PLAN="${MATCHES%$'\n'}"       # strip the accumulator's trailing newline
 fi
 if [ -z "$PLAN" ]; then
     # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
