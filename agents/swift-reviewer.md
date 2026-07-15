@@ -181,6 +181,8 @@ ROSTER=$?
 echo "ROSTER=$ROSTER"   # echo it: a shell var cannot survive this block
 # 0 = every reviewer asserted held, nothing to act on · 2 = RATCHET only · 3 = ≥1 UNATTRIBUTED ·
 # 4 = a held name was unknown/duplicated (an INPUT error — treat as uncertainty, never as a pass)
+exit "$ROSTER"         # propagate it: without this, `echo` succeeds and the BLOCK exits 0 —
+                       # a fail-closed control must not report success while carrying ROSTER=3
 ```
 
 To assert one, replace `` `#  security-reviewer` `` with `security-reviewer`. The script echoes

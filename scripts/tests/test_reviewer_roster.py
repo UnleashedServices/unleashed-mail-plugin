@@ -446,18 +446,25 @@ class RecipeTestCase(_RosterFixture, unittest.TestCase):
         return hits[0]
 
     def _run_recipe(self, recipe):
+        """-> (rc, stdout). The rc is NOT optional: the first version of this helper returned stdout
+        only, which is precisely why the suite green-lit a fence that printed ROSTER=3 while the
+        process exited 0 (codex R12). A control that reports success while carrying a failure is the
+        same shape as every other fail-open in this ticket."""
         env = self._env()
         env["CLAUDE_PLUGIN_ROOT"] = _ROOT
         p = subprocess.run(["bash", "-c", recipe], cwd=self.repo, env=env,
                            capture_output=True, text=True, timeout=60)
-        return p.stdout
+        return p.returncode, p.stdout
 
     def test_shipped_recipe_run_VERBATIM_fails_closed(self):
         """THE ONE THAT MATTERS: a model is likeliest to run the fence exactly as written. Verbatim it
         must classify ALL FIVE and report ROSTER=3 — never ROSTER=0."""
         self._capture({"status": "BLOCKED", "agent": AGENT, "blockerDescription": "never ran"})
-        out = self._run_recipe(self._recipe())
+        rc, out = self._run_recipe(self._recipe())
         self.assertIn("ROSTER=3", out, f"the DEFAULT recipe did not fail closed: {out!r}")
+        # The PROCESS must fail too — not merely print a failure (codex R12).
+        self.assertEqual(rc, 3, f"fence printed ROSTER=3 but exited {rc}: a fail-closed control must "
+                                f"not report success")
         self.assertNotIn("ROSTER=0", out)
         self.assertIn("ROSTER-INPUT: held = (none)", out)
         for a in VALID:
@@ -480,8 +487,22 @@ class RecipeTestCase(_RosterFixture, unittest.TestCase):
         recipe = self._recipe()
         for a in VALID:
             recipe = recipe.replace(f"`#  {a}`", a)
-        out = self._run_recipe(recipe)
+        rc, out = self._run_recipe(recipe)
         self.assertIn("ROSTER=0", out)
+        self.assertEqual(rc, 0)
+
+    def test_recipe_propagates_the_roster_status_to_the_process(self):
+        """The exit code must track the classification, not the last echo. Pins codex's R12 vector
+        directly: without `exit "$ROSTER"` this returns 0 while printing ROSTER=3."""
+        self._capture({"status": "BLOCKED", "agent": AGENT, "blockerDescription": "x"})
+        recipe = self._recipe()
+        # assert every reviewer EXCEPT the ratcheting one -> RATCHET only -> exit 2
+        for a in VALID:
+            if a != AGENT:
+                recipe = recipe.replace(f"`#  {a}`", a)
+        rc, out = self._run_recipe(recipe)
+        self.assertIn("ROSTER=2", out)
+        self.assertEqual(rc, 2, "the RATCHET status must reach the process, not stop at the echo")
 
 
 if __name__ == "__main__":

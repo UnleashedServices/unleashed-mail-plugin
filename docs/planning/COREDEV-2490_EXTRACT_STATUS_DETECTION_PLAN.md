@@ -43,6 +43,29 @@ neither can certify, **because COMPLETE never certifies**. That rule is load-bea
 belt-and-braces. Also hardened: `_printable` now applies to `RATCHET`'s description and `REMAINING`'s
 payload — the only transcript-derived (prompt-injectable) fields, previously emitted raw.
 
+## R12 (codex) — the fence printed a failure but the PROCESS exited 0
+
+**Finding, accepted:** `ROSTER=$?` captured 3, then `echo` succeeded and became the fence's exit status,
+so the block reported success while carrying `ROSTER=3`. `RecipeTestCase` missed it because
+`_run_recipe()` returned stdout and **threw away `returncode`** — my gap, and the same shape as every
+other fail-open here: *a control that reports success while carrying a failure.*
+
+**Resolution: `exit "$ROSTER"`.** I first flagged this as reversing #43 (COREDEV-2494 M5), where both
+skeptics rejected `exit "$BUILD_VERIFY"` in an agent Bash block. **On inspection that is not a conflict.**
+#43's objection was explicitly about **retry cost** — *"a failed Bash call invites a retry -> a second
+full `xcodebuild test`"*. Measured here: a roster re-run is **0.09s, read-only, no side effects**; a
+build-verify re-run is **minutes**. The reasoning does not transfer; only the surface shape resembled it.
+The general rule stands (#43's `echo`-only remains correct for build-verify) — the discriminator is
+whether a retry is expensive, not whether `exit` is used.
+
+Pinned: `test_shipped_recipe_run_VERBATIM_fails_closed` now asserts **rc == 3**, and
+`test_recipe_propagates_the_roster_status_to_the_process` asserts a RATCHET reaches the process as 2.
+Mutation-proved: dropping `exit "$ROSTER"` -> 2 failures.
+
+**This was the FIFTH level this defect climbed** — prose, a stray sentence, an unassigned variable, the
+recipe's default, and finally the exit code. Each fix was correct; each time the bug relocated one layer
+out. **The default is the control**, at every layer that has one.
+
 ## R5 — three fixes accepted; one blocker ACCEPTED AS FACT but its proposed FIX REJECTED
 
 gemini confirmed 3 of 4 R4 blockers closed ("the design is robust against the LLM misassembling the
