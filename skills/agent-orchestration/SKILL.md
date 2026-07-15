@@ -168,7 +168,7 @@ Handoff: Logic layer complete
 - ViewModel: [class name]
   - Published state: [list of properties with types]
   - Actions: [list of async methods]
-  - Error type: [MailProviderError cases relevant]
+  - Error type: [EmailServiceError cases relevant]
   - Observation: [how the VM starts/stops observation]
 - Service protocol: [protocol name and key methods]
 ```

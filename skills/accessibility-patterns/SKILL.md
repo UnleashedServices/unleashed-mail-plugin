@@ -136,15 +136,26 @@ TextEditor(text: $body)
 ### Scalable Text
 
 ```swift
+// UnleashedMail scales text APP-WIDE via CuratorTheme, not SwiftUI Dynamic Type.
+// Use the Curator typography sizes (CGFloat point sizes):
 Text("Welcome to UnleashedMail")
-    .font(.largeTitle)  // Scales with Dynamic Type
-
-// Custom font that scales
-Text("Message")
-    .font(.system(size: 16, weight: .medium, design: .default))  // ❌ Doesn't scale
+    .font(.system(size: CuratorTheme.Typography.headlineSize, weight: .semibold))  // 18pt
 
 Text("Message")
-    .font(.body)  // ✅ Scales automatically
+    .font(.system(size: CuratorTheme.Typography.bodySize))  // ✅ 14pt base
+
+// Where user-controllable scaling is needed, use the Curator scaler
+// (driven by appState.uiPreferences.uiFontScale):
+Text("Message")
+    .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.bodySize,
+                                  weight: .regular,
+                                  scale: appState.uiPreferences.uiFontScale))
+
+// ❌ Do NOT use SwiftUI semantic fonts — the design system uses CuratorTheme.Typography
+//    (displaySize 44, headlineSize 18, titleSize 16, bodySize 14, bodySmallSize 13,
+//    labelSize 11, microSize 10), matching the shipped Curator components.
+Text("Message").font(.body)      // ❌
+Text("Title").font(.largeTitle)  // ❌
 ```
 
 ### Layout Adaptation
@@ -152,9 +163,9 @@ Text("Message")
 ```swift
 VStack {
     Text("Subject")
-        .font(.headline)
+        .font(.system(size: CuratorTheme.Typography.titleSize, weight: .semibold))
     Text(subject)
-        .font(.body)
+        .font(.system(size: CuratorTheme.Typography.bodySize))
         .lineLimit(nil)  // Allow wrapping
         .fixedSize(horizontal: false, vertical: true)  // Grow vertically
 }
@@ -165,27 +176,31 @@ VStack {
 ### Semantic Colors
 
 ```swift
-// ✅ Adapts to light/dark mode and high contrast
-Color.primary
-Color.secondary
-Color.accentColor
+// ✅ Curator semantic colors (adapt to light/dark; per CLAUDE.md, never raw Color.*)
+Color.curatorOnSurface          // primary text
+Color.curatorOnSurfaceVariant   // secondary / metadata text
+Color.curatorPrimary            // accent / selection
+Color.curatorSecondary          // unread dots / badges
+Color.curatorError              // error
 
-// ❌ Hardcoded colors
+// ❌ Raw SwiftUI colors AND bare semantic colors — none are the sanctioned Curator tokens
 Color.blue
 Color.white
+Color.primary
+Color.accentColor
 ```
 
 ### State Indicators
 
 ```swift
-// ✅ Multiple indicators
+// ✅ Multiple indicators (icon + text — don't convey state by color alone) + Curator colors
 HStack {
     Image(systemName: message.isStarred ? "star.fill" : "star")
     Text(message.subject)
 }
-.foregroundStyle(message.isStarred ? .yellow : .gray)
+.foregroundStyle(message.isStarred ? Color.curatorAccent : Color.curatorOnSurfaceVariant)
 
-// ❌ Color only
+// ❌ Color only, and raw (.yellow/.primary) instead of Curator tokens
 Text(message.subject)
     .foregroundStyle(message.isStarred ? .yellow : .primary)
 ```

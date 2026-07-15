@@ -248,7 +248,7 @@ Ensure robust, consistent error handling.
 
 **Error handling:**
 - Every `catch` block must log with `Logger` — no empty catches
-- Use typed errors (`MailProviderError`, domain-specific enums) — not generic `Error`
+- Use typed errors (`EmailServiceError`, domain-specific enums) — not generic `Error`
 - Service layer catches and wraps API errors; ViewModel layer catches provider errors
 - No `try?` silently swallowing — always `do-catch` with logging
 

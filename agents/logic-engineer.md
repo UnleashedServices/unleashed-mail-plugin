@@ -133,7 +133,7 @@ final class GraphDraftService: DraftServiceProtocol {
 final class DraftsViewModel {
     var drafts: [MailDraft] = []
     var state: ViewState<[MailDraft]> = .idle
-    var error: MailProviderError?
+    var error: EmailServiceError?
 
     private let draftService: DraftServiceProtocol
     private let dbQueue: DatabaseQueue
@@ -162,7 +162,7 @@ final class DraftsViewModel {
                 self.state = .loaded(drafts)
             }
         } catch {
-            self.error = .databaseError(underlying: error)
+            self.error = .networkError(error)   // EmailServiceError has no DB case — a DB observation failure surfaces via the generic wrapper
         }
     }
 
@@ -179,7 +179,7 @@ final class DraftsViewModel {
             let saved = try await draftService.saveDraft(draft)
             try await dbQueue.write { db in try saved.save(db) }
         } catch {
-            self.error = MailProviderError(from: error)
+            self.error = (error as? EmailServiceError) ?? .networkError(error)
         }
     }
 
@@ -198,7 +198,7 @@ final class DraftsViewModel {
             try await draftService.deleteDraft(id: id)
         } catch {
             // Revert — refetch from API
-            self.error = MailProviderError(from: error)
+            self.error = (error as? EmailServiceError) ?? .networkError(error)
             await refreshFromAPI()
         }
     }
@@ -215,45 +215,31 @@ final class DraftsViewModel {
                 try sent.save(db)
             }
         } catch {
-            self.error = MailProviderError(from: error)
+            self.error = (error as? EmailServiceError) ?? .networkError(error)
         }
     }
 }
 ```
 
-### 4. Error Mapping
+### 4. Error Handling
 
-All provider-specific errors must be mapped to the shared `MailProviderError`:
+Providers throw the app's **real** typed errors — do NOT define a custom mapping enum. The
+provider-agnostic error is `EmailServiceError` (both `GmailService` and `MicrosoftGraphService`
+conform to `EmailServiceProtocol`, and `AccountScopedServiceProvider.activeService()` returns
+`any EmailServiceProtocol`) — catch it directly. Provider-specific paths may throw `GmailError`
+(`GmailService+APIModels.swift`) or `MicrosoftAuthError`; Google OAuth throws `AuthError`. See the
+`error-handling` skill for `EmailServiceError`'s exact cases — note `.networkError(Error)` is
+**unlabeled**, `.rateLimited` has no payload, and there is `.requestFailed(statusCode:)` /
+`.operationNotSupported`. Prefer the `isAuthenticationError` / `isRateLimited` helpers.
 
 ```swift
-extension MailProviderError {
-    init(from error: Error) {
-        switch error {
-        case let gmailError as GmailAPIError:
-            switch gmailError {
-            case .unauthorized: self = .tokenExpired
-            case .forbidden: self = .permissionDenied(scope: "unknown")
-            case .rateLimited: self = .rateLimited(retryAfter: nil)
-            case .notFound(let id): self = .messageNotFound(id: id)
-            case .serverError(let code): self = .serverError(code: code, message: "Gmail API error")
-            case .networkError(let e): self = .networkError(underlying: e)
-            }
-        case let graphError as GraphAPIError:
-            switch graphError {
-            case .notSignedIn, .authenticationFailed: self = .notAuthenticated
-            case .interactionRequired: self = .interactionRequired
-            case .tokenRefreshFailed: self = .tokenExpired
-            case .forbidden(let msg): self = .permissionDenied(scope: msg)
-            case .throttled(let retry): self = .rateLimited(retryAfter: retry.map(TimeInterval.init))
-            case .notFound(let r): self = .messageNotFound(id: r)
-            case .serverError(let code): self = .serverError(code: code, message: "Graph API error")
-            case .networkError(let e): self = .networkError(underlying: e)
-            case .decodingError(let e): self = .networkError(underlying: e)
-            }
-        default:
-            self = .networkError(underlying: error)
-        }
-    }
+do {
+    let messages = try await emailService.fetchInbox()
+    // …
+} catch let error as EmailServiceError {
+    self.error = error
+} catch {
+    self.error = .networkError(error)   // wrap anything unexpected (unlabeled associated value)
 }
 ```
 
@@ -340,7 +326,7 @@ final class MockDraftService: DraftServiceProtocol {
     var saveDraftCallCount = 0
     var deleteDraftCallCount = 0
     var sendDraftCallCount = 0
-    var shouldThrow: MailProviderError?
+    var shouldThrow: EmailServiceError?
 
     func saveDraft(_ draft: MailDraft) async throws -> MailDraft {
         saveDraftCallCount += 1

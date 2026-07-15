@@ -9,6 +9,8 @@ description: >
   tables, writing GRDB queries, setting up ValueObservation, adding indexes, or
   when a feature requires persistent storage.
 model: inherit
+skills:
+  - grdb-patterns
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
@@ -80,7 +82,7 @@ Per CLAUDE.md, all database access uses SQLCipher (AES-256) — never unencrypte
 // ✅ Open encrypted database
 var config = Configuration()
 config.prepareDatabase { db in
-    try db.usePassphrase(try KeychainManager.shared.getDatabaseKey())
+    try db.usePassphrase(try EncryptionKeyManager.shared.databaseKey())  // SQLCipher key owner (see keychain-security skill) — distinct from OAuth-token Keychain items
 }
 let dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
 

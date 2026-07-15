@@ -23,6 +23,15 @@ prevent silent parity drift.
 All provider-specific code lives behind these protocols. ViewModels and UI code
 **never** reference `GmailMailProvider` or `GraphMailProvider` directly.
 
+> **Illustrative names — use the app's REAL types in real code.** The `Mail…`-prefixed
+> protocols/types below (`MailProviderProtocol`, `MailProviderType`, `MailMessage`,
+> `MailProviderError`, …) illustrate the *parity pattern*. In the actual app the provider
+> abstraction is **`EmailServiceProtocol`** (both `GmailService` and `MicrosoftGraphService`
+> conform), the provider/account type is **`AccountType`**, the provider-agnostic error is
+> **`EmailServiceError`**, and unsupported-operation is
+> **`ProviderParityError.unsupportedForProvider(operation:provider:)`**. (Full accuracy pass for
+> this skill is tracked under the P2 progressive-disclosure rewrite.)
+
 ```swift
 // MARK: - Core mail operations
 protocol MailProviderProtocol {

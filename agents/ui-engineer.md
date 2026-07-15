@@ -9,6 +9,8 @@ description: >
   navigation, adding toolbar items, implementing loading/error/empty states,
   modifying the email composer UI, or any task that changes what the user sees.
 model: inherit
+skills:
+  - swiftui-mvvm
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
@@ -262,7 +264,7 @@ enum ViewState<T> {
     case idle
     case loading
     case loaded(T)
-    case error(MailProviderError)
+    case error(EmailServiceError)
 }
 ```
 

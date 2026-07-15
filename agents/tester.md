@@ -61,7 +61,7 @@ final class MockEmailService: EmailServiceProtocol {
     var stubbedEmails: [Email] = []
     var fetchInboxCallCount = 0
     var sendCallCount = 0
-    var shouldThrow: MailProviderError?
+    var shouldThrow: EmailServiceError?
 
     func fetchInbox() async throws -> [Email] {
         fetchInboxCallCount += 1
@@ -132,15 +132,16 @@ final class InboxViewModelTests: XCTestCase {
 
     func test_fetchEmails_setsErrorOnFailure() async throws {
         // Arrange
-        mockService.shouldThrow = .networkError(underlying: URLError(.notConnectedToInternet))
+        mockService.shouldThrow = .networkError(URLError(.notConnectedToInternet))
 
         // Act
         await sut.fetchEmails()
 
         // Assert
         XCTAssertTrue(sut.messages.isEmpty)
-        XCTAssertNotNil(sut.error)
-        XCTAssertEqual(sut.error, .networkError)
+        guard case .networkError = sut.error else {
+            return XCTFail("expected .networkError, got \(String(describing: sut.error))")
+        }
     }
 }
 ```
