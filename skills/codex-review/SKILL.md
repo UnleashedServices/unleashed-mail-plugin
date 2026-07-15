@@ -30,7 +30,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 
 ```bash
 # Put the prompt in a workspace file, then run codex through the wrapper.
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" /tmp/codex-out.txt -- \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/codex-out.txt -- \
     codex exec -s read-only "$(cat .codex-prompt.md)"
 # Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
 
