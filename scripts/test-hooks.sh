@@ -758,6 +758,18 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 4 (gemini): the RATIONALE is not a rule list ==
+# This project MANDATES a trailing rationale after a ` - ` delimiter (CLAUDE.md: "note the ` - `
+# rationale delimiter"), and the app has them in the wild. Scanning the whole tail meant
+# `disable:next force_cast - force_try is handled by caller` falsely waived force_try.
+printf 'import Foundation\nstruct I {\n    // swiftlint:disable:next force_cast - force_try is handled by caller\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Rationale.swift"
+OUT="$(lint_run "$LINTDIR/Rationale.swift")"
+assert_contains "lint: a rationale mentioning force_try does NOT waive it" "$OUT" "try!"
+# ...and the project's own documented shape (rule + ` - ` + ticket) still waives.
+printf 'import Foundation\nstruct J {\n    // swiftlint:disable:next force_try - COREDEV-1234 regex migration\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/RuleWithTicket.swift"
+OUT="$(lint_run "$LINTDIR/RuleWithTicket.swift")"
+assert_not_contains "lint: 'force_try - <ticket>' (the documented shape) DOES waive" "$OUT" "try!"
+
 # == COREDEV-2494 review round 3 (gemini): the policy is PRODUCTION-only ==
 # My stage-2 force_try/force_cast elevation had no test-file guard, so a `try!` in an XCTestCase started
 # BLOCKING — a regression vs alpha, which guards tests in all three places. Force-try in a test is

@@ -153,7 +153,14 @@ _waives() {
     # `force_try_custom` and `some_force_try` too, so a directive for a DIFFERENT rule whose name merely
     # CONTAINS this one silently waived a real violation (gemini, #43 review; reproduced). SwiftLint
     # separates rule names with commas/whitespace, so pad and search for the delimited token.
-    _norm=" $(printf '%s' "$_tail" | tr ',' ' ' | tr -s '[:space:]' ' ') "
+    # CUT THE RATIONALE FIRST. This project MANDATES a trailing rationale after a ` - ` delimiter —
+    # CLAUDE.md: "`// swiftlint:disable:next no_legacy_nsregex - <migration ticket>` — note the ` - `
+    # rationale delimiter" — and the app has them in the wild (`large_tuple - mirrors the 5-member
+    # tuple...`, `type_name - COREDEV-2308 ...`). Without cutting, the PROSE is scanned as a rule list,
+    # so `disable:next force_cast - force_try is handled by caller` falsely waived force_try
+    # (gemini, #43 review; reproduced). Rule IDs never contain " - ", so cutting there is lossless.
+    _rules="${_tail%% - *}"
+    _norm=" $(printf '%s' "$_rules" | tr ',' ' ' | tr -s '[:space:]' ' ') "
     [ "${_norm#* $_rule }" != "$_norm" ] && return 0
     return 1
 }
