@@ -6,7 +6,7 @@ description: >
   implementations, sync services, or any code touching email fetching, sending,
   folder/label management, attachments, or push notification handling.
   Ensures both providers stay feature-aligned.
-allowed-tools: Read, Grep, Glob, Bash
+allowed-tools: Read, Grep, Glob
 ---
 
 # Provider Parity — Gmail ↔ Microsoft Graph

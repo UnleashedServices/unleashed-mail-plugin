@@ -303,7 +303,7 @@ Check that both mail providers are consistent.
 
 ```bash
 # Find provider-specific code in ViewModels (should be zero)
-grep -rn "GmailMailProvider\|GraphMailProvider\|MSALResult\|GmailAPI\." --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/" 2>/dev/null
+grep -rn "GmailService\|MicrosoftGraphService\|MSALResult\|GmailAPI\." --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/" 2>/dev/null
 ```
 
 - ViewModels never reference concrete provider types
