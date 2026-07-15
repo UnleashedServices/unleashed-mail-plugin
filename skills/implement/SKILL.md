@@ -22,7 +22,8 @@ any code:
 if [ -f "$ARGUMENTS" ]; then
     PLAN="$ARGUMENTS"
 else
-    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
+    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `->`_`, `-`->`_` (gemini, #41).
+    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] -' '[:lower:]__')
     # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
     # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
     # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).
@@ -33,23 +34,25 @@ else
     # fail-closed on an empty key; this makes the property explicit.)
     # A direct glob, NOT `ls | while read` — parsing ls breaks on a filename with spaces/newlines, and
     # the subshell also swallowed any variable set inside it (gemini, #41 review). bash 3.2-safe.
-    MATCHES=""
+    # An ARRAY, not a newline-joined string: `grep -c .` counted a filename CONTAINING a newline as two
+    # matches and reported a false AMBIGUOUS, and ${p##*/} drops a basename subshell per file (gemini).
+    MATCHES=()
     for p in docs/planning/*PLAN*.md; do
         [ -e "$p" ] || continue                     # unmatched glob stays literal -> skip
-        b=$(basename "$p" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
+        b=$(printf '%s' "${p##*/}" | tr '[:upper:] -' '[:lower:]__')
         if [[ -n "$KEY" && "$b" == *"$KEY"* ]]; then
-            MATCHES="${MATCHES}${p}"$'\n'
+            MATCHES+=("$p")
         fi
     done
-    N=$(printf '%s' "$MATCHES" | grep -c . || true)
+    N=${#MATCHES[@]}
     # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
     # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated
     # — defeating this block's whole purpose. Make the human disambiguate.
     if [ "$N" -gt 1 ]; then
-        { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "$MATCHES"; } >&2
+        { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "${MATCHES[@]}"; } >&2
         exit 2
     fi
-    PLAN="${MATCHES%$'\n'}"       # strip the accumulator's trailing newline
+    PLAN="${MATCHES[0]}"          # empty array -> empty PLAN -> the fail-closed branch below
 fi
 if [ -z "$PLAN" ]; then
     # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
