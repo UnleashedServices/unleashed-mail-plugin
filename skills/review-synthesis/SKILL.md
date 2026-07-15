@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Read-only; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep
+allowed-tools: Read, Grep, Bash
 ---
 
 # Plan-Review Synthesis
@@ -92,6 +92,29 @@ Map each reviewer's raw verdict to one canonical token:
 - **[high | medium | low]** — [one line; low whenever a transcript was MISSING or a verdict was inferred from ambiguous prose]
 ```
 
+## Persist the verdict (bind it to the plan)
+
+After emitting the block, **persist the Combined verdict as a plan-digest-bound artifact** so
+`implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit). Pass the
+plan that was reviewed plus each reviewer's status + transcript:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+    --plan docs/planning/FEATURE_NAME_PLAN.md \
+    --verdict <COMBINED_VERDICT> \
+    --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
+    --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
+    --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
+(the artifact fails closed — `implement`'s verify blocks on a non-approving verdict), e.g. `--reviewer codex=MISSING`.
+
+This records the plan's **raw-byte SHA-256** (+ the two transcript digests) in a private `.verdicts/`
+dir beside the plan (git-ignored session state). It writes the artifact for ANY combined verdict —
+`implement` is what refuses to proceed on a non-approving one, so the audit trail is complete either
+way. If `${CLAUDE_PLUGIN_ROOT}` is unset, use the repo-relative `scripts/review-verdict.py`.
+
 ## Guardrails
 
 - **No PII.** Plan transcripts may quote email addresses, subjects, or message bodies. Reference findings
@@ -100,5 +123,6 @@ Map each reviewer's raw verdict to one canonical token:
   return; treat it as `MISSING` (rule 1), never as a silent `APPROVE`.
 - **Surface, don't average.** `DISAGREEMENT` is a real verdict — keep both reviewers' positions visible
   rather than collapsing a one-approve / one-reject split into either extreme.
-- **Passive and read-only.** This skill reads two files and emits one block; it never edits the plan,
-  re-runs a reviewer, or gates anything on its own.
+- **Never edits the plan or gates.** This skill reads the two transcripts, emits one block, and persists
+  the verdict artifact beside the plan (the `.verdicts/` handoff). It never edits the plan itself,
+  re-runs a reviewer, or decides to proceed — `implement`'s Design Gate is the only consumer that gates.

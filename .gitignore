@@ -5,6 +5,8 @@ firebase-debug.log
 # committed placeholders-only template (real .env / .env.* stay ignored above)
 !.env.example
 .DS_Store
+# Plan Review Gate artifacts — per-session Combined-verdict handoff state, never committed
+.verdicts/
 **/.DS_Store
 
 # Claude Code local settings — machine-specific, may hold tokens/paths. Never commit

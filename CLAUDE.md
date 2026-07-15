@@ -55,6 +55,7 @@ python3 scripts/validate-hooks.py --root . --strict --require-manifest
 VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh  # plugin.json == README == counts (21/21/0/1)
 bash scripts/test-hooks.sh                                         # hook stdin-contract harness
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
+python3 -m unittest discover -s scripts/tests                      # scripts suite (review-verdict gate)
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
 ```
 
