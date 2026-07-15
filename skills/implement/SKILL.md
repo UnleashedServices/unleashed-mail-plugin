@@ -12,25 +12,55 @@ This command orchestrates implementation across specialized coding agents.
 
 ## Phase 1: Design Gate (fail-closed)
 
-Implementation without a **reviewed** plan violates CLAUDE.md's mandatory Plan Review Gate.
-Check for a plan and its approval **before writing any code**:
+Implementation without a **reviewed** plan violates CLAUDE.md's mandatory Plan Review Gate. Resolve the
+plan **for this feature**, then **verify its Combined-verdict artifact deterministically**, before writing
+any code:
 
 ```bash
-ls docs/planning/*PLAN*.md 2>/dev/null
+# Resolve THE plan for $ARGUMENTS — never let an unrelated approved plan satisfy the gate.
+# $ARGUMENTS is the feature name (e.g. "dark mode") or a direct path to the plan.
+if [ -f "$ARGUMENTS" ]; then
+    PLAN="$ARGUMENTS"
+else
+    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
+    # Substring match via prefix-strip — NOT `case`: bash 3.2 (what macOS ships) fails to parse a
+    # `case … esac` nested inside a `while` inside `$( )`. This form parses on 3.2 and bash 5+.
+    PLAN=$(ls docs/planning/*PLAN*.md 2>/dev/null | while IFS= read -r p; do
+        b=$(basename "$p" | tr '[:upper:]' '[:lower:]' | tr ' -' '__')
+        if [ "${b#*$KEY}" != "$b" ]; then printf '%s\n' "$p"; fi
+    done | head -1)
+fi
+if [ -z "$PLAN" ]; then
+    echo "No plan matches '$ARGUMENTS'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null
+else
+    echo "Plan: $PLAN"
+    # Verify the persisted, digest-bound verdict for THAT plan:
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" verify --plan "$PLAN"
+fi
 ```
 
-- **No plan?** STOP and hand back to the user: *"No planning doc found — run `/unleashed-mail:brainstorm`
-  first (it's `disable-model-invocation: true`, so it's user-run only), then `/gemini-review` +
-  `/codex-review`. Those two are model-invocable, but per the AGENT_CONTRACTS §2 gate I run them under
-  the plan-review workflow rather than self-approving here."* Do NOT proceed to Phase 2.
-- **Plan exists but not gated?** Confirm it carries an approved **Combined verdict** — both `/gemini-review`
-  and `/codex-review` returned APPROVE / APPROVE_WITH_NOTES (see `/unleashed-mail:review-synthesis`). If it
-  doesn't, STOP and ask the user to run the gate to convergence first.
-- **Plan exists and gated?** Read it, re-verify the modern-standards recommendations are still current (via
-  Context7), then proceed.
+- **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
+  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it's `disable-model-invocation: true`, so it's
+  user-run only), then the Plan Review Gate (`/gemini-review` + `/codex-review` →
+  `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the
+  AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
+  Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
+- **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
+  - *no artifact* → the gate never ran (or ran in another checkout); ask the user to run
+    `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence.
+  - *not an approving verdict* → the plan was `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate.
+  - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval
+    (**approve-then-edit is blocked**); re-run the gate on the current plan.
+  - *written for a different plan* → the artifact isn't this plan's; run the gate on `$PLAN`.
+- **`verify` exits 0?** The artifact is an approving verdict bound to the plan's current bytes. Read the
+  plan, re-verify the modern-standards recommendations are still current (via Context7), then proceed.
 
-This is a **workflow-level** fail-closed check — `implement` declines to proceed without a reviewed plan; a
-command cannot mechanically enforce a tool boundary on its own.
+The `review-verdict.py verify` check is deterministic (raw-byte plan digest + dual-reviewer approval),
+so it catches a stale/edited/absent/unrelated approval a prose check would miss. It stays
+**workflow-level** fail-closed — `implement` declines to proceed; a skill cannot mechanically enforce a
+tool boundary on its own (the gate deliberately drops the heavier PreToolUse-token approach as
+over-engineering for this cooperative workflow). If `${CLAUDE_PLUGIN_ROOT}` is unset, use the
+repo-relative `scripts/review-verdict.py`.
 
 ## Phase 2: Implementation Plan
 

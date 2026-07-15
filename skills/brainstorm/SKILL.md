@@ -160,4 +160,30 @@ without a tracked plan.
 
 Update the Jira ticket with a link to the plan document.
 
-Wait for approval before proceeding to `/unleashed-mail:implement`.
+## Step 10: Plan Review Gate (Mandatory — do this BEFORE `/implement`)
+
+`/unleashed-mail:implement` runs a **deterministic** Design Gate: it calls
+`scripts/review-verdict.py verify` and refuses to write code unless an **approving, plan-digest-bound
+Combined-verdict artifact** exists. Going straight from here to `/implement` therefore fails with
+`GATE FAILED — no Combined-verdict artifact`. Walk the gate first:
+
+1. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
+   `/gemini-review` and `/codex-review` on `docs/planning/FEATURE_NAME_PLAN.md`.
+   Route non-TTY runs through `scripts/pty-capture.py` (see those skills).
+2. **Iterate to convergence** — revise the plan and re-run until **both** return
+   `APPROVE` / `APPROVE_WITH_NOTES` (typically 2–6 rounds).
+3. **Synthesize:** run `/unleashed-mail:review-synthesis` to combine the two transcripts into one
+   auditable Combined verdict — it also **persists** the artifact:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+       --plan docs/planning/FEATURE_NAME_PLAN.md \
+       --verdict <COMBINED_VERDICT> \
+       --reviewer gemini=<STATUS>:/tmp/agy-out.txt \
+       --reviewer codex=<STATUS>:/tmp/codex-out.txt \
+       --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   ```
+4. **Then** hand off: `/unleashed-mail:implement FEATURE_NAME`.
+
+> The artifact is bound to the plan's **raw bytes** — editing the plan after approval invalidates it
+> (approve-then-edit is blocked), so re-run the gate on any post-approval change.

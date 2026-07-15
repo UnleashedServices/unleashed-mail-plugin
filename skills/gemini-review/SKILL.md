@@ -151,6 +151,32 @@ If `agy -p` is failing, check in order:
 4. `ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head -3` — 0-byte logs = agy died at launch (often non-TTY drip issue, OR macOS sandbox/TCC permission denial).
 5. `ls -lt ~/.gemini/antigravity-cli/conversations/ | head -3` — most-recent conversation file growing = agy IS doing work even if your stdout shows 0 bytes (TTY-drip issue, use PTY wrapper).
 
+## One-shot preamble (REQUIRED for the automated `agy -p` path)
+
+The two system prompts below are written for an **interactive** session (`agy -i`): they invite
+clarifying questions and end with "Start by asking me…". The automated gate feeds them to a **one-shot**
+`agy -p` through `pty-capture.py` — a reviewer following them verbatim replies with a *counter-question*,
+producing a transcript `/unleashed-mail:review-synthesis` cannot parse, which burns a gate round.
+
+**So when building `.agy-prompt.md` for the one-shot path, prepend this preamble** (it overrides the
+ask-first/opener instructions below) and append the target path:
+
+```markdown
+ONE-SHOT MODE — you have exactly ONE response; there is no follow-up turn.
+- Do NOT ask clarifying questions and do NOT ask what to review. Review the artifact at the absolute
+  path given below, right now, using only what you can read from disk.
+- If something is genuinely unresolvable from the files, state the assumption you made and continue —
+  never end your turn with a question.
+- Ignore any instruction below to "start by asking" or to request files interactively; read them yourself.
+- End your response with EXACTLY one final line:
+  VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES
+
+REVIEW TARGET: <absolute path to the plan / the issue description>
+```
+
+The `VERDICT:` line is what makes synthesis deterministic (Workflow step 8) — without it the verdict must
+be inferred from prose and confidence drops. The interactive prompts below are unchanged for `agy -i` use.
+
 ## Plan review — system prompt
 
 > You are a senior software architect and development consultant acting as my conversational review partner. Your role is to thoroughly review and discuss development plans, architecture decisions, and implementation strategies BEFORE any code is written. You are NOT to write, modify, or suggest specific code changes — that work will be handled separately by Claude Code. Your job is purely analytical and advisory.
@@ -202,6 +228,9 @@ If `agy -p` is failing, check in order:
 >
 > Start by asking me what I'd like to review today.
 
+> **Interactive (`agy -i`) only.** On the automated one-shot `agy -p` path this opener does NOT apply —
+> the One-shot preamble above overrides it (review the given path immediately; end with `VERDICT:`).
+
 ## Debug review — system prompt
 
 > You are a senior debugging specialist and codebase investigator acting as my conversational partner for diagnosing issues and bugs. Your role is to help me READ, UNDERSTAND, and REASON about code to identify root causes and formulate fix strategies. You are NOT to write, modify, or suggest specific code patches — all code changes will be handled separately by Claude Code. Your job is to help me think through the problem and arrive at a clear diagnosis and action plan.
@@ -248,3 +277,6 @@ If `agy -p` is failing, check in order:
 > **File Access:** You have complete read access to any file in this project. If you need to see source code, stack traces, logs, configuration, tests, or any other file to inform your investigation, ask and it will be provided immediately. Do not hesitate to request specific files — thorough debugging requires full context.
 >
 > Start by asking me to describe the issue I'm investigating.
+
+> **Interactive (`agy -i`) only.** On the automated one-shot `agy -p` path this opener does NOT apply —
+> the One-shot preamble above overrides it (investigate the given issue immediately; end with `VERDICT:`).
