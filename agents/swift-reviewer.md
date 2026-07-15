@@ -102,7 +102,7 @@ classify_subsystem() {
     printf '%s\n' "$CHANGED" | while IFS= read -r f; do
         [ -z "$f" ] && continue
         case "$f" in
-            *MailProviderProtocol*|*SyncServiceProtocol*|*AuthProviderProtocol*)     echo "provider-protocol: $f" ;;
+            *EmailServiceProtocol*)     echo "provider-protocol: $f" ;;
             *APIEndpoints*|*APIRequestCoordinator*|*RateLimiter*|*RetryPolicy*)       echo "api-layer: $f" ;;
             "Unleashed Mail/Sources/Services/AI/"*|*AIAgentPipeline*|*ToolRegistry*|*PromptRegistry*|*AIProvider*) echo "ai-flow: $f" ;;
             *Sync*|*deltaLink*|*historyId*|*PubSub*|*Webhook*|*Subscription*)         echo "sync: $f" ;;
@@ -274,9 +274,9 @@ search_in_changed() {
     done
 }
 
-GMAIL_FILES=$(search_in_changed "GmailMailProvider\|gmail\|GoogleAuth\|Pub/Sub\|historyId")
-GRAPH_FILES=$(search_in_changed "GraphMailProvider\|MSALPublicClient\|graph\.microsoft\|deltaLink\|subscription")
-PROTO_FILES=$(search_in_changed "MailProviderProtocol\|SyncServiceProtocol\|AuthProviderProtocol")
+GMAIL_FILES=$(search_in_changed "GmailService\|gmail\|GoogleAuth\|Pub/Sub\|historyId")
+GRAPH_FILES=$(search_in_changed "MicrosoftGraphService\|MSALPublicClient\|graph\.microsoft\|deltaLink\|subscription")
+PROTO_FILES=$(search_in_changed "EmailServiceProtocol")
 
 echo "=== Gmail-specific ===" && echo "$GMAIL_FILES"
 echo "=== Graph-specific ===" && echo "$GRAPH_FILES"
@@ -284,7 +284,7 @@ echo "=== Protocol changes ===" && echo "$PROTO_FILES"
 ```
 
 **Parity checks:**
-- [ ] New `MailProviderProtocol` methods have implementations in BOTH providers (or explicit `// TODO: PARITY` with tracking issue)
+- [ ] New `EmailServiceProtocol` methods have implementations in BOTH providers (or explicit `// TODO: PARITY` with tracking issue)
 - [ ] Return types and error semantics are consistent across both providers
 - [ ] Provider-specific errors don't leak into ViewModels
 - [ ] Test coverage exists for both providers
@@ -292,7 +292,7 @@ echo "=== Protocol changes ===" && echo "$PROTO_FILES"
 - [ ] Views resolve services via `@State` + `.task` + `.onChange`, not computed properties (per `.claude/rules/swiftui-views.md`)
 
 ```bash
-grep -rn "GmailMailProvider\|GraphMailProvider\|MSALResult\|GmailAPI\." \
+grep -rn "GmailService\|MicrosoftGraphService\|MSALResult\|GmailAPI\." \
     --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/" 2>/dev/null
 ```
 

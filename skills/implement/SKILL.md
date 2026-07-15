@@ -108,7 +108,7 @@ After all three agents complete:
 3. **Verify provider parity**:
    ```bash
    grep -rn "TODO: PARITY" --include='*.swift' "Unleashed Mail/Sources/"
-   grep -rn "GmailMailProvider\|GraphMailProvider" --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/"
+   grep -rn "GmailService\|MicrosoftGraphService" --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/"
    ```
 
 4. **Commit with conventional format** (the COREDEV ticket key is mandatory, not optional):

@@ -2,95 +2,141 @@
 name: provider-parity
 description: >
   Mail provider parity enforcement for UnleashedMail. Activates automatically when
-  working on Gmail-specific or Microsoft Graph-specific code, MailProviderProtocol
+  working on Gmail-specific or Microsoft Graph-specific code, EmailServiceProtocol
   implementations, sync services, or any code touching email fetching, sending,
   folder/label management, attachments, or push notification handling.
   Ensures both providers stay feature-aligned.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
+allowed-tools: Read, Grep, Glob
 ---
 
 # Provider Parity — Gmail ↔ Microsoft Graph
 
 ## Why This Exists
 
-UnleashedMail supports two mail backends behind a shared protocol layer. Every time
-you add, modify, or remove a capability in one provider, the other must be updated
-to match — or the gap must be explicitly tracked. This skill fires automatically to
-prevent silent parity drift.
+UnleashedMail supports two mail backends behind one shared protocol. Every time you add,
+modify, or remove a capability in one provider, the other must be updated to match — or
+the gap must be **declared** in the provider's `ServiceCapabilities` and, if a call site
+can still be reached, guarded with `ProviderParityError`. This skill fires automatically
+to prevent silent parity drift.
 
-## Shared Abstraction Layer
+## The Shared Abstraction — `EmailServiceProtocol`
 
-All provider-specific code lives behind these protocols. ViewModels and UI code
-**never** reference `GmailMailProvider` or `GraphMailProvider` directly.
-
-> **Illustrative names — use the app's REAL types in real code.** The `Mail…`-prefixed
-> protocols/types below (`MailProviderProtocol`, `MailProviderType`, `MailMessage`,
-> `MailProviderError`, …) illustrate the *parity pattern*. In the actual app the provider
-> abstraction is **`EmailServiceProtocol`** (both `GmailService` and `MicrosoftGraphService`
-> conform), the provider/account type is **`AccountType`**, the provider-agnostic error is
-> **`EmailServiceError`**, and unsupported-operation is
-> **`ProviderParityError.unsupportedForProvider(operation:provider:)`**. (Full accuracy pass for
-> this skill is tracked under the P2 progressive-disclosure rewrite.)
+All provider-specific code lives behind **`EmailServiceProtocol`**
+(`Unleashed Mail/Sources/Services/EmailServiceProtocol.swift`). Both `GmailService` and
+`MicrosoftGraphService` conform. ViewModels and UI code **never** reference those concrete
+types — they hold `any EmailServiceProtocol`, resolved through `AccountScopedServiceProvider`.
 
 ```swift
-// MARK: - Core mail operations
-protocol MailProviderProtocol {
-    var providerType: MailProviderType { get }
+internal protocol EmailServiceProtocol: AnyObject, Sendable {
+    var accountEmail: String? { get }
+    var accountType: AccountType { get }            // .google | .microsoft
+    var capabilities: ServiceCapabilities { get }   // declarative parity — see below
 
-    // Inbox & message list
-    func fetchInbox(pageToken: String?) async throws -> MailPage
-    func fetchMessage(id: String) async throws -> MailMessage
-    func searchMessages(query: String, pageToken: String?) async throws -> MailPage
+    func getCurrentUser() async throws -> User
 
-    // Actions
-    func send(_ draft: MailDraft) async throws -> MailMessage
-    func reply(to messageId: String, body: String) async throws -> MailMessage
-    func forward(messageId: String, to: [String]) async throws -> MailMessage
+    // Messages — batch-oriented; both providers normalize to the shared `Email` model.
+    func fetchMessages(folderId: String, maxResults: Int, pageToken: PaginationToken?)
+        async throws -> (emails: [Email], nextToken: PaginationToken)
+    func fetchMessage(id: String, forceRefresh: Bool) async throws -> Email
+    func batchFetchMessages(ids: [String], onEmailFetched: ((Email) async -> Void)?)
+        async throws -> [String: Email]
+    func searchMessages(query: String, maxResults: Int) async throws -> [Email]
 
-    // State changes
-    func markRead(id: String) async throws
-    func markUnread(id: String) async throws
-    func star(id: String) async throws
-    func unstar(id: String) async throws
-    func archive(id: String) async throws
-    func moveToTrash(id: String) async throws
-    func move(id: String, to folderId: String) async throws
+    // State changes — batch by ids (singular convenience overloads are default-implemented).
+    func markAsRead(ids: [String]) async throws
+    func markAsUnread(ids: [String]) async throws
+    func starMessages(ids: [String]) async throws
+    func unstarMessages(ids: [String]) async throws
+    func moveToTrash(ids: [String]) async throws
+    func deleteMessages(ids: [String]) async throws
+    func archiveMessages(ids: [String]) async throws
+    func reportAsSpam(ids: [String]) async throws
+    func moveToFolder(ids: [String], folderId: String) async throws
 
-    // Folders / Labels
-    func fetchFolders() async throws -> [MailFolder]
-    func createFolder(name: String, parentId: String?) async throws -> MailFolder
+    // Folders (Gmail labels are modeled as `Folder` too).
+    func fetchFolders(forceRefresh: Bool) async throws -> [Folder]
+    func createFolder(name: String, parentId: String?) async throws -> Folder
+    func deleteFolder(id: String) async throws
 
-    // Attachments
-    func fetchAttachment(messageId: String, attachmentId: String) async throws -> MailAttachment
-    func uploadAttachment(_ data: Data, filename: String, mimeType: String, to draftId: String) async throws -> MailAttachment
-}
+    // Send / drafts. NOTE the `authAccount:` overload is a REAL protocol requirement —
+    // it pins the send to the composing account so a mid-drain account switch can't send
+    // from B while draining A's outbox.
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?, authAccount: String?) async throws
+    func createDraft(draft: EmailDraft, attachmentCache: [String: Data]?) async throws -> String
+    func updateDraft(draftId: String, draft: EmailDraft, attachmentCache: [String: Data]?) async throws
+    func deleteDraft(draftId: String) async throws
+    func listDrafts() async throws -> [Email]
 
-// MARK: - Sync / push
-protocol SyncServiceProtocol {
-    func performInitialSync() async throws
-    func performIncrementalSync() async throws
-    func startPushNotifications() async throws
-    func stopPushNotifications() async throws
-    func renewPushSubscription() async throws
-}
-
-// MARK: - Auth
-protocol AuthProviderProtocol {
-    func signIn(from window: NSWindow) async throws
-    func signOut() async throws
-    func validAccessToken() async throws -> String
-    var isSignedIn: Bool { get }
-}
-
-enum MailProviderType: String, Codable {
-    case gmail
-    case microsoftGraph
+    // Attachments are fetched as raw bytes; the provider owns MIME/JSON decoding.
+    func fetchAttachmentData(messageId: String, attachmentId: String) async throws -> Data
 }
 ```
 
-## Parity Mapping Reference
+`PaginationToken` (`Models/PaginationToken.swift`) is a provider-agnostic enum — Gmail's
+`nextPageToken` and Graph's `@odata.nextLink` both normalize into it, so ViewModels never
+see a raw token string.
 
-Use this table when implementing a feature to find the counterpart:
+## Service Resolution — never touch a concrete service
+
+Resolve the active provider through `AccountScopedServiceProvider` (see the app's
+`CLAUDE.md` "Service Resolution"). This is the same containment boundary that keeps one
+account's data from leaking into another.
+
+```swift
+// Provider-agnostic call — the ONLY pattern ViewModels/services use:
+let service = try serviceProvider.activeService()          // -> any EmailServiceProtocol
+let (emails, next) = try await service.fetchMessages(folderId: "INBOX", maxResults: 50, pageToken: nil)
+
+// Provider-specific escape hatch (throws if the active account is the wrong provider):
+let gmail = try serviceProvider.gmailServiceGuarded()
+
+// Guard a provider-specific operation at the top of the method:
+try serviceProvider.validateSupported(.scheduledSend)      // throws ProviderParityError if unsupported
+```
+
+## Declaring parity differences — `ServiceCapabilities`
+
+Genuine feature differences are **declared**, not discovered at a crash site. Each provider
+exposes a static `ServiceCapabilities` value; UI gates on the flag rather than hard-coding a
+provider check.
+
+```swift
+internal struct ServiceCapabilities: Sendable, Equatable {
+    let supportsMultipleLabels: Bool
+    let supportsScheduledSend: Bool
+    let supportsArchive: Bool
+    let supportsUndoSend: Bool
+    let supportsCategories: Bool
+    let supportsImportance: Bool
+    let supportsReadReceipts: Bool
+    static let gmail = Self(/* … */)
+    static let microsoft = Self(/* … */)
+}
+```
+
+Current declared differences (keep this in sync with the source of truth in
+`EmailServiceProtocol.swift`):
+
+| Capability | Gmail (`.google`) | Microsoft (`.microsoft`) |
+|---|---|---|
+| `supportsMultipleLabels` | ✅ | ❌ (single parent folder) |
+| `supportsScheduledSend` | ✅ | ❌ (needs Graph `deferredDeliveryTime`) |
+| `supportsArchive` | ✅ | ✅ (may be false for consumer accounts) |
+| `supportsUndoSend` | ✅ | ❌ |
+| `supportsCategories` | ❌ | ✅ |
+| `supportsImportance` | ❌ | ✅ |
+| `supportsReadReceipts` | ❌ | ✅ |
+
+```swift
+// Gate UI on a capability — NOT on `accountType == .google`:
+if service.capabilities.supportsScheduledSend {
+    ScheduleSendButton()
+}
+```
+
+## Parity Mapping Reference (API endpoints)
+
+Use this when implementing a feature to find the counterpart call:
 
 | Capability | Gmail Implementation | Graph Implementation |
 |---|---|---|
@@ -111,7 +157,6 @@ Use this table when implementing a feature to find the counterpart:
 | **Attachments (large)** | Multipart upload (<35MB) | Upload session (<150MB) |
 | **Push** | Pub/Sub `watch()` → historyId | Webhook subscription → resource ID |
 | **Incremental sync** | `GET /history?startHistoryId=` | `GET /me/mailFolders/inbox/messages/delta` |
-| **Push renewal** | Every 7 days | Every ~7 days |
 | **Pagination** | `pageToken` / `nextPageToken` | `@odata.nextLink` |
 | **Batch** | Gmail batch API (multipart) | `POST /$batch` (JSON, max 20 requests) |
 | **Search** | Gmail search syntax (`from:`, `subject:`, etc.) | `$filter` and `$search` OData parameters |
@@ -119,148 +164,114 @@ Use this table when implementing a feature to find the counterpart:
 
 ## Workflow: Implementing a New Capability
 
-### Step 1: Protocol First
+### Step 1 — Protocol first
+Add the method to `EmailServiceProtocol` **before** writing either implementation. If it is a
+truly optional feature, add a `ProviderOperation` case and a `ServiceCapabilities` flag too.
 
-Add the method signature to the appropriate shared protocol (`MailProviderProtocol`, `SyncServiceProtocol`, or `AuthProviderProtocol`) **before** writing either implementation.
+### Step 2 — Implement the first provider
+Pick the provider you know best. Follow TDD (invoke the `swift-tdd` skill).
 
-```swift
-// Add to MailProviderProtocol
-func snooze(id: String, until: Date) async throws
-```
+### Step 3 — Implement (or explicitly gap) the second provider
+Use the mapping table to find the equivalent call. If the second provider can't do it:
 
-### Step 2: Implement the First Provider
-
-Pick the provider you're most familiar with. Follow TDD (invoke `swift-tdd` skill).
-
-### Step 3: Implement the Second Provider
-
-**Before marking the task as done**, implement the counterpart. Use the mapping table above to find the equivalent API call.
-
-If the second provider's API doesn't support the feature natively:
-1. Check if it can be emulated (e.g., Gmail doesn't have native snooze — you could remove from inbox + schedule a re-label).
-2. If it can't be emulated, add a stub with an explicit marker:
+1. **Emulate** if reasonable (e.g. Gmail has no native snooze → remove from inbox + schedule a re-label).
+2. Otherwise **declare it unsupported** — flip the `ServiceCapabilities` flag to `false`, gate the
+   UI on that flag, and make any still-reachable call site throw:
 
 ```swift
-// GraphMailProvider.swift
-func snooze(id: String, until: Date) async throws {
-    // TODO: PARITY — Graph API does not support native snooze.
-    // Tracked: https://github.com/UnleashedServices/UnleashedMail/issues/XXX
-    throw MailProviderError.unsupportedOperation(provider: .microsoftGraph, operation: "snooze")
+// MicrosoftGraphService — genuinely unsupported operation
+func scheduleSend(draft: EmailDraft, at date: Date) async throws {
+    throw ProviderParityError.unsupportedForProvider(operation: "scheduledSend", provider: .microsoft)
 }
 ```
 
-3. The `MailProviderError.unsupportedOperation` case lets the ViewModel gracefully disable the UI for that provider.
+`ProviderParityError.unsupportedForProvider(operation:provider:)`
+(`Services/AccountScopedServiceProvider.swift`) is the **only** acceptable way to express a
+parity gap at a call site. Its `errorDescription` already renders a user-facing
+"*… is not yet available for \(provider.displayName) accounts.*" — the UI shows a
+`CuratorActionMismatchNotice` rather than a raw error.
 
-### Step 4: Shared Tests
-
-For every protocol method, maintain parallel test cases:
-
-```
-Unleashed MailTests/
-├── Gmail/
-│   └── GmailMailProviderTests.swift     ← tests with MockGmailAPI
-├── Graph/
-│   └── GraphMailProviderTests.swift     ← tests with MockGraphAPI
-└── Shared/
-    └── MailProviderParityTests.swift    ← tests that run against BOTH providers
-```
-
-The parity test file instantiates both providers with mocks and asserts identical behavior:
+### Step 4 — Parity tests against both providers
+Regression tests live in `Unleashed MailTests/ProviderParityRegressionTests.swift` and run
+against the in-repo stubs `StubGoogleEmailService` / `StubMicrosoftEmailService` (both
+conform to `EmailServiceProtocol`). Assert the shared operations work on both and that
+provider-specific ones are correctly scoped:
 
 ```swift
-final class MailProviderParityTests: XCTestCase {
-    let providers: [MailProviderProtocol] = [
-        GmailMailProvider(api: MockGmailAPI()),
-        GraphMailProvider(api: MockGraphAPI(), tokenManager: MockMSALTokenManager())
-    ]
-
-    func test_fetchInbox_returnsSameStructure() async throws {
-        for provider in providers {
-            let page = try await provider.fetchInbox(pageToken: nil)
-            XCTAssertFalse(page.messages.isEmpty, "\(provider.providerType) inbox should return messages")
-            for msg in page.messages {
-                XCTAssertFalse(msg.subject.isEmpty, "\(provider.providerType) message should have subject")
-                XCTAssertFalse(msg.sender.isEmpty, "\(provider.providerType) message should have sender")
-                XCTAssertNotNil(msg.receivedAt, "\(provider.providerType) message should have date")
-            }
-        }
-    }
-}
+func test_providerOperation_fetchMessages_supportedByBoth() { /* both stubs succeed */ }
+func test_providerOperation_scheduledSend_googleOnly()     { /* google ok; microsoft throws */ }
 ```
 
-### Step 5: Parity Audit Before Commit
+Any type that takes a service must accept **`any EmailServiceProtocol`**, never a concrete
+service (see `test_cidImageResolver_acceptsAnyEmailServiceProtocol`).
 
-Run this before committing any provider-related change:
+### Step 5 — Parity audit before commit
 
 ```bash
-# 1. Check protocol conformance — both providers compile
-xcodebuild build -scheme "Unleashed Mail" -destination 'platform=macOS' 2>&1 | grep "does not conform to protocol" | head -10
+# 1. Both providers still conform (compile check)
+xcodebuild build -scheme "Unleashed Mail" -destination 'platform=macOS' 2>&1 \
+  | grep "does not conform to protocol" | head -10
 
-# 2. Find TODO: PARITY markers
-grep -rn "TODO: PARITY\|FIXME: PARITY" --include='*.swift' "Unleashed Mail/Sources/"
-
-# 3. Count public methods per provider (should be roughly equal)
-echo "=== GmailMailProvider ==="
-find "Unleashed Mail/Sources/" -name "GmailMailProvider.swift" -exec grep -c "func " {} \; 2>/dev/null || echo "not found"
-echo "=== GraphMailProvider ==="
-find "Unleashed Mail/Sources/" -name "GraphMailProvider.swift" -exec grep -c "func " {} \; 2>/dev/null || echo "not found"
-
-# 4. Check for provider-specific types leaking outside the provider layer
-grep -rn "GmailMailProvider\|GraphMailProvider\|MSALResult\|GmailAPI\." --include='*.swift' \
+# 2. Provider concretes must NOT leak into ViewModels/Views (parity violation → zero results)
+grep -rn "GmailService\|MicrosoftGraphService\|MSALResult\|GmailAPI\." --include='*.swift' \
     "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/"
+
+# 3. Every ProviderOperation case should be covered by a capability decision or a parity test
+grep -rn "ProviderParityError.unsupportedForProvider" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
-Step 4 should return **zero results**. If a ViewModel or View references a concrete provider, that's a parity violation.
+## The `ProviderOperation` catalogue
 
-## Shared Error Type
+`ProviderOperation` (`Services/AccountScopedServiceProvider.swift`) enumerates every gate-able
+operation — pass one to `validateSupported(_:)`:
 
-Both providers map their errors to a common type:
-
-```swift
-enum MailProviderError: Error {
-    case notAuthenticated
-    case tokenExpired
-    case interactionRequired                         // Graph-specific, but shared
-    case permissionDenied(scope: String)
-    case messageNotFound(id: String)
-    case folderNotFound(id: String)
-    case rateLimited(retryAfter: TimeInterval?)
-    case serverError(code: Int, message: String)
-    case networkError(underlying: Error)
-    case unsupportedOperation(provider: MailProviderType, operation: String)
-}
-```
-
-The `unsupportedOperation` case is the **only** acceptable way to express a parity gap at the protocol level. It must always include a tracking issue URL in the comment at the call site.
+`fetchMessages`, `sendMessage`, `markAsRead`, `markAsUnread`, `star`, `archive`, `trash`,
+`delete`, `moveToFolder`, `search`, `fetchAttachments`, `createDraft`, `updateDraft`,
+`deleteDraft`, `snooze`, `scheduledSend`, `autoRespond`, `workflowExecution`,
+`signatureImport`, `pushNotifications`, `batchModifyLabels`, `modifyLabels`, `emptyTrash`,
+`emptySpam`.
 
 ## Domain Model Normalization
 
-Both providers must produce identical domain model structs:
+Both providers normalize to the shared **`Email`** model (`Models/Email.swift`) — never a
+provider-native shape:
 
 ```swift
-struct MailMessage: Identifiable, Codable {
-    let id: String                    // provider-native ID
-    let threadId: String?             // Gmail: threadId; Graph: conversationId
+struct Email: Identifiable, Sendable {
+    let id: String
+    let threadId: String            // Gmail threadId; Graph conversationId
     let subject: String
-    let sender: String                // display name + email
-    let recipients: [String]
-    let bodyHTML: String              // both providers normalize to HTML
-    let snippet: String               // preview text
-    let receivedAt: Date
-    var isRead: Bool
-    var isStarred: Bool               // Gmail: STARRED label; Graph: flag.flagStatus
-    let hasAttachments: Bool
-    let folderIds: [String]           // Gmail: labelIds; Graph: [parentFolderId]
-    let provider: MailProviderType    // which backend this came from
+    let from: EmailAddress
+    let to: [EmailAddress]
+    let cc: [EmailAddress]
+    let date: Date
+    let snippet: String
+    let bodyHTML: String?           // both providers normalize to HTML (sanitized before WKWebView)
+    let isRead: Bool
+    let isStarred: Bool             // Gmail STARRED label; Graph flag.flagStatus
+    let labelIds: [String]          // Gmail labelIds; Graph [parentFolderId]
+    let attachments: [EmailAttachment]
+    let accountEmail: String?       // account scoping — every row is account-tagged
+    // … (see Models/Email.swift for the full shape)
 }
 ```
 
-If a field has different semantics per provider, document the normalization in a comment on the mapping code — not on the model itself.
+If a field has different semantics per provider, document the normalization in the mapping
+code — not on the model.
+
+## Shared Error Type
+
+Provider-agnostic failures surface as **`EmailServiceError`** (defined in
+`EmailServiceProtocol.swift`): `.notAuthenticated`, `.invalidResponse`,
+`.requestFailed(statusCode:)`, `.rateLimited`, `.notFound`, `.folderNotFound(folderName:)`,
+`.networkError(Error)`. See the `error-handling` skill for the canonical mapping. Parity /
+containment failures use `ProviderParityError` (above), which is distinct.
 
 ## Hard Rules
 
-1. **Protocol-first, always.** Never add a public method to one provider without adding it to the protocol.
-2. **No provider types in ViewModels.** `import` only the protocol and shared domain models.
-3. **Every parity gap gets a tracking issue.** No orphaned `// TODO: PARITY` without a link.
-4. **Tests run against both.** A feature isn't done until both mock providers pass.
-5. **The reviewer will flag it.** The `swift-reviewer` agent treats missing parity as a 🔴 BLOCKER.
+1. **Protocol-first, always.** Never add a public method to one service without adding it to `EmailServiceProtocol`.
+2. **No provider concretes in ViewModels/Views.** Hold `any EmailServiceProtocol`; resolve via `AccountScopedServiceProvider.activeService()`.
+3. **Declare differences in `ServiceCapabilities`; gate UI on the flag** — not on `accountType`.
+4. **Every genuine gap throws `ProviderParityError.unsupportedForProvider`** at any reachable call site, and is covered by a parity regression test.
+5. **Tests run against both stubs.** A feature isn't done until `StubGoogleEmailService` and `StubMicrosoftEmailService` both pass in `ProviderParityRegressionTests`.
+6. **The reviewer will flag it.** `swift-reviewer` treats missing parity as a 🔴 BLOCKER (`parity` category).
