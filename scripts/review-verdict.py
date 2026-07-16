@@ -223,6 +223,26 @@ def _read_regular_file(path: str) -> str | None:
                 pass
 
 
+def _write_text_nofollow(path: str, text: str) -> None:
+    """Write `text` to `path` at 0600 refusing to follow a symlink — O_NOFOLLOW makes it atomic. The
+    `.tmp.<pid>` staging name is predictable, so a same-account attacker could pre-plant it as a symlink;
+    `open(path, "w")` would then write THROUGH it to the link target with the gate process's privileges
+    (round 8: codex). The `opener` keeps single-close ownership."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+
+    def _op(p, _f):
+        fd = os.open(p, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    with open(path, "w", encoding="utf-8", opener=_op) as fh:
+        fh.write(text)
+
+
 def _verdict_path(plan_path: str) -> str:
     """`<plan-dir>/.verdicts/<plan-basename>.verdict.json` — co-located with the plan it binds."""
     plan_path = os.path.abspath(plan_path)
@@ -342,9 +362,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     tmp = f"{dest}.tmp.{os.getpid()}"
     old_umask = os.umask(0o077)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(digest + "\n")
-        os.chmod(tmp, 0o600)
+        _write_text_nofollow(tmp, digest + "\n")
         os.replace(tmp, dest)
     finally:
         os.umask(old_umask)
@@ -448,10 +466,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     tmp = f"{dest}.tmp.{os.getpid()}"
     old_umask = os.umask(0o077)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(artifact, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        os.chmod(tmp, 0o600)
+        _write_text_nofollow(tmp, json.dumps(artifact, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, dest)
     finally:
         os.umask(old_umask)

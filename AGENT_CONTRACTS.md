@@ -78,6 +78,9 @@ Use the `/create-feature-plan` skill to scaffold (bundled as `/unleashed-mail:cr
 
 Before any implementation begins:
 
+0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
+   --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
+   fails closed without it. Re-run it on any plan revision.
 1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
 2. Plan author runs `/codex-review` (uses `codex exec -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts

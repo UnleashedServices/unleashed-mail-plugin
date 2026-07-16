@@ -957,3 +957,25 @@ class ReviewVerdictTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WriteTextNofollowTest(unittest.TestCase):
+    def _mod(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rv_wtn", SCRIPT)
+        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        return m
+
+    def test_refuses_a_symlinked_tmp(self):
+        """The `.tmp.<pid>` staging file is predictable; a pre-planted symlink there must be refused
+        (O_NOFOLLOW), not written THROUGH to the link target (round 8: codex)."""
+        m = self._mod()
+        d = tempfile.mkdtemp()
+        try:
+            target = os.path.join(d, "target"); tmp = os.path.join(d, "x.tmp")
+            os.symlink(target, tmp)
+            with self.assertRaises(OSError):
+                m._write_text_nofollow(tmp, "digest")
+            self.assertFalse(os.path.exists(target), "must not write through the symlink")
+        finally:
+            import shutil; shutil.rmtree(d, ignore_errors=True)
