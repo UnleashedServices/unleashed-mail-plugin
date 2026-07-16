@@ -70,7 +70,9 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
     var lastFetchFolderId: String?
     var lastFetchMaxResults: Int?
     var lastFetchPaginationToken: PaginationToken?
-    var lastSentAuthAccount: String?
+    // One entry PER owner-bound (3-arg) send, in call order. Empty ⇒ the 3-arg path never ran (only the
+    // 2-arg overload) — distinct from `[nil]`, which means the 3-arg WAS called with `authAccount: nil`.
+    var sentAuthAccounts: [String?] = []
 
     // Conforms to the REAL EmailServiceProtocol requirement (EmailServiceProtocol.swift): the method
     // is `fetchMessages(folderId:maxResults:paginationToken:) -> (emails:, nextToken:)`, NOT `fetchInbox`.
@@ -96,7 +98,7 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
         if let error = shouldThrow { throw error }
     }
     func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?, authAccount: String?) async throws {
-        lastSentAuthAccount = authAccount
+        sentAuthAccounts.append(authAccount)   // records THIS call; a test asserts .last or the full sequence
         try await sendMessage(draft: draft, attachmentCache: attachmentCache)
     }
 }
