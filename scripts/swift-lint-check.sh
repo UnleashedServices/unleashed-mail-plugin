@@ -274,9 +274,13 @@ _waives_scoped() {
     _stripped="$(printf '%s' "$_rules" | tr -d '[:space:]')"
     [ -z "$_stripped" ] && return 0                 # blanket disable, no rule list
     _norm=" $(printf '%s' "$_rules" | tr ',' ' ' | tr -s '[:space:]' ' ') "
-    [ "${_norm#* all }" != "$_norm" ] && return 0   # documented `all` keyword
-    # QUOTE the needle: unquoted, $_rule expands as a GLOB inside ${..} (SC2295).
-    [ "${_norm#* "$_rule" }" != "$_norm" ] && return 0
+    [[ "$_norm" == *" all "* ]] && return 0          # documented `all` keyword
+    # `[[ ]]` with the boundary spaces INSIDE the quoted pattern — not `${_norm#* "$_rule" }`. The
+    # strip form's word boundary was a TRAILING SPACE before the `}`, which a formatter / shfmt /
+    # trailing-whitespace hook could silently strip, collapsing `force_try` into a prefix that also
+    # matches `force_try_x` (gemini, #43 review). Here the spaces are structural. `$_rule` inside the
+    # double-quotes is a LITERAL needle (no SC2295 glob); the `*` outside it glob.
+    [[ "$_norm" == *" $_rule "* ]] && return 0
     return 1
 }
 

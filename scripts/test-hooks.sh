@@ -773,6 +773,13 @@ OUT="$(lint_run "$LINTDIR/IuoMixed.swift")"
 assert_contains "lint: a real try-bang next to an IUO type still BLOCKS" "$OUT" "4:"
 assert_contains "lint: a real as-bang still BLOCKS" "$OUT" "5:"
 
+# == COREDEV-2494 full review (gemini): the rule-token boundary must be structural ==
+# `${_norm#* "$_rule" }` relied on a trailing space before `}` that a formatter could strip, collapsing
+# force_try into a prefix that also matches force_try_extra. Now `[[ ]]` with explicit boundary spaces.
+printf 'import Foundation\nstruct RB {\n    // swiftlint:disable:next force_try_extra\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/RuleBoundary.swift"
+OUT="$(lint_run "$LINTDIR/RuleBoundary.swift")"
+assert_contains "lint: 'force_try_extra' does NOT waive force_try (token boundary, not prefix)" "$OUT" "try!"
+
 # == COREDEV-2494 review round 9 (codex): a malformed scope is not a waiver ==
 # `:next*` etc. are PREFIX globs, so `:nextforce_try` stripped `:next` and read `force_try` as a rule —
 # a typo SwiftLint ignores became a fail-open waiver. And `:bogus force_try` fell through as an
