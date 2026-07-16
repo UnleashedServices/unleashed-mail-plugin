@@ -102,6 +102,11 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
         sentAuthAccounts.append(authAccount)   // records THIS call; a test asserts .last or the full sequence
         try await sendMessage(draft: draft, attachmentCache: attachmentCache)
     }
+
+    // … the REMAINING EmailServiceProtocol requirements (getCurrentUser, fetchMessage, folder ops,
+    // draft ops, attachments, etc. — see skills/provider-parity/SKILL.md for the full interface) are
+    // stubbed the SAME way: record the inputs you assert on, return realistic stub data, honour
+    // `shouldThrow`. Elided here to keep the example focused; a real mock must implement them all to conform.
 }
 ```
 
