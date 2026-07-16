@@ -344,16 +344,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
             v = r.get("status")
             return v.strip().upper() if isinstance(v, str) else ""
 
-        _dicts = [r for r in _revs if isinstance(r, dict)]
         # A status we cannot read is not a verdict. Say the artifact is corrupt; never guess.
-        malformed = sorted(str(r.get("name")) for r in _dicts if not _status(r))
+        # That applies to an unreadable ENTRY exactly as much as an unreadable STATUS: filtering
+        # non-dicts out silently let `reviewers: ["gemini-approved-trust-me", {...}]` skip the CORRUPT
+        # branch and report "codex recorded MISSING ... NOT a plan problem" — a confident claim derived
+        # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
+        # after I wrote it down.
+        _dicts = [r for r in _revs if isinstance(r, dict)]
+        _bad_status = sorted(str(r.get("name")) for r in _dicts if not _status(r))
+        _bad_entries = len(_revs) - len(_dicts)
+        _corrupt = []
+        if _bad_status:
+            _corrupt.append(f"{', '.join(_bad_status)} has an absent/null/non-string status")
+        if _bad_entries:
+            _corrupt.append(f"{_bad_entries} reviewer entr"
+                            f"{'y is' if _bad_entries == 1 else 'ies are'} not an object")
         absent = sorted(str(r.get("name")) for r in _dicts if _status(r) == "MISSING")
         # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
         rejecting = sorted(f"{r.get('name')}={_status(r)}" for r in _dicts
                            if _status(r) and _status(r) not in APPROVING and _status(r) != "MISSING")
-        if malformed:
-            hint = (f" — artifact is CORRUPT: {', '.join(malformed)} has an absent/null/non-string status,"
-                    " so no reviewer classification here can be trusted; re-run the gate")
+        if _corrupt:
+            hint = (f" — artifact is CORRUPT: {'; '.join(_corrupt)} — so no reviewer classification here"
+                    " can be trusted; re-run the gate")
         elif absent and rejecting:
             # MIXED. Saying "not a plan problem" here would tell the implementer to ignore real,
             # actionable feedback from the reviewer that DID run (codex, #42 review). Both are true and

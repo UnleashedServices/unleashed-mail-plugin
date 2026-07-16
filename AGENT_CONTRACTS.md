@@ -92,7 +92,9 @@ loop with no escape.
 
 - **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
   isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `Pong!` (bare
+  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
+  only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
+  unavailable and sends you down the recovery path for no reason (bare
   `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
   codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
   is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
@@ -118,8 +120,12 @@ loop with no escape.
   > `pty-capture.py` creates one). A mechanical control documented as user-authorized but forgeable would
   > misdescribe the system. Note this does **not** make the rest of the gate cryptographically
   > trustworthy — it is a cooperative attestation too — but it declines to add a *sanctioned* bypass to
-  > it. The audit record and the bypass are separable: record the exception in the plan (as
-  > `docs/planning/OCTO_ADOPTION_PLAN.md` does) **without** claiming the gate passed. A genuinely
+  > it. The audit record and the bypass are separable: record the exception in the plan
+  > **without** claiming the gate passed. (This used to cite `docs/planning/OCTO_ADOPTION_PLAN.md` as the
+  > exemplar. It is the opposite: that plan excluded gemini and then declared **"GATE SATISFIED"** on
+  > codex alone — a reviewer exclusion *plus* a gate-passed claim, i.e. precisely what COREDEV-2493
+  > forbids. An agent copying the cited precedent would do the wrong thing and believe the contract
+  > endorsed it. No exemplar is cited now because none exists.) A genuinely
   > unforgeable waiver would need new trust infrastructure (an external signer holding a key outside the
   > agent's authority, releasing a plan-digest-bound token on user presence) — disproportionate for a
   > single-developer, non-CI workflow. Gated + decided at COREDEV-2493 (gemini `APPROVE`, codex

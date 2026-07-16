@@ -169,10 +169,17 @@ a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remo
 and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …` — address the requested
 changes *and* recover the missing reviewer. Neither alone passes the gate.
 
-First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` returning `Pong!` means the CLI is healthy
+First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` that answers a **`pong`** means the CLI is healthy
 and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a
 verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
 flag and re-run.
+
+> **Match the ping with `grep -qi pong` — case-insensitive, and do not require the `!`.** Across three
+> measured runs `agy` answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let
+> me know how I can help you today.` A `Pong!`-exact check reports a **healthy** CLI as unavailable
+> roughly one run in three — sending you down this recovery path (and escalating to the user) when the
+> only real problem was a missing `--print-timeout 18m`. That is the exact misdiagnosis this step exists
+> to prevent.
 
 If it is genuinely unavailable, STOP and present the recovery choices to the **user** — install/authenticate
 the CLI, capture the review on another machine, or explicitly direct the work outside `/implement`. That last

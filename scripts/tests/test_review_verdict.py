@@ -360,6 +360,30 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotIn("wants plan changes", out)    # never invent a rejection
                 self.assertIn("CORRUPT", out)
 
+    def test_a_non_object_reviewer_entry_is_reported_as_corrupt(self):
+        """An unreadable ENTRY is as corrupt as an unreadable STATUS — the invariant is "never guess".
+
+        `_dicts = [r for r in _revs if isinstance(r, dict)]` filtered non-objects out SILENTLY, so
+        `reviewers: ["gemini-approved-trust-me", {...}]` skipped the CORRUPT branch and produced a
+        confident "codex recorded MISSING ... NOT a plan problem" derived from a garbage artifact
+        (pre-merge audit)."""
+        import glob
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+        with open(art, encoding="utf-8") as fh:
+            a = json.load(fh)
+        a["reviewers"] = ["gemini-approved-trust-me", {"name": "codex", "status": "MISSING"}]
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(a, fh)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("CORRUPT", out)
+        self.assertIn("not an object", out)
+        self.assertNotIn("NOT a plan problem", out)   # must not draw conclusions from garbage
+
     def test_mixed_MISSING_plus_rejection_does_not_mask_the_rejection(self):
         """One reviewer MISSING + one REQUEST_CHANGES is TWO problems, not one.
 
