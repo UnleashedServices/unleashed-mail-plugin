@@ -35,15 +35,37 @@ APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
-VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
+# A single REVIEWER's status is a DIFFERENT vocabulary from a COMBINED verdict: MISSING is a reviewer
+# status (it never returned), DISAGREEMENT is a combined outcome (the two reviewers differed). Neither
+# crosses over. Conflating them (the old single `VERDICTS` set) let `--verdict MISSING` and
+# `--reviewer x=DISAGREEMENT` through — a reviewer cannot "disagree" and a combined verdict is never
+# MISSING (full review, #42).
+REVIEWER_STATUSES = APPROVING | {"REQUEST_CHANGES", "MISSING"}
+# The top-level `verdict` is a COMBINED verdict, a DIFFERENT vocabulary from a reviewer's status:
+# DISAGREEMENT is a combined outcome, MISSING is a reviewer status, and neither crosses over. Kept
+# distinct so a stale/tampered `verdict` (a list, a dict, a bare reviewer status) is named as corrupt
+# rather than crashing or being silently misclassified (codex, #42 review).
+COMBINED_VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT"}
+# ONE phrasing for what MISSING means, shared by every branch that reports it. `review-synthesis`
+# normalizes BOTH "reviewer never returned" AND "empty / unparseable transcript" to MISSING (its table,
+# SKILL.md:48), so no branch may assert "never ran" as fact. A CONSTANT because the two branches that
+# say it DID diverge: I fixed the wording in the single-reviewer branch and left the mixed branch
+# claiming "never ran" for a whole round, because I fixed the site I was looking at (codex, #42 review).
+_MISSING_MEANS = "no usable verdict — the reviewer never ran, OR its transcript was empty/unparseable"
+  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
 # BOTH, distinct, each approving — a reviewer can never stand in for the other, and the caller's
-# combined `verdict` can never override a reviewer that actually rejected. (A future user-authorized
-# waiver — AGENT_CONTRACTS §2 — would extend this with a recorded WAIVED marker, not weaken it.)
+# combined `verdict` can never override a reviewer that actually rejected.
+#
+# There is NO waiver status, by decision (COREDEV-2493): "only the user may waive" is unenforceable
+# here — the agent is the process running this script, so any waiver flag it could be asked to supply,
+# it can supply unprompted. An unavailable reviewer is handled OUT of band by the user (see
+# "Preflight & unavailable-reviewer recovery" in AGENT_CONTRACTS §2), and such an exception is recorded
+# in the plan's progress log WITHOUT an approving artifact — never as a gate-passing verdict here.
 REQUIRED_REVIEWERS = {"gemini", "codex"}
 
 
-def _quorum_problem(verdict, reviewers) -> "str | None":
+def _quorum_problem(verdict, reviewers) -> str | None:
     """Reason string if an APPROVING verdict is NOT backed by a genuine dual approval (both required
     reviewers present, DISTINCT, each approving); else None. Non-approving verdicts record whatever
     ran and are never gate-passing, so they skip this. Enforced at BOTH write and verify so neither a
@@ -210,7 +232,7 @@ def _parse_reviewer(spec: str) -> dict:
     name, rest = spec.split("=", 1)
     status, _, transcript = rest.partition(":")
     name, status = name.strip(), status.strip().upper()
-    if not name or status not in VERDICTS:
+    if not name or status not in REVIEWER_STATUSES:
         raise SystemExit(f"review-verdict: reviewer {name!r} has invalid status {status!r}")
     out = {"name": name, "status": status}
     if transcript:
@@ -239,17 +261,41 @@ def _parse_reviewer(spec: str) -> dict:
     return out
 
 
+def _reviewer_identity_problem(reviewers: list[dict]) -> str | None:
+    """Reason string if the reviewer SET is malformed regardless of verdict: a duplicate name, a stray
+    reviewer, or a missing mandatory reviewer. Enforced at WRITE so an artifact verify would call corrupt
+    can never be created in the first place (full review, #42 — write/verify symmetry). Statuses/names
+    are already validated by `_parse_reviewer`; this is about identity."""
+    names = [str(r.get("name", "")).strip().lower() for r in reviewers]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        return f"duplicate reviewer(s) {dupes} — one reviewer cannot be recorded twice"
+    strays = sorted(set(names) - REQUIRED_REVIEWERS)
+    if strays:
+        return (f"reviewer(s) {strays} are not part of the gate "
+                f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
+    missing = sorted(REQUIRED_REVIEWERS - set(names))
+    if missing:
+        return f"missing mandatory reviewer(s) {missing} — the gate is {', '.join(sorted(REQUIRED_REVIEWERS))}"
+    return None
+
+
 def cmd_write(args: argparse.Namespace) -> int:
     plan = args.plan
     if not os.path.isfile(plan):
         raise SystemExit(f"review-verdict: plan not found: {plan}")
     verdict = args.verdict.strip().upper()
-    if verdict not in VERDICTS:
-        raise SystemExit(f"review-verdict: --verdict must be one of {sorted(VERDICTS)}, got {verdict!r}")
+    if verdict not in COMBINED_VERDICTS:
+        raise SystemExit(f"review-verdict: --verdict must be one of {sorted(COMBINED_VERDICTS)}, "
+                         f"got {verdict!r} (that vocabulary is combined verdicts; MISSING is a reviewer "
+                         "status, not a combined verdict)")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
         raise SystemExit("review-verdict: at least two reviewers (gemini + codex) are required")
+    id_problem = _reviewer_identity_problem(reviewers)
+    if id_problem:
+        raise SystemExit("review-verdict: refusing to write a malformed artifact — " + id_problem)
     problem = _quorum_problem(verdict, reviewers)
     if problem:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
@@ -314,8 +360,155 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return _fail(f"artifact unreadable/corrupt: {e}")
     if not isinstance(art, dict) or art.get("schemaVersion") != SCHEMA_VERSION:
         return _fail(f"artifact schemaVersion != {SCHEMA_VERSION} (stale format — re-run the gate)")
-    if art.get("verdict") not in APPROVING:
-        return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed")
+    _verdict = art.get("verdict")
+    # A membership test on a non-string crashes: `[1,2] not in APPROVING` raises TypeError (unhashable),
+    # taking down verify with a traceback instead of a controlled failure (codex, #42 review). And a
+    # verdict OUTSIDE the combined vocabulary (a stale `WAIVED`, a bare reviewer status) is a corrupt
+    # artifact, not a recoverable one — say so once, here, before anything reasons about it.
+    if not isinstance(_verdict, str) or _verdict not in COMBINED_VERDICTS:
+        return _fail(f"artifact verdict {_verdict!r} is not a recognized combined verdict "
+                     f"({', '.join(sorted(COMBINED_VERDICTS))}) — corrupt or stale; re-run the gate")
+    if _verdict not in APPROVING:
+        # NAME the reviewers that never ran. Without this the message for "the two reviewers disagreed"
+        # and "a reviewer CLI was unavailable" is byte-identical, so an implementer cannot tell which
+        # `implement` recovery branch they are in and defaults to the wrong one — "iterate the plan +
+        # gate" — which cannot work, because there is no plan problem to iterate (codex, #42 review).
+        # `or []` only rescues FALSY junk: a tampered `reviewers: 5` / `true` is truthy and non-iterable,
+        # so it reached the loop and raised TypeError (gemini, #42 review). It still exited non-zero —
+        # a crash is not a pass — but a traceback is not a diagnosable failure, and the isinstance guard
+        # below (which would have caught it) never ran because this hint is computed first.
+        _revs = art.get("reviewers")
+        if not isinstance(_revs, list):
+            # Do NOT coerce to [] and carry on. `reviewers: 5` is a corrupt artifact, but coercing made
+            # every downstream count zero, so the hint fell through and reported an ordinary
+            # non-approving verdict — the same "never guess" invariant this branch exists to enforce,
+            # broken by the guard I added to stop it crashing (gemini, #42 review). Fixing the crash and
+            # keeping the silence just moved the failure from loud to quiet.
+            return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed"
+                         " — artifact is CORRUPT: reviewers is not a list, so nothing about this "
+                         "artifact can be trusted; re-run the gate")
+
+        def _name(r):
+            """Readable reviewer name, or "" when absent/null/non-string.
+
+            FOURTH instance of the `.get`-default trap in this file (gemini, #42 review): `str(r.get(
+            "name"))` renders an explicit `"name": null` as the STRING "None", so the hint named a
+            reviewer that does not exist — "None recorded MISSING (never ran)". Same normalization as
+            `_status`; an unreadable NAME is as corrupt as an unreadable STATUS, and the invariant is the
+            same: never guess.
+            """
+            v = r.get("name")
+            return v.strip() if isinstance(v, str) and v.strip() else ""
+
+        def _status(r):
+            """Normalized status, or "" when the field is absent/null/non-string.
+
+            NOT `str(r.get("status", ""))`: `.get(k, default)` returns the default only when the key is
+            ABSENT — an explicit `"status": null` returns None, and `str(None)` is the STRING "None".
+            That classified a null-status reviewer as a rejection and reported `gemini=NONE (ran, wants
+            plan changes)` — fabricating a fact about a reviewer whose status is simply unusable
+            (gemini, #42 review). This is the same `.get`-default trap already annotated on
+            `transcriptSha256` in `_quorum_problem`; normalizing in one place stops the third instance.
+            """
+            v = r.get("status")
+            return v.strip().upper() if isinstance(v, str) else ""
+
+        # A status we cannot read is not a verdict. Say the artifact is corrupt; never guess.
+        # That applies to an unreadable ENTRY exactly as much as an unreadable STATUS: filtering
+        # non-dicts out silently let `reviewers: ["gemini-approved-trust-me", {...}]` skip the CORRUPT
+        # branch and report "codex recorded MISSING ... NOT a plan problem" — a confident claim derived
+        # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
+        # after I wrote it down.
+        _dicts = [r for r in _revs if isinstance(r, dict)]
+        # USE THE DEFINED VOCABULARY. `REVIEWER_STATUSES` sits at the top of this file and the hint never
+        # consulted it: `rejecting` was a CATCH-ALL for "not approving and not MISSING", so any status
+        # outside the vocabulary was reported as a considered rejection (gemini AND codex, #42 review —
+        # both found this independently, which is why it is the root cause and not a nit):
+        #     INVALID_STATUS -> "gemini=INVALID_STATUS (ran, wants plan changes — address them)"
+        #     WAIVED         -> same. And WAIVED is not hypothetical: THIS PR removes it, so artifacts
+        #                       written before it carry a status this code no longer recognizes.
+        #     lgtm           -> "gemini=LGTM (ran, wants plan changes)"
+        # An unrecognized status is not a rejection; it is an artifact we cannot read.
+        _unknown_status = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
+                                 if _name(r) and _status(r) and _status(r) not in REVIEWER_STATUSES)
+        _bad_status = sorted(_name(r) for r in _dicts if _name(r) and not _status(r))
+        _bad_names = sum(1 for r in _dicts if not _name(r))
+        _bad_entries = len(_revs) - len(_dicts)
+        # The artifact must record the MANDATORY pair. `_quorum_problem` enforces this for APPROVING
+        # verdicts only, so `--reviewer gemni=MISSING` (a plain typo) was accepted here and produced
+        # "gemni recorded MISSING (never ran)" — recovery advice about a reviewer that does not exist
+        # (codex, #42 review).
+        _names_l = [_name(r).lower() for r in _dicts if _name(r)]
+        _known = set(_names_l)
+        _absent_required = sorted(REQUIRED_REVIEWERS - _known)
+        # DUPLICATES and STRAYS are corrupt here too. `_quorum_problem` rejects both, but only for
+        # APPROVING verdicts, so a non-approving artifact sailed through and this hint then spoke
+        # confidently about it (codex, #42 review):
+        #   gemini=MISSING + gemini=REQUEST_CHANGES -> "gemini=REQUEST_CHANGES (ran, wants plan changes)
+        #                                              AND gemini recorded MISSING" — gemini both ran
+        #                                              and did not run, from one artifact.
+        #   octo=MISSING (a stray)                  -> "octo recorded MISSING ... see 'Unavailable
+        #                                              reviewer'" — recovery advice for a reviewer that
+        #                                              is not part of the gate at all.
+        _dupes = sorted({n for n in _names_l if _names_l.count(n) > 1})
+        _strays = sorted(_known - REQUIRED_REVIEWERS)
+        _corrupt = []
+        if _unknown_status:
+            _corrupt.append(f"{', '.join(_unknown_status)} is not a recognized status "
+                            f"({', '.join(sorted(REVIEWER_STATUSES))})")
+        if _bad_status:
+            _corrupt.append(f"{', '.join(_bad_status)} has an absent/null/non-string status")
+        if _bad_names:
+            _corrupt.append(f"{_bad_names} reviewer entr"
+                            f"{'y has' if _bad_names == 1 else 'ies have'} no readable name")
+        if _bad_entries:
+            _corrupt.append(f"{_bad_entries} reviewer entr"
+                            f"{'y is' if _bad_entries == 1 else 'ies are'} not an object")
+        if _dupes:
+            _corrupt.append(f"{', '.join(_dupes)} appears more than once — one reviewer cannot both "
+                            "run and not run")
+        if _strays:
+            _corrupt.append(f"{', '.join(_strays)} is not part of the gate "
+                            f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
+        # NO `and not _corrupt` guard: for a typo BOTH facts are the diagnosis — `gemni` is a stray AND
+        # `gemini` is absent. Suppressing the second because the first fired reported half of it and made
+        # the reader work out the rest.
+        if _absent_required:
+            _corrupt.append(f"does not record the mandatory reviewer(s) {_absent_required} "
+                            f"(recorded: {sorted(_known) or 'none'} — a typo?)")
+        absent = sorted(_name(r) for r in _dicts if _name(r) and _status(r) == "MISSING")
+        # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
+        # The `in REVIEWER_STATUSES` filter is redundant BY CONSTRUCTION — `_unknown_status` above short-circuits
+        # to the CORRUPT branch first, so this line is unreachable with a status outside the vocabulary,
+        # and no test pins it (reverting it to the old catch-all fails nothing). Kept anyway, and said
+        # plainly rather than dressed up as coverage: it makes this line's contract readable on its own,
+        # which is exactly what the catch-all version lacked.
+        rejecting = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
+                           if _name(r) and _status(r) in REVIEWER_STATUSES and _status(r) not in APPROVING
+                           and _status(r) != "MISSING")
+        if _corrupt:
+            hint = (f" — artifact is CORRUPT: {'; '.join(_corrupt)} — so no reviewer classification here"
+                    " can be trusted; re-run the gate")
+        elif absent and rejecting:
+            # MIXED. Saying "not a plan problem" here would tell the implementer to ignore real,
+            # actionable feedback from the reviewer that DID run (codex, #42 review). Both are true and
+            # both must be resolved.
+            hint = (f" — TWO SEPARATE problems: {', '.join(rejecting)} (ran, wants plan changes — address"
+                    f" them) AND {', '.join(absent)} recorded MISSING ({_MISSING_MEANS} — see"
+                    " 'Unavailable reviewer' in the implement skill). Resolving either one alone will NOT"
+                    " pass the gate")
+        elif absent:
+            # NOT "never ran". `review-synthesis` maps BOTH "reviewer never returned" AND "empty /
+            # unparseable transcript" to MISSING (its normalization table, SKILL.md:48), so asserting
+            # "never ran" states one of two possible facts as certain — and they need different
+            # recoveries (install/authenticate the CLI vs re-capture the review). What IS common to both,
+            # and is the load-bearing half, is that no plan edit clears either (codex, #42 review).
+            hint = (f" — {', '.join(absent)} recorded MISSING: {_MISSING_MEANS}. Either way this is NOT"
+                    " a plan problem, so iterating the plan cannot clear it; see 'Unavailable reviewer' in"
+                    " the implement skill")
+        else:
+            hint = ""
+        return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed{hint}")
     reviewers = art.get("reviewers")
     if not isinstance(reviewers, list) or len(reviewers) < 2:
         return _fail("artifact does not record the required dual review")

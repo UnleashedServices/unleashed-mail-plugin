@@ -16,7 +16,8 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 - **Tool:** Antigravity CLI binary `agy` — resolve via `$PATH` (typical install: `~/.local/bin/agy`). Current verified version: 1.0.1 (2026-05-23). Call it directly via Bash — do NOT use an MCP wrapper.
 - **Auth:** OAuth-personal handled by the CLI's own login. Creds cached at `~/.gemini/oauth_creds.json` (the `~/.gemini/` dir is reused by Antigravity for backward compatibility). DO NOT set `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` (user rejected Vertex 2026-04-20).
-- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success): `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 30 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `Pong!` (a bare `agy -p "ping"` returning `Pong! How can I help you today?` is valid only from a real terminal). If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. Only the *user* may waive it (scoped + recorded); see the "Preflight & waiver" policy in `AGENT_CONTRACTS.md` §2. Never self-waive.
+- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success): `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` with `grep -qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 18m -p "Read and follow .agy-prompt.md"` — the slim-argv form recommended below, NOT `-p "$(cat .agy-prompt.md)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a *failure*, never a verdict, and never an APPROVE.
 - **Model selection — NO `-m` flag.** The model is set globally in `~/.gemini/settings.json` under `"model": { "name": "gemini-3.1-pro" }`. Verify with `cat ~/.gemini/settings.json | grep model`. For plan-review fallback to `gemini-2.5-pro`, temporarily edit settings.json and restore after. For debug review: NO fallback — fail the review rather than degrade.
 - **NO `-o` flag.** Output is plaintext only.
 - **Workspace access — NOT persistent.** Each `agy -p` invocation is a fresh session. Either pass `--add-dir /absolute/path/to/workspace` on every invocation, OR use absolute paths in the prompt. The interactive `/add-dir` slash command (inside `agy -i` sessions) updates persistent state but doesn't affect `-p` runs.
@@ -30,8 +31,12 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. For agy:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
+# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
+# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
@@ -78,8 +83,12 @@ EOF
 
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
+# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
+# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
+# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
+    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.
 ```
 
@@ -90,7 +99,7 @@ The drip animation renders to a real TTY directly. Read the output in your termi
 ```bash
 # Plan review — agy -p with workspace flag in same invocation.
 # Run from the project root so "$(pwd)" resolves to the workspace.
-agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 
 # For record-keeping: use the PTY wrapper above instead of `> file`.
 # A redirect like `agy ... > /tmp/review.md` will produce 0 bytes because
@@ -130,7 +139,7 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 
 ## Workflow
 
-1. **Smoke-test:** `agy -p "ping"` → expect `Pong!`. If empty, re-login interactively.
+1. **Smoke-test:** `agy -p "ping"` → expect a `pong` (case-insensitive; the `!` is not guaranteed). If empty, re-login interactively.
 2. **Check current model:** `grep -A1 model ~/.gemini/settings.json` → confirm `gemini-3.1-pro`.
 3. **Write the task** to a workspace prompt file (e.g., `.agy-prompt.md`) with all context including absolute paths to any files agy must read.
 4. **Invoke** via PTY wrapper from non-TTY contexts, or directly from a real terminal.
@@ -146,7 +155,7 @@ Do not skip to save time. Do not treat as a rubber stamp.
 If `agy -p` is failing, check in order:
 
 1. `agy --version` — should be ≥ 1.0.1 (2026-05-23). If older, `agy update`.
-2. `agy -p "ping"` — should return `Pong!` in < 2 s in a real terminal.
+2. `agy -p "ping"` — should return a `pong` (case varies) in < 2 s in a real terminal.
 3. `tail ~/.gemini/antigravity-cli/cli.log` — most-recent log entries; non-zero size = startup succeeded.
 4. `ls -lt ~/.gemini/antigravity-cli/log/cli-*.log | head -3` — 0-byte logs = agy died at launch (often non-TTY drip issue, OR macOS sandbox/TCC permission denial).
 5. `ls -lt ~/.gemini/antigravity-cli/conversations/ | head -3` — most-recent conversation file growing = agy IS doing work even if your stdout shows 0 bytes (TTY-drip issue, use PTY wrapper).

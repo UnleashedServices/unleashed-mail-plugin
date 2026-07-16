@@ -279,9 +279,11 @@ class ReviewVerdictTest(unittest.TestCase):
         open(empty, "w").close()
         for verdict in ("REQUEST_CHANGES", "DISAGREEMENT"):
             with self.subTest(verdict=verdict):
+                # `verdict` is a COMBINED verdict; a reviewer STATUS cannot be DISAGREEMENT, so drive
+                # the reviewers with a real rejecting status while the combined verdict varies.
                 r = run("write", "--plan", self.plan, "--verdict", verdict,
-                        "--reviewer", f"gemini={verdict}:{empty}",
-                        "--reviewer", f"codex={verdict}:{self.tx}")
+                        "--reviewer", f"gemini=REQUEST_CHANGES:{empty}",
+                        "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
                 self.assertNotEqual(r.returncode, 0,
                                     "a 0-byte transcript is a FAILED review — it must never be recorded "
                                     "as a real one, approving or not")
@@ -293,6 +295,295 @@ class ReviewVerdictTest(unittest.TestCase):
         r = run("write", "--plan", self.plan, "--verdict", "REQUEST_CHANGES",
                 "--reviewer", "gemini=MISSING", "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
         self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_verify_NAMES_a_MISSING_reviewer(self):
+        """An unavailable reviewer and a genuine disagreement must not read identically.
+
+        `/review-synthesis` records an absent reviewer as `<name>=MISSING` and writes a NON-APPROVING
+        artifact, so both land on verify's 'not an approving verdict' branch. Byte-identical messages
+        left an implementer unable to tell which `implement` recovery branch applied — so they follow
+        the first one that fits, 'iterate the plan + gate', which can never clear a reviewer that never
+        ran. That is the exact wedge COREDEV-2493 removes (codex, #42 review).
+        """
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("MISSING", out)
+        self.assertIn("codex", out)
+        self.assertIn("NOT a plan problem", out)
+
+    def test_a_tampered_non_list_reviewers_field_fails_cleanly_not_with_a_traceback(self):
+        """`art.get("reviewers") or []` rescues only FALSY junk — `5`/`true` are truthy and
+        non-iterable, so the MISSING-hint loop raised TypeError (gemini, #42 review). Fails closed
+        either way, but a GATE FAILED must be diagnosable, not a stack trace."""
+        for junk in (5, True, "str", {"a": 1}, None):
+            with self.subTest(reviewers=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                import glob
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a = json.load(fh)
+                a["reviewers"] = junk
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("GATE FAILED", out)
+
+    def test_a_null_status_is_reported_as_corrupt_not_invented_as_a_rejection(self):
+        """`.get("status", "")` returns None (not "") for an explicit null, and `str(None)` == "None" —
+        so a null-status reviewer was reported as `gemini=NONE (ran, wants plan changes)`, fabricating a
+        verdict for a reviewer whose status is unusable (gemini, #42 review). Same `.get`-default trap
+        already annotated on transcriptSha256."""
+        import glob
+        # "INVALID_STATUS" per gemini's suggestion: an unrecognized STRING status is corrupt too — it
+        # used to be classified as a considered rejection ("ran, wants plan changes").
+        for junk in (None, 123, [], {}, "INVALID_STATUS"):
+            with self.subTest(status=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a = json.load(fh)
+                a["reviewers"] = [{"name": "gemini", "status": junk},
+                                  {"name": "codex", "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("NONE", out)                  # never invent a status
+                self.assertNotIn("wants plan changes", out)    # never invent a rejection
+                self.assertIn("CORRUPT", out)
+
+    def test_a_null_reviewer_NAME_is_corrupt_not_rendered_as_the_string_None(self):
+        """FOURTH instance of the `.get`-default trap in this file (gemini, #42 review).
+
+        `str(r.get("name"))` renders `"name": null` as the STRING "None", so the hint reported
+        "None recorded MISSING (never ran)" — naming a reviewer that does not exist. An unreadable NAME
+        is as corrupt as an unreadable STATUS; the invariant is the same."""
+        import glob
+        for junk in (None, 123, "", "   "):
+            with self.subTest(name=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a_ = json.load(fh)
+                a_["reviewers"] = [{"name": "gemini", "status": "APPROVE",
+                                    "transcriptSha256": "a" * 64},
+                                   {"name": junk, "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a_, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("None recorded MISSING", out)
+                self.assertIn("no readable name", out)
+
+    def test_a_non_list_reviewers_field_is_reported_as_corrupt_not_silently_coerced(self):
+        """Coercing `reviewers: 5` to [] stopped the TypeError but MASKED the corruption: every count
+        went to zero, so the hint fell through and reported a plain non-approving verdict (gemini, #42
+        review). Fixing a crash by making it quiet is not fixing it."""
+        import glob
+        for junk in (5, True, "str", {"a": 1}):
+            with self.subTest(reviewers=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["reviewers"] = junk
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("CORRUPT", out)
+
+    def test_an_unrecognized_status_is_corrupt_not_a_rejection(self):
+        """`rejecting` was a CATCH-ALL for "not approving and not MISSING", so any status outside the
+        VERDICTS vocabulary — defined at the top of this very file and never consulted — was reported as
+        a considered rejection. Found independently by BOTH bots (#42 review).
+
+        `WAIVED` is the live case, not a hypothetical: this PR REMOVES that status, so any artifact
+        written before it carries a status this code no longer recognizes."""
+        import glob
+        for st in ("INVALID_STATUS", "WAIVED", "lgtm", "APPROVE_WITH_NITS"):
+            with self.subTest(status=st):
+                self.assertEqual(self._write(verdict="DISAGREEMENT").returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["reviewers"] = [{"name": "gemini", "status": st, "transcriptSha256": "a" * 64},
+                                  {"name": "codex", "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertIn("CORRUPT", out)
+                self.assertIn("not a recognized status", out)
+                self.assertNotIn("wants plan changes", out)
+
+    def test_write_enforces_reviewer_identity_for_ALL_verdicts(self):
+        """Write rejects duplicate/stray/missing-mandatory reviewers regardless of verdict — the
+        symmetry the review asked for, so an artifact verify would call corrupt can never be created
+        (full review, #42). Verify's handling of hand-tampered artifacts is covered separately."""
+        cases = [
+            (("gemini=MISSING", f"gemini=REQUEST_CHANGES:{self.tx}", f"codex=APPROVE:{self.tx2}"),
+             "duplicate reviewer"),
+            ((f"gemini=APPROVE:{self.tx}", f"codex=APPROVE:{self.tx2}", "octo=MISSING"),
+             "not part of the gate"),
+            (("gemni=MISSING", f"codex=APPROVE:{self.tx}"), "not part of the gate"),
+        ]
+        for reviewers, needle in cases:
+            with self.subTest(reviewers=reviewers):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        *[a for rv in reviewers for a in ("--reviewer", rv)])
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(needle, r.stderr)
+
+    def test_a_non_string_or_unknown_top_level_verdict_is_corrupt_not_a_crash(self):
+        """`[1,2] not in APPROVING` raises TypeError (unhashable) — verify crashed instead of failing
+        cleanly. And a verdict outside the COMBINED vocabulary (stale WAIVED, a bare reviewer status
+        like MISSING) is corrupt, not recoverable (codex, #42 review). One controlled result for all."""
+        import glob
+        for bad in ([1, 2], {"a": 1}, 5, None, "WAIVED", "MISSING", "lgtm"):
+            with self.subTest(verdict=bad):
+                self.assertEqual(self._write(verdict="DISAGREEMENT").returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["verdict"] = bad
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("not a recognized combined verdict", out)
+
+    def test_a_duplicate_reviewer_is_corrupt_not_contradictory_advice(self):
+        """`_quorum_problem` rejects duplicates for APPROVING verdicts only, so a non-approving artifact
+        with `gemini=MISSING` AND `gemini=REQUEST_CHANGES` produced advice saying gemini both ran and did
+        not run — from one artifact (codex, #42 review)."""
+        # WRITE now refuses to create the contradictory artifact at all (write/verify symmetry, full
+        # review); verify's handling of a hand-tampered one is covered separately.
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", "gemini=MISSING",
+                "--reviewer", f"gemini=REQUEST_CHANGES:{self.tx}",
+                "--reviewer", f"codex=APPROVE:{self.tx2}")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("duplicate reviewer", r.stderr)
+
+    def test_a_stray_reviewer_is_corrupt_not_recovery_advice(self):
+        """`write` accepts extra reviewers for non-approving verdicts, so `octo=MISSING` alongside the
+        required pair produced "octo recorded MISSING ... see 'Unavailable reviewer'" — recovery advice
+        for a reviewer that is not part of the gate at all (codex, #42 review)."""
+        # WRITE now refuses the stray (write/verify symmetry, full review).
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}",
+                "--reviewer", f"codex=REQUEST_CHANGES:{self.tx2}",
+                "--reviewer", "octo=MISSING")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not part of the gate", r.stderr)
+
+    def test_a_typod_reviewer_name_is_corrupt_not_recovery_advice(self):
+        """`_quorum_problem` enforces the mandatory pair for APPROVING verdicts only, so
+        `--reviewer gemni=MISSING` was accepted and verify emitted "gemni recorded MISSING (never ran)"
+        — recovery advice about a reviewer that does not exist (codex, #42 review)."""
+        # WRITE now refuses the typo (a misspelled name is a stray + the real one is missing).
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", "gemni=MISSING", "--reviewer", f"codex=APPROVE:{self.tx}")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not part of the gate", r.stderr)   # gemni is a stray
+
+    def test_the_MISSING_hint_does_not_assert_never_ran(self):
+        """MISSING is overloaded: `review-synthesis` maps BOTH "never returned" AND "empty/unparseable
+        transcript" to it (SKILL.md:48). Asserting "never ran" states one of two possible facts as
+        certain, and they need different recoveries (codex, #42 review). What IS common to both — no
+        plan edit clears either — must survive."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertIn("codex", out)
+        self.assertIn("no usable verdict", out)
+        self.assertIn("unparseable", out)
+        self.assertIn("NOT a plan problem", out)      # the load-bearing half must remain
+        self.assertNotIn("(never ran):", out)         # ...but not as a bare assertion of fact
+
+    def test_a_non_object_reviewer_entry_is_reported_as_corrupt(self):
+        """An unreadable ENTRY is as corrupt as an unreadable STATUS — the invariant is "never guess".
+
+        `_dicts = [r for r in _revs if isinstance(r, dict)]` filtered non-objects out SILENTLY, so
+        `reviewers: ["gemini-approved-trust-me", {...}]` skipped the CORRUPT branch and produced a
+        confident "codex recorded MISSING ... NOT a plan problem" derived from a garbage artifact
+        (pre-merge audit)."""
+        import glob
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+        with open(art, encoding="utf-8") as fh:
+            a = json.load(fh)
+        a["reviewers"] = ["gemini-approved-trust-me", {"name": "codex", "status": "MISSING"}]
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(a, fh)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("CORRUPT", out)
+        self.assertIn("not an object", out)
+        self.assertNotIn("NOT a plan problem", out)   # must not draw conclusions from garbage
+
+    def test_mixed_MISSING_plus_rejection_does_not_mask_the_rejection(self):
+        """One reviewer MISSING + one REQUEST_CHANGES is TWO problems, not one.
+
+        The unconditional MISSING hint said "this is NOT a plan problem" even when the reviewer that
+        DID run wanted plan changes — telling the implementer to ignore real, actionable feedback and
+        go chase the unavailable CLI (codex, #42 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=REQUEST_CHANGES:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        # ATTRIBUTION, not presence. Asserting only that both NAMES appear left the ONE axis this PR
+        # exists to protect unpinned: transposing the two f-string interpolations inverts the message to
+        # "codex (ran, wants plan changes) AND gemini=REQUEST_CHANGES recorded MISSING" — telling the
+        # implementer to address the plan feedback of a reviewer that never ran, and to install the CLI
+        # of one that ran fine and rejected the plan — and the whole 54-test suite stayed GREEN
+        # (pre-merge audit). Pin each name TO ITS ROLE, not to the output.
+        self.assertIn("gemini=REQUEST_CHANGES (ran", out)   # the rejector, named as the rejector
+        self.assertIn("codex recorded MISSING", out)        # the absentee, named as the absentee
+        self.assertNotIn("NOT a plan problem", out)         # ...and we do NOT claim there is nothing to fix
+
+    def test_verify_does_NOT_name_MISSING_on_a_genuine_disagreement(self):
+        """Both reviewers ran and disagreed — 'iterate the plan + gate' IS the right advice, and the
+        MISSING hint would be actively misleading. The hint must be earned, not unconditional."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}",
+                "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertNotIn("MISSING", out)
+        self.assertNotIn("NOT a plan problem", out)
 
     def test_a_tampered_transcript_field_cannot_pass(self):
         """gemini (#41 review): `.get(k, "")` returns the default only when the key is ABSENT, so an
@@ -438,7 +729,7 @@ class ReviewVerdictTest(unittest.TestCase):
     def test_unknown_reviewers_rejected_at_write(self):
         r = self._write(reviewers=("foo=APPROVE", "bar=APPROVE"))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("missing required reviewer", r.stderr)
+        self.assertIn("not part of the gate", r.stderr)   # foo/bar are strays
 
     def test_approve_verdict_with_rejecting_statuses_rejected_at_write(self):
         # combined --verdict APPROVE but both reviewers said REQUEST_CHANGES -> refuse to record
