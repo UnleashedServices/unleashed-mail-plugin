@@ -46,11 +46,18 @@ else
     # because `tr` above maps ' ', '-' and '.' to '_' BEFORE this runs — so ARGUMENTS=" " (or "-", or
     # " - ") yields KEY="_", which is non-empty, passes `-n`, and `*_*` then matches most plan filenames.
     # `/implement " "` therefore resolved to an arbitrary plan and verified THAT plan's artifact: if it
-    # happened to be approved, the gate PASSED for a feature nobody named. Guarding emptiness was never
-    # the point; guarding CONTENT is. (KEY is lowercased above, so [a-z0-9] is the full alnum set.)
+    # happened to be approved, the gate PASSED for a feature nobody named.
+    #
+    # `*[!_]*` — "KEY is not composed SOLELY of the characters tr just mapped to underscore" — states
+    # that property directly. It replaced `*[a-z0-9]*`, which tested an ASCII-shaped PROXY for it and so
+    # rejected a legitimate all-non-ASCII feature name (`日本語` -> no [a-z0-9] -> treated as content-free
+    # and refused; `café`/`Grüße` were fine, having ASCII letters). That direction is fail-CLOSED — the
+    # user gets "No plan matches" and the plan list — so it was usability, not a hole (gemini, #41
+    # review). Verified identical to the old guard on every content-free input ('', ' ', '-', '.', ' - ',
+    # '--', '...', '_', '___') and locale-independent.
     # Hoisted out of the loop so a junk KEY costs zero subshells (gemini, #41 review).
     MATCHES=()
-    if [[ "$KEY" == *[a-z0-9]* ]]; then
+    if [[ "$KEY" == *[!_]* ]]; then
         for p in docs/planning/*PLAN*.md; do
             [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
             b=$(printf '%s' "${p##*/}" | tr '[:upper:] -.' '[:lower:]___')
