@@ -57,53 +57,50 @@ sensitive_category() {
 }
 
 # Resolve a segment's EFFECTIVE command word: strip any directory (`/usr/bin/rm` -> `rm`) and unwrap a
-# leading `env` / `VAR=val …` prefix (`env rm X`, `FOO=1 python3 -c …` -> `rm` / `python3`) so ONE verb
-# list covers `/bin/rm`, `env python3`, `FOO=1 rm`, etc. — the earlier `/*rm|/*python*` path-glob list
-# was fragile and incomplete (round 1: gemini base_verb normalization). Best-effort: `env`'s
-# arg-consuming flags (`-u NAME`) aren't modelled, an acceptable gap for a warn-first heuristic.
+# leading `VAR=val …` and/or `env …` prefix (`FOO=1 rm X`, `env python3 -c …`, `FOO=1 env -u BAR sh …`
+# -> `rm` / `python3` / `sh`) so ONE verb list covers `/bin/rm`, `env python3`, `FOO=1 rm`, etc. — the
+# earlier `/*rm|/*python*` path-glob list was fragile and incomplete (round 1); a bare `FOO=1 rm` was
+# still mis-classified as verb `FOO=1`, and `env -u NAME rm` as verb `NAME` (round 2: codex + gemini).
 _effective_verb() {
     local -a a=()
     read -ra a <<<"$1"
-    local v="${a[0]:-}"; v="${v##*/}"
+    local n=${#a[@]} i=0 tok v=""
+    # Skip a leading run of `VAR=val` assignment prefixes (`FOO=1 BAR=2 cmd …`), with or without `env`.
+    while [ "$i" -lt "$n" ]; do
+        case "${a[$i]}" in
+            -*) break ;;             # a flag => the command word already started
+            *=*) i=$((i + 1)) ;;     # VAR=val assignment prefix — skip
+            *) break ;;
+        esac
+    done
+    v="${a[$i]:-}"; v="${v##*/}"
+    # Unwrap `env [OPTION]... [NAME=VALUE]... COMMAND`: skip env, its flags, the ARG consumed by
+    # -u/--unset/-C/--chdir/-S/--split-string (space-separated), and any VAR=val, to the command word.
     if [ "$v" = "env" ]; then
-        local tok
-        for tok in "${a[@]:1}"; do
+        i=$((i + 1))
+        while [ "$i" -lt "$n" ]; do
+            tok="${a[$i]}"
             case "$tok" in
-                -*|*=*) ;;                       # env flag or VAR=val assignment — skip
-                *) v="${tok##*/}"; break ;;      # first bare word is the real command
+                --) i=$((i + 1)); break ;;                               # explicit end-of-options
+                -u|--unset|-C|--chdir|-S|--split-string) i=$((i + 2)) ;; # option + its argument
+                -*) i=$((i + 1)) ;;                                      # other flag / =-joined form
+                *=*) i=$((i + 1)) ;;                                     # VAR=val
+                *) break ;;                                              # the command word
             esac
         done
+        v="${a[$i]:-}"; v="${v##*/}"
     fi
     printf '%s' "$v"
 }
 
-# Does this command SEGMENT mutate the filesystem? A precise per-verb parse (below) can only extract a
-# target for the forms it knows (redirect / cp / mv / sed -i / tee). It missed deletion (`rm`), symlink
-# clobber (`ln`), and interpreter one-liners (`python3 -c 'open("X","w")...'`, perl/ruby/node -e) —
-# semantically-equivalent writes that slipped straight through (#44 independent review §6). This returns
-# true for any of those, so the broad fail-closed scan below runs. Read-only commands (cat/grep/less)
-# return false, so a sensitive file merely READ never prompts.
-_seg_is_mutating() {
-    local s="$1" v=""
-    v="$(_effective_verb "$s")"
-    case "$v" in
-        rm|unlink|shred|mv|rename|cp|install|dd|truncate|ln|tee|touch) return 0 ;;
-    esac
-    # An interpreter invoked with inline code or a heredoc can write anything. Match the inline-code
-    # flag in ANY short-flag cluster (`-c`, `-xc`, `perl -we`, `perl -pe's/…/'`) and with the code
-    # directly adjacent (`-c"…"`) — the old `-(c|e)([space]|=)` missed combined and quote-adjacent flags.
-    case "$v" in
-        python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env)
-            printf '%s' "$s" | grep -qE '(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<' && return 0 ;;
-    esac
-    # A redirection that writes/clobbers/appends to a FILE, anywhere in the segment. `>>?[^&]` matches
-    # `>f`/`>>f`/`2>f`/`&>f`/`>|f` (a real write always has a target after `>`) but NOT an FD dup
-    # (`2>&1`, `>&2`, `1>&2`): there the char after `>`/`>>` is `&`. A BARE trailing `>` is not matched
-    # either — the `[;&|]` segment splitter breaks `2>&1` into `…2>` + `1`, and treating that dangling
-    # `>` as a write is exactly the false positive we're closing (round 1: the bare `>>?|>\|`).
-    printf '%s' "$s" | grep -qE '>>?[^&]' && return 0
-    printf '%s' "$s" | grep -qE '(^|[[:space:]])sed[[:space:]]+-i' && return 0
-    return 1
+# True if an interpreter SEGMENT carries inline code — a `-c`/`-e` cluster (`-c`, `-xc`, `perl -we`,
+# `perl -pe's/…/'`, code adjacent as `-c"…"`) or a heredoc (`<<`). Inline code can write a file NAMED
+# INSIDE it, so the broad fail-closed scan must run for it. A plain `python3 script.py` (no inline code)
+# writes nothing we can textually see and must NOT trigger the scan; an interpreter whose only mutation
+# is a redirect has its target captured precisely above, so scanning its read args would over-fire
+# (round 2: codex). The old `-(c|e)([space]|=)` missed combined and quote-adjacent flags (round 1).
+_seg_has_inline_code() {
+    printf '%s' "$1" | grep -qE '(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<'
 }
 
 # Best-effort: print the basename of a sensitive WRITE target in a Bash command, else nothing. Reads
@@ -111,6 +108,7 @@ _seg_is_mutating() {
 # heuristic; the robust guard is the Edit/Write file_path path — arbitrary shell can always evade text.
 guard_bash_write_target() {
     local cmd="$1" cand="" seg="" line="" t="" bn="" base_verb="" tok="" last="" bt="" _bcheck=0
+    local seen_cmd=0 skipnext=0
     local -a toks=()
     # Split on shell separators so a chained command (`cp a b && git diff`) is parsed
     # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
@@ -152,22 +150,55 @@ ${toks[*]: -1}"
                 fi
                 ;;
             tee)
-                cand="${cand}
-$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*tee[[:space:]]+(-a[[:space:]]+)?//; s/[[:space:]].*$//; s/^"//; s/"$//')"
+                # tee writes to ALL its FILE operands. Collect each non-flag token AFTER the command word
+                # (matched by basename, so `/usr/bin/tee` / `env tee` work) — the old sed anchored at a
+                # literal leading `tee` recorded `/usr/bin/tee`/`env` for the prefixed forms (round 2: codex).
+                seen_cmd=0
+                for tok in "${toks[@]}"; do
+                    if [ "$seen_cmd" = 0 ]; then
+                        case "${tok##*/}" in tee) seen_cmd=1 ;; esac
+                        continue
+                    fi
+                    case "$tok" in -*) ;; *) cand="${cand}
+${tok}" ;; esac
+                done
+                ;;
+            touch)
+                # touch's targets are its non-flag operands, EXCLUDING the arg consumed by -r/--reference
+                # (a READ reference file), -d/--date, and -t (a timestamp) — `touch -r SENSITIVE marker`
+                # reads SENSITIVE, it does not modify it (round 2: codex). Skip the command word first.
+                seen_cmd=0; skipnext=0
+                for tok in "${toks[@]}"; do
+                    if [ "$seen_cmd" = 0 ]; then
+                        case "${tok##*/}" in touch) seen_cmd=1 ;; esac
+                        continue
+                    fi
+                    if [ "$skipnext" = 1 ]; then skipnext=0; continue; fi
+                    case "$tok" in
+                        -r|--reference|-d|--date|-t) skipnext=1 ;;   # option consumes the next token
+                        --reference=*|--date=*) ;;                    # =-joined arg, not a target
+                        -*) ;;                                        # other touch flag (-a/-c/-m/-h)
+                        *) cand="${cand}
+${tok}" ;;
+                    esac
+                done
                 ;;
         esac
-        # FAIL CLOSED for the mutating verbs the precise parse above CANNOT target: deletion
-        # (`rm`/`unlink`/`shred`), symlink clobber (`ln`), and interpreter one-liners
-        # (`python3 -c 'open("X","w")'`). For these, ANY sensitive basename named in the segment is
-        # treated as the mutated file. Deliberately NOT run for cp/mv/install/sed/tee/redirects — those
-        # already extracted their precise target(s) above, and a broad scan there would wrongly flag a
-        # READ source (`cp KeychainManager.swift /backup/` reads it, does not modify it). Scoped to
-        # mutation, so `cat X`/`grep foo X` never trip it (#44 review §6).
+        # FAIL CLOSED for the mutating verbs the precise parse above CANNOT target by shape: deletion
+        # (`rm`/`unlink`/`shred`), symlink clobber (`ln`), and interpreter one-liners that write a file
+        # NAMED INSIDE inline code (`python3 -c 'open("X","w")'`). For these, ANY sensitive basename in
+        # the segment is treated as the mutated file. NOT run for cp/mv/install/sed/tee/touch/redirects —
+        # those extract their precise target(s) above, and a broad scan there would wrongly flag a READ
+        # (`cp KeychainManager.swift /backup/`, or `python3 report.py X.swift > out` whose write is `out`,
+        # not `X.swift`). An interpreter with only a redirect (no inline code) is skipped for the same
+        # reason (round 2: codex). So `cat X`/`grep foo X` never trip it (#44 review §6).
+        _bcheck=0
         case "$base_verb" in
-            rm|unlink|shred|ln|touch|python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env) _bcheck=1 ;;
-            *) _bcheck=0 ;;
+            rm|unlink|shred|ln) _bcheck=1 ;;
+            python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh)
+                _seg_has_inline_code "$seg" && _bcheck=1 ;;
         esac
-        if [ "$_bcheck" = 1 ] && _seg_is_mutating "$seg"; then
+        if [ "$_bcheck" = 1 ]; then
             while IFS= read -r bt; do
                 [ -n "$bt" ] || continue
                 cand="${cand}

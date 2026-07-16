@@ -142,8 +142,22 @@ assert_empty "interpreter read + 2>&1 FD-dup -> no decision" "$(guard_bash '"pyt
 assert_contains "/usr/bin/rm sensitive -> ask" "$(guard_bash '"/usr/bin/rm OAuthService.swift"')" '"permissionDecision":"ask"'
 assert_contains "env rm sensitive -> ask" "$(guard_bash '"env rm KeychainManager.swift"')" '"permissionDecision":"ask"'
 assert_contains "/usr/bin/cp DEST sensitive -> ask" "$(guard_bash '"/usr/bin/cp template.swift KeychainManager.swift"')" '"permissionDecision":"ask"'
-# 5h. touch creates/updates a file -> mutating.
+# 5h. touch creates/updates a file -> mutating; but `-r SENSITIVE` is a READ reference, not a write.
 assert_contains "touch sensitive -> ask" "$(guard_bash '"touch OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "touch -r sensitive (reference read) -> no decision" "$(guard_bash '"touch -r OAuthService.swift /tmp/marker"')"
+assert_contains "touch -r marker over sensitive TARGET -> ask" "$(guard_bash '"touch -r /tmp/marker KeychainManager.swift"')" '"permissionDecision":"ask"'
+# == round 2 (codex + gemini): prefix unwrap, over-scan scoping, prefixed tee ==
+# 5i. Bare `VAR=val cmd` (no `env`) must unwrap to the real verb — `FOO=1 rm SENSITIVE` still mutates.
+assert_contains "VAR=val rm sensitive -> ask" "$(guard_bash '"FOO=1 rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "VAR=val env python3 -c sensitive -> ask" "$(guard_bash '"FOO=1 env python3 -c open(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5j. `env -u NAME` / `env -C DIR` CONSUME the next token — the command word is after it, not it.
+assert_contains "env -u NAME rm sensitive -> ask" "$(guard_bash '"env -u PATH rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5k. Interpreter whose ONLY mutation is a redirect must NOT broad-scan its READ args (write is the
+#     redirect target). `python3 report.py SENSITIVE > /tmp/out` reads SENSITIVE, writes /tmp/out.
+assert_empty "interpreter read-arg + file redirect -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift > /tmp/out.txt"')"
+# 5l. Prefixed tee must record the FILE operand, not the command path. `/usr/bin/tee SENSITIVE` writes it.
+assert_contains "/usr/bin/tee sensitive -> ask" "$(guard_bash '"/usr/bin/tee KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "env tee -a sensitive -> ask" "$(guard_bash '"env tee -a OAuthService.swift"')" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
