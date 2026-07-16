@@ -18,18 +18,37 @@ any code:
 
 ```bash
 # Resolve THE plan for $ARGUMENTS — never let an unrelated approved plan satisfy the gate.
-# $ARGUMENTS is the feature name (e.g. "dark mode") or a direct path to the plan.
+# $ARGUMENTS is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
+
+# PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
+#
+# The plan's BYTES must live under <repo-root>/docs/planning. Everything else here is convenience; this
+# is the tracked-plan mandate (CLAUDE.md:68) and it has been bypassed four different ways, each time
+# because the previous guard checked a PROXY for containment instead of containment:
+#   /tmp/OUTSIDE_PLAN.md                        -> `-f` accepts any existing file      (textual fix)
+#   docs/planning/../../evil/OUTSIDE_PLAN.md    -> `..` wears the prefix               (added `..` case)
+#   docs/planning/EVIL_PLAN.md -> /tmp/...      -> a symlink wears the prefix          (added realpath)
+#   docs/planning -> /tmp/...                   -> a symlinked ROOT: realpath'ing the BASE resolved it
+#                                                  through the same link, so both sides matched
+# Resolve the plan, but anchor the base to the PHYSICAL repo root and do NOT resolve the base itself —
+# then a symlinked docs/planning cannot launder its own target. (codex, #41 review; all reproduced.)
+_contained() {
+    python3 - "$1" <<'PYEOF'
+import os, sys
+root = os.path.realpath(".")
+base = os.path.join(root, "docs", "planning")   # deliberately NOT realpath'd
+real = os.path.realpath(sys.argv[1])
+sys.exit(0 if real == base or real.startswith(base + os.sep) else 1)
+PYEOF
+}
+_refuse_uncontained() {
+    { echo "REFUSED: '$1' does not live under <repo-root>/docs/planning."
+      echo "A tracked plan's BYTES must be in the repo — a symlink, a ../ escape, or a symlinked"
+      echo "docs/planning is not a tracked plan (CLAUDE.md's Plan Review Gate)."; } >&2
+    exit 1
+}
+
 if [ -f "$ARGUMENTS" ]; then
-    # A DIRECT PATH MUST STILL BE A TRACKED PLAN. `-f` alone accepted ANY existing file, so
-    # `/implement /tmp/OUTSIDE_PLAN.md` verified the artifact beside that out-of-tree file and returned
-    # GATE OK — satisfying the Design Gate with a plan that is not in git, has no review history, and can
-    # be edited or deleted outside the repo. That bypasses CLAUDE.md's mandatory `docs/planning/*_PLAN.md`
-    # process in the one branch whose job is to enforce it (codex, #41 review; reproduced).
-    #
-    # Repo-relative under docs/planning only. An absolute path is refused even when it points into a
-    # docs/planning dir: `*/docs/planning/*` would happily match /tmp/docs/planning/EVIL_PLAN.md, which
-    # is the same hole with extra steps. The resolver below is already repo-relative (its glob is), and
-    # the "Available:" listing prints repo-relative paths, so this is the shape users already see.
     _p="${ARGUMENTS#./}"
     case "$_p" in
         docs/planning/*PLAN*.md) ;;
@@ -37,75 +56,37 @@ if [ -f "$ARGUMENTS" ]; then
              echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
            exit 1 ;;
     esac
-    # ...and the prefix must be EARNED, not worn. A textual check alone is theatre — both of these
-    # match `docs/planning/*PLAN*.md` and both read bytes from outside the tree:
-    #     docs/planning/../../evil/OUTSIDE_PLAN.md          (traversal)
-    #     docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md (symlink; `-f` follows it — codex, #41)
-    # So resolve the REAL path and require containment. This subsumes the `..` check it replaces, and
-    # also covers a symlinked ANCESTOR (e.g. docs/planning itself being a link), which testing `-L` on
-    # the final component would miss. python3 is already a hard dependency of this recipe.
-    _real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$_p" 2>/dev/null)
-    _base=$(python3 -c 'import os; print(os.path.realpath("docs/planning"))' 2>/dev/null)
-    case "$_real" in
-        "$_base"/*) ;;
-        *) { echo "REFUSED: '$ARGUMENTS' resolves to $_real, which is outside docs/planning."
-             echo "A tracked plan's BYTES must live in the repo — a symlink or ../ escape is not a tracked plan."; } >&2
-           exit 1 ;;
-    esac
+    _contained "$_p" || _refuse_uncontained "$ARGUMENTS"
     PLAN="$_p"
 else
     # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
-    # `.` is normalized too, or `/implement "OAuth 2.0"` (KEY `oauth_2.0`) never matches
-    # OAUTH_2_0_PLAN.md (`oauth_2_0_plan.md`) and the gate reports "no plan" for a plan that exists
-    # (codex, #41 review). `.md` -> `_md` on both sides is harmless: this is a substring test.
-    #
-    # THE DASH MUST COME LAST. In a tr SET, a dash BETWEEN two characters is a RANGE, so the ` -.` I
-    # first wrote meant space(32)..dot(46) — silently mapping 15 characters (!"#$%&'()*+,-.) to `_` on
-    # BOTH BSD and GNU tr, not the three I intended. That is not cosmetic: it widens the equivalence
-    # class and resolves the WRONG plan — `/implement "c+dark"` -> KEY `c_dark` -> matches
-    # C-DARK_PLAN.md, so the gate verifies a plan nobody named (gemini, #41 review; the exact fail-open
-    # this block exists to prevent). Trailing `-` is a literal; ` .-` maps space, dot and dash only.
+    # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
+    # space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
+    # the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
     KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] .-' '[:lower:]___')
-    # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
-    # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
-    # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).
-    #
-    # THE `-n "$KEY"` GUARD IS LOAD-BEARING — DO NOT "SIMPLIFY" IT AWAY. `[[ "$b" == *""* ]]` matches
-    # EVERY plan, so without it an empty $ARGUMENTS silently resolves to the first plan on disk and
-    # satisfies the Design Gate: a fail-OPEN. (The old prefix-strip form was only *accidentally*
-    # fail-closed on an empty key; this makes the property explicit.)
-    # A direct glob, NOT `ls | while read` — parsing ls breaks on a filename with spaces/newlines, and
-    # the subshell also swallowed any variable set inside it (gemini, #41 review). bash 3.2-safe.
-    # An ARRAY, not a newline-joined string: `grep -c .` counted a filename CONTAINING a newline as two
-    # matches and reported a false AMBIGUOUS, and ${p##*/} drops a basename subshell per file (gemini).
-    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`,
-    # and do not drop it. `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY silently resolves to
-    # the first plan on disk and satisfies the Design Gate: a fail-OPEN. `-n` alone is NOT enough either,
-    # because `tr` above maps ' ', '-' and '.' to '_' BEFORE this runs — so ARGUMENTS=" " (or "-", or
-    # " - ") yields KEY="_", which is non-empty, passes `-n`, and `*_*` then matches most plan filenames.
-    # `/implement " "` therefore resolved to an arbitrary plan and verified THAT plan's artifact: if it
-    # happened to be approved, the gate PASSED for a feature nobody named.
-    #
-    # `*[!_]*` — "KEY is not composed SOLELY of the characters tr just mapped to underscore" — states
-    # that property directly. It replaced `*[a-z0-9]*`, which tested an ASCII-shaped PROXY for it and so
-    # rejected a legitimate all-non-ASCII feature name (`日本語` -> no [a-z0-9] -> treated as content-free
-    # and refused; `café`/`Grüße` were fine, having ASCII letters). That direction is fail-CLOSED — the
-    # user gets "No plan matches" and the plan list — so it was usability, not a hole (gemini, #41
-    # review). Verified identical to the old guard on every content-free input ('', ' ', '-', '.', ' - ',
-    # '--', '...', '_', '___') and locale-independent.
-    # Hoisted out of the loop so a junk KEY costs zero subshells (gemini, #41 review).
+    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
+    # `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
+    # fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
+    # ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
+    # states the real property ("not composed solely of what tr just mapped to _") and is
+    # locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
     MATCHES=()
     if [[ "$KEY" == *[!_]* ]]; then
         for p in docs/planning/*PLAN*.md; do
             [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
+            # THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
+            # `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
+            # branch refused that exact symlink while the glob branch happily took it (codex, #41
+            # review; reproduced). Filtering here, not after, so an out-of-tree symlink cannot even
+            # create a false AMBIGUOUS.
+            _contained "$p" || continue
             b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
             [[ "$b" == *"$KEY"* ]] && MATCHES+=("$p")
         done
     fi
     N=${#MATCHES[@]}
     # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
-    # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated
-    # — defeating this block's whole purpose. Make the human disambiguate.
+    # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated.
     if [ "$N" -gt 1 ]; then
         { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "${MATCHES[@]}"; } >&2
         exit 2
@@ -119,9 +100,8 @@ if [ -z "$PLAN" ]; then
     exit 1
 else
     echo "Plan: $PLAN"
-    # Verify the persisted, digest-bound verdict for THAT plan:
-    # :-. so the recipe DOES what the prose below says — unset would otherwise resolve to the
-    # absolute /scripts/review-verdict.py and fail (gemini, #41 review). Matches the other skills.
+    # Verify the persisted, digest-bound verdict for THAT plan. `:-.` so the recipe DOES what the prose
+    # says — unset would resolve to the absolute /scripts/review-verdict.py and fail (gemini, #41).
     python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" verify --plan "$PLAN"
 fi
 ```
