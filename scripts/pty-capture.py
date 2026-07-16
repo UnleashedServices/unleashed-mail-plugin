@@ -280,6 +280,17 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
             with open(out_path, 'wb') as f:
                 f.write(cleaned)
+            # PROVENANCE: leave a per-run capture ID beside the transcript. review-verdict.py auto-reads
+            # `<out>.captureid` and uses distinct capture IDs as authoritative, content-independent proof
+            # that two reviewers were two separate wrapper runs — so two byte-identical transcripts from
+            # distinct runs are no longer falsely rejected (full review, #41). Best-effort: a failure
+            # here must not fail the capture, so it never touches `capture_error`. Unique per run without
+            # `uuid`: os.urandom is available on macOS stock 3.9.6 and needs no import beyond `os`.
+            try:
+                with open(out_path + '.captureid', 'w', encoding='utf-8') as cf:
+                    cf.write(os.urandom(16).hex() + '\n')
+            except OSError:
+                pass
         except OSError as e:
             capture_error = e
             try:

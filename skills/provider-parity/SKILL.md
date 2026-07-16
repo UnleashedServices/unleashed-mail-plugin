@@ -67,8 +67,16 @@ internal protocol EmailServiceProtocol: AnyObject, Sendable {
     func deleteDraft(draftId: String) async throws
     func listDrafts() async throws -> [Email]
 
-    // Attachments are fetched as raw bytes; the provider owns MIME/JSON decoding.
-    func fetchAttachmentData(messageId: String, attachmentId: String) async throws -> Data
+    // Attachments are fetched as raw bytes; the provider owns MIME/JSON decoding. NOTE the
+    // `onProgress:` parameter is part of the PROTOCOL REQUIREMENT (a large attachment reports
+    // 0.0→1.0 as it downloads). The two-argument `(messageId:attachmentId:)` form is only a
+    // convenience EXTENSION that calls this with `onProgress: nil` — do NOT snapshot the convenience
+    // form as the requirement (full review; verified against EmailServiceProtocol.swift:231).
+    func fetchAttachmentData(
+        messageId: String,
+        attachmentId: String,
+        onProgress: (@Sendable (Double) -> Void)?
+    ) async throws -> Data
 }
 ```
 
