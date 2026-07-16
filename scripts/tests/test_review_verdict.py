@@ -162,6 +162,38 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
         self.assertEqual(run("verify", "--plan", self.plan).returncode, 0)
 
+    def test_duplicate_provenance_among_present_fields_is_not_bypassed_by_a_fieldless_entry(self):
+        """The distinctness checks must catch duplicates among the fields that ARE present, not require
+        every reviewer to have the field. An all-or-nothing guard let a tampered artifact with one
+        path-less / capture-id-less entry skip the check even with duplicates among the rest (gemini,
+        #41 review)."""
+        import glob
+        self.assertEqual(self._write().returncode, 0)
+        art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+        # (a) two reviewers share a capture ID; a third entry has none.
+        with open(art, encoding="utf-8") as fh:
+            a = json.load(fh)
+        a["verdict"] = "APPROVE"
+        a["reviewers"] = [
+            {"name": "gemini", "status": "APPROVE", "transcriptSha256": "a" * 64,
+             "transcriptPath": "/x/g", "captureId": "DUP"},
+            {"name": "codex", "status": "APPROVE", "transcriptSha256": "b" * 64,
+             "transcriptPath": "/x/c", "captureId": "DUP"},
+            {"name": "octo", "status": "APPROVE", "transcriptSha256": "d" * 64, "transcriptPath": "/x/o"},
+        ]
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(a, fh)
+        self.assertNotEqual(run("verify", "--plan", self.plan).returncode, 0)
+        # (b) two reviewers share a PATH; a third entry has none.
+        a["reviewers"] = [
+            {"name": "gemini", "status": "APPROVE", "transcriptSha256": "a" * 64, "transcriptPath": "/x/SAME"},
+            {"name": "codex", "status": "APPROVE", "transcriptSha256": "b" * 64, "transcriptPath": "/x/SAME"},
+            {"name": "octo", "status": "APPROVE", "transcriptSha256": "d" * 64},
+        ]
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(a, fh)
+        self.assertNotEqual(run("verify", "--plan", self.plan).returncode, 0)
+
     def test_identical_capture_ids_are_rejected(self):
         """The same capture ID for both = one wrapper run standing in for two."""
         id1 = os.path.join(self.d, "s1.txt")

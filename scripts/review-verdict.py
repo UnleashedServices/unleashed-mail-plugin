@@ -110,22 +110,30 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
         return ("an APPROVING combined verdict requires a real SHA-256 transcript digest (64 hex chars); "
                 "malformed for " + ", ".join(_malformed_t))
     _dicts = [r for r in reviewers if isinstance(r, dict)]
-    # 1. Distinct capture PATHS. The same transcript FILE recorded for both reviewers is the real
+    # 1. Distinct capture PATHS. The same transcript FILE recorded for two reviewers is the real
     #    accidental mistake (one copy-paste in the documented two-file flow), and it is provenance, not
     #    content: catch it by path so two genuinely-separate reviews with identical bytes are NOT
-    #    falsely rejected (full review, #41). Only enforced when paths were recorded (schema >= 2).
+    #    falsely rejected (full review, #41).
+    #    Check duplicates among the paths that ARE present — NOT gated on every reviewer having one. The
+    #    earlier `== len(_dicts)` guard was all-or-nothing: a tampered artifact with one path-less entry
+    #    skipped the check even with duplicates among the rest (gemini, #41 review). A legit approving
+    #    artifact has a distinct path per reviewer, so this never false-triggers.
     _paths = [r["transcriptPath"] for r in _dicts if r.get("transcriptPath")]
-    if len(_paths) == len(_dicts) and len(set(_paths)) < len(_paths):
+    if len(set(_paths)) < len(_paths):
         return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
                 "transcript FILE is recorded for more than one reviewer, i.e. one review standing in for two")
-    # 2. Distinct capture IDs, when a wrapper produced them for every reviewer. A capture ID is a
-    #    per-run token, so it is authoritative provenance independent of content: identical IDs = one run.
+    # 2. Distinct capture IDs. A capture ID is a per-run token, so a repeat = one wrapper run claimed
+    #    twice — caught among the IDs that ARE present, same anti-all-or-nothing reasoning as paths.
     _cids = [r["captureId"] for r in _dicts if r.get("captureId")]
-    if len(_cids) == len(_dicts) and len(_cids) > 1:
-        if len(set(_cids)) < len(_cids):
-            return ("an APPROVING combined verdict requires a DISTINCT capture per reviewer — the same "
-                    "capture ID is recorded for more than one reviewer")
-        return None   # capture IDs are authoritative; identical content across distinct runs is fine
+    if len(set(_cids)) < len(_cids):
+        return ("an APPROVING combined verdict requires a DISTINCT capture per reviewer — the same "
+                "capture ID is recorded for more than one reviewer")
+    # 3. Capture IDs are AUTHORITATIVE only when EVERY reviewer has a distinct one: then two byte-identical
+    #    transcripts from distinct runs are legitimately two reviews, so skip the content-based floor.
+    #    Requiring all-present HERE is correct (unlike the duplicate checks) — a partial set cannot vouch
+    #    for the reviewer that has none, so it must not license bypassing the digest floor.
+    if _cids and len(_cids) == len(_dicts) and len(set(_cids)) == len(_dicts):
+        return None
     # 3. Fallback (no capture IDs): distinct DIGESTS. Has a benign false-negative — two byte-identical
     #    separate reviews are rejected — but that is astronomically rare, and pty-capture's capture IDs
     #    (path 2) lift it whenever present.
