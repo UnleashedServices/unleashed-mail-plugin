@@ -57,22 +57,56 @@ to extend `MockServices.swift` rather than introduce parallel mock files.
 
 ```swift
 // In MockServices.swift — the canonical location
-final class MockEmailService: EmailServiceProtocol {
+// `EmailServiceProtocol` refines `Sendable`, so a mock with mutable stored state needs an explicit
+// Sendability opt-out. `@unchecked Sendable` is the sanctioned test-mock form — these mutable vars are
+// only ever touched from the single test thread; do NOT copy this opt-out into production types.
+final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
     var stubbedEmails: [Email] = []
-    var fetchInboxCallCount = 0
-    var sendCallCount = 0
+    var fetchMessagesCallCount = 0
+    var sendMessageCallCount = 0
     var shouldThrow: EmailServiceError?
+    // Capture each call's INPUTS, not just a count — a mock that only counts calls passes even when
+    // production fetches the wrong folder, drops the page token, or sends from the wrong account.
+    var lastFetchFolderId: String?
+    var lastFetchMaxResults: Int?
+    var lastFetchPaginationToken: PaginationToken?
+    // One entry PER owner-bound (3-arg) send, in call order. Empty ⇒ the 3-arg path never ran (only the
+    // 2-arg overload) — distinct from `[nil]`, which means the 3-arg WAS called with `authAccount: nil`.
+    var sentAuthAccounts: [String?] = []
 
-    func fetchInbox() async throws -> [Email] {
-        fetchInboxCallCount += 1
+    // Conforms to the REAL EmailServiceProtocol requirement (EmailServiceProtocol.swift): the method
+    // is `fetchMessages(folderId:maxResults:paginationToken:) -> (emails:, nextToken:)`, NOT `fetchInbox`.
+    func fetchMessages(folderId: String, maxResults: Int,
+                       paginationToken: PaginationToken?) async throws -> (emails: [Email], nextToken: PaginationToken) {
+        fetchMessagesCallCount += 1
+        lastFetchFolderId = folderId
+        lastFetchMaxResults = maxResults
+        lastFetchPaginationToken = paginationToken
         if let error = shouldThrow { throw error }
-        return stubbedEmails
+        return (stubbedEmails, .none)   // `.none` is PaginationToken's end-of-list case (it's an enum, not Optional)
     }
 
-    func send(_ draft: Draft) async throws {
-        sendCallCount += 1
+    // BOTH send overloads are protocol requirements (NOT `send(_:)`). The 2-arg
+    // `sendMessage(draft:attachmentCache:)` has NO extension default, so a mock MUST implement it. The
+    // owner-bound 3-arg `sendMessage(draft:attachmentCache:authAccount:)` (COREDEV-2354) DOES have a
+    // protocol-extension default (forwarding to the 2-arg), so a mock CAN skip it — but implement it
+    // DIRECTLY when a test needs to assert WHICH account the owner-bound path used, since the default
+    // silently drops `authAccount`. A real mock witness is a proper dynamic-dispatch target — it does NOT
+    // static-shadow the production override (that hazard is a defaulted-ARGUMENT extension, not a genuine
+    // conformance). It records `authAccount` and forwards to the 2-arg behaviour.
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws {
+        sendMessageCallCount += 1
         if let error = shouldThrow { throw error }
     }
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?, authAccount: String?) async throws {
+        sentAuthAccounts.append(authAccount)   // records THIS call; a test asserts .last or the full sequence
+        try await sendMessage(draft: draft, attachmentCache: attachmentCache)
+    }
+
+    // … the REMAINING EmailServiceProtocol requirements (getCurrentUser, fetchMessage, folder ops,
+    // draft ops, attachments, etc. — see skills/provider-parity/SKILL.md for the full interface) are
+    // stubbed the SAME way: record the inputs you assert on, return realistic stub data, honour
+    // `shouldThrow`. Elided here to keep the example focused; a real mock must implement them all to conform.
 }
 ```
 
@@ -126,7 +160,7 @@ final class InboxViewModelTests: XCTestCase {
 
         // Assert
         XCTAssertEqual(sut.messages, expectedEmails)
-        XCTAssertEqual(mockService.fetchInboxCallCount, 1)
+        XCTAssertEqual(mockService.fetchMessagesCallCount, 1)
         XCTAssertNil(sut.error)
     }
 

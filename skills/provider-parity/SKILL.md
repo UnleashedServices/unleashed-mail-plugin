@@ -58,9 +58,12 @@ internal protocol EmailServiceProtocol: AnyObject, Sendable {
     func createFolder(name: String, parentId: String?) async throws -> Folder
     func deleteFolder(id: String) async throws
 
-    // Send / drafts. NOTE the `authAccount:` overload is a REAL protocol requirement —
-    // it pins the send to the composing account so a mid-drain account switch can't send
-    // from B while draining A's outbox.
+    // Send / drafts. BOTH send overloads are protocol requirements. The 2-arg has NO extension default,
+    // so every conformer MUST implement it. The owner-bound `authAccount:` overload DOES have a
+    // protocol-extension default (forwarding to the 2-arg), but it is still a REAL requirement — it pins
+    // the send to the composing account so a mid-drain account switch can't send from B while draining
+    // A's outbox; production providers override it, mocks/legacy inherit the default.
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws
     func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?, authAccount: String?) async throws
     func createDraft(draft: EmailDraft, attachmentCache: [String: Data]?) async throws -> String
     func updateDraft(draftId: String, draft: EmailDraft, attachmentCache: [String: Data]?) async throws
