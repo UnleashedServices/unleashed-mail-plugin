@@ -480,8 +480,15 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
     # Status sidecar (COREDEV-2328) — runs only after the findings replace SUCCEEDED, OUTSIDE the
     # try/except above, so a status-side issue can never flip this into "invalid". Clear any prior
     # occupant's status FIRST, then write the freshly-extracted one (if any): a write failure OR a
-    # status-less overwrite leaves the sidecar ABSENT (face value), never a stale BLOCKED/PARTIAL.
+    # status-less overwrite leaves the sidecar ABSENT, never a stale BLOCKED/PARTIAL.
     # `_clear_status`/`_write_status` never raise.
+    #
+    # An ABSENT sidecar is producer-FAIL-OPEN and consumer-UNATTRIBUTED (COREDEV-2490). This writer is
+    # deliberately best-effort and that is now RELIED UPON, not merely tolerated: the consumer treats
+    # absent/corrupt/COMPLETE/PARTIAL alike as "nobody vouched that this reviewer ran" and re-dispatches
+    # it. It does NOT mean "face value" any more — that reading is exactly the fail-open 2490 fixed, and
+    # it could never be fixed here anyway: `context_latest_round_dir` skips rounds this writer failed in,
+    # so the reader never even sees them.
     _clear_status(dest_dir, agent)
     status = extract_status(message)
     if status:
