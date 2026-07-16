@@ -35,7 +35,12 @@ APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
-VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}
+# A single REVIEWER's status is a DIFFERENT vocabulary from a COMBINED verdict: MISSING is a reviewer
+# status (it never returned), DISAGREEMENT is a combined outcome (the two reviewers differed). Neither
+# crosses over. Conflating them (the old single `VERDICTS` set) let `--verdict MISSING` and
+# `--reviewer x=DISAGREEMENT` through — a reviewer cannot "disagree" and a combined verdict is never
+# MISSING (full review, #42).
+REVIEWER_STATUSES = APPROVING | {"REQUEST_CHANGES", "MISSING"}
 # The top-level `verdict` is a COMBINED verdict, a DIFFERENT vocabulary from a reviewer's status:
 # DISAGREEMENT is a combined outcome, MISSING is a reviewer status, and neither crosses over. Kept
 # distinct so a stale/tampered `verdict` (a list, a dict, a bare reviewer status) is named as corrupt
@@ -227,7 +232,7 @@ def _parse_reviewer(spec: str) -> dict:
     name, rest = spec.split("=", 1)
     status, _, transcript = rest.partition(":")
     name, status = name.strip(), status.strip().upper()
-    if not name or status not in VERDICTS:
+    if not name or status not in REVIEWER_STATUSES:
         raise SystemExit(f"review-verdict: reviewer {name!r} has invalid status {status!r}")
     out = {"name": name, "status": status}
     if transcript:
@@ -256,17 +261,41 @@ def _parse_reviewer(spec: str) -> dict:
     return out
 
 
+def _reviewer_identity_problem(reviewers) -> "str | None":
+    """Reason string if the reviewer SET is malformed regardless of verdict: a duplicate name, a stray
+    reviewer, or a missing mandatory reviewer. Enforced at WRITE so an artifact verify would call corrupt
+    can never be created in the first place (full review, #42 — write/verify symmetry). Statuses/names
+    are already validated by `_parse_reviewer`; this is about identity."""
+    names = [str(r.get("name", "")).strip().lower() for r in reviewers]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        return f"duplicate reviewer(s) {dupes} — one reviewer cannot be recorded twice"
+    strays = sorted(set(names) - REQUIRED_REVIEWERS)
+    if strays:
+        return (f"reviewer(s) {strays} are not part of the gate "
+                f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
+    missing = sorted(REQUIRED_REVIEWERS - set(names))
+    if missing:
+        return f"missing mandatory reviewer(s) {missing} — the gate is {', '.join(sorted(REQUIRED_REVIEWERS))}"
+    return None
+
+
 def cmd_write(args: argparse.Namespace) -> int:
     plan = args.plan
     if not os.path.isfile(plan):
         raise SystemExit(f"review-verdict: plan not found: {plan}")
     verdict = args.verdict.strip().upper()
-    if verdict not in VERDICTS:
-        raise SystemExit(f"review-verdict: --verdict must be one of {sorted(VERDICTS)}, got {verdict!r}")
+    if verdict not in COMBINED_VERDICTS:
+        raise SystemExit(f"review-verdict: --verdict must be one of {sorted(COMBINED_VERDICTS)}, "
+                         f"got {verdict!r} (that vocabulary is combined verdicts; MISSING is a reviewer "
+                         "status, not a combined verdict)")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
         raise SystemExit("review-verdict: at least two reviewers (gemini + codex) are required")
+    id_problem = _reviewer_identity_problem(reviewers)
+    if id_problem:
+        raise SystemExit("review-verdict: refusing to write a malformed artifact — " + id_problem)
     problem = _quorum_problem(verdict, reviewers)
     if problem:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
@@ -391,7 +420,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
         # after I wrote it down.
         _dicts = [r for r in _revs if isinstance(r, dict)]
-        # USE THE DEFINED VOCABULARY. `VERDICTS` sits at the top of this file and the hint logic never
+        # USE THE DEFINED VOCABULARY. `REVIEWER_STATUSES` sits at the top of this file and the hint never
         # consulted it: `rejecting` was a CATCH-ALL for "not approving and not MISSING", so any status
         # outside the vocabulary was reported as a considered rejection (gemini AND codex, #42 review —
         # both found this independently, which is why it is the root cause and not a nit):
@@ -401,7 +430,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         #     lgtm           -> "gemini=LGTM (ran, wants plan changes)"
         # An unrecognized status is not a rejection; it is an artifact we cannot read.
         _unknown_status = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
-                                 if _name(r) and _status(r) and _status(r) not in VERDICTS)
+                                 if _name(r) and _status(r) and _status(r) not in REVIEWER_STATUSES)
         _bad_status = sorted(_name(r) for r in _dicts if _name(r) and not _status(r))
         _bad_names = sum(1 for r in _dicts if not _name(r))
         _bad_entries = len(_revs) - len(_dicts)
@@ -426,7 +455,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         _corrupt = []
         if _unknown_status:
             _corrupt.append(f"{', '.join(_unknown_status)} is not a recognized status "
-                            f"({', '.join(sorted(VERDICTS))})")
+                            f"({', '.join(sorted(REVIEWER_STATUSES))})")
         if _bad_status:
             _corrupt.append(f"{', '.join(_bad_status)} has an absent/null/non-string status")
         if _bad_names:
@@ -449,13 +478,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                             f"(recorded: {sorted(_known) or 'none'} — a typo?)")
         absent = sorted(_name(r) for r in _dicts if _name(r) and _status(r) == "MISSING")
         # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
-        # The `in VERDICTS` filter is redundant BY CONSTRUCTION — `_unknown_status` above short-circuits
+        # The `in REVIEWER_STATUSES` filter is redundant BY CONSTRUCTION — `_unknown_status` above short-circuits
         # to the CORRUPT branch first, so this line is unreachable with a status outside the vocabulary,
         # and no test pins it (reverting it to the old catch-all fails nothing). Kept anyway, and said
         # plainly rather than dressed up as coverage: it makes this line's contract readable on its own,
         # which is exactly what the catch-all version lacked.
         rejecting = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
-                           if _name(r) and _status(r) in VERDICTS and _status(r) not in APPROVING
+                           if _name(r) and _status(r) in REVIEWER_STATUSES and _status(r) not in APPROVING
                            and _status(r) != "MISSING")
         if _corrupt:
             hint = (f" — artifact is CORRUPT: {'; '.join(_corrupt)} — so no reviewer classification here"

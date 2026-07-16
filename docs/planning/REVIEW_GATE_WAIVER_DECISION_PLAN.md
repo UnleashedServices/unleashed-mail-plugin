@@ -1,7 +1,9 @@
 # Plan Review Gate — the WAIVED path: wire it, or drop the claim?
 
-**Status:** DRAFT v2 — R2 gate. **This plan asks for a decision**, not just a review.
-**Epic:** COREDEV-2485 · **Ticket:** COREDEV-2493 · Branch `feat/plugin-waiver-decision` off `alpha`.
+**Status:** ✅ DECIDED — **Option B** (drop the scripted waiver). Both reviewers concurred (R1 codex
+`APPROVE_WITH_NOTES` choosing B; R2 confirmed). Implemented on `feat/plugin-waiver-decision`.
+**Epic:** COREDEV-2485 · **Ticket:** COREDEV-2493 · Branch `feat/plugin-waiver-decision`, **stacked on
+`feat/plugin-workflow-usability` (#41)**, ultimately targeting `alpha`.
 
 ## Round history
 
@@ -134,9 +136,15 @@ guidance (it is real and useful) and keep "a missing transcript is never APPROVE
 > agent may present these choices but must never select or infer the exception.
 
 This keeps §2's real intent (never wedge with no way out; never silently pass) while removing the promise
-no code can honor. The repo already has this pattern: `docs/planning/OCTO_ADOPTION_PLAN.md:534` records a
-user exception while explicitly distinguishing it from the normal dual-review gate — so "record without
-claiming the gate passed" is an established, proven shape here rather than a new invention.
+no code can honor. The shape we want is "record the exception in the progress log **without** claiming the
+gate passed."
+
+> **Not an endorsement of `OCTO_ADOPTION_PLAN.md` as an exemplar.** An earlier draft cited it as the
+> proven shape. It is the opposite: that plan excluded gemini and then declared **"GATE SATISFIED"** on
+> codex alone — an exclusion *plus* a gate-passed claim, precisely what this decision forbids
+> (`AGENT_CONTRACTS.md` §2 records the same correction). The "record the exception" half is worth
+> keeping; OCTO's "and call the gate passed" half is the anti-pattern. The citation is removed to avoid
+> holding it up as a model (full review, #42).
 
 ## Recommendation — **Option B** (codex concurred at R1)
 
@@ -148,7 +156,8 @@ code can honor.
 **The counter-argument, and why it loses.** In practice a wedged gate gets bypassed by a human saying
 "skip it", leaving no record — whereas Option A leaves one. R1 (codex) answered this directly and
 convincingly: *"Option B can preserve a record without claiming the gate passed"* — record the exception
-in the plan's progress log, as `OCTO_ADOPTION_PLAN.md:534` already does. The two goods are separable, so
+in the plan's progress log (the audit record), **without** the gate-passed claim (which OCTO wrongly
+made — see the note above). The two goods are separable, so
 we do not have to buy a sanctioned bypass to get an audit record. **This is the argument that settles the
 decision** — not the (overstated) false-audit-trail framing v1 leaned on.
 

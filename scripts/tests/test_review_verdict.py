@@ -279,9 +279,11 @@ class ReviewVerdictTest(unittest.TestCase):
         open(empty, "w").close()
         for verdict in ("REQUEST_CHANGES", "DISAGREEMENT"):
             with self.subTest(verdict=verdict):
+                # `verdict` is a COMBINED verdict; a reviewer STATUS cannot be DISAGREEMENT, so drive
+                # the reviewers with a real rejecting status while the combined verdict varies.
                 r = run("write", "--plan", self.plan, "--verdict", verdict,
-                        "--reviewer", f"gemini={verdict}:{empty}",
-                        "--reviewer", f"codex={verdict}:{self.tx}")
+                        "--reviewer", f"gemini=REQUEST_CHANGES:{empty}",
+                        "--reviewer", f"codex=REQUEST_CHANGES:{self.tx}")
                 self.assertNotEqual(r.returncode, 0,
                                     "a 0-byte transcript is a FAILED review — it must never be recorded "
                                     "as a real one, approving or not")
@@ -435,6 +437,24 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertIn("not a recognized status", out)
                 self.assertNotIn("wants plan changes", out)
 
+    def test_write_enforces_reviewer_identity_for_ALL_verdicts(self):
+        """Write rejects duplicate/stray/missing-mandatory reviewers regardless of verdict — the
+        symmetry the review asked for, so an artifact verify would call corrupt can never be created
+        (full review, #42). Verify's handling of hand-tampered artifacts is covered separately."""
+        cases = [
+            (("gemini=MISSING", f"gemini=REQUEST_CHANGES:{self.tx}", f"codex=APPROVE:{self.tx2}"),
+             "duplicate reviewer"),
+            ((f"gemini=APPROVE:{self.tx}", f"codex=APPROVE:{self.tx2}", "octo=MISSING"),
+             "not part of the gate"),
+            (("gemni=MISSING", f"codex=APPROVE:{self.tx}"), "not part of the gate"),
+        ]
+        for reviewers, needle in cases:
+            with self.subTest(reviewers=reviewers):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        *[a for rv in reviewers for a in ("--reviewer", rv)])
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn(needle, r.stderr)
+
     def test_a_non_string_or_unknown_top_level_verdict_is_corrupt_not_a_crash(self):
         """`[1,2] not in APPROVING` raises TypeError (unhashable) — verify crashed instead of failing
         cleanly. And a verdict outside the COMBINED vocabulary (stale WAIVED, a bare reviewer status
@@ -459,50 +479,36 @@ class ReviewVerdictTest(unittest.TestCase):
         """`_quorum_problem` rejects duplicates for APPROVING verdicts only, so a non-approving artifact
         with `gemini=MISSING` AND `gemini=REQUEST_CHANGES` produced advice saying gemini both ran and did
         not run — from one artifact (codex, #42 review)."""
+        # WRITE now refuses to create the contradictory artifact at all (write/verify symmetry, full
+        # review); verify's handling of a hand-tampered one is covered separately.
         r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
                 "--reviewer", "gemini=MISSING",
                 "--reviewer", f"gemini=REQUEST_CHANGES:{self.tx}",
                 "--reviewer", f"codex=APPROVE:{self.tx2}")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        v = run("verify", "--plan", self.plan)
-        out = v.stdout + v.stderr
-        self.assertNotEqual(v.returncode, 0)
-        self.assertIn("CORRUPT", out)
-        self.assertIn("more than once", out)
-        self.assertNotIn("TWO SEPARATE problems", out)   # never reason from a contradictory artifact
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("duplicate reviewer", r.stderr)
 
     def test_a_stray_reviewer_is_corrupt_not_recovery_advice(self):
         """`write` accepts extra reviewers for non-approving verdicts, so `octo=MISSING` alongside the
         required pair produced "octo recorded MISSING ... see 'Unavailable reviewer'" — recovery advice
         for a reviewer that is not part of the gate at all (codex, #42 review)."""
+        # WRITE now refuses the stray (write/verify symmetry, full review).
         r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
                 "--reviewer", f"gemini=APPROVE:{self.tx}",
                 "--reviewer", f"codex=REQUEST_CHANGES:{self.tx2}",
                 "--reviewer", "octo=MISSING")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        v = run("verify", "--plan", self.plan)
-        out = v.stdout + v.stderr
-        self.assertNotEqual(v.returncode, 0)
-        self.assertIn("CORRUPT", out)
-        self.assertIn("not part of the gate", out)
-        self.assertNotIn("Unavailable reviewer", out)    # do not send them chasing `octo`
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not part of the gate", r.stderr)
 
     def test_a_typod_reviewer_name_is_corrupt_not_recovery_advice(self):
         """`_quorum_problem` enforces the mandatory pair for APPROVING verdicts only, so
         `--reviewer gemni=MISSING` was accepted and verify emitted "gemni recorded MISSING (never ran)"
         — recovery advice about a reviewer that does not exist (codex, #42 review)."""
+        # WRITE now refuses the typo (a misspelled name is a stray + the real one is missing).
         r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
                 "--reviewer", "gemni=MISSING", "--reviewer", f"codex=APPROVE:{self.tx}")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        v = run("verify", "--plan", self.plan)
-        out = v.stdout + v.stderr
-        self.assertNotEqual(v.returncode, 0)
-        self.assertIn("CORRUPT", out)
-        # BOTH halves of the diagnosis: the stray that was recorded, and the required one that was not.
-        # Either alone leaves the reader to spot `gemni` vs `gemini` themselves.
-        self.assertIn("not part of the gate", out)
-        self.assertIn("mandatory reviewer", out)
-        self.assertNotIn("never ran", out)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not part of the gate", r.stderr)   # gemni is a stray
 
     def test_the_MISSING_hint_does_not_assert_never_ran(self):
         """MISSING is overloaded: `review-synthesis` maps BOTH "never returned" AND "empty/unparseable
@@ -723,7 +729,7 @@ class ReviewVerdictTest(unittest.TestCase):
     def test_unknown_reviewers_rejected_at_write(self):
         r = self._write(reviewers=("foo=APPROVE", "bar=APPROVE"))
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("missing required reviewer", r.stderr)
+        self.assertIn("not part of the gate", r.stderr)   # foo/bar are strays
 
     def test_approve_verdict_with_rejecting_statuses_rejected_at_write(self):
         # combined --verdict APPROVE but both reviewers said REQUEST_CHANGES -> refuse to record
