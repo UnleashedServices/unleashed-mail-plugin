@@ -211,7 +211,9 @@ def _read_regular_file(path: str) -> str | None:
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             fd = -1  # fdopen owns it now; the finally must not double-close
             return fh.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # invalid-UTF-8 bytes in a sidecar are "not a genuine digest" — return None (controlled
+        # fail-closed/skip), never a traceback (round 7: codex).
         return None
     finally:
         if fd >= 0:
@@ -378,42 +380,41 @@ def cmd_write(args: argparse.Namespace) -> int:
     # and artifact construction would pass `--reviewed-sha256` on the old bytes yet record the new,
     # unreviewed digest, which `verify` would then accept (round 3: codex).
     plan_sha = _sha256_bytes(plan)
-    # Resolve the reviewed digest from EITHER the explicit --reviewed-sha256 flag (backward-compatible;
-    # an EMPTY value fails loudly rather than silently skipping — round 1) OR, when the flag is omitted,
-    # the `snapshot`-written sidecar (the normal gate flow; the old shell-var approach expanded empty
-    # across invocations — round 4: codex). A stale sidecar is NOT unlinked: if the plan is unchanged its
-    # digest still matches (correct), and if the plan changed the mismatch below fails closed, forcing a
-    # fresh `snapshot` — safer than consuming it and silently skipping the binding on a retry.
-    expected = None
-    if getattr(args, "reviewed_sha256", None) is not None:
-        expected = args.reviewed_sha256.strip().lower()
-        if not _SHA256_HEX.match(expected):
-            raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
-    else:
-        # Read the snapshot sidecar via _read_regular_file — O_NOFOLLOW at open closes the
-        # islink()-then-open() TOCTOU race (an attacker owning `.verdicts` could swap it to a symlink
-        # between the checks and the open) and rejects a planted FIFO too (round 5: codex).
-        _snap = _read_regular_file(_reviewed_sha_sidecar(plan))
-        if _snap is not None:
-            expected = _snap.strip().lower()
+    # The reviewed-digest BINDING applies ONLY to an APPROVING verdict — that is the one bound to the bytes
+    # the reviewers saw. A non-approving verdict blocks `implement` regardless, so a stale/absent snapshot
+    # must NOT affect it: gating the whole block on APPROVING stops a REQUEST_CHANGES after a plan edit from
+    # aborting on the digest mismatch (round 7: codex).
+    if verdict in APPROVING:
+        # Resolve the reviewed digest from EITHER the explicit --reviewed-sha256 flag (an EMPTY value fails
+        # loudly rather than silently skipping — round 1) OR the `snapshot`-written sidecar (the normal
+        # flow; a shell var can't cross tool invocations — round 4). The sidecar is read via
+        # _read_regular_file: O_NOFOLLOW closes the islink()-then-open() TOCTOU race and fstat rejects a
+        # planted FIFO (round 5).
+        expected = None
+        if getattr(args, "reviewed_sha256", None) is not None:
+            expected = args.reviewed_sha256.strip().lower()
             if not _SHA256_HEX.match(expected):
-                raise SystemExit("review-verdict: snapshot sidecar is corrupt (not 64 hex chars): "
-                                 + _reviewed_sha_sidecar(plan))
-    if expected is not None and plan_sha != expected:
-        raise SystemExit(
-            "review-verdict: the plan CHANGED between review and write — refusing to record an "
-            f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
-            f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
-    # FAIL CLOSED: an APPROVING verdict MUST carry a reviewed-digest binding. With no snapshot sidecar and
-    # no --reviewed-sha256, the review->write window is unguarded — a caller could review v1, edit to v2,
-    # and write an APPROVE bound only to v2's write-time digest, which `verify` then accepts (the snapshot
-    # can be simply skipped, or removed / swapped to a symlink / a FIFO, yielding `expected = None`). A
-    # non-approving verdict blocks `implement` regardless, so it needs no binding (round 6: codex).
-    if expected is None and verdict in APPROVING:
-        raise SystemExit(
-            "review-verdict: an APPROVING verdict requires a reviewed-plan digest, but none is available "
-            "(no snapshot sidecar and no --reviewed-sha256). Run `review-verdict.py snapshot --plan "
-            f"{plan}` BEFORE dispatching the reviews. Refusing to bind an approval to unreviewed bytes.")
+                raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
+        else:
+            _snap = _read_regular_file(_reviewed_sha_sidecar(plan))
+            if _snap is not None:
+                expected = _snap.strip().lower()
+                if not _SHA256_HEX.match(expected):
+                    raise SystemExit("review-verdict: snapshot sidecar is corrupt (not 64 hex chars): "
+                                     + _reviewed_sha_sidecar(plan))
+        # FAIL CLOSED: no binding at all (snapshot skipped/removed/symlinked/FIFO) leaves the review->write
+        # window open — a caller could review v1, edit to v2, and write an APPROVE bound only to v2, which
+        # `verify` then accepts (round 6: codex).
+        if expected is None:
+            raise SystemExit(
+                "review-verdict: an APPROVING verdict requires a reviewed-plan digest, but none is "
+                "available (no snapshot sidecar and no --reviewed-sha256). Run `review-verdict.py snapshot "
+                f"--plan {plan}` BEFORE dispatching the reviews. Refusing to bind an approval to unreviewed bytes.")
+        if plan_sha != expected:
+            raise SystemExit(
+                "review-verdict: the plan CHANGED between review and write — refusing to record an "
+                f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
+                f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.

@@ -758,6 +758,30 @@ class ReviewVerdictTest(unittest.TestCase):
                         snapshot=False)
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_non_approving_verdict_not_blocked_by_stale_snapshot(self):
+        """A non-approving verdict needs NO binding, so a STALE snapshot (plan edited after snapshot) must
+        not abort it — the digest-mismatch check is gated on APPROVING (round 7: codex)."""
+        run("snapshot", "--plan", self.plan)
+        with open(self.plan, "a", encoding="utf-8") as fh:
+            fh.write("\nedited after snapshot\n")
+        r = self._write(verdict="REQUEST_CHANGES",
+                        reviewers=("gemini=REQUEST_CHANGES:%s" % self.tx, "codex=APPROVE:%s" % self.tx2),
+                        snapshot=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_invalid_utf8_snapshot_sidecar_does_not_traceback(self):
+        """A sidecar with invalid UTF-8 bytes must be treated as no-binding (controlled), not raise an
+        uncaught UnicodeDecodeError traceback (round 7: codex). With an approving verdict that means the
+        fail-closed 'requires a digest' message, not a stack trace."""
+        os.makedirs(os.path.join(self.d, ".verdicts"), exist_ok=True)
+        side = os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.reviewed-sha256")
+        with open(side, "wb") as fh:
+            fh.write(b"\xff\xfe not utf-8\n")
+        r = self._write(snapshot=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("requires a reviewed-plan digest", r.stdout + r.stderr)
+
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
         v = run("verify", "--plan", self.plan)
