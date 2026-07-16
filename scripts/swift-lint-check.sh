@@ -12,6 +12,14 @@
 # COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
 # CLAUDE_TOOL_ARG_* fallback) and a per-kind lint marker is written for the Stop-gate.
 
+# Kill switch (COREDEV-2494) — this was the only BLOCKING hook without one, despite emitting
+# `decision:block` and arming the Stop gate. A blocking hook with no escape is exactly the thing a user
+# needs to be able to turn off. (Most hooks here honour a `UNLEASHED_*` switch, but NOT all: this
+# comment used to claim "every other hook" does. `swift-build-verify.sh` has none — its
+# `UNLEASHED_FAILURE_LOG` gates only the log side-effect, and the advisory still fires; `test-runner.sh`
+# and `pre-commit-checks.sh` have none either. Verified, pre-merge audit.)
+[ "${UNLEASHED_LINT_CHECK:-on}" = "off" ] && exit 0
+
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/hook-io.sh
 [ -f "$_DIR/lib/hook-io.sh" ] && . "$_DIR/lib/hook-io.sh"
@@ -63,7 +71,10 @@ $(printf '%s' "$RESULT" | head -10)"
 fi
 
 # --- 2. SwiftLint check (if available) ---
+SWIFTLINT_RAN=0
+LINT_OUTPUT=""
 if command -v swiftlint &> /dev/null; then
+    SWIFTLINT_RAN=1
     # COREDEV-2486 (audit hooks-scripts.1): `--path` was deprecated in SwiftLint 0.48 and REMOVED
     # in 0.56 (current is 0.65). Use the positional form; capturing the exit code lets a future CLI
     # break surface as an advisory instead of silently disabling the stage.
@@ -75,6 +86,26 @@ if command -v swiftlint &> /dev/null; then
     WARNING_COUNT=$(printf '%s' "$LINT_OUTPUT" | grep -c ": warning:" 2>/dev/null || true)
     ERROR_COUNT=${ERROR_COUNT:-0}
     WARNING_COUNT=${WARNING_COUNT:-0}
+
+    # force_try / force_cast BLOCK at whatever severity SwiftLint assigned them (codex, #43 review).
+    # This hook enforces the PROJECT's policy ("no force-try in production", CLAUDE.md) and uses
+    # SwiftLint only as the ORACLE for "is there an UNWAIVED violation here". Severity is a per-repo
+    # config knob — `force_try: severity: warning` is explicitly supported — and the app's current
+    # `severity: error` is the only reason the error branch below catches these at all. Inheriting that
+    # choice made a policy control silently configurable away: reported as a warning, an unwaived
+    # `try!` produced an advisory with no `lint=fail` marker, so the Stop gate never armed. Reproduced.
+    # PRODUCTION ONLY — the policy is "no force-try in PRODUCTION code" (CLAUDE.md), and force-try in a
+    # test is legitimate (a fixture that must fail loudly). The grep fallback below has always carried
+    # this guard; my stage-2 elevation did not, so a `try!` in an XCTestCase started BLOCKING — a
+    # regression against alpha, which guards tests in all three places (gemini, #43 review; reproduced).
+    FORCED=""
+    if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
+        FORCED=$(printf '%s' "$LINT_OUTPUT" | grep -E ": (error|warning):.*\((force_try|force_cast)\)" || true)
+    fi
+    if [ -n "$FORCED" ]; then
+        add_block "❌ Force try/cast in production code — $FILE_PATH:
+$(printf '%s' "$FORCED" | head -10)"
+    fi
 
     if [ "$ERROR_COUNT" -gt 0 ]; then
         add_block "❌ SwiftLint errors in $FILE_PATH:
@@ -89,25 +120,268 @@ $(printf '%s' "$LINT_OUTPUT" | grep ": warning:" | head -5)"
     if [ "$LINT_RC" -ne 0 ] && [ "$ERROR_COUNT" -eq 0 ] && [ "$WARNING_COUNT" -eq 0 ]; then
         add_advisory "⚠️  swiftlint exited $LINT_RC with no parsed findings — the lint stage may be misconfigured (check the SwiftLint CLI/version):
 $(printf '%s' "$LINT_OUTPUT" | head -3)"
+        # ...and DO NOT claim swiftlint ran (PR #43 review). `SWIFTLINT_RAN=1` was set on
+        # `command -v swiftlint` ALONE, so a broken CLI skipped the try!/as! grep fallback below and
+        # an unwaived `try!` got only this non-blocking advisory — no `lint=fail` marker, so the Stop
+        # gate was left UNARMED. On alpha the greps ran unconditionally and DID block, so that was a
+        # regression this PR introduced. Falling back to the greps restores alpha's behaviour exactly.
+        #
+        # Deliberately NOT `add_block` here: that would block EVERY Swift edit whenever the CLI is
+        # misconfigured, including clean files. Handing the decision back to the greps blocks only on a
+        # real, unwaived violation — fail-closed where it matters, quiet where it doesn't.
+        SWIFTLINT_RAN=0
     fi
 fi
 
-# --- 3. try! in production code (BLOCKS) ---
-# grep -n prefixes "NN:", so filter comments on the POST-linenumber text (the old
-# `grep -v '^\s*//'` could never match a numbered line). Use POSIX classes (BSD/GNU-safe).
+# Does $1 (a source line) waive rule $2? A directive waives only the rules it NAMES; a bare
+# `swiftlint:disable`/`:next` with no rule list is a blanket waiver. Prefix-strip, not `case`
+# (COREDEV-2492/2494: a `)` in a case pattern collides with an enclosing `$( )`, and bash 3.2 cannot
+# parse case-in-while-in-$() at all).
+# Is $1 a REAL SwiftLint directive comment? If so, echo the directive body; else fail.
+#
+# THREE separate bugs have lived in this one predicate, all found by review:
+#
+# a) The directive must BE the comment, not appear in it. A bare "contains swiftlint:disable" test let
+#    prose act as a directive — `// TODO: remove any swiftlint:disable force_try here` WAIVED a real
+#    try!, and `// NOTE: we used to swiftlint:disable force_try here` opened a REGION. Fail-open: a
+#    comment ABOUT the linter turned the linter off.
+# b) Anchoring on the FIRST `//` broke on code containing `//` before its trailing comment —
+#    `try! NSRegularExpression(pattern: "https://example.com") // swiftlint:disable:this force_try`
+#    had its directive eaten by the URL. False positive, and this app is full of regex URLs.
+# c) `swiftlint:disable*` is a PREFIX glob, so the typo `swiftlint:disabled force_try` matched and
+#    waived. Fail-open, from a typo SwiftLint itself would ignore.
+#
+# So: scan each `//` left to right and take the FIRST one whose comment content begins with an EXACT
+# `swiftlint:disable`/`swiftlint:enable` token — terminated by end, `:` (a scope), or whitespace.
+# Left-to-right (not `##*//`) because a rationale may itself contain a URL:
+#   `// swiftlint:disable:next force_try - see http://x`   <- `##*//` would grab "x"
+_directive_body() {
+    _rest="$1"
+    while :; do
+        case "$_rest" in
+            *"//"*) _rest="${_rest#*//}" ;;
+            *) return 1 ;;
+        esac
+        _c="$_rest"
+        while :; do
+            case "$_c" in
+                " "*) _c="${_c# }" ;;
+                "	"*) _c="${_c#	}" ;;
+                *) break ;;
+            esac
+        done
+        case "$_c" in
+            swiftlint:disable|swiftlint:enable) printf '%s' "$_c"; return 0 ;;
+            swiftlint:disable:*|swiftlint:enable:*) printf '%s' "$_c"; return 0 ;;
+            swiftlint:disable[[:space:]]*|swiftlint:enable[[:space:]]*) printf '%s' "$_c"; return 0 ;;
+        esac
+    done
+}
+
+# Is line $2 of file $1 inside an OPEN `swiftlint:disable <rule>` REGION?
+#
+# `_waives` only ever inspects the PRECEDING line, which covers `:next` and a blanket directive directly
+# above. It does NOT cover the REGION form, which is what 15 real app files actually use:
+#     // swiftlint:disable force_try
+#     let a = try! ...        <- prev line IS the directive -> _waives says waived
+#     let b = try! ...        <- prev line is CODE          -> _waives says NOT waived  == FALSE POSITIVE
+#     // swiftlint:enable force_try
+# That false block reached the developer only after this PR stopped gating the greps on SWIFTLINT_RAN,
+# i.e. the region gap and the widened fallback are individually correct and jointly a regression — the
+# 120-false-positive class the suppression used to hide. Found by pre-merge audit, not by the bots.
+#
+# Scope suffixes (:next/:this/:previous) are LINE-scoped and never open a region — only a bare
+# `swiftlint:disable` does, until a matching `swiftlint:enable`.
+_in_disabled_region() {
+    awk -v n="$2" -v rule="$3" '
+        NR >= n { exit }
+        {
+            line = $0
+            # The directive must BE the comment, not appear in it. Anchor to the start of the COMMENT
+            # CONTENT (after the first //), so prose like `// NOTE: we used to swiftlint:disable
+            # force_try here` no longer OPENS A REGION and silences every hit below it (codex, #43).
+            i = index(line, "//")
+            if (i == 0) next
+            body = substr(line, i + 2)
+            sub(/^[ \t]+/, "", body)
+            # EXACT token, terminated by `:` (a scope), whitespace, or end — mirroring _directive_body.
+            # `/^swiftlint:(disable|enable)/` is a PREFIX match, so the typo `swiftlint:disabled
+            # force_try` opened a region here even after _directive_body learned to reject it: I fixed
+            # the shell predicate and left its awk twin with the identical bug (codex, #43 review; my
+            # own new test caught the miss).
+            if (body !~ /^swiftlint:(disable|enable)([: \t]|$)/) next
+            act  = (body ~ /^swiftlint:disable/) ? "d" : "e"
+            tail = (act == "d") ? substr(body, length("swiftlint:disable") + 1) \
+                                : substr(body, length("swiftlint:enable") + 1)
+            # A scoped directive is LINE-scoped and never opens OR closes a region. SwiftLint
+            # documents :previous/:this/:next for `enable` too, so skipping only scoped `disable` let
+            # `// swiftlint:enable:this force_try` close the whole region and block every later try!
+            # that SwiftLint still waives (codex, #43 review). Applies to BOTH acts.
+            # Scope must be a whole token (delimiter or end after it), mirroring _waives_scoped —
+            # else `:nextforce_try` reads as scope+rule here too. And a colon-led tail that is NOT a
+            # known scope is malformed: skip it entirely rather than let it open a region.
+            if (tail ~ /^:(next|this|previous)([ \t:]|$)/) next
+            if (tail ~ /^:/) next
+            sub(/ - .*$/, "", tail)                                   # drop the mandated ` - <rationale>`
+            gsub(/[:,]/, " ", tail)
+            names = " " tail " "
+            gsub(/[ \t]+/, " ", names)
+            blanket = (names ~ /^ *$/)
+            # `all` is a DOCUMENTED SwiftLint keyword for every rule, in BOTH directions. Without it,
+            # `disable force_try` ... `enable all` left the region OPEN and waived every hit after it
+            # (fail-open), and `disable all` waived nothing (fail-closed). Verified against the docs.
+            hit = blanket || index(names, " " rule " ") || index(names, " all ")
+            if (hit) open = (act == "d") ? 1 : 0
+        }
+        END { exit (open ? 0 : 1) }
+    ' "$1"
+}
+
+# Does the directive on line $1 waive rule $2 for the line at scope $3 (next|this|previous)?
+#
+# SwiftLint documents THREE line scopes, and the fallback only ever read the PRECEDING line — so two of
+# them were ignored and legitimately-waived code was blocked (codex, #43 review; both reproduced):
+#     let r = try! ... // swiftlint:disable:this force_try      <- same line   (16 sites in the app)
+#     let r = try! ...
+#     // swiftlint:disable:previous force_try                   <- following line
+# Both are FALSE POSITIVES, so the gate stayed closed — but a hook that demands an edit the project's own
+# convention forbids is broken in the direction that wastes a developer's afternoon.
+_waives_scoped() {
+    _line="$1"; _rule="$2"; _want="$3"
+    _body=$(_directive_body "$_line") || return 1
+    case "$_body" in swiftlint:disable*) ;; *) return 1 ;; esac   # an `enable` never waives
+    _tail="${_body#swiftlint:disable}"
+    # The scope must be a WHOLE token: `:next` then end / whitespace / ` - `. `:next*` is a prefix glob,
+    # so `:nextforce_try` stripped `:next` and read `force_try` as a rule — a typo SwiftLint ignores
+    # became a waiver (codex, #43 review). A `:`-led tail that is NOT one of the three known scopes is
+    # ALSO malformed (`:bogus force_try`) and must not fall through as an unscoped region.
+    case "$_tail" in
+        :next|:next[[:space:]]*)         _got=next;     _tail="${_tail#:next}" ;;
+        :this|:this[[:space:]]*)         _got=this;     _tail="${_tail#:this}" ;;
+        :previous|:previous[[:space:]]*) _got=previous; _tail="${_tail#:previous}" ;;
+        :*)          return 1 ;;   # a colon that is not a known scope -> malformed, never waives
+        *)           _got=region ;;
+    esac
+    # An unscoped `swiftlint:disable` opens a REGION, which also covers the line right after it.
+    if [ "$_want" = next ]; then
+        [ "$_got" = next ] || [ "$_got" = region ] || return 1
+    else
+        [ "$_got" = "$_want" ] || return 1
+    fi
+    # CUT THE RATIONALE FIRST — this project MANDATES `<rule> - <ticket>` (CLAUDE.md), and scanning the
+    # prose as a rule list falsely waived (gemini, #43 review). Rule IDs never contain " - ".
+    _rules="${_tail%% - *}"
+    _stripped="$(printf '%s' "$_rules" | tr -d '[:space:]')"
+    [ -z "$_stripped" ] && return 0                 # blanket disable, no rule list
+    _norm=" $(printf '%s' "$_rules" | tr ',' ' ' | tr -s '[:space:]' ' ') "
+    [[ "$_norm" == *" all "* ]] && return 0          # documented `all` keyword
+    # `[[ ]]` with the boundary spaces INSIDE the quoted pattern — not `${_norm#* "$_rule" }`. The
+    # strip form's word boundary was a TRAILING SPACE before the `}`, which a formatter / shfmt /
+    # trailing-whitespace hook could silently strip, collapsing `force_try` into a prefix that also
+    # matches `force_try_x` (gemini, #43 review). Here the spaces are structural. `$_rule` inside the
+    # double-quotes is a LITERAL needle (no SC2295 glob); the `*` outside it glob.
+    [[ "$_norm" == *" $_rule "* ]] && return 0
+    return 1
+}
+
+# Back-compat shim: the preceding line waiving THIS line == scope `next`.
+_waives() { _waives_scoped "$1" "$2" next; }
+
+# --- 3 & 4. try! / as! greps: FALLBACK ONLY, when SwiftLint did not run (COREDEV-2494).
+#
+# WORD-BOUNDARIED: `(^|[^A-Za-z0-9_])try!` / `as!`, not bare `try!`/`as!`. An IUO type declaration
+# ends in `!`, so `IntentPatternRegistry!` contains the substring `try!` and `Canvas!` contains `as!` —
+# the bare greps flagged legitimate implicitly-unwrapped optionals as force operations and BLOCKED them
+# (codex/full review, #43). The bracket form is POSIX ERE (identical on BSD and GNU), not `\b` which is
+# a grep extension. `grep -n` prints the whole line regardless of the matched prefix char, so the line
+# number and the reported hit are unchanged.
+#
+# These greps cannot see `// swiftlint:disable:next force_try` — they filter only lines that are
+# THEMSELVES comments, so a directive on line N never protects line N+1. Measured against the consumer
+# app: 120 of 273 production `try!` sites carry that exact waiver, so the greps produced 120 FALSE
+# POSITIVES and told the model "❌ Found 'try!' in production code" for code the project's own CLAUDE.md
+# REQUIRES to be waived (the regex-migration epic — piecemeal NSRegularExpression conversion risks
+# Sendable regressions). The hook then poisons a `lint=fail` marker that blocks Stop.
+#
+# SUPERSEDED (round 5) — kept only to record why the old reasoning was wrong, because it reads
+# plausibly and a maintainer "restoring" it would reopen a real hole. It used to say: "When swiftlint ran
+# it is authoritative: it honours the directives, and BOTH rules are default-error rules, so an UNWAIVED
+# site still surfaces as `: error:` and stage 2 already blocks." The flaw: "swiftlint ran" does not mean
+# these rules ran. `disabled_rules`/`only_rules`/`excluded:` all make swiftlint exit 0 with NO output,
+# which is indistinguishable from a clean file — so the fallback was dropped for exactly the files
+# swiftlint never policed. The gate is now per-rule and evidence-based: see `_lint_proved`.
+# SILENCE IS NOT PROOF. `SWIFTLINT_RAN` only says the binary executed — it does NOT say these rules
+# policed THIS file. The repo config can disable them (`disabled_rules`/`only_rules`) or exclude the
+# path (`excluded:` — the consumer app excludes GRDB/SwiftSoup/Vendor/build/.build), and swiftlint then
+# exits 0 with NO output, indistinguishable from a clean file. Gating the fallback on SWIFTLINT_RAN
+# therefore dropped the net for exactly the files swiftlint never policed (codex, #43 review).
+#
+# Only a real FINDING proves the rule was enforced. Per-rule, because force_try and force_cast are
+# independent: one being enforced says nothing about the other.
+#
+# Safe to widen now ONLY because the greps became waiver-aware: the 120 measured false positives came
+# from waived sites, and `_waives` + `_in_disabled_region` filter those directly, so suppression is no
+# longer load-bearing. (Both are required: `_waives` covers `:next`/adjacent directives, and
+# `_in_disabled_region` covers the disable/enable REGION form that 15 real app files use. Crediting
+# `_waives` alone was stale attribution — the region half landed later, in def02a4.)
+_lint_proved() {
+    [ "$SWIFTLINT_RAN" -eq 1 ] || return 1
+    printf '%s' "$LINT_OUTPUT" | grep -qE "\($1\)"
+}
 if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
-    TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//')
+    # No toolchain: keep a coarse net, but honour an explicit waiver on the preceding line so the
+    # fallback cannot demand a policy-violating edit either. -A1 pairs directive->site.
+    TRY_BANG=""
+    _lint_proved force_try || TRY_BANG=$(grep -nE '(^|[^A-Za-z0-9_])try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+        | while IFS= read -r hit; do
+            n="${hit%%:*}"
+            # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
+            # spawning a pointless `sed -n 0p` (gemini, #43 review). NOTE: gemini said this "prints an
+            # error to stderr on BSD and GNU sed" — on BSD sed it actually exits 0 SILENTLY (verified),
+            # so this is efficiency, not a bug: prev="" already yielded the correct not-waived answer.
+            prev=""
+            [ "$n" -gt 1 ] && prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
+            # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
+            # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
+            # The directive must name THIS rule (or be a blanket `swiftlint:disable` with no rule
+            # list). `swiftlint:disable:next no_legacy_nsregex` before a `try! NSRegularExpression(...)`
+            # is a REAL pattern in this codebase (the regex-migration epic) and must NOT be read as a
+            # force_try waiver (PR #43 review).
+            cur=$(sed -n "${n}p" "$FILE_PATH" 2>/dev/null)
+            nxt=$(sed -n "$((n + 1))p" "$FILE_PATH" 2>/dev/null)
+            if ! _waives "$prev" force_try \
+               && ! _waives_scoped "$cur" force_try this \
+               && ! _waives_scoped "$nxt" force_try previous \
+               && ! _in_disabled_region "$FILE_PATH" "$n" force_try; then printf '%s\n' "$hit"; fi
+        done)
     if [ -n "$TRY_BANG" ]; then
-        add_block "❌ Found 'try!' in production code — $FILE_PATH:
+        add_block "❌ Found 'try!' in production code (swiftlint did not enforce force_try here — grep fallback) — $FILE_PATH:
 $TRY_BANG"
     fi
-fi
 
-# --- 4. Force cast detection (BLOCKS) ---
-if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
-    FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//')
+    FORCE_CAST=""
+    _lint_proved force_cast || FORCE_CAST=$(grep -nE '(^|[^A-Za-z0-9_])as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+        | while IFS= read -r hit; do
+            n="${hit%%:*}"
+            # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
+            # spawning a pointless `sed -n 0p` (gemini, #43 review). NOTE: gemini said this "prints an
+            # error to stderr on BSD and GNU sed" — on BSD sed it actually exits 0 SILENTLY (verified),
+            # so this is efficiency, not a bug: prev="" already yielded the correct not-waived answer.
+            prev=""
+            [ "$n" -gt 1 ] && prev=$(sed -n "$((n - 1))p" "$FILE_PATH" 2>/dev/null)
+            # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
+            # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
+            # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
+            cur=$(sed -n "${n}p" "$FILE_PATH" 2>/dev/null)
+            nxt=$(sed -n "$((n + 1))p" "$FILE_PATH" 2>/dev/null)
+            if ! _waives "$prev" force_cast \
+               && ! _waives_scoped "$cur" force_cast this \
+               && ! _waives_scoped "$nxt" force_cast previous \
+               && ! _in_disabled_region "$FILE_PATH" "$n" force_cast; then printf '%s\n' "$hit"; fi
+        done)
     if [ -n "$FORCE_CAST" ]; then
-        add_block "❌ Found 'as!' (force cast) in production code — $FILE_PATH:
+        add_block "❌ Found 'as!' (force cast) in production code (swiftlint did not enforce force_cast here — grep fallback) — $FILE_PATH:
 $FORCE_CAST"
     fi
 fi

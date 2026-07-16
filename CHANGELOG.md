@@ -13,6 +13,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
+  only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
+  reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
+  executed on the branch they were added to. Triggers are now `[main, alpha]`, and `SECURITY.md` records it.
+- **`firebase-debug.log` secret-scan exemption is commit-scoped** (COREDEV-2494): it was a blanket path
+  allowlist, so a brand-new credential committed into that exact filename scanned clean — a permanent blind
+  spot on precisely the filename that caused the original leak. Now pinned to the two commits the file ever
+  existed in; verified against gitleaks 8.30.1 that a new secret in that filename is still caught.
+- **`swift-lint-check.sh` respects `swiftlint:disable` directives** (COREDEV-2494): waived lines no longer
+  produce false blocks. The waiver must NAME the rule, and a trailing ` - <rationale>` (this project's
+  mandated convention) is no longer parsed as a rule list. A broken/misconfigured SwiftLint CLI now falls
+  back to the greps instead of silently disarming the Stop gate. Force-try/cast elevation is production-only.
+- **`pty-capture.py` runs on macOS system Python again** (COREDEV-2494): a PEP-604 `X | None` annotation
+  (added in #30) is a syntax error on 3.9.6, crashing every PTY-wrapped review capture.
+
 ### Changed
 - **`swift-reviewer` Step 4 extracted to a shipped, unit-tested script** (COREDEV-2489 / Item 5):
   the inline build / lint / test block moved to [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh)

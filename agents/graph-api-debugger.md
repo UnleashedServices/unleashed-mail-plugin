@@ -62,7 +62,7 @@ Common AADSTS error codes:
 **For API response issues:**
 ```bash
 # Check for Graph error response handling
-grep -rn "GraphAPIError\|statusCode\|error.*code\|error.*message" --include='*.swift' "Unleashed Mail/Sources/"
+grep -rn "EmailServiceError\|MicrosoftAuthError\|statusCode\|error.*code\|error.*message" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
 Graph errors return structured JSON:
@@ -96,7 +96,7 @@ grep -rn "subscription\|changeType\|notificationUrl\|deltaLink" --include='*.swi
 **Permission errors (403):**
 1. Verify app registration has the correct API permissions in Azure portal
 2. Check if permissions are **delegated** (not application) for user-context calls
-3. Admin consent may be required for org accounts — check `consentResult`
+3. Admin consent may be required for org accounts
 4. Verify `$scopes` in token request match what's configured
 
 **Throttling (429):**
@@ -147,10 +147,10 @@ MSAL stores tokens in the macOS Keychain automatically. Common issues:
 
 ### Step 5: Cross-Provider Debugging
 
-When an issue appears in Outlook but not Gmail (or vice versa), check the `MailProviderProtocol` abstraction layer:
+When an issue appears in Outlook but not Gmail (or vice versa), check the `EmailServiceProtocol` abstraction layer:
 
 ```bash
-grep -rn "MailProviderProtocol\|GraphMailProvider\|GmailMailProvider" --include='*.swift' "Unleashed Mail/Sources/"
+grep -rn "EmailServiceProtocol\|MicrosoftGraphService\|GmailService" --include='*.swift' "Unleashed Mail/Sources/"
 ```
 
 Common abstraction issues:

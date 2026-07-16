@@ -33,6 +33,12 @@ Examples
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path> (default /tmp/pty-out.txt).
 """
+# REQUIRED for macOS's stock /usr/bin/python3 (3.9.6): `main()`'s `timeout: float | None` is a PEP-604
+# union evaluated AT IMPORT in a module-level def, so 3.9 raises `TypeError: unsupported operand type(s)
+# for |: 'type' and 'NoneType'` before anything runs — which would take BOTH mandatory review gates down
+# on a stock Mac (this plugin's likeliest host). Matches the 7 other shipped .py files. (COREDEV-2494)
+from __future__ import annotations
+
 import fcntl
 import os
 import pty
@@ -274,6 +280,17 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
             with open(out_path, 'wb') as f:
                 f.write(cleaned)
+            # PROVENANCE: leave a per-run capture ID beside the transcript. review-verdict.py auto-reads
+            # `<out>.captureid` and uses distinct capture IDs as authoritative, content-independent proof
+            # that two reviewers were two separate wrapper runs — so two byte-identical transcripts from
+            # distinct runs are no longer falsely rejected (full review, #41). Best-effort: a failure
+            # here must not fail the capture, so it never touches `capture_error`. Unique per run without
+            # `uuid`: os.urandom is available on macOS stock 3.9.6 and needs no import beyond `os`.
+            try:
+                with open(out_path + '.captureid', 'w', encoding='utf-8') as cf:
+                    cf.write(os.urandom(16).hex() + '\n')
+            except OSError:
+                pass
         except OSError as e:
             capture_error = e
             try:

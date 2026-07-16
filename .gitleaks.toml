@@ -12,17 +12,38 @@ title = "unleashed-mail-plugin"
 [extend]
 useDefault = true
 
-[allowlist]
-description = "Accepted historical exposure — see SECURITY.md (firebase-debug.log + GCP project id, rotated/treated-as-public)"
-# The deleted debug log (endpoints/OAuth scopes) is treated as public; exempt it wherever it
-# appears in history by path.
+# COMMIT-SCOPED, not blanket (COREDEV-2494). A top-level `[allowlist]` carrying only `paths`
+# exempts that path in EVERY commit — past AND future. That made `firebase-debug.log` a permanent
+# blind spot: a brand-new credential committed into that exact filename today would scan clean,
+# while the identical credential in any other file is caught. The exempted name is precisely the
+# one that caused the original leak and the one most likely to reappear from a `firebase` CLI run,
+# so the blind spot sat exactly where the risk is. It also contradicted SECURITY.md's guarantee.
+#
+# `firebase-debug.log` exists in ONLY two commits in this repo's history:
+#   git log --all --oneline --follow -- '*firebase-debug.log'  ->  edc27bf (added), 1f18944 (removed)
+# so pinning the exemption to those two commits keeps history green while restoring the scan for
+# every future commit.
+#
+# NOTE the `'''` literal strings: `"""..."""` is a basic multi-line string in which `\.` is an
+# INVALID escape — a fatal TOML parse error that wedges the whole scan rather than failing loudly.
+[[allowlists]]
+description = "Accepted historical exposure — firebase-debug.log, ONLY in the two commits it ever existed in (see SECURITY.md)"
+condition = "AND"
+commits = [
+  "edc27bf56879da2fea29a695d1c0aa42018b43da",  # added the debug log
+  "1f1894488c981fbe2dd167aa43155062c4433b51",  # removed it
+]
 paths = [
   # Anchored so it exempts ONLY the exact file (root or any dir), never a path that merely
   # contains the substring (e.g. firebase-debug.log.bak / firebase-debug.logger.swift).
   '''(^|/)firebase-debug\.log$''',
 ]
+
 # The GCP project id committed in edc27bf and replaced with a placeholder in HEAD. A project id
-# is not a credential, but pin it explicitly so a rule that flags it can't wedge the scan.
+# is not a credential, but pin it explicitly so a rule that flags it can't wedge the scan. This one
+# stays global: it is a non-secret identifier, not an exemption for a file that could hold secrets.
+[[allowlists]]
+description = "GCP project id — an identifier, not a credential"
 regexes = [
   '''emailwithai-476119''',
 ]
