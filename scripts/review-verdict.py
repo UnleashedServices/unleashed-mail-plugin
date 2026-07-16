@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 
 SCHEMA_VERSION = 1
@@ -32,6 +33,7 @@ APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 # path — an artifact written before that check existed, or hand-edited after a zero-byte capture, still
 # carried this value and passed verify (codex, #41 review). Rejecting the constant closes both paths.
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+_SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
 VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
@@ -95,6 +97,18 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
     # AFTER the empty check ON PURPOSE: two 0-byte transcripts are identical AND empty, and "your
     # transcript is empty" is the actionable diagnosis (0 bytes is agy's failure signature) —
     # "duplicate" would misdirect. Specific beats general.
+    # A digest must LOOK like one. Non-empty + distinct + not-the-empty-hash still admitted
+    # `transcriptSha256: "x"` / `"y"` — two distinct non-empty strings — and produced GATE OK on a
+    # hand-edited artifact (codex, #41 review — reproduced). Hand-tampering is this check's stated threat
+    # model, so "any non-empty string is evidence" was never good enough. sha256 hex is exactly 64
+    # lowercase hex chars; anything else was never produced by `_sha256_bytes`.
+    _malformed_t = sorted(_n for _n, _d in
+                          ((str(r.get("name")), str(r.get("transcriptSha256", "")).strip().lower())
+                           for r in reviewers if isinstance(r, dict))
+                          if not _SHA256_HEX.match(_d))
+    if _malformed_t:
+        return ("an APPROVING combined verdict requires a real SHA-256 transcript digest (64 hex chars); "
+                "malformed for " + ", ".join(_malformed_t))
     _digests = [str(r.get("transcriptSha256", "")).strip().lower() for r in reviewers
                 if isinstance(r, dict)]
     if len(set(_digests)) < len(_digests):

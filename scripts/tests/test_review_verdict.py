@@ -58,6 +58,51 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("requires a transcript per reviewer", r.stdout + r.stderr)
 
+    def test_a_malformed_transcript_digest_cannot_pass(self):
+        """A digest must LOOK like a digest.
+
+        non-empty + distinct + not-the-empty-hash admitted `transcriptSha256: "x"` / `"y"` and produced
+        GATE OK on a hand-edited artifact (codex, #41 review). Hand-tampering is this check's stated
+        threat model, so "any non-empty string is evidence" was never good enough."""
+        import glob
+        # NOTE "A"*64 and " "+"a"*64 are deliberately NOT here: hex is case-insensitive and the digest
+        # is stripped+lowercased before matching, so both normalize to a REAL digest and must PASS.
+        # Rejecting them would be over-strict and could fail a legitimate artifact — asserted below.
+        for bad in ("x", "y" * 63, "z" * 64, "a" * 65, "g" * 64, "0x" + "a" * 62):
+            with self.subTest(digest=bad):
+                self.assertEqual(self._write().returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["verdict"] = "APPROVE"
+                for i, r in enumerate(d["reviewers"]):
+                    r["status"] = "APPROVE"
+                    r["transcriptSha256"] = bad if i == 0 else "b" * 64
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                self.assertNotEqual(v.returncode, 0, f"{bad!r} is not a sha256 and must not pass")
+
+    def test_uppercase_and_padded_digests_are_normalized_not_rejected(self):
+        """The hex check must not be over-strict: hex is case-insensitive, and the digest is stripped
+        before matching, so `A...A` and ` a...a ` are REAL digests in a different skin. A check that
+        rejected them would fail a legitimate artifact — a false GATE FAILED is its own outage."""
+        import glob
+        for good in ("A" * 64, " " + "a" * 64 + " "):
+            with self.subTest(digest=good):
+                self.assertEqual(self._write().returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["verdict"] = "APPROVE"
+                for i, r in enumerate(d["reviewers"]):
+                    r["status"] = "APPROVE"
+                    r["transcriptSha256"] = good if i == 0 else "b" * 64
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                self.assertEqual(v.returncode, 0, f"{good!r} normalizes to a real digest: {v.stderr}")
+
     def test_one_transcript_cannot_back_TWO_approvals(self):
         """Distinct NAMES are not distinct EVIDENCE.
 

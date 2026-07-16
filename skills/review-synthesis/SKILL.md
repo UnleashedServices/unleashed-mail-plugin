@@ -99,7 +99,7 @@ After emitting the block, **persist the Combined verdict as a plan-digest-bound 
 plan that was reviewed plus each reviewer's status + transcript:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
     --plan docs/planning/FEATURE_NAME_PLAN.md \
     --verdict <COMBINED_VERDICT> \
     --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
