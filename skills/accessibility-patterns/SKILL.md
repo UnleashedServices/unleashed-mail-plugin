@@ -40,7 +40,7 @@ Button("Send", systemImage: "paperplane") {
 ```swift
 // Custom gesture-based control
 Rectangle()
-    .fill(Color.blue)
+    .fill(Color.curatorPrimary)   // Curator token, not raw Color.blue (see Semantic Colors below)
     .frame(width: 50, height: 50)
     .onTapGesture {
         toggleStar()
@@ -71,7 +71,7 @@ struct MessageRow: View {
     var body: some View {
         HStack {
             Circle()
-                .fill(message.isRead ? Color.clear : Color.blue)
+                .fill(message.isRead ? Color.clear : Color.curatorSecondary)  // unread dot token
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)  // Decorative
 
@@ -138,18 +138,18 @@ TextEditor(text: $body)
 ```swift
 // UnleashedMail scales text APP-WIDE via CuratorTheme, not SwiftUI Dynamic Type.
 // Use the Curator typography sizes (CGFloat point sizes):
-Text("Welcome to UnleashedMail")
-    .font(.system(size: CuratorTheme.Typography.headlineSize, weight: .semibold))  // 18pt
-
-Text("Message")
-    .font(.system(size: CuratorTheme.Typography.bodySize))  // ✅ 14pt base
-
-// Where user-controllable scaling is needed, use the Curator scaler
-// (driven by appState.uiPreferences.uiFontScale):
+// SCALABLE text uses the Curator scaler — the ONLY form that responds to the user's font-scale
+// preference (appState.uiPreferences.uiFontScale). This is the accessible default:
 Text("Message")
     .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.bodySize,
                                   weight: .regular,
                                   scale: appState.uiPreferences.uiFontScale))
+
+// A bare `.system(size: CuratorTheme.Typography.…)` is the BASE point size and is NOT user-scalable —
+// it does not change with uiFontScale. Use it only where fixed sizing is intentional (chrome that must
+// not reflow); it is NOT the answer for "scalable text".
+Text("Welcome to UnleashedMail")
+    .font(.system(size: CuratorTheme.Typography.headlineSize, weight: .semibold))  // fixed 18pt base
 
 // ❌ Do NOT use SwiftUI semantic fonts — the design system uses CuratorTheme.Typography
 //    (displaySize 44, headlineSize 18, titleSize 16, bodySize 14, bodySmallSize 13,

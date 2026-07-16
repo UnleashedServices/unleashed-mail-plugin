@@ -59,18 +59,22 @@ to extend `MockServices.swift` rather than introduce parallel mock files.
 // In MockServices.swift — the canonical location
 final class MockEmailService: EmailServiceProtocol {
     var stubbedEmails: [Email] = []
-    var fetchInboxCallCount = 0
-    var sendCallCount = 0
+    var fetchMessagesCallCount = 0
+    var sendMessageCallCount = 0
     var shouldThrow: EmailServiceError?
 
-    func fetchInbox() async throws -> [Email] {
-        fetchInboxCallCount += 1
+    // Conforms to the REAL EmailServiceProtocol requirement (EmailServiceProtocol.swift): the method
+    // is `fetchMessages(folderId:maxResults:paginationToken:) -> (emails:, nextToken:)`, NOT `fetchInbox`.
+    func fetchMessages(folderId: String, maxResults: Int,
+                       paginationToken: PaginationToken?) async throws -> (emails: [Email], nextToken: PaginationToken) {
+        fetchMessagesCallCount += 1
         if let error = shouldThrow { throw error }
-        return stubbedEmails
+        return (stubbedEmails, PaginationToken(nil))
     }
 
-    func send(_ draft: Draft) async throws {
-        sendCallCount += 1
+    // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`.
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws {
+        sendMessageCallCount += 1
         if let error = shouldThrow { throw error }
     }
 }
@@ -126,7 +130,7 @@ final class InboxViewModelTests: XCTestCase {
 
         // Assert
         XCTAssertEqual(sut.messages, expectedEmails)
-        XCTAssertEqual(mockService.fetchInboxCallCount, 1)
+        XCTAssertEqual(mockService.fetchMessagesCallCount, 1)
         XCTAssertNil(sut.error)
     }
 

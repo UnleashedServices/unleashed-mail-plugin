@@ -234,7 +234,7 @@ conform to `EmailServiceProtocol`, and `AccountScopedServiceProvider.activeServi
 
 ```swift
 do {
-    let messages = try await emailService.fetchInbox()
+    let (messages, _) = try await emailService.fetchMessages(folderId: "INBOX", maxResults: 50, paginationToken: nil)
     // …
 } catch let error as EmailServiceError {
     self.error = error
@@ -304,7 +304,7 @@ func prefetchIfNeeded(currentIndex: Int) async {
     defer { isPrefetching = false }
 
     do {
-        let page = try await provider.fetchInbox(pageToken: nextToken)
+        let page = try await provider.fetchMessages(folderId: "INBOX", maxResults: 50, paginationToken: nextToken)
         self.nextPageToken = page.nextPageToken
         try await dbQueue.write { db in
             for msg in page.messages { try msg.save(db) }
