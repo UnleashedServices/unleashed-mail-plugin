@@ -68,28 +68,66 @@ _has_unbalanced_quote() {
 
 # Split a command on shell separators (`;` `&` `|` and an UNQUOTED newline, incl. `&&`/`||`) that are
 # OUTSIDE single/double quotes, one NUL-delimited segment per record. A separator INSIDE quotes — an
-# interpreter's `-c 'a; b'` or a quoted filename — is NOT a separator and stays with its segment (round 3:
-# codex). NUL (not newline) is the record delimiter so a QUOTED multiline script (`-c 'a\nopen("X")'`)
-# stays in ONE segment; but an UNQUOTED newline IS a real command separator and splits (round 4 kept it
-# in-segment, missing `echo a<newline>rm X` — round 5: codex). Inside DOUBLE quotes a backslash escapes
-# the next char, so `"…\"…"` does not falsely close the quote (round 5: codex). Best-effort: unquoted
-# backslash-escaped separators and line continuations are not modelled (the robust guard is Edit/Write).
+# interpreter's `-c 'a; b'` or a quoted filename — stays with its segment (round 3: codex). NUL is the
+# record delimiter so a QUOTED multiline script stays in ONE segment; an UNQUOTED newline IS a real
+# separator and splits (round 5: codex). Additional shell structure the char scan honours:
+#   - inside DOUBLE quotes a backslash escapes the next char (`"…\"…"` doesn't falsely close) — round 5;
+#   - a HEREDOC body (`<<[-]['"]?TAG['"]? … TAG`) keeps its newlines with the interpreter — round 6 (the
+#     round-5 unquoted-newline split had severed the body from the `<<` invocation);
+#   - an UNQUOTED ` #` starts a comment to end-of-line and is DROPPED, so a protected name only in a
+#     comment isn't scanned; a `#` inside quotes or mid-word is literal — round 6 (fixes the over-eager
+#     round-5 broad-scan `sed` that also stripped a quoted `#`).
+# Best-effort: unquoted backslash-escaped separators and line continuations are not modelled.
 _split_segments() {
-    local s="$1" n=${#1} i=0 ch q="" seg="" bs='\' nl=$'\n'
+    local s="$1" n=${#1} i=0 ch q="" seg="" bs='\' nl=$'\n' prev="" j tag tq c2 c3 lbuf trimmed
     while [ "$i" -lt "$n" ]; do
         ch="${s:$i:1}"
+        # HEREDOC: on an unquoted `<<`, capture the tag, then swallow the body up to a line == tag.
+        if [ -z "$q" ] && [ "$ch" = "<" ] && [ "${s:$((i + 1)):1}" = "<" ]; then
+            j=$((i + 2)); tag=""; tq=""
+            [ "${s:$j:1}" = "-" ] && j=$((j + 1))
+            while [ "${s:$j:1}" = " " ] || [ "${s:$j:1}" = "	" ]; do j=$((j + 1)); done
+            case "${s:$j:1}" in "'"|'"') tq="${s:$j:1}"; j=$((j + 1)) ;; esac
+            while [ "$j" -lt "$n" ]; do
+                c2="${s:$j:1}"
+                if [ -n "$tq" ]; then
+                    [ "$c2" = "$tq" ] && { j=$((j + 1)); break; }
+                    tag="$tag$c2"; j=$((j + 1))
+                else
+                    case "$c2" in [A-Za-z0-9_]) tag="$tag$c2"; j=$((j + 1)) ;; *) break ;; esac
+                fi
+            done
+            seg="$seg${s:$i:$((j - i))}"; i=$j; prev=""
+            if [ -n "$tag" ]; then
+                lbuf=""
+                while [ "$i" -lt "$n" ]; do
+                    c3="${s:$i:1}"; seg="$seg$c3"; i=$((i + 1))
+                    if [ "$c3" = "$nl" ]; then
+                        trimmed="${lbuf#"${lbuf%%[![:space:]]*}"}"
+                        [ "$trimmed" = "$tag" ] && break
+                        lbuf=""
+                    else
+                        lbuf="$lbuf$c3"
+                    fi
+                done
+            fi
+            continue
+        fi
         if [ "$q" = '"' ] && [ "$ch" = "$bs" ]; then
-            seg="$seg$ch${s:$((i + 1)):1}"; i=$((i + 2)); continue   # keep the escape pair verbatim
+            seg="$seg$ch${s:$((i + 1)):1}"; i=$((i + 2)); prev=""; continue
         fi
         if [ -n "$q" ]; then
             [ "$ch" = "$q" ] && q=""
-            seg="$seg$ch"
+            seg="$seg$ch"; prev="$ch"
         elif [ "$ch" = "'" ] || [ "$ch" = '"' ]; then
-            q="$ch"; seg="$seg$ch"
+            q="$ch"; seg="$seg$ch"; prev="$ch"
+        elif [ "$ch" = "#" ] && { [ -z "$prev" ] || [ "$prev" = " " ] || [ "$prev" = "	" ]; }; then
+            while [ "$i" -lt "$n" ] && [ "${s:$i:1}" != "$nl" ]; do i=$((i + 1)); done
+            prev=""; continue
         elif [ "$ch" = ";" ] || [ "$ch" = "&" ] || [ "$ch" = "|" ] || [ "$ch" = "$nl" ]; then
-            printf '%s\0' "$seg"; seg=""
+            printf '%s\0' "$seg"; seg=""; prev=""
         else
-            seg="$seg$ch"
+            seg="$seg$ch"; prev="$ch"
         fi
         i=$((i + 1))
     done
@@ -297,15 +335,16 @@ ${tok}" ;;
                 _seg_has_inline_code "$seg" "$base_verb" && _bcheck=1 ;;
         esac
         if [ "$_bcheck" = 1 ]; then
-            # Strip a trailing ` #…` shell comment on each line first — a protected name that appears only
-            # in a comment (`rm InboxView.swift # OAuthService.swift`) is never an operand and must not
-            # prompt (round 5: codex). Best-effort: a `#` with leading whitespace ends the line.
+            # Unquoted ` #…` comments were already dropped by `_split_segments`, so the segment holds only
+            # real code/operands here. Extract WHOLE path-like tokens (not extension-shaped substrings) so
+            # `is_sensitive_basename` sees the real basename: `OAuthService.swift.bak` must read as a
+            # `.bak` file, not the `.swift` prefix substring (round 6: codex). Non-file tokens are dropped
+            # by is_sensitive_basename downstream, so over-extraction is harmless.
             while IFS= read -r bt; do
                 [ -n "$bt" ] || continue
                 cand="${cand}
 ${bt}"
-            done < <(printf '%s\n' "$seg" | sed -E 's/[[:space:]]#.*$//' \
-                     | grep -oE '[A-Za-z0-9._-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)' 2>/dev/null)
+            done < <(printf '%s\n' "$seg" | grep -oE '[A-Za-z0-9._/-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)[A-Za-z0-9._-]*' 2>/dev/null)
         fi
     done < <(_split_segments "$cmd")
     # Evaluate candidates by basename (while-read avoids globbing on a `*` operand).

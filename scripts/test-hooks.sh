@@ -203,6 +203,13 @@ assert_empty "sensitive name only in a # comment -> no decision" "$(guard_bash '
 # 5z. env option ARG (`-u NAME`) must not be collected as an mv operand; env -S split-string cp DEST fires.
 assert_empty "env -u NAME mv (NAME is an unset var) -> no decision" "$(guard_bash '"env -u OAuthService.swift mv a.swift b.swift"')"
 assert_contains "env -S quoted cp DEST sensitive -> ask" "$(guard_bash "\"env -S 'cp benign.swift OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# == round 6 (codex): heredoc body kept with interpreter; comments not collected as operands ==
+# 6a. A heredoc body stays in the interpreter's segment (round-5 unquoted-newline split had severed it).
+assert_contains "heredoc body writes sensitive -> ask" "$(guard_bash '"python3 <<PY\nopen(OAuthService.swift)\nPY"')" '"permissionDecision":"ask"'
+# 6b. A protected name in a trailing shell comment is not a tee operand.
+assert_empty "tee then # comment naming sensitive -> no decision" "$(guard_bash '"tee /tmp/output # OAuthService.swift"')"
+# 6c. A `.bak` of a sensitive file is NOT the sensitive basename — the broad scan must read the whole token.
+assert_empty "rm sensitive.swift.bak -> no decision" "$(guard_bash '"rm OAuthService.swift.bak"')"
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
