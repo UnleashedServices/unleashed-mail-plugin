@@ -284,6 +284,28 @@ Track release health:
 # Watch for support tickets
 ```
 
+### Change-failure attribution (CFR)
+
+Part of post-release monitoring: when a production/customer-impacting **Bug** is reported, you own the
+**deploy-causation** determination that decides whether it counts as a *change failure* for GitKraken's
+Change Failure Rate (see [`AGENT_CONTRACTS.md §12`](../AGENT_CONTRACTS.md)). `jira-manager` applies the
+`change-failure` label; **you establish whether it belongs** — severity alone never does.
+
+Attribute an incident to a recent change when **any** of these hold — otherwise it is a pre-existing bug,
+**not** a change failure:
+
+- The regression **bisects** to a commit shipped in a recent release.
+- The behavior **worked in the prior release** and broke in a specific one (a true regression).
+- The **crash signature / stack first appears** in builds ≥ a specific release — correlate the crash
+  report timestamps and build numbers (post-release monitoring above) against `CHANGELOG.md` / release
+  dates.
+- The report **explicitly cites** behavior that changed after a named release/update.
+
+If the issue is present in builds *before* the correlating release, it is pre-existing — do not attribute
+it. When you **cannot** correlate it to a specific release, say so and flag for human confirmation rather
+than guessing. Hand the confirmed determination to `jira-manager` to apply (or withhold) the
+`change-failure` label; it only counts toward CFR in projects **`COREDEV` / `FT`**.
+
 ### Rollback Plan
 
 > The project uses **append-only migrations** (per `.claude/rules/database.md`). There are NO

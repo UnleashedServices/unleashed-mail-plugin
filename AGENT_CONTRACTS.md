@@ -364,6 +364,33 @@ consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
 
 ---
 
+## 12. Change-Failure Rate (CFR) Labeling
+
+**Owner (causation):** `release-manager` · **Owner (label mechanics):** `jira-manager`
+
+GitKraken Insights computes **Change Failure Rate** for `unleashedservices.atlassian.net` by counting
+Jira issues tagged with the literal label **`change-failure`** (lowercase, hyphenated; a standard label,
+not a custom field or issue type), divided by deployments over the window. Under-labeling silently reports
+CFR as 0% whether or not failures are happening — the metric is only as good as the labeling discipline.
+
+- **`release-manager` determines deploy-causation** — whether a production-impacting Bug is a *regression*
+  caused by a recent deployment (bisect to a shipped commit, worked-in-prior-release, crash-first-seen-in
+  -release, or an explicit "broke after release X" report) vs. a pre-existing bug. Severity alone never
+  implies a change failure.
+- **`jira-manager` applies the label** — adds `change-failure` (**additive** to type / priority /
+  component) at creation when causation is confirmed at intake, or retroactively via `editJiraIssue` once
+  `release-manager` confirms it. When causation is **uncertain**, the issue stays UNLABELLED and is flagged
+  for human confirmation — never guess.
+- **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
+  Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
+  not an agent action.
+
+Do NOT apply `change-failure` to: pre-existing bugs, feature requests, or any issue whose root cause is not
+attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) and `release-manager`
+(Change-failure attribution) for the operational detail.
+
+---
+
 ## Cross-references
 
 > Cross-references below describe the **consumer project layout** (what UnleashedMail
