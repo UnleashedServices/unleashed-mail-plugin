@@ -129,8 +129,12 @@ class TestSynthesizeTool(unittest.TestCase):
         # canonicalizes to a NON-empty string that matches no finding's repo-relative file, so it
         # survives the empty-changeset guard and scopes every real blocker to pre-existing -> a bogus
         # APPROVE. Reject the call (#44 independent review §5 — the residual of the bare-dot fix).
+        # Windows drive-letter roots (`C:\…`, `c:/…`) are absolute too — canonical_path turns `\` into
+        # `/`, so `C:\etc` arrives as `C:/etc` and its `startswith("/")` is False; the drive-letter
+        # regex is what fails it closed alongside the POSIX-absolute and traversal vectors.
         for changed in (["/etc/passwd"], ["../../etc/passwd"], ["Sources/../Sources/Auth.swift"],
-                        ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"]):
+                        ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"],
+                        ["C:/etc/passwd"], ["C:\\repo\\Auth.swift"], ["c:/x"], ["A.swift", "D:/y"]):
             out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": "synthesize_review",
                                       "arguments": {"findings": [good()], "changed_files": changed}}}])

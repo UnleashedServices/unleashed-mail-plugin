@@ -22,12 +22,18 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
 
 from schema import canonical_path, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
+
+# A Windows drive-letter prefix (`C:`, `c:`) is an ABSOLUTE path just like a leading `/`;
+# canonical_path has already turned `\` into `/`, so `C:\etc` arrives as `C:/etc`. `git diff
+# --name-only` never emits one — treat it as absolute and fail closed alongside `/`-rooted paths.
+_DRIVE_ABS = re.compile(r"^[A-Za-z]:")
 
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
 # clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
@@ -141,7 +147,9 @@ def _call_synthesize(arguments: dict) -> dict:
     # rather than filter — a caller sending impossible diff paths is untrustworthy input.
     _bad = sorted({c for c in changed_files
                    if (cp := canonical_path(c))
-                   and (cp.startswith("/") or ".." in cp.split("/"))})
+                   and (cp.startswith("/")            # POSIX absolute
+                        or _DRIVE_ABS.match(cp)       # Windows drive-letter absolute (C:/… ; \ already /)
+                        or ".." in cp.split("/"))})    # traversal
     if _bad:
         raise _RpcError(
             -32602,
