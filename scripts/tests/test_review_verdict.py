@@ -435,6 +435,26 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertIn("not a recognized status", out)
                 self.assertNotIn("wants plan changes", out)
 
+    def test_a_non_string_or_unknown_top_level_verdict_is_corrupt_not_a_crash(self):
+        """`[1,2] not in APPROVING` raises TypeError (unhashable) — verify crashed instead of failing
+        cleanly. And a verdict outside the COMBINED vocabulary (stale WAIVED, a bare reviewer status
+        like MISSING) is corrupt, not recoverable (codex, #42 review). One controlled result for all."""
+        import glob
+        for bad in ([1, 2], {"a": 1}, 5, None, "WAIVED", "MISSING", "lgtm"):
+            with self.subTest(verdict=bad):
+                self.assertEqual(self._write(verdict="DISAGREEMENT").returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["verdict"] = bad
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("not a recognized combined verdict", out)
+
     def test_a_duplicate_reviewer_is_corrupt_not_contradictory_advice(self):
         """`_quorum_problem` rejects duplicates for APPROVING verdicts only, so a non-approving artifact
         with `gemini=MISSING` AND `gemini=REQUEST_CHANGES` produced advice saying gemini both ran and did

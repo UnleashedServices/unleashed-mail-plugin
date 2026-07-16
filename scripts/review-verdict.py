@@ -36,6 +36,11 @@ _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
 VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}
+# The top-level `verdict` is a COMBINED verdict, a DIFFERENT vocabulary from a reviewer's status:
+# DISAGREEMENT is a combined outcome, MISSING is a reviewer status, and neither crosses over. Kept
+# distinct so a stale/tampered `verdict` (a list, a dict, a bare reviewer status) is named as corrupt
+# rather than crashing or being silently misclassified (codex, #42 review).
+COMBINED_VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT"}
 # ONE phrasing for what MISSING means, shared by every branch that reports it. `review-synthesis`
 # normalizes BOTH "reviewer never returned" AND "empty / unparseable transcript" to MISSING (its table,
 # SKILL.md:48), so no branch may assert "never ran" as fact. A CONSTANT because the two branches that
@@ -326,7 +331,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return _fail(f"artifact unreadable/corrupt: {e}")
     if not isinstance(art, dict) or art.get("schemaVersion") != SCHEMA_VERSION:
         return _fail(f"artifact schemaVersion != {SCHEMA_VERSION} (stale format — re-run the gate)")
-    if art.get("verdict") not in APPROVING:
+    _verdict = art.get("verdict")
+    # A membership test on a non-string crashes: `[1,2] not in APPROVING` raises TypeError (unhashable),
+    # taking down verify with a traceback instead of a controlled failure (codex, #42 review). And a
+    # verdict OUTSIDE the combined vocabulary (a stale `WAIVED`, a bare reviewer status) is a corrupt
+    # artifact, not a recoverable one — say so once, here, before anything reasons about it.
+    if not isinstance(_verdict, str) or _verdict not in COMBINED_VERDICTS:
+        return _fail(f"artifact verdict {_verdict!r} is not a recognized combined verdict "
+                     f"({', '.join(sorted(COMBINED_VERDICTS))}) — corrupt or stale; re-run the gate")
+    if _verdict not in APPROVING:
         # NAME the reviewers that never ran. Without this the message for "the two reviewers disagreed"
         # and "a reviewer CLI was unavailable" is byte-identical, so an implementer cannot tell which
         # `implement` recovery branch they are in and defaults to the wrong one — "iterate the plan +
