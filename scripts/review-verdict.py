@@ -110,21 +110,41 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
         return ("an APPROVING combined verdict requires a real SHA-256 transcript digest (64 hex chars); "
                 "malformed for " + ", ".join(_malformed_t))
     _dicts = [r for r in reviewers if isinstance(r, dict)]
+    # A present-but-non-STRING provenance field is tamper garbage. Guard it for TWO reasons: (a) a list
+    # or dict is unhashable, so `set(...)` below would CRASH with TypeError instead of failing closed —
+    # the exact non-hashable class already fixed for the top-level verdict (gemini, #41 review); and (b)
+    # silently dropping a non-string value would let a tamperer set one reviewer's path/id to `[]` to
+    # make it "absent" and slip past the distinctness checks. So: only STRINGS participate, and a
+    # present non-string field is CORRUPT.
+    def _provenance(field):
+        vals, malformed = [], False
+        for r in _dicts:
+            if field in r:
+                v = r[field]
+                if isinstance(v, str) and v:
+                    vals.append(v)
+                elif v:                       # present, truthy, and not a usable string -> tampered
+                    malformed = True
+        return vals, malformed
+
     # 1. Distinct capture PATHS. The same transcript FILE recorded for two reviewers is the real
     #    accidental mistake (one copy-paste in the documented two-file flow), and it is provenance, not
     #    content: catch it by path so two genuinely-separate reviews with identical bytes are NOT
-    #    falsely rejected (full review, #41).
-    #    Check duplicates among the paths that ARE present — NOT gated on every reviewer having one. The
-    #    earlier `== len(_dicts)` guard was all-or-nothing: a tampered artifact with one path-less entry
-    #    skipped the check even with duplicates among the rest (gemini, #41 review). A legit approving
-    #    artifact has a distinct path per reviewer, so this never false-triggers.
-    _paths = [r["transcriptPath"] for r in _dicts if r.get("transcriptPath")]
+    #    falsely rejected (full review, #41). Check duplicates among the paths that ARE present — NOT
+    #    gated on every reviewer having one (the earlier `== len(_dicts)` guard was all-or-nothing: a
+    #    tampered artifact with one path-less entry skipped the check even with duplicates among the
+    #    rest — gemini, #41 review). A legit approving artifact has a distinct path per reviewer.
+    _paths, _paths_bad = _provenance("transcriptPath")
+    if _paths_bad:
+        return "an APPROVING combined verdict has a non-string transcriptPath — corrupt/tampered artifact"
     if len(set(_paths)) < len(_paths):
         return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
                 "transcript FILE is recorded for more than one reviewer, i.e. one review standing in for two")
     # 2. Distinct capture IDs. A capture ID is a per-run token, so a repeat = one wrapper run claimed
     #    twice — caught among the IDs that ARE present, same anti-all-or-nothing reasoning as paths.
-    _cids = [r["captureId"] for r in _dicts if r.get("captureId")]
+    _cids, _cids_bad = _provenance("captureId")
+    if _cids_bad:
+        return "an APPROVING combined verdict has a non-string captureId — corrupt/tampered artifact"
     if len(set(_cids)) < len(_cids):
         return ("an APPROVING combined verdict requires a DISTINCT capture per reviewer — the same "
                 "capture ID is recorded for more than one reviewer")

@@ -162,6 +162,31 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
         self.assertEqual(run("verify", "--plan", self.plan).returncode, 0)
 
+    def test_a_non_string_provenance_field_fails_closed_not_with_a_crash(self):
+        """A hand-tampered non-string transcriptPath/captureId (a list/dict) would make `set(...)` raise
+        TypeError: unhashable type — a crash, not a controlled failure — and dropping it silently would
+        let a tamperer null a field to skip distinctness (gemini, #41 review). Present non-string ->
+        CORRUPT, no crash."""
+        import glob
+        for field in ("transcriptPath", "captureId"):
+            for bad in ([1, 2], {"a": 1}, 5):
+                with self.subTest(field=field, value=bad):
+                    self.assertEqual(self._write().returncode, 0)
+                    art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                    with open(art, encoding="utf-8") as fh:
+                        a = json.load(fh)
+                    a["verdict"] = "APPROVE"
+                    a["reviewers"] = [
+                        {"name": "gemini", "status": "APPROVE", "transcriptSha256": "a" * 64, field: bad},
+                        {"name": "codex", "status": "APPROVE", "transcriptSha256": "b" * 64, field: "ok"},
+                    ]
+                    with open(art, "w", encoding="utf-8") as fh:
+                        json.dump(a, fh)
+                    v = run("verify", "--plan", self.plan)
+                    out = v.stdout + v.stderr
+                    self.assertNotEqual(v.returncode, 0)
+                    self.assertNotIn("Traceback", out)
+
     def test_duplicate_provenance_among_present_fields_is_not_bypassed_by_a_fieldless_entry(self):
         """The distinctness checks must catch duplicates among the fields that ARE present, not require
         every reviewer to have the field. An all-or-nothing guard let a tampered artifact with one
