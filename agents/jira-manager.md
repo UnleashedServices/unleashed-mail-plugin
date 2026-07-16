@@ -138,39 +138,50 @@ never replaces them.
 
 **Timing — apply at intake vs. retroactively (never guess):**
 
+The uncertain / retroactive paths below use **two** workflow labels, and **neither is the counted label —
+neither ever touches CFR** (only `change-failure` is counted): **`cfr-triage-pending`** (a fresh candidate
+awaiting deploy-causation attribution) and **`cfr-needs-human`** (a candidate `release-manager` could not
+resolve, awaiting human adjudication). An issue carries at most one of the two at a time.
+
 - **At creation** — add `change-failure` immediately *only if* deploy-causation is already CONFIRMED at
   intake, meaning `release-manager` established it on corroborating evidence: the regression bisected to a
   shipped commit, or the crash signature first appears in builds ≥ a specific release. A reporter merely
   *stating* "it broke after release X" is temporal correlation, **not** confirmation (they may be first
   hitting a pre-existing defect, or the cause may be a backend / configuration / account-migration change)
   — that is a candidate for the path below, never a CONFIRMED-at-intake trigger.
+
 - **Retroactively (the default whenever causation isn't already proven)** — do **NOT** guess. Create the
-  issue *without* `change-failure`, add the workflow label **`cfr-triage-pending`** (a queue marker only —
-  it is *not* the counted label, so it never touches CFR) and a triage note (`candidate change-failure —
-  pending deploy-causation check`). Deploy-causation is `release-manager`'s call, but it has **no Atlassian
-  access** — so *you* own the Jira legs of the queue: **you** enumerate the pending queue with the JQL
-  `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter — a candidate closed to Done
-  before it is attributed must still be swept), and because this agent cannot spawn `release-manager`
-  (`Agent` is disabled) you **surface those candidates in your result so the invoking session dispatches
-  `release-manager`** to determine causation. Once `release-manager` reports a recent change is the cause,
-  add `change-failure` **and** remove `cfr-triage-pending` (see the read-modify-write note below).
+  issue *without* `change-failure`, add **`cfr-triage-pending`**, and a triage note (`candidate
+  change-failure — pending deploy-causation check`). Deploy-causation is `release-manager`'s call, but it has
+  **no Atlassian access** — so *you* own the Jira legs of the queue: **you** enumerate the dispatch queue
+  with the JQL `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter — a candidate
+  closed to Done before it is attributed must still be swept), and because this agent cannot spawn
+  `release-manager` (`Agent` is disabled) you **surface those candidates in your result so the invoking
+  session dispatches `release-manager`** to determine causation. Once `release-manager` reports a recent
+  change is the cause, add `change-failure` **and** remove `cfr-triage-pending` (see the read-modify-write
+  note below).
 - **Uncertain after triage** — if `release-manager` can obtain *neither* corroboration *nor* evidence of
-  pre-existence (verdict: **unconfirmed**), **keep `cfr-triage-pending`** so the issue stays in the
-  queryable queue, leave it UNLABELLED, update the triage note (`escalated — causation indeterminate,
-  awaiting evidence / human confirmation`), and flag for human review. Do **not** clear the marker here: the
-  free-text note is not queryable, so dropping the label would make the candidate undiscoverable by future
-  sweeps and could leave a real change failure permanently unlabeled. The marker is removed **only** on a
-  terminal determination — `change-failure` applied (confirmed), **proven** pre-existing (evidence it
-  predates the release), or an explicit **human dismissal** (a recorded review decision, never an agent
-  guess). An escalated candidate awaits that human adjudication: do not auto-re-dispatch `release-manager`
-  on it unless new evidence appears, so the queue cannot churn. Never inflate or deflate CFR on a guess.
+  pre-existence (verdict: **unconfirmed**), **swap the marker**: remove `cfr-triage-pending` and add
+  **`cfr-needs-human`**, leave the issue UNLABELLED, and update the triage note (`escalated — causation
+  indeterminate, awaiting evidence / human confirmation`). The swap moves the candidate off the
+  release-manager dispatch queue onto a **distinct, independently queryable** human-review queue (`project
+  in (COREDEV, FT) AND labels = cfr-needs-human`) — which you enumerate and surface for the invoking session
+  the same way, but for **human adjudication**, never `release-manager` dispatch (release-manager is
+  dispatched from the `cfr-triage-pending` queue only). This keeps the candidate discoverable (never
+  silently dropped, which would understate CFR) **and** off `cfr-triage-pending`, so it is not re-dispatched
+  to `release-manager` on the next sweep (no churn); re-attribution happens only if new evidence arrives
+  (swap it back: remove `cfr-needs-human`, add `cfr-triage-pending`). `cfr-needs-human` is removed **only** on a terminal outcome — `change-failure`
+  applied (causation confirmed), **proven** pre-existing (evidence it predates the release), or an explicit
+  **human dismissal** (a recorded review decision, never an agent guess). Never inflate or deflate CFR on a
+  guess.
 
 Mechanically: add the literal `change-failure` to the issue's Jira `labels` via the Atlassian MCP
 (`editJiraIssue`, or at `createJiraIssue` when confirmed at intake) — **alongside**, not instead of, the
 existing labels / type / priority / component. `editJiraIssue`'s `labels` field **replaces the whole
 array**, so treat every label change as read-modify-write: `getJiraIssue` the current labels, add or drop
-the one you intend (e.g. add `change-failure` / drop `cfr-triage-pending`), then set the **full** resulting
-set — never pass a bare single-element array, which would silently wipe the issue's other labels.
+the one you intend (e.g. add `change-failure` / drop `cfr-triage-pending`, or swap `cfr-triage-pending` →
+`cfr-needs-human`), then set the **full** resulting set — never pass a bare single-element array, which
+would silently wipe the issue's other labels.
 
 ## Planning Document Integration
 

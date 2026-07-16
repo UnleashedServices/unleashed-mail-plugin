@@ -314,17 +314,17 @@ it. When you **cannot** correlate it to a specific release, say so and flag for 
 than guessing.
 
 You determine causation **only** — you have no Atlassian access (`tools:` is a strict allowlist —
-Read/Write/Edit/Bash/Grep/Glob, no Atlassian MCP) and cannot query or edit Jira. During post-release monitoring the `cfr-triage-pending` candidates are
-enumerated by `jira-manager` (it owns the `labels = cfr-triage-pending` queue) and dispatched to you by the
-invoking session; for each named candidate you do the causation analysis with the tools you have — git
-`bisect`, `CHANGELOG.md` / build-number correlation, crash-first-seen timestamps — and hand the
-determination back. `jira-manager` clears `cfr-triage-pending` only on a **terminal** verdict: on your
-**confirmation** it adds `change-failure` and clears the marker; on **proven pre-existing** it clears the
-marker and withholds the label. On an **unconfirmed** verdict the marker **stays** (the candidate remains in
-the queryable queue), flagged for **human** adjudication — you are not re-dispatched on it unless new
-evidence appears, and only a human review reaches its terminal (supplying evidence → confirmed / proven
-pre-existing, or an explicit dismissal that clears the marker); an agent clearing it here would silently
-drop a possible change failure and understate CFR. It only counts toward CFR in projects **`COREDEV` / `FT`**.
+Read/Write/Edit/Bash/Grep/Glob, no Atlassian MCP) and cannot query or edit Jira. During post-release
+monitoring, `jira-manager` enumerates the dispatch queue (`labels = cfr-triage-pending`) and the invoking
+session dispatches each candidate to you; for each you do the causation analysis with the tools you have —
+git `bisect`, `CHANGELOG.md` / build-number correlation, crash-first-seen timestamps — and hand the verdict
+back. `jira-manager` (never you) then acts on it: **confirmed** → it adds `change-failure` and clears
+`cfr-triage-pending`; **proven pre-existing** → it clears `cfr-triage-pending` and withholds the label;
+**unconfirmed** → it **swaps** `cfr-triage-pending` for `cfr-needs-human`, moving the candidate onto a
+distinct, still-queryable human-review queue. Because you are dispatched only from `cfr-triage-pending`, an
+escalated `cfr-needs-human` candidate is **not** re-dispatched to you unless new evidence moves it back — so
+a genuinely indeterminate case never churns yet is never silently dropped (dropping it would understate
+CFR). It only counts toward CFR in projects **`COREDEV` / `FT`**.
 
 ### Rollback Plan
 

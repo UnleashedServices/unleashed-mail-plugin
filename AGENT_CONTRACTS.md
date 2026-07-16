@@ -383,19 +383,19 @@ labeled; the metric is only as good as the labeling discipline.
   `release-manager`'s `tools:` allowlist grants no Atlassian MCP, so it never queries or edits Jira — it
   receives a named candidate and returns the verdict.
 - **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
-  component) at creation only when causation is confirmed at intake; otherwise it marks the issue
-  **`cfr-triage-pending`** (a queue label, *not* counted toward CFR). It also **enumerates that queue**
-  (JQL `project in (COREDEV, FT) AND labels = cfr-triage-pending`, no status filter) and surfaces the
-  candidates so the invoking session dispatches `release-manager` to attribute each. The marker is cleared
-  **only on a terminal verdict** (`editJiraIssue`, read-modify-write — the `labels` field replaces the whole
-  array): **confirmed** → add `change-failure`, clear marker; **proven pre-existing** → clear marker,
-  withhold. When the verdict is **unconfirmed** (neither corroboration nor pre-existence evidence), the
-  issue stays UNLABELLED **and retains `cfr-triage-pending`** — keeping it in the queryable queue — flagged
-  for **human** adjudication, the terminal authority for that case: the human supplies evidence (→ confirmed
-  / proven pre-existing) or explicitly dismisses it (a recorded human decision that clears the marker).
-  Absence of evidence is never treated as pre-existing, no agent drops the marker on a guess, and an
-  already-escalated candidate is not auto-re-dispatched to `release-manager` absent new evidence (so the
-  queue cannot churn).
+  component) at creation only when causation is confirmed at intake; otherwise it runs a **two-label queue**,
+  *both* uncounted (only `change-failure` counts): **`cfr-triage-pending`** (fresh, awaiting attribution)
+  and **`cfr-needs-human`** (escalated, awaiting human), at most one per issue. It **enumerates each queue**
+  by JQL — `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter) and the parallel
+  `… labels = cfr-needs-human` — and surfaces candidates so the invoking session dispatches `release-manager`
+  for the *dispatch* queue only. Every label change is `editJiraIssue` read-modify-write (the `labels` field
+  replaces the whole array). On `release-manager`'s verdict: **confirmed** → add `change-failure`, clear the
+  marker; **proven pre-existing** → clear the marker, withhold; **unconfirmed** (neither corroboration nor
+  pre-existence evidence) → **swap `cfr-triage-pending` → `cfr-needs-human`**, leaving the issue UNLABELLED
+  on the human-review queue. Absence of evidence is never treated as pre-existing, no agent drops a marker on
+  a guess, and because an escalated candidate no longer carries `cfr-triage-pending` it is not re-dispatched
+  to `release-manager` absent new evidence (no churn). `cfr-needs-human` clears only on a terminal outcome —
+  `change-failure` (confirmed), proven pre-existing, or an explicit human dismissal (a recorded decision).
 - **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
   Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
   not an agent action.
