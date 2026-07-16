@@ -70,6 +70,18 @@ codex -c model_reasoning_effort=xhigh review --commit <SHA>
 codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMPT_HERE"
 ```
 
+> **The built-in `codex review` path pins EFFORT, not the MODEL.** `-c model_reasoning_effort=xhigh`
+> only overrides effort; the built-in review resolves its model from config — and if `~/.codex/config.toml`
+> sets `review_model` (a recognized key, verified on 0.144.4), `codex review` uses THAT, not the session
+> `model`. So a machine left with a stale `review_model` can run the diff audit on an old model despite the
+> v2.5.0 "review tooling is on `gpt-5.6-sol`" guidance. For the built-in path, either verify `review_model`
+> is unset/`gpt-5.6-sol` or pin it inline with a `-c review_model=gpt-5.6-sol` override alongside the effort
+> override. The `codex exec "/skill …"` audits are unaffected — they inherit the session `model`.
+>
+> ```bash
+> codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted
+> ```
+
 ## `codex exec` flags (non-interactive)
 
 | Flag | Purpose |
@@ -88,15 +100,18 @@ codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMP
 | `--uncommitted` | Review staged, unstaged, and untracked changes |
 | `--base BRANCH` | Review changes against the given base branch |
 | `--commit SHA` | Review changes introduced by a specific commit |
-| `--title TITLE` | Optional commit title to display in the review summary |
-| `[PROMPT]` | Custom review instructions (`-` reads from stdin) |
+| `--title TITLE` | Commit title for the review summary — **requires `--commit`** (`codex review --title …` alone errors: `Usage: codex review --commit <SHA> --title <TITLE>`) |
+| `[PROMPT]` | Custom review instructions (`-` reads from stdin) — a **review target of its own**, mutually exclusive with `--uncommitted`/`--base`/`--commit` |
 
-`codex review` takes an optional `[PROMPT]` (custom review instructions; `-` reads from stdin) — the
-older "no custom prompt" note was stale (verified against `codex-cli` 0.144.4 and the upstream
-reference). It writes to **stdout only — there is no `-o`/`--output-last-message`** on `codex review`
-(that flag is `codex exec`-only), so capture it via the mandated PTY wrapper. For the skill/agent-role
-audits, still prefer `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`, which
-carries the skill rubric.
+`codex review` takes exactly **one** review target: `--uncommitted`, `--base`, `--commit`, **or** a
+custom `[PROMPT]` — they **conflict** and cannot be combined. Verified on `codex-cli` 0.144.4:
+`codex review --uncommitted "focus on X"` exits non-zero with the argument-conflict error
+(`--uncommitted` cannot be used with `[PROMPT]`). So `[PROMPT]` steers a review INSTEAD of a diff
+target, not on top of one. It writes to
+**stdout only — there is no `-o`/`--output-last-message`** on `codex review` (that flag is
+`codex exec`-only), so capture it via the mandated PTY wrapper. For a steerable review of specific
+changes, keep the instructions on `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`,
+which carries the skill rubric and takes both a prompt and file targets.
 
 ## Codex skills — mirror of the Unleashed Mail plugin
 
@@ -161,6 +176,6 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
 - `codex exec -c model_reasoning_effort=xhigh -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review; it takes an optional `[PROMPT]` of custom review instructions and outputs to stdout (capture via the PTY wrapper — no `-o`)
+- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.
