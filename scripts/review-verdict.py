@@ -194,11 +194,37 @@ def _sha256_bytes(path: str) -> str:
     return h.hexdigest()
 
 
+def _read_regular_file(path: str) -> str | None:
+    """Read `path` refusing to follow a symlink — O_NOFOLLOW makes the refusal ATOMIC at open (no
+    islink()-then-open() TOCTOU window). Returns the text, or None if the path is a symlink (ELOOP),
+    missing, or unreadable, so a pre-seeded symlink can never be trusted (round 4: codex)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
 def _verdict_path(plan_path: str) -> str:
     """`<plan-dir>/.verdicts/<plan-basename>.verdict.json` — co-located with the plan it binds."""
     plan_path = os.path.abspath(plan_path)
     return os.path.join(os.path.dirname(plan_path), ".verdicts",
                         os.path.basename(plan_path) + ".verdict.json")
+
+
+def _reviewed_sha_sidecar(plan_path: str) -> str:
+    """`<plan-dir>/.verdicts/<plan-basename>.reviewed-sha256` — the pre-review plan digest, snapshotted
+    at gate LAUNCH by the `snapshot` subcommand so a LATER, separate `write` invocation can bind the
+    approval to the bytes the reviewers saw. A shell variable cannot carry the digest across Claude Code
+    tool invocations, so the earlier `REVIEWED_PLAN_SHA256=…` shell-local expanded EMPTY at write time
+    (round 4: codex). Session state, git-ignored beside the artifact."""
+    plan_path = os.path.abspath(plan_path)
+    return os.path.join(os.path.dirname(plan_path), ".verdicts",
+                        os.path.basename(plan_path) + ".reviewed-sha256")
 
 
 def _ensure_secure_dir(d: str) -> None:
@@ -253,13 +279,15 @@ def _parse_reviewer(spec: str) -> dict:
         # auto-discovered — no caller/skill change needed; absent -> the digest floor still applies.
         out["transcriptPath"] = os.path.realpath(transcript)
         _cid = transcript + ".captureid"
-        # Ignore a SYMLINKED sidecar: `os.path.isfile`/`open` follow links, so a pre-seeded
+        # Read the sidecar with O_NOFOLLOW so a SYMLINK is refused ATOMICALLY at open. A pre-seeded
         # `<transcript>.captureid` symlink (attacker-chosen value) would otherwise be trusted as
-        # authoritative provenance and make two copied transcripts look like distinct runs. A genuine
-        # pty-capture sidecar is a real regular file written with O_NOFOLLOW (round 3: codex).
-        if os.path.isfile(_cid) and not os.path.islink(_cid) and os.path.getsize(_cid) > 0:
-            with open(_cid, encoding="utf-8") as _fh:
-                _v = _fh.read().strip()
+        # authoritative provenance and make two copied transcripts look like distinct runs. An
+        # islink()-then-open() precheck has a TOCTOU race — a local attacker owning the predictable /tmp
+        # dir can swap a regular file for a symlink between the check and the open; O_NOFOLLOW closes that
+        # window (a genuine pty-capture sidecar is a real regular file) (round 3 + round 4: codex).
+        _cap = _read_regular_file(_cid)
+        if _cap is not None:
+            _v = _cap.strip()
             if _v:
                 out["captureId"] = _v
     return out
@@ -282,6 +310,36 @@ def _reviewer_identity_problem(reviewers: list[dict]) -> str | None:
     if missing:
         return f"missing mandatory reviewer(s) {missing} — the gate is {', '.join(sorted(REQUIRED_REVIEWERS))}"
     return None
+
+
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    """Record the plan's CURRENT digest to the `.reviewed-sha256` sidecar. Run at gate LAUNCH, BEFORE
+    dispatching /gemini-review + /codex-review, so `write` (a later invocation) binds the approval to
+    exactly these bytes. Overwrites any prior snapshot atomically — re-run it whenever the plan is
+    revised in response to feedback."""
+    plan = args.plan
+    if not os.path.isfile(plan):
+        raise SystemExit(f"review-verdict: plan not found: {plan}")
+    digest = _sha256_bytes(plan)
+    dest = _reviewed_sha_sidecar(plan)
+    _ensure_secure_dir(os.path.dirname(dest))
+    if os.path.islink(dest):
+        raise SystemExit(f"review-verdict: refusing to overwrite a symlinked snapshot: {dest}")
+    tmp = f"{dest}.tmp.{os.getpid()}"
+    old_umask = os.umask(0o077)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(digest + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dest)
+    finally:
+        os.umask(old_umask)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    print(f"review-verdict: snapshotted reviewed plan digest {digest[:12]}… for {plan}")
+    return 0
 
 
 def cmd_write(args: argparse.Namespace) -> int:
@@ -308,15 +366,29 @@ def cmd_write(args: argparse.Namespace) -> int:
     # and artifact construction would pass `--reviewed-sha256` on the old bytes yet record the new,
     # unreviewed digest, which `verify` would then accept (round 3: codex).
     plan_sha = _sha256_bytes(plan)
+    # Resolve the reviewed digest from EITHER the explicit --reviewed-sha256 flag (backward-compatible;
+    # an EMPTY value fails loudly rather than silently skipping — round 1) OR, when the flag is omitted,
+    # the `snapshot`-written sidecar (the normal gate flow; the old shell-var approach expanded empty
+    # across invocations — round 4: codex). A stale sidecar is NOT unlinked: if the plan is unchanged its
+    # digest still matches (correct), and if the plan changed the mismatch below fails closed, forcing a
+    # fresh `snapshot` — safer than consuming it and silently skipping the binding on a retry.
+    expected = None
     if getattr(args, "reviewed_sha256", None) is not None:
         expected = args.reviewed_sha256.strip().lower()
         if not _SHA256_HEX.match(expected):
             raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
-        if plan_sha != expected:
-            raise SystemExit(
-                "review-verdict: the plan CHANGED between review and write — refusing to record an "
-                f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
-                f"{plan_sha[:12]}…). Re-run the reviews on the current plan.")
+    else:
+        sidecar = _reviewed_sha_sidecar(plan)
+        if os.path.isfile(sidecar) and not os.path.islink(sidecar):
+            with open(sidecar, encoding="utf-8") as fh:
+                expected = fh.read().strip().lower()
+            if not _SHA256_HEX.match(expected):
+                raise SystemExit(f"review-verdict: snapshot sidecar is corrupt (not 64 hex chars): {sidecar}")
+    if expected is not None and plan_sha != expected:
+        raise SystemExit(
+            "review-verdict: the plan CHANGED between review and write — refusing to record an "
+            f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
+            f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
@@ -572,10 +644,14 @@ def main(argv: list[str]) -> int:
     w.add_argument("--reviewer", action="append", help="name=STATUS[:TRANSCRIPT] (repeatable; >=2)")
     w.add_argument("--reviewed-sha256", default=None,
                    help="the plan's SHA-256 as snapshotted BEFORE the reviews ran; write aborts if the "
-                        "plan has since changed (binds approval to the reviewed bytes)")
+                        "plan has since changed (binds approval to the reviewed bytes). Omit it to auto-"
+                        "read the `snapshot` sidecar (the normal gate flow)")
     w.add_argument("--round", type=int, default=None)
     w.add_argument("--created-at", default=None, help="ISO-8601 timestamp (caller supplies the clock)")
     w.set_defaults(func=cmd_write)
+    s = sub.add_parser("snapshot", help="record the plan's pre-review digest at gate launch (for write)")
+    s.add_argument("--plan", required=True)
+    s.set_defaults(func=cmd_snapshot)
     v = sub.add_parser("verify", help="fail closed unless an approving, digest-matching artifact exists")
     v.add_argument("--plan", required=True)
     v.set_defaults(func=cmd_verify)

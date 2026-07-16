@@ -54,6 +54,31 @@ class WritePrivateTests(unittest.TestCase):
             self.mod._write_private(link, b"x")
         self.assertFalse(os.path.exists(target), "must not create the symlink target")
 
+    def test_opener_closes_the_fd_if_fchmod_fails(self):
+        """The `opener` holds a raw fd BEFORE open() takes ownership, so if os.fchmod raises there it must
+        close that fd (not leak it) and propagate. Force fchmod to fail and assert the error propagates
+        and the fd we handed out was closed (round 4: gemini — uncovered error path)."""
+        path = os.path.join(self.d, "t.txt")
+        real_open, real_fchmod, real_close = os.open, os.fchmod, os.close
+        opened, closed = [], []
+
+        def _open_spy(*a, **k):
+            fd = real_open(*a, **k)
+            opened.append(fd)
+            return fd
+
+        def _fchmod_boom(fd, mode):
+            raise PermissionError("forced")
+
+        os.open, os.fchmod, os.close = _open_spy, _fchmod_boom, lambda fd: (closed.append(fd), real_close(fd))[1]
+        try:
+            with self.assertRaises(PermissionError):
+                self.mod._write_private(path, b"x")
+        finally:
+            os.open, os.fchmod, os.close = real_open, real_fchmod, real_close
+        self.assertTrue(opened, "opener should have os.open'd an fd")
+        self.assertIn(opened[-1], closed, "the fd must be closed when fchmod fails in the opener")
+
     def test_no_manual_close_once_open_owns_the_fd(self):
         """Double-close guard: the fd is created via open()'s `opener`, so the file object owns it and
         closes it exactly once (C-level, not via os.close) — even when the write fails. Passing a str

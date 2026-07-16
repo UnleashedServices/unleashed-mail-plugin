@@ -678,6 +678,42 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, "empty --reviewed-sha256 must not silently write")
         self.assertIn("64 hex chars", r.stdout + r.stderr)
 
+    def test_snapshot_then_write_auto_binds_without_the_flag(self):
+        """The `snapshot` subcommand persists the pre-review digest to a sidecar so a LATER `write` (a
+        separate tool invocation) can bind the approval WITHOUT `--reviewed-sha256` — a shell variable
+        could not survive across invocations (round 4: codex). Write auto-reads the sidecar."""
+        self.assertEqual(run("snapshot", "--plan", self.plan).returncode, 0)
+        r = self._write()   # no reviewed_sha256 flag -> must auto-read the sidecar and bind
+        self.assertEqual(r.returncode, 0, r.stderr)
+        import hashlib as _h
+        art = json.load(open(os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")))
+        self.assertEqual(art["planSha256"], _h.sha256(open(self.plan, "rb").read()).hexdigest())
+
+    def test_snapshot_then_plan_edit_aborts_the_auto_bound_write(self):
+        """A plan edited AFTER the snapshot must abort write (approve-then-edit blocked) even via the
+        sidecar path, not just the explicit flag."""
+        self.assertEqual(run("snapshot", "--plan", self.plan).returncode, 0)
+        with open(self.plan, "a", encoding="utf-8") as fh:
+            fh.write("\nan edit the reviewers never saw\n")
+        r = self._write()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("CHANGED between review and write", r.stdout + r.stderr)
+
+    def test_symlinked_snapshot_sidecar_is_ignored(self):
+        """A pre-seeded SYMLINK snapshot sidecar (attacker-chosen digest) must NOT bind the approval — a
+        genuine snapshot is a real regular file. Write ignores the symlink and proceeds on current bytes
+        (here: no binding from the planted value)."""
+        run("snapshot", "--plan", self.plan)
+        side = os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.reviewed-sha256")
+        os.remove(side)
+        planted = os.path.join(self.d, "planted")
+        with open(planted, "w", encoding="utf-8") as fh:
+            fh.write("0" * 64 + "\n")
+        os.symlink(planted, side)
+        r = self._write()
+        self.assertEqual(r.returncode, 0, r.stderr)          # symlink ignored -> write proceeds
+        self.assertNotIn("0" * 12, r.stdout + r.stderr)      # the planted digest never bound
+
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
         v = run("verify", "--plan", self.plan)
