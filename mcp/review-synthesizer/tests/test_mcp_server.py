@@ -124,6 +124,20 @@ class TestSynthesizeTool(unittest.TestCase):
             self.assertEqual(out[0]["error"]["code"], -32602, f"changed_files={changed!r} must fail closed")
             self.assertIn("refusing", out[0]["error"]["message"])
 
+    def test_absolute_and_traversal_changed_files_fail_closed(self):
+        # `git diff --name-only` NEVER emits an absolute path or a `..` component. Such an entry
+        # canonicalizes to a NON-empty string that matches no finding's repo-relative file, so it
+        # survives the empty-changeset guard and scopes every real blocker to pre-existing -> a bogus
+        # APPROVE. Reject the call (#44 independent review §5 — the residual of the bare-dot fix).
+        for changed in (["/etc/passwd"], ["../../etc/passwd"], ["Sources/../Sources/Auth.swift"],
+                        ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"]):
+            out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()], "changed_files": changed}}}])
+            self.assertEqual(out[0]["error"]["code"], -32602,
+                             f"changed_files={changed!r} (absolute/traversal) must fail closed")
+            self.assertIn("absolute or traversal", out[0]["error"]["message"])
+
     def test_real_changed_file_alongside_blanks_still_synthesizes(self):
         # A real path mixed with blank entries is NOT empty after canonicalization -> proceed normally
         # (the guard must not over-reject a legitimate changeset that happens to carry noise entries).

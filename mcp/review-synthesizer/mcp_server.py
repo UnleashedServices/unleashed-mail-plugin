@@ -132,6 +132,23 @@ def _call_synthesize(arguments: dict) -> dict:
             "changed_files is empty (or all-blank/'.'-only) but findings were provided; refusing "
             "to synthesize (every finding would mis-scope to pre-existing and yield a bogus APPROVE)",
         )
+    # Fail CLOSED on ABSOLUTE or TRAVERSAL entries. `git diff --name-only` only ever emits
+    # repo-relative paths with no leading `/` and no `..` component; an absolute path (`/etc/passwd`)
+    # or a `../..` escape canonicalizes to a NON-empty string that matches no finding's repo-relative
+    # `file`, so it survives the empty-changeset guard above and scopes every real blocker to
+    # pre-existing -> a bogus provisional APPROVE. The empty-`.`-only guard closes `.`/`..`/`/`; this
+    # closes the residual `/abs` and `../esc` vectors (#44 independent review §5). Reject the call
+    # rather than filter — a caller sending impossible diff paths is untrustworthy input.
+    _bad = sorted({c for c in changed_files
+                   if (cp := canonical_path(c))
+                   and (cp.startswith("/") or ".." in cp.split("/"))})
+    if _bad:
+        raise _RpcError(
+            -32602,
+            "changed_files contains absolute or traversal paths "
+            f"({', '.join(_bad)}); `git diff --name-only` never emits these, so they cannot be a real "
+            "changeset — refusing to synthesize (they would mis-scope findings to a bogus APPROVE)",
+        )
     findings, quarantined = [], []
     for d in findings_in:
         try:
