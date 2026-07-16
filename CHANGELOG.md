@@ -13,8 +13,6 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
-## [2.5.0] — 2026-07-15
-
 ### Fixed
 - **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
   only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
