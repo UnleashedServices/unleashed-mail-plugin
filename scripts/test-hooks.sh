@@ -190,6 +190,19 @@ assert_contains "env -S quoted rm sensitive -> ask" "$(guard_bash "\"env -S 'rm 
 # 5v. A quoted MULTILINE inline script stays in one segment (NUL-delimited), so a filename after an
 #     embedded newline is still scanned (the \n is a JSON escape -> a real newline in the command).
 assert_contains "multiline -c write sensitive -> ask" "$(guard_bash "\"python3 -c 'print(1)\nopen(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+# == round 5 (codex): unquoted-newline split, per-interpreter inline flags, comments, env prefixes ==
+# 5w. An UNQUOTED newline IS a command separator — the 2nd command's write must be seen (round-4
+#     NUL-delimiting kept it in-segment). `\n` here is a JSON escape decoded to a real newline in $CMD.
+assert_contains "unquoted newline then rm sensitive -> ask" "$(guard_bash '"echo benign\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5x. Inline-code flags are interpreter-specific: node -p IS code; python/ruby -E are NOT (env/encoding).
+assert_contains "node -p write sensitive -> ask" "$(guard_bash '"node -p writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_empty "python3 -E read arg (not code) -> no decision" "$(guard_bash '"python3 -E report.py OAuthService.swift > /tmp/o"')"
+assert_empty "ruby -E encoding read arg (not code) -> no decision" "$(guard_bash '"ruby -E utf-8 report.rb OAuthService.swift > /tmp/o"')"
+# 5y. A protected name only in a trailing shell COMMENT is not an operand -> must not prompt.
+assert_empty "sensitive name only in a # comment -> no decision" "$(guard_bash '"rm InboxView.swift # OAuthService.swift"')"
+# 5z. env option ARG (`-u NAME`) must not be collected as an mv operand; env -S split-string cp DEST fires.
+assert_empty "env -u NAME mv (NAME is an unset var) -> no decision" "$(guard_bash '"env -u OAuthService.swift mv a.swift b.swift"')"
+assert_contains "env -S quoted cp DEST sensitive -> ask" "$(guard_bash "\"env -S 'cp benign.swift OAuthService.swift'\"")" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \

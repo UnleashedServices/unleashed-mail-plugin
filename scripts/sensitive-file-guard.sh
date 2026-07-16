@@ -66,23 +66,27 @@ _has_unbalanced_quote() {
     return 1
 }
 
-# Split a command on shell separators (`;` `&` `|`, incl. `&&`/`||`) that are OUTSIDE single/double
-# quotes, one NUL-delimited segment per record. A `;`/`&`/`|` inside quotes — an interpreter's `-c 'a; b'`
-# or a quoted filename — is NOT a separator and stays with its segment, so the inline-code scan sees the
-# whole quoted script (round 3: codex). NUL (not newline) is the delimiter so a quoted MULTILINE inline
-# script (`-c 'a\nopen("X")'`) also stays in ONE segment — a newline record-separator would split it and
-# the filename after the newline would be missed (round 4: codex). The old `sed 's/[;&|]/\n/g'` split
-# blindly and cut quoted code apart.
+# Split a command on shell separators (`;` `&` `|` and an UNQUOTED newline, incl. `&&`/`||`) that are
+# OUTSIDE single/double quotes, one NUL-delimited segment per record. A separator INSIDE quotes — an
+# interpreter's `-c 'a; b'` or a quoted filename — is NOT a separator and stays with its segment (round 3:
+# codex). NUL (not newline) is the record delimiter so a QUOTED multiline script (`-c 'a\nopen("X")'`)
+# stays in ONE segment; but an UNQUOTED newline IS a real command separator and splits (round 4 kept it
+# in-segment, missing `echo a<newline>rm X` — round 5: codex). Inside DOUBLE quotes a backslash escapes
+# the next char, so `"…\"…"` does not falsely close the quote (round 5: codex). Best-effort: unquoted
+# backslash-escaped separators and line continuations are not modelled (the robust guard is Edit/Write).
 _split_segments() {
-    local s="$1" n=${#1} i=0 ch q="" seg=""
+    local s="$1" n=${#1} i=0 ch q="" seg="" bs='\' nl=$'\n'
     while [ "$i" -lt "$n" ]; do
         ch="${s:$i:1}"
+        if [ "$q" = '"' ] && [ "$ch" = "$bs" ]; then
+            seg="$seg$ch${s:$((i + 1)):1}"; i=$((i + 2)); continue   # keep the escape pair verbatim
+        fi
         if [ -n "$q" ]; then
             [ "$ch" = "$q" ] && q=""
             seg="$seg$ch"
         elif [ "$ch" = "'" ] || [ "$ch" = '"' ]; then
             q="$ch"; seg="$seg$ch"
-        elif [ "$ch" = ";" ] || [ "$ch" = "&" ] || [ "$ch" = "|" ]; then
+        elif [ "$ch" = ";" ] || [ "$ch" = "&" ] || [ "$ch" = "|" ] || [ "$ch" = "$nl" ]; then
             printf '%s\0' "$seg"; seg=""
         else
             seg="$seg$ch"
@@ -90,6 +94,14 @@ _split_segments() {
         i=$((i + 1))
     done
     printf '%s\0' "$seg"
+}
+
+# Basename of a token with any leading quote `read -ra` left on it stripped (`'cp`/`"cp`/`/usr/bin/cp`
+# -> `cp`), for matching the command word inside the precise-parse arms (round 5: codex — `env -S 'cp …'`
+# splits the quoted command so the word arrives as `'cp`).
+_basecmd() {
+    local w="${1##*/}"
+    printf '%s' "${w#[\"\']}"
 }
 
 # Resolve a segment's EFFECTIVE command word: strip any directory (`/usr/bin/rm` -> `rm`) and unwrap a
@@ -152,9 +164,17 @@ _effective_verb() {
 # cluster (`-xc`, `perl -we`, `perl -pe's/…/'`, adjacent `-c"…"`), the long forms, or a heredoc (`<<`).
 _seg_has_inline_code() {
     local seg="$1" verb="$2" pat
+    # The inline-code FLAG is interpreter-SPECIFIC (round 5: codex — `-E`/`-e` mean different things per
+    # tool): shells + python take code via `-c` only (python has no -e; python -E ignores env vars); perl
+    # via `-e`/`-E` (perl -c is a syntax-check READ); ruby via `-e` (ruby -E sets encoding, -c checks
+    # syntax); node via `-e`/`-p`/`--eval`/`--print`; osascript via `-e`. Match the letter in any short
+    # cluster (`-xc`, `perl -we`, adjacent `-c"…"`), the long forms, or a heredoc (`<<`).
     case "$verb" in
-        bash|sh|zsh) pat='(^|[[:space:]])-[[:alnum:]]*c([^[:alnum:]]|$)|<<' ;;
-        *)           pat='(^|[[:space:]])(-[[:alnum:]]*[ceE]([^[:alnum:]]|$)|--(eval|print)([^[:alnum:]]|=|$))|<<' ;;
+        bash|sh|zsh|python|python2|python3) pat='(^|[[:space:]])-[[:alnum:]]*c([^[:alnum:]]|$)|<<' ;;
+        perl)                               pat='(^|[[:space:]])-[[:alnum:]]*[eE]([^[:alnum:]]|$)|<<' ;;
+        ruby|osascript)                     pat='(^|[[:space:]])-[[:alnum:]]*e([^[:alnum:]]|$)|<<' ;;
+        node|nodejs)  pat='(^|[[:space:]])(-[[:alnum:]]*[ep]([^[:alnum:]]|$)|--(eval|print)([^[:alnum:]]|=|$))|<<' ;;
+        *)                                  pat='(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<' ;;
     esac
     printf '%s' "$seg" | grep -qE "$pat"
 }
@@ -191,7 +211,7 @@ ${line}"
                 last=""; tdir=""; skipnext=0; seen_cmd=0
                 for tok in "${toks[@]}"; do
                     if [ "$seen_cmd" = 0 ]; then
-                        case "${tok##*/}" in cp|install|ln) seen_cmd=1 ;; esac
+                        case "$(_basecmd "$tok")" in cp|install|ln) seen_cmd=1 ;; esac
                         continue
                     fi
                     if [ "$skipnext" = 1 ]; then tdir="$tok"; skipnext=0; continue; fi
@@ -207,8 +227,15 @@ ${tdir}"; elif [ -n "$last" ]; then cand="${cand}
 ${last}"; fi
                 ;;
             mv|rename)
-                # a rename can modify/remove the SOURCE too — check every non-flag operand.
-                for tok in "${toks[@]:1}"; do
+                # a rename can modify/remove the SOURCE too — check every non-flag operand AFTER the
+                # command word. Skip to it (not `toks[1]`) so an `env -u NAME mv a b` prefix doesn't flag
+                # the unset var NAME as an operand (round 5: codex).
+                seen_cmd=0
+                for tok in "${toks[@]}"; do
+                    if [ "$seen_cmd" = 0 ]; then
+                        case "$(_basecmd "$tok")" in mv|rename) seen_cmd=1 ;; esac
+                        continue
+                    fi
                     case "$tok" in -*) ;; *) cand="${cand}
 ${tok}" ;; esac
                 done
@@ -226,7 +253,7 @@ ${toks[*]: -1}"
                 seen_cmd=0
                 for tok in "${toks[@]}"; do
                     if [ "$seen_cmd" = 0 ]; then
-                        case "${tok##*/}" in tee) seen_cmd=1 ;; esac
+                        case "$(_basecmd "$tok")" in tee) seen_cmd=1 ;; esac
                         continue
                     fi
                     case "$tok" in -*) ;; *) cand="${cand}
@@ -240,7 +267,7 @@ ${tok}" ;; esac
                 seen_cmd=0; skipnext=0
                 for tok in "${toks[@]}"; do
                     if [ "$seen_cmd" = 0 ]; then
-                        case "${tok##*/}" in touch) seen_cmd=1 ;; esac
+                        case "$(_basecmd "$tok")" in touch) seen_cmd=1 ;; esac
                         continue
                     fi
                     if [ "$skipnext" = 1 ]; then skipnext=0; continue; fi
@@ -270,11 +297,15 @@ ${tok}" ;;
                 _seg_has_inline_code "$seg" "$base_verb" && _bcheck=1 ;;
         esac
         if [ "$_bcheck" = 1 ]; then
+            # Strip a trailing ` #…` shell comment on each line first — a protected name that appears only
+            # in a comment (`rm InboxView.swift # OAuthService.swift`) is never an operand and must not
+            # prompt (round 5: codex). Best-effort: a `#` with leading whitespace ends the line.
             while IFS= read -r bt; do
                 [ -n "$bt" ] || continue
                 cand="${cand}
 ${bt}"
-            done < <(printf '%s\n' "$seg" | grep -oE '[A-Za-z0-9._-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)' 2>/dev/null)
+            done < <(printf '%s\n' "$seg" | sed -E 's/[[:space:]]#.*$//' \
+                     | grep -oE '[A-Za-z0-9._-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)' 2>/dev/null)
         fi
     done < <(_split_segments "$cmd")
     # Evaluate candidates by basename (while-read avoids globbing on a `*` operand).
