@@ -130,6 +130,20 @@ assert_empty "cp sensitive SOURCE -> no decision (read, not write)" "$(guard_bas
 assert_empty "cat sensitive -> no decision" "$(guard_bash '"cat OAuthService.swift"')"
 assert_empty "rm non-sensitive -> no decision" "$(guard_bash '"rm InboxView.swift"')"
 assert_empty "python3 running a script (no sensitive name) -> no decision" "$(guard_bash '"python3 build.py"')"
+# 5e. Inline-code flags the old -(c|e)[space=] form MISSED: combined clusters (`-xc`, `-we`) and code
+#     directly adjacent to the flag (`-c"..."`). Round 1 (gemini + codex).
+assert_contains "bash -xc combined flag -> ask" "$(guard_bash '"bash -xc unlink OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "perl -we combined flag -> ask" "$(guard_bash '"perl -we OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "python3 -c no-space code -> ask" "$(guard_bash '"python3 -c\"open(OAuthService.swift)\""')" '"permissionDecision":"ask"'
+# 5f. FD dup (`2>&1`) is NOT a file write — must NOT over-fire on a sensitive file merely READ as input.
+assert_empty "interpreter read + 2>&1 FD-dup -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift 2>&1"')"
+# 5g. base_verb normalization: an absolute path or an `env` prefix resolves to the real verb (the old
+#     `/*rm` path-glob list was fragile and had no `env`/`/bin/cp` coverage). Round 1: gemini.
+assert_contains "/usr/bin/rm sensitive -> ask" "$(guard_bash '"/usr/bin/rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env rm sensitive -> ask" "$(guard_bash '"env rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "/usr/bin/cp DEST sensitive -> ask" "$(guard_bash '"/usr/bin/cp template.swift KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5h. touch creates/updates a file -> mutating.
+assert_contains "touch sensitive -> ask" "$(guard_bash '"touch OAuthService.swift"')" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \

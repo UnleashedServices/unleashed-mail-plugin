@@ -56,6 +56,27 @@ sensitive_category() {
     esac
 }
 
+# Resolve a segment's EFFECTIVE command word: strip any directory (`/usr/bin/rm` -> `rm`) and unwrap a
+# leading `env` / `VAR=val …` prefix (`env rm X`, `FOO=1 python3 -c …` -> `rm` / `python3`) so ONE verb
+# list covers `/bin/rm`, `env python3`, `FOO=1 rm`, etc. — the earlier `/*rm|/*python*` path-glob list
+# was fragile and incomplete (round 1: gemini base_verb normalization). Best-effort: `env`'s
+# arg-consuming flags (`-u NAME`) aren't modelled, an acceptable gap for a warn-first heuristic.
+_effective_verb() {
+    local -a a=()
+    read -ra a <<<"$1"
+    local v="${a[0]:-}"; v="${v##*/}"
+    if [ "$v" = "env" ]; then
+        local tok
+        for tok in "${a[@]:1}"; do
+            case "$tok" in
+                -*|*=*) ;;                       # env flag or VAR=val assignment — skip
+                *) v="${tok##*/}"; break ;;      # first bare word is the real command
+            esac
+        done
+    fi
+    printf '%s' "$v"
+}
+
 # Does this command SEGMENT mutate the filesystem? A precise per-verb parse (below) can only extract a
 # target for the forms it knows (redirect / cp / mv / sed -i / tee). It missed deletion (`rm`), symlink
 # clobber (`ln`), and interpreter one-liners (`python3 -c 'open("X","w")...'`, perl/ruby/node -e) —
@@ -64,17 +85,23 @@ sensitive_category() {
 # return false, so a sensitive file merely READ never prompts.
 _seg_is_mutating() {
     local s="$1" v=""
-    read -ra _mt <<<"$s"; v="${_mt[0]:-}"; v="${v##*/}"
+    v="$(_effective_verb "$s")"
     case "$v" in
-        rm|unlink|shred|mv|rename|cp|install|dd|truncate|ln|tee|dded) return 0 ;;
+        rm|unlink|shred|mv|rename|cp|install|dd|truncate|ln|tee|touch) return 0 ;;
     esac
-    # An interpreter invoked with inline code (-c / -e) or a heredoc can write anything.
+    # An interpreter invoked with inline code or a heredoc can write anything. Match the inline-code
+    # flag in ANY short-flag cluster (`-c`, `-xc`, `perl -we`, `perl -pe's/…/'`) and with the code
+    # directly adjacent (`-c"…"`) — the old `-(c|e)([space]|=)` missed combined and quote-adjacent flags.
     case "$v" in
         python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env)
-            printf '%s' "$s" | grep -qE '(^|[[:space:]])-(c|e)([[:space:]]|=)|<<' && return 0 ;;
+            printf '%s' "$s" | grep -qE '(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<' && return 0 ;;
     esac
-    # Any redirection that writes/clobbers/appends, anywhere in the segment.
-    printf '%s' "$s" | grep -qE '>>?|>\|' && return 0
+    # A redirection that writes/clobbers/appends to a FILE, anywhere in the segment. `>>?[^&]` matches
+    # `>f`/`>>f`/`2>f`/`&>f`/`>|f` (a real write always has a target after `>`) but NOT an FD dup
+    # (`2>&1`, `>&2`, `1>&2`): there the char after `>`/`>>` is `&`. A BARE trailing `>` is not matched
+    # either — the `[;&|]` segment splitter breaks `2>&1` into `…2>` + `1`, and treating that dangling
+    # `>` as a write is exactly the false positive we're closing (round 1: the bare `>>?|>\|`).
+    printf '%s' "$s" | grep -qE '>>?[^&]' && return 0
     printf '%s' "$s" | grep -qE '(^|[[:space:]])sed[[:space:]]+-i' && return 0
     return 1
 }
@@ -83,7 +110,7 @@ _seg_is_mutating() {
 # (grep/cat) and a file used only as a SOURCE (`cp Keychain.swift /backup/`) print nothing. Phase-1
 # heuristic; the robust guard is the Edit/Write file_path path — arbitrary shell can always evade text.
 guard_bash_write_target() {
-    local cmd="$1" cand="" seg="" line="" t="" bn="" verb="" tok="" last="" bt="" _bcheck=0
+    local cmd="$1" cand="" seg="" line="" t="" bn="" base_verb="" tok="" last="" bt="" _bcheck=0
     local -a toks=()
     # Split on shell separators so a chained command (`cp a b && git diff`) is parsed
     # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
@@ -98,8 +125,10 @@ guard_bash_write_target() {
 ${line}"
         done < <(printf '%s\n' "$seg" | grep -oE '>>?[[:space:]]*("[^"]+"|[^"[:space:]|&;]+)' 2>/dev/null)
         read -ra toks <<<"$seg"
-        verb="${toks[0]:-}"
-        case "$verb" in
+        # Effective command word (dir stripped, `env`/`VAR=val` unwrapped) so `/bin/cp`, `env mv`, etc.
+        # reach the right parse arm — not just the bare-word forms.
+        base_verb="$(_effective_verb "$seg")"
+        case "$base_verb" in
             cp|install)
                 # destination = last non-flag operand.
                 last=""
@@ -134,9 +163,8 @@ $(printf '%s' "$seg" | sed -E 's/^[[:space:]]*tee[[:space:]]+(-a[[:space:]]+)?//
         # already extracted their precise target(s) above, and a broad scan there would wrongly flag a
         # READ source (`cp KeychainManager.swift /backup/` reads it, does not modify it). Scoped to
         # mutation, so `cat X`/`grep foo X` never trip it (#44 review §6).
-        case "$verb" in
-            rm|unlink|shred|ln|python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env) _bcheck=1 ;;
-            /*rm|/*python*|/*perl|/*ruby|/*node|/*unlink|/*shred|/*ln) _bcheck=1 ;;
+        case "$base_verb" in
+            rm|unlink|shred|ln|touch|python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env) _bcheck=1 ;;
             *) _bcheck=0 ;;
         esac
         if [ "$_bcheck" = 1 ] && _seg_is_mutating "$seg"; then
