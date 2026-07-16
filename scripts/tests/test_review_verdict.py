@@ -714,6 +714,17 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)          # symlink ignored -> write proceeds
         self.assertNotIn("0" * 12, r.stdout + r.stderr)      # the planted digest never bound
 
+    def test_fifo_snapshot_sidecar_is_ignored(self):
+        """A pre-created FIFO snapshot sidecar (an attacker planting a non-regular file at the predictable
+        path) must NOT be read as a digest — O_NONBLOCK + fstat reject it, so write proceeds unbound
+        rather than blocking or trusting it (round 5: codex)."""
+        run("snapshot", "--plan", self.plan)
+        side = os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.reviewed-sha256")
+        os.remove(side)
+        os.mkfifo(side)
+        r = self._write()
+        self.assertEqual(r.returncode, 0, r.stderr)   # FIFO ignored -> no binding, write proceeds
+
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
         v = run("verify", "--plan", self.plan)

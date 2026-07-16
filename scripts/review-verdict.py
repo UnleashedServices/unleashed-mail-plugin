@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 
 SCHEMA_VERSION = 2
@@ -195,18 +196,29 @@ def _sha256_bytes(path: str) -> str:
 
 
 def _read_regular_file(path: str) -> str | None:
-    """Read `path` refusing to follow a symlink — O_NOFOLLOW makes the refusal ATOMIC at open (no
-    islink()-then-open() TOCTOU window). Returns the text, or None if the path is a symlink (ELOOP),
-    missing, or unreadable, so a pre-seeded symlink can never be trusted (round 4: codex)."""
+    """Read `path` only if it is a REGULAR file, refusing a symlink or a FIFO/device. O_NOFOLLOW makes
+    the symlink refusal ATOMIC at open (no islink()-then-open() TOCTOU window); O_NONBLOCK avoids blocking
+    on a pre-created FIFO; an fstat S_ISREG check then rejects a FIFO/device an attacker planted at the
+    predictable path. Returns the text, or None on any of those, so a pre-seeded non-regular sidecar can
+    never be trusted as provenance (round 4 + round 5: codex)."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = -1  # fdopen owns it now; the finally must not double-close
             return fh.read()
     except OSError:
         return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _verdict_path(plan_path: str) -> str:
@@ -378,12 +390,15 @@ def cmd_write(args: argparse.Namespace) -> int:
         if not _SHA256_HEX.match(expected):
             raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
     else:
-        sidecar = _reviewed_sha_sidecar(plan)
-        if os.path.isfile(sidecar) and not os.path.islink(sidecar):
-            with open(sidecar, encoding="utf-8") as fh:
-                expected = fh.read().strip().lower()
+        # Read the snapshot sidecar via _read_regular_file — O_NOFOLLOW at open closes the
+        # islink()-then-open() TOCTOU race (an attacker owning `.verdicts` could swap it to a symlink
+        # between the checks and the open) and rejects a planted FIFO too (round 5: codex).
+        _snap = _read_regular_file(_reviewed_sha_sidecar(plan))
+        if _snap is not None:
+            expected = _snap.strip().lower()
             if not _SHA256_HEX.match(expected):
-                raise SystemExit(f"review-verdict: snapshot sidecar is corrupt (not 64 hex chars): {sidecar}")
+                raise SystemExit("review-verdict: snapshot sidecar is corrupt (not 64 hex chars): "
+                                 + _reviewed_sha_sidecar(plan))
     if expected is not None and plan_sha != expected:
         raise SystemExit(
             "review-verdict: the plan CHANGED between review and write — refusing to record an "

@@ -39,12 +39,14 @@ Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 # on a stock Mac (this plugin's likeliest host). Matches the 7 other shipped .py files. (COREDEV-2494)
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 import pty
 import re
 import select
 import signal
+import stat
 import struct
 import sys
 import termios
@@ -60,19 +62,23 @@ def _write_private(path: str, data: bytes) -> None:
     """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
 
     O_NOFOLLOW: if `path` is already a symlink, open() raises (ELOOP) instead of writing THROUGH it to
-    an attacker-chosen target. O_CREAT|O_TRUNC: create-or-truncate a regular file. fchmod: O_CREAT only
-    applies the mode on creation, so an already-existing 0644 file is tightened to 0600 explicitly.
+    an attacker-chosen target. O_NONBLOCK + an fstat S_ISREG check reject a pre-created FIFO/device at the
+    predictable path (O_NOFOLLOW alone permits a FIFO — with no reader the write blocks forever, with an
+    attacker-held reader it leaks the transcript, round 5: codex). O_CREAT|O_TRUNC: create-or-truncate a
+    regular file. fchmod: O_CREAT only applies the mode on creation, so an existing 0644 file is tightened.
 
     Uses open()'s `opener` hook so the returned file object OWNS the fd and closes it exactly once —
     no manual fd bookkeeping, and structurally impossible to double-close (round 2: gemini). The opener
-    is the only place that still holds a raw fd: if fchmod fails there, close it before raising, since
+    is the only place that still holds a raw fd: if a check fails there, close it before raising, since
     open() never received it.
     """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
     def _opener(p, _flags):
-        fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW), not open()'s text-mode default
+        fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.ENOTSUP, "refusing a non-regular capture target (FIFO/device/dir)", p)
             os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
         except BaseException:
             os.close(fd)                # open() hasn't taken ownership yet, so we must close it here

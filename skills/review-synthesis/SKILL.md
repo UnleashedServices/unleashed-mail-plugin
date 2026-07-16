@@ -107,8 +107,11 @@ After emitting the block, **persist the Combined verdict as a plan-digest-bound 
 a git-ignored `.reviewed-sha256` sidecar beside the plan. That snapshot binds the approval to the bytes
 the reviewers actually saw. It CANNOT be a shell variable — each skill step is a separate tool
 invocation, so a `REVIEWED_PLAN_SHA256=…` shell-local would be empty here (#44 review §4; COREDEV-2499).
-If no snapshot was taken (or the plan was revised without re-snapshotting), take/refresh it now against
-the current bytes before proceeding — an approval is only valid for the exact plan the reviewers saw.
+If no valid pre-review snapshot exists — none was taken, or the plan was edited AFTER the reviews ran —
+do **NOT** snapshot the current bytes here and continue: that would bind the approval to bytes the
+reviewers never saw. Instead **re-run `/gemini-review` + `/codex-review` on the current plan** (with a
+fresh `snapshot` taken before dispatch), then synthesize those transcripts. An approval is only valid for
+the exact plan the reviewers actually reviewed.
 
 Then persist — pass the plan that was reviewed plus each reviewer's status + transcript. `write`
 auto-reads the snapshot sidecar and aborts if the plan changed since, so **no `--reviewed-sha256`

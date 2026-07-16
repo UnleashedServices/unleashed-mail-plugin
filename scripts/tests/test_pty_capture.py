@@ -45,6 +45,15 @@ class WritePrivateTests(unittest.TestCase):
         self.assertEqual(Path(path).read_bytes(), b"new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
+    def test_refuses_to_write_to_a_fifo(self):
+        """O_NOFOLLOW alone permits a pre-created FIFO at the predictable capture path — with no reader
+        the write blocks forever, with an attacker-held reader it leaks the transcript. O_NONBLOCK + an
+        fstat S_ISREG check must refuse it (round 5: codex)."""
+        fifo = os.path.join(self.d, "out.fifo")
+        os.mkfifo(fifo)
+        with self.assertRaises(OSError):
+            self.mod._write_private(fifo, b"x")
+
     @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "O_NOFOLLOW required")
     def test_refuses_to_write_through_a_symlink(self):
         target = os.path.join(self.d, "secret")
