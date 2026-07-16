@@ -253,7 +253,11 @@ def _parse_reviewer(spec: str) -> dict:
         # auto-discovered — no caller/skill change needed; absent -> the digest floor still applies.
         out["transcriptPath"] = os.path.realpath(transcript)
         _cid = transcript + ".captureid"
-        if os.path.isfile(_cid) and os.path.getsize(_cid) > 0:
+        # Ignore a SYMLINKED sidecar: `os.path.isfile`/`open` follow links, so a pre-seeded
+        # `<transcript>.captureid` symlink (attacker-chosen value) would otherwise be trusted as
+        # authoritative provenance and make two copied transcripts look like distinct runs. A genuine
+        # pty-capture sidecar is a real regular file written with O_NOFOLLOW (round 3: codex).
+        if os.path.isfile(_cid) and not os.path.islink(_cid) and os.path.getsize(_cid) > 0:
             with open(_cid, encoding="utf-8") as _fh:
                 _v = _fh.read().strip()
             if _v:
@@ -299,16 +303,20 @@ def cmd_write(args: argparse.Namespace) -> int:
     # (backward-compatible), but passing it EMPTY (`--reviewed-sha256 ""`, e.g. an unset shell var)
     # must FAIL loudly — a falsy-skip would silently disable the binding and record an approval bound
     # to no reviewed bytes, exactly what the flag defends against (round 1: gemini + codex).
+    # Hash the plan ONCE and reuse it for BOTH the reviewed-digest check and the artifact's `planSha256`
+    # below. Re-reading the file for the artifact would reopen a TOCTOU: a plan edited between the check
+    # and artifact construction would pass `--reviewed-sha256` on the old bytes yet record the new,
+    # unreviewed digest, which `verify` would then accept (round 3: codex).
+    plan_sha = _sha256_bytes(plan)
     if getattr(args, "reviewed_sha256", None) is not None:
         expected = args.reviewed_sha256.strip().lower()
         if not _SHA256_HEX.match(expected):
             raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
-        actual = _sha256_bytes(plan)
-        if actual != expected:
+        if plan_sha != expected:
             raise SystemExit(
                 "review-verdict: the plan CHANGED between review and write — refusing to record an "
                 f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
-                f"{actual[:12]}…). Re-run the reviews on the current plan.")
+                f"{plan_sha[:12]}…). Re-run the reviews on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
@@ -329,7 +337,7 @@ def cmd_write(args: argparse.Namespace) -> int:
         # directory-distinguishing. The artifact is git-ignored session state, so embedding an absolute
         # path is fine; a repo move simply invalidates it (re-run the gate), which is correct.
         "planPath": os.path.realpath(plan),
-        "planSha256": _sha256_bytes(plan),
+        "planSha256": plan_sha,   # the SAME bytes the reviewed-digest check validated above (no re-read)
         "verdict": verdict,
         "reviewers": reviewers,
         "round": args.round,

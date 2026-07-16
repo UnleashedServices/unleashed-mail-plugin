@@ -61,5 +61,16 @@ Open questions, alternatives considered, lessons learned.
 ## After scaffolding
 
 1. Update the Jira ticket (Task / Bug) with a link to the plan file.
-2. Run `/gemini-review` and `/codex-review` on the plan before any code is written.
-3. Incorporate reviewer feedback into the plan doc before the implementation batch begins.
+2. **Snapshot the plan's digest BEFORE dispatching the reviews** — this is what binds the eventual
+   approval to the exact bytes the reviewers saw. Capture it here, at the gate launch, because the later
+   `/unleashed-mail:review-synthesis` step runs *after* the reviews and cannot reconstruct the
+   pre-review bytes (COREDEV-2499):
+   ```bash
+   REVIEWED_PLAN_SHA256="$(shasum -a 256 docs/planning/FEATURE_NAME_PLAN.md | cut -d' ' -f1)"
+   ```
+   Keep `REVIEWED_PLAN_SHA256` for the synthesis step; it flows through to `review-verdict.py write
+   --reviewed-sha256`, which refuses to record an approval if the plan changed after this snapshot.
+3. Run `/gemini-review` and `/codex-review` on the plan before any code is written.
+4. Incorporate reviewer feedback into the plan doc before the implementation batch begins. If you
+   revise the plan in response to feedback, the reviews (and the snapshot in step 2) must be **re-run**
+   on the new bytes — an approval is only valid for the exact plan the reviewers saw.

@@ -164,6 +164,23 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
         self.assertEqual(run("verify", "--plan", self.plan).returncode, 0)
 
+    def test_a_symlinked_captureid_sidecar_is_ignored_not_trusted(self):
+        """A `.captureid` SYMLINK (a pre-seeded, attacker-chosen value) must NOT be read as authoritative
+        provenance — otherwise two copied transcripts could be dressed up as distinct wrapper runs. A
+        genuine sidecar is a real regular file (pty-capture writes it O_NOFOLLOW) (round 3: codex)."""
+        tx = os.path.join(self.d, "r.txt")
+        with open(tx, "w", encoding="utf-8") as fh:
+            fh.write("review body\nVERDICT: APPROVE\n")
+        real_value = os.path.join(self.d, "planted-value")
+        with open(real_value, "w", encoding="utf-8") as fh:
+            fh.write("PLANTED-CID\n")
+        os.symlink(real_value, tx + ".captureid")   # sidecar is a SYMLINK, not a real file
+        run("write", "--plan", self.plan, "--verdict", "APPROVE_WITH_NOTES",
+            "--reviewer", f"gemini=APPROVE:{tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
+        art = json.load(open(os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")))
+        gem = next(r for r in art["reviewers"] if r["name"] == "gemini")
+        self.assertNotIn("captureId", gem, "a symlinked sidecar must not be trusted as a captureId")
+
     def test_a_non_string_provenance_field_fails_closed_not_with_a_crash(self):
         """A hand-tampered non-string transcriptPath/captureId (a list/dict) would make `set(...)` raise
         TypeError: unhashable type — a crash, not a controlled failure — and dropping it silently would

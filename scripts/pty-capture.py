@@ -320,7 +320,16 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
             try:
                 _write_private(out_path + '.captureid', (os.urandom(16).hex() + '\n').encode())
             except OSError:
-                pass
+                # A pre-existing SYMLINK at the sidecar makes _write_private (O_NOFOLLOW) fail. Leaving it
+                # would let a pre-seeded `.captureid` (attacker-chosen value) survive and be trusted by
+                # review-verdict as authoritative provenance — two copied transcripts could then look like
+                # distinct wrapper runs. Remove it (os.unlink never follows the link) so no stale/foreign
+                # value is read; a capture with NO sidecar is safe — review-verdict treats a missing
+                # captureId as "no proof", not as authoritative (round 3: codex).
+                try:
+                    os.unlink(out_path + '.captureid')
+                except OSError:
+                    pass
         except OSError as e:
             capture_error = e
             try:
