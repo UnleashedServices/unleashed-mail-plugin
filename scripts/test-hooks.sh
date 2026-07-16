@@ -760,6 +760,19 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 full review (codex): IUO type declarations are not force operations ==
+# An implicitly-unwrapped optional ends in `!`, so `IntentPatternRegistry!` contains `try!` and
+# `Canvas!` contains `as!`. Bare greps flagged legitimate IUO declarations and BLOCKED them.
+printf 'import Foundation\nstruct IU {\n    var reg: IntentPatternRegistry!\n    var canvas: Canvas!\n}\n' > "$LINTDIR/Iuo.swift"
+OUT="$(lint_run "$LINTDIR/Iuo.swift")"
+assert_not_contains "lint: IUO type Registry-bang is not flagged as force_try" "$OUT" "try!"
+assert_not_contains "lint: IUO type Canvas-bang is not flagged as force_cast" "$OUT" "as!"
+# ...while real force operations on the same file still block.
+printf 'import Foundation\nstruct IU2 {\n    var reg: Registry!\n    let r = try! NSRegularExpression(pattern: "a")\n    let c = x as! Y\n}\n' > "$LINTDIR/IuoMixed.swift"
+OUT="$(lint_run "$LINTDIR/IuoMixed.swift")"
+assert_contains "lint: a real try-bang next to an IUO type still BLOCKS" "$OUT" "4:"
+assert_contains "lint: a real as-bang still BLOCKS" "$OUT" "5:"
+
 # == COREDEV-2494 review round 9 (codex): a malformed scope is not a waiver ==
 # `:next*` etc. are PREFIX globs, so `:nextforce_try` stripped `:next` and read `force_try` as a rule —
 # a typo SwiftLint ignores became a fail-open waiver. And `:bogus force_try` fell through as an

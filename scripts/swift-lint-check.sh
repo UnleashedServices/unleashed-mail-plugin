@@ -285,6 +285,13 @@ _waives() { _waives_scoped "$1" "$2" next; }
 
 # --- 3 & 4. try! / as! greps: FALLBACK ONLY, when SwiftLint did not run (COREDEV-2494).
 #
+# WORD-BOUNDARIED: `(^|[^A-Za-z0-9_])try!` / `as!`, not bare `try!`/`as!`. An IUO type declaration
+# ends in `!`, so `IntentPatternRegistry!` contains the substring `try!` and `Canvas!` contains `as!` —
+# the bare greps flagged legitimate implicitly-unwrapped optionals as force operations and BLOCKED them
+# (codex/full review, #43). The bracket form is POSIX ERE (identical on BSD and GNU), not `\b` which is
+# a grep extension. `grep -n` prints the whole line regardless of the matched prefix char, so the line
+# number and the reported hit are unchanged.
+#
 # These greps cannot see `// swiftlint:disable:next force_try` — they filter only lines that are
 # THEMSELVES comments, so a directive on line N never protects line N+1. Measured against the consumer
 # app: 120 of 273 production `try!` sites carry that exact waiver, so the greps produced 120 FALSE
@@ -321,7 +328,7 @@ if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
     # No toolchain: keep a coarse net, but honour an explicit waiver on the preceding line so the
     # fallback cannot demand a policy-violating edit either. -A1 pairs directive->site.
     TRY_BANG=""
-    _lint_proved force_try || TRY_BANG=$(grep -nE 'try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+    _lint_proved force_try || TRY_BANG=$(grep -nE '(^|[^A-Za-z0-9_])try!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
             # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
@@ -350,7 +357,7 @@ $TRY_BANG"
     fi
 
     FORCE_CAST=""
-    _lint_proved force_cast || FORCE_CAST=$(grep -nE 'as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
+    _lint_proved force_cast || FORCE_CAST=$(grep -nE '(^|[^A-Za-z0-9_])as!' "$FILE_PATH" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*//' \
         | while IFS= read -r hit; do
             n="${hit%%:*}"
             # A hit on line 1 has no preceding line, so there is nothing to waive. Guarding avoids
