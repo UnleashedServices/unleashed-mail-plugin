@@ -158,6 +158,24 @@ assert_empty "interpreter read-arg + file redirect -> no decision" "$(guard_bash
 # 5l. Prefixed tee must record the FILE operand, not the command path. `/usr/bin/tee SENSITIVE` writes it.
 assert_contains "/usr/bin/tee sensitive -> ask" "$(guard_bash '"/usr/bin/tee KeychainManager.swift"')" '"permissionDecision":"ask"'
 assert_contains "env tee -a sensitive -> ask" "$(guard_bash '"env tee -a OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 3 (codex + gemini): verb-aware -e, quoting, ln/cp -t sources, env -S/-P, quoted-; ==
+# 5m. Shell -e is errexit, NOT inline code — a read script arg must NOT be flagged (only the redirect writes).
+assert_empty "bash -e script + read arg -> no decision" "$(guard_bash '"bash -e report.sh OAuthService.swift > /tmp/out"')"
+assert_contains "perl -e inline code IS code -> ask" "$(guard_bash '"perl -e unlink(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5n. Single-quoted target must be seen through the quotes.
+assert_contains "touch single-quoted sensitive -> ask" "$(guard_bash "\"touch 'OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5o. ln SOURCE is a READ (LINK is the write); cp -t DIR SOURCE is a READ source.
+assert_empty "ln -s sensitive SOURCE -> no decision" "$(guard_bash '"ln -s OAuthService.swift /tmp/link"')"
+assert_contains "ln clobber over sensitive DEST -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "cp -t DIR sensitive SOURCE -> no decision" "$(guard_bash '"cp -t /tmp KeychainManager.swift"')"
+# 5p. env -S runs the split string as a command; -P consumes its path arg.
+assert_contains "env -S rm sensitive -> ask" "$(guard_bash '"env -S rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env -P PATH rm sensitive -> ask" "$(guard_bash '"env -P /opt/bin rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5q. Inline code with a QUOTED semicolon keeps the filename in the interpreter segment.
+assert_contains "python3 -c quoted-; write sensitive -> ask" "$(guard_bash "\"python3 -c 'import x; open(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_empty "interpreter code then unquoted read -> no decision" "$(guard_bash "\"python3 -c 'print(1)' ; cat OAuthService.swift\"")"
+# 5r. Quoted env-assignment value with a space must still resolve the real verb.
+assert_contains "FOO=quoted-space rm sensitive -> ask" "$(guard_bash "\"FOO='a b' rm OAuthService.swift\"")" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
