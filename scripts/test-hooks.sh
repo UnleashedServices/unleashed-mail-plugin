@@ -760,6 +760,39 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 7 (codex): SwiftLint has THREE line scopes, not one ==
+# The fallback only ever read the PRECEDING line, so `:this` (same line) and `:previous` (following
+# line) — both documented — were ignored and legitimately-waived code was BLOCKED. `:this` is live in
+# the consumer app (16 sites). False positives, so the gate stayed closed; but a hook demanding an edit
+# the project's own convention forbids still burns the developer's afternoon.
+printf 'import Foundation\nstruct TH {\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:this force_try\n}\n' > "$LINTDIR/This.swift"
+OUT="$(lint_run "$LINTDIR/This.swift")"
+assert_not_contains "lint: same-line ':this' waiver is honoured" "$OUT" "try!"
+printf 'import Foundation\nstruct PV {\n    let r = try! NSRegularExpression(pattern: "x")\n    // swiftlint:disable:previous force_try\n}\n' > "$LINTDIR/Prev.swift"
+OUT="$(lint_run "$LINTDIR/Prev.swift")"
+assert_not_contains "lint: following-line ':previous' waiver is honoured" "$OUT" "try!"
+# ...but a scope must not waive the WRONG line.
+printf 'import Foundation\nstruct TW {\n    // swiftlint:disable:this force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ThisWrong.swift"
+OUT="$(lint_run "$LINTDIR/ThisWrong.swift")"
+assert_contains "lint: ':this' on the PRECEDING line does NOT waive this line" "$OUT" "try!"
+printf 'import Foundation\nstruct PW {\n    // swiftlint:disable:previous force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/PrevWrong.swift"
+OUT="$(lint_run "$LINTDIR/PrevWrong.swift")"
+assert_contains "lint: ':previous' on the PRECEDING line does NOT waive this line" "$OUT" "try!"
+# A directive on the HIT line whose scope points ELSEWHERE must not waive it. These pin the scope
+# MATCH itself: the wrong-line cases above only exercise the `next` branch, so dropping the
+# `_got == _want` check left the suite green — a test that cannot fail is not a test.
+printf 'import Foundation\nstruct SW {\n    let a = 1\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:previous force_try\n}\n' > "$LINTDIR/ScopeWrong1.swift"
+OUT="$(lint_run "$LINTDIR/ScopeWrong1.swift")"
+assert_contains "lint: ':previous' ON the hit line waives the line ABOVE, not the hit line" "$OUT" "try!"
+printf 'import Foundation\nstruct SW2 {\n    let r = try! NSRegularExpression(pattern: "x")\n    // swiftlint:disable:next force_try\n    let b = 1\n}\n' > "$LINTDIR/ScopeWrong2.swift"
+OUT="$(lint_run "$LINTDIR/ScopeWrong2.swift")"
+assert_contains "lint: ':next' on the FOLLOWING line waives the line BELOW it, not the hit line" "$OUT" "try!"
+
+# ...and a scoped waiver for a DIFFERENT rule must not waive force_try.
+printf 'import Foundation\nstruct TO {\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:this force_cast\n}\n' > "$LINTDIR/ThisOther.swift"
+OUT="$(lint_run "$LINTDIR/ThisOther.swift")"
+assert_contains "lint: ':this force_cast' does NOT waive force_try" "$OUT" "try!"
+
 # == COREDEV-2494 review round 6 (codex): a directive must BE the comment, and `all` is a keyword ==
 # Both `_waives` and `_in_disabled_region` used a bare "contains swiftlint:disable" test, so prose ABOUT
 # the linter silenced the linter — all FAIL-OPEN. And SwiftLint's documented `all` keyword was handled

@@ -212,31 +212,46 @@ _in_disabled_region() {
     ' "$1"
 }
 
-_waives() {
-    _line="$1"; _rule="$2"
+# Does the directive on line $1 waive rule $2 for the line at scope $3 (next|this|previous)?
+#
+# SwiftLint documents THREE line scopes, and the fallback only ever read the PRECEDING line — so two of
+# them were ignored and legitimately-waived code was blocked (codex, #43 review; both reproduced):
+#     let r = try! ... // swiftlint:disable:this force_try      <- same line   (16 sites in the app)
+#     let r = try! ...
+#     // swiftlint:disable:previous force_try                   <- following line
+# Both are FALSE POSITIVES, so the gate stayed closed — but a hook that demands an edit the project's own
+# convention forbids is broken in the direction that wastes a developer's afternoon.
+_waives_scoped() {
+    _line="$1"; _rule="$2"; _want="$3"
     _body=$(_directive_body "$_line") || return 1
     case "$_body" in swiftlint:disable*) ;; *) return 1 ;; esac   # an `enable` never waives
     _tail="${_body#swiftlint:disable}"
     case "$_tail" in
-        :previous*|:this*) return 1 ;;   # scoped to a line that is not ours
+        :next*)     _got=next;     _tail="${_tail#:next}" ;;
+        :this*)     _got=this;     _tail="${_tail#:this}" ;;
+        :previous*) _got=previous; _tail="${_tail#:previous}" ;;
+        *)          _got=region ;;
     esac
-    _tail="${_tail#:next}"
-    # CUT THE RATIONALE FIRST. This project MANDATES a trailing rationale after a ` - ` delimiter —
-    # CLAUDE.md: "`// swiftlint:disable:next no_legacy_nsregex - <migration ticket>` — note the ` - `
-    # rationale delimiter" — and the app has them in the wild. Without cutting, the PROSE is scanned as
-    # a rule list, so `disable:next force_cast - force_try is handled by caller` falsely waived
-    # force_try (gemini, #43 review). Rule IDs never contain " - ", so cutting there is lossless.
+    # An unscoped `swiftlint:disable` opens a REGION, which also covers the line right after it.
+    if [ "$_want" = next ]; then
+        [ "$_got" = next ] || [ "$_got" = region ] || return 1
+    else
+        [ "$_got" = "$_want" ] || return 1
+    fi
+    # CUT THE RATIONALE FIRST — this project MANDATES `<rule> - <ticket>` (CLAUDE.md), and scanning the
+    # prose as a rule list falsely waived (gemini, #43 review). Rule IDs never contain " - ".
     _rules="${_tail%% - *}"
     _stripped="$(printf '%s' "$_rules" | tr -d '[:space:]')"
-    [ -z "$_stripped" ] && return 0                 # blanket `swiftlint:disable` with no rule list
+    [ -z "$_stripped" ] && return 0                 # blanket disable, no rule list
     _norm=" $(printf '%s' "$_rules" | tr ',' ' ' | tr -s '[:space:]' ' ') "
-    # `all` is a DOCUMENTED SwiftLint keyword meaning every rule (README: "Disable All Rules in Swift
-    # Code"), which this helper did not know (codex, #43 review) — verified against the SwiftLint docs.
-    [ "${_norm#* all }" != "$_norm" ] && return 0
-    # QUOTE the needle: inside ${..} an unquoted $_rule expands as a GLOB, not a literal (SC2295).
+    [ "${_norm#* all }" != "$_norm" ] && return 0   # documented `all` keyword
+    # QUOTE the needle: unquoted, $_rule expands as a GLOB inside ${..} (SC2295).
     [ "${_norm#* "$_rule" }" != "$_norm" ] && return 0
     return 1
 }
+
+# Back-compat shim: the preceding line waiving THIS line == scope `next`.
+_waives() { _waives_scoped "$1" "$2" next; }
 
 # --- 3 & 4. try! / as! greps: FALLBACK ONLY, when SwiftLint did not run (COREDEV-2494).
 #
@@ -292,7 +307,12 @@ if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
             # list). `swiftlint:disable:next no_legacy_nsregex` before a `try! NSRegularExpression(...)`
             # is a REAL pattern in this codebase (the regex-migration epic) and must NOT be read as a
             # force_try waiver (PR #43 review).
-            if ! _waives "$prev" force_try && ! _in_disabled_region "$FILE_PATH" "$n" force_try; then printf '%s\n' "$hit"; fi
+            cur=$(sed -n "${n}p" "$FILE_PATH" 2>/dev/null)
+            nxt=$(sed -n "$((n + 1))p" "$FILE_PATH" 2>/dev/null)
+            if ! _waives "$prev" force_try \
+               && ! _waives_scoped "$cur" force_try this \
+               && ! _waives_scoped "$nxt" force_try previous \
+               && ! _in_disabled_region "$FILE_PATH" "$n" force_try; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$TRY_BANG" ]; then
         add_block "❌ Found 'try!' in production code (swiftlint did not enforce force_try here — grep fallback) — $FILE_PATH:
@@ -312,7 +332,12 @@ $TRY_BANG"
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
-            if ! _waives "$prev" force_cast && ! _in_disabled_region "$FILE_PATH" "$n" force_cast; then printf '%s\n' "$hit"; fi
+            cur=$(sed -n "${n}p" "$FILE_PATH" 2>/dev/null)
+            nxt=$(sed -n "$((n + 1))p" "$FILE_PATH" 2>/dev/null)
+            if ! _waives "$prev" force_cast \
+               && ! _waives_scoped "$cur" force_cast this \
+               && ! _waives_scoped "$nxt" force_cast previous \
+               && ! _in_disabled_region "$FILE_PATH" "$n" force_cast; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$FORCE_CAST" ]; then
         add_block "❌ Found 'as!' (force cast) in production code (swiftlint did not enforce force_cast here — grep fallback) — $FILE_PATH:
