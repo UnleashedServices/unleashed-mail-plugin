@@ -57,7 +57,10 @@ to extend `MockServices.swift` rather than introduce parallel mock files.
 
 ```swift
 // In MockServices.swift — the canonical location
-final class MockEmailService: EmailServiceProtocol {
+// `EmailServiceProtocol` refines `Sendable`, so a mock with mutable stored state needs an explicit
+// Sendability opt-out. `@unchecked Sendable` is the sanctioned test-mock form — these mutable vars are
+// only ever touched from the single test thread; do NOT copy this opt-out into production types.
+final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
     var stubbedEmails: [Email] = []
     var fetchMessagesCallCount = 0
     var sendMessageCallCount = 0
@@ -69,7 +72,7 @@ final class MockEmailService: EmailServiceProtocol {
                        paginationToken: PaginationToken?) async throws -> (emails: [Email], nextToken: PaginationToken) {
         fetchMessagesCallCount += 1
         if let error = shouldThrow { throw error }
-        return (stubbedEmails, PaginationToken(nil))
+        return (stubbedEmails, .none)   // `.none` is PaginationToken's end-of-list case (it's an enum, not Optional)
     }
 
     // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`. The owner-bound

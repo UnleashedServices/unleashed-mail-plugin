@@ -305,7 +305,10 @@ func prefetchIfNeeded(currentIndex: Int) async {
 
     do {
         let page = try await provider.fetchMessages(folderId: "INBOX", maxResults: 50, paginationToken: nextToken)
-        self.nextPageToken = page.nextToken
+        // `nextToken` is a non-optional PaginationToken; end-of-list is the `.none` case, not nil. Store
+        // nil once `hasMore` is false so the guard above stops prefetching — assigning the raw token
+        // would keep `nextPageToken` non-nil and loop forever at the end of the list.
+        self.nextPageToken = page.nextToken.hasMore ? page.nextToken : nil
         try await dbQueue.write { db in
             for msg in page.emails { try msg.save(db) }
         }

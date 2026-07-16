@@ -161,11 +161,16 @@ Text("Title").font(.largeTitle)  // ❌
 ### Layout Adaptation
 
 ```swift
+// Content text must SCALE — use the Curator scaler, not a bare `.system(size:)` (fixed, chrome-only).
 VStack {
     Text("Subject")
-        .font(.system(size: CuratorTheme.Typography.titleSize, weight: .semibold))
+        .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.titleSize,
+                                      weight: .semibold,
+                                      scale: appState.uiPreferences.uiFontScale))
     Text(subject)
-        .font(.system(size: CuratorTheme.Typography.bodySize))
+        .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.bodySize,
+                                      weight: .regular,
+                                      scale: appState.uiPreferences.uiFontScale))
         .lineLimit(nil)  // Allow wrapping
         .fixedSize(horizontal: false, vertical: true)  // Grow vertically
 }
