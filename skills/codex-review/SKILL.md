@@ -7,7 +7,7 @@ description: Read-only Codex CLI review for plans, debug sessions, and post-impl
 
 All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/gemini-review` (not as a replacement). Post-implementation audits also run Codex.
 
-> **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. Only the *user* may waive it (scoped + recorded in the Combined verdict); see the "Preflight & waiver" policy in `AGENT_CONTRACTS.md` §2. Never self-waive.
+> **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
 
 Docs: https://developers.openai.com/codex/cli/reference
 

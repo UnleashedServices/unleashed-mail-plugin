@@ -6,10 +6,15 @@ allowed-tools: Read, Grep, Bash
 
 # Plan-Review Synthesis
 
-A **read-only** skill that combines the two plan-review transcripts into a single auditable record — the
-proof that the `AGENT_CONTRACTS.md §2` "both reviewers must return APPROVE / APPROVE_WITH_NOTES" gate
-passed, with any disagreement **surfaced** rather than averaged away. It runs nothing and gates nothing
-automatically; it produces a Markdown block for the human running the gate.
+A **source-preserving** skill that combines the two plan-review transcripts into a single auditable
+record — the proof that the `AGENT_CONTRACTS.md §2` "both reviewers must return APPROVE / APPROVE_WITH_NOTES"
+gate passed, with any disagreement **surfaced** rather than averaged away. It runs nothing and gates
+nothing automatically; it produces a Markdown block for the human running the gate.
+
+> **Not read-only in the filesystem sense.** It never edits the plan, the gates, or any source, but it
+> DOES write session state: it persists the plan-digest-bound Combined-verdict artifact under the plan's
+> `.verdicts/` dir (step below). "Source-preserving, session-state-writing" is the accurate description;
+> the earlier "read-only" label was wrong about the write (full review, #41).
 
 Run it **after** both review transcripts are captured (see `/gemini-review` and
 `/codex-review`):
@@ -99,7 +104,7 @@ After emitting the block, **persist the Combined verdict as a plan-digest-bound 
 plan that was reviewed plus each reviewer's status + transcript:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
     --plan docs/planning/FEATURE_NAME_PLAN.md \
     --verdict <COMBINED_VERDICT> \
     --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
