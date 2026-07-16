@@ -22,12 +22,18 @@ any code:
 if [ -f "$ARGUMENTS" ]; then
     PLAN="$ARGUMENTS"
 else
-    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`-`/`.` -> `_` (gemini, #41).
+    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
     # `.` is normalized too, or `/implement "OAuth 2.0"` (KEY `oauth_2.0`) never matches
     # OAUTH_2_0_PLAN.md (`oauth_2_0_plan.md`) and the gate reports "no plan" for a plan that exists
-    # (codex, #41 review). It fails CLOSED, so this is usability, not safety. `.md` -> `_md` on both
-    # sides is harmless: this is a substring test, not an equality test.
-    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] -.' '[:lower:]___')
+    # (codex, #41 review). `.md` -> `_md` on both sides is harmless: this is a substring test.
+    #
+    # THE DASH MUST COME LAST. In a tr SET, a dash BETWEEN two characters is a RANGE, so the ` -.` I
+    # first wrote meant space(32)..dot(46) — silently mapping 15 characters (!"#$%&'()*+,-.) to `_` on
+    # BOTH BSD and GNU tr, not the three I intended. That is not cosmetic: it widens the equivalence
+    # class and resolves the WRONG plan — `/implement "c+dark"` -> KEY `c_dark` -> matches
+    # C-DARK_PLAN.md, so the gate verifies a plan nobody named (gemini, #41 review; the exact fail-open
+    # this block exists to prevent). Trailing `-` is a literal; ` .-` maps space, dot and dash only.
+    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] .-' '[:lower:]___')
     # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
     # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
     # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).
@@ -60,7 +66,7 @@ else
     if [[ "$KEY" == *[!_]* ]]; then
         for p in docs/planning/*PLAN*.md; do
             [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
-            b=$(printf '%s' "${p##*/}" | tr '[:upper:] -.' '[:lower:]___')
+            b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
             [[ "$b" == *"$KEY"* ]] && MATCHES+=("$p")
         done
     fi
