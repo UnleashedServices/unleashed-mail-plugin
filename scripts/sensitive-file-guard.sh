@@ -87,7 +87,9 @@ _split_segments() {
             j=$((i + 2)); tag=""; tq=""
             [ "${s:$j:1}" = "-" ] && j=$((j + 1))
             while [ "${s:$j:1}" = " " ] || [ "${s:$j:1}" = "	" ]; do j=$((j + 1)); done
-            case "${s:$j:1}" in "'"|'"') tq="${s:$j:1}"; j=$((j + 1)) ;; esac
+            # a `'`/`"`-quoted OR a `\`-escaped delimiter (`<<'EOF'`, `<<\EOF`) both disable expansion; the
+            # backslash is a one-char marker with no closing pair — skip it and read the alnum tag (r7: codex).
+            case "${s:$j:1}" in "'"|'"') tq="${s:$j:1}"; j=$((j + 1)) ;; \\) j=$((j + 1)) ;; esac
             while [ "$j" -lt "$n" ]; do
                 c2="${s:$j:1}"
                 if [ -n "$tq" ]; then
@@ -110,6 +112,9 @@ _split_segments() {
                         lbuf="$lbuf$c3"
                     fi
                 done
+                # the heredoc command is complete at the terminator — emit it so a following command
+                # (`cat <<EOF … EOF <newline> rm X`) starts a FRESH segment, not appended here (r7: codex).
+                printf '%s\0' "$seg"; seg=""
             fi
             continue
         fi
@@ -181,6 +186,19 @@ _effective_verb() {
                 -*) i=$((i + 1)) ;;                               # other flag (incl. -S) / =-joined form
                 *=*) i=$((i + 1)) ;;                              # VAR=val
                 *) break ;;                                       # the command word
+            esac
+        done
+        v="${a[$i]:-}"; v="${v##*/}"
+    fi
+    # Unwrap the `command` builtin prefix (`command rm X`, `command -p python3 -c …`) — it runs the named
+    # utility bypassing functions/aliases, so the real verb is the word after it and its flags (r7: codex).
+    if [ "$v" = "command" ]; then
+        i=$((i + 1))
+        while [ "$i" -lt "$n" ]; do
+            case "${a[$i]}" in
+                --) i=$((i + 1)); break ;;
+                -*) i=$((i + 1)) ;;
+                *) break ;;
             esac
         done
         v="${a[$i]:-}"; v="${v##*/}"

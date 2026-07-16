@@ -210,6 +210,13 @@ assert_contains "heredoc body writes sensitive -> ask" "$(guard_bash '"python3 <
 assert_empty "tee then # comment naming sensitive -> no decision" "$(guard_bash '"tee /tmp/output # OAuthService.swift"')"
 # 6c. A `.bak` of a sensitive file is NOT the sensitive basename — the broad scan must read the whole token.
 assert_empty "rm sensitive.swift.bak -> no decision" "$(guard_bash '"rm OAuthService.swift.bak"')"
+# == round 7 (codex): heredoc-then-command split, backslash/`command` delimiters ==
+# 6d. A command AFTER a heredoc terminator is a SEPARATE command (must split off the heredoc segment).
+assert_contains "heredoc then rm sensitive -> ask" "$(guard_bash '"cat <<EOF\ntext\nEOF\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6e. A backslash-quoted heredoc delimiter (`<<\\EOF`) is still a heredoc — body stays with interpreter.
+assert_contains "backslash heredoc body write -> ask" "$(guard_bash '"python3 <<\\EOF\nopen(OAuthService.swift)\nEOF"')" '"permissionDecision":"ask"'
+# 6f. The `command` builtin prefix must unwrap to the real verb.
+assert_contains "command rm sensitive -> ask" "$(guard_bash '"command rm OAuthService.swift"')" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
