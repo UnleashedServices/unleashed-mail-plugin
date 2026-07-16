@@ -12,9 +12,12 @@
 # COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
 # CLAUDE_TOOL_ARG_* fallback) and a per-kind lint marker is written for the Stop-gate.
 
-# Kill switch (COREDEV-2494) — this was the ONE hook without one, despite emitting `decision:block`
-# and arming the Stop gate. Every other hook here honours a `UNLEASHED_*` off switch; a blocking hook
-# with no escape is exactly the thing a user needs to be able to turn off.
+# Kill switch (COREDEV-2494) — this was the only BLOCKING hook without one, despite emitting
+# `decision:block` and arming the Stop gate. A blocking hook with no escape is exactly the thing a user
+# needs to be able to turn off. (Most hooks here honour a `UNLEASHED_*` switch, but NOT all: this
+# comment used to claim "every other hook" does. `swift-build-verify.sh` has none — its
+# `UNLEASHED_FAILURE_LOG` gates only the log side-effect, and the advisory still fires; `test-runner.sh`
+# and `pre-commit-checks.sh` have none either. Verified, pre-merge audit.)
 [ "${UNLEASHED_LINT_CHECK:-on}" = "off" ] && exit 0
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -134,6 +137,43 @@ fi
 # `swiftlint:disable`/`:next` with no rule list is a blanket waiver. Prefix-strip, not `case`
 # (COREDEV-2492/2494: a `)` in a case pattern collides with an enclosing `$( )`, and bash 3.2 cannot
 # parse case-in-while-in-$() at all).
+# Is line $2 of file $1 inside an OPEN `swiftlint:disable <rule>` REGION?
+#
+# `_waives` only ever inspects the PRECEDING line, which covers `:next` and a blanket directive directly
+# above. It does NOT cover the REGION form, which is what 15 real app files actually use:
+#     // swiftlint:disable force_try
+#     let a = try! ...        <- prev line IS the directive -> _waives says waived
+#     let b = try! ...        <- prev line is CODE          -> _waives says NOT waived  == FALSE POSITIVE
+#     // swiftlint:enable force_try
+# That false block reached the developer only after this PR stopped gating the greps on SWIFTLINT_RAN,
+# i.e. the region gap and the widened fallback are individually correct and jointly a regression — the
+# 120-false-positive class the suppression used to hide. Found by pre-merge audit, not by the bots.
+#
+# Scope suffixes (:next/:this/:previous) are LINE-scoped and never open a region — only a bare
+# `swiftlint:disable` does, until a matching `swiftlint:enable`.
+_in_disabled_region() {
+    awk -v n="$2" -v rule="$3" '
+        NR >= n { exit }
+        {
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            if (line !~ /^\/\//) next                       # directives live in comments only
+            if (match(line, /swiftlint:(disable|enable)/) == 0) next
+            act  = (line ~ /swiftlint:disable/) ? "d" : "e"
+            tail = substr(line, RSTART + RLENGTH)
+            if (act == "d" && tail ~ /^:(next|this|previous)/) next   # line-scoped, not a region
+            sub(/ - .*$/, "", tail)                          # drop the mandated ` - <rationale>`
+            gsub(/[:,]/, " ", tail)
+            names = " " tail " "
+            gsub(/[[:space:]]+/, " ", names)
+            blanket = (names ~ /^ *$/)
+            hit = blanket || index(names, " " rule " ")
+            if (hit) open = (act == "d") ? 1 : 0
+        }
+        END { exit (open ? 0 : 1) }
+    ' "$1"
+}
+
 _waives() {
     _line="$1"; _rule="$2"
     # not a directive at all
@@ -182,9 +222,13 @@ _waives() {
 # REQUIRES to be waived (the regex-migration epic — piecemeal NSRegularExpression conversion risks
 # Sendable regressions). The hook then poisons a `lint=fail` marker that blocks Stop.
 #
-# When swiftlint ran (stage 2) it is authoritative: it honours the directives, and BOTH rules are
-# default-error rules (`force_try` / `force_cast`), so a genuinely UNWAIVED site still surfaces as
-# `: error:` and stage 2 already blocks on it. Detection is preserved; the false-positive class is not.
+# SUPERSEDED (round 5) — kept only to record why the old reasoning was wrong, because it reads
+# plausibly and a maintainer "restoring" it would reopen a real hole. It used to say: "When swiftlint ran
+# it is authoritative: it honours the directives, and BOTH rules are default-error rules, so an UNWAIVED
+# site still surfaces as `: error:` and stage 2 already blocks." The flaw: "swiftlint ran" does not mean
+# these rules ran. `disabled_rules`/`only_rules`/`excluded:` all make swiftlint exit 0 with NO output,
+# which is indistinguishable from a clean file — so the fallback was dropped for exactly the files
+# swiftlint never policed. The gate is now per-rule and evidence-based: see `_lint_proved`.
 # SILENCE IS NOT PROOF. `SWIFTLINT_RAN` only says the binary executed — it does NOT say these rules
 # policed THIS file. The repo config can disable them (`disabled_rules`/`only_rules`) or exclude the
 # path (`excluded:` — the consumer app excludes GRDB/SwiftSoup/Vendor/build/.build), and swiftlint then
@@ -220,7 +264,7 @@ if [[ "$FILE_PATH" != *Tests/* ]] && [[ "$FILE_PATH" != *Test.swift ]]; then
             # list). `swiftlint:disable:next no_legacy_nsregex` before a `try! NSRegularExpression(...)`
             # is a REAL pattern in this codebase (the regex-migration epic) and must NOT be read as a
             # force_try waiver (PR #43 review).
-            if ! _waives "$prev" force_try; then printf '%s\n' "$hit"; fi
+            if ! _waives "$prev" force_try && ! _in_disabled_region "$FILE_PATH" "$n" force_try; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$TRY_BANG" ]; then
         add_block "❌ Found 'try!' in production code (swiftlint did not enforce force_try here — grep fallback) — $FILE_PATH:
@@ -240,7 +284,7 @@ $TRY_BANG"
             # Prefix-strip, NOT `case`: a `)` in a case pattern collides with the closing `)` of the
             # enclosing `$( )` (and bash 3.2 — what macOS ships — cannot parse case-in-while-in-$() at
             # all). Same fix as COREDEV-2492. "${prev#*swiftlint:disable}" != "$prev" == "contains it".
-            if ! _waives "$prev" force_cast; then printf '%s\n' "$hit"; fi
+            if ! _waives "$prev" force_cast && ! _in_disabled_region "$FILE_PATH" "$n" force_cast; then printf '%s\n' "$hit"; fi
         done)
     if [ -n "$FORCE_CAST" ]; then
         add_block "❌ Found 'as!' (force cast) in production code (swiftlint did not enforce force_cast here — grep fallback) — $FILE_PATH:

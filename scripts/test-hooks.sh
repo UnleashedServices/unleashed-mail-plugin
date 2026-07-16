@@ -8,9 +8,11 @@
 # COVERAGE NOTE (COREDEV-2338): this harness exercises hook *behavior* but hardcodes the
 # hook-script paths it drives — it does NOT prove hooks/hooks.json actually points at those
 # scripts (that manifest<->script linkage, event names, and matcher tokens are gated by
-# scripts/validate-hooks.py). Known behavioral gap: the PostToolUse `swift-lint-check.sh`
-# hook is not simulated here (it needs SwiftLint + a Swift-file context unavailable on the
-# Linux CI runner); its manifest wiring is still validated by validate-hooks.py.
+# scripts/validate-hooks.py). NOTE (COREDEV-2494): `swift-lint-check.sh` IS behaviorally covered
+# here now — the grep-fallback path needs no SwiftLint, and the swiftlint-present paths are driven
+# by stub binaries on PATH (see `$LINTDIR/{badbin,warnbin,silentbin}`), so all of it runs on the
+# Linux CI runner. This header used to declare the hook untestable; that claim outlived its truth
+# by ~20 assertions and would have talked the next contributor out of testing it.
 set -uo pipefail
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -758,6 +760,32 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 pre-merge audit: the REGION form of swiftlint:disable ==
+# `_waives` only ever looks at the PRECEDING line, so it covered `:next` and a directive directly above
+# but NOT the region form — which is what 15 real app files actually use. The 2nd+ site in a region has
+# CODE on its preceding line, so it was a FALSE POSITIVE. Latent until this PR stopped gating the greps
+# on SWIFTLINT_RAN: the region gap and the widened fallback are each correct and jointly a regression.
+# Measured: 15/15 real app files false-blocked without _in_disabled_region; 0/15 with it.
+printf 'import Foundation\nstruct RG {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n    // swiftlint:enable force_try\n}\n' > "$LINTDIR/Region.swift"
+OUT="$(lint_run "$LINTDIR/Region.swift")"
+assert_not_contains "lint: try! inside a disable REGION -> NOT flagged (2nd site too)" "$OUT" "try!"
+# The region must CLOSE at :enable — a site after it is unwaived.
+printf 'import Foundation\nstruct RC {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/RegionClose.swift"
+OUT="$(lint_run "$LINTDIR/RegionClose.swift")"
+assert_contains "lint: try! AFTER swiftlint:enable -> BLOCKS (region closed)" "$OUT" "6:"
+# A region for a DIFFERENT rule must not waive force_try.
+printf 'import Foundation\nstruct RO {\n    // swiftlint:disable force_cast\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_cast\n}\n' > "$LINTDIR/RegionOther.swift"
+OUT="$(lint_run "$LINTDIR/RegionOther.swift")"
+assert_contains "lint: a force_cast REGION does NOT waive force_try" "$OUT" "try!"
+# A blanket region (no rule list) waives everything inside it.
+printf 'import Foundation\nstruct RB {\n    // swiftlint:disable\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable\n}\n' > "$LINTDIR/RegionBlanket.swift"
+OUT="$(lint_run "$LINTDIR/RegionBlanket.swift")"
+assert_not_contains "lint: blanket disable REGION waives force_try" "$OUT" "try!"
+# `:next` must NOT open a region — the site two lines below stays unwaived.
+printf 'import Foundation\nstruct RN {\n    // swiftlint:disable:next force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/RegionNext.swift"
+OUT="$(lint_run "$LINTDIR/RegionNext.swift")"
+assert_contains "lint: ':next' does NOT open a region -> the 2nd site still BLOCKS" "$OUT" "5:"
+
 # == COREDEV-2494 review round 5 (codex): SILENCE IS NOT PROOF OF ENFORCEMENT ==
 # The fallback was gated on SWIFTLINT_RAN, i.e. "the binary executed". But the repo config can disable
 # these rules (`disabled_rules`/`only_rules`) or exclude the path (`excluded:` — the consumer app
@@ -820,9 +848,9 @@ printf 'import Foundation\nstruct E {\n    // swiftlint:disable:next force_try_c
 OUT="$(lint_run "$LINTDIR/SubstringRule.swift")"
 assert_contains "lint: force_try_custom does NOT waive force_try" "$OUT" "try!"
 # ...but a comma-separated list that really does name it still waives.
-printf 'import Foundation\nstruct F {\n    // swiftlint:disable:next no_legacy_nsregex, force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ListRule.swift"
+printf 'import Foundation\nstruct F {\n    // swiftlint:disable:next no_legacy_nsregex,force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ListRule.swift"
 OUT="$(lint_run "$LINTDIR/ListRule.swift")"
-assert_not_contains "lint: a comma-list naming force_try DOES waive it" "$OUT" "try!"
+assert_not_contains "lint: a comma-list (NO space — pins tr ',' ' ') naming force_try DOES waive it" "$OUT" "try!"
 
 # == COREDEV-2494 PR review round 2 (gemini): a hit on LINE 1 has no preceding line ==
 printf 'let r = try! NSRegularExpression(pattern: "x")\n' > "$LINTDIR/Line1.swift"
