@@ -70,28 +70,57 @@ else
     # ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
     # states the real property ("not composed solely of what tr just mapped to _") and is
     # locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
-    MATCHES=()
+    # EXACT STEM matches are collected separately from mere SUBSTRING matches. A unique substring used
+    # to resolve silently as identity — `/implement mode` picked DARK_MODE_PLAN.md — so a coincidental
+    # fragment could satisfy the gate against a plan the user did not name (full review, #41). Now a
+    # full/exact feature name always wins, and a pure substring must be named explicitly.
+    #
+    # For each plan, three stems the arg may exactly equal:
+    #   full   — the basename minus the `_PLAN.md` suffix            (coredev_2328_reviewer_status_capture)
+    #   desc   — full minus a leading `coredev_<digits>_` ticket     (reviewer_status_capture)
+    #   ticket — the `coredev_<digits>` prefix alone                 (coredev_2328)
+    EXACT=(); SUBSTR=()
     if [[ "$KEY" == *[!_]* ]]; then
         for p in docs/planning/*PLAN*.md; do
             [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
             # THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
             # `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
             # branch refused that exact symlink while the glob branch happily took it (codex, #41
-            # review; reproduced). Filtering here, not after, so an out-of-tree symlink cannot even
-            # create a false AMBIGUOUS.
+            # review; reproduced). Filtering here so an out-of-tree symlink cannot even reach a match.
             _contained "$p" || continue
+            # `b` is the NORMALIZED basename: tr already mapped ` `/`.`/`-` -> `_`, so `.md` is `_md`
+            # here and the suffix to strip is `_plan_md`, not `_plan.md`.
             b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
-            [[ "$b" == *"$KEY"* ]] && MATCHES+=("$p")
+            full="${b%_plan_md}"
+            desc="$full"; ticket=""
+            case "$full" in
+                coredev_[0-9]*)
+                    rest="${full#coredev_}"      # 2328_reviewer_status_capture
+                    ticket="coredev_${rest%%_*}" # coredev_2328
+                    desc="${rest#*_}"            # reviewer_status_capture
+                    ;;
+            esac
+            if [ "$KEY" = "$full" ] || [ "$KEY" = "$desc" ] || [ "$KEY" = "$ticket" ]; then
+                EXACT+=("$p")
+            elif [[ "$b" == *"$KEY"* ]]; then
+                SUBSTR+=("$p")
+            fi
         done
     fi
-    N=${#MATCHES[@]}
-    # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
-    # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated.
-    if [ "$N" -gt 1 ]; then
-        { echo "AMBIGUOUS: '$ARGUMENTS' matches $N plans — name one exactly:"; printf '%s\n' "${MATCHES[@]}"; } >&2
+    # Prefer EXACT: a full name wins over any coincidental substring.
+    if [ "${#EXACT[@]}" -gt 1 ]; then
+        { echo "AMBIGUOUS: '$ARGUMENTS' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
+        exit 2
+    elif [ "${#EXACT[@]}" -eq 1 ]; then
+        PLAN="${EXACT[0]}"
+    elif [ "${#SUBSTR[@]}" -ge 1 ]; then
+        # A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
+        # the user only partially named. Require an exact name (full review, #41).
+        { echo "No plan is named exactly '$ARGUMENTS'. Did you mean one of these? Name it exactly:"
+          printf '%s\n' "${SUBSTR[@]}"; } >&2
         exit 2
     fi
-    PLAN="${MATCHES[0]}"          # empty array -> empty PLAN -> the fail-closed branch below
+    # No EXACT and no SUBSTR -> empty PLAN -> the fail-closed branch below.
 fi
 if [ -z "$PLAN" ]; then
     # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY

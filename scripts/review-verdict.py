@@ -26,7 +26,7 @@ import os
 import re
 import sys
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 # SHA-256 of zero bytes. `agy` writes EXACTLY 0 bytes from a non-TTY when a review fails, so this digest
 # is the signature of a FAILED review, never a review. The parse-time size check only guards the WRITE
@@ -195,7 +195,14 @@ def cmd_write(args: argparse.Namespace) -> int:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
     artifact = {
         "schemaVersion": SCHEMA_VERSION,
-        "planPath": os.path.relpath(os.path.abspath(plan)),
+        # REALPATH, not a CWD-relative relpath: the binding must distinguish two plans that share a
+        # basename in different directories (`docs/planning/a/SAME_PLAN.md` vs `.../b/SAME_PLAN.md`).
+        # relpath is CWD-dependent, which is why verify previously fell back to comparing basenames —
+        # and that let an artifact copied between two same-named plans with identical bytes verify the
+        # wrong one (full review, #41). realpath is absolute+canonical, so it is CWD-independent AND
+        # directory-distinguishing. The artifact is git-ignored session state, so embedding an absolute
+        # path is fine; a repo move simply invalidates it (re-run the gate), which is correct.
+        "planPath": os.path.realpath(plan),
         "planSha256": _sha256_bytes(plan),
         "verdict": verdict,
         "reviewers": reviewers,
@@ -259,10 +266,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if problem:
         return _fail("approval not backed by a genuine dual review — " + problem)
     # The artifact must have been written FOR this plan — a copied/renamed artifact whose bytes happen
-    # to match a different plan must not satisfy the gate (PR #39 review). Compare basenames (relpath is
-    # CWD-dependent; the artifact is co-located with its plan, so the basename is the stable binding).
-    if os.path.basename(str(art.get("planPath", ""))) != os.path.basename(plan):
-        return _fail(f"artifact was written for a different plan ({art.get('planPath')!r}), not {plan}")
+    # to match a different plan must not satisfy the gate (PR #39 review). Compare the FULL realpath,
+    # not the basename: two plans that share a basename in different dirs (with identical bytes, so the
+    # digest also matches) would otherwise be interchangeable, and an artifact copied between them
+    # verified the wrong one (full review, #41; reproduced). realpath is CWD-independent.
+    if os.path.realpath(plan) != str(art.get("planPath", "")):
+        return _fail(f"artifact was written for a different plan ({art.get('planPath')!r}), "
+                     f"not {os.path.realpath(plan)}")
     current = _sha256_bytes(plan)
     if current != art.get("planSha256"):
         return _fail("plan has CHANGED since approval (digest mismatch) — re-run the gate on the "

@@ -58,6 +58,33 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("requires a transcript per reviewer", r.stdout + r.stderr)
 
+    def test_a_same_basename_plan_in_a_different_dir_cannot_reuse_the_artifact(self):
+        """The plan binding compared BASENAMES only, so an approving artifact copied between two
+        same-named plans with identical bytes verified the wrong one — the digest matched (identical
+        bytes) and the basename matched (same filename). Now bound to the full realpath (full review,
+        #41; reproduced)."""
+        import shutil
+        a_dir = os.path.join(self.d, "a")
+        b_dir = os.path.join(self.d, "b")
+        os.makedirs(a_dir); os.makedirs(b_dir)
+        a_plan = os.path.join(a_dir, "SAME_PLAN.md")
+        b_plan = os.path.join(b_dir, "SAME_PLAN.md")
+        for pth in (a_plan, b_plan):
+            with open(pth, "w", encoding="utf-8") as fh:
+                fh.write("# Same plan\nidentical bytes\n")
+        # approve a_plan
+        r = run("write", "--plan", a_plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(run("verify", "--plan", a_plan).returncode, 0)  # legit
+        # copy a's artifact next to b's identically-named plan
+        b_verdicts = os.path.join(b_dir, ".verdicts")
+        os.makedirs(b_verdicts)
+        shutil.copy(os.path.join(a_dir, ".verdicts", "SAME_PLAN.md.verdict.json"), b_verdicts)
+        v = run("verify", "--plan", b_plan)
+        self.assertNotEqual(v.returncode, 0, "a's approval must NOT verify b's plan")
+        self.assertIn("written for a different plan", v.stdout + v.stderr)
+
     def test_a_malformed_transcript_digest_cannot_pass(self):
         """A digest must LOOK like a digest.
 
