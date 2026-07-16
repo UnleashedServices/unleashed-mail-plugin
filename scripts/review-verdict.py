@@ -65,7 +65,7 @@ _MISSING_MEANS = "no usable verdict — the reviewer never ran, OR its transcrip
 REQUIRED_REVIEWERS = {"gemini", "codex"}
 
 
-def _quorum_problem(verdict, reviewers) -> "str | None":
+def _quorum_problem(verdict, reviewers) -> str | None:
     """Reason string if an APPROVING verdict is NOT backed by a genuine dual approval (both required
     reviewers present, DISTINCT, each approving); else None. Non-approving verdicts record whatever
     ran and are never gate-passing, so they skip this. Enforced at BOTH write and verify so neither a
@@ -261,7 +261,7 @@ def _parse_reviewer(spec: str) -> dict:
     return out
 
 
-def _reviewer_identity_problem(reviewers) -> "str | None":
+def _reviewer_identity_problem(reviewers: list[dict]) -> str | None:
     """Reason string if the reviewer SET is malformed regardless of verdict: a duplicate name, a stray
     reviewer, or a missing mandatory reviewer. Enforced at WRITE so an artifact verify would call corrupt
     can never be created in the first place (full review, #42 — write/verify symmetry). Statuses/names
