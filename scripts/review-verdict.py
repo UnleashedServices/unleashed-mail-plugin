@@ -428,7 +428,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if _strays:
             _corrupt.append(f"{', '.join(_strays)} is not part of the gate "
                             f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
-        if _absent_required and not _corrupt:
+        # NO `and not _corrupt` guard: for a typo BOTH facts are the diagnosis — `gemni` is a stray AND
+        # `gemini` is absent. Suppressing the second because the first fired reported half of it and made
+        # the reader work out the rest.
+        if _absent_required:
             _corrupt.append(f"does not record the mandatory reviewer(s) {_absent_required} "
                             f"(recorded: {sorted(_known) or 'none'} — a typo?)")
         absent = sorted(_name(r) for r in _dicts if _name(r) and _status(r) == "MISSING")

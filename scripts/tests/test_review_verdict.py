@@ -478,6 +478,9 @@ class ReviewVerdictTest(unittest.TestCase):
         out = v.stdout + v.stderr
         self.assertNotEqual(v.returncode, 0)
         self.assertIn("CORRUPT", out)
+        # BOTH halves of the diagnosis: the stray that was recorded, and the required one that was not.
+        # Either alone leaves the reader to spot `gemni` vs `gemini` themselves.
+        self.assertIn("not part of the gate", out)
         self.assertIn("mandatory reviewer", out)
         self.assertNotIn("never ran", out)
 
