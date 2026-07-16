@@ -61,10 +61,10 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT_HERE"
 # Targeted agent-role audit (post-implementation) — see skill list below
 codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 
-# Full diff review — built-in `codex review` (accepts an optional [PROMPT]; `-` reads stdin)
-codex -c model_reasoning_effort=xhigh review --uncommitted -o /tmp/review-output.md
-codex -c model_reasoning_effort=xhigh review --base main     -o /tmp/review-output.md
-codex -c model_reasoning_effort=xhigh review --commit <SHA>  -o /tmp/review-output.md
+# Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
+codex -c model_reasoning_effort=xhigh review --uncommitted
+codex -c model_reasoning_effort=xhigh review --base main
+codex -c model_reasoning_effort=xhigh review --commit <SHA>
 
 # Save agent output to file
 codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMPT_HERE"
@@ -85,12 +85,18 @@ codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMP
 
 | Flag | Purpose |
 |------|---------|
-| `--uncommitted` | Review staged, unstaged, and untracked changes (no custom prompt allowed) |
+| `--uncommitted` | Review staged, unstaged, and untracked changes |
 | `--base BRANCH` | Review changes against the given base branch |
 | `--commit SHA` | Review changes introduced by a specific commit |
-| `-o PATH` | Write final review to file |
+| `--title TITLE` | Optional commit title to display in the review summary |
+| `[PROMPT]` | Custom review instructions (`-` reads from stdin) |
 
-`codex review` DOES accept an optional `[PROMPT]` (custom review instructions; `-` reads from stdin) — the older "no custom prompt" note was stale (verified on `codex-cli` 0.144.4). For the skill/agent-role audits, still prefer `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`, which carries the skill rubric.
+`codex review` takes an optional `[PROMPT]` (custom review instructions; `-` reads from stdin) — the
+older "no custom prompt" note was stale (verified against `codex-cli` 0.144.4 and the upstream
+reference). It writes to **stdout only — there is no `-o`/`--output-last-message`** on `codex review`
+(that flag is `codex exec`-only), so capture it via the mandated PTY wrapper. For the skill/agent-role
+audits, still prefer `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`, which
+carries the skill rubric.
 
 ## Codex skills — mirror of the Unleashed Mail plugin
 
@@ -155,6 +161,6 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
 - `codex exec -c model_reasoning_effort=xhigh -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review (an optional `[PROMPT]` may refine it)
+- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review; it takes an optional `[PROMPT]` of custom review instructions and outputs to stdout (capture via the PTY wrapper — no `-o`)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.
