@@ -335,6 +335,31 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotIn("Traceback", out)
                 self.assertIn("GATE FAILED", out)
 
+    def test_a_null_status_is_reported_as_corrupt_not_invented_as_a_rejection(self):
+        """`.get("status", "")` returns None (not "") for an explicit null, and `str(None)` == "None" —
+        so a null-status reviewer was reported as `gemini=NONE (ran, wants plan changes)`, fabricating a
+        verdict for a reviewer whose status is unusable (gemini, #42 review). Same `.get`-default trap
+        already annotated on transcriptSha256."""
+        import glob
+        for junk in (None, 123, [], {}):
+            with self.subTest(status=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a = json.load(fh)
+                a["reviewers"] = [{"name": "gemini", "status": junk},
+                                  {"name": "codex", "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("NONE", out)                  # never invent a status
+                self.assertNotIn("wants plan changes", out)    # never invent a rejection
+                self.assertIn("CORRUPT", out)
+
     def test_mixed_MISSING_plus_rejection_does_not_mask_the_rejection(self):
         """One reviewer MISSING + one REQUEST_CHANGES is TWO problems, not one.
 

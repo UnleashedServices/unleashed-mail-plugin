@@ -330,14 +330,31 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # below (which would have caught it) never ran because this hint is computed first.
         _revs = art.get("reviewers")
         _revs = _revs if isinstance(_revs, list) else []
-        absent = sorted(str(r.get("name")) for r in _revs if isinstance(r, dict)
-                        and str(r.get("status", "")).strip().upper() == "MISSING")
+
+        def _status(r):
+            """Normalized status, or "" when the field is absent/null/non-string.
+
+            NOT `str(r.get("status", ""))`: `.get(k, default)` returns the default only when the key is
+            ABSENT — an explicit `"status": null` returns None, and `str(None)` is the STRING "None".
+            That classified a null-status reviewer as a rejection and reported `gemini=NONE (ran, wants
+            plan changes)` — fabricating a fact about a reviewer whose status is simply unusable
+            (gemini, #42 review). This is the same `.get`-default trap already annotated on
+            `transcriptSha256` in `_quorum_problem`; normalizing in one place stops the third instance.
+            """
+            v = r.get("status")
+            return v.strip().upper() if isinstance(v, str) else ""
+
+        _dicts = [r for r in _revs if isinstance(r, dict)]
+        # A status we cannot read is not a verdict. Say the artifact is corrupt; never guess.
+        malformed = sorted(str(r.get("name")) for r in _dicts if not _status(r))
+        absent = sorted(str(r.get("name")) for r in _dicts if _status(r) == "MISSING")
         # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
-        rejecting = sorted(f"{r.get('name')}={str(r.get('status', '')).strip().upper()}"
-                           for r in _revs if isinstance(r, dict)
-                           and str(r.get("status", "")).strip().upper() not in APPROVING
-                           and str(r.get("status", "")).strip().upper() != "MISSING")
-        if absent and rejecting:
+        rejecting = sorted(f"{r.get('name')}={_status(r)}" for r in _dicts
+                           if _status(r) and _status(r) not in APPROVING and _status(r) != "MISSING")
+        if malformed:
+            hint = (f" — artifact is CORRUPT: {', '.join(malformed)} has an absent/null/non-string status,"
+                    " so no reviewer classification here can be trusted; re-run the gate")
+        elif absent and rejecting:
             # MIXED. Saying "not a plan problem" here would tell the implementer to ignore real,
             # actionable feedback from the reviewer that DID run (codex, #42 review). Both are true and
             # both must be resolved.
