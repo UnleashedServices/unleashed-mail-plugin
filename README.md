@@ -312,12 +312,12 @@ The `.env` file is gitignored and will not be distributed with the plugin.
 
 ## Hooks
 
-The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch (the always-on lint-feedback hook `swift-lint-check.sh` is the exception; it only feeds advisories to the model). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
+The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch — including `swift-lint-check.sh`, which emits `decision:block` and arms the Stop gate, so it is the one that most needs an escape (`UNLEASHED_LINT_CHECK=off`). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
 | Event | Script | Behavior | Default | Kill switch |
 |---|---|---|---|---|
 | PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` |
-| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | — |
+| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | `UNLEASHED_LINT_CHECK=off` |
 | PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
 | Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` |
 | StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |

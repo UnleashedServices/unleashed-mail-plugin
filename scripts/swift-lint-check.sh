@@ -239,7 +239,10 @@ _waives() {
 # independent: one being enforced says nothing about the other.
 #
 # Safe to widen now ONLY because the greps became waiver-aware: the 120 measured false positives came
-# from waived sites, and `_waives` filters those directly, so suppression is no longer load-bearing.
+# from waived sites, and `_waives` + `_in_disabled_region` filter those directly, so suppression is no
+# longer load-bearing. (Both are required: `_waives` covers `:next`/adjacent directives, and
+# `_in_disabled_region` covers the disable/enable REGION form that 15 real app files use. Crediting
+# `_waives` alone was stale attribution — the region half landed later, in def02a4.)
 _lint_proved() {
     [ "$SWIFTLINT_RAN" -eq 1 ] || return 1
     printf '%s' "$LINT_OUTPUT" | grep -qE "\($1\)"
