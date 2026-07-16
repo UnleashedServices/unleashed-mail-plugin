@@ -23,7 +23,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 - **Working directory:** always run from the project root (top-level workspace directory containing `Unleashed Mail.xcodeproj/`). Codex resolves relative paths against `$PWD`.
 - **Model:** `~/.codex/config.toml` sets `model = "gpt-5.6-sol"` (Codex 5.6 "Sol"; `codex-cli` 0.144.4, verified 2026-07-16). The model is inherited by every `codex exec` call — **do not pass `--model`** on this ChatGPT-auth'd install (`gpt-5-codex` silently fails with zero-byte output when backgrounded).
 - **⚠️ Effort: ALWAYS pass `-c model_reasoning_effort=xhigh` on a review call — do not rely on the config default.** The config *should* carry `model_reasoning_effort = "xhigh"`, but that setting is fragile: the Codex 5.6 upgrade silently reset it to **`low`** once already. A plain `codex exec` inheriting a `low` default reviews at low and silently under-powers the gate, with no error to notice. So every review recipe below passes `-c model_reasoning_effort=xhigh` explicitly — it makes the gate resilient to a config reset and correct on any machine regardless of its default. There is no dedicated `--reasoning-effort` flag; the generic `-c key=value` (confirmed on `codex-cli` 0.144.4) is the mechanism.
-- **One-off model override (rarely needed):** `codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT"` — let the config supply the model; only pin `-c model=…` if you must, and never `--model`.
+- **Pinning a config value one-off (rarely needed):** `codex exec -c model=gpt-5.6-sol -c model_reasoning_effort=xhigh -s read-only "PROMPT"` — the `-c model=…` shows an explicit model pin. Normally let the config supply the model and only force effort; never `--model` (zero-byte failure on this install).
 
 ## ⚠️ Always capture output via the PTY wrapper (eliminates 0-byte / STDN failures)
 
@@ -61,10 +61,10 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT_HERE"
 # Targeted agent-role audit (post-implementation) — see skill list below
 codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 
-# Full diff review — built-in mode, no custom prompt allowed
-codex exec -c model_reasoning_effort=xhigh review --uncommitted -o /tmp/review-output.md
-codex exec -c model_reasoning_effort=xhigh review --base main     -o /tmp/review-output.md
-codex exec -c model_reasoning_effort=xhigh review --commit <SHA>  -o /tmp/review-output.md
+# Full diff review — built-in `codex review` (accepts an optional [PROMPT]; `-` reads stdin)
+codex -c model_reasoning_effort=xhigh review --uncommitted -o /tmp/review-output.md
+codex -c model_reasoning_effort=xhigh review --base main     -o /tmp/review-output.md
+codex -c model_reasoning_effort=xhigh review --commit <SHA>  -o /tmp/review-output.md
 
 # Save agent output to file
 codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMPT_HERE"
@@ -81,7 +81,7 @@ codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMP
 | `-o PATH` / `--output-last-message PATH` | Write final response to file |
 | `--ephemeral` | Run without persisting session files |
 
-## `codex exec review` flags (built-in review mode)
+## `codex review` flags (built-in review mode)
 
 | Flag | Purpose |
 |------|---------|
@@ -90,7 +90,7 @@ codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMP
 | `--commit SHA` | Review changes introduced by a specific commit |
 | `-o PATH` | Write final review to file |
 
-`codex exec -c model_reasoning_effort=xhigh review --uncommitted` does NOT accept a custom prompt. For targeted reviews with specific instructions, use `codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT"`.
+`codex review` DOES accept an optional `[PROMPT]` (custom review instructions; `-` reads from stdin) — the older "no custom prompt" note was stale (verified on `codex-cli` 0.144.4). For the skill/agent-role audits, still prefer `codex exec -c model_reasoning_effort=xhigh -s read-only "/skill ..."`, which carries the skill rubric.
 
 ## Codex skills — mirror of the Unleashed Mail plugin
 
@@ -146,7 +146,7 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 
 1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/codex-out.txt` + `/tmp/agy-out.txt` into one auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
-3. **Full diff review:** optionally also run `codex exec -c model_reasoning_effort=xhigh review --uncommitted`
+3. **Full diff review:** optionally also run `codex -c model_reasoning_effort=xhigh review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
 
@@ -155,6 +155,6 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
 - `codex exec -c model_reasoning_effort=xhigh -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex exec -c model_reasoning_effort=xhigh review --uncommitted` is for general diff reviews only (no custom prompt)
+- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review (an optional `[PROMPT]` may refine it)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.
