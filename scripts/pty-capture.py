@@ -22,9 +22,10 @@ the partial transcript is still written, and the wrapper exits 124 (the timeout(
 
 Examples
 --------
-    # Codex review — capture is guaranteed, no -o flag needed.
+    # Codex review — capture is guaranteed, no -o flag needed. Always force xhigh effort
+    # (the config default is fragile — see skills/codex-review/SKILL.md).
     python3 pty-capture.py /tmp/codex-out.txt -- \
-        codex exec -s read-only "$(cat .codex-prompt.md)"
+        codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
 
     # Antigravity (agy) review.
     python3 pty-capture.py /tmp/agy-out.txt -- \
