@@ -217,6 +217,14 @@ assert_contains "heredoc then rm sensitive -> ask" "$(guard_bash '"cat <<EOF\nte
 assert_contains "backslash heredoc body write -> ask" "$(guard_bash '"python3 <<\\EOF\nopen(OAuthService.swift)\nEOF"')" '"permissionDecision":"ask"'
 # 6f. The `command` builtin prefix must unwrap to the real verb.
 assert_contains "command rm sensitive -> ask" "$(guard_bash '"command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 8 (codex): command -v/-V probe (not a mutation), command/env chaining, non-alnum heredoc delim ==
+# 6g. `command -v rm X` only DESCRIBES rm (doesn't run it) -> no decision.
+assert_empty "command -v probe -> no decision" "$(guard_bash '"command -v rm OAuthService.swift"')"
+# 6h. Nested command/env prefixes both resolve to the real verb.
+assert_contains "command env rm sensitive -> ask" "$(guard_bash '"command env rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env command rm sensitive -> ask" "$(guard_bash '"env command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6i. A punctuation heredoc delimiter (`<<EOF-1`) is still a heredoc.
+assert_contains "punctuation heredoc delim write -> ask" "$(guard_bash '"python3 <<EOF-1\nopen(OAuthService.swift)\nEOF-1"')" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \

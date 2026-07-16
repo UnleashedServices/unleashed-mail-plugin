@@ -96,7 +96,12 @@ _split_segments() {
                     [ "$c2" = "$tq" ] && { j=$((j + 1)); break; }
                     tag="$tag$c2"; j=$((j + 1))
                 else
-                    case "$c2" in [A-Za-z0-9_]) tag="$tag$c2"; j=$((j + 1)) ;; *) break ;; esac
+                    # an UNQUOTED delimiter is a word — any char up to whitespace or a shell metachar
+                    # (`<<EOF-1`, `<<END.OF`), not just `[A-Za-z0-9_]` (round 8: codex).
+                    case "$c2" in
+                        " "|"	"|"$nl"|"<"|">"|";"|"&"|"|"|"("|")") break ;;
+                        *) tag="$tag$c2"; j=$((j + 1)) ;;
+                    esac
                 fi
             done
             seg="$seg${s:$i:$((j - i))}"; i=$j; prev=""
@@ -155,7 +160,7 @@ _basecmd() {
 _effective_verb() {
     local -a a=()
     read -ra a <<<"$1"
-    local n=${#a[@]} i=0 tok v=""
+    local n=${#a[@]} i=0 tok v="" probe=0
     # Skip a leading run of `VAR=val` assignment prefixes (`FOO=1 BAR=2 cmd …`), with or without `env`.
     # A quoted value can contain spaces (`FOO="a b" cmd`) that `read -ra` splits across tokens — keep
     # consuming until the quote balances so the command word isn't mistaken for the value's tail (r3: codex).
@@ -171,41 +176,40 @@ _effective_verb() {
             *) break ;;
         esac
     done
-    v="${a[$i]:-}"; v="${v##*/}"
-    # Unwrap `env [OPTION]... [NAME=VALUE]... COMMAND`: skip env, its flags, and the ARG consumed by
-    # -u/--unset/-C/--chdir/-P (space-separated), plus VAR=val, to the command word. `-S`/`--split-string`
-    # is NOT here: its argument IS the command (`env -S rm X` runs `rm X`), so it falls to the generic
-    # skip-one below and the next token resolves as the verb (round 3: codex `-S`, gemini `-P`).
-    if [ "$v" = "env" ]; then
-        i=$((i + 1))
-        while [ "$i" -lt "$n" ]; do
-            tok="${a[$i]}"
-            case "$tok" in
-                --) i=$((i + 1)); break ;;                        # explicit end-of-options
-                -u|--unset|-C|--chdir|-P) i=$((i + 2)) ;;         # option + its argument
-                -*) i=$((i + 1)) ;;                               # other flag (incl. -S) / =-joined form
-                *=*) i=$((i + 1)) ;;                              # VAR=val
-                *) break ;;                                       # the command word
-            esac
-        done
-        v="${a[$i]:-}"; v="${v##*/}"
-    fi
-    # Unwrap the `command` builtin prefix (`command rm X`, `command -p python3 -c …`) — it runs the named
-    # utility bypassing functions/aliases, so the real verb is the word after it and its flags (r7: codex).
-    if [ "$v" = "command" ]; then
-        i=$((i + 1))
-        while [ "$i" -lt "$n" ]; do
-            case "${a[$i]}" in
-                --) i=$((i + 1)); break ;;
-                -*) i=$((i + 1)) ;;
-                *) break ;;
-            esac
-        done
-        v="${a[$i]:-}"; v="${v##*/}"
-    fi
-    # Strip a leading quote left on the word by `read -ra` — `env -S 'rm X'` splits into `'rm` + `X`, so
-    # the command word arrives as `'rm`; unquoting it resolves the real verb `rm` (round 4: codex).
-    v="${v#[\"\']}"
+    v="${a[$i]:-}"; v="${v##*/}"; v="${v#[\"\']}"
+    # Unwrap ANY nesting of `env …` / `command …` prefixes IN A LOOP so `command env rm X`, `env command
+    # rm X`, etc. all resolve to the real verb (a single pass in one order missed the other — round 8: codex).
+    #   env [OPT]... [VAR=VAL]... CMD: skip env, its flags, the ARG consumed by -u/--unset/-C/--chdir/-P,
+    #     and VAR=val. `-S`/`--split-string` is NOT arg-consuming here — its argument IS the command, so it
+    #     falls to the generic skip-one and the next token resolves as the verb (round 3: codex `-S`).
+    #   command [-pvV] CMD: runs CMD bypassing aliases — BUT `-v`/`-V` only DESCRIBE it (don't execute), so
+    #     `command -v rm X` is a read-only probe and must NOT be classified as `rm` (round 8: codex).
+    while [ "$v" = "env" ] || [ "$v" = "command" ]; do
+        if [ "$v" = "env" ]; then
+            i=$((i + 1))
+            while [ "$i" -lt "$n" ]; do
+                case "${a[$i]}" in
+                    --) i=$((i + 1)); break ;;
+                    -u|--unset|-C|--chdir|-P) i=$((i + 2)) ;;
+                    -*) i=$((i + 1)) ;;
+                    *=*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+        else
+            i=$((i + 1)); probe=0
+            while [ "$i" -lt "$n" ]; do
+                case "${a[$i]}" in
+                    --) i=$((i + 1)); break ;;
+                    -*[vV]*) probe=1; i=$((i + 1)) ;;   # -v/-V (or a cluster with them): describe, don't run
+                    -*) i=$((i + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            [ "$probe" = 1 ] && { v="command"; break; }   # a lookup mode is not a mutation
+        fi
+        v="${a[$i]:-}"; v="${v##*/}"; v="${v#[\"\']}"
+    done
     printf '%s' "$v"
 }
 
