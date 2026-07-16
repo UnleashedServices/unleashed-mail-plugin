@@ -386,6 +386,28 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotIn("None recorded MISSING", out)
                 self.assertIn("no readable name", out)
 
+    def test_a_non_list_reviewers_field_is_reported_as_corrupt_not_silently_coerced(self):
+        """Coercing `reviewers: 5` to [] stopped the TypeError but MASKED the corruption: every count
+        went to zero, so the hint fell through and reported a plain non-approving verdict (gemini, #42
+        review). Fixing a crash by making it quiet is not fixing it."""
+        import glob
+        for junk in (5, True, "str", {"a": 1}):
+            with self.subTest(reviewers=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["reviewers"] = junk
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("CORRUPT", out)
+
     def test_a_non_object_reviewer_entry_is_reported_as_corrupt(self):
         """An unreadable ENTRY is as corrupt as an unreadable STATUS — the invariant is "never guess".
 

@@ -329,7 +329,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # a crash is not a pass — but a traceback is not a diagnosable failure, and the isinstance guard
         # below (which would have caught it) never ran because this hint is computed first.
         _revs = art.get("reviewers")
-        _revs = _revs if isinstance(_revs, list) else []
+        if not isinstance(_revs, list):
+            # Do NOT coerce to [] and carry on. `reviewers: 5` is a corrupt artifact, but coercing made
+            # every downstream count zero, so the hint fell through and reported an ordinary
+            # non-approving verdict — the same "never guess" invariant this branch exists to enforce,
+            # broken by the guard I added to stop it crashing (gemini, #42 review). Fixing the crash and
+            # keeping the silence just moved the failure from loud to quiet.
+            return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed"
+                         " — artifact is CORRUPT: reviewers is not a list, so nothing about this "
+                         "artifact can be trusted; re-run the gate")
 
         def _name(r):
             """Readable reviewer name, or "" when absent/null/non-string.
@@ -363,7 +371,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
         # after I wrote it down.
         _dicts = [r for r in _revs if isinstance(r, dict)]
-        _bad_status = sorted(_name(r) or "<unnamed>" for r in _dicts if _name(r) and not _status(r))
+        _bad_status = sorted(_name(r) for r in _dicts if _name(r) and not _status(r))
         _bad_names = sum(1 for r in _dicts if not _name(r))
         _bad_entries = len(_revs) - len(_dicts)
         _corrupt = []
