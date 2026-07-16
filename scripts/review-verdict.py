@@ -295,7 +295,11 @@ def cmd_write(args: argparse.Namespace) -> int:
     # plan's digest BEFORE dispatching the reviews and passes it as --reviewed-sha256, refuse to write
     # unless the plan is STILL those exact bytes. `verify` already re-checks the digest after write; this
     # closes the review->write window in front of it.
-    if getattr(args, "reviewed_sha256", None):
+    # `is not None`, not truthiness: OMITTING the flag (default None) legitimately skips the check
+    # (backward-compatible), but passing it EMPTY (`--reviewed-sha256 ""`, e.g. an unset shell var)
+    # must FAIL loudly — a falsy-skip would silently disable the binding and record an approval bound
+    # to no reviewed bytes, exactly what the flag defends against (round 1: gemini + codex).
+    if getattr(args, "reviewed_sha256", None) is not None:
         expected = args.reviewed_sha256.strip().lower()
         if not _SHA256_HEX.match(expected):
             raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")

@@ -652,6 +652,15 @@ class ReviewVerdictTest(unittest.TestCase):
         r = self._write(reviewed_sha256=reviewed)   # no edit -> matches -> writes
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_empty_reviewed_sha256_is_rejected_not_silently_skipped(self):
+        """PASSING --reviewed-sha256 EMPTY (e.g. an unset `$REVIEWED_PLAN_SHA256`) must FAIL loudly,
+        never falsy-skip the binding. A truthiness check let `""` silently disable the digest guard and
+        record an approval bound to no reviewed bytes; omitting the flag stays the backward-compatible
+        skip (round 1: gemini + codex)."""
+        r = self._write(reviewed_sha256="")
+        self.assertNotEqual(r.returncode, 0, "empty --reviewed-sha256 must not silently write")
+        self.assertIn("64 hex chars", r.stdout + r.stderr)
+
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
         v = run("verify", "--plan", self.plan)

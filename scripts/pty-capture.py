@@ -65,15 +65,24 @@ def _write_private(path: str, data: bytes) -> None:
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
+    # Once os.fdopen() succeeds the returned object OWNS fd and closes it exactly once (on the `with`
+    # exit — including when fh.write raises). Closing fd AGAIN in the except would double-close: between
+    # the two closes another thread can open a file and be handed the same fd number, so the second
+    # os.close() would clobber an UNRELATED fd. Only close manually while we still own fd — i.e. before
+    # fdopen took over (an os.fchmod/os.fdopen failure) (round 1: gemini + codex).
+    fdopen_owns = False
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "wb") as fh:
+        fh = os.fdopen(fd, "wb")
+        fdopen_owns = True
+        with fh:
             fh.write(data)
     except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if not fdopen_owns:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise
 
 
