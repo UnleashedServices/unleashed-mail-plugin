@@ -518,7 +518,9 @@ class TestExtractStatus(unittest.TestCase):
         self.assertEqual(r, {"status": "PARTIAL", "remaining": "first", "completed": "done"})
 
     def test_multiline_field_wrap_aborts_trailer(self):
-        # a label-less wrapped continuation line is "other content" -> trailer aborts -> face value.
+        # A label-less wrapped continuation line is "other content" -> the trailer aborts -> no status.
+        # The sidecar is then ABSENT, which the consumer reads as UNATTRIBUTED -> re-dispatch
+        # (COREDEV-2490). It does NOT mean "face value" — that reading was the fail-open.
         self.assertIsNone(self._s("Status: BLOCKED\nBlocker Description: line one\nline two wrap\n" + jfence()))
 
 
@@ -656,7 +658,10 @@ class TestStatusSidecar(unittest.TestCase):
     def test_write_status_survives_unencodable_detail_field(self):
         # A lone surrogate in a detail field makes json.dump->utf-8 raise UnicodeEncodeError (a
         # ValueError); _write_status must swallow it so capture() still returns "written", the findings
-        # are persisted, the sidecar is simply absent (face value), and no tmp file leaks.
+        # are persisted, the sidecar is simply ABSENT, and no tmp file leaks.
+        # The producer stays fail-open BY DESIGN and COREDEV-2490 now RELIES on that: an absent
+        # sidecar is UNATTRIBUTED at the consumer (-> re-dispatch), never "face value". This asserts
+        # WRITER behaviour only, so it is unchanged by 2490 — only the rationale moved.
         with tempfile.TemporaryDirectory() as root:
             msg = status_msg("Status: BLOCKED\nBlocker Description: \ud800 lone surrogate", [raw()])
             self.assertEqual(self._cap(root, msg), "written")
