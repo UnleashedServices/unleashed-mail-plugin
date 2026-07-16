@@ -110,6 +110,49 @@ Add comments to the ticket at each milestone:
    - SwiftLint violations in files **not modified** by this change (pre-existing tech debt). Violations in any file the change *does* modify must be fixed as part of the change — they are never deferred to a ticket (see `CLAUDE.md` code-style rule + the SwiftLint merge gate: `swiftlint --strict <changed files>` on touched files plus whole-repo `swiftlint lint --strict --baseline swiftlint-baseline.json`). **One exception:** legacy `NSRegularExpression` ("old regex") is *not* migrated inline even in a modified file — if the `no_legacy_nsregex` rule flags it, the touching change suppresses that line with `// swiftlint:disable:next no_legacy_nsregex - <ticket>` (the ` - ` rationale delimiter; a trailing `//` breaks `--strict`) and you track the site under the Swift `Regex`/`RegexBuilder` migration epic instead (the rule is a sample in the `swiftlint-config` skill, not yet enabled in the app's `.swiftlint.yml`)
    - Ideas or improvements noted during development
 
+## Change-Failure Labeling (CFR)
+
+GitKraken Insights computes **Change Failure Rate (CFR)** for `unleashedservices.atlassian.net` by
+counting Jira issues that carry the label **`change-failure`** — the literal string, lowercase and
+hyphenated, a standard Jira label (no custom field, no special issue type). CFR = (issues labeled
+`change-failure`) ÷ (deployments) over the reporting window, so the number is only as good as the
+labeling discipline: a deploy-caused failure left unlabeled silently **understates** CFR (it reports 0%
+even while failures are happening).
+
+**Apply `change-failure` when — and only when — ALL of these hold:**
+
+1. **Production/customer-impacting problem.** The issue is a `Bug` representing a real user-facing
+   malfunction — a crash, data loss, auth/token failure, sync or send/receive breakage, a broken
+   upgrade. NOT a feature request, a `Task`, a cosmetic nit, tech debt, or an internal-only issue.
+2. **Caused by a recent deployment or code change.** It is a *regression*, not a pre-existing bug. A
+   high-priority bug is **not** automatically a change failure. **This determination is owned by
+   `release-manager`** (deploy / release-history correlation — see `AGENT_CONTRACTS.md §12`); never infer
+   it from severity alone.
+3. **In an in-scope project — `COREDEV` or `FT`.** GitKraken's defect detection is scoped to those two
+   only (LW and UV are excluded from this instance). Labeling an out-of-scope issue does **not** affect
+   CFR; if an incident must be filed elsewhere, note that GitKraken Insights' project scope has to be
+   widened first and flag it for a human.
+
+**The label is ADDITIVE** — it layers on top of the normal issue type, priority, and component fields; it
+never replaces them.
+
+**Timing — apply at intake vs. retroactively (never guess):**
+
+- **At creation** — add `change-failure` immediately *only if* deploy-causation is already CONFIRMED at
+  intake (e.g. `release-manager` bisected the regression to a shipped commit, the crash signature first
+  appears in builds ≥ a specific release, or the report explicitly cites behavior that changed after a
+  named release).
+- **Retroactively** — if causation is not yet established, do **NOT** guess upfront. Create the issue
+  *without* the label, add a triage note (`candidate change-failure — pending deploy-causation check`),
+  and hand off to `release-manager` for the correlation. Add the label with `editJiraIssue` once triage
+  confirms a recent change is the cause.
+- **Uncertain after triage** — if `release-manager` cannot attribute the issue to a specific release,
+  leave it UNLABELLED and flag for human confirmation, rather than inflating or deflating CFR on a guess.
+
+Mechanically: add the literal `change-failure` to the issue's Jira `labels` via the Atlassian MCP
+(`editJiraIssue`, or at `createJiraIssue` when confirmed at intake) — **alongside**, not instead of, the
+existing labels / type / priority / component.
+
 ## Planning Document Integration
 
 When a `docs/planning/FEATURE_NAME_PLAN.md` exists:
