@@ -138,7 +138,8 @@ class TestSynthesizeTool(unittest.TestCase):
         for changed in (["/etc/passwd"], ["../../etc/passwd"], ["Sources/../Sources/Auth.swift"],
                         ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"],
                         ["C:/etc/passwd"], ["C:\\repo\\Auth.swift"], ["c:/x"], ["A.swift", "D:/y"],
-                        ["A.swift", ".."], ["A.swift", "/"], ["good/path.swift", "../escape"]):
+                        ["A.swift", ".."], ["A.swift", "/"], ["good/path.swift", "../escape"],
+                        ["\\\\server\\share\\A.swift"], ["A.swift", "\\\\host\\x"]):
             out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": "synthesize_review",
                                       "arguments": {"findings": [good()], "changed_files": changed}}}])

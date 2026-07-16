@@ -56,7 +56,9 @@ def _abs_or_traversal(path: str) -> bool:
         r = r[2:]
     if not r:
         return False
-    return bool(r.startswith("/") or _DRIVE_ABS.match(r) or ".." in r.split("/"))
+    # `\\server\share\…` is a Windows UNC ABSOLUTE path (leading DOUBLE backslash); reject it too. A
+    # SINGLE leading `\` stays a valid POSIX filename (`\report.swift`), so only `\\` is absolute (r5: codex).
+    return bool(r.startswith("/") or r.startswith("\\\\") or _DRIVE_ABS.match(r) or ".." in r.split("/"))
 
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
 # clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
