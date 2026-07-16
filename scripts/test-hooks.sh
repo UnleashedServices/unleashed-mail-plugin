@@ -113,6 +113,24 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ Keycha
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_contains "sed -i sensitive -> ask" "$OUT" '"permissionDecision":"ask"'
 
+# == #44 independent review §6: mutating commands the redirect-only parse missed must fail closed ==
+guard_bash() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$1" \
+    | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null; }
+# 5a. Deletion of a sensitive file.
+assert_contains "rm sensitive -> ask" "$(guard_bash '"rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "unlink sensitive -> ask" "$(guard_bash '"unlink KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5b. Interpreter one-liner writing a sensitive file (the exact review bypass).
+assert_contains "python3 -c open(sensitive) -> ask" "$(guard_bash '"python3 -c \"open(\\\"OAuthService.swift\\\",\\\"w\\\").write(1)\""')" '"permissionDecision":"ask"'
+assert_contains "perl -e unlink(sensitive) -> ask" "$(guard_bash '"perl -e \"unlink(q(KeychainManager.swift))\""')" '"permissionDecision":"ask"'
+# 5c. Symlink clobber over a sensitive file.
+assert_contains "ln -sf over sensitive -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5d. SCOPING — must NOT over-fire: a sensitive file READ as a cp/interpreter SOURCE, or plain reads,
+#     or a non-sensitive deletion.
+assert_empty "cp sensitive SOURCE -> no decision (read, not write)" "$(guard_bash '"cp KeychainManager.swift /backup/"')"
+assert_empty "cat sensitive -> no decision" "$(guard_bash '"cat OAuthService.swift"')"
+assert_empty "rm non-sensitive -> no decision" "$(guard_bash '"rm InboxView.swift"')"
+assert_empty "python3 running a script (no sensitive name) -> no decision" "$(guard_bash '"python3 build.py"')"
+
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"

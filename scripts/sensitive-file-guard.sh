@@ -56,13 +56,34 @@ sensitive_category() {
     esac
 }
 
-# Best-effort: print the basename of a sensitive WRITE target in a Bash command,
-# else nothing. Read-only commands (grep/cat) and signatures used only as a SOURCE
-# (e.g. `cp Keychain.swift /backup/`) must print nothing. Phase-1 heuristic; tuned
-# during the warn window. Quoted redirection targets with spaces are handled; a
-# quoted cp/mv destination with spaces is a known best-effort gap.
+# Does this command SEGMENT mutate the filesystem? A precise per-verb parse (below) can only extract a
+# target for the forms it knows (redirect / cp / mv / sed -i / tee). It missed deletion (`rm`), symlink
+# clobber (`ln`), and interpreter one-liners (`python3 -c 'open("X","w")...'`, perl/ruby/node -e) —
+# semantically-equivalent writes that slipped straight through (#44 independent review §6). This returns
+# true for any of those, so the broad fail-closed scan below runs. Read-only commands (cat/grep/less)
+# return false, so a sensitive file merely READ never prompts.
+_seg_is_mutating() {
+    local s="$1" v=""
+    read -ra _mt <<<"$s"; v="${_mt[0]:-}"; v="${v##*/}"
+    case "$v" in
+        rm|unlink|shred|mv|rename|cp|install|dd|truncate|ln|tee|dded) return 0 ;;
+    esac
+    # An interpreter invoked with inline code (-c / -e) or a heredoc can write anything.
+    case "$v" in
+        python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env)
+            printf '%s' "$s" | grep -qE '(^|[[:space:]])-(c|e)([[:space:]]|=)|<<' && return 0 ;;
+    esac
+    # Any redirection that writes/clobbers/appends, anywhere in the segment.
+    printf '%s' "$s" | grep -qE '>>?|>\|' && return 0
+    printf '%s' "$s" | grep -qE '(^|[[:space:]])sed[[:space:]]+-i' && return 0
+    return 1
+}
+
+# Best-effort: print the basename of a sensitive WRITE target in a Bash command, else nothing. Reads
+# (grep/cat) and a file used only as a SOURCE (`cp Keychain.swift /backup/`) print nothing. Phase-1
+# heuristic; the robust guard is the Edit/Write file_path path — arbitrary shell can always evade text.
 guard_bash_write_target() {
-    local cmd="$1" cand="" seg="" line="" t="" bn="" verb="" tok="" last=""
+    local cmd="$1" cand="" seg="" line="" t="" bn="" verb="" tok="" last="" bt="" _bcheck=0
     local -a toks=()
     # Split on shell separators so a chained command (`cp a b && git diff`) is parsed
     # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
@@ -106,6 +127,25 @@ ${toks[*]: -1}"
 $(printf '%s' "$seg" | sed -E 's/^[[:space:]]*tee[[:space:]]+(-a[[:space:]]+)?//; s/[[:space:]].*$//; s/^"//; s/"$//')"
                 ;;
         esac
+        # FAIL CLOSED for the mutating verbs the precise parse above CANNOT target: deletion
+        # (`rm`/`unlink`/`shred`), symlink clobber (`ln`), and interpreter one-liners
+        # (`python3 -c 'open("X","w")'`). For these, ANY sensitive basename named in the segment is
+        # treated as the mutated file. Deliberately NOT run for cp/mv/install/sed/tee/redirects — those
+        # already extracted their precise target(s) above, and a broad scan there would wrongly flag a
+        # READ source (`cp KeychainManager.swift /backup/` reads it, does not modify it). Scoped to
+        # mutation, so `cat X`/`grep foo X` never trip it (#44 review §6).
+        case "$verb" in
+            rm|unlink|shred|ln|python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh|env) _bcheck=1 ;;
+            /*rm|/*python*|/*perl|/*ruby|/*node|/*unlink|/*shred|/*ln) _bcheck=1 ;;
+            *) _bcheck=0 ;;
+        esac
+        if [ "$_bcheck" = 1 ] && _seg_is_mutating "$seg"; then
+            while IFS= read -r bt; do
+                [ -n "$bt" ] || continue
+                cand="${cand}
+${bt}"
+            done < <(printf '%s\n' "$seg" | grep -oE '[A-Za-z0-9._-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)' 2>/dev/null)
+        fi
     done < <(printf '%s\n' "$cmd" | sed -E 's/(\&\&|\|\||[;&|])/\n/g')
     # Evaluate candidates by basename (while-read avoids globbing on a `*` operand).
     while IFS= read -r t; do
