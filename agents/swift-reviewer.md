@@ -461,10 +461,12 @@ or indentation for code. An array **missing required fields** (`severity`,
 only slightly off (a stray newline, trailing comma, or a field you can infer from the
 reviewer's prose), **repair it yourself** from the report you already have — don't
 discard real findings over a syntax slip. Only when you genuinely cannot recover the
-findings, **re-run that reviewer** — **consulting the SAME per-review dispatch ledger as the roster's
-re-dispatch: at most ONE spawn per reviewer per review, whichever path asks for it** (COREDEV-2490;
-without this, an attribution retry that returns a readable status but malformed JSON would license a
-second spawn and quietly break the "one re-dispatch each" bound). If that reviewer's single retry is
+findings, **re-run that reviewer** — but track your re-dispatches **in your own working memory for this
+review** (there is no on-disk ledger, and none is needed: the roster path and this malformed-JSON path
+run in the SAME swift-reviewer session, so YOU are the single point that both consult). The bound is
+**at most ONE spawn per reviewer per review, whichever path asks for it** (COREDEV-2490; without holding
+that count yourself, an attribution retry that returns a readable status but malformed JSON would license
+a second spawn and quietly break the "one re-dispatch each" bound). If that reviewer's single retry is
 already spent, do NOT spawn again: treat it as the missing-reviewer case → Needs Confirmation → NEEDS
 DISCUSSION. Re-run with an explicit "emit one valid JSON array, nothing
 else" instruction — the `Agent` tool spawns a *fresh* subagent (there is no live
