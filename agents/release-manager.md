@@ -291,20 +291,33 @@ Part of post-release monitoring: when a production/customer-impacting **Bug** is
 Change Failure Rate (see [`AGENT_CONTRACTS.md §12`](../AGENT_CONTRACTS.md)). `jira-manager` applies the
 `change-failure` label; **you establish whether it belongs** — severity alone never does.
 
-Attribute an incident to a recent change when **any** of these hold — otherwise it is a pre-existing bug,
-**not** a change failure:
+Attribute an incident to a recent change only on **corroborated** causation evidence — **any** of these is
+sufficient; otherwise it is a pre-existing bug, **not** a change failure:
 
 - The regression **bisects** to a commit shipped in a recent release.
 - The behavior **worked in the prior release** and broke in a specific one (a true regression).
 - The **crash signature / stack first appears** in builds ≥ a specific release — correlate the crash
   report timestamps and build numbers (post-release monitoring above) against `CHANGELOG.md` / release
   dates.
-- The report **explicitly cites** behavior that changed after a named release/update.
+
+A reporter merely **stating** "it broke after release X" is a *starting signal, not proof* — temporal
+correlation is not causation (they may be first encountering a pre-existing defect, or the real cause may
+be a backend / configuration / account-migration change). Corroborate it against one of the criteria above
+— reproduce on the release build and confirm the prior build was clean, or tie it to a build-number /
+first-seen correlation — before attributing. If you **cannot** corroborate it, treat it as unconfirmed.
 
 If the issue is present in builds *before* the correlating release, it is pre-existing — do not attribute
 it. When you **cannot** correlate it to a specific release, say so and flag for human confirmation rather
-than guessing. Hand the confirmed determination to `jira-manager` to apply (or withhold) the
-`change-failure` label; it only counts toward CFR in projects **`COREDEV` / `FT`**.
+than guessing.
+
+You determine causation **only** — you have no Atlassian access (`tools:` is a strict allowlist —
+Read/Write/Edit/Bash/Grep/Glob, no Atlassian MCP) and cannot query or edit Jira. During post-release monitoring the `cfr-triage-pending` candidates are
+enumerated by `jira-manager` (it owns the `labels = cfr-triage-pending` queue) and dispatched to you by the
+invoking session; for each named candidate you do the causation analysis with the tools you have — git
+`bisect`, `CHANGELOG.md` / build-number correlation, crash-first-seen timestamps — and hand the
+determination back. On your confirmation `jira-manager` adds `change-failure` and clears
+`cfr-triage-pending`; if you find it pre-existing/uncorroborated it clears the marker and withholds the
+label. It only counts toward CFR in projects **`COREDEV` / `FT`**.
 
 ### Rollback Plan
 

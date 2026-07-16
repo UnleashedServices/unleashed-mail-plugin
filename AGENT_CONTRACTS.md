@@ -370,17 +370,25 @@ consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
 
 GitKraken Insights computes **Change Failure Rate** for `unleashedservices.atlassian.net` by counting
 Jira issues tagged with the literal label **`change-failure`** (lowercase, hyphenated; a standard label,
-not a custom field or issue type), divided by deployments over the window. Under-labeling silently reports
-CFR as 0% whether or not failures are happening — the metric is only as good as the labeling discipline.
+not a custom field or issue type), divided by deployments over the window. Under-labeling **understates**
+CFR — each missed failure lowers the numerator, reading a false 0% only in a window where nothing was
+labeled; the metric is only as good as the labeling discipline.
 
-- **`release-manager` determines deploy-causation** — whether a production-impacting Bug is a *regression*
-  caused by a recent deployment (bisect to a shipped commit, worked-in-prior-release, crash-first-seen-in
-  -release, or an explicit "broke after release X" report) vs. a pre-existing bug. Severity alone never
-  implies a change failure.
-- **`jira-manager` applies the label** — adds `change-failure` (**additive** to type / priority /
-  component) at creation when causation is confirmed at intake, or retroactively via `editJiraIssue` once
-  `release-manager` confirms it. When causation is **uncertain**, the issue stays UNLABELLED and is flagged
-  for human confirmation — never guess.
+- **`release-manager` determines deploy-causation (analysis only, no Jira access)** — whether a
+  production-impacting Bug is a *regression* caused by a recent deployment, on **corroborated** evidence
+  (bisect to a shipped commit, worked-in-prior-release, or crash-first-seen-in-release) vs. a pre-existing
+  bug. A reporter's bare "broke after release X" is temporal correlation, not proof — corroborate before
+  attributing. Severity alone never implies a change failure. `release-manager`'s `tools:` allowlist grants
+  no Atlassian MCP, so it never queries or edits Jira — it receives a named candidate and returns a verdict.
+- **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
+  component) at creation only when causation is confirmed at intake; otherwise it marks the issue
+  **`cfr-triage-pending`** (a queue label, *not* counted toward CFR). It also **enumerates that queue**
+  (JQL `project in (COREDEV, FT) AND labels = cfr-triage-pending`, no status filter) and surfaces the
+  candidates so the invoking session
+  dispatches `release-manager` to attribute each; on confirmation it adds `change-failure` and clears the
+  marker via `editJiraIssue` (read-modify-write — the `labels` field replaces the whole array). When
+  causation is **uncertain**, the issue stays UNLABELLED (marker cleared) and is flagged for human
+  confirmation — never guess.
 - **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
   Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
   not an agent action.

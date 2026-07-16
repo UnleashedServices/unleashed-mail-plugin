@@ -116,8 +116,8 @@ GitKraken Insights computes **Change Failure Rate (CFR)** for `unleashedservices
 counting Jira issues that carry the label **`change-failure`** — the literal string, lowercase and
 hyphenated, a standard Jira label (no custom field, no special issue type). CFR = (issues labeled
 `change-failure`) ÷ (deployments) over the reporting window, so the number is only as good as the
-labeling discipline: a deploy-caused failure left unlabeled silently **understates** CFR (it reports 0%
-even while failures are happening).
+labeling discipline: every deploy-caused failure left unlabeled **understates** CFR — it lowers the
+numerator, and reads a false **0%** only in a window where *nothing* got labeled.
 
 **Apply `change-failure` when — and only when — ALL of these hold:**
 
@@ -139,19 +139,31 @@ never replaces them.
 **Timing — apply at intake vs. retroactively (never guess):**
 
 - **At creation** — add `change-failure` immediately *only if* deploy-causation is already CONFIRMED at
-  intake (e.g. `release-manager` bisected the regression to a shipped commit, the crash signature first
-  appears in builds ≥ a specific release, or the report explicitly cites behavior that changed after a
-  named release).
-- **Retroactively** — if causation is not yet established, do **NOT** guess upfront. Create the issue
-  *without* the label, add a triage note (`candidate change-failure — pending deploy-causation check`),
-  and hand off to `release-manager` for the correlation. Add the label with `editJiraIssue` once triage
-  confirms a recent change is the cause.
+  intake, meaning `release-manager` established it on corroborating evidence: the regression bisected to a
+  shipped commit, or the crash signature first appears in builds ≥ a specific release. A reporter merely
+  *stating* "it broke after release X" is temporal correlation, **not** confirmation (they may be first
+  hitting a pre-existing defect, or the cause may be a backend / configuration / account-migration change)
+  — that is a candidate for the path below, never a CONFIRMED-at-intake trigger.
+- **Retroactively (the default whenever causation isn't already proven)** — do **NOT** guess. Create the
+  issue *without* `change-failure`, add the workflow label **`cfr-triage-pending`** (a queue marker only —
+  it is *not* the counted label, so it never touches CFR) and a triage note (`candidate change-failure —
+  pending deploy-causation check`). Deploy-causation is `release-manager`'s call, but it has **no Atlassian
+  access** — so *you* own the Jira legs of the queue: **you** enumerate the pending queue with the JQL
+  `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter — a candidate closed to Done
+  before it is attributed must still be swept), and because this agent cannot spawn `release-manager`
+  (`Agent` is disabled) you **surface those candidates in your result so the invoking session dispatches
+  `release-manager`** to determine causation. Once `release-manager` reports a recent change is the cause,
+  add `change-failure` **and** remove `cfr-triage-pending` (see the read-modify-write note below).
 - **Uncertain after triage** — if `release-manager` cannot attribute the issue to a specific release,
-  leave it UNLABELLED and flag for human confirmation, rather than inflating or deflating CFR on a guess.
+  remove `cfr-triage-pending`, leave it UNLABELLED, and flag for human confirmation, rather than inflating
+  or deflating CFR on a guess.
 
 Mechanically: add the literal `change-failure` to the issue's Jira `labels` via the Atlassian MCP
 (`editJiraIssue`, or at `createJiraIssue` when confirmed at intake) — **alongside**, not instead of, the
-existing labels / type / priority / component.
+existing labels / type / priority / component. `editJiraIssue`'s `labels` field **replaces the whole
+array**, so treat every label change as read-modify-write: `getJiraIssue` the current labels, add or drop
+the one you intend (e.g. add `change-failure` / drop `cfr-triage-pending`), then set the **full** resulting
+set — never pass a bare single-element array, which would silently wipe the issue's other labels.
 
 ## Planning Document Integration
 
