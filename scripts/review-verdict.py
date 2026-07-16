@@ -109,11 +109,30 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
     if _malformed_t:
         return ("an APPROVING combined verdict requires a real SHA-256 transcript digest (64 hex chars); "
                 "malformed for " + ", ".join(_malformed_t))
-    _digests = [str(r.get("transcriptSha256", "")).strip().lower() for r in reviewers
-                if isinstance(r, dict)]
+    _dicts = [r for r in reviewers if isinstance(r, dict)]
+    # 1. Distinct capture PATHS. The same transcript FILE recorded for both reviewers is the real
+    #    accidental mistake (one copy-paste in the documented two-file flow), and it is provenance, not
+    #    content: catch it by path so two genuinely-separate reviews with identical bytes are NOT
+    #    falsely rejected (full review, #41). Only enforced when paths were recorded (schema >= 2).
+    _paths = [r["transcriptPath"] for r in _dicts if r.get("transcriptPath")]
+    if len(_paths) == len(_dicts) and len(set(_paths)) < len(_paths):
+        return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
+                "transcript FILE is recorded for more than one reviewer, i.e. one review standing in for two")
+    # 2. Distinct capture IDs, when a wrapper produced them for every reviewer. A capture ID is a
+    #    per-run token, so it is authoritative provenance independent of content: identical IDs = one run.
+    _cids = [r["captureId"] for r in _dicts if r.get("captureId")]
+    if len(_cids) == len(_dicts) and len(_cids) > 1:
+        if len(set(_cids)) < len(_cids):
+            return ("an APPROVING combined verdict requires a DISTINCT capture per reviewer — the same "
+                    "capture ID is recorded for more than one reviewer")
+        return None   # capture IDs are authoritative; identical content across distinct runs is fine
+    # 3. Fallback (no capture IDs): distinct DIGESTS. Has a benign false-negative — two byte-identical
+    #    separate reviews are rejected — but that is astronomically rare, and pty-capture's capture IDs
+    #    (path 2) lift it whenever present.
+    _digests = [str(r.get("transcriptSha256", "")).strip().lower() for r in _dicts]
     if len(set(_digests)) < len(_digests):
         return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
-                "transcript is recorded for more than one reviewer, i.e. one review standing in for two")
+                "transcript content is recorded for more than one reviewer, i.e. one review standing in for two")
     return None
 
 def _sha256_bytes(path: str) -> str:
@@ -157,7 +176,7 @@ def _ensure_secure_dir(d: str) -> None:
 
 
 def _parse_reviewer(spec: str) -> dict:
-    """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?}."""
+    """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?, transcriptPath?, captureId?}."""
     if "=" not in spec:
         raise SystemExit(f"review-verdict: --reviewer must be name=STATUS[:TRANSCRIPT], got {spec!r}")
     name, rest = spec.split("=", 1)
@@ -176,6 +195,19 @@ def _parse_reviewer(spec: str) -> dict:
             # artifact exists to record. `agy` writes precisely 0 bytes from a non-TTY on failure.
             raise SystemExit(f"review-verdict: reviewer {name!r} transcript is EMPTY: {transcript}")
         out["transcriptSha256"] = _sha256_bytes(transcript)
+        # PROVENANCE beyond content-inequality (full review, #41). Record the canonical capture PATH,
+        # and a wrapper-produced capture ID when `pty-capture.py` left one beside the transcript
+        # (`<transcript>.captureid`). Content-inequality alone cannot tell two genuinely-separate
+        # reviews that happen to be byte-identical from one file reused for both; a distinct path (the
+        # common accidental case) and a distinct capture ID (a per-run token) can. Both optional and
+        # auto-discovered — no caller/skill change needed; absent -> the digest floor still applies.
+        out["transcriptPath"] = os.path.realpath(transcript)
+        _cid = transcript + ".captureid"
+        if os.path.isfile(_cid) and os.path.getsize(_cid) > 0:
+            with open(_cid, encoding="utf-8") as _fh:
+                _v = _fh.read().strip()
+            if _v:
+                out["captureId"] = _v
     return out
 
 

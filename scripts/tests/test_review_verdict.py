@@ -143,6 +143,48 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, "one transcript must not back two approvals")
         self.assertIn("DISTINCT transcript", r.stdout + r.stderr)
 
+    def test_identical_content_with_distinct_capture_ids_passes(self):
+        """Content-inequality alone cannot tell two genuinely-separate reviews that happen to be
+        byte-identical from one file reused for both. A wrapper capture ID (a per-run token) is
+        authoritative provenance: two DIFFERENT files with IDENTICAL bytes but DISTINCT capture IDs are
+        two real reviews and must pass (full review, #41)."""
+        id1 = os.path.join(self.d, "r1.txt")
+        id2 = os.path.join(self.d, "r2.txt")
+        for pth in (id1, id2):
+            with open(pth, "w", encoding="utf-8") as fh:
+                fh.write("byte-identical review body\nVERDICT: APPROVE\n")
+        with open(id1 + ".captureid", "w", encoding="utf-8") as fh:
+            fh.write("cap-A\n")
+        with open(id2 + ".captureid", "w", encoding="utf-8") as fh:
+            fh.write("cap-B\n")
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{id1}", "--reviewer", f"codex=APPROVE:{id2}")
+        self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
+        self.assertEqual(run("verify", "--plan", self.plan).returncode, 0)
+
+    def test_identical_capture_ids_are_rejected(self):
+        """The same capture ID for both = one wrapper run standing in for two."""
+        id1 = os.path.join(self.d, "s1.txt")
+        id2 = os.path.join(self.d, "s2.txt")
+        with open(id1, "w", encoding="utf-8") as fh:
+            fh.write("gemini body\nVERDICT: APPROVE\n")
+        with open(id2, "w", encoding="utf-8") as fh:
+            fh.write("codex body DIFFERENT\nVERDICT: APPROVE\n")
+        for pth in (id1, id2):
+            with open(pth + ".captureid", "w", encoding="utf-8") as fh:
+                fh.write("cap-SAME\n")
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{id1}", "--reviewer", f"codex=APPROVE:{id2}")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("DISTINCT capture", r.stdout + r.stderr)
+
+    def test_same_file_for_both_is_rejected_by_path(self):
+        """The real accidental mistake: one transcript FILE for both reviewers."""
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx}")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("same transcript FILE", r.stdout + r.stderr)
+
     def test_two_distinct_transcripts_still_pass(self):
         """The fix must not break the legitimate case it guards."""
         tx2 = os.path.join(self.d, "codex.txt")
