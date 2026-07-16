@@ -40,7 +40,13 @@ class ReviewVerdictTest(unittest.TestCase):
         shutil.rmtree(self.d, ignore_errors=True)
 
     def _write(self, verdict="APPROVE_WITH_NOTES",
-               reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES"), reviewed_sha256=None):
+               reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES"), reviewed_sha256=None,
+               snapshot=True):
+        # An APPROVING write now REQUIRES a reviewed-digest binding (round 6): snapshot the plan first by
+        # default, unless the test drives the digest itself (reviewed_sha256) or exercises the no-binding
+        # path (snapshot=False).
+        if snapshot and reviewed_sha256 is None:
+            run("snapshot", "--plan", self.plan)
         args = ["write", "--plan", self.plan, "--verdict", verdict]
         for i, r in enumerate(reviewers):
             # Attach a DISTINCT fixture transcript per reviewer unless the case supplied its own path
@@ -55,6 +61,7 @@ class ReviewVerdictTest(unittest.TestCase):
     def test_approving_artifact_requires_a_transcript_per_reviewer(self):
         """An APPROVING verdict must EVIDENCE its approvals: `gemini=APPROVE` with no `:TRANSCRIPT`
         used to write a GATE OK on the caller's bare assertion alone (codex, #41 review)."""
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", "gemini=APPROVE", "--reviewer", "codex=APPROVE")
         self.assertNotEqual(r.returncode, 0)
@@ -75,6 +82,7 @@ class ReviewVerdictTest(unittest.TestCase):
             with open(pth, "w", encoding="utf-8") as fh:
                 fh.write("# Same plan\nidentical bytes\n")
         # approve a_plan
+        run("snapshot", "--plan", a_plan)
         r = run("write", "--plan", a_plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -140,6 +148,7 @@ class ReviewVerdictTest(unittest.TestCase):
         reviewers and produced `GATE OK — [gemini=APPROVE, codex=APPROVE]`. Every existing check passed
         because they all inspect the LABEL: the duplicate-name rule says "one reviewer cannot stand in
         for the other" while only ever comparing names (codex, #41 review)."""
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx}")
         self.assertNotEqual(r.returncode, 0, "one transcript must not back two approvals")
@@ -159,6 +168,7 @@ class ReviewVerdictTest(unittest.TestCase):
             fh.write("cap-A\n")
         with open(id2 + ".captureid", "w", encoding="utf-8") as fh:
             fh.write("cap-B\n")
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{id1}", "--reviewer", f"codex=APPROVE:{id2}")
         self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
@@ -175,6 +185,7 @@ class ReviewVerdictTest(unittest.TestCase):
         with open(real_value, "w", encoding="utf-8") as fh:
             fh.write("PLANTED-CID\n")
         os.symlink(real_value, tx + ".captureid")   # sidecar is a SYMLINK, not a real file
+        run("snapshot", "--plan", self.plan)
         run("write", "--plan", self.plan, "--verdict", "APPROVE_WITH_NOTES",
             "--reviewer", f"gemini=APPROVE:{tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
         art = json.load(open(os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")))
@@ -249,6 +260,7 @@ class ReviewVerdictTest(unittest.TestCase):
         for pth in (id1, id2):
             with open(pth + ".captureid", "w", encoding="utf-8") as fh:
                 fh.write("cap-SAME\n")
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{id1}", "--reviewer", f"codex=APPROVE:{id2}")
         self.assertNotEqual(r.returncode, 0)
@@ -256,6 +268,7 @@ class ReviewVerdictTest(unittest.TestCase):
 
     def test_same_file_for_both_is_rejected_by_path(self):
         """The real accidental mistake: one transcript FILE for both reviewers."""
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx}")
         self.assertNotEqual(r.returncode, 0)
@@ -266,6 +279,7 @@ class ReviewVerdictTest(unittest.TestCase):
         tx2 = os.path.join(self.d, "codex.txt")
         with open(tx2, "w", encoding="utf-8") as fh:
             fh.write("codex said other things\nVERDICT: APPROVE\n")
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{tx2}")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -277,6 +291,7 @@ class ReviewVerdictTest(unittest.TestCase):
         a failed review recorded e3b0c442...855 (the empty-string digest) and passed."""
         empty = os.path.join(self.d, "empty.txt")
         open(empty, "w").close()
+        run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{empty}", "--reviewer", f"codex=APPROVE:{self.tx}")
         self.assertNotEqual(r.returncode, 0)
@@ -691,18 +706,19 @@ class ReviewVerdictTest(unittest.TestCase):
 
     def test_snapshot_then_plan_edit_aborts_the_auto_bound_write(self):
         """A plan edited AFTER the snapshot must abort write (approve-then-edit blocked) even via the
-        sidecar path, not just the explicit flag."""
+        sidecar path, not just the explicit flag. `snapshot=False` keeps the ORIGINAL snapshot (a re-snap
+        would bind the edited bytes)."""
         self.assertEqual(run("snapshot", "--plan", self.plan).returncode, 0)
         with open(self.plan, "a", encoding="utf-8") as fh:
             fh.write("\nan edit the reviewers never saw\n")
-        r = self._write()
+        r = self._write(snapshot=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("CHANGED between review and write", r.stdout + r.stderr)
 
     def test_symlinked_snapshot_sidecar_is_ignored(self):
         """A pre-seeded SYMLINK snapshot sidecar (attacker-chosen digest) must NOT bind the approval — a
-        genuine snapshot is a real regular file. Write ignores the symlink and proceeds on current bytes
-        (here: no binding from the planted value)."""
+        genuine snapshot is a real regular file, so the symlink yields NO binding. An APPROVING write with
+        no binding then FAILS CLOSED (round 6), so the planted digest can neither bind nor slip through."""
         run("snapshot", "--plan", self.plan)
         side = os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.reviewed-sha256")
         os.remove(side)
@@ -710,20 +726,37 @@ class ReviewVerdictTest(unittest.TestCase):
         with open(planted, "w", encoding="utf-8") as fh:
             fh.write("0" * 64 + "\n")
         os.symlink(planted, side)
-        r = self._write()
-        self.assertEqual(r.returncode, 0, r.stderr)          # symlink ignored -> write proceeds
+        r = self._write(snapshot=False)
+        self.assertNotEqual(r.returncode, 0, "symlinked sidecar -> no binding -> approving must fail closed")
+        self.assertIn("requires a reviewed-plan digest", r.stdout + r.stderr)
         self.assertNotIn("0" * 12, r.stdout + r.stderr)      # the planted digest never bound
 
     def test_fifo_snapshot_sidecar_is_ignored(self):
-        """A pre-created FIFO snapshot sidecar (an attacker planting a non-regular file at the predictable
-        path) must NOT be read as a digest — O_NONBLOCK + fstat reject it, so write proceeds unbound
-        rather than blocking or trusting it (round 5: codex)."""
+        """A pre-created FIFO snapshot sidecar (a non-regular file planted at the predictable path) must
+        NOT be read as a digest — O_NONBLOCK + fstat reject it, yielding NO binding; an APPROVING write
+        then fails closed rather than blocking or trusting it (round 5 + round 6: codex)."""
         run("snapshot", "--plan", self.plan)
         side = os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.reviewed-sha256")
         os.remove(side)
         os.mkfifo(side)
-        r = self._write()
-        self.assertEqual(r.returncode, 0, r.stderr)   # FIFO ignored -> no binding, write proceeds
+        r = self._write(snapshot=False)
+        self.assertNotEqual(r.returncode, 0, "FIFO sidecar -> no binding -> approving must fail closed")
+        self.assertIn("requires a reviewed-plan digest", r.stdout + r.stderr)
+
+    def test_approving_write_without_any_binding_fails_closed(self):
+        """No snapshot sidecar and no --reviewed-sha256 leaves the review->write window unguarded: a
+        caller could review v1, edit to v2, and write an APPROVE bound only to v2. An APPROVING verdict
+        must therefore REQUIRE a reviewed-digest binding (round 6: codex)."""
+        r = self._write(snapshot=False)   # no sidecar, no flag
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("requires a reviewed-plan digest", r.stdout + r.stderr)
+
+    def test_non_approving_write_needs_no_binding(self):
+        """A non-approving verdict blocks `implement` regardless, so it does not need the binding."""
+        r = self._write(verdict="REQUEST_CHANGES",
+                        reviewers=("gemini=REQUEST_CHANGES:%s" % self.tx, "codex=APPROVE:%s" % self.tx2),
+                        snapshot=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
@@ -874,10 +907,14 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(run("verify", "--plan", self.plan).returncode, 1)
 
     def test_write_refuses_symlinked_verdict_dir(self):
+        import hashlib as _h
         elsewhere = os.path.join(self.d, "attacker")
         os.makedirs(elsewhere)
         os.symlink(elsewhere, os.path.join(self.d, ".verdicts"))
-        r = self._write()
+        # Pass an explicit valid binding so the write clears the reviewed-digest check and REACHES the
+        # dir-symlink refusal (a symlinked `.verdicts` blocks `snapshot` from writing a sidecar).
+        reviewed = _h.sha256(open(self.plan, "rb").read()).hexdigest()
+        r = self._write(reviewed_sha256=reviewed)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("symlink", r.stderr.lower())
 

@@ -404,6 +404,16 @@ def cmd_write(args: argparse.Namespace) -> int:
             "review-verdict: the plan CHANGED between review and write — refusing to record an "
             f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
             f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
+    # FAIL CLOSED: an APPROVING verdict MUST carry a reviewed-digest binding. With no snapshot sidecar and
+    # no --reviewed-sha256, the review->write window is unguarded — a caller could review v1, edit to v2,
+    # and write an APPROVE bound only to v2's write-time digest, which `verify` then accepts (the snapshot
+    # can be simply skipped, or removed / swapped to a symlink / a FIFO, yielding `expected = None`). A
+    # non-approving verdict blocks `implement` regardless, so it needs no binding (round 6: codex).
+    if expected is None and verdict in APPROVING:
+        raise SystemExit(
+            "review-verdict: an APPROVING verdict requires a reviewed-plan digest, but none is available "
+            "(no snapshot sidecar and no --reviewed-sha256). Run `review-verdict.py snapshot --plan "
+            f"{plan}` BEFORE dispatching the reviews. Refusing to bind an approval to unreviewed bytes.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.

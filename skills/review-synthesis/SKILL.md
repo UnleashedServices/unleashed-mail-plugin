@@ -126,8 +126,11 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
     --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-`write` aborts if the plan changed since the snapshot. You may still pass `--reviewed-sha256 <digest>`
-explicitly to override the sidecar (e.g. a caller that tracks the digest itself); a passed-but-EMPTY
+`write` aborts if the plan changed since the snapshot. An **APPROVING** verdict REQUIRES a reviewed-digest
+binding: if no snapshot sidecar exists (and no `--reviewed-sha256` is passed) `write` FAILS CLOSED rather
+than record an approval bound to unreviewed bytes — so the snapshot in `create-feature-plan` is
+mandatory, not optional, for an approval. You may still pass `--reviewed-sha256 <digest>` explicitly to
+override the sidecar (e.g. a caller that tracks the digest itself); a passed-but-EMPTY
 `--reviewed-sha256 ""` fails loudly rather than silently skipping the binding.
 
 For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
