@@ -217,7 +217,11 @@ _in_disabled_region() {
             # documents :previous/:this/:next for `enable` too, so skipping only scoped `disable` let
             # `// swiftlint:enable:this force_try` close the whole region and block every later try!
             # that SwiftLint still waives (codex, #43 review). Applies to BOTH acts.
-            if (tail ~ /^:(next|this|previous)/) next
+            # Scope must be a whole token (delimiter or end after it), mirroring _waives_scoped —
+            # else `:nextforce_try` reads as scope+rule here too. And a colon-led tail that is NOT a
+            # known scope is malformed: skip it entirely rather than let it open a region.
+            if (tail ~ /^:(next|this|previous)([ \t:]|$)/) next
+            if (tail ~ /^:/) next
             sub(/ - .*$/, "", tail)                                   # drop the mandated ` - <rationale>`
             gsub(/[:,]/, " ", tail)
             names = " " tail " "
@@ -247,11 +251,16 @@ _waives_scoped() {
     _body=$(_directive_body "$_line") || return 1
     case "$_body" in swiftlint:disable*) ;; *) return 1 ;; esac   # an `enable` never waives
     _tail="${_body#swiftlint:disable}"
+    # The scope must be a WHOLE token: `:next` then end / whitespace / ` - `. `:next*` is a prefix glob,
+    # so `:nextforce_try` stripped `:next` and read `force_try` as a rule — a typo SwiftLint ignores
+    # became a waiver (codex, #43 review). A `:`-led tail that is NOT one of the three known scopes is
+    # ALSO malformed (`:bogus force_try`) and must not fall through as an unscoped region.
     case "$_tail" in
-        :next*)     _got=next;     _tail="${_tail#:next}" ;;
-        :this*)     _got=this;     _tail="${_tail#:this}" ;;
-        :previous*) _got=previous; _tail="${_tail#:previous}" ;;
-        *)          _got=region ;;
+        :next|:next[[:space:]]*)         _got=next;     _tail="${_tail#:next}" ;;
+        :this|:this[[:space:]]*)         _got=this;     _tail="${_tail#:this}" ;;
+        :previous|:previous[[:space:]]*) _got=previous; _tail="${_tail#:previous}" ;;
+        :*)          return 1 ;;   # a colon that is not a known scope -> malformed, never waives
+        *)           _got=region ;;
     esac
     # An unscoped `swiftlint:disable` opens a REGION, which also covers the line right after it.
     if [ "$_want" = next ]; then

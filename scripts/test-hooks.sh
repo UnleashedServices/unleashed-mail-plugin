@@ -760,6 +760,26 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 9 (codex): a malformed scope is not a waiver ==
+# `:next*` etc. are PREFIX globs, so `:nextforce_try` stripped `:next` and read `force_try` as a rule —
+# a typo SwiftLint ignores became a fail-open waiver. And `:bogus force_try` fell through as an
+# unscoped region. The scope must be a WHOLE token; an unknown `:scope` is malformed and waives nothing.
+printf 'import Foundation\nstruct MS {\n    // swiftlint:disable:nextforce_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalNext.swift"
+OUT="$(lint_run "$LINTDIR/MalNext.swift")"
+assert_contains "lint: malformed ':nextforce_try' does NOT waive (region path)" "$OUT" "try!"
+printf 'import Foundation\nstruct MS2 {\n    let r = try! NSRegularExpression(pattern: "a") // swiftlint:disable:thisforce_try\n}\n' > "$LINTDIR/MalThis.swift"
+OUT="$(lint_run "$LINTDIR/MalThis.swift")"
+assert_contains "lint: malformed ':thisforce_try' does NOT waive (this path)" "$OUT" "try!"
+printf 'import Foundation\nstruct MS3 {\n    // swiftlint:disable:bogus force_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalScope.swift"
+OUT="$(lint_run "$LINTDIR/MalScope.swift")"
+assert_contains "lint: unknown scope ':bogus' does NOT open a region" "$OUT" "try!"
+# ...and the same malformed scope TWO lines up must not open a region either — this is the case that
+# reaches the AWK region scanner (the preceding-line case above is handled by the shell _waives). Under
+# the old prefix logic `:bogus force_try` fell through to "region" and waived every hit below it.
+printf 'import Foundation\nstruct MS4 {\n    // swiftlint:disable:bogus force_try\n    let filler = 0\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalScopeRegion.swift"
+OUT="$(lint_run "$LINTDIR/MalScopeRegion.swift")"
+assert_contains "lint: unknown scope ':bogus' does NOT open a region for LATER lines (awk path)" "$OUT" "try!"
+
 # == COREDEV-2494 review round 8 (codex): the directive predicate had three separate holes ==
 # (a) `//` inside a STRING ate the trailing directive — and this app is full of regex URLs.
 printf 'import Foundation\nstruct UR {\n    let r = try! NSRegularExpression(pattern: "https://example.com") // swiftlint:disable:this force_try\n}\n' > "$LINTDIR/UrlThis.swift"
