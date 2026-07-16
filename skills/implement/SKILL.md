@@ -22,15 +22,12 @@ any code:
 if [ -f "$ARGUMENTS" ]; then
     PLAN="$ARGUMENTS"
 else
-    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `->`_`, `-`->`_` (gemini, #41).
-    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] -' '[:lower:]__')
-    # FAIL CLOSED ON A CONTENT-FREE KEY. The `-n "$KEY"` guard below is not enough on its own: `tr` maps
-    # ' ' and '-' to '_' BEFORE it runs, so ARGUMENTS=" " (or "-", or " - ") yields KEY="_" — non-empty,
-    # so `-n` passes, and `*_*` then matches most plan filenames. `/implement " "` therefore resolved to
-    # an arbitrary plan and verified THAT plan's artifact: if it happened to be approved, the Design Gate
-    # passed for a feature nobody named. Guarding emptiness was never the point; guarding CONTENT is.
-    # (KEY is already lowercased above, so [a-z0-9] is the full alphanumeric set here.)
-    [[ "$KEY" == *[a-z0-9]* ]] || KEY=""
+    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`-`/`.` -> `_` (gemini, #41).
+    # `.` is normalized too, or `/implement "OAuth 2.0"` (KEY `oauth_2.0`) never matches
+    # OAUTH_2_0_PLAN.md (`oauth_2_0_plan.md`) and the gate reports "no plan" for a plan that exists
+    # (codex, #41 review). It fails CLOSED, so this is usability, not safety. `.md` -> `_md` on both
+    # sides is harmless: this is a substring test, not an equality test.
+    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] -.' '[:lower:]___')
     # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
     # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
     # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).
@@ -43,14 +40,23 @@ else
     # the subshell also swallowed any variable set inside it (gemini, #41 review). bash 3.2-safe.
     # An ARRAY, not a newline-joined string: `grep -c .` counted a filename CONTAINING a newline as two
     # matches and reported a false AMBIGUOUS, and ${p##*/} drops a basename subshell per file (gemini).
+    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`,
+    # and do not drop it. `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY silently resolves to
+    # the first plan on disk and satisfies the Design Gate: a fail-OPEN. `-n` alone is NOT enough either,
+    # because `tr` above maps ' ', '-' and '.' to '_' BEFORE this runs — so ARGUMENTS=" " (or "-", or
+    # " - ") yields KEY="_", which is non-empty, passes `-n`, and `*_*` then matches most plan filenames.
+    # `/implement " "` therefore resolved to an arbitrary plan and verified THAT plan's artifact: if it
+    # happened to be approved, the gate PASSED for a feature nobody named. Guarding emptiness was never
+    # the point; guarding CONTENT is. (KEY is lowercased above, so [a-z0-9] is the full alnum set.)
+    # Hoisted out of the loop so a junk KEY costs zero subshells (gemini, #41 review).
     MATCHES=()
-    for p in docs/planning/*PLAN*.md; do
-        [ -e "$p" ] || continue                     # unmatched glob stays literal -> skip
-        b=$(printf '%s' "${p##*/}" | tr '[:upper:] -' '[:lower:]__')
-        if [[ -n "$KEY" && "$b" == *"$KEY"* ]]; then
-            MATCHES+=("$p")
-        fi
-    done
+    if [[ "$KEY" == *[a-z0-9]* ]]; then
+        for p in docs/planning/*PLAN*.md; do
+            [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
+            b=$(printf '%s' "${p##*/}" | tr '[:upper:] -.' '[:lower:]___')
+            [[ "$b" == *"$KEY"* ]] && MATCHES+=("$p")
+        done
+    fi
     N=${#MATCHES[@]}
     # AMBIGUITY IS NOT A PASS. `head -1` would silently pick the alphabetically-first of N matches, so
     # `/implement review` could verify an approved-but-WRONG plan while the intended one stays ungated

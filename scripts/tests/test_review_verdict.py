@@ -27,6 +27,13 @@ class ReviewVerdictTest(unittest.TestCase):
         self.tx = os.path.join(self.d, "transcript.txt")
         with open(self.tx, "w", encoding="utf-8") as fh:
             fh.write("reviewer said things\nVERDICT: APPROVE\n")
+        # A SECOND, distinct transcript. An approving artifact requires a DISTINCT transcript per
+        # reviewer (codex, #41 review), and until that rule existed this fixture handed the SAME file to
+        # both reviewers — so every test wrote the exact artifact shape that rule now forbids, which is
+        # precisely why no test caught the hole. `_write` gives each reviewer its own by default.
+        self.tx2 = os.path.join(self.d, "transcript2.txt")
+        with open(self.tx2, "w", encoding="utf-8") as fh:
+            fh.write("the OTHER reviewer said other things\nVERDICT: APPROVE\n")
 
     def tearDown(self):
         import shutil
@@ -35,11 +42,11 @@ class ReviewVerdictTest(unittest.TestCase):
     def _write(self, verdict="APPROVE_WITH_NOTES",
                reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES")):
         args = ["write", "--plan", self.plan, "--verdict", verdict]
-        for r in reviewers:
-            # Attach the fixture transcript unless the case supplied its own path (or deliberately
-            # omits one to exercise the missing-transcript rule).
+        for i, r in enumerate(reviewers):
+            # Attach a DISTINCT fixture transcript per reviewer unless the case supplied its own path
+            # (or deliberately omits one to exercise the missing-transcript rule).
             if ":" not in r:
-                r = f"{r}:{self.tx}"
+                r = f"{r}:{self.tx if i == 0 else self.tx2}"
             args += ["--reviewer", r]
         return run(*args)
 
@@ -50,6 +57,30 @@ class ReviewVerdictTest(unittest.TestCase):
                 "--reviewer", "gemini=APPROVE", "--reviewer", "codex=APPROVE")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("requires a transcript per reviewer", r.stdout + r.stderr)
+
+    def test_one_transcript_cannot_back_TWO_approvals(self):
+        """Distinct NAMES are not distinct EVIDENCE.
+
+        `--reviewer gemini=APPROVE:/tmp/agy-out.txt --reviewer codex=APPROVE:/tmp/agy-out.txt` — one
+        copy-paste slip in the documented two-file flow — recorded identical transcript digests for both
+        reviewers and produced `GATE OK — [gemini=APPROVE, codex=APPROVE]`. Every existing check passed
+        because they all inspect the LABEL: the duplicate-name rule says "one reviewer cannot stand in
+        for the other" while only ever comparing names (codex, #41 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx}")
+        self.assertNotEqual(r.returncode, 0, "one transcript must not back two approvals")
+        self.assertIn("DISTINCT transcript", r.stdout + r.stderr)
+
+    def test_two_distinct_transcripts_still_pass(self):
+        """The fix must not break the legitimate case it guards."""
+        tx2 = os.path.join(self.d, "codex.txt")
+        with open(tx2, "w", encoding="utf-8") as fh:
+            fh.write("codex said other things\nVERDICT: APPROVE\n")
+        r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{tx2}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        self.assertEqual(v.returncode, 0, v.stderr)
 
     def test_empty_transcript_is_rejected(self):
         """`agy` writes exactly 0 bytes from a non-TTY on failure, and only `isfile` was checked — so

@@ -86,8 +86,21 @@ def _quorum_problem(verdict, reviewers) -> "str | None":
         return ("an APPROVING combined verdict requires a NON-EMPTY transcript; the empty-file digest "
                 "was recorded for " + ", ".join(sorted(empty_t)) + " (a 0-byte capture is a FAILED "
                 "review — `agy` writes exactly 0 bytes from a non-TTY on failure)")
+    # DISTINCT EVIDENCE, not just distinct names. The duplicate-name check above says "one reviewer
+    # cannot stand in for the other" — but it only inspects the LABEL. Recording the same transcript for
+    # both (`gemini=APPROVE:/tmp/agy-out.txt` + `codex=APPROVE:/tmp/agy-out.txt`, one copy-paste slip in
+    # the documented two-file flow) produced a GATE OK in which ONE review backed BOTH approvals
+    # (codex, #41 review — reproduced). Every prior check passed because they all compare labels.
+    #
+    # AFTER the empty check ON PURPOSE: two 0-byte transcripts are identical AND empty, and "your
+    # transcript is empty" is the actionable diagnosis (0 bytes is agy's failure signature) —
+    # "duplicate" would misdirect. Specific beats general.
+    _digests = [str(r.get("transcriptSha256", "")).strip().lower() for r in reviewers
+                if isinstance(r, dict)]
+    if len(set(_digests)) < len(_digests):
+        return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
+                "transcript is recorded for more than one reviewer, i.e. one review standing in for two")
     return None
-
 
 def _sha256_bytes(path: str) -> str:
     """Raw-byte SHA-256 of a file (never text-normalized — a whitespace edit must change it)."""
