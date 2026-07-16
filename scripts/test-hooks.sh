@@ -760,6 +760,31 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 8 (codex): the directive predicate had three separate holes ==
+# (a) `//` inside a STRING ate the trailing directive — and this app is full of regex URLs.
+printf 'import Foundation\nstruct UR {\n    let r = try! NSRegularExpression(pattern: "https://example.com") // swiftlint:disable:this force_try\n}\n' > "$LINTDIR/UrlThis.swift"
+OUT="$(lint_run "$LINTDIR/UrlThis.swift")"
+assert_not_contains "lint: a URL in the code does not eat the trailing :this waiver" "$OUT" "try!"
+# ...and the scan is LEFT-to-right, so a URL in the RATIONALE does not steal the directive either.
+printf 'import Foundation\nstruct UR2 {\n    // swiftlint:disable:next force_try - see http://x/y\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/UrlRationale.swift"
+OUT="$(lint_run "$LINTDIR/UrlRationale.swift")"
+assert_not_contains "lint: a URL in the rationale does not break the directive" "$OUT" "try!"
+# (b) `swiftlint:disable*` is a PREFIX glob — the typo `swiftlint:disabled` waived. Fail-open.
+printf 'import Foundation\nstruct TY {\n    // swiftlint:disabled force_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Typo.swift"
+OUT="$(lint_run "$LINTDIR/Typo.swift")"
+assert_contains "lint: the typo 'swiftlint:disabled' does NOT waive (exact token required)" "$OUT" "try!"
+printf 'import Foundation\nstruct TY2 {\n    // swiftlint:disableXforce_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Typo2.swift"
+OUT="$(lint_run "$LINTDIR/Typo2.swift")"
+assert_contains "lint: 'swiftlint:disableXforce_try' (no separator) does NOT waive" "$OUT" "try!"
+# (c) A SCOPED enable is line-scoped and must not close a whole region.
+printf 'import Foundation\nstruct SE {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable:this force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/ScopedEnable.swift"
+OUT="$(lint_run "$LINTDIR/ScopedEnable.swift")"
+assert_not_contains "lint: a scoped ':this' enable does NOT close the region" "$OUT" "try!"
+# ...while an UNSCOPED enable still does.
+printf 'import Foundation\nstruct UE {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/UnscopedEnable.swift"
+OUT="$(lint_run "$LINTDIR/UnscopedEnable.swift")"
+assert_contains "lint: an UNSCOPED enable still closes the region" "$OUT" "6:"
+
 # == COREDEV-2494 review round 7 (codex): SwiftLint has THREE line scopes, not one ==
 # The fallback only ever read the PRECEDING line, so `:this` (same line) and `:previous` (following
 # line) — both documented — were ignored and legitimately-waived code was BLOCKED. `:this` is live in

@@ -139,31 +139,43 @@ fi
 # parse case-in-while-in-$() at all).
 # Is $1 a REAL SwiftLint directive comment? If so, echo the directive body; else fail.
 #
-# The directive must BE the comment, not merely appear inside it. `_waives` and `_in_disabled_region`
-# both used a bare "contains swiftlint:disable" test, so ordinary prose acted as a directive
-# (codex, #43 review — reproduced):
-#     // TODO: remove any swiftlint:disable force_try here      -> WAIVED a real try!
-#     // we should swiftlint:disable force_try but we did not   -> WAIVED a real try!
-#     // NOTE: we used to swiftlint:disable force_try here      -> opened a disable REGION
-# All three are FAIL-OPEN: a comment ABOUT the linter silenced the linter.
+# THREE separate bugs have lived in this one predicate, all found by review:
 #
-# Anchor to the start of the COMMENT CONTENT, not the line: SwiftLint documents trailing directives
-# (`let x = y as! Int // swiftlint:disable:this force_cast`), so requiring the LINE to start with `//`
-# would miss those. Everything after the first `//`, minus leading blanks, must begin `swiftlint:`.
+# a) The directive must BE the comment, not appear in it. A bare "contains swiftlint:disable" test let
+#    prose act as a directive — `// TODO: remove any swiftlint:disable force_try here` WAIVED a real
+#    try!, and `// NOTE: we used to swiftlint:disable force_try here` opened a REGION. Fail-open: a
+#    comment ABOUT the linter turned the linter off.
+# b) Anchoring on the FIRST `//` broke on code containing `//` before its trailing comment —
+#    `try! NSRegularExpression(pattern: "https://example.com") // swiftlint:disable:this force_try`
+#    had its directive eaten by the URL. False positive, and this app is full of regex URLs.
+# c) `swiftlint:disable*` is a PREFIX glob, so the typo `swiftlint:disabled force_try` matched and
+#    waived. Fail-open, from a typo SwiftLint itself would ignore.
+#
+# So: scan each `//` left to right and take the FIRST one whose comment content begins with an EXACT
+# `swiftlint:disable`/`swiftlint:enable` token — terminated by end, `:` (a scope), or whitespace.
+# Left-to-right (not `##*//`) because a rationale may itself contain a URL:
+#   `// swiftlint:disable:next force_try - see http://x`   <- `##*//` would grab "x"
 _directive_body() {
-    case "$1" in *"//"*) ;; *) return 1 ;; esac
-    _c="${1#*//}"
+    _rest="$1"
     while :; do
+        case "$_rest" in
+            *"//"*) _rest="${_rest#*//}" ;;
+            *) return 1 ;;
+        esac
+        _c="$_rest"
+        while :; do
+            case "$_c" in
+                " "*) _c="${_c# }" ;;
+                "	"*) _c="${_c#	}" ;;
+                *) break ;;
+            esac
+        done
         case "$_c" in
-            " "*) _c="${_c# }" ;;
-            "	"*) _c="${_c#	}" ;;
-            *) break ;;
+            swiftlint:disable|swiftlint:enable) printf '%s' "$_c"; return 0 ;;
+            swiftlint:disable:*|swiftlint:enable:*) printf '%s' "$_c"; return 0 ;;
+            swiftlint:disable[[:space:]]*|swiftlint:enable[[:space:]]*) printf '%s' "$_c"; return 0 ;;
         esac
     done
-    case "$_c" in
-        swiftlint:disable*|swiftlint:enable*) printf '%s' "$_c"; return 0 ;;
-    esac
-    return 1
 }
 
 # Is line $2 of file $1 inside an OPEN `swiftlint:disable <rule>` REGION?
@@ -192,11 +204,20 @@ _in_disabled_region() {
             if (i == 0) next
             body = substr(line, i + 2)
             sub(/^[ \t]+/, "", body)
-            if (body !~ /^swiftlint:(disable|enable)/) next
+            # EXACT token, terminated by `:` (a scope), whitespace, or end — mirroring _directive_body.
+            # `/^swiftlint:(disable|enable)/` is a PREFIX match, so the typo `swiftlint:disabled
+            # force_try` opened a region here even after _directive_body learned to reject it: I fixed
+            # the shell predicate and left its awk twin with the identical bug (codex, #43 review; my
+            # own new test caught the miss).
+            if (body !~ /^swiftlint:(disable|enable)([: \t]|$)/) next
             act  = (body ~ /^swiftlint:disable/) ? "d" : "e"
             tail = (act == "d") ? substr(body, length("swiftlint:disable") + 1) \
                                 : substr(body, length("swiftlint:enable") + 1)
-            if (act == "d" && tail ~ /^:(next|this|previous)/) next   # line-scoped, never a region
+            # A scoped directive is LINE-scoped and never opens OR closes a region. SwiftLint
+            # documents :previous/:this/:next for `enable` too, so skipping only scoped `disable` let
+            # `// swiftlint:enable:this force_try` close the whole region and block every later try!
+            # that SwiftLint still waives (codex, #43 review). Applies to BOTH acts.
+            if (tail ~ /^:(next|this|previous)/) next
             sub(/ - .*$/, "", tail)                                   # drop the mandated ` - <rationale>`
             gsub(/[:,]/, " ", tail)
             names = " " tail " "
