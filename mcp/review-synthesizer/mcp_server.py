@@ -35,6 +35,20 @@ from synthesize import render_report, synthesize          # noqa: E402
 # --name-only` never emits one — treat it as absolute and fail closed alongside `/`-rooted paths.
 _DRIVE_ABS = re.compile(r"^[A-Za-z]:")
 
+
+def _abs_or_traversal(path: str) -> bool:
+    """True if `path` is an ABSOLUTE or `..`-TRAVERSAL entry — something `git diff --name-only` never
+    emits. Checks the RAW (lightly-normalized) form, NOT canonical_path's output: canonical_path
+    collapses any dots/slashes-only path (`.`, `..`, `/`, `.//`) to "", so a bare `..` or `/` mixed
+    with a real file (`["A.swift", ".."]`) would make a walrus `(cp := canonical_path(c))` short-circuit
+    on the falsy "" and never be rejected (round 2: gemini). Mirror canonical_path's
+    strip/backslash/`./` normalization but stop BEFORE the empty-collapse so `..`/`/` stay visible.
+    A benign `.`/`./`/"" normalizes to a non-`/`, non-`..` string (or "") and is correctly NOT flagged."""
+    r = path.strip().replace("\\", "/")
+    while r.startswith("./"):
+        r = r[2:]
+    return bool(r) and (r.startswith("/") or bool(_DRIVE_ABS.match(r)) or ".." in r.split("/"))
+
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
 # clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
 # framing, tools/list, tools/call shapes) changed between these revisions.
@@ -138,18 +152,15 @@ def _call_synthesize(arguments: dict) -> dict:
             "changed_files is empty (or all-blank/'.'-only) but findings were provided; refusing "
             "to synthesize (every finding would mis-scope to pre-existing and yield a bogus APPROVE)",
         )
-    # Fail CLOSED on ABSOLUTE or TRAVERSAL entries. `git diff --name-only` only ever emits
-    # repo-relative paths with no leading `/` and no `..` component; an absolute path (`/etc/passwd`)
-    # or a `../..` escape canonicalizes to a NON-empty string that matches no finding's repo-relative
-    # `file`, so it survives the empty-changeset guard above and scopes every real blocker to
-    # pre-existing -> a bogus provisional APPROVE. The empty-`.`-only guard closes `.`/`..`/`/`; this
-    # closes the residual `/abs` and `../esc` vectors (#44 independent review §5). Reject the call
-    # rather than filter — a caller sending impossible diff paths is untrustworthy input.
-    _bad = sorted({c for c in changed_files
-                   if (cp := canonical_path(c))
-                   and (cp.startswith("/")            # POSIX absolute
-                        or _DRIVE_ABS.match(cp)       # Windows drive-letter absolute (C:/… ; \ already /)
-                        or ".." in cp.split("/"))})    # traversal
+    # Fail CLOSED on ABSOLUTE or TRAVERSAL entries. `git diff --name-only` only ever emits repo-relative
+    # paths with no leading `/` and no `..` component. An absolute path (`/etc/passwd`) or `../..` escape
+    # matches no finding's repo-relative `file`, so it survives the empty-changeset guard above and scopes
+    # every real blocker to pre-existing -> a bogus provisional APPROVE (#44 independent review §5). The
+    # empty-changeset guard only fires when ALL entries collapse to "" — a bare `..`/`/` MIXED with a real
+    # file (`["A.swift", ".."]`) slips it, and canonical_path collapses `..`/`/` to "" so a canonical-based
+    # check would drop them too. `_abs_or_traversal` inspects the RAW path to catch them (round 2: gemini).
+    # Reject the call rather than filter — a caller sending impossible diff paths is untrustworthy input.
+    _bad = sorted({c for c in changed_files if _abs_or_traversal(c)})
     if _bad:
         raise _RpcError(
             -32602,
