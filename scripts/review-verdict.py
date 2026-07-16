@@ -331,6 +331,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
         _revs = art.get("reviewers")
         _revs = _revs if isinstance(_revs, list) else []
 
+        def _name(r):
+            """Readable reviewer name, or "" when absent/null/non-string.
+
+            FOURTH instance of the `.get`-default trap in this file (gemini, #42 review): `str(r.get(
+            "name"))` renders an explicit `"name": null` as the STRING "None", so the hint named a
+            reviewer that does not exist — "None recorded MISSING (never ran)". Same normalization as
+            `_status`; an unreadable NAME is as corrupt as an unreadable STATUS, and the invariant is the
+            same: never guess.
+            """
+            v = r.get("name")
+            return v.strip() if isinstance(v, str) and v.strip() else ""
+
         def _status(r):
             """Normalized status, or "" when the field is absent/null/non-string.
 
@@ -351,18 +363,23 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
         # after I wrote it down.
         _dicts = [r for r in _revs if isinstance(r, dict)]
-        _bad_status = sorted(str(r.get("name")) for r in _dicts if not _status(r))
+        _bad_status = sorted(_name(r) or "<unnamed>" for r in _dicts if _name(r) and not _status(r))
+        _bad_names = sum(1 for r in _dicts if not _name(r))
         _bad_entries = len(_revs) - len(_dicts)
         _corrupt = []
         if _bad_status:
             _corrupt.append(f"{', '.join(_bad_status)} has an absent/null/non-string status")
+        if _bad_names:
+            _corrupt.append(f"{_bad_names} reviewer entr"
+                            f"{'y has' if _bad_names == 1 else 'ies have'} no readable name")
         if _bad_entries:
             _corrupt.append(f"{_bad_entries} reviewer entr"
                             f"{'y is' if _bad_entries == 1 else 'ies are'} not an object")
-        absent = sorted(str(r.get("name")) for r in _dicts if _status(r) == "MISSING")
+        absent = sorted(_name(r) for r in _dicts if _name(r) and _status(r) == "MISSING")
         # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
-        rejecting = sorted(f"{r.get('name')}={_status(r)}" for r in _dicts
-                           if _status(r) and _status(r) not in APPROVING and _status(r) != "MISSING")
+        rejecting = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
+                           if _name(r) and _status(r) and _status(r) not in APPROVING
+                           and _status(r) != "MISSING")
         if _corrupt:
             hint = (f" — artifact is CORRUPT: {'; '.join(_corrupt)} — so no reviewer classification here"
                     " can be trusted; re-run the gate")

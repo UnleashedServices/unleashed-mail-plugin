@@ -360,6 +360,32 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotIn("wants plan changes", out)    # never invent a rejection
                 self.assertIn("CORRUPT", out)
 
+    def test_a_null_reviewer_NAME_is_corrupt_not_rendered_as_the_string_None(self):
+        """FOURTH instance of the `.get`-default trap in this file (gemini, #42 review).
+
+        `str(r.get("name"))` renders `"name": null` as the STRING "None", so the hint reported
+        "None recorded MISSING (never ran)" — naming a reviewer that does not exist. An unreadable NAME
+        is as corrupt as an unreadable STATUS; the invariant is the same."""
+        import glob
+        for junk in (None, 123, "", "   "):
+            with self.subTest(name=junk):
+                r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                        "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    a_ = json.load(fh)
+                a_["reviewers"] = [{"name": "gemini", "status": "APPROVE",
+                                    "transcriptSha256": "a" * 64},
+                                   {"name": junk, "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(a_, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertNotIn("None recorded MISSING", out)
+                self.assertIn("no readable name", out)
+
     def test_a_non_object_reviewer_entry_is_reported_as_corrupt(self):
         """An unreadable ENTRY is as corrupt as an unreadable STATUS — the invariant is "never guess".
 
