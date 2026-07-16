@@ -435,6 +435,38 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertIn("not a recognized status", out)
                 self.assertNotIn("wants plan changes", out)
 
+    def test_a_duplicate_reviewer_is_corrupt_not_contradictory_advice(self):
+        """`_quorum_problem` rejects duplicates for APPROVING verdicts only, so a non-approving artifact
+        with `gemini=MISSING` AND `gemini=REQUEST_CHANGES` produced advice saying gemini both ran and did
+        not run — from one artifact (codex, #42 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", "gemini=MISSING",
+                "--reviewer", f"gemini=REQUEST_CHANGES:{self.tx}",
+                "--reviewer", f"codex=APPROVE:{self.tx2}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("CORRUPT", out)
+        self.assertIn("more than once", out)
+        self.assertNotIn("TWO SEPARATE problems", out)   # never reason from a contradictory artifact
+
+    def test_a_stray_reviewer_is_corrupt_not_recovery_advice(self):
+        """`write` accepts extra reviewers for non-approving verdicts, so `octo=MISSING` alongside the
+        required pair produced "octo recorded MISSING ... see 'Unavailable reviewer'" — recovery advice
+        for a reviewer that is not part of the gate at all (codex, #42 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}",
+                "--reviewer", f"codex=REQUEST_CHANGES:{self.tx2}",
+                "--reviewer", "octo=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("CORRUPT", out)
+        self.assertIn("not part of the gate", out)
+        self.assertNotIn("Unavailable reviewer", out)    # do not send them chasing `octo`
+
     def test_a_typod_reviewer_name_is_corrupt_not_recovery_advice(self):
         """`_quorum_problem` enforces the mandatory pair for APPROVING verdicts only, so
         `--reviewer gemni=MISSING` was accepted and verify emitted "gemni recorded MISSING (never ran)"

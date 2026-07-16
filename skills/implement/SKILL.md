@@ -146,7 +146,8 @@ fi
     `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence. If the gate
     never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
   - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason
-    names a reviewer as `MISSING`, that reviewer never ran — see **Unavailable reviewer** below. Read the
+    names a reviewer as `MISSING`, that reviewer produced **no usable verdict** (it never ran, *or* its
+    transcript was empty/unparseable) — see **Unavailable reviewer** below. Read the
     whole reason before acting: a `MISSING` reviewer **and** a rejecting one is **two** problems, and
     `verify` says so explicitly (`TWO SEPARATE problems: …`). Resolving either alone will not pass.
   - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval

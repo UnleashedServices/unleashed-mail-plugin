@@ -396,8 +396,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # verdicts only, so `--reviewer gemni=MISSING` (a plain typo) was accepted here and produced
         # "gemni recorded MISSING (never ran)" — recovery advice about a reviewer that does not exist
         # (codex, #42 review).
-        _known = {_name(r).lower() for r in _dicts if _name(r)}
+        _names_l = [_name(r).lower() for r in _dicts if _name(r)]
+        _known = set(_names_l)
         _absent_required = sorted(REQUIRED_REVIEWERS - _known)
+        # DUPLICATES and STRAYS are corrupt here too. `_quorum_problem` rejects both, but only for
+        # APPROVING verdicts, so a non-approving artifact sailed through and this hint then spoke
+        # confidently about it (codex, #42 review):
+        #   gemini=MISSING + gemini=REQUEST_CHANGES -> "gemini=REQUEST_CHANGES (ran, wants plan changes)
+        #                                              AND gemini recorded MISSING" — gemini both ran
+        #                                              and did not run, from one artifact.
+        #   octo=MISSING (a stray)                  -> "octo recorded MISSING ... see 'Unavailable
+        #                                              reviewer'" — recovery advice for a reviewer that
+        #                                              is not part of the gate at all.
+        _dupes = sorted({n for n in _names_l if _names_l.count(n) > 1})
+        _strays = sorted(_known - REQUIRED_REVIEWERS)
         _corrupt = []
         if _unknown_status:
             _corrupt.append(f"{', '.join(_unknown_status)} is not a recognized status "
@@ -410,6 +422,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if _bad_entries:
             _corrupt.append(f"{_bad_entries} reviewer entr"
                             f"{'y is' if _bad_entries == 1 else 'ies are'} not an object")
+        if _dupes:
+            _corrupt.append(f"{', '.join(_dupes)} appears more than once — one reviewer cannot both "
+                            "run and not run")
+        if _strays:
+            _corrupt.append(f"{', '.join(_strays)} is not part of the gate "
+                            f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
         if _absent_required and not _corrupt:
             _corrupt.append(f"does not record the mandatory reviewer(s) {_absent_required} "
                             f"(recorded: {sorted(_known) or 'none'} — a typo?)")
