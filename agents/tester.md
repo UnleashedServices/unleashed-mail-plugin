@@ -86,13 +86,14 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
         return (stubbedEmails, .none)   // `.none` is PaginationToken's end-of-list case (it's an enum, not Optional)
     }
 
-    // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`. The owner-bound
-    // 3-arg `sendMessage(draft:attachmentCache:authAccount:)` (COREDEV-2354) is ALSO a protocol
-    // requirement. Implement it DIRECTLY (rather than leaning on the protocol-extension default, which
-    // silently drops `authAccount`) so a test of the owner-bound send path can assert WHICH account was
-    // used. A real mock witness is a proper dynamic-dispatch target — it does NOT static-shadow the
-    // production override (that hazard is a defaulted-ARGUMENT extension, not a genuine conformance). It
-    // records `authAccount` and forwards to the 2-arg behaviour.
+    // BOTH send overloads are protocol requirements (NOT `send(_:)`). The 2-arg
+    // `sendMessage(draft:attachmentCache:)` has NO extension default, so a mock MUST implement it. The
+    // owner-bound 3-arg `sendMessage(draft:attachmentCache:authAccount:)` (COREDEV-2354) DOES have a
+    // protocol-extension default (forwarding to the 2-arg), so a mock CAN skip it — but implement it
+    // DIRECTLY when a test needs to assert WHICH account the owner-bound path used, since the default
+    // silently drops `authAccount`. A real mock witness is a proper dynamic-dispatch target — it does NOT
+    // static-shadow the production override (that hazard is a defaulted-ARGUMENT extension, not a genuine
+    // conformance). It records `authAccount` and forwards to the 2-arg behaviour.
     func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws {
         sendMessageCallCount += 1
         if let error = shouldThrow { throw error }
