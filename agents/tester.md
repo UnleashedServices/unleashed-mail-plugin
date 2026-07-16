@@ -65,25 +65,39 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
     var fetchMessagesCallCount = 0
     var sendMessageCallCount = 0
     var shouldThrow: EmailServiceError?
+    // Capture each call's INPUTS, not just a count — a mock that only counts calls passes even when
+    // production fetches the wrong folder, drops the page token, or sends from the wrong account.
+    var lastFetchFolderId: String?
+    var lastFetchMaxResults: Int?
+    var lastFetchPaginationToken: PaginationToken?
+    var lastSentAuthAccount: String?
 
     // Conforms to the REAL EmailServiceProtocol requirement (EmailServiceProtocol.swift): the method
     // is `fetchMessages(folderId:maxResults:paginationToken:) -> (emails:, nextToken:)`, NOT `fetchInbox`.
     func fetchMessages(folderId: String, maxResults: Int,
                        paginationToken: PaginationToken?) async throws -> (emails: [Email], nextToken: PaginationToken) {
         fetchMessagesCallCount += 1
+        lastFetchFolderId = folderId
+        lastFetchMaxResults = maxResults
+        lastFetchPaginationToken = paginationToken
         if let error = shouldThrow { throw error }
         return (stubbedEmails, .none)   // `.none` is PaginationToken's end-of-list case (it's an enum, not Optional)
     }
 
     // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`. The owner-bound
     // 3-arg `sendMessage(draft:attachmentCache:authAccount:)` (COREDEV-2354) is ALSO a protocol
-    // requirement, but EmailServiceProtocol ships a protocol-extension DEFAULT that forwards it to this
-    // 2-arg for "legacy/mocked conformers that do no real auth" ("No mock edits") — so a mock conforms
-    // by implementing only this one. Do NOT re-declare the 3-arg here: a mock override would statically
-    // shadow the witness and defeat the per-account dispatch the production services rely on.
+    // requirement. Implement it DIRECTLY (rather than leaning on the protocol-extension default, which
+    // silently drops `authAccount`) so a test of the owner-bound send path can assert WHICH account was
+    // used. A real mock witness is a proper dynamic-dispatch target — it does NOT static-shadow the
+    // production override (that hazard is a defaulted-ARGUMENT extension, not a genuine conformance). It
+    // records `authAccount` and forwards to the 2-arg behaviour.
     func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws {
         sendMessageCallCount += 1
         if let error = shouldThrow { throw error }
+    }
+    func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?, authAccount: String?) async throws {
+        lastSentAuthAccount = authAccount
+        try await sendMessage(draft: draft, attachmentCache: attachmentCache)
     }
 }
 ```
