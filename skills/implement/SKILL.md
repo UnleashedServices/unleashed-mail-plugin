@@ -160,7 +160,18 @@ two different failures**, depending on how far the user got:
 | What the user did | `verify` says | 
 |---|---|
 | Never ran `/unleashed-mail:review-synthesis` | *no artifact* |
-| Ran it, recording `<reviewer>=MISSING` | *not an approving verdict* … `<reviewer> recorded MISSING (never ran)` |
+| Ran it, recording `<reviewer>=MISSING` | *not an approving verdict* … `<reviewer> recorded MISSING: no usable verdict` |
+
+**`MISSING` means one of two things**, and `review-synthesis` records both the same way (its
+normalization table maps *missing / empty / **unparseable** transcript* → `MISSING`):
+
+1. the reviewer **never ran** — install/authenticate the CLI, or capture the review elsewhere;
+2. it ran but the transcript was **empty or unparseable** — re-capture it (`agy` writes exactly 0 bytes
+   from a non-TTY on failure, and needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+   verdict).
+
+Check the transcript before assuming (1): the fix for (2) is a re-run, not an install. What they share —
+and it is the load-bearing half — is that **no plan edit clears either**.
 
 Both are the **same situation**. Do not read the second as a plan problem — iterating the plan cannot clear
 a reviewer that never ran (that misread is the wedge COREDEV-2493 exists to remove).

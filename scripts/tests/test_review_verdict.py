@@ -341,7 +341,9 @@ class ReviewVerdictTest(unittest.TestCase):
         verdict for a reviewer whose status is unusable (gemini, #42 review). Same `.get`-default trap
         already annotated on transcriptSha256."""
         import glob
-        for junk in (None, 123, [], {}):
+        # "INVALID_STATUS" per gemini's suggestion: an unrecognized STRING status is corrupt too — it
+        # used to be classified as a considered rejection ("ran, wants plan changes").
+        for junk in (None, 123, [], {}, "INVALID_STATUS"):
             with self.subTest(status=junk):
                 r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
                         "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
@@ -407,6 +409,61 @@ class ReviewVerdictTest(unittest.TestCase):
                 self.assertNotEqual(v.returncode, 0)
                 self.assertNotIn("Traceback", out)
                 self.assertIn("CORRUPT", out)
+
+    def test_an_unrecognized_status_is_corrupt_not_a_rejection(self):
+        """`rejecting` was a CATCH-ALL for "not approving and not MISSING", so any status outside the
+        VERDICTS vocabulary — defined at the top of this very file and never consulted — was reported as
+        a considered rejection. Found independently by BOTH bots (#42 review).
+
+        `WAIVED` is the live case, not a hypothetical: this PR REMOVES that status, so any artifact
+        written before it carries a status this code no longer recognizes."""
+        import glob
+        for st in ("INVALID_STATUS", "WAIVED", "lgtm", "APPROVE_WITH_NITS"):
+            with self.subTest(status=st):
+                self.assertEqual(self._write(verdict="DISAGREEMENT").returncode, 0)
+                art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+                with open(art, encoding="utf-8") as fh:
+                    d = json.load(fh)
+                d["reviewers"] = [{"name": "gemini", "status": st, "transcriptSha256": "a" * 64},
+                                  {"name": "codex", "status": "MISSING"}]
+                with open(art, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh)
+                v = run("verify", "--plan", self.plan)
+                out = v.stdout + v.stderr
+                self.assertNotEqual(v.returncode, 0)
+                self.assertIn("CORRUPT", out)
+                self.assertIn("not a recognized status", out)
+                self.assertNotIn("wants plan changes", out)
+
+    def test_a_typod_reviewer_name_is_corrupt_not_recovery_advice(self):
+        """`_quorum_problem` enforces the mandatory pair for APPROVING verdicts only, so
+        `--reviewer gemni=MISSING` was accepted and verify emitted "gemni recorded MISSING (never ran)"
+        — recovery advice about a reviewer that does not exist (codex, #42 review)."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", "gemni=MISSING", "--reviewer", f"codex=APPROVE:{self.tx}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0)
+        self.assertIn("CORRUPT", out)
+        self.assertIn("mandatory reviewer", out)
+        self.assertNotIn("never ran", out)
+
+    def test_the_MISSING_hint_does_not_assert_never_ran(self):
+        """MISSING is overloaded: `review-synthesis` maps BOTH "never returned" AND "empty/unparseable
+        transcript" to it (SKILL.md:48). Asserting "never ran" states one of two possible facts as
+        certain, and they need different recoveries (codex, #42 review). What IS common to both — no
+        plan edit clears either — must survive."""
+        r = run("write", "--plan", self.plan, "--verdict", "DISAGREEMENT",
+                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", "codex=MISSING")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        v = run("verify", "--plan", self.plan)
+        out = v.stdout + v.stderr
+        self.assertIn("codex", out)
+        self.assertIn("no usable verdict", out)
+        self.assertIn("unparseable", out)
+        self.assertIn("NOT a plan problem", out)      # the load-bearing half must remain
+        self.assertNotIn("(never ran):", out)         # ...but not as a bare assertion of fact
 
     def test_a_non_object_reviewer_entry_is_reported_as_corrupt(self):
         """An unreadable ENTRY is as corrupt as an unreadable STATUS — the invariant is "never guess".

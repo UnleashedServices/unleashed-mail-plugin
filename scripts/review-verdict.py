@@ -371,10 +371,30 @@ def cmd_verify(args: argparse.Namespace) -> int:
         # from an artifact one of whose entries is garbage (pre-merge audit). Same invariant, one commit
         # after I wrote it down.
         _dicts = [r for r in _revs if isinstance(r, dict)]
+        # USE THE DEFINED VOCABULARY. `VERDICTS` sits at the top of this file and the hint logic never
+        # consulted it: `rejecting` was a CATCH-ALL for "not approving and not MISSING", so any status
+        # outside the vocabulary was reported as a considered rejection (gemini AND codex, #42 review —
+        # both found this independently, which is why it is the root cause and not a nit):
+        #     INVALID_STATUS -> "gemini=INVALID_STATUS (ran, wants plan changes — address them)"
+        #     WAIVED         -> same. And WAIVED is not hypothetical: THIS PR removes it, so artifacts
+        #                       written before it carry a status this code no longer recognizes.
+        #     lgtm           -> "gemini=LGTM (ran, wants plan changes)"
+        # An unrecognized status is not a rejection; it is an artifact we cannot read.
+        _unknown_status = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
+                                 if _name(r) and _status(r) and _status(r) not in VERDICTS)
         _bad_status = sorted(_name(r) for r in _dicts if _name(r) and not _status(r))
         _bad_names = sum(1 for r in _dicts if not _name(r))
         _bad_entries = len(_revs) - len(_dicts)
+        # The artifact must record the MANDATORY pair. `_quorum_problem` enforces this for APPROVING
+        # verdicts only, so `--reviewer gemni=MISSING` (a plain typo) was accepted here and produced
+        # "gemni recorded MISSING (never ran)" — recovery advice about a reviewer that does not exist
+        # (codex, #42 review).
+        _known = {_name(r).lower() for r in _dicts if _name(r)}
+        _absent_required = sorted(REQUIRED_REVIEWERS - _known)
         _corrupt = []
+        if _unknown_status:
+            _corrupt.append(f"{', '.join(_unknown_status)} is not a recognized status "
+                            f"({', '.join(sorted(VERDICTS))})")
         if _bad_status:
             _corrupt.append(f"{', '.join(_bad_status)} has an absent/null/non-string status")
         if _bad_names:
@@ -383,10 +403,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if _bad_entries:
             _corrupt.append(f"{_bad_entries} reviewer entr"
                             f"{'y is' if _bad_entries == 1 else 'ies are'} not an object")
+        if _absent_required and not _corrupt:
+            _corrupt.append(f"does not record the mandatory reviewer(s) {_absent_required} "
+                            f"(recorded: {sorted(_known) or 'none'} — a typo?)")
         absent = sorted(_name(r) for r in _dicts if _name(r) and _status(r) == "MISSING")
         # A reviewer that RAN and rejected is a plan problem, and must not be masked by a MISSING peer.
+        # The `in VERDICTS` filter is redundant BY CONSTRUCTION — `_unknown_status` above short-circuits
+        # to the CORRUPT branch first, so this line is unreachable with a status outside the vocabulary,
+        # and no test pins it (reverting it to the old catch-all fails nothing). Kept anyway, and said
+        # plainly rather than dressed up as coverage: it makes this line's contract readable on its own,
+        # which is exactly what the catch-all version lacked.
         rejecting = sorted(f"{_name(r)}={_status(r)}" for r in _dicts
-                           if _name(r) and _status(r) and _status(r) not in APPROVING
+                           if _name(r) and _status(r) in VERDICTS and _status(r) not in APPROVING
                            and _status(r) != "MISSING")
         if _corrupt:
             hint = (f" — artifact is CORRUPT: {'; '.join(_corrupt)} — so no reviewer classification here"
@@ -399,7 +427,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     f" them) AND {', '.join(absent)} recorded MISSING (never ran — see 'Unavailable"
                     " reviewer' in the implement skill). Resolving either one alone will NOT pass the gate")
         elif absent:
-            hint = (f" — {', '.join(absent)} recorded MISSING (never ran): this is NOT a plan problem, so"
+            # NOT "never ran". `review-synthesis` maps BOTH "reviewer never returned" AND "empty /
+            # unparseable transcript" to MISSING (its normalization table, SKILL.md:48), so asserting
+            # "never ran" states one of two possible facts as certain — and they need different
+            # recoveries (install/authenticate the CLI vs re-capture the review). What IS common to both,
+            # and is the load-bearing half, is that no plan edit clears either (codex, #42 review).
+            hint = (f" — {', '.join(absent)} recorded MISSING: no usable verdict (the reviewer never ran,"
+                    " OR its transcript was empty/unparseable). Either way this is NOT a plan problem, so"
                     " iterating the plan cannot clear it; see 'Unavailable reviewer' in the implement skill")
         else:
             hint = ""
