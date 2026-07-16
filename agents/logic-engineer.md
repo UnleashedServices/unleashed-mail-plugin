@@ -305,9 +305,9 @@ func prefetchIfNeeded(currentIndex: Int) async {
 
     do {
         let page = try await provider.fetchMessages(folderId: "INBOX", maxResults: 50, paginationToken: nextToken)
-        self.nextPageToken = page.nextPageToken
+        self.nextPageToken = page.nextToken
         try await dbQueue.write { db in
-            for msg in page.messages { try msg.save(db) }
+            for msg in page.emails { try msg.save(db) }
         }
     } catch {
         // Prefetch failure is non-fatal — user can still scroll

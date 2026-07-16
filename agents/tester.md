@@ -72,7 +72,12 @@ final class MockEmailService: EmailServiceProtocol {
         return (stubbedEmails, PaginationToken(nil))
     }
 
-    // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`.
+    // The send requirement is `sendMessage(draft:attachmentCache:)`, NOT `send(_:)`. The owner-bound
+    // 3-arg `sendMessage(draft:attachmentCache:authAccount:)` (COREDEV-2354) is ALSO a protocol
+    // requirement, but EmailServiceProtocol ships a protocol-extension DEFAULT that forwards it to this
+    // 2-arg for "legacy/mocked conformers that do no real auth" ("No mock edits") — so a mock conforms
+    // by implementing only this one. Do NOT re-declare the 3-arg here: a mock override would statically
+    // shadow the witness and defeat the per-account dispatch the production services rely on.
     func sendMessage(draft: EmailDraft, attachmentCache: [String: Data]?) async throws {
         sendMessageCallCount += 1
         if let error = shouldThrow { throw error }
