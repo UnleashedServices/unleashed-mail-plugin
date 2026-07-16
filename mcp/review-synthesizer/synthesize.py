@@ -45,6 +45,9 @@ def in_gating_scope(f: Finding, changed_files: set[str]) -> bool:
     # in the changeset.
     if f.family in _ALWAYS_GATING_FAMILIES:
         return True
+    # `f.file` is already canonicalised at parse (schema.parse_finding) and `changed_files` by the caller,
+    # so both sides collapse `Sources/./Auth.swift` / `Sources//Auth.swift` to `Sources/Auth.swift` and
+    # a reviewer's noncanonical path still matches git's clean changed entry (round 4: codex).
     return f.scope == "structural-pipeline" or f.file in changed_files
 
 

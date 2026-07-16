@@ -156,7 +156,14 @@ def canonical_path(p: str) -> str:
     # (the same fail-open the empty-changeset guard blocks for [""]/["./"]). (PR #38 review.)
     if p.strip("./") == "":
         return ""
-    return p
+    # Collapse redundant INTERIOR segments — `Sources//Auth.swift` and `Sources/./Auth.swift` both mean
+    # `Sources/Auth.swift`. Without this a reviewer's noncanonical `file` would not match git's clean
+    # changed-files entry, so the finding scopes to pre-existing and is silently dropped (round 4: codex).
+    # Applied to BOTH sides, so the compare stays symmetric. A `..` segment never reaches here — the
+    # server rejects traversal entries before scoping (mcp_server._abs_or_traversal). PRESERVE a leading
+    # `/` (an absolute path): capture.py's PII sanitizer keys on it to redact `/Users/<name>/…` prefixes.
+    lead = "/" if p.startswith("/") else ""
+    return lead + "/".join(seg for seg in p.split("/") if seg not in ("", "."))
 
 
 def parse_finding(d: dict) -> Finding:
