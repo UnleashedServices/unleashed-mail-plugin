@@ -374,21 +374,28 @@ not a custom field or issue type), divided by deployments over the window. Under
 CFR — each missed failure lowers the numerator, reading a false 0% only in a window where nothing was
 labeled; the metric is only as good as the labeling discipline.
 
-- **`release-manager` determines deploy-causation (analysis only, no Jira access)** — whether a
-  production-impacting Bug is a *regression* caused by a recent deployment, on **corroborated** evidence
-  (bisect to a shipped commit, worked-in-prior-release, or crash-first-seen-in-release) vs. a pre-existing
-  bug. A reporter's bare "broke after release X" is temporal correlation, not proof — corroborate before
-  attributing. Severity alone never implies a change failure. `release-manager`'s `tools:` allowlist grants
-  no Atlassian MCP, so it never queries or edits Jira — it receives a named candidate and returns a verdict.
+- **`release-manager` determines deploy-causation (analysis only, no Jira access)** — it returns one of
+  **three** verdicts for a production-impacting Bug: **confirmed** regression (corroborated evidence — bisect
+  to a shipped commit, worked-in-prior-release, or crash-first-seen-in-release), **proven pre-existing**
+  (positive evidence it predates the release), or **unconfirmed** (neither can be established). Absence of
+  evidence is never downgraded to pre-existing. A reporter's bare "broke after release X" is temporal
+  correlation, not proof — corroborate before attributing; severity alone never implies a change failure.
+  `release-manager`'s `tools:` allowlist grants no Atlassian MCP, so it never queries or edits Jira — it
+  receives a named candidate and returns the verdict.
 - **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
   component) at creation only when causation is confirmed at intake; otherwise it marks the issue
   **`cfr-triage-pending`** (a queue label, *not* counted toward CFR). It also **enumerates that queue**
   (JQL `project in (COREDEV, FT) AND labels = cfr-triage-pending`, no status filter) and surfaces the
-  candidates so the invoking session
-  dispatches `release-manager` to attribute each; on confirmation it adds `change-failure` and clears the
-  marker via `editJiraIssue` (read-modify-write — the `labels` field replaces the whole array). When
-  causation is **uncertain**, the issue stays UNLABELLED (marker cleared) and is flagged for human
-  confirmation — never guess.
+  candidates so the invoking session dispatches `release-manager` to attribute each. The marker is cleared
+  **only on a terminal verdict** (`editJiraIssue`, read-modify-write — the `labels` field replaces the whole
+  array): **confirmed** → add `change-failure`, clear marker; **proven pre-existing** → clear marker,
+  withhold. When the verdict is **unconfirmed** (neither corroboration nor pre-existence evidence), the
+  issue stays UNLABELLED **and retains `cfr-triage-pending`** — keeping it in the queryable queue — flagged
+  for **human** adjudication, the terminal authority for that case: the human supplies evidence (→ confirmed
+  / proven pre-existing) or explicitly dismisses it (a recorded human decision that clears the marker).
+  Absence of evidence is never treated as pre-existing, no agent drops the marker on a guess, and an
+  already-escalated candidate is not auto-re-dispatched to `release-manager` absent new evidence (so the
+  queue cannot churn).
 - **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
   Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
   not an agent action.

@@ -154,9 +154,16 @@ never replaces them.
   (`Agent` is disabled) you **surface those candidates in your result so the invoking session dispatches
   `release-manager`** to determine causation. Once `release-manager` reports a recent change is the cause,
   add `change-failure` **and** remove `cfr-triage-pending` (see the read-modify-write note below).
-- **Uncertain after triage** — if `release-manager` cannot attribute the issue to a specific release,
-  remove `cfr-triage-pending`, leave it UNLABELLED, and flag for human confirmation, rather than inflating
-  or deflating CFR on a guess.
+- **Uncertain after triage** — if `release-manager` can obtain *neither* corroboration *nor* evidence of
+  pre-existence (verdict: **unconfirmed**), **keep `cfr-triage-pending`** so the issue stays in the
+  queryable queue, leave it UNLABELLED, update the triage note (`escalated — causation indeterminate,
+  awaiting evidence / human confirmation`), and flag for human review. Do **not** clear the marker here: the
+  free-text note is not queryable, so dropping the label would make the candidate undiscoverable by future
+  sweeps and could leave a real change failure permanently unlabeled. The marker is removed **only** on a
+  terminal determination — `change-failure` applied (confirmed), **proven** pre-existing (evidence it
+  predates the release), or an explicit **human dismissal** (a recorded review decision, never an agent
+  guess). An escalated candidate awaits that human adjudication: do not auto-re-dispatch `release-manager`
+  on it unless new evidence appears, so the queue cannot churn. Never inflate or deflate CFR on a guess.
 
 Mechanically: add the literal `change-failure` to the issue's Jira `labels` via the Atlassian MCP
 (`editJiraIssue`, or at `createJiraIssue` when confirmed at intake) — **alongside**, not instead of, the

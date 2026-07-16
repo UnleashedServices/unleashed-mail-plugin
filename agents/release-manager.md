@@ -292,7 +292,10 @@ Change Failure Rate (see [`AGENT_CONTRACTS.md §12`](../AGENT_CONTRACTS.md)). `j
 `change-failure` label; **you establish whether it belongs** — severity alone never does.
 
 Attribute an incident to a recent change only on **corroborated** causation evidence — **any** of these is
-sufficient; otherwise it is a pre-existing bug, **not** a change failure:
+sufficient. Three verdicts are possible: **confirmed** change failure (a signal below holds),
+**proven pre-existing** (positive evidence it predates the release — see below), or **unconfirmed** (you can
+obtain *neither*). Absence of evidence is **not** proof of pre-existence — never downgrade an incapable-to-determine
+case to "pre-existing":
 
 - The regression **bisects** to a commit shipped in a recent release.
 - The behavior **worked in the prior release** and broke in a specific one (a true regression).
@@ -315,9 +318,13 @@ Read/Write/Edit/Bash/Grep/Glob, no Atlassian MCP) and cannot query or edit Jira.
 enumerated by `jira-manager` (it owns the `labels = cfr-triage-pending` queue) and dispatched to you by the
 invoking session; for each named candidate you do the causation analysis with the tools you have — git
 `bisect`, `CHANGELOG.md` / build-number correlation, crash-first-seen timestamps — and hand the
-determination back. On your confirmation `jira-manager` adds `change-failure` and clears
-`cfr-triage-pending`; if you find it pre-existing/uncorroborated it clears the marker and withholds the
-label. It only counts toward CFR in projects **`COREDEV` / `FT`**.
+determination back. `jira-manager` clears `cfr-triage-pending` only on a **terminal** verdict: on your
+**confirmation** it adds `change-failure` and clears the marker; on **proven pre-existing** it clears the
+marker and withholds the label. On an **unconfirmed** verdict the marker **stays** (the candidate remains in
+the queryable queue), flagged for **human** adjudication — you are not re-dispatched on it unless new
+evidence appears, and only a human review reaches its terminal (supplying evidence → confirmed / proven
+pre-existing, or an explicit dismissal that clears the marker); an agent clearing it here would silently
+drop a possible change failure and understate CFR. It only counts toward CFR in projects **`COREDEV` / `FT`**.
 
 ### Rollback Plan
 
