@@ -24,6 +24,13 @@ if [ -f "$ARGUMENTS" ]; then
 else
     # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `->`_`, `-`->`_` (gemini, #41).
     KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] -' '[:lower:]__')
+    # FAIL CLOSED ON A CONTENT-FREE KEY. The `-n "$KEY"` guard below is not enough on its own: `tr` maps
+    # ' ' and '-' to '_' BEFORE it runs, so ARGUMENTS=" " (or "-", or " - ") yields KEY="_" — non-empty,
+    # so `-n` passes, and `*_*` then matches most plan filenames. `/implement " "` therefore resolved to
+    # an arbitrary plan and verified THAT plan's artifact: if it happened to be approved, the Design Gate
+    # passed for a feature nobody named. Guarding emptiness was never the point; guarding CONTENT is.
+    # (KEY is already lowercased above, so [a-z0-9] is the full alphanumeric set here.)
+    [[ "$KEY" == *[a-z0-9]* ]] || KEY=""
     # LITERAL substring match. NOT `case` (bash 3.2 — what macOS ships — cannot parse `case … esac`
     # nested inside a `while` inside `$( )`), and NOT `${b#*$KEY}` (that expands $KEY as a GLOB, so
     # `d*k` and `dark?mode` both false-match DARK_MODE_PLAN.md).

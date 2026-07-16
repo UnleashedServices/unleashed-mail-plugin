@@ -61,6 +61,30 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("EMPTY", r.stdout + r.stderr)
 
+    def test_the_parse_time_empty_guard_covers_NON_approving_verdicts_too(self):
+        """Pins the parse-time `getsize == 0` guard, which nothing else did.
+
+        `test_empty_transcript_is_rejected` names that guard but does not pin it: it writes an APPROVING
+        verdict, which `_quorum_problem`'s `empty_t` check rejects independently — so deleting the
+        parse-time guard entirely left the WHOLE suite green (pre-merge audit). `_quorum_problem`
+        early-returns for non-approving verdicts, so those paths are covered by the parse-time guard
+        ALONE. Verified: with the guard deleted, APPROVE is still caught but REQUEST_CHANGES and
+        DISAGREEMENT both write an artifact recording a 0-byte transcript — an audit trail asserting a
+        review that never happened. Distinct from `test_non_approving_verdict_may_omit_a_transcript`:
+        OMITTING a transcript (a MISSING reviewer) is legitimate; SUPPLYING an empty one is a failure.
+        """
+        empty = os.path.join(self.d, "empty2.txt")
+        open(empty, "w").close()
+        for verdict in ("REQUEST_CHANGES", "DISAGREEMENT"):
+            with self.subTest(verdict=verdict):
+                r = run("write", "--plan", self.plan, "--verdict", verdict,
+                        "--reviewer", f"gemini={verdict}:{empty}",
+                        "--reviewer", f"codex={verdict}:{self.tx}")
+                self.assertNotEqual(r.returncode, 0,
+                                    "a 0-byte transcript is a FAILED review — it must never be recorded "
+                                    "as a real one, approving or not")
+                self.assertIn("EMPTY", r.stdout + r.stderr)
+
     def test_non_approving_verdict_may_omit_a_transcript(self):
         """Deliberate asymmetry: a MISSING reviewer legitimately HAS no transcript, and recording
         that failure is the whole point of the artifact."""
