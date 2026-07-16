@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.4.2
+# UnleashedMail — Claude Code Plugin v2.5.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,33 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.5.0
+
+The Plan Review Gate hardening release — the gate is now usable end-to-end and cannot be talked out of
+its own guarantees.
+
+- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to *the*
+  tracked plan (exact-stem match; a bare substring must be named), refuses any plan outside
+  `docs/planning/` (realpath containment closes the `" "`/`.`/`..`/symlink/symlinked-root/same-basename
+  bypasses that let a stray argument or an out-of-tree file satisfy the gate), and verifies a
+  plan-digest-bound Combined-verdict artifact before code is written. That artifact demands a non-empty,
+  real-SHA-256, **distinct** transcript per reviewer — by capture path or wrapper capture-id, so two
+  genuine reviews with identical text aren't rejected and one review can't stand in for two — a validated
+  combined verdict, and the mandatory gemini+codex identities, enforced identically at write and verify.
+- **The `WAIVED` promise dropped, not faked (COREDEV-2493).** `AGENT_CONTRACTS.md` §2 had promised a
+  user-authorized scripted waiver that nothing implemented and nothing could; it now documents the
+  recovery that actually exists. `agy` review timeouts raised so a real multi-file plan review stops
+  dying at the 5-minute default.
+- **Correctness + CI hardening (COREDEV-2494).** `swift-lint-check.sh` now honours every `swiftlint:disable`
+  form (region / `:next` / `:this` / `:previous` / `all`), ignores prose and typo'd directives, and no
+  longer flags IUO types (`Registry!`, `Canvas!`) as force operations — 15/15 sampled real app files were
+  false positives before. `pty-capture.py` runs on macOS system Python 3.9 again (a new py3.9 CI job
+  guards it), the gitleaks exemption is commit-scoped (no permanent blind spot), and `alpha` is now
+  gated by CI + history-aware secret scanning.
+- **Review tooling on Codex `gpt-5.6-sol` @ `xhigh` (COREDEV-2495).** Every codex review call forces
+  `-c model_reasoning_effort=xhigh`, resilient to the config reset the 5.6 upgrade introduced.
+- Built on the v2.4.x plugin-audit remediation (Epic COREDEV-2485, 17 PRs) already integrated on `alpha`.
 
 ### v2.4.2
 

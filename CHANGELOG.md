@@ -13,6 +13,32 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-07-16
+
+### Added
+- **Plan Review Gate made usable end-to-end and hardened** (COREDEV-2492): `/implement` now resolves a
+  feature name or path to *the* tracked plan (exact-stem match; a pure substring must be named
+  explicitly), refuses anything outside `docs/planning/` (realpath containment — closes the
+  `..`/symlink/symlinked-root and same-basename bypasses), and deterministically verifies a
+  plan-digest-bound Combined-verdict artifact via [`scripts/review-verdict.py`](scripts/review-verdict.py)
+  before any code is written. The artifact requires a non-empty, real-SHA-256, DISTINCT transcript per
+  reviewer (by capture path / wrapper capture-id, falling back to digest), a validated combined verdict,
+  and the mandatory gemini+codex identities — enforced identically at write and verify, so neither a
+  mis-recording caller nor a hand-tampered artifact can manufacture a false approval. `pty-capture.py`
+  emits a `<out>.captureid` per run for that provenance.
+
+### Changed
+- **Dropped the unimplementable scripted `WAIVED` path** (COREDEV-2493): `AGENT_CONTRACTS.md` §2 had
+  promised a user-authorized `WAIVED:` marker that nothing implemented and nothing could — "only the
+  user may waive" is unenforceable when the agent is the process running the script. Removed rather than
+  faked; §2 now documents the real recovery (the user chooses; a workflow exception is recorded without
+  claiming the gate passed). `agy` gets `--print-timeout 18m` so a real plan review no longer dies at the
+  5-minute default, and the wrapper timeout sits above it so a diagnosable error survives.
+- **Review tooling refreshed to Codex `gpt-5.6-sol` @ `xhigh`** (COREDEV-2495): Codex 5.6 "Sol"
+  (`codex-cli` 0.144.4). The upgrade silently reset the config's reasoning effort to `low`, so every
+  review recipe now passes `-c model_reasoning_effort=xhigh` explicitly — resilient to that reset and
+  correct on any machine, instead of trusting a config value the upgrade proved fragile.
+
 ### Fixed
 - **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
   only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
