@@ -100,8 +100,22 @@ Map each reviewer's raw verdict to one canonical token:
 ## Persist the verdict (bind it to the plan)
 
 After emitting the block, **persist the Combined verdict as a plan-digest-bound artifact** so
-`implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit). Pass the
-plan that was reviewed plus each reviewer's status + transcript:
+`implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit).
+
+**Prerequisite — the reviewed digest was snapshotted at gate LAUNCH.** `create-feature-plan` runs
+`review-verdict.py snapshot --plan …` *before* dispatching `/gemini-review` + `/codex-review`, writing
+a git-ignored `.reviewed-sha256` sidecar beside the plan. That snapshot binds the approval to the bytes
+the reviewers actually saw. It CANNOT be a shell variable — each skill step is a separate tool
+invocation, so a `REVIEWED_PLAN_SHA256=…` shell-local would be empty here (#44 review §4; COREDEV-2499).
+If no valid pre-review snapshot exists — none was taken, or the plan was edited AFTER the reviews ran —
+do **NOT** snapshot the current bytes here and continue: that would bind the approval to bytes the
+reviewers never saw. Instead **re-run `/gemini-review` + `/codex-review` on the current plan** (with a
+fresh `snapshot` taken before dispatch), then synthesize those transcripts. An approval is only valid for
+the exact plan the reviewers actually reviewed.
+
+Then persist — pass the plan that was reviewed plus each reviewer's status + transcript. `write`
+auto-reads the snapshot sidecar and aborts if the plan changed since, so **no `--reviewed-sha256`
+argument is needed** in the normal flow:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
@@ -111,6 +125,13 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
     --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
     --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
+
+`write` aborts if the plan changed since the snapshot. An **APPROVING** verdict REQUIRES a reviewed-digest
+binding: if no snapshot sidecar exists (and no `--reviewed-sha256` is passed) `write` FAILS CLOSED rather
+than record an approval bound to unreviewed bytes — so the snapshot in `create-feature-plan` is
+mandatory, not optional, for an approval. You may still pass `--reviewed-sha256 <digest>` explicitly to
+override the sidecar (e.g. a caller that tracks the digest itself); a passed-but-EMPTY
+`--reviewed-sha256 ""` fails loudly rather than silently skipping the binding.
 
 For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
 (the artifact fails closed — `implement`'s verify blocks on a non-approving verdict), e.g. `--reviewer codex=MISSING`.

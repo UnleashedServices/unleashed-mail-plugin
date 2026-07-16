@@ -161,7 +161,13 @@ jobs:
           python3 scripts/pty-capture.py "$out" -- echo ok
           grep -q "ok" "$out" || { echo "3.9 capture missing"; exit 1; }
           test -s "$out.captureid" || { echo "3.9 capture-id sidecar missing"; exit 1; }
-          echo "pty-capture on 3.9: capture + capture-id OK"
+          # Session-safety (#44 review §4): the transcript + sidecar must be 0600, and a pre-existing
+          # symlink at the output path must be REFUSED (not written through).
+          test "$(stat -c '%a' "$out")" = "600" || { echo "capture not 0600"; stat -c '%a' "$out"; exit 1; }
+          victim="$(mktemp)"; link="$(mktemp -u)"; ln -s "$victim" "$link"
+          python3 scripts/pty-capture.py "$link" -- echo pwned || true
+          test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
+          echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
 
   secret-scan:
     # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the

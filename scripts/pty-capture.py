@@ -40,12 +40,14 @@ Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 # on a stock Mac (this plugin's likeliest host). Matches the 7 other shipped .py files. (COREDEV-2494)
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 import pty
 import re
 import select
 import signal
+import stat
 import struct
 import sys
 import termios
@@ -55,6 +57,37 @@ ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
 SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
 POLL_INTERVAL_SEC = 0.1
 SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
+
+
+def _write_private(path: str, data: bytes) -> None:
+    """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
+
+    O_NOFOLLOW: if `path` is already a symlink, open() raises (ELOOP) instead of writing THROUGH it to
+    an attacker-chosen target. O_NONBLOCK + an fstat S_ISREG check reject a pre-created FIFO/device at the
+    predictable path (O_NOFOLLOW alone permits a FIFO — with no reader the write blocks forever, with an
+    attacker-held reader it leaks the transcript, round 5: codex). O_CREAT|O_TRUNC: create-or-truncate a
+    regular file. fchmod: O_CREAT only applies the mode on creation, so an existing 0644 file is tightened.
+
+    Uses open()'s `opener` hook so the returned file object OWNS the fd and closes it exactly once —
+    no manual fd bookkeeping, and structurally impossible to double-close (round 2: gemini). The opener
+    is the only place that still holds a raw fd: if a check fails there, close it before raising, since
+    open() never received it.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+    def _opener(p, _flags):
+        fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.ENOTSUP, "refusing a non-regular capture target (FIFO/device/dir)", p)
+            os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
+        except BaseException:
+            os.close(fd)                # open() hasn't taken ownership yet, so we must close it here
+            raise
+        return fd
+
+    with open(path, "wb", opener=_opener) as fh:
+        fh.write(data)
 
 
 def _signal_child(pid: int, sig: int) -> None:
@@ -279,19 +312,31 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
                 os.makedirs(out_dir, exist_ok=True)
             # PTYs translate \n -> \r\n (ONLCR); normalize to Unix newlines.
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
-            with open(out_path, 'wb') as f:
-                f.write(cleaned)
+            # SESSION-SAFE write (#44 review §4). Review transcripts can quote message bodies / tokens,
+            # and the recipes use predictable /tmp paths, so a pre-created symlink or a 0644 file is a
+            # local hazard: another user could pre-seed `/tmp/agy-out.txt` as a symlink to redirect the
+            # capture, or read a world-readable transcript. Create with O_NOFOLLOW (a pre-existing symlink
+            # at out_path makes open() fail rather than being followed) and force mode 0600 (fchmod, since
+            # O_CREAT only sets the mode when the file did not already exist).
+            _write_private(out_path, cleaned)
             # PROVENANCE: leave a per-run capture ID beside the transcript. review-verdict.py auto-reads
             # `<out>.captureid` and uses distinct capture IDs as authoritative, content-independent proof
-            # that two reviewers were two separate wrapper runs — so two byte-identical transcripts from
-            # distinct runs are no longer falsely rejected (full review, #41). Best-effort: a failure
-            # here must not fail the capture, so it never touches `capture_error`. Unique per run without
-            # `uuid`: os.urandom is available on macOS stock 3.9.6 and needs no import beyond `os`.
+            # that two reviewers were two separate wrapper runs (full review, #41). Best-effort — a
+            # failure here must not fail the capture, so it never touches `capture_error`. Same 0600 /
+            # O_NOFOLLOW discipline as the transcript.
             try:
-                with open(out_path + '.captureid', 'w', encoding='utf-8') as cf:
-                    cf.write(os.urandom(16).hex() + '\n')
+                _write_private(out_path + '.captureid', (os.urandom(16).hex() + '\n').encode())
             except OSError:
-                pass
+                # A pre-existing SYMLINK at the sidecar makes _write_private (O_NOFOLLOW) fail. Leaving it
+                # would let a pre-seeded `.captureid` (attacker-chosen value) survive and be trusted by
+                # review-verdict as authoritative provenance — two copied transcripts could then look like
+                # distinct wrapper runs. Remove it (os.unlink never follows the link) so no stale/foreign
+                # value is read; a capture with NO sidecar is safe — review-verdict treats a missing
+                # captureId as "no proof", not as authoritative (round 3: codex).
+                try:
+                    os.unlink(out_path + '.captureid')
+                except OSError:
+                    pass
         except OSError as e:
             capture_error = e
             try:
