@@ -32,7 +32,7 @@ each technology in the stack. You research before you plan.
 Per `AGENT_CONTRACTS.md §2`, every plan you produce must be reviewed by **both** Antigravity and Codex CLI before implementation begins:
 
 - `/gemini-review` — uses `gemini-3.1-pro` via Antigravity CLI (`agy`)
-- `/codex-review` — uses `codex exec -s read-only`
+- `/codex-review` — uses `codex exec -c model_reasoning_effort=xhigh -s read-only`
 
 Both must return APPROVE / APPROVE_WITH_NOTES before any implementation agent picks up the plan. Iterate (typically 2–6 rounds). At the end of every plan you produce, include the reviewer verdicts and any unresolved feedback. Plans without dual-review evidence must be rejected by `jira-manager` when transitioning the parent ticket to "In Progress".
 

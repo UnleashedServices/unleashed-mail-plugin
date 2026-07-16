@@ -79,7 +79,7 @@ Use the `/create-feature-plan` skill to scaffold (bundled as `/unleashed-mail:cr
 Before any implementation begins:
 
 1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/codex-review` (uses `codex exec -s read-only`)
+2. Plan author runs `/codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
