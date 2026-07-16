@@ -157,9 +157,19 @@ class TestSynthesizeTool(unittest.TestCase):
         # filename chars — git can emit them, so they must NOT be mistaken for a Windows drive-absolute
         # or a `..` traversal. Only `C:/`-style (colon+slash) drive roots and true `/`-separated `..`
         # components are absolute/traversal (round 3: gemini + codex).
-        for changed in (["a:b"], ["C:fixture.swift"], ["src/C:thing.swift"], ["foo\\..\\bar.swift"]):
+        for changed in (["a:b"], ["C:fixture.swift"], ["src/C:thing.swift"], ["foo\\..\\bar.swift"],
+                        ["C:"], ["\\report.swift"], ["src/\\weird.swift"]):
             res = self._call([good()], changed)
             self.assertFalse(res["isError"], f"changed_files={changed!r} is a valid repo path, not absolute")
+
+    def test_noncanonical_interior_changed_path_still_scopes_the_finding(self):
+        # A reviewer's noncanonical file (`Sources/./Auth.swift`, `Sources//Auth.swift`) must still match
+        # git's clean `Sources/Auth.swift` changed entry — otherwise the blocker scopes to pre-existing and
+        # is silently dropped from the provisional verdict (round 4: codex). canonical_path collapses both.
+        res = self._call([good(file="Sources/./Auth.swift")], ["Sources//Auth.swift"])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "REQUEST_CHANGES",
+                         "a blocker on a noncanonical in-scope path must not be dropped to pre-existing")
 
     def test_empty_changed_files_with_no_findings_is_allowed(self):
         # A genuinely clean review (findings []) with an empty changeset is legitimate, not an error.

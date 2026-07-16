@@ -30,11 +30,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/sy
 from schema import canonical_path, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
-# A Windows drive-letter prefix (`C:/`, `c:/`, or a bare `C:`) is an ABSOLUTE path like a leading `/`.
-# `git diff --name-only` never emits one. The colon MUST be followed by a slash or end-of-string: a bare
-# `[A-Za-z]:` prefix also matches legitimate POSIX names like `a:b` or `C:fixture.swift` (colon is a
-# valid filename char on macOS/Linux), which are repo-relative, not absolute (round 3: gemini + codex).
-_DRIVE_ABS = re.compile(r"^[A-Za-z]:(?:/|$)")
+# A Windows drive-letter ABSOLUTE prefix — `C:/` or `C:\` (either separator). `git diff --name-only`
+# never emits one. The colon MUST be followed by a slash/backslash: a bare `C:` is NOT absolute (it is a
+# valid POSIX top-level filename, and on Windows `C:` alone is drive-RELATIVE), and `a:b` /
+# `C:fixture.swift` are ordinary POSIX names (colon is a valid filename char) — none may be rejected
+# (round 3 + round 4: gemini + codex).
+_DRIVE_ABS = re.compile(r"^[A-Za-z]:[/\\]")
 
 
 def _abs_or_traversal(path: str) -> bool:
@@ -44,9 +45,10 @@ def _abs_or_traversal(path: str) -> bool:
     with a real file (`["A.swift", ".."]`) would make a walrus `(cp := canonical_path(c))` short-circuit
     on the falsy "" and never be rejected (round 2: gemini).
 
-    The ABSOLUTE/drive test runs on a `\\`->`/`-normalized copy (Windows uses `\\`); the `..` TRAVERSAL
-    test runs on git's real separator `/` against the RAW string — on POSIX a `\\` is a literal filename
-    char, so `foo\\..\\bar` is ONE component (not traversal) and is left alone (round 3: codex). Leading
+    Works on the RAW path (no `\\`->`/` folding): `git diff --name-only` emits `/`-separated paths on
+    EVERY platform, so a `\\` is a literal filename char, never a separator. Thus `foo\\..\\bar` is ONE
+    component (not traversal), `\\report.swift` is a repo-relative name (not absolute), and Windows
+    drive-absolutes are caught by `_DRIVE_ABS` in either separator (round 3 + round 4: codex). Leading
     whitespace is still stripped: a ` /x` space-dir path is pathological and near-impossible in this repo,
     and keeping `.strip()` matches canonical_path's own reviewer-copied-path normalization."""
     r = path.strip()
@@ -54,8 +56,7 @@ def _abs_or_traversal(path: str) -> bool:
         r = r[2:]
     if not r:
         return False
-    norm = r.replace("\\", "/")
-    return norm.startswith("/") or bool(_DRIVE_ABS.match(norm)) or ".." in r.split("/")
+    return bool(r.startswith("/") or _DRIVE_ABS.match(r) or ".." in r.split("/"))
 
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
 # clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
