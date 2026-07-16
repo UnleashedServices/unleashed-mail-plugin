@@ -37,10 +37,20 @@ if [ -f "$ARGUMENTS" ]; then
              echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
            exit 1 ;;
     esac
-    # ...and `..` cannot be used to wear the prefix: docs/planning/../../../tmp/EVIL_PLAN.md matches the
-    # case above but resolves straight back out of the tree.
-    case "$_p" in
-        *..*) { echo "REFUSED: path traversal in '$ARGUMENTS'."; } >&2; exit 1 ;;
+    # ...and the prefix must be EARNED, not worn. A textual check alone is theatre — both of these
+    # match `docs/planning/*PLAN*.md` and both read bytes from outside the tree:
+    #     docs/planning/../../evil/OUTSIDE_PLAN.md          (traversal)
+    #     docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md (symlink; `-f` follows it — codex, #41)
+    # So resolve the REAL path and require containment. This subsumes the `..` check it replaces, and
+    # also covers a symlinked ANCESTOR (e.g. docs/planning itself being a link), which testing `-L` on
+    # the final component would miss. python3 is already a hard dependency of this recipe.
+    _real=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$_p" 2>/dev/null)
+    _base=$(python3 -c 'import os; print(os.path.realpath("docs/planning"))' 2>/dev/null)
+    case "$_real" in
+        "$_base"/*) ;;
+        *) { echo "REFUSED: '$ARGUMENTS' resolves to $_real, which is outside docs/planning."
+             echo "A tracked plan's BYTES must live in the repo — a symlink or ../ escape is not a tracked plan."; } >&2
+           exit 1 ;;
     esac
     PLAN="$_p"
 else
