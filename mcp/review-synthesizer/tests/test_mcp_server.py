@@ -152,6 +152,15 @@ class TestSynthesizeTool(unittest.TestCase):
         res = self._call([good()], ["", "A.swift", "./"])
         self.assertFalse(res["isError"])
 
+    def test_colon_and_backslash_repo_paths_are_not_rejected(self):
+        # A colon (`a:b`, `C:fixture.swift`) and a literal backslash (`foo\..\bar.swift`) are VALID POSIX
+        # filename chars — git can emit them, so they must NOT be mistaken for a Windows drive-absolute
+        # or a `..` traversal. Only `C:/`-style (colon+slash) drive roots and true `/`-separated `..`
+        # components are absolute/traversal (round 3: gemini + codex).
+        for changed in (["a:b"], ["C:fixture.swift"], ["src/C:thing.swift"], ["foo\\..\\bar.swift"]):
+            res = self._call([good()], changed)
+            self.assertFalse(res["isError"], f"changed_files={changed!r} is a valid repo path, not absolute")
+
     def test_empty_changed_files_with_no_findings_is_allowed(self):
         # A genuinely clean review (findings []) with an empty changeset is legitimate, not an error.
         res = self._call([], [])
