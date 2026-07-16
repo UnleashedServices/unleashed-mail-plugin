@@ -56,6 +56,27 @@ POLL_INTERVAL_SEC = 0.1
 SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
 
 
+def _write_private(path: str, data: bytes) -> None:
+    """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
+
+    O_NOFOLLOW: if `path` is already a symlink, open() raises (ELOOP) instead of writing THROUGH it to
+    an attacker-chosen target. O_CREAT|O_TRUNC: create-or-truncate a regular file. fchmod: O_CREAT only
+    applies the mode on creation, so an already-existing 0644 file is tightened to 0600 explicitly.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
 def _signal_child(pid: int, sig: int) -> None:
     """Deliver `sig` to the wrapped child, and best-effort to its process group.
 
@@ -278,17 +299,20 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
                 os.makedirs(out_dir, exist_ok=True)
             # PTYs translate \n -> \r\n (ONLCR); normalize to Unix newlines.
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
-            with open(out_path, 'wb') as f:
-                f.write(cleaned)
+            # SESSION-SAFE write (#44 review §4). Review transcripts can quote message bodies / tokens,
+            # and the recipes use predictable /tmp paths, so a pre-created symlink or a 0644 file is a
+            # local hazard: another user could pre-seed `/tmp/agy-out.txt` as a symlink to redirect the
+            # capture, or read a world-readable transcript. Create with O_NOFOLLOW (a pre-existing symlink
+            # at out_path makes open() fail rather than being followed) and force mode 0600 (fchmod, since
+            # O_CREAT only sets the mode when the file did not already exist).
+            _write_private(out_path, cleaned)
             # PROVENANCE: leave a per-run capture ID beside the transcript. review-verdict.py auto-reads
             # `<out>.captureid` and uses distinct capture IDs as authoritative, content-independent proof
-            # that two reviewers were two separate wrapper runs — so two byte-identical transcripts from
-            # distinct runs are no longer falsely rejected (full review, #41). Best-effort: a failure
-            # here must not fail the capture, so it never touches `capture_error`. Unique per run without
-            # `uuid`: os.urandom is available on macOS stock 3.9.6 and needs no import beyond `os`.
+            # that two reviewers were two separate wrapper runs (full review, #41). Best-effort — a
+            # failure here must not fail the capture, so it never touches `capture_error`. Same 0600 /
+            # O_NOFOLLOW discipline as the transcript.
             try:
-                with open(out_path + '.captureid', 'w', encoding='utf-8') as cf:
-                    cf.write(os.urandom(16).hex() + '\n')
+                _write_private(out_path + '.captureid', (os.urandom(16).hex() + '\n').encode())
             except OSError:
                 pass
         except OSError as e:

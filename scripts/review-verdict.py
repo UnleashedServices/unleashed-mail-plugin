@@ -289,6 +289,22 @@ def cmd_write(args: argparse.Namespace) -> int:
         raise SystemExit(f"review-verdict: --verdict must be one of {sorted(COMBINED_VERDICTS)}, "
                          f"got {verdict!r} (that vocabulary is combined verdicts; MISSING is a reviewer "
                          "status, not a combined verdict)")
+    # DIGEST-BEFORE-DISPATCH (#44 review §4). The plan digest is computed HERE, at write, which is AFTER
+    # the reviewers ran — so a plan edited between review and write would bind approval to bytes the
+    # reviewers never saw ("review v1, edit to v2, write approves v2"). When the caller snapshots the
+    # plan's digest BEFORE dispatching the reviews and passes it as --reviewed-sha256, refuse to write
+    # unless the plan is STILL those exact bytes. `verify` already re-checks the digest after write; this
+    # closes the review->write window in front of it.
+    if getattr(args, "reviewed_sha256", None):
+        expected = args.reviewed_sha256.strip().lower()
+        if not _SHA256_HEX.match(expected):
+            raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
+        actual = _sha256_bytes(plan)
+        if actual != expected:
+            raise SystemExit(
+                "review-verdict: the plan CHANGED between review and write — refusing to record an "
+                f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
+                f"{actual[:12]}…). Re-run the reviews on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
@@ -542,6 +558,9 @@ def main(argv: list[str]) -> int:
     w.add_argument("--plan", required=True)
     w.add_argument("--verdict", required=True)
     w.add_argument("--reviewer", action="append", help="name=STATUS[:TRANSCRIPT] (repeatable; >=2)")
+    w.add_argument("--reviewed-sha256", default=None,
+                   help="the plan's SHA-256 as snapshotted BEFORE the reviews ran; write aborts if the "
+                        "plan has since changed (binds approval to the reviewed bytes)")
     w.add_argument("--round", type=int, default=None)
     w.add_argument("--created-at", default=None, help="ISO-8601 timestamp (caller supplies the clock)")
     w.set_defaults(func=cmd_write)

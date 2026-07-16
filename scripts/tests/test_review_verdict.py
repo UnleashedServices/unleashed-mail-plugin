@@ -40,7 +40,7 @@ class ReviewVerdictTest(unittest.TestCase):
         shutil.rmtree(self.d, ignore_errors=True)
 
     def _write(self, verdict="APPROVE_WITH_NOTES",
-               reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES")):
+               reviewers=("gemini=APPROVE", "codex=APPROVE_WITH_NOTES"), reviewed_sha256=None):
         args = ["write", "--plan", self.plan, "--verdict", verdict]
         for i, r in enumerate(reviewers):
             # Attach a DISTINCT fixture transcript per reviewer unless the case supplied its own path
@@ -48,6 +48,8 @@ class ReviewVerdictTest(unittest.TestCase):
             if ":" not in r:
                 r = f"{r}:{self.tx if i == 0 else self.tx2}"
             args += ["--reviewer", r]
+        if reviewed_sha256 is not None:
+            args += ["--reviewed-sha256", reviewed_sha256]
         return run(*args)
 
     def test_approving_artifact_requires_a_transcript_per_reviewer(self):
@@ -631,6 +633,25 @@ class ReviewVerdictTest(unittest.TestCase):
         return os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")
 
     # --- happy path -----------------------------------------------------------------
+    def test_reviewed_sha256_aborts_when_the_plan_changed_since_review(self):
+        """DIGEST-BEFORE-DISPATCH (#44 review §4): the digest is bound at write (after review), so an
+        edit between review and write would approve bytes the reviewers never saw. --reviewed-sha256
+        (the digest snapshotted BEFORE dispatch) makes write refuse if the plan changed since."""
+        import hashlib as _h
+        reviewed = _h.sha256(open(self.plan, "rb").read()).hexdigest()
+        # edit the plan AFTER "review"
+        with open(self.plan, "a", encoding="utf-8") as fh:
+            fh.write("\nan edit the reviewers never saw\n")
+        r = self._write(reviewed_sha256=reviewed)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("CHANGED between review and write", r.stdout + r.stderr)
+
+    def test_reviewed_sha256_matching_current_plan_writes(self):
+        import hashlib as _h
+        reviewed = _h.sha256(open(self.plan, "rb").read()).hexdigest()
+        r = self._write(reviewed_sha256=reviewed)   # no edit -> matches -> writes
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_write_then_verify_approves(self):
         self.assertEqual(self._write().returncode, 0)
         v = run("verify", "--plan", self.plan)

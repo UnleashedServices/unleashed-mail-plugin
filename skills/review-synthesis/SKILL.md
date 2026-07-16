@@ -109,8 +109,20 @@ python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
     --verdict <COMBINED_VERDICT> \
     --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
     --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
+    --reviewed-sha256 "$REVIEWED_PLAN_SHA256" \
     --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
+
+> **Bind the approval to the bytes that were REVIEWED, not the bytes at write time.** The digest is
+> computed at `write`, which runs AFTER the reviews — so a plan edited between review and write would
+> record an approval for content the reviewers never saw ("review v1, edit to v2, write approves v2").
+> **Snapshot the plan's digest BEFORE dispatching the reviews** and pass it as `--reviewed-sha256`:
+> ```bash
+> # at the START of the gate, before /gemini-review + /codex-review run:
+> REVIEWED_PLAN_SHA256="$(shasum -a 256 docs/planning/FEATURE_NAME_PLAN.md | cut -d' ' -f1)"
+> ```
+> `write` aborts if the plan has changed since. It's optional (backward-compatible), but omitting it
+> reopens the review→write window that `verify`'s post-write digest check cannot see (#44 review §4).
 
 For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
 (the artifact fails closed — `implement`'s verify blocks on a non-approving verdict), e.g. `--reviewer codex=MISSING`.
