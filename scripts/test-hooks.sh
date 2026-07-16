@@ -113,6 +113,119 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ Keycha
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_contains "sed -i sensitive -> ask" "$OUT" '"permissionDecision":"ask"'
 
+# == #44 independent review §6: mutating commands the redirect-only parse missed must fail closed ==
+guard_bash() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$1" \
+    | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null; }
+# 5a. Deletion of a sensitive file.
+assert_contains "rm sensitive -> ask" "$(guard_bash '"rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "unlink sensitive -> ask" "$(guard_bash '"unlink KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5b. Interpreter one-liner writing a sensitive file (the exact review bypass).
+assert_contains "python3 -c open(sensitive) -> ask" "$(guard_bash '"python3 -c \"open(\\\"OAuthService.swift\\\",\\\"w\\\").write(1)\""')" '"permissionDecision":"ask"'
+assert_contains "perl -e unlink(sensitive) -> ask" "$(guard_bash '"perl -e \"unlink(q(KeychainManager.swift))\""')" '"permissionDecision":"ask"'
+# 5c. Symlink clobber over a sensitive file.
+assert_contains "ln -sf over sensitive -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5d. SCOPING — must NOT over-fire: a sensitive file READ as a cp/interpreter SOURCE, or plain reads,
+#     or a non-sensitive deletion.
+assert_empty "cp sensitive SOURCE -> no decision (read, not write)" "$(guard_bash '"cp KeychainManager.swift /backup/"')"
+assert_empty "cat sensitive -> no decision" "$(guard_bash '"cat OAuthService.swift"')"
+assert_empty "rm non-sensitive -> no decision" "$(guard_bash '"rm InboxView.swift"')"
+assert_empty "python3 running a script (no sensitive name) -> no decision" "$(guard_bash '"python3 build.py"')"
+# 5e. Inline-code flags the old -(c|e)[space=] form MISSED: combined clusters (`-xc`, `-we`) and code
+#     directly adjacent to the flag (`-c"..."`). Round 1 (gemini + codex).
+assert_contains "bash -xc combined flag -> ask" "$(guard_bash '"bash -xc unlink OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "perl -we combined flag -> ask" "$(guard_bash '"perl -we OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "python3 -c no-space code -> ask" "$(guard_bash '"python3 -c\"open(OAuthService.swift)\""')" '"permissionDecision":"ask"'
+# 5f. FD dup (`2>&1`) is NOT a file write — must NOT over-fire on a sensitive file merely READ as input.
+assert_empty "interpreter read + 2>&1 FD-dup -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift 2>&1"')"
+# 5g. base_verb normalization: an absolute path or an `env` prefix resolves to the real verb (the old
+#     `/*rm` path-glob list was fragile and had no `env`/`/bin/cp` coverage). Round 1: gemini.
+assert_contains "/usr/bin/rm sensitive -> ask" "$(guard_bash '"/usr/bin/rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env rm sensitive -> ask" "$(guard_bash '"env rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "/usr/bin/cp DEST sensitive -> ask" "$(guard_bash '"/usr/bin/cp template.swift KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5h. touch creates/updates a file -> mutating; but `-r SENSITIVE` is a READ reference, not a write.
+assert_contains "touch sensitive -> ask" "$(guard_bash '"touch OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "touch -r sensitive (reference read) -> no decision" "$(guard_bash '"touch -r OAuthService.swift /tmp/marker"')"
+assert_contains "touch -r marker over sensitive TARGET -> ask" "$(guard_bash '"touch -r /tmp/marker KeychainManager.swift"')" '"permissionDecision":"ask"'
+# == round 2 (codex + gemini): prefix unwrap, over-scan scoping, prefixed tee ==
+# 5i. Bare `VAR=val cmd` (no `env`) must unwrap to the real verb — `FOO=1 rm SENSITIVE` still mutates.
+assert_contains "VAR=val rm sensitive -> ask" "$(guard_bash '"FOO=1 rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "VAR=val env python3 -c sensitive -> ask" "$(guard_bash '"FOO=1 env python3 -c open(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5j. `env -u NAME` / `env -C DIR` CONSUME the next token — the command word is after it, not it.
+assert_contains "env -u NAME rm sensitive -> ask" "$(guard_bash '"env -u PATH rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5k. Interpreter whose ONLY mutation is a redirect must NOT broad-scan its READ args (write is the
+#     redirect target). `python3 report.py SENSITIVE > /tmp/out` reads SENSITIVE, writes /tmp/out.
+assert_empty "interpreter read-arg + file redirect -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift > /tmp/out.txt"')"
+# 5l. Prefixed tee must record the FILE operand, not the command path. `/usr/bin/tee SENSITIVE` writes it.
+assert_contains "/usr/bin/tee sensitive -> ask" "$(guard_bash '"/usr/bin/tee KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "env tee -a sensitive -> ask" "$(guard_bash '"env tee -a OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 3 (codex + gemini): verb-aware -e, quoting, ln/cp -t sources, env -S/-P, quoted-; ==
+# 5m. Shell -e is errexit, NOT inline code — a read script arg must NOT be flagged (only the redirect writes).
+assert_empty "bash -e script + read arg -> no decision" "$(guard_bash '"bash -e report.sh OAuthService.swift > /tmp/out"')"
+assert_contains "perl -e inline code IS code -> ask" "$(guard_bash '"perl -e unlink(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5n. Single-quoted target must be seen through the quotes.
+assert_contains "touch single-quoted sensitive -> ask" "$(guard_bash "\"touch 'OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5o. ln SOURCE is a READ (LINK is the write); cp -t DIR SOURCE is a READ source.
+assert_empty "ln -s sensitive SOURCE -> no decision" "$(guard_bash '"ln -s OAuthService.swift /tmp/link"')"
+assert_contains "ln clobber over sensitive DEST -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "cp -t DIR sensitive SOURCE -> no decision" "$(guard_bash '"cp -t /tmp KeychainManager.swift"')"
+# 5p. env -S runs the split string as a command; -P consumes its path arg.
+assert_contains "env -S rm sensitive -> ask" "$(guard_bash '"env -S rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env -P PATH rm sensitive -> ask" "$(guard_bash '"env -P /opt/bin rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5q. Inline code with a QUOTED semicolon keeps the filename in the interpreter segment.
+assert_contains "python3 -c quoted-; write sensitive -> ask" "$(guard_bash "\"python3 -c 'import x; open(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_empty "interpreter code then unquoted read -> no decision" "$(guard_bash "\"python3 -c 'print(1)' ; cat OAuthService.swift\"")"
+# 5r. Quoted env-assignment value with a space must still resolve the real verb.
+assert_contains "FOO=quoted-space rm sensitive -> ask" "$(guard_bash "\"FOO='a b' rm OAuthService.swift\"")" '"permissionDecision":"ask"'
+# == round 4 (codex + gemini): eval/source, node/perl inline long-forms, quoted env -S, multiline -c ==
+# 5s. eval/source/. execute arbitrary code/files -> scan for sensitive names.
+assert_contains "eval sensitive -> ask" "$(guard_bash "\"eval 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "source sensitive -> ask" "$(guard_bash '"source KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "dot-source sensitive -> ask" "$(guard_bash '". OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5t. Non-shell inline-code long/upper forms: perl -E, node --eval, node --print.
+assert_contains "perl -E inline sensitive -> ask" "$(guard_bash "\"perl -E 'unlink q(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_contains "node --eval sensitive -> ask" "$(guard_bash '"node --eval writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_contains "node --print sensitive -> ask" "$(guard_bash '"node --print OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5u. env -S SPLIT STRING is the command (quoted single token) -> resolve the real verb.
+assert_contains "env -S quoted rm sensitive -> ask" "$(guard_bash "\"env -S 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5v. A quoted MULTILINE inline script stays in one segment (NUL-delimited), so a filename after an
+#     embedded newline is still scanned (the \n is a JSON escape -> a real newline in the command).
+assert_contains "multiline -c write sensitive -> ask" "$(guard_bash "\"python3 -c 'print(1)\nopen(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+# == round 5 (codex): unquoted-newline split, per-interpreter inline flags, comments, env prefixes ==
+# 5w. An UNQUOTED newline IS a command separator — the 2nd command's write must be seen (round-4
+#     NUL-delimiting kept it in-segment). `\n` here is a JSON escape decoded to a real newline in $CMD.
+assert_contains "unquoted newline then rm sensitive -> ask" "$(guard_bash '"echo benign\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5x. Inline-code flags are interpreter-specific: node -p IS code; python/ruby -E are NOT (env/encoding).
+assert_contains "node -p write sensitive -> ask" "$(guard_bash '"node -p writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_empty "python3 -E read arg (not code) -> no decision" "$(guard_bash '"python3 -E report.py OAuthService.swift > /tmp/o"')"
+assert_empty "ruby -E encoding read arg (not code) -> no decision" "$(guard_bash '"ruby -E utf-8 report.rb OAuthService.swift > /tmp/o"')"
+# 5y. A protected name only in a trailing shell COMMENT is not an operand -> must not prompt.
+assert_empty "sensitive name only in a # comment -> no decision" "$(guard_bash '"rm InboxView.swift # OAuthService.swift"')"
+# 5z. env option ARG (`-u NAME`) must not be collected as an mv operand; env -S split-string cp DEST fires.
+assert_empty "env -u NAME mv (NAME is an unset var) -> no decision" "$(guard_bash '"env -u OAuthService.swift mv a.swift b.swift"')"
+assert_contains "env -S quoted cp DEST sensitive -> ask" "$(guard_bash "\"env -S 'cp benign.swift OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# == round 6 (codex): heredoc body kept with interpreter; comments not collected as operands ==
+# 6a. A heredoc body stays in the interpreter's segment (round-5 unquoted-newline split had severed it).
+assert_contains "heredoc body writes sensitive -> ask" "$(guard_bash '"python3 <<PY\nopen(OAuthService.swift)\nPY"')" '"permissionDecision":"ask"'
+# 6b. A protected name in a trailing shell comment is not a tee operand.
+assert_empty "tee then # comment naming sensitive -> no decision" "$(guard_bash '"tee /tmp/output # OAuthService.swift"')"
+# 6c. A `.bak` of a sensitive file is NOT the sensitive basename — the broad scan must read the whole token.
+assert_empty "rm sensitive.swift.bak -> no decision" "$(guard_bash '"rm OAuthService.swift.bak"')"
+# == round 7 (codex): heredoc-then-command split, backslash/`command` delimiters ==
+# 6d. A command AFTER a heredoc terminator is a SEPARATE command (must split off the heredoc segment).
+assert_contains "heredoc then rm sensitive -> ask" "$(guard_bash '"cat <<EOF\ntext\nEOF\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6e. A backslash-quoted heredoc delimiter (`<<\\EOF`) is still a heredoc — body stays with interpreter.
+assert_contains "backslash heredoc body write -> ask" "$(guard_bash '"python3 <<\\EOF\nopen(OAuthService.swift)\nEOF"')" '"permissionDecision":"ask"'
+# 6f. The `command` builtin prefix must unwrap to the real verb.
+assert_contains "command rm sensitive -> ask" "$(guard_bash '"command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 8 (codex): command -v/-V probe (not a mutation), command/env chaining, non-alnum heredoc delim ==
+# 6g. `command -v rm X` only DESCRIBES rm (doesn't run it) -> no decision.
+assert_empty "command -v probe -> no decision" "$(guard_bash '"command -v rm OAuthService.swift"')"
+# 6h. Nested command/env prefixes both resolve to the real verb.
+assert_contains "command env rm sensitive -> ask" "$(guard_bash '"command env rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env command rm sensitive -> ask" "$(guard_bash '"env command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6i. A punctuation heredoc delimiter (`<<EOF-1`) is still a heredoc.
+assert_contains "punctuation heredoc delim write -> ask" "$(guard_bash '"python3 <<EOF-1\nopen(OAuthService.swift)\nEOF-1"')" '"permissionDecision":"ask"'
+
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
