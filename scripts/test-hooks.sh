@@ -760,6 +760,33 @@ OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/U
     | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
 assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
 
+# == COREDEV-2494 review round 6 (codex): a directive must BE the comment, and `all` is a keyword ==
+# Both `_waives` and `_in_disabled_region` used a bare "contains swiftlint:disable" test, so prose ABOUT
+# the linter silenced the linter — all FAIL-OPEN. And SwiftLint's documented `all` keyword was handled
+# in neither direction (confirmed against the SwiftLint docs via Context7).
+printf 'import Foundation\nstruct PR {\n    // TODO: remove any swiftlint:disable force_try here\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Prose.swift"
+OUT="$(lint_run "$LINTDIR/Prose.swift")"
+assert_contains "lint: prose naming the rule does NOT waive (directive must BE the comment)" "$OUT" "try!"
+printf 'import Foundation\nstruct PR2 {\n    // NOTE: we used to swiftlint:disable force_try here, but not anymore\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/ProseRegion.swift"
+OUT="$(lint_run "$LINTDIR/ProseRegion.swift")"
+assert_contains "lint: prose does NOT open a disable REGION" "$OUT" "try!"
+# `swiftlint:enable all` closes the region for EVERY rule (documented keyword).
+printf 'import Foundation\nstruct EA {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable all\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/EnableAll.swift"
+OUT="$(lint_run "$LINTDIR/EnableAll.swift")"
+assert_contains "lint: 'swiftlint:enable all' CLOSES the region -> the site after it BLOCKS" "$OUT" "6:"
+# ...and `swiftlint:disable all` opens it for every rule.
+printf 'import Foundation\nstruct DA {\n    // swiftlint:disable all\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable all\n}\n' > "$LINTDIR/DisableAll.swift"
+OUT="$(lint_run "$LINTDIR/DisableAll.swift")"
+assert_not_contains "lint: 'swiftlint:disable all' waives every rule" "$OUT" "try!"
+# `:next all` on the preceding line waives too.
+printf 'import Foundation\nstruct NA {\n    // swiftlint:disable:next all\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/NextAll.swift"
+OUT="$(lint_run "$LINTDIR/NextAll.swift")"
+assert_not_contains "lint: 'disable:next all' waives force_try" "$OUT" "try!"
+# An `enable` must never be read as a waiver.
+printf 'import Foundation\nstruct EN {\n    // swiftlint:enable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/EnableOnly.swift"
+OUT="$(lint_run "$LINTDIR/EnableOnly.swift")"
+assert_contains "lint: a bare 'swiftlint:enable' never waives" "$OUT" "try!"
+
 # == COREDEV-2494 pre-merge audit: the REGION form of swiftlint:disable ==
 # `_waives` only ever looks at the PRECEDING line, so it covered `:next` and a directive directly above
 # but NOT the region form — which is what 15 real app files actually use. The 2nd+ site in a region has
