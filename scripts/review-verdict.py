@@ -35,7 +35,14 @@ APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 _EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 _SHA256_HEX = re.compile(r"\A[0-9a-f]{64}\Z")
 # The full set of Combined-verdict values /review-synthesis can emit (for validation).
-VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}  # MISSING = reviewer did not return (non-approving only)
+VERDICTS = APPROVING | {"REQUEST_CHANGES", "DISAGREEMENT", "MISSING"}
+# ONE phrasing for what MISSING means, shared by every branch that reports it. `review-synthesis`
+# normalizes BOTH "reviewer never returned" AND "empty / unparseable transcript" to MISSING (its table,
+# SKILL.md:48), so no branch may assert "never ran" as fact. A CONSTANT because the two branches that
+# say it DID diverge: I fixed the wording in the single-reviewer branch and left the mixed branch
+# claiming "never ran" for a whole round, because I fixed the site I was looking at (codex, #42 review).
+_MISSING_MEANS = "no usable verdict — the reviewer never ran, OR its transcript was empty/unparseable"
+  # MISSING = reviewer did not return (non-approving only)
 # The mandatory dual-review pair (CLAUDE.md Plan Review Gate). An APPROVING artifact must record
 # BOTH, distinct, each approving — a reviewer can never stand in for the other, and the caller's
 # combined `verdict` can never override a reviewer that actually rejected.
@@ -424,17 +431,18 @@ def cmd_verify(args: argparse.Namespace) -> int:
             # actionable feedback from the reviewer that DID run (codex, #42 review). Both are true and
             # both must be resolved.
             hint = (f" — TWO SEPARATE problems: {', '.join(rejecting)} (ran, wants plan changes — address"
-                    f" them) AND {', '.join(absent)} recorded MISSING (never ran — see 'Unavailable"
-                    " reviewer' in the implement skill). Resolving either one alone will NOT pass the gate")
+                    f" them) AND {', '.join(absent)} recorded MISSING ({_MISSING_MEANS} — see"
+                    " 'Unavailable reviewer' in the implement skill). Resolving either one alone will NOT"
+                    " pass the gate")
         elif absent:
             # NOT "never ran". `review-synthesis` maps BOTH "reviewer never returned" AND "empty /
             # unparseable transcript" to MISSING (its normalization table, SKILL.md:48), so asserting
             # "never ran" states one of two possible facts as certain — and they need different
             # recoveries (install/authenticate the CLI vs re-capture the review). What IS common to both,
             # and is the load-bearing half, is that no plan edit clears either (codex, #42 review).
-            hint = (f" — {', '.join(absent)} recorded MISSING: no usable verdict (the reviewer never ran,"
-                    " OR its transcript was empty/unparseable). Either way this is NOT a plan problem, so"
-                    " iterating the plan cannot clear it; see 'Unavailable reviewer' in the implement skill")
+            hint = (f" — {', '.join(absent)} recorded MISSING: {_MISSING_MEANS}. Either way this is NOT"
+                    " a plan problem, so iterating the plan cannot clear it; see 'Unavailable reviewer' in"
+                    " the implement skill")
         else:
             hint = ""
         return _fail(f"verdict is {art.get('verdict')!r}, not an approving verdict — gate not passed{hint}")

@@ -501,9 +501,15 @@ class ReviewVerdictTest(unittest.TestCase):
         v = run("verify", "--plan", self.plan)
         out = v.stdout + v.stderr
         self.assertNotEqual(v.returncode, 0)
-        self.assertIn("codex", out)                    # the missing one is still named
-        self.assertIn("gemini=REQUEST_CHANGES", out)   # ...and the rejection is NOT masked
-        self.assertNotIn("NOT a plan problem", out)    # ...and we do NOT claim there is nothing to fix
+        # ATTRIBUTION, not presence. Asserting only that both NAMES appear left the ONE axis this PR
+        # exists to protect unpinned: transposing the two f-string interpolations inverts the message to
+        # "codex (ran, wants plan changes) AND gemini=REQUEST_CHANGES recorded MISSING" — telling the
+        # implementer to address the plan feedback of a reviewer that never ran, and to install the CLI
+        # of one that ran fine and rejected the plan — and the whole 54-test suite stayed GREEN
+        # (pre-merge audit). Pin each name TO ITS ROLE, not to the output.
+        self.assertIn("gemini=REQUEST_CHANGES (ran", out)   # the rejector, named as the rejector
+        self.assertIn("codex recorded MISSING", out)        # the absentee, named as the absentee
+        self.assertNotIn("NOT a plan problem", out)         # ...and we do NOT claim there is nothing to fix
 
     def test_verify_does_NOT_name_MISSING_on_a_genuine_disagreement(self):
         """Both reviewers ran and disagreed — 'iterate the plan + gate' IS the right advice, and the
