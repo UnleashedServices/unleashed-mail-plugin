@@ -67,26 +67,29 @@ _has_unbalanced_quote() {
 }
 
 # Split a command on shell separators (`;` `&` `|`, incl. `&&`/`||`) that are OUTSIDE single/double
-# quotes, one segment per line. A `;`/`&`/`|` inside quotes — an interpreter's `-c 'a; b'` or a quoted
-# filename — is NOT a separator and stays with its segment, so the inline-code scan sees the whole quoted
-# script (round 3: codex). The old `sed 's/[;&|]/\n/g'` split blindly and cut quoted code apart.
+# quotes, one NUL-delimited segment per record. A `;`/`&`/`|` inside quotes — an interpreter's `-c 'a; b'`
+# or a quoted filename — is NOT a separator and stays with its segment, so the inline-code scan sees the
+# whole quoted script (round 3: codex). NUL (not newline) is the delimiter so a quoted MULTILINE inline
+# script (`-c 'a\nopen("X")'`) also stays in ONE segment — a newline record-separator would split it and
+# the filename after the newline would be missed (round 4: codex). The old `sed 's/[;&|]/\n/g'` split
+# blindly and cut quoted code apart.
 _split_segments() {
-    local s="$1" n=${#1} i=0 ch q="" out=""
+    local s="$1" n=${#1} i=0 ch q="" seg=""
     while [ "$i" -lt "$n" ]; do
         ch="${s:$i:1}"
         if [ -n "$q" ]; then
             [ "$ch" = "$q" ] && q=""
-            out="$out$ch"
+            seg="$seg$ch"
         elif [ "$ch" = "'" ] || [ "$ch" = '"' ]; then
-            q="$ch"; out="$out$ch"
+            q="$ch"; seg="$seg$ch"
         elif [ "$ch" = ";" ] || [ "$ch" = "&" ] || [ "$ch" = "|" ]; then
-            out="$out"$'\n'
+            printf '%s\0' "$seg"; seg=""
         else
-            out="$out$ch"
+            seg="$seg$ch"
         fi
         i=$((i + 1))
     done
-    printf '%s\n' "$out"
+    printf '%s\0' "$seg"
 }
 
 # Resolve a segment's EFFECTIVE command word: strip any directory (`/usr/bin/rm` -> `rm`) and unwrap a
@@ -132,6 +135,9 @@ _effective_verb() {
         done
         v="${a[$i]:-}"; v="${v##*/}"
     fi
+    # Strip a leading quote left on the word by `read -ra` — `env -S 'rm X'` splits into `'rm` + `X`, so
+    # the command word arrives as `'rm`; unquoting it resolves the real verb `rm` (round 4: codex).
+    v="${v#[\"\']}"
     printf '%s' "$v"
 }
 
@@ -141,13 +147,14 @@ _effective_verb() {
 # interpreter whose only mutation is a redirect has its target captured precisely, so scanning its read
 # args would over-fire (round 2: codex). The inline-code FLAG LETTER is verb-specific: POSIX shells
 # (bash/sh/zsh) use ONLY `-c` — their `-e` is `errexit`, a script option, NOT code (`bash -e report.sh`
-# must not scan its read args, round 3: codex) — while perl/ruby/node also use `-e`. Matches the letter
-# in ANY short cluster (`-xc`, `perl -we`, `perl -pe's/…/'`, adjacent `-c"…"`) or a heredoc (`<<`).
+# must not scan its read args, round 3: codex) — while perl/ruby/node also use `-e`, perl `-E` (“like
+# -e”), and node/perl long forms `--eval`/`--print` (round 4: codex). Matches the letter in ANY short
+# cluster (`-xc`, `perl -we`, `perl -pe's/…/'`, adjacent `-c"…"`), the long forms, or a heredoc (`<<`).
 _seg_has_inline_code() {
     local seg="$1" verb="$2" pat
     case "$verb" in
         bash|sh|zsh) pat='(^|[[:space:]])-[[:alnum:]]*c([^[:alnum:]]|$)|<<' ;;
-        *)           pat='(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<' ;;
+        *)           pat='(^|[[:space:]])(-[[:alnum:]]*[ceE]([^[:alnum:]]|$)|--(eval|print)([^[:alnum:]]|=|$))|<<' ;;
     esac
     printf '%s' "$seg" | grep -qE "$pat"
 }
@@ -163,7 +170,7 @@ guard_bash_write_target() {
     # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
     # the Bash path is a warn-first speed-bump — the robust guard is the Edit/Write
     # file_path path; arbitrary shell can always evade a textual heuristic.
-    while IFS= read -r seg; do
+    while IFS= read -r -d '' seg; do
         [ -n "$seg" ] || continue
         # Redirection targets within the segment: >FILE / >>FILE (quoted or not).
         while IFS= read -r line; do
@@ -258,6 +265,7 @@ ${tok}" ;;
         _bcheck=0
         case "$base_verb" in
             rm|unlink|shred) _bcheck=1 ;;
+            eval|source|.) _bcheck=1 ;;   # run an arbitrary string/file — scan it for sensitive names (round 4: gemini)
             python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh)
                 _seg_has_inline_code "$seg" "$base_verb" && _bcheck=1 ;;
         esac

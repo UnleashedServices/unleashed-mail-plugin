@@ -176,6 +176,20 @@ assert_contains "python3 -c quoted-; write sensitive -> ask" "$(guard_bash "\"py
 assert_empty "interpreter code then unquoted read -> no decision" "$(guard_bash "\"python3 -c 'print(1)' ; cat OAuthService.swift\"")"
 # 5r. Quoted env-assignment value with a space must still resolve the real verb.
 assert_contains "FOO=quoted-space rm sensitive -> ask" "$(guard_bash "\"FOO='a b' rm OAuthService.swift\"")" '"permissionDecision":"ask"'
+# == round 4 (codex + gemini): eval/source, node/perl inline long-forms, quoted env -S, multiline -c ==
+# 5s. eval/source/. execute arbitrary code/files -> scan for sensitive names.
+assert_contains "eval sensitive -> ask" "$(guard_bash "\"eval 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "source sensitive -> ask" "$(guard_bash '"source KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "dot-source sensitive -> ask" "$(guard_bash '". OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5t. Non-shell inline-code long/upper forms: perl -E, node --eval, node --print.
+assert_contains "perl -E inline sensitive -> ask" "$(guard_bash "\"perl -E 'unlink q(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_contains "node --eval sensitive -> ask" "$(guard_bash '"node --eval writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_contains "node --print sensitive -> ask" "$(guard_bash '"node --print OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5u. env -S SPLIT STRING is the command (quoted single token) -> resolve the real verb.
+assert_contains "env -S quoted rm sensitive -> ask" "$(guard_bash "\"env -S 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5v. A quoted MULTILINE inline script stays in one segment (NUL-delimited), so a filename after an
+#     embedded newline is still scanned (the \n is a JSON escape -> a real newline in the command).
+assert_contains "multiline -c write sensitive -> ask" "$(guard_bash "\"python3 -c 'print(1)\nopen(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
 
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
