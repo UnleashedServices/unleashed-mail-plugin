@@ -20,7 +20,29 @@ any code:
 # Resolve THE plan for $ARGUMENTS — never let an unrelated approved plan satisfy the gate.
 # $ARGUMENTS is the feature name (e.g. "dark mode") or a direct path to the plan.
 if [ -f "$ARGUMENTS" ]; then
-    PLAN="$ARGUMENTS"
+    # A DIRECT PATH MUST STILL BE A TRACKED PLAN. `-f` alone accepted ANY existing file, so
+    # `/implement /tmp/OUTSIDE_PLAN.md` verified the artifact beside that out-of-tree file and returned
+    # GATE OK — satisfying the Design Gate with a plan that is not in git, has no review history, and can
+    # be edited or deleted outside the repo. That bypasses CLAUDE.md's mandatory `docs/planning/*_PLAN.md`
+    # process in the one branch whose job is to enforce it (codex, #41 review; reproduced).
+    #
+    # Repo-relative under docs/planning only. An absolute path is refused even when it points into a
+    # docs/planning dir: `*/docs/planning/*` would happily match /tmp/docs/planning/EVIL_PLAN.md, which
+    # is the same hole with extra steps. The resolver below is already repo-relative (its glob is), and
+    # the "Available:" listing prints repo-relative paths, so this is the shape users already see.
+    _p="${ARGUMENTS#./}"
+    case "$_p" in
+        docs/planning/*PLAN*.md) ;;
+        *) { echo "REFUSED: '$ARGUMENTS' is not a tracked plan."
+             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
+           exit 1 ;;
+    esac
+    # ...and `..` cannot be used to wear the prefix: docs/planning/../../../tmp/EVIL_PLAN.md matches the
+    # case above but resolves straight back out of the tree.
+    case "$_p" in
+        *..*) { echo "REFUSED: path traversal in '$ARGUMENTS'."; } >&2; exit 1 ;;
+    esac
+    PLAN="$_p"
 else
     # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
     # `.` is normalized too, or `/implement "OAuth 2.0"` (KEY `oauth_2.0`) never matches
