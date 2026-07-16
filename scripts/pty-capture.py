@@ -62,28 +62,25 @@ def _write_private(path: str, data: bytes) -> None:
     O_NOFOLLOW: if `path` is already a symlink, open() raises (ELOOP) instead of writing THROUGH it to
     an attacker-chosen target. O_CREAT|O_TRUNC: create-or-truncate a regular file. fchmod: O_CREAT only
     applies the mode on creation, so an already-existing 0644 file is tightened to 0600 explicitly.
+
+    Uses open()'s `opener` hook so the returned file object OWNS the fd and closes it exactly once —
+    no manual fd bookkeeping, and structurally impossible to double-close (round 2: gemini). The opener
+    is the only place that still holds a raw fd: if fchmod fails there, close it before raising, since
+    open() never received it.
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
-    # Once os.fdopen() succeeds the returned object OWNS fd and closes it exactly once (on the `with`
-    # exit — including when fh.write raises). Closing fd AGAIN in the except would double-close: between
-    # the two closes another thread can open a file and be handed the same fd number, so the second
-    # os.close() would clobber an UNRELATED fd. Only close manually while we still own fd — i.e. before
-    # fdopen took over (an os.fchmod/os.fdopen failure) (round 1: gemini + codex).
-    fdopen_owns = False
-    try:
-        os.fchmod(fd, 0o600)
-        fh = os.fdopen(fd, "wb")
-        fdopen_owns = True
-        with fh:
-            fh.write(data)
-    except BaseException:
-        if not fdopen_owns:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        raise
+
+    def _opener(p, _flags):
+        fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW), not open()'s text-mode default
+        try:
+            os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
+        except BaseException:
+            os.close(fd)                # open() hasn't taken ownership yet, so we must close it here
+            raise
+        return fd
+
+    with open(path, "wb", opener=_opener) as fh:
+        fh.write(data)
 
 
 def _signal_child(pid: int, sig: int) -> None:

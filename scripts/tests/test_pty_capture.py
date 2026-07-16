@@ -8,6 +8,7 @@ import os
 import stat
 import tempfile
 import unittest
+from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PTY = os.path.normpath(os.path.join(_HERE, "..", "pty-capture.py"))
@@ -32,7 +33,7 @@ class WritePrivateTests(unittest.TestCase):
     def test_writes_content_at_0600(self):
         path = os.path.join(self.d, "t.txt")
         self.mod._write_private(path, b"hello")
-        self.assertEqual(open(path, "rb").read(), b"hello")
+        self.assertEqual(Path(path).read_bytes(), b"hello")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
     def test_tightens_a_preexisting_world_readable_file(self):
@@ -41,7 +42,7 @@ class WritePrivateTests(unittest.TestCase):
             fh.write(b"old")
         os.chmod(path, 0o644)
         self.mod._write_private(path, b"new")
-        self.assertEqual(open(path, "rb").read(), b"new")
+        self.assertEqual(Path(path).read_bytes(), b"new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
     @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "O_NOFOLLOW required")
@@ -53,11 +54,11 @@ class WritePrivateTests(unittest.TestCase):
             self.mod._write_private(link, b"x")
         self.assertFalse(os.path.exists(target), "must not create the symlink target")
 
-    def test_no_manual_close_once_fdopen_owns_the_fd(self):
-        """Double-close guard: when the write fails AFTER os.fdopen() took ownership, the `with` closes
-        the fd exactly once (C-level, not via os.close); the except path must NOT os.close it again — a
-        second close can land on an fd another thread has since reopened. Passing a str makes fh.write
-        raise TypeError after fdopen succeeded, so any os.close here is the erroneous manual one."""
+    def test_no_manual_close_once_open_owns_the_fd(self):
+        """Double-close guard: the fd is created via open()'s `opener`, so the file object owns it and
+        closes it exactly once (C-level, not via os.close) — even when the write fails. Passing a str
+        makes fh.write raise TypeError after open() returned, so any os.close observed here would be an
+        erroneous manual close on an fd another thread could have since reopened."""
         path = os.path.join(self.d, "wf.txt")
         real_close = os.close
         closed = []
