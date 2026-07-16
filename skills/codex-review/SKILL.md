@@ -62,9 +62,9 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PROMPT_HERE"
 codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 
 # Full diff review — built-in `codex review` (outputs to STDOUT; no -o — capture via the PTY wrapper)
-codex -c model_reasoning_effort=xhigh review --uncommitted
-codex -c model_reasoning_effort=xhigh review --base main
-codex -c model_reasoning_effort=xhigh review --commit <SHA>
+codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted
+codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --base main
+codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --commit <SHA>
 
 # Save agent output to file
 codex exec -c model_reasoning_effort=xhigh -s read-only -o /tmp/output.md "PROMPT_HERE"
@@ -167,7 +167,7 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 
 1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/codex-out.txt` + `/tmp/agy-out.txt` into one auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
-3. **Full diff review:** optionally also run `codex -c model_reasoning_effort=xhigh review --uncommitted`
+3. **Full diff review:** optionally also run `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
 
@@ -176,6 +176,6 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-approvals-and-sandbox` is reserved for externally sandboxed CI environments only
 - `codex exec -c model_reasoning_effort=xhigh -s read-only` with skill prompts is the preferred pattern for targeted reviews
-- `codex -c model_reasoning_effort=xhigh review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`)
+- `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review` is the built-in general diff review; its target is **exactly one** of `--uncommitted` / `--base` / `--commit` / a custom `[PROMPT]` — these **conflict**, so a `[PROMPT]` replaces a diff target rather than refining one (`codex review --uncommitted "…"` errors). It outputs to stdout (capture via the PTY wrapper — no `-o`). The `review_model` pin is needed because the built-in review path resolves its model from `review_model`, not the session `model` (see the callout above)
 
 Both Gemini and Codex must review plans before implementation begins. Neither review is optional.
