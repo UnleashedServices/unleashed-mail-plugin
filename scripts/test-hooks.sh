@@ -226,6 +226,29 @@ assert_contains "env command rm sensitive -> ask" "$(guard_bash '"env command rm
 # 6i. A punctuation heredoc delimiter (`<<EOF-1`) is still a heredoc.
 assert_contains "punctuation heredoc delim write -> ask" "$(guard_bash '"python3 <<EOF-1\nopen(OAuthService.swift)\nEOF-1"')" '"permissionDecision":"ask"'
 
+# == COREDEV-2503 F4/F12: structured quote-aware lexer, exit-2 fail-closed contract, 256KB DoS backstop ==
+# F4 mutation-kills — the pre-fix quote-BLIND parser got these WRONG (bypass on a mid-word quote, over-ask
+# on a quoted/escaped operator):
+assert_contains "mid-word-quote rm -> ask" "$(guard_bash '"rm Key\"chain\".swift"')" '"permissionDecision":"ask"'
+assert_empty "quoted redirect operator (literal) -> no decision" "$(guard_bash "\"echo '> Keychain.swift'\"")"
+assert_empty "escaped redirect operator (literal) -> no decision" "$(guard_bash '"echo \\> Keychain.swift"')"
+# F4 preservation: an ACTIVE redirect still writes.
+assert_contains "active redirect -> ask" "$(guard_bash '"echo x > Keychain.swift"')" '"permissionDecision":"ask"'
+# F12 write-form arms:
+assert_contains "subshell ( rm ) -> ask" "$(guard_bash '"( rm Keychain.swift )"')" '"permissionDecision":"ask"'
+assert_contains "sed --in-place=bak -> ask" "$(guard_bash '"sed --in-place=bak Info.plist"')" '"permissionDecision":"ask"'
+assert_contains "clobber >| -> ask" "$(guard_bash '"echo x >| Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "find -delete -> ask" "$(guard_bash "\"find . -name 'Keychain.swift' -delete\"")" '"permissionDecision":"ask"'
+assert_contains "xargs rm from pipe -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs rm\"")" '"permissionDecision":"ask"'
+# F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
+BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
+assert_contains "256KB command -> ask (DoS backstop)" \
+    "$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$BIGCMD" | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)" \
+    '"permissionDecision":"ask"'
+# F4 exit-contract: an injected lexer parse failure -> exit-2 fail-closed DENY (never exit-0 no-decision).
+FAILOUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm InboxView.swift"}}' | _BWS_FORCE_FAIL=1 UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" >/dev/null 2>&1; printf 'RC=%s' "$?")"
+assert_contains "lexer parse failure -> exit-2 deny" "$FAILOUT" "RC=2"
+
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"

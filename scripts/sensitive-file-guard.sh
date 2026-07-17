@@ -56,332 +56,28 @@ sensitive_category() {
     esac
 }
 
-# True if `$1` contains an ODD number of `'` or `"` — i.e. an unclosed quote whose value continues into
-# the next whitespace-split token (`FOO="a` in `FOO="a b" cmd`). Best-effort: nested/escaped quotes are
-# not modelled, which is fine for a warn-first heuristic (round 3: codex).
-_has_unbalanced_quote() {
-    local s="$1" t
-    t="${s//[^\"]/}"; [ $(( ${#t} % 2 )) -eq 1 ] && return 0
-    t="${s//[^\']/}"; [ $(( ${#t} % 2 )) -eq 1 ] && return 0
-    return 1
-}
-
-# Split a command on shell separators (`;` `&` `|` and an UNQUOTED newline, incl. `&&`/`||`) that are
-# OUTSIDE single/double quotes, one NUL-delimited segment per record. A separator INSIDE quotes — an
-# interpreter's `-c 'a; b'` or a quoted filename — stays with its segment (round 3: codex). NUL is the
-# record delimiter so a QUOTED multiline script stays in ONE segment; an UNQUOTED newline IS a real
-# separator and splits (round 5: codex). Additional shell structure the char scan honours:
-#   - inside DOUBLE quotes a backslash escapes the next char (`"…\"…"` doesn't falsely close) — round 5;
-#   - a HEREDOC body (`<<[-]['"]?TAG['"]? … TAG`) keeps its newlines with the interpreter — round 6 (the
-#     round-5 unquoted-newline split had severed the body from the `<<` invocation);
-#   - an UNQUOTED ` #` starts a comment to end-of-line and is DROPPED, so a protected name only in a
-#     comment isn't scanned; a `#` inside quotes or mid-word is literal — round 6 (fixes the over-eager
-#     round-5 broad-scan `sed` that also stripped a quoted `#`).
-# Best-effort: unquoted backslash-escaped separators and line continuations are not modelled.
-_split_segments() {
-    local s="$1" n=${#1} i=0 ch q="" seg="" bs='\' nl=$'\n' prev="" j tag tq c2 c3 lbuf trimmed
-    while [ "$i" -lt "$n" ]; do
-        ch="${s:$i:1}"
-        # HEREDOC: on an unquoted `<<`, capture the tag, then swallow the body up to a line == tag.
-        if [ -z "$q" ] && [ "$ch" = "<" ] && [ "${s:$((i + 1)):1}" = "<" ]; then
-            j=$((i + 2)); tag=""; tq=""
-            [ "${s:$j:1}" = "-" ] && j=$((j + 1))
-            while [ "${s:$j:1}" = " " ] || [ "${s:$j:1}" = "	" ]; do j=$((j + 1)); done
-            # a `'`/`"`-quoted OR a `\`-escaped delimiter (`<<'EOF'`, `<<\EOF`) both disable expansion; the
-            # backslash is a one-char marker with no closing pair — skip it and read the alnum tag (r7: codex).
-            case "${s:$j:1}" in "'"|'"') tq="${s:$j:1}"; j=$((j + 1)) ;; \\) j=$((j + 1)) ;; esac
-            while [ "$j" -lt "$n" ]; do
-                c2="${s:$j:1}"
-                if [ -n "$tq" ]; then
-                    [ "$c2" = "$tq" ] && { j=$((j + 1)); break; }
-                    tag="$tag$c2"; j=$((j + 1))
-                else
-                    # an UNQUOTED delimiter is a word — any char up to whitespace or a shell metachar
-                    # (`<<EOF-1`, `<<END.OF`), not just `[A-Za-z0-9_]` (round 8: codex).
-                    case "$c2" in
-                        " "|"	"|"$nl"|"<"|">"|";"|"&"|"|"|"("|")") break ;;
-                        *) tag="$tag$c2"; j=$((j + 1)) ;;
-                    esac
-                fi
-            done
-            seg="$seg${s:$i:$((j - i))}"; i=$j; prev=""
-            if [ -n "$tag" ]; then
-                lbuf=""
-                while [ "$i" -lt "$n" ]; do
-                    c3="${s:$i:1}"; seg="$seg$c3"; i=$((i + 1))
-                    if [ "$c3" = "$nl" ]; then
-                        trimmed="${lbuf#"${lbuf%%[![:space:]]*}"}"
-                        [ "$trimmed" = "$tag" ] && break
-                        lbuf=""
-                    else
-                        lbuf="$lbuf$c3"
-                    fi
-                done
-                # the heredoc command is complete at the terminator — emit it so a following command
-                # (`cat <<EOF … EOF <newline> rm X`) starts a FRESH segment, not appended here (r7: codex).
-                printf '%s\0' "$seg"; seg=""
-            fi
-            continue
-        fi
-        if [ "$q" = '"' ] && [ "$ch" = "$bs" ]; then
-            seg="$seg$ch${s:$((i + 1)):1}"; i=$((i + 2)); prev=""; continue
-        fi
-        if [ -n "$q" ]; then
-            [ "$ch" = "$q" ] && q=""
-            seg="$seg$ch"; prev="$ch"
-        elif [ "$ch" = "'" ] || [ "$ch" = '"' ]; then
-            q="$ch"; seg="$seg$ch"; prev="$ch"
-        elif [ "$ch" = "#" ] && { [ -z "$prev" ] || [ "$prev" = " " ] || [ "$prev" = "	" ]; }; then
-            while [ "$i" -lt "$n" ] && [ "${s:$i:1}" != "$nl" ]; do i=$((i + 1)); done
-            prev=""; continue
-        elif [ "$ch" = ";" ] || [ "$ch" = "&" ] || [ "$ch" = "|" ] || [ "$ch" = "$nl" ]; then
-            printf '%s\0' "$seg"; seg=""; prev=""
-        else
-            seg="$seg$ch"; prev="$ch"
-        fi
-        i=$((i + 1))
-    done
-    printf '%s\0' "$seg"
-}
-
-# Basename of a token with any leading quote `read -ra` left on it stripped (`'cp`/`"cp`/`/usr/bin/cp`
-# -> `cp`), for matching the command word inside the precise-parse arms (round 5: codex — `env -S 'cp …'`
-# splits the quoted command so the word arrives as `'cp`).
-_basecmd() {
-    local w="${1##*/}"
-    printf '%s' "${w#[\"\']}"
-}
-
-# Resolve a segment's EFFECTIVE command word: strip any directory (`/usr/bin/rm` -> `rm`) and unwrap a
-# leading `VAR=val …` and/or `env …` prefix (`FOO=1 rm X`, `env python3 -c …`, `FOO=1 env -u BAR sh …`
-# -> `rm` / `python3` / `sh`) so ONE verb list covers `/bin/rm`, `env python3`, `FOO=1 rm`, etc. — the
-# earlier `/*rm|/*python*` path-glob list was fragile and incomplete (round 1); a bare `FOO=1 rm` was
-# still mis-classified as verb `FOO=1`, and `env -u NAME rm` as verb `NAME` (round 2: codex + gemini).
-_effective_verb() {
-    local -a a=()
-    read -ra a <<<"$1"
-    local n=${#a[@]} i=0 tok v="" probe=0
-    # Skip a leading run of `VAR=val` assignment prefixes (`FOO=1 BAR=2 cmd …`), with or without `env`.
-    # A quoted value can contain spaces (`FOO="a b" cmd`) that `read -ra` splits across tokens — keep
-    # consuming until the quote balances so the command word isn't mistaken for the value's tail (r3: codex).
-    while [ "$i" -lt "$n" ]; do
-        case "${a[$i]}" in
-            -*) break ;;             # a flag => the command word already started
-            *=*)
-                tok="${a[$i]}"; i=$((i + 1))
-                while [ "$i" -lt "$n" ] && _has_unbalanced_quote "$tok"; do
-                    tok="$tok ${a[$i]}"; i=$((i + 1))
-                done
-                ;;
-            *) break ;;
-        esac
-    done
-    v="${a[$i]:-}"; v="${v##*/}"; v="${v#[\"\']}"
-    # Unwrap ANY nesting of `env …` / `command …` prefixes IN A LOOP so `command env rm X`, `env command
-    # rm X`, etc. all resolve to the real verb (a single pass in one order missed the other — round 8: codex).
-    #   env [OPT]... [VAR=VAL]... CMD: skip env, its flags, the ARG consumed by -u/--unset/-C/--chdir/-P,
-    #     and VAR=val. `-S`/`--split-string` is NOT arg-consuming here — its argument IS the command, so it
-    #     falls to the generic skip-one and the next token resolves as the verb (round 3: codex `-S`).
-    #   command [-pvV] CMD: runs CMD bypassing aliases — BUT `-v`/`-V` only DESCRIBE it (don't execute), so
-    #     `command -v rm X` is a read-only probe and must NOT be classified as `rm` (round 8: codex).
-    while [ "$v" = "env" ] || [ "$v" = "command" ]; do
-        if [ "$v" = "env" ]; then
-            i=$((i + 1))
-            while [ "$i" -lt "$n" ]; do
-                case "${a[$i]}" in
-                    --) i=$((i + 1)); break ;;
-                    -u|--unset|-C|--chdir|-P) i=$((i + 2)) ;;
-                    -*) i=$((i + 1)) ;;
-                    *=*) i=$((i + 1)) ;;
-                    *) break ;;
-                esac
-            done
-        else
-            i=$((i + 1)); probe=0
-            while [ "$i" -lt "$n" ]; do
-                case "${a[$i]}" in
-                    --) i=$((i + 1)); break ;;
-                    -*[vV]*) probe=1; i=$((i + 1)) ;;   # -v/-V (or a cluster with them): describe, don't run
-                    -*) i=$((i + 1)) ;;
-                    *) break ;;
-                esac
-            done
-            [ "$probe" = 1 ] && { v="command"; break; }   # a lookup mode is not a mutation
-        fi
-        v="${a[$i]:-}"; v="${v##*/}"; v="${v#[\"\']}"
-    done
-    printf '%s' "$v"
-}
-
-# True if an interpreter SEGMENT ($1) carries inline code, given its effective verb ($2). Inline code
-# can write a file NAMED INSIDE it, so the broad fail-closed scan must run for it; a plain `python3
-# script.py` (no inline code) writes nothing we can textually see and must NOT trigger the scan, and an
-# interpreter whose only mutation is a redirect has its target captured precisely, so scanning its read
-# args would over-fire (round 2: codex). The inline-code FLAG LETTER is verb-specific: POSIX shells
-# (bash/sh/zsh) use ONLY `-c` — their `-e` is `errexit`, a script option, NOT code (`bash -e report.sh`
-# must not scan its read args, round 3: codex) — while perl/ruby/node also use `-e`, perl `-E` (“like
-# -e”), and node/perl long forms `--eval`/`--print` (round 4: codex). Matches the letter in ANY short
-# cluster (`-xc`, `perl -we`, `perl -pe's/…/'`, adjacent `-c"…"`), the long forms, or a heredoc (`<<`).
-_seg_has_inline_code() {
-    local seg="$1" verb="$2" pat
-    # The inline-code FLAG is interpreter-SPECIFIC (round 5: codex — `-E`/`-e` mean different things per
-    # tool): shells + python take code via `-c` only (python has no -e; python -E ignores env vars); perl
-    # via `-e`/`-E` (perl -c is a syntax-check READ); ruby via `-e` (ruby -E sets encoding, -c checks
-    # syntax); node via `-e`/`-p`/`--eval`/`--print`; osascript via `-e`. Match the letter in any short
-    # cluster (`-xc`, `perl -we`, adjacent `-c"…"`), the long forms, or a heredoc (`<<`).
-    case "$verb" in
-        bash|sh|zsh|python|python2|python3) pat='(^|[[:space:]])-[[:alnum:]]*c([^[:alnum:]]|$)|<<' ;;
-        perl)                               pat='(^|[[:space:]])-[[:alnum:]]*[eE]([^[:alnum:]]|$)|<<' ;;
-        ruby|osascript)                     pat='(^|[[:space:]])-[[:alnum:]]*e([^[:alnum:]]|$)|<<' ;;
-        node|nodejs)  pat='(^|[[:space:]])(-[[:alnum:]]*[ep]([^[:alnum:]]|$)|--(eval|print)([^[:alnum:]]|=|$))|<<' ;;
-        *)                                  pat='(^|[[:space:]])-[[:alnum:]]*[ce]([^[:alnum:]]|$)|<<' ;;
-    esac
-    printf '%s' "$seg" | grep -qE "$pat"
-}
-
-# Best-effort: print the basename of a sensitive WRITE target in a Bash command, else nothing. Reads
-# (grep/cat) and a file used only as a SOURCE (`cp Keychain.swift /backup/`) print nothing. Phase-1
-# heuristic; the robust guard is the Edit/Write file_path path — arbitrary shell can always evade text.
+# COREDEV-2503 F4: the guard's Bash write-target extraction was an O(n^2) per-char segmenter plus
+# quote-BLIND greps that both over-asked on a quoted operator (`echo '> Keychain.swift'`) and bypassed on a
+# mid-word quote (`rm Key"chain".swift`). It is replaced by ONE structured, quote/escape/operator-aware
+# linear lexer in `lib/bash-write-scan.py`, which prints the (de-quoted) write-target words; this function
+# just applies the sensitive-basename policy. Best-effort by design (arbitrary shell can evade any textual
+# heuristic — the robust guard is the Edit/Write file_path path).
+#
+# Return: prints the first sensitive write-target basename (empty if none); exit status 2 means the lexer
+# could not parse the command -> the caller FAILS CLOSED (deny). If python3 is unavailable the best-effort
+# Bash heuristic is skipped (empty, status 0) — never a blanket deny of every command.
 guard_bash_write_target() {
-    local cmd="$1" cand="" seg="" line="" t="" bn="" base_verb="" tok="" last="" bt="" _bcheck=0
-    local seen_cmd=0 skipnext=0 tdir=""
-    local -a toks=()
-    # Split on shell separators so a chained command (`cp a b && git diff`) is parsed
-    # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
-    # the Bash path is a warn-first speed-bump — the robust guard is the Edit/Write
-    # file_path path; arbitrary shell can always evade a textual heuristic.
-    while IFS= read -r -d '' seg; do
-        [ -n "$seg" ] || continue
-        # Redirection targets within the segment: >FILE / >>FILE (quoted or not).
-        while IFS= read -r line; do
-            line="$(printf '%s' "$line" | sed -E 's/^>>?[[:space:]]*//; s/^"//; s/"$//')"
-            [ -n "$line" ] && cand="${cand}
-${line}"
-        done < <(printf '%s\n' "$seg" | grep -oE '>>?[[:space:]]*("[^"]+"|[^"[:space:]|&;]+)' 2>/dev/null)
-        read -ra toks <<<"$seg"
-        # Effective command word (dir stripped, `env`/`VAR=val` unwrapped) so `/bin/cp`, `env mv`, etc.
-        # reach the right parse arm — not just the bare-word forms.
-        base_verb="$(_effective_verb "$seg")"
-        case "$base_verb" in
-            cp|install|ln)
-                # Destination = the `-t`/`--target-directory` DIR if present (the sources are then only
-                # READ, so they must NOT be flagged — `cp -t /tmp Keychain.swift`, `ln -t DIR TARGET`),
-                # else the LAST non-flag operand (`cp SRC DEST` / `ln SRC LINK` write the last one, the
-                # earlier ones are sources) (round 3: codex — cp -t and ln-source were over-flagged).
-                last=""; tdir=""; skipnext=0; seen_cmd=0
-                for tok in "${toks[@]}"; do
-                    if [ "$seen_cmd" = 0 ]; then
-                        case "$(_basecmd "$tok")" in cp|install|ln) seen_cmd=1 ;; esac
-                        continue
-                    fi
-                    if [ "$skipnext" = 1 ]; then tdir="$tok"; skipnext=0; continue; fi
-                    case "$tok" in
-                        -t|--target-directory) skipnext=1 ;;
-                        --target-directory=*) tdir="${tok#*=}" ;;
-                        -*) ;;
-                        *) last="$tok" ;;
-                    esac
-                done
-                if [ -n "$tdir" ]; then cand="${cand}
-${tdir}"; elif [ -n "$last" ]; then cand="${cand}
-${last}"; fi
-                ;;
-            mv|rename)
-                # a rename can modify/remove the SOURCE too — check every non-flag operand AFTER the
-                # command word. Skip to it (not `toks[1]`) so an `env -u NAME mv a b` prefix doesn't flag
-                # the unset var NAME as an operand (round 5: codex).
-                seen_cmd=0
-                for tok in "${toks[@]}"; do
-                    if [ "$seen_cmd" = 0 ]; then
-                        case "$(_basecmd "$tok")" in mv|rename) seen_cmd=1 ;; esac
-                        continue
-                    fi
-                    case "$tok" in -*) ;; *) cand="${cand}
-${tok}" ;; esac
-                done
-                ;;
-            sed)
-                if printf '%s' "$seg" | grep -qE 'sed[[:space:]]+-i' 2>/dev/null; then
-                    cand="${cand}
-${toks[*]: -1}"
-                fi
-                ;;
-            tee)
-                # tee writes to ALL its FILE operands. Collect each non-flag token AFTER the command word
-                # (matched by basename, so `/usr/bin/tee` / `env tee` work) — the old sed anchored at a
-                # literal leading `tee` recorded `/usr/bin/tee`/`env` for the prefixed forms (round 2: codex).
-                seen_cmd=0
-                for tok in "${toks[@]}"; do
-                    if [ "$seen_cmd" = 0 ]; then
-                        case "$(_basecmd "$tok")" in tee) seen_cmd=1 ;; esac
-                        continue
-                    fi
-                    case "$tok" in -*) ;; *) cand="${cand}
-${tok}" ;; esac
-                done
-                ;;
-            touch)
-                # touch's targets are its non-flag operands, EXCLUDING the arg consumed by -r/--reference
-                # (a READ reference file), -d/--date, and -t (a timestamp) — `touch -r SENSITIVE marker`
-                # reads SENSITIVE, it does not modify it (round 2: codex). Skip the command word first.
-                seen_cmd=0; skipnext=0
-                for tok in "${toks[@]}"; do
-                    if [ "$seen_cmd" = 0 ]; then
-                        case "$(_basecmd "$tok")" in touch) seen_cmd=1 ;; esac
-                        continue
-                    fi
-                    if [ "$skipnext" = 1 ]; then skipnext=0; continue; fi
-                    case "$tok" in
-                        -r|--reference|-d|--date|-t) skipnext=1 ;;   # option consumes the next token
-                        --reference=*|--date=*) ;;                    # =-joined arg, not a target
-                        -*) ;;                                        # other touch flag (-a/-c/-m/-h)
-                        *) cand="${cand}
-${tok}" ;;
-                    esac
-                done
-                ;;
-        esac
-        # FAIL CLOSED for the mutating verbs the precise parse above CANNOT target by shape: deletion
-        # (`rm`/`unlink`/`shred`) and interpreter one-liners that write a file NAMED INSIDE inline code
-        # (`python3 -c 'open("X","w")'`). For these, ANY sensitive basename in the segment is treated as
-        # the mutated file. NOT run for cp/install/ln/mv/sed/tee/touch/redirects — those extract their
-        # precise target(s) above, and a broad scan there would wrongly flag a READ (`cp KeychainManager.swift
-        # /backup/`, `ln -s Keychain.swift /tmp/link`, or `python3 report.py X.swift > out` whose write is
-        # `out`, not `X.swift`). An interpreter with only a redirect (no inline code) is skipped for the
-        # same reason (round 2: codex). So `cat X`/`grep foo X` never trip it (#44 review §6).
-        _bcheck=0
-        case "$base_verb" in
-            rm|unlink|shred) _bcheck=1 ;;
-            eval|source|.) _bcheck=1 ;;   # run an arbitrary string/file — scan it for sensitive names (round 4: gemini)
-            python|python2|python3|perl|ruby|node|nodejs|osascript|bash|sh|zsh)
-                _seg_has_inline_code "$seg" "$base_verb" && _bcheck=1 ;;
-        esac
-        if [ "$_bcheck" = 1 ]; then
-            # Unquoted ` #…` comments were already dropped by `_split_segments`, so the segment holds only
-            # real code/operands here. Extract WHOLE path-like tokens (not extension-shaped substrings) so
-            # `is_sensitive_basename` sees the real basename: `OAuthService.swift.bak` must read as a
-            # `.bak` file, not the `.swift` prefix substring (round 6: codex). Non-file tokens are dropped
-            # by is_sensitive_basename downstream, so over-extraction is harmless.
-            while IFS= read -r bt; do
-                [ -n "$bt" ] || continue
-                cand="${cand}
-${bt}"
-            done < <(printf '%s\n' "$seg" | grep -oE '[A-Za-z0-9._/-]+\.(swift|entitlements|plist|pbxproj|mobileprovision|xcodeproj)[A-Za-z0-9._-]*' 2>/dev/null)
-        fi
-    done < <(_split_segments "$cmd")
-    # Evaluate candidates by basename (while-read avoids globbing on a `*` operand).
+    local cmd="$1" out="" t="" bn=""
+    command -v python3 >/dev/null 2>&1 || return 0
+    out="$(printf '%s' "$cmd" | python3 "$_DIR/lib/bash-write-scan.py")" || return 2
     while IFS= read -r t; do
         [ -n "$t" ] || continue
-        t="${t#\"}"; t="${t%\"}"       # strip one surrounding double quote…
-        t="${t#\'}"; t="${t%\'}"       # …or single quote (`touch 'Keychain.swift'`), round 3: codex
         bn="${t##*/}"
         if is_sensitive_basename "$bn"; then
             printf '%s' "$bn"
             return 0
         fi
-    done <<EOF
-$cand
-EOF
+    done <<< "$out"
     return 0
 }
 
@@ -400,7 +96,27 @@ case "$TOOL" in
         ;;
     Bash)
         CMD="$(hook_command)"
-        [ -n "$CMD" ] && TARGET="$(guard_bash_write_target "$CMD")"
+        if [ -n "$CMD" ]; then
+            # F4 DoS backstop: a command too large to parse within the 10s hook timeout must NOT time out
+            # (a killed hook fails open). Over 256 KiB (bytes, LC_ALL=C) -> ask unconditionally, fail-closed.
+            NBYTES=$(LC_ALL=C printf '%s' "$CMD" | wc -c | tr -d ' ')
+            if [ "${NBYTES:-0}" -gt 262144 ]; then
+                if [ "$MODE" = ask ]; then
+                    hook_emit_ask "This command is very large (${NBYTES} bytes); the sensitive-file guard cannot fully parse it in time. Proceed?"
+                else
+                    hook_emit_warn "Very large command (${NBYTES} bytes) — the sensitive-file guard could not fully scan it."
+                fi
+                exit 0
+            fi
+            TARGET="$(guard_bash_write_target "$CMD")"; GRC=$?
+            # F4 exit-contract: a lexer PARSE FAILURE (not a mere no-match) is undecidable -> FAIL CLOSED
+            # with an exit-2 deny + stderr reason (Claude Code ignores stdout JSON on exit 2, so an `ask`
+            # cannot be exit-2; a hard deny can). python3-absent is handled inside as a best-effort skip.
+            if [ "$GRC" -eq 2 ]; then
+                printf 'sensitive-file guard: could not parse this Bash command; blocking (fail-closed).\n' >&2
+                exit 2
+            fi
+        fi
         ;;
     *)
         exit 0
