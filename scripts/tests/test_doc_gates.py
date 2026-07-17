@@ -34,17 +34,24 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
     consumer repo). This guard fails if ANY non-exact spelling is (re)introduced."""
 
     _TREES = ("agents", "skills")
-    # Two branches, NO `\b` immediately after ROOT (COREDEV-2504 gemini review, rounds 1+2):
-    #   1. `\$\{CLAUDE_PLUGIN_ROOT[^}\n]*\}?`  — a braced ref; `[^}\n]*` consumes any suffix/operator up to
-    #      the closing brace, so a suffix typo (`${CLAUDE_PLUGIN_ROOT_DIR}`), a `:-.`/`:?`/`#…` param form,
-    #      and an unterminated `${CLAUDE_PLUGIN_ROOT` all match as ONE non-exact token → flagged.
-    #   2. `\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*`  — an unbraced ref; the char class stops at the first
-    #      non-word char, so it matches exactly `$CLAUDE_PLUGIN_ROOT[suffix]` WITHOUT greedily eating the
-    #      rest of the line (the round-2 imprecision).
-    # A bare `\b` right after ROOT (either round-1's original OR gemini's round-2 suggestion) silently
-    # DROPS same-word suffix typos to a zero-length match set → they bypass the exact-token assertion.
-    # `test_guard_regex_flags_adversarial_spellings` pins this against regression.
-    _ANY = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT[^}\n]*\}?|\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*")
+    # CONTRACT (COREDEV-2504, gemini review rounds 1-3 + a 6-lens adversarial completeness sweep):
+    # among strings that are RECOGNISABLE references to this variable — a `$` + the correctly-spelled ASCII
+    # name CLAUDE_PLUGIN_ROOT (any case) — every one must be the exact `${CLAUDE_PLUGIN_ROOT}` token, because
+    # Claude Code substitutes ONLY that literal inline; anything else (fallback `:-.`, suffix typo, unbraced,
+    # or spaces inside the braces) reaches the shell verbatim and resolves to `.` in a consumer install.
+    # Two branches, NO `\b` immediately after ROOT (that boundary silently drops same-word suffix typos —
+    # the round-1 hole, which gemini's own round-2/3 replacement suggestions each reintroduced):
+    #   1. braced   `\$\{\s*CLAUDE_PLUGIN_ROOT[^}\n]*\}?` — `\s*` tolerates `${ CLAUDE_PLUGIN_ROOT }`;
+    #      `[^}\n]*` swallows any suffix/operator (`_DIR`, `:-.`, `:?`, `#…`) up to the brace, so it matches
+    #      as ONE non-exact token → flagged. Also catches an unterminated `${CLAUDE_PLUGIN_ROOT`.
+    #   2. unbraced `\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*` — matches `$CLAUDE_PLUGIN_ROOT[suffix]` precisely,
+    #      WITHOUT greedily eating the rest of the line (the round-2 imprecision).
+    # re.IGNORECASE folds in case variants (`${claude_plugin_root}`) — the one high-plausibility miss.
+    # DELIBERATELY OUT OF CONTRACT (pinned in test_out_of_contract_spellings_are_deliberately_not_flagged):
+    # identifier MISSPELLINGS (`${CLADUE_…}`), invisible/unicode homoglyphs (ZWSP, BOM, full-width `＄`), and
+    # the-exact-token-plus-a-stray-char (`${CLAUDE_PLUGIN_ROOT}}`). Those are unbounded generic-typo /
+    # unicode-hygiene concerns a token regex cannot own without false positives — a separate check's job.
+    _ANY = re.compile(r"\$\{\s*CLAUDE_PLUGIN_ROOT[^}\n]*\}?|\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*", re.IGNORECASE)
 
     def _md_files(self):
         for tree in self._TREES:
@@ -62,16 +69,15 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                     bad.append(f"{rel}: {m!r}")
         self.assertEqual(bad, [], f"COREDEV-2504: only the exact ${{CLAUDE_PLUGIN_ROOT}} token is allowed: {bad}")
 
+    def _verdict(self, s):
+        # Guard verdict := FAIL iff any regex match != the exact token (i.e. a non-exact reference exists).
+        matches = self._ANY.findall(s)
+        return "FAIL" if any(m != "${CLAUDE_PLUGIN_ROOT}" for m in matches) else "PASS"
+
     def test_guard_regex_flags_adversarial_spellings(self):
-        # COREDEV-2504 (gemini rounds 1+2): pin the guard regex's behaviour so a future "cleanup" that
-        # reintroduces a `\b`-after-ROOT (which silently drops suffix typos) is caught HERE, not by luck of
-        # a real file happening to contain the typo. Guard verdict := FAIL iff any match != the exact token.
-        exact = "${CLAUDE_PLUGIN_ROOT}"
-
-        def verdict(s):
-            matches = self._ANY.findall(s)
-            return "FAIL" if any(m != exact for m in matches) else "PASS"
-
+        # COREDEV-2504 (gemini rounds 1-3 + completeness sweep): pin the guard's behaviour so a future
+        # "cleanup" that reintroduces a `\b`-after-ROOT (silently drops suffix typos), loses `\s*` (spacing),
+        # or drops re.IGNORECASE (case) is caught HERE — not by luck of a real file containing the typo.
         must_flag = [
             "${CLAUDE_PLUGIN_ROOT:-.}",                             # the bug this whole ticket fixes
             "${CLAUDE_PLUGIN_ROOT_DIR}",                            # round-1 hole: same-word suffix typo
@@ -82,6 +88,12 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "${CLAUDE_PLUGIN_ROOT}/a ${CLAUDE_PLUGIN_ROOT_DIR}/b",  # a valid + a bad on one line
             "${CLAUDE_PLUGIN_ROOT:?err}",                          # :? param form
             "${CLAUDE_PLUGIN_ROOT",                                 # unterminated brace
+            "${ CLAUDE_PLUGIN_ROOT }",                             # round-3: spaces inside braces
+            "${ CLAUDE_PLUGIN_ROOT}",                             # round-3: leading space only
+            "${CLAUDE_PLUGIN_ROOT }",                             # round-3: trailing space only
+            "${claude_plugin_root}",                               # sweep: all-lowercase (case)
+            "${CLAUDE_PLUGIN_Root}",                               # sweep: mixed case
+            "$claude_plugin_root",                                 # sweep: unbraced lowercase
         ]
         must_pass = [
             "${CLAUDE_PLUGIN_ROOT}",
@@ -89,12 +101,40 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "See ${CLAUDE_PLUGIN_ROOT} then $HOME/x",
             "${CLAUDE_PLUGIN_ROOT}/a ${CLAUDE_PLUGIN_ROOT}/b",     # two valid on one line
             "prefix${CLAUDE_PLUGIN_ROOT}suffix",
+            "the CLAUDE_PLUGIN_ROOT variable, in prose (no $) — not a substitution site",
             "no reference at all",
         ]
         for s in must_flag:
-            self.assertEqual(verdict(s), "FAIL", f"COREDEV-2504: guard must FLAG {s!r} (findall={self._ANY.findall(s)})")
+            self.assertEqual(self._verdict(s), "FAIL", f"COREDEV-2504: guard must FLAG {s!r} (findall={self._ANY.findall(s)})")
         for s in must_pass:
-            self.assertEqual(verdict(s), "PASS", f"COREDEV-2504: guard must PASS {s!r} (findall={self._ANY.findall(s)})")
+            self.assertEqual(self._verdict(s), "PASS", f"COREDEV-2504: guard must PASS {s!r} (findall={self._ANY.findall(s)})")
+
+    def test_out_of_contract_spellings_are_deliberately_not_flagged(self):
+        # COREDEV-2504 scope boundary — pinned so it is an INTENTIONAL design decision, not an oversight,
+        # and so bot review round N+1 has a documented answer. A 6-lens adversarial sweep enumerated ~60
+        # non-exact spellings; these three classes are deliberately OUT of this token guard's contract:
+        #   (a) identifier MISSPELLINGS — a reference to a *different* (non-existent) variable name; catching
+        #       every transposition/missing-underscore is unbounded fuzzy matching a regex cannot own;
+        #   (b) invisible/unicode homoglyphs — a non-ASCII/hidden-char hygiene concern for a separate linter,
+        #       not a `${…}`-token spelling check (chasing it in this regex risks false positives on prose);
+        #   (c) the EXACT token plus a stray adjacent char (`${CLAUDE_PLUGIN_ROOT}}`, `$${…}`) — the token
+        #       itself IS spelled correctly and Claude Code substitutes it; the stray brace/dollar is a
+        #       different lexical bug, and flagging it cannot be distinguished from a legit `${…}/path` suffix
+        #       without over-matching.
+        # If the team later wants any of these caught, that is a NEW ticket that consciously flips a line here.
+        out_of_contract = [
+            "${CLADUE_PLUGIN_ROOT}",          # (a) transposition typo -> different name
+            "${CLAUDE_PLGUIN_ROOT}",          # (a) transposition typo
+            "${CLAUDEPLUGIN_ROOT}",           # (a) missing underscore
+            "${​CLAUDE_PLUGIN_ROOT}",    # (b) zero-width space after brace
+            "＄{CLAUDE_PLUGIN_ROOT}",     # (b) full-width dollar homoglyph
+            "${CLAUDE_PLUGIN_ROOT}}",         # (c) exact token + stray trailing brace
+            "$${CLAUDE_PLUGIN_ROOT}",         # (c) exact token + escaped leading dollar
+        ]
+        for s in out_of_contract:
+            self.assertEqual(self._verdict(s), "PASS",
+                             f"COREDEV-2504: {s!r} is documented OUT of the guard's contract — if this now "
+                             f"FLAGs, update the contract comment + this test intentionally (findall={self._ANY.findall(s)})")
 
     def test_gate_script_references_present_via_bare_token(self):
         # Defense-in-depth (codex R2): catch someone DELETING the token + replacing with a repo-relative
