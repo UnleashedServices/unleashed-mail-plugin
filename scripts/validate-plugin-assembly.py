@@ -51,9 +51,14 @@ MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
 # tool name silently disables that tool (mirrors validate-hooks.py's difflib guard).
 KNOWN_TOOLS = {
     "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "BashOutput",
-    "Glob", "Grep", "Agent", "Task", "WebFetch", "WebSearch", "TodoWrite",
+    "Glob", "Grep", "Agent", "WebFetch", "WebSearch", "TodoWrite",
     "Skill", "SlashCommand", "ExitPlanMode", "KillShell", "AskUserQuestion",
 }
+
+# B4 (COREDEV-2503): stale/invalid tool names to HARD-reject. Merely dropping `Task` from KNOWN_TOOLS is a
+# no-op — an unknown tool is accepted unless `difflib` finds a close match, and `Task` has none. The
+# sub-agent dispatcher is `Agent`, never `Task` (AGENT_CONTRACTS §9; validate-hooks.py agrees).
+STALE_TOOLS = {"Task"}
 
 
 def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
@@ -72,8 +77,11 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
         problems.append(f"{rel}: unknown agent frontmatter key `{key}`{hint}")
 
     model = fm.get("model", "")
-    # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not.
-    if model and model not in MODEL_ALIASES and not re.match(r"^[a-z]+-[a-z0-9-]*\d", model):
+    # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not. F10
+    # (COREDEV-2503): `re.fullmatch` anchors BOTH ends — the prior `re.match` (start-only, no end anchor)
+    # accepted a valid prefix + trailing garbage/newline (`claude-opus-4-8 rm -rf`). `\Z`-style fullmatch,
+    # not `$` (which allows a terminal newline). The trailing `[a-z0-9-]*` allows ids ending in a letter.
+    if model and model not in MODEL_ALIASES and not re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", model):
         problems.append(
             f"{rel}: `model: {model}` is not a known alias {sorted(MODEL_ALIASES)} or a model id")
 
@@ -83,6 +91,10 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
             continue
         for entry in (t.strip() for t in val.split(",")):
             if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
+                continue
+            if entry in STALE_TOOLS:  # B4: hard-reject a known-stale name (difflib wouldn't flag it)
+                problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — the "
+                                f"sub-agent dispatcher is `Agent`, not `{entry}` (AGENT_CONTRACTS §9)")
                 continue
             near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
             if near:
