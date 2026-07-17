@@ -693,20 +693,34 @@ if __name__ == "__main__":
 
 
 class SecureTmpWriteTest(unittest.TestCase):
-    """COREDEV-2503 F11: the tmp+replace writes must refuse a pre-planted symlink at the predictable
-    `.tmp.<pid>` path (O_NOFOLLOW) rather than write/truncate THROUGH it to an attacker-chosen target."""
+    """COREDEV-2503 F11: the tmp+replace writes must never write/truncate THROUGH a pre-planted symlink at
+    the predictable `.tmp.<pid>` path to an attacker-chosen target. The invariant is "the victim is never
+    clobbered" — the planted symlink is removed (as the symlink) and a fresh file is created, not followed."""
 
-    def test_open_private_tmp_refuses_a_planted_symlink(self):
+    def test_open_private_tmp_does_not_clobber_planted_symlink_target(self):
         d = tempfile.mkdtemp()
         victim = os.path.join(d, "victim")
         with open(victim, "w", encoding="utf-8") as fh:
             fh.write("PRECIOUS")
         tmp = os.path.join(d, "x.tmp.%d" % os.getpid())
         os.symlink(victim, tmp)
-        with self.assertRaises(OSError):        # O_NOFOLLOW refuses the symlink atomically at open
-            C._open_private_tmp(tmp)
+        with C._open_private_tmp(tmp) as fh:    # unlink removes the symlink; O_EXCL|O_NOFOLLOW creates fresh
+            fh.write("STATUS")
         self.assertEqual(open(victim, encoding="utf-8").read(), "PRECIOUS",
                          "the write must not follow the planted symlink to the victim")
+        self.assertFalse(os.path.islink(tmp), "tmp must be a fresh regular file, not the planted symlink")
+        self.assertEqual(open(tmp, encoding="utf-8").read(), "STATUS")
+
+    def test_open_private_tmp_clears_a_stale_regular_tmp(self):
+        # gemini review #53: a leftover tmp from a crashed same-pid run must not persistently wedge the
+        # write — it is cleared and recreated (not a fail).
+        d = tempfile.mkdtemp()
+        tmp = os.path.join(d, "x.tmp.%d" % os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("STALE")
+        with C._open_private_tmp(tmp) as fh:
+            fh.write("FRESH")
+        self.assertEqual(open(tmp, encoding="utf-8").read(), "FRESH")
 
     def test_write_status_does_not_clobber_through_symlink(self):
         d = tempfile.mkdtemp()

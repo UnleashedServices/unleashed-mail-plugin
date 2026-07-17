@@ -368,14 +368,20 @@ def _status_path(round_dir: str, agent: str) -> str:
 
 
 def _open_private_tmp(tmp: str):
-    """Open a fresh private tmp for a tmp+replace write, refusing a pre-planted target. The `.tmp.<pid>`
-    path is predictable, so a same-account attacker could plant a symlink there and make a plain
-    ``open(tmp, "w")`` write/truncate THROUGH to the link target (arbitrary-file clobber with the gate's
-    privileges). ``O_NOFOLLOW`` refuses the symlink atomically at open; ``O_EXCL`` makes creation exclusive
-    so a planted regular file is refused too and the predictable-name race is closed (stronger than the
-    review-verdict.py / pty-capture.py twins, which use O_NOFOLLOW without O_EXCL); mode 0600. COREDEV-2503
-    F11. A leftover tmp (rare: same pid + a crashed prior run) makes O_EXCL fail — fail-SAFE, since the
-    callers swallow it and report a non-written status rather than clobbering anything."""
+    """Open a fresh private tmp for a tmp+replace write, never writing THROUGH a pre-planted target. The
+    `.tmp.<pid>` path is predictable, so a same-account attacker could plant a symlink there and make a
+    plain ``open(tmp, "w")`` write/truncate THROUGH to the link target (arbitrary-file clobber with the
+    gate's privileges). Two layers: first ``os.unlink`` clears any stale/planted entry — it operates on the
+    LINK ITSELF (never follows), so a planted symlink is removed as the symlink, its target untouched, and
+    a stale tmp from a crashed same-pid prior run no longer wedges the write (gemini review #53). Then
+    ``os.open`` with ``O_CREAT|O_EXCL`` (exclusive create) + ``O_NOFOLLOW`` (refuse a symlink atomically)
+    creates fresh: anything re-planted in the unlink→open race window makes the exclusive open FAIL
+    (EEXIST) rather than follow/clobber, so the "never clobber the victim" invariant holds either way;
+    mode 0600. COREDEV-2503 F11."""
+    try:
+        os.unlink(tmp)                          # clear a stale/planted entry (the LINK, never its target)
+    except OSError:
+        pass
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     return os.fdopen(fd, "w", encoding="utf-8")
 
