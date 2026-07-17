@@ -12,6 +12,7 @@ schema the markdown reviewers already emit (see agents/*-reviewer.md Step 5).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 SEVERITIES = ("blocker", "warning", "suggestion")
@@ -159,19 +160,54 @@ def canonical_path(p: str) -> str:
     # Collapse redundant INTERIOR segments — `Sources//Auth.swift` and `Sources/./Auth.swift` both mean
     # `Sources/Auth.swift`. Without this a reviewer's noncanonical `file` would not match git's clean
     # changed-files entry, so the finding scopes to pre-existing and is silently dropped (round 4: codex).
-    # Applied to BOTH sides, so the compare stays symmetric. A `..` segment never reaches here — the
-    # server rejects traversal entries before scoping (mcp_server._abs_or_traversal). PRESERVE a leading
-    # `/` (an absolute path): capture.py's PII sanitizer keys on it to redact `/Users/<name>/…` prefixes.
+    # Applied to BOTH sides, so the compare stays symmetric. A `..` segment IS preserved here (only "" and
+    # "." are dropped): `is_abs_or_traversal` — not this function — rejects traversal/absolute entries, and
+    # it runs on BOTH `changed_files` (mcp_server) AND each finding's `file` (parse_finding), COREDEV-2503
+    # F2/F3. PRESERVE a leading `/` (an absolute path): capture.py's PII sanitizer keys on it to redact
+    # `/Users/<name>/…` prefixes.
     lead = "/" if p.startswith("/") else ""
     return lead + "/".join(seg for seg in p.split("/") if seg not in ("", "."))
 
 
-def parse_finding(d: dict) -> Finding:
+# Windows drive-absolute root: `C:\…` or `C:/…` (letter + colon + separator). A bare `C:foo.swift`
+# (colon, no separator) is a valid POSIX name and is NOT matched.
+_DRIVE_ABS = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def is_abs_or_traversal(path: str) -> bool:
+    r"""True if `path` is ABSOLUTE (POSIX `/…`, Windows drive `C:\…`/`C:/…`, or UNC `\\…`) or contains a
+    `..` TRAVERSAL segment — none of which `git diff --name-only` emits. Applied to BOTH `changed_files`
+    (mcp_server) and each finding's `file` (parse_finding) so the two sides can't disagree (COREDEV-2503
+    F2/F3). Separators are folded `\`->`/` FIRST — the same normalization `canonical_path` does — closing
+    the fail-open where a backslash `changed_files` entry (`\Sources\Auth.swift`) slipped the old raw-path
+    guard yet canonical_path folded it to an absolute path, demoting every real blocker to pre-existing.
+    Trade-off (documented): a rare POSIX filename containing a literal backslash is treated as a separator
+    and may be rejected — acceptable, since canonical_path already folds it identically and such a name is
+    near-impossible in this repo."""
+    r = path.strip()
+    while r.startswith("./"):
+        r = r[2:]
+    if not r:
+        return False
+    if _DRIVE_ABS.match(r):          # drive-absolute on the RAW form: matches both `C:\` and `C:/`
+        return True
+    r = r.replace("\\", "/")         # fold separators to agree with canonical_path (UNC `\\` -> `//`)
+    return r.startswith("/") or ".." in r.split("/")
+
+
+def parse_finding(d: dict, *, reject_abs_traversal: bool = False) -> Finding:
     """Validate a raw dict (e.g. from a markdown reviewer's JSON) into a Finding.
 
     On the API path the model output is already schema-valid; this is the
     ingest-side guard for the prompt-only reviewers whose JSON is not enforced.
     Anything that fails here is quarantined, never silently dropped.
+
+    `reject_abs_traversal` (COREDEV-2503 F3) — when True, an absolute / `..`-traversal `file` is REJECTED
+    (quarantined) rather than accepted. The GATING caller (`mcp_server`) passes True: such a path can never
+    match the guarded `changed_files` set, so it would silently scope to pre-existing and stop gating -> a
+    bogus provisional APPROVE. `capture.py`'s PII sanitizer keeps the default (False): it deliberately
+    ACCEPTS an absolute path and redacts it to `[abs]/…` for the audit record — a different concern from
+    gating, and it never approves anything.
     """
     if not isinstance(d, dict):
         raise SchemaError("finding must be a JSON object")
@@ -191,6 +227,12 @@ def parse_finding(d: dict) -> Finding:
     file = canonical_path(d["file"])  # trim ws + leading ./ so it matches $CHANGED
     if not file:
         raise SchemaError("file must be non-empty")
+    # F3 (COREDEV-2503): at the GATING boundary, reject an absolute / `..`-traversal finding path —
+    # quarantine (fail-closed), never demote. Same shared helper as the changed_files guard, so a blocker
+    # cannot slip in via its finding path. Opt-in so capture.py's PII-redaction path (which accepts and
+    # collapses absolute paths) is unaffected.
+    if reject_abs_traversal and is_abs_or_traversal(d["file"]):
+        raise SchemaError(f"file is absolute or contains a traversal segment: {d['file']!r}")
     scope = d.get("scope", "changeset")
     if not isinstance(scope, str) or scope not in SCOPES:
         raise SchemaError(f"bad scope: {scope!r}")
