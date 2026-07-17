@@ -401,6 +401,12 @@ class AuditPR53(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("sudo -g wheel rm Keychain.swift"))
         self.assertIn("Keychain.swift", targets("sudo rm Keychain.swift"))  # no-option form still works
 
+    def test_env_split_string_shlex_quotes(self):
+        # gemini review of #53: `env -S 'rm "a b.swift"'` — a quoted arg with a space must stay ONE token
+        self.assertIn("Keychain Manager.swift", bws.write_targets("env -S 'rm \"Keychain Manager.swift\"'"))
+        self.assertIn("Keychain.swift", targets("env -S 'rm Keychain.swift'"))  # no-space still works
+        self.assertEqual(bws.write_targets("env -S 'echo hi'"), [])              # no write
+
     def test_repeated_xargs_stages_stay_linear(self):
         # A3: N `| xargs rm` stages each emitting all_words was O(N^2); a 165KB command blew the 10s budget
         import time

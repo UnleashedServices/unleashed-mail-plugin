@@ -32,6 +32,7 @@ fail-opens, the sweep's write classes, and catches accidental writes.
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 
 # File extensions the interpreter-inline-code / eval scan treats as candidate file words (coupled to the
@@ -369,7 +370,10 @@ def _strip_prefixes(words: list[str]) -> list[str]:
             if split_string:
                 rest = words[idx:]
                 if rest and " " in rest[0]:           # `env -S 'rm X'` -> the quoted split-string is the cmd
-                    rest = rest[0].split() + rest[1:]
+                    try:                              # shlex so a quoted arg with spaces stays ONE token
+                        rest = shlex.split(rest[0]) + rest[1:]   # (`env -S 'rm "a b.swift"'`, gemini #53)
+                    except ValueError:                # unbalanced quotes -> best-effort whitespace split
+                        rest = rest[0].split() + rest[1:]
                 return _strip_prefixes(rest)          # the split command may carry its own VAR=val/env prefix
             if idx < len(words) and not words[idx].startswith("-") and (
                 base in _PREFIX_1POS                          # `timeout DURATION cmd` / `chrt PRIO cmd`

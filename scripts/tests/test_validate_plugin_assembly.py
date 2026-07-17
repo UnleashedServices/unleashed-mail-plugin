@@ -54,6 +54,23 @@ class StaleToolRejectTest(unittest.TestCase):
     def test_valid_list_form_is_accepted(self):
         self.assertEqual(self._problems("[Read, Agent]"), [], "a valid flow-list must pass")
 
+    def test_stale_task_in_multiline_block_list(self):
+        # gemini review of #53: parse_frontmatter recorded only the FIRST block-list item, so a stale tool
+        # past line 1 escaped. It must now accumulate ALL items.
+        md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task\n  - Grep\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        self.assertTrue(any("stale" in x or "Agent" in x for x in p),
+                        f"`Task` in a multi-line block list must be rejected: {p} (tools={fm.get('tools')!r})")
+
+    def test_multiline_block_list_clean_passes(self):
+        md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Agent\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        self.assertEqual(p, [], f"a clean multi-line block list must pass: {p}")
+
 
 if __name__ == "__main__":
     unittest.main()

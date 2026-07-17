@@ -146,8 +146,14 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
             current = key
         elif current is not None and line.strip() and line[:1].isspace():
             # continuation / block-scalar body -> the key has content
+            body = line.strip()
             if fm.get(current, "") in ("", ">", "|", ">-", "|-"):
-                fm[current] = line.strip()
+                fm[current] = body
+            else:
+                # ACCUMULATE every subsequent indented item, comma-joined — a multi-line YAML block list
+                # (`tools:\n  - Read\n  - Task`) otherwise recorded only its FIRST item, so a stale tool
+                # past line 1 escaped validation (gemini review of #53). Matches the flow-list form.
+                fm[current] = fm[current] + ", " + body
         i += 1
     return None  # no closing '---'
 
