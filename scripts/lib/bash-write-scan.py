@@ -10,8 +10,20 @@ sensitive-basename policy and emits the ask. Exit 0 on success; exit 3 on an int
 guard can fail CLOSED (deny) rather than exit-0-without-decision. Whole-pipeline O(n): one linear lexer pass,
 no quadratic accumulation.
 
+Coverage (adversarial sweep, codex review of #53): redirect writes incl. `>&`(file form, not fd-dup);
+`--` end-of-options; command wrappers (env/sudo/nice/timeout/nohup/doas/arch/xcrun/taskset/chrt/...) with
+their arg/positional consumption; brace-group `{ …; }`; command-substitution/expansion inside a target
+(`$(…)`, backticks, trailing subshell `)`, brace suffix) via a substring scan for old-grep parity; verbs
+rm/mv/cp/ln/install/ditto/rsync/tee/sed-i/dd/truncate/touch/find/patch/git(rm|mv|checkout --|restore) and
+interpreters bash/sh/python/perl/ruby(-e; -E is encoding)/node/osascript/awk(`print > "f"`). Input redirects
+(`tee out < K.swift`) are reads, not writes — their source is NOT emitted.
+
 Best-effort by design: a determined adversary can hide a target from ANY textual heuristic (base64,
-indirection). This closes the quote-blindness + O(n^2)-timeout fail-opens and catches accidental writes.
+indirection). Deliberately NOT modeled (documented gaps, no worse than the old grep): runtime GLOB/wildcard
+metachars (`rm Key?.swift`, `[K]eychain.swift`) and brace expansion that splits the stem from the extension
+(`Keychain.{swift,bak}`); read-vs-write discrimination INSIDE arbitrary interpreter code (a referenced file
+over-asks — the fail-SAFE direction). This closes the quote-blindness + O(n^2)-timeout fail-opens, the
+sweep's write classes, and catches accidental writes.
 """
 from __future__ import annotations
 
@@ -26,7 +38,7 @@ _CODE_SCAN_EXTS = ("swift", "entitlements", "plist", "pbxproj", "mobileprovision
 _CODE_FILE_RE = re.compile(r"[A-Za-z0-9._/-]+\.(?:%s)[A-Za-z0-9._-]*" % "|".join(_CODE_SCAN_EXTS))
 
 # Operators, longest first so `>>`/`>|`/`&&`/`||`/`|&`/`<<-` win over their shorter prefixes.
-_OPS = (">>", ">|", "&>>", "&>", "<<<", "<<-", "<<", "<&", ">&", "&&", "||", "|&", ";;", "|", "&", ";", "(", ")", "<", ">")
+_OPS = (">>", ">|", "&>>", "&>", "<<<", "<<-", "<<", "<&", ">&", "&&", "||", "|&", ";;", "|", "&", ";", "(", ")", "{", "}", "<", ">")
 
 
 def _parse_heredoc_delim(cmd: str, pos: int) -> tuple[str, int]:
@@ -71,16 +83,38 @@ def _consume_heredoc_body(cmd: str, pos: int, delim: str, strip_tabs: bool) -> t
     return "\n".join(body_lines), n
 
 _REDIR_WRITE = (">", ">>", ">|", "&>", "&>>")   # active redirect operators whose following WORD is written
+# every operator whose following WORD is a redirect TARGET/SOURCE (not a command operand): the write forms
+# above PLUS `>&`(file form) and the input forms `<`/`<&`/`<<<`. Used to drop redirect words from operand
+# lists so an INPUT redirect (`tee out < Keychain.swift`) does not over-ask on the read source.
+_REDIR_ANY = (">", ">>", ">|", "&>", "&>>", ">&", "<", "<&", "<<<")
 _STMT_SEP = (";", "&&", "||", "&", ";;", "\n")   # statement boundaries (NOT `|` — a pipeline stays together)
 
 # verb -> write-target rule
 _DELETE_ALL = {"rm", "unlink", "shred", "rmdir"}          # every non-flag operand
 _MOVE_ALL = {"mv", "rename"}                              # every non-flag operand (source removed + dest)
-_DEST_LAST = {"cp", "install", "ln"}                     # dest = -t DIR, else last non-flag operand
+_DEST_LAST = {"cp", "install", "ln", "ditto", "rsync"}   # dest = -t DIR, else last non-flag operand
 _TEE = {"tee"}                                           # every non-flag operand
+_TRUNCATE = {"truncate"}                                 # non-flag operands (skip -s SIZE / -r REF value args)
+_AWK = {"awk", "gawk", "mawk", "nawk"}                   # `print > "f"` inside the program string writes files
 _INLINE_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python2", "python3", "osascript"}
 _INLINE_ALWAYS = {"eval", "source", "."}                # run an arbitrary string/file -> scan it
-_PREFIXES = {"env", "command", "sudo", "nice", "ionice", "time", "builtin", "exec", "stdbuf", "setsid"}
+# command wrappers that exec a FOLLOWING command; the real write verb is the wrapped word. `_PREFIX_1POS`
+# additionally consume ONE leading non-option positional (timeout DURATION, chrt PRIORITY, taskset MASK).
+_PREFIXES = {"env", "command", "sudo", "nice", "ionice", "time", "builtin", "exec", "stdbuf", "setsid",
+             "nohup", "doas", "timeout", "arch", "xcrun", "unbuffer", "catchsegv", "chrt", "taskset", "run0"}
+# wrappers that ALWAYS carry exactly one leading positional before the verb (timeout DURATION, chrt PRIO).
+# taskset is handled separately: its MASK positional is present only in the bare form (absent with -c/-p).
+_PREFIX_1POS = {"timeout", "chrt"}
+# per-prefix options that consume a SEPARATE-form value arg (so the value is not mistaken for the verb).
+_PREFIX_VAL_OPTS = {
+    "env": {"-u", "-C", "-P", "--unset", "--chdir", "--path"},
+    "nice": {"-n", "--adjustment"},
+    "doas": {"-u", "-C", "-a"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "arch": {"-e", "-u"},
+    "taskset": {"-c", "-p", "--cpu-list", "--pid"},
+    "xcrun": {"--sdk", "--toolchain"},
+}
 
 
 def _tokenize(cmd: str) -> list[list[dict]]:
@@ -169,6 +203,28 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             w_dq.append("".join(buf_dq)); w_raw.append("".join(buf_raw)); in_word = True
             i = j + 1
             continue
+        # --- unquoted command substitution: keep `$(...)` / `` `...` `` as ONE word so an internal space
+        #     or operator is NOT statement structure and a name inside survives to the substring scan ---
+        if c == "`":
+            j = i + 1
+            while j < n and cmd[j] != "`":
+                j += 2 if (cmd[j] == "\\" and j + 1 < n) else 1
+            span = cmd[i:min(j + 1, n)]
+            w_dq.append(span); w_raw.append(span); in_word = True
+            i = j + 1
+            continue
+        if c == "$" and i + 1 < n and cmd[i + 1] == "(":
+            depth = 1; j = i + 2
+            while j < n and depth:
+                if cmd[j] == "(":
+                    depth += 1
+                elif cmd[j] == ")":
+                    depth -= 1
+                j += 1
+            span = cmd[i:j]
+            w_dq.append(span); w_raw.append(span); in_word = True
+            i = j
+            continue
         # --- operators (unquoted) ---
         matched = None
         for op in _OPS:
@@ -176,9 +232,15 @@ def _tokenize(cmd: str) -> list[list[dict]]:
                 matched = op
                 break
         if matched is not None:
-            if matched in ("(", ")") and in_word:
-                # a `(`/`)` ATTACHED to a word is part of a code token (`unlink(X.swift)`), NOT a subshell
-                # group — only a STANDALONE `( … )` (at a command boundary) is grouping to strip.
+            if matched in ("(", ")", "{", "}") and in_word:
+                # a `(`/`)`/`{`/`}` ATTACHED to a word is part of a code token (`unlink(X.swift)`) or brace
+                # expansion (`Keychain.swift{,.bak}`), NOT a group — only a STANDALONE one is a boundary.
+                w_dq.append(c); w_raw.append(c); in_word = True
+                i += 1
+                continue
+            if matched == "{" and any(t["k"] == "W" for t in toks):
+                # `{` in ARGUMENT position (a verb already present, e.g. `cp {a,b}.swift dst`) is brace
+                # expansion, not a `{ …; }` group — keep it as a literal word char.
                 w_dq.append(c); w_raw.append(c); in_word = True
                 i += 1
                 continue
@@ -192,6 +254,10 @@ def _tokenize(cmd: str) -> list[list[dict]]:
                     toks.append({"k": "O", "op": matched}); i += len(matched)
                 continue
             if matched in ("(", ")"):        # standalone grouping: statement boundary, drop the token
+                end_statement()
+            elif matched == "{":             # command-position `{ list; }` group open -> drop the boundary
+                pass                         # (arg-position `{` was kept literal above)
+            elif matched == "}":             # standalone group close -> drop the boundary (never a verb)
                 end_statement()
             elif matched in _STMT_SEP:
                 end_statement()
@@ -224,6 +290,8 @@ def _strip_prefixes(words: list[str]) -> list[str]:
         if base in _PREFIXES:
             probe = False
             split_string = False
+            val_consumed = False
+            val_opts = _PREFIX_VAL_OPTS.get(base, ())
             idx += 1
             # consume this prefix's option-args that take a following token
             while idx < len(words) and words[idx].startswith("-"):
@@ -231,15 +299,14 @@ def _strip_prefixes(words: list[str]) -> list[str]:
                 idx += 1
                 if base == "command" and opt in ("-v", "-V"):
                     probe = True                      # `command -v rm X` LOOKS UP rm; it does not run it
-                elif base == "env" and (opt in ("-S", "--split-string")):
+                elif base == "xcrun" and opt in ("-f", "--find"):
+                    probe = True                      # `xcrun -f rm` prints rm's PATH; it does not run it
+                elif base == "env" and opt in ("-S", "--split-string"):
                     split_string = True               # the REMAINING tokens are the command string
                     break
-                elif base == "env" and opt in ("-u", "-C", "-P", "--unset", "--chdir", "--path"):
+                elif opt in val_opts:                 # option that consumes a separate-form value arg
                     if idx < len(words):
-                        idx += 1                      # these env options consume a following arg
-                elif base == "nice" and opt in ("-n", "--adjustment"):
-                    if idx < len(words):
-                        idx += 1
+                        idx += 1; val_consumed = True
             if probe:
                 return []                             # a probe executes nothing -> no write target
             if split_string:
@@ -247,6 +314,11 @@ def _strip_prefixes(words: list[str]) -> list[str]:
                 if rest and " " in rest[0]:           # `env -S 'rm X'` -> the quoted split-string is the cmd
                     rest = rest[0].split() + rest[1:]
                 return _strip_prefixes(rest)          # the split command may carry its own VAR=val/env prefix
+            if idx < len(words) and not words[idx].startswith("-") and (
+                base in _PREFIX_1POS                          # `timeout DURATION cmd` / `chrt PRIO cmd`
+                or (base == "taskset" and not val_consumed)   # bare `taskset MASK cmd` (absent when -c/-p given)
+            ):
+                idx += 1
             continue
         break
     return words[idx:]
@@ -257,11 +329,15 @@ def _has_inline_code(words: list[str], verb: str) -> bool:
     Shells + python use `-c`; perl/ruby use `-e`/`-E`; node uses `-e`/`-p`/`--eval`/`--print`. A shell `-e`
     is errexit, NOT code. Handles clustered short flags (`-xc`, `-we`) and code adjacent to the flag
     (`-c"..."`)."""
-    if verb in ("perl", "ruby"):
+    if verb == "perl":                               # perl `-e` AND `-E` both run inline code
         code_flags = ("e", "E")
+    elif verb == "ruby":                             # ruby `-e` is code; `-E`/`-K` are ENCODING (take an arg)
+        code_flags = ("e",)
     elif verb in ("node", "nodejs"):
         code_flags = ("e", "p")
-    else:                                            # shells + python + osascript
+    elif verb == "osascript":                        # osascript's inline flag is `-e`, not `-c`
+        code_flags = ("e",)
+    else:                                            # shells + python
         code_flags = ("c",)
     for w in words[1:]:
         if not w.startswith("-") or w.startswith("--"):
@@ -284,6 +360,67 @@ def _emit_scan_words(words: list[str], out: list[str]) -> None:
     SUBSTRING of the de-quoted code, e.g. `open("OAuthService.swift","w")`)."""
     for w in words:
         out.extend(_CODE_FILE_RE.findall(w))
+
+
+def _emit_target(word: str, out: list[str]) -> None:
+    """Emit ONE write-target word: the literal (basename-matched by the guard) PLUS any extension-shaped
+    token embedded in it. The embedded scan gives old-grep parity for command-substitution / expansion
+    forms whose literal basename slips the policy: `$(printf Keychain.swift)` and `` `echo K.swift` `` (the
+    trailing `)`/`` ` `` glue on), a trailing subshell paren (`(rm K.swift)` -> `K.swift)`), and a brace
+    suffix (`K.swift{,.bak}`). A determined adversary can still hide a name (base64/indirection) — the
+    module is best-effort by contract."""
+    if word:
+        out.append(word)
+    out.extend(_CODE_FILE_RE.findall(word))
+
+
+def _is_fd_ref(word: str) -> bool:
+    """A `>&`/`<&` operand that is a file-DESCRIPTOR reference (`>&2`, `>&-`, `>&2-`), not a filename — so
+    `echo x >&2` / `2>&1` are fd dup/close (no file write), while `echo x >& log` truncates `log`."""
+    return word == "-" or re.fullmatch(r"\d+-?", word) is not None
+
+
+def _targets_nonflag(operands: list[str], out: list[str]) -> None:
+    """Emit every non-flag operand as a write target, honoring the `--` end-of-options marker: operands
+    after the first bare `--` are targets even if they start with `-` (`rm -- -Keychain.swift`)."""
+    after_dd = False
+    for o in operands:
+        if after_dd:
+            _emit_target(o, out)
+        elif o == "--":
+            after_dd = True
+        elif not o.startswith("-"):
+            _emit_target(o, out)
+
+
+_GIT_VAL_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+
+
+def _scan_git(operands: list[str], out: list[str]) -> None:
+    """git subcommands that WRITE/DELETE working-tree files: `git rm` (delete), `git mv` (source removed +
+    dest written), and the working-tree overwrites `git checkout [<ref>] -- <path>` / `git restore <path>`
+    (both discard local edits). `git checkout <branch>` with no pathspec is a branch switch -> no target."""
+    i, n = 0, len(operands)
+    while i < n and operands[i].startswith("-"):     # skip git's own global opts to reach the subcommand
+        i += 2 if operands[i] in _GIT_VAL_OPTS else 1
+    if i >= n:
+        return
+    sub, rest = operands[i], operands[i + 1:]
+    if sub in ("rm", "mv"):
+        _targets_nonflag(rest, out)                  # rm: every path; mv: source(s) removed + dest written
+    elif sub in ("checkout", "restore"):
+        if "--" in rest:                             # explicit pathspec after `--` -> all are targets
+            for o in rest[rest.index("--") + 1:]:
+                _emit_target(o, out)
+        elif sub == "restore":                       # `git restore <paths>` (no `--`) overwrites those paths
+            skip = False
+            for o in rest:
+                if skip:
+                    skip = False
+                elif o in ("-s", "--source", "--pathspec-from-file"):
+                    skip = True
+                elif not o.startswith("-"):
+                    _emit_target(o, out)
 
 
 # xargs's OWN options that take a separate-form argument (`-n 1`, `-I {}`, `--max-args 1`).
@@ -311,21 +448,35 @@ def _strip_xargs_opts(operands: list[str]) -> list[str]:
 
 
 def _scan_statement(stmt: list[dict], out: list[str]) -> None:
-    # 1) active-redirect targets apply regardless of verb (the WORD after >, >>, >|, &>, &>>)
+    # 1) redirect targets apply regardless of verb: the WORD after >, >>, >|, &>, &>> — and after `>&`
+    #    UNLESS it is an fd reference (`>&2`/`>&-`), which is a dup/close not a file write.
     for k in range(len(stmt) - 1):
         t = stmt[k]
-        if t["k"] == "O" and t["op"] in _REDIR_WRITE and stmt[k + 1]["k"] == "W":
-            out.append(stmt[k + 1]["dq"])
+        if t["k"] != "O" or stmt[k + 1]["k"] != "W":
+            continue
+        nxt = stmt[k + 1]["dq"]
+        if t["op"] in _REDIR_WRITE:
+            _emit_target(nxt, out)
+        elif t["op"] == ">&" and not _is_fd_ref(nxt):
+            _emit_target(nxt, out)                   # `>& file` redirects BOTH streams to (truncates) file
 
-    # 2) split the statement into pipeline-commands at `|`/`|&`, keep all words for the xargs scan
+    # 2) split the statement into pipeline-commands at `|`/`|&`. DROP the word after any redirect operator
+    #    (it is a redirect target/source, not a command operand) so an INPUT redirect (`tee out < K.swift`)
+    #    does not leak the read source into an operand list and over-ask. Keep all words for the xargs scan.
     all_words = [t["dq"] for t in stmt if t["k"] == "W"]
     heredoc_bodies = [t["body"] for t in stmt if t["k"] == "H"]
     cmds: list[list[str]] = [[]]
+    after_redir = False
     for t in stmt:
         if t["k"] == "O" and t["op"] in ("|", "|&"):
-            cmds.append([])
+            cmds.append([]); after_redir = False
+        elif t["k"] == "O":
+            after_redir = t["op"] in _REDIR_ANY
         elif t["k"] == "W":
-            cmds[-1].append(t["dq"])
+            if after_redir:
+                after_redir = False                  # this word is a redirect target/source, skip it
+            else:
+                cmds[-1].append(t["dq"])
 
     for words in cmds:
         words = _strip_prefixes(words)
@@ -335,34 +486,51 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
         operands = words[1:]
 
         if verb in _DELETE_ALL or verb in _MOVE_ALL or verb in _TEE:
-            out.extend(o for o in operands if not o.startswith("-"))
-        elif verb in _DEST_LAST:
-            tdir = ""; last = ""; skip = False
+            _targets_nonflag(operands, out)
+        elif verb in _TRUNCATE:
+            skip = False; after_dd = False
             for o in operands:
                 if skip:
-                    tdir = o; skip = False; continue
-                if o in ("-t", "--target-directory"):
+                    skip = False
+                elif after_dd:
+                    _emit_target(o, out)
+                elif o == "--":
+                    after_dd = True
+                elif o in ("-s", "--size", "-r", "--reference"):
+                    skip = True
+                elif not o.startswith("-"):
+                    _emit_target(o, out)
+        elif verb in _DEST_LAST:
+            tdir = ""; last = ""; skip = False; after_dd = False
+            for o in operands:
+                if skip:
+                    tdir = o; skip = False
+                elif after_dd:
+                    last = o
+                elif o == "--":
+                    after_dd = True
+                elif o in ("-t", "--target-directory"):
                     skip = True
                 elif o.startswith("--target-directory="):
                     tdir = o.split("=", 1)[1]
-                elif o.startswith("-"):
-                    pass
-                else:
+                elif not o.startswith("-"):
                     last = o
-            out.append(tdir or last)
+            _emit_target(tdir or last, out)
         elif verb == "touch":
-            skip = False
+            skip = False; after_dd = False
             for o in operands:
                 if skip:
-                    skip = False; continue
-                if o in ("-r", "--reference", "-d", "--date", "-t"):
+                    skip = False
+                elif after_dd:
+                    _emit_target(o, out)
+                elif o == "--":
+                    after_dd = True
+                elif o in ("-r", "--reference", "-d", "--date", "-t"):
                     skip = True
                 elif o.startswith("--reference=") or o.startswith("--date="):
                     pass
-                elif o.startswith("-"):
-                    pass
-                else:
-                    out.append(o)
+                elif not o.startswith("-"):
+                    _emit_target(o, out)
         elif verb == "sed":
             inplace = any(
                 o == "--in-place" or o.startswith("--in-place=")
@@ -370,17 +538,50 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
                 for o in operands
             )
             if inplace:
-                out.extend(o for o in operands if not o.startswith("-"))
+                _targets_nonflag(operands, out)
+        elif verb == "patch":
+            emit_next = False; skip = False
+            for o in operands:
+                if emit_next:
+                    _emit_target(o, out); emit_next = False   # `-o OUT` value is the written output file
+                elif skip:
+                    skip = False
+                elif o in ("-o", "--output"):
+                    emit_next = True
+                elif o in ("-i", "--input", "-p", "--strip", "-B", "--prefix", "-D", "--ifdef",
+                           "-r", "--reject-file", "-F", "--fuzz", "-z", "--suffix", "-Y", "--basename-prefix"):
+                    skip = True
+                elif not o.startswith("-"):
+                    _emit_target(o, out)                       # the patched file (modified in place)
+        elif verb == "git":
+            _scan_git(operands, out)
+        elif verb in _AWK:
+            prog = None; uses_progfile = False; skip = False
+            for o in operands:
+                if skip:
+                    skip = False
+                elif o in ("-f", "--file"):
+                    uses_progfile = True; skip = True
+                elif o in ("-v", "--assign"):
+                    skip = True
+                elif o.startswith("-f"):
+                    uses_progfile = True
+                elif o.startswith("-"):
+                    pass
+                elif prog is None:
+                    prog = o                                  # first non-option operand is the awk program
+            if prog and not uses_progfile and ">" in prog:    # `print > "f"` / `printf >> "f"` write files
+                _emit_scan_words([prog], out)
         elif verb == "dd":
             for o in operands:
                 if o.startswith("of="):
-                    out.append(o[3:])
+                    _emit_target(o[3:], out)
         elif verb == "find":
             destructive = any(o in ("-delete", "-exec", "-execdir", "-ok", "-okdir") for o in operands)
             if destructive:
                 for m in range(len(operands) - 1):
                     if operands[m] in ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"):
-                        out.append(operands[m + 1])
+                        _emit_target(operands[m + 1], out)
         elif verb in ("xargs",):
             sub = _strip_prefixes(_strip_xargs_opts(operands))   # skip xargs's own options, THEN wrappers
             subverb = _basecmd(sub[0]) if sub else ""
@@ -391,7 +592,7 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
         elif verb in _INLINE_ALWAYS:
             _emit_scan_words(operands, out)
             _emit_scan_words(heredoc_bodies, out)
-        elif verb in _INLINE_SHELLS or verb in ("perl", "nodejs", "node"):
+        elif verb in _INLINE_SHELLS or verb in ("perl", "ruby", "nodejs", "node"):
             # inline code via a -c/-e flag OR a heredoc body (`python3 <<PY … PY`) feeding the interpreter
             if _has_inline_code(words, verb) or heredoc_bodies:
                 _emit_scan_words(operands, out)

@@ -241,6 +241,16 @@ assert_contains "clobber >| -> ask" "$(guard_bash '"echo x >| Keychain.swift"')"
 assert_contains "find -delete -> ask" "$(guard_bash "\"find . -name 'Keychain.swift' -delete\"")" '"permissionDecision":"ask"'
 assert_contains "xargs rm from pipe -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs rm\"")" '"permissionDecision":"ask"'
 assert_contains "xargs -n 1 rm (options before verb) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs -n 1 rm\"")" '"permissionDecision":"ask"'
+# Round-4 sweep (codex review of #53) end-to-end guard arms:
+assert_contains ">& file redirect -> ask" "$(guard_bash '"echo hi >& Keychain.swift"')" '"permissionDecision":"ask"'
+assert_empty    ">&2 fd-dup (not a write) -> no decision" "$(guard_bash '"echo err >&2"')"
+assert_contains "command-sub in rm operand -> ask" "$(guard_bash "\"rm \\\"\$(printf Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "-- end-of-options rm -> ask" "$(guard_bash '"rm -- -Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "timeout wrapper rm -> ask" "$(guard_bash '"timeout 5 rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "brace group { rm; } -> ask" "$(guard_bash '"{ rm Keychain.swift; }"')" '"permissionDecision":"ask"'
+assert_contains "git checkout -- path -> ask" "$(guard_bash '"git checkout -- Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "ruby -e inline code -> ask" "$(guard_bash "\"ruby -e 'File.delete(\\\"Keychain.swift\\\")'\"")" '"permissionDecision":"ask"'
+assert_empty    "input-redirect read source (tee out < sensitive) -> no decision" "$(guard_bash '"tee out.log < Keychain.swift"')"
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \
