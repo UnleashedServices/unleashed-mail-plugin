@@ -11,9 +11,11 @@ SCRIPT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "review",
 
 XCODEBUILD_MOCK = textwrap.dedent("""\
     #!/usr/bin/env bash
-    # $1 is the subcommand: build | test
-    if [ "$1" = "build" ]; then echo "mock build output"; exit "${MOCK_BUILD_RC:-0}"; fi
-    if [ "$1" = "test" ]; then echo "mock test output"; exit "${MOCK_TEST_RC:-0}"; fi
+    # $1 is the subcommand. B6 (COREDEV-2503): the script compiles ONCE via `build-for-testing`, then runs
+    # `test-without-building` (reuse) — NOT the plain `build`+`test` pair that recompiled twice.
+    [ -n "${MOCK_LOG:-}" ] && printf '%s\\n' "$1" >> "$MOCK_LOG"
+    if [ "$1" = "build-for-testing" ]; then echo "mock build output"; exit "${MOCK_BUILD_RC:-0}"; fi
+    if [ "$1" = "test-without-building" ]; then echo "mock test output"; exit "${MOCK_TEST_RC:-0}"; fi
     exit 0
 """)
 SWIFTLINT_MOCK = textwrap.dedent("""\
@@ -58,6 +60,19 @@ class BuildVerifyTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         for gate in ("✅ build", "✅ lint", "✅ tests"):
             self.assertIn(gate, r.stdout)
+
+    def test_b6_compiles_once_via_build_for_testing(self):
+        # COREDEV-2503 B6: the plain `build`+`test` pair recompiled everything twice. The script must use
+        # `build-for-testing` (compile app+tests once) then `test-without-building` (reuse) — and each
+        # failure must still propagate (the RC mocks below prove they are the invoked subcommands).
+        log = os.path.join(self.mock, "xcodebuild.log")
+        r = self.run_bv(MOCK_LOG=log)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        invoked = [ln for ln in open(log, encoding="utf-8").read().splitlines() if ln]
+        self.assertIn("build-for-testing", invoked)
+        self.assertIn("test-without-building", invoked)
+        self.assertNotIn("build", invoked, "no bare recompiling `build` subcommand")
+        self.assertNotIn("test", invoked, "no bare recompiling `test` subcommand")
 
     def test_build_fail_exits_nonzero(self):
         r = self.run_bv(MOCK_BUILD_RC=65)

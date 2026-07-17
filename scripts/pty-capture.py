@@ -360,35 +360,39 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
     return exit_status
 
 
-if __name__ == "__main__":
-    # argv shape: pty-capture.py <out-path> -- <command> [args...]
-    argv = sys.argv[1:]
-    if "--" not in argv:
-        raise SystemExit(
-            "usage: pty-capture.py <out-path> -- <command> [args...]"
-        )
-    sep = argv.index("--")
-    pre = argv[:sep]          # tokens before `--` (optional out-path + --timeout N)
-    command = argv[sep + 1:]  # the command to run in the PTY
-    # Parse an optional `--timeout SECONDS` and at most one out-path token. Rejecting
-    # extras avoids silently dropping a misplaced flag — or worse, treating it as the out-path.
+def _parse_timeout_value(val: str) -> float:
+    try:
+        t = float(val)
+    except ValueError:
+        raise SystemExit(f"error: --timeout: invalid number '{val}'")
+    if not (0 < t < float("inf")):
+        # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the deadline check
+        # `elapsed >= timeout` is always False -> the timeout silently no-ops.
+        raise SystemExit("error: --timeout must be a positive, finite number of seconds")
+    return t
+
+
+def parse_pre_args(pre: list[str]) -> "tuple[float | None, str]":
+    """Parse the tokens BEFORE `--`: an optional timeout in either `--timeout SECONDS` (space) or
+    `--timeout=SECONDS` (equals) form, plus at most one out-path. Returns (timeout, out_path).
+
+    B1 (COREDEV-2503): the equals form was previously unrecognized and fell into `positional` as the
+    out-path — so a caller passing `--timeout=600` got an UNBOUNDED run (and its real out-path became a
+    'too many arguments' error, or was silently replaced). Both forms now share `_parse_timeout_value`.
+    """
     timeout = None
-    positional = []
+    positional: list[str] = []
     i = 0
     while i < len(pre):
         if pre[i] == "--timeout":
             if i + 1 >= len(pre):
                 raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [out-path] -- <cmd>\n"
                                  "error: --timeout requires a value")
-            try:
-                timeout = float(pre[i + 1])
-            except ValueError:
-                raise SystemExit(f"error: --timeout: invalid number '{pre[i + 1]}'")
-            if not (0 < timeout < float("inf")):
-                # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the
-                # deadline check `elapsed >= timeout` is always False -> the timeout silently no-ops.
-                raise SystemExit("error: --timeout must be a positive, finite number of seconds")
+            timeout = _parse_timeout_value(pre[i + 1])
             i += 2
+        elif pre[i].startswith("--timeout="):
+            timeout = _parse_timeout_value(pre[i][len("--timeout="):])
+            i += 1
         else:
             positional.append(pre[i])
             i += 1
@@ -397,5 +401,16 @@ if __name__ == "__main__":
             "usage: pty-capture.py [--timeout SECONDS] [out-path] -- <command> [args...]\n"
             f"error: too many arguments before '--': {positional}"
         )
-    out = positional[0] if positional else "/tmp/pty-out.txt"
-    sys.exit(main(out, command, timeout))
+    return timeout, (positional[0] if positional else "/tmp/pty-out.txt")
+
+
+if __name__ == "__main__":
+    # argv shape: pty-capture.py [--timeout SECONDS|--timeout=SECONDS] [out-path] -- <command> [args...]
+    argv = sys.argv[1:]
+    if "--" not in argv:
+        raise SystemExit(
+            "usage: pty-capture.py <out-path> -- <command> [args...]"
+        )
+    sep = argv.index("--")
+    _timeout, _out = parse_pre_args(argv[:sep])
+    sys.exit(main(_out, argv[sep + 1:], _timeout))

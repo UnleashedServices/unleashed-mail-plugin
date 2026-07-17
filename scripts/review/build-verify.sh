@@ -25,7 +25,10 @@ BASELINE="${BASELINE:-swiftlint-baseline.json}"
 CHANGED="$(cat)"
 
 # --- 1. Build — must succeed (paths contain spaces; quote the scheme) ---
-xcodebuild build -scheme "$SCHEME" -destination "$DESTINATION" 2>&1 | tail -10
+# B6 (COREDEV-2503): `build-for-testing` compiles the app AND the test targets ONCE; step 3 then runs
+# `test-without-building`, so the sources are compiled a single time (the plain `build` + `test` pair
+# recompiled everything twice).
+xcodebuild build-for-testing -scheme "$SCHEME" -destination "$DESTINATION" 2>&1 | tail -10
 BUILD=$?; [ "$BUILD" -eq 0 ] && echo "✅ build" || echo "❌ build FAILED (exit $BUILD)"
 
 # --- 2. SwiftLint — both arms of the merge gate ---
@@ -46,8 +49,8 @@ swiftlint lint --strict --baseline "$BASELINE" --quiet 2>&1 | tail -20; BASELINE
 LINT=$(( CHANGED_LINT | BASELINE_LINT ))
 [ "$LINT" -eq 0 ] && echo "✅ lint" || echo "❌ lint FAILED (changed=$CHANGED_LINT baseline=$BASELINE_LINT)"
 
-# --- 3. Tests — must pass ---
-xcodebuild test -scheme "$SCHEME" -destination "$DESTINATION" 2>&1 | tail -30
+# --- 3. Tests — must pass (reuse the build-for-testing product; do NOT recompile — B6) ---
+xcodebuild test-without-building -scheme "$SCHEME" -destination "$DESTINATION" 2>&1 | tail -30
 TEST=$?; [ "$TEST" -eq 0 ] && echo "✅ tests" || echo "❌ tests FAILED (exit $TEST)"
 
 # --- 4. Missing-test-file scan (non-gating warning) ---

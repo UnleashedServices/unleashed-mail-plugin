@@ -112,3 +112,30 @@ class WritePrivateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseTimeoutEqualsForm(unittest.TestCase):
+    """COREDEV-2503 B1: `--timeout=N` (equals form) was unrecognized and fell into the out-path, so a caller
+    using `=N` got an UNBOUNDED run. Both forms now parse to the same timeout via parse_pre_args."""
+
+    def setUp(self):
+        self.mod = _load()
+
+    def test_equals_form_sets_timeout(self):
+        t, out = self.mod.parse_pre_args(["--timeout=5", "/tmp/o.txt"])
+        self.assertEqual(t, 5.0)
+        self.assertEqual(out, "/tmp/o.txt")
+
+    def test_space_form_still_works(self):
+        t, _ = self.mod.parse_pre_args(["--timeout", "5", "/tmp/o.txt"])
+        self.assertEqual(t, 5.0)
+
+    def test_equals_form_validates_like_space_form(self):
+        for bad in ("--timeout=abc", "--timeout=0", "--timeout=-1", "--timeout=inf", "--timeout=nan"):
+            with self.assertRaises(SystemExit):
+                self.mod.parse_pre_args([bad, "/tmp/o.txt"])
+
+    def test_equals_form_does_not_leak_into_outpath(self):
+        # before B1 `--timeout=600` became the out-path (unbounded run + a 'too many arguments' error)
+        t, out = self.mod.parse_pre_args(["--timeout=600", "/real/out.txt"])
+        self.assertEqual((t, out), (600.0, "/real/out.txt"))
