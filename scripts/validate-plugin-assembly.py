@@ -118,6 +118,7 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
     fm: dict[str, str] = {}
     i, n = 1, len(lines)
     current: str | None = None
+    block_scalar_keys: set[str] = set()
     while i < n:
         line = lines[i]
         if line.strip() == "---":
@@ -145,21 +146,28 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
                 if hashpos != -1:
                     val = val[:hashpos].strip()
             fm[key] = val  # may be "", ">", "|", or an inline value
+            if val in (">", "|", ">-", "|-"):
+                block_scalar_keys.add(key)           # `key: |`/`>` body is PROSE — space-join, never comma
             current = key
         elif current is not None and line.strip() and line[:1].isspace():
             # continuation / block-scalar body -> the key has content
             body = line.strip()
-            if body.startswith("-"):                 # block-list item: drop a trailing YAML inline comment
+            is_list_item = body.startswith("-") and current not in block_scalar_keys
+            if is_list_item:                         # block-list item: drop a trailing YAML inline comment
                 hp = body.find(" #")                 # (`- Task # legacy`) so it doesn't hide a stale tool
                 if hp != -1:
                     body = body[:hp].rstrip()
             if fm.get(current, "") in ("", ">", "|", ">-", "|-"):
                 fm[current] = body
-            else:
-                # ACCUMULATE every subsequent indented item, comma-joined — a multi-line YAML block list
-                # (`tools:\n  - Read\n  - Task`) otherwise recorded only its FIRST item, so a stale tool
-                # past line 1 escaped validation (gemini review of #53). Matches the flow-list form.
+            elif is_list_item:
+                # ACCUMULATE every subsequent block-LIST item, comma-joined — a multi-line YAML block list
+                # (`tools:\n  - Read\n  - Task`) otherwise recorded only its FIRST item, so a stale tool past
+                # line 1 escaped validation (gemini #53). Matches the flow-list form.
                 fm[current] = fm[current] + ", " + body
+            else:
+                # a block SCALAR (`description: |`) or wrapped value: SPACE-join, not comma — comma-joining
+                # prose corrupts the text (gemini review of #53).
+                fm[current] = fm[current] + " " + body
         i += 1
     return None  # no closing '---'
 

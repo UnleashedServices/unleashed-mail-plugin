@@ -44,6 +44,19 @@ class StaleToolRejectTest(unittest.TestCase):
     def test_agent_is_accepted(self):
         self.assertEqual(self._problems("Read, Agent, Grep"), [], "`Agent` is the valid dispatcher tool")
 
+    def test_block_scalar_description_not_comma_corrupted(self):
+        # gemini review of #53: the block-list accumulation must NOT comma-join a `description: |` block
+        # scalar (that corrupts prose). Space-join scalars; comma-join only real block-list items.
+        md = "---\nname: x\ndescription: |\n  Line one.\n  Line two.\nmodel: inherit\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        self.assertEqual(fm["description"], "Line one. Line two.")
+        self.assertNotIn(",", fm["description"])
+        # tools block list is unaffected (still comma-joined + Task caught)
+        md2 = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task\n---\nb\n"
+        fm2 = vpa.parse_frontmatter(md2); p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm2, p)
+        self.assertTrue(any("stale" in x for x in p))
+
     def test_stale_task_case_insensitive(self):
         # gemini review of #53: a mixed-case stale dispatcher must still be rejected
         for tools in ("task", "TASK", "tAsK", "Read, task", "[TASK]", "- task"):
