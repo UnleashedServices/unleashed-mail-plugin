@@ -244,6 +244,28 @@ class SweepRound5(unittest.TestCase):
         self.assertEqual(targets("patch --output=Keychain.swift < p.diff"), ["Keychain.swift"])
 
 
+class SweepRound6(unittest.TestCase):
+    """codex review of #53 (round 6)."""
+
+    def test_patch_attached_short_output_reject(self):
+        self.assertEqual(targets("patch -oKeychain.swift < change.diff"), ["Keychain.swift"])
+        self.assertEqual(targets("patch -rKeychain.swift < change.diff"), ["Keychain.swift"])
+
+    def test_xargs_sed_inplace_child(self):
+        for cmd in ("printf 'Keychain.swift' | xargs sed -i 's/a/b/'",
+                    "printf 'Keychain.swift' | xargs sed -i.bak 's/a/b/'",
+                    "printf 'Keychain.swift' | xargs -n1 sed -i 's/a/b/'",
+                    "printf 'Keychain.swift' | xargs truncate -s 0"):
+            self.assertIn("Keychain.swift", targets(cmd), cmd)
+
+    def test_xargs_read_child_still_not_flagged(self):
+        # sed WITHOUT -i streams to stdout (read); grep/cat read — must NOT ask
+        for cmd in ("printf 'Keychain.swift' | xargs sed 's/a/b/'",
+                    "printf 'Keychain.swift' | xargs grep foo",
+                    "printf 'Keychain.swift' | xargs cat"):
+            self.assertNotIn("Keychain.swift", targets(cmd), cmd)
+
+
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):
         big = "echo " + ("a" * 80000)

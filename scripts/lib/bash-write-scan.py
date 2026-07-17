@@ -466,6 +466,27 @@ def _norm_interp(verb: str) -> str:
     return m.group(1) if m and m.group(1) in _INTERP_STEMS else verb
 
 
+def _sed_is_inplace(operands: list[str]) -> bool:
+    """True if a sed invocation edits its file operands IN PLACE (`-i`, `--in-place`, clustered `-ni`)."""
+    return any(
+        o == "--in-place" or o.startswith("--in-place=")
+        or (o.startswith("-") and not o.startswith("--") and "i" in o[1:])
+        for o in operands
+    )
+
+
+def _xargs_child_writes(sub: list[str]) -> bool:
+    """True if an xargs CHILD command writes/deletes its (stdin-supplied) file operands, so every literal
+    word in the pipeline must be treated as a candidate — the operands are not statically visible. Covers
+    delete/move/tee/dest-copy AND in-place `sed`/`truncate` (codex review of #53)."""
+    if not sub:
+        return False
+    subverb = _basecmd(sub[0])
+    if subverb in _DELETE_ALL or subverb in _MOVE_ALL or subverb in _TEE or subverb in _DEST_LAST or subverb in _TRUNCATE:
+        return True
+    return subverb == "sed" and _sed_is_inplace(sub[1:])
+
+
 def _scan_command(words: list[str], out: list[str], all_words: list[str], heredoc_bodies: list[str]) -> None:
     """Extract the write targets of ONE command (a pipeline stage, or a `find -exec` sub-command). Applies
     prefix/keyword stripping, then dispatches on the verb."""
@@ -523,12 +544,7 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
             elif not o.startswith("-"):
                 _emit_target(o, out)
     elif verb == "sed":
-        inplace = any(
-            o == "--in-place" or o.startswith("--in-place=")
-            or (o.startswith("-") and not o.startswith("--") and "i" in o[1:])
-            for o in operands
-        )
-        if inplace:
+        if _sed_is_inplace(operands):
             _targets_nonflag(operands, out)
     elif verb == "patch":
         emit_next = False; skip = False
@@ -541,6 +557,8 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                 emit_next = True                              # output file / hunk-failure reject file
             elif o.startswith("--output=") or o.startswith("--reject-file="):
                 _emit_target(o.split("=", 1)[1], out)
+            elif (o.startswith("-o") or o.startswith("-r")) and len(o) > 2:
+                _emit_target(o[2:], out)                     # attached short form `-oFILE`/`-rFILE`
             elif o in ("-i", "--input", "-p", "--strip", "-B", "--prefix", "-D", "--ifdef",
                        "-F", "--fuzz", "-z", "--suffix", "-Y", "--basename-prefix", "-V", "--version-control"):
                 skip = True
@@ -592,8 +610,7 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                 m += 1
     elif verb == "xargs":
         sub = _strip_prefixes(_strip_xargs_opts(operands))   # skip xargs's own options, THEN wrappers
-        subverb = _basecmd(sub[0]) if sub else ""
-        if subverb in _DELETE_ALL or subverb in _MOVE_ALL or subverb in _TEE or subverb in _DEST_LAST:
+        if _xargs_child_writes(sub):
             # input words come from the pipe/stdin (not statically visible) — fail closed by treating
             # every literal word in the whole pipeline as a candidate.
             out.extend(all_words)

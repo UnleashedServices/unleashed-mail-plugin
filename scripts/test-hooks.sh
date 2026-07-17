@@ -251,6 +251,9 @@ assert_contains "brace group { rm; } -> ask" "$(guard_bash '"{ rm Keychain.swift
 assert_contains "git checkout -- path -> ask" "$(guard_bash '"git checkout -- Keychain.swift"')" '"permissionDecision":"ask"'
 assert_contains "ruby -e inline code -> ask" "$(guard_bash "\"ruby -e 'File.delete(\\\"Keychain.swift\\\")'\"")" '"permissionDecision":"ask"'
 assert_empty    "input-redirect read source (tee out < sensitive) -> no decision" "$(guard_bash '"tee out.log < Keychain.swift"')"
+assert_contains "patch -oFILE attached short -> ask" "$(guard_bash '"patch -oKeychain.swift < change.diff"')" '"permissionDecision":"ask"'
+assert_contains "xargs sed -i (in-place child) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed -i 's/a/b/'\"")" '"permissionDecision":"ask"'
+assert_empty    "xargs sed (no -i, read) -> no decision" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed 's/a/b/'\"")"
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \
