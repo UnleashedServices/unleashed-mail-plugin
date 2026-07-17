@@ -56,10 +56,11 @@ REPO_HASH="$(marker_repo_hash)"
 # retry and wedge the session. (Loop-guard #1, stop_hook_active, still prevents the in-loop wedge.)
 SESSION_KEY="$(hook_str session_id)"
 [ -n "$SESSION_KEY" ] || SESSION_KEY="$(hook_str transcript_path)"
-# F5 (codex review of #53): an EMPTY session key (both fields absent) must NOT share a sentinel — a
+# F5 (codex+gemini review of #53): an EMPTY session key (both fields absent) must NOT share a sentinel — a
 # hash("") would collide EVERY anonymous session into one file, so the first anonymous block would unblock
-# all later ones, reviving the cross-session bypass. With no identity, use NO sentinel and block fail-safe
-# each time (loop-guard #1 / stop_hook_active still prevents an in-loop wedge).
+# all later ones (cross-session bypass). With no identity, use NO sentinel; the enforce path below then
+# falls through to the warn-log (fail OPEN) rather than blocking — no shared file to bypass through, and no
+# wedge (the loop-guard cannot be durably recorded, so blocking would re-fire on every later Stop).
 if [ -n "$SESSION_KEY" ]; then
     SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
     SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
@@ -99,16 +100,14 @@ else
 fi
 REASON="Last ${BLOCKED_KIND} check FAILED (${BLOCKED_AGE}s ago, commit ${HEAD_COMMIT}). Fix it before stopping. Run: ${REMEDY}"
 
-if [ "$MODE" = "enforce" ]; then
-    if [ -z "$SENTINEL" ]; then
-        # No session identity: cannot record a per-session loop-guard, and a shared one would be a
-        # cross-session bypass. Block this Stop WITHOUT persisting any sentinel (fail-safe).
-        hook_emit_block "$REASON"
-        exit 0
-    fi
-    # Only block once loop-guard #2 is durably recorded. If the sentinel can't be
-    # written (data dir unwritable/full), DON'T block — otherwise a later Stop on
-    # this same commit could keep re-blocking. Fail open to the warn-log path.
+# Block only when loop-guard #2 can be DURABLY, per-session recorded. Skip the block (fall through to the
+# warn-log path — fail OPEN) when there is no session identity to key the sentinel (anonymous payload) OR
+# the sentinel can't be written (dir unwritable/full) — otherwise a later Stop on this commit keeps
+# re-blocking (a wedge). This satisfies BOTH review bots: codex #53 flagged the shared empty-key sentinel
+# (a cross-session bypass) — with no identity NOTHING is written or read, so there is no shared file to
+# bypass through; gemini #53 flagged that BLOCKING anonymously wedges — failing open avoids the wedge and
+# matches the gate's own "can't record the loop-guard -> don't block" design.
+if [ "$MODE" = "enforce" ] && [ -n "$SENTINEL" ]; then
     if printf '%s' "$HEAD_COMMIT" > "$SENTINEL" 2>/dev/null; then
         chmod 600 "$SENTINEL" 2>/dev/null || true   # F5: not world-writable/plantable
         hook_emit_block "$REASON"

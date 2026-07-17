@@ -239,6 +239,17 @@ class SweepRound5(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("git restore Keychain.swift"))
         self.assertIn("OAuthService.swift", targets("git checkout -- OAuthService.swift"))
 
+    def test_git_checkout_named_file_without_dashdash(self):
+        # gemini review of #53: `git checkout <file>` (no `--`) discards local edits -> a write. Distinguish
+        # a file pathspec from a branch name by the file-shaped heuristic.
+        self.assertIn("Keychain.swift", targets("git checkout Keychain.swift"))
+        self.assertIn("OAuthService.swift", targets("git checkout HEAD OAuthService.swift"))
+        self.assertIn("Info.plist", targets("git checkout Info.plist"))
+        # branch switches / branch creation must NOT be treated as file writes
+        self.assertEqual(targets("git checkout main"), [])
+        self.assertEqual(targets("git checkout -b Keychain.swift"), [])   # creating a branch, not a file
+        self.assertEqual(targets("git checkout feature/foo"), [])
+
     def test_patch_attached_output_only_via_equals_branch(self):
         # the ATTACHED `--output=FILE` form has no positional to fall back on — proves the `=` branch
         self.assertEqual(targets("patch --output=Keychain.swift < p.diff"), ["Keychain.swift"])

@@ -406,12 +406,22 @@ def _targets_nonflag(operands: list[str], out: list[str]) -> None:
 
 
 _GIT_VAL_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+# `git checkout`/`restore` options that consume a following NAME (a branch/ref/file, NOT a pathspec target).
+_GIT_CO_VAL_OPTS = {"-s", "--source", "--pathspec-from-file", "-b", "-B", "-t", "--track", "--orphan", "--conflict"}
+
+
+def _looks_like_code_file(word: str) -> bool:
+    """True if a word carries a guard-relevant file extension — used to tell a `git checkout` PATHSPEC
+    (`git checkout Keychain.swift`, overwrites the file) from a BRANCH/ref name (`git checkout main`)."""
+    return _CODE_FILE_RE.search(word) is not None
 
 
 def _scan_git(operands: list[str], out: list[str]) -> None:
     """git subcommands that WRITE/DELETE working-tree files: `git rm` (delete), `git mv` (source removed +
-    dest written), and the working-tree overwrites `git checkout [<ref>] -- <path>` / `git restore <path>`
-    (both discard local edits). `git checkout <branch>` with no pathspec is a branch switch -> no target."""
+    dest written), and the working-tree overwrites `git checkout [<ref>] [--] <path>` / `git restore
+    <path>` (both discard local edits). A bare `git checkout <branch>` is a branch switch — no target; so
+    without `--`, a checkout operand is treated as a pathspec only when it LOOKS like a file (gemini review
+    of #53). A broad `.`/directory pathspec names no file and is out of scope (see the module docstring)."""
     i, n = 0, len(operands)
     while i < n and operands[i].startswith("-"):     # skip git's own global opts to reach the subcommand
         i += 2 if operands[i] in _GIT_VAL_OPTS else 1
@@ -424,14 +434,14 @@ def _scan_git(operands: list[str], out: list[str]) -> None:
         if "--" in rest:                             # explicit pathspec after `--` -> all are targets
             for o in rest[rest.index("--") + 1:]:
                 _emit_target(o, out)
-        elif sub == "restore":                       # `git restore <paths>` (no `--`) overwrites those paths
-            skip = False
+        else:                                        # no `--`: emit pathspec operands (restore: all;
+            skip = False                             # checkout: only file-shaped ones, to skip branch names)
             for o in rest:
                 if skip:
                     skip = False
-                elif o in ("-s", "--source", "--pathspec-from-file"):
+                elif o in _GIT_CO_VAL_OPTS:
                     skip = True
-                elif not o.startswith("-"):
+                elif not o.startswith("-") and (sub == "restore" or _looks_like_code_file(o)):
                     _emit_target(o, out)
 
 

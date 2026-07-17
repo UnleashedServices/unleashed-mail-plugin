@@ -330,10 +330,11 @@ assert_contains "build-verify reads stdin command" "$OUT" "xcodebuild build dete
 
 echo "== stop-quality-marker-gate (Item 4) =="
 
-# 12. Fresh failing marker, commit matches -> block (enforce).
+# 12. Fresh failing marker, commit matches -> block (enforce). Uses an identified session (production Stop
+#     payloads always carry session_id; an anonymous payload now fails OPEN — see the F5 (d) cases).
 reset_markers
 marker_write lint fail
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"T12"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_contains "fresh fail -> block" "$OUT" '"decision":"block"'
 if is_valid_json "$OUT"; then ok; else fail "block -> valid JSON"; fi
 assert_not_contains "block is root-level (not nested)" "$OUT" 'hookSpecificOutput'
@@ -386,12 +387,15 @@ marker_write lint pass          # clears ALL repo-matching session sentinels
 marker_write lint fail          # fresh failure again
 assert_contains "F5 reset: S1 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
 assert_contains "F5 reset: S2 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
-# (d) codex #53 round-5: an ANONYMOUS Stop (no session_id AND no transcript_path) must NOT share a
-#     sentinel — an empty key would hash all anonymous sessions to one file, so the 1st block would unblock
-#     every later one. Both consecutive anonymous Stops must block (no cross-session-shared bypass).
+# (d) codex+gemini #53: an ANONYMOUS Stop (no session_id AND no transcript_path) has no identity to key a
+#     per-session sentinel. It must NOT share one (codex: a hash("") collision is a cross-session bypass)
+#     AND must NOT block-and-wedge (gemini: a durable loop-guard can't be recorded). Resolution: fail OPEN
+#     (fall through to warn-log), so NEITHER anonymous Stop blocks and no shared sentinel is ever written.
 reset_markers; marker_write lint fail
-assert_contains "F5 anon Stop #1 -> block" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
-assert_contains "F5 anon Stop #2 (no shared-sentinel bypass) -> block again" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
+assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers
@@ -424,7 +428,7 @@ for _t in xcodebuild swiftlint; do
 done
 marker_write build fail
 T0="$(date +%s 2>/dev/null || echo 0)"
-OUT="$(printf '{"stop_hook_active":false}' \
+OUT="$(printf '{"stop_hook_active":false,"session_id":"TBUILD"}' \
     | PATH="$SHIMDIR:$PATH" UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 T1="$(date +%s 2>/dev/null || echo 0)"
 assert_contains "build fail -> block" "$OUT" '"decision":"block"'
