@@ -44,6 +44,16 @@ class StaleToolRejectTest(unittest.TestCase):
     def test_agent_is_accepted(self):
         self.assertEqual(self._problems("Read, Agent, Grep"), [], "`Agent` is the valid dispatcher tool")
 
+    def test_stale_task_in_yaml_list_forms(self):
+        # audit of #53: `val.split(",")` alone missed the YAML flow-list and block-list forms
+        for tools in ("[Task]", "[Task, Read]", "[Read, Task]", "- Task"):
+            p = self._problems(tools)
+            self.assertTrue(any("stale" in x or "Agent" in x for x in p),
+                            f"`Task` in list form {tools!r} must be rejected: {p}")
+
+    def test_valid_list_form_is_accepted(self):
+        self.assertEqual(self._problems("[Read, Agent]"), [], "a valid flow-list must pass")
+
 
 if __name__ == "__main__":
     unittest.main()

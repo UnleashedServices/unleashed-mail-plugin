@@ -375,6 +375,43 @@ class CRLF(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("cat <<EOF > /tmp/safe\ndata\nEOF\nrm Keychain.swift\n"))
 
 
+class AuditPR53(unittest.TestCase):
+    """External audit of #53: further lexer bypasses + a quadratic-timeout regression."""
+
+    def test_heredoc_delimiter_full_word(self):
+        # A4: bash accepts `<<EOF+`/`<<E@F`; parsing only `EOF` swallowed the following command as body
+        self.assertIn("KeychainManager.swift",
+                      targets("cat <<EOF+\ndata\nEOF+\nrm KeychainManager.swift\n"))
+        self.assertIn("OAuthService.swift", targets("cat <<E@F\nx\nE@F\nrm OAuthService.swift\n"))
+        self.assertIn("Keychain.swift", targets("cat <<'EOF+'\nx\nEOF+\nmv Keychain.swift /t\n"))
+        # a normal delimiter and a heredoc-to-a-sensitive-file still behave
+        self.assertIn("Keychain.swift", targets("cat <<EOF\nbody\nEOF\nrm Keychain.swift\n"))
+        self.assertNotIn("Keychain.swift", targets("cat <<EOF\nrm Keychain.swift\nEOF\n"))  # body = data
+
+    def test_xargs_scans_inline_code_child(self):
+        # A7: `xargs sh -c 'rm X'` runs the -c string regardless of stdin
+        self.assertIn("KeychainManager.swift", targets("printf x | xargs sh -c 'rm KeychainManager.swift'"))
+        self.assertIn("Keychain.swift", targets("printf x | xargs bash -c 'rm Keychain.swift'"))
+        self.assertNotIn("Keychain.swift", targets("printf x | xargs sh -c 'echo hi'"))  # no write
+
+    def test_sudo_ionice_value_options(self):
+        # A8: `-u root` / `-c 2` value options must not be read as the command verb
+        self.assertIn("KeychainManager.swift", targets("sudo -u root rm KeychainManager.swift"))
+        self.assertIn("KeychainManager.swift", targets("ionice -c 2 rm KeychainManager.swift"))
+        self.assertIn("Keychain.swift", targets("sudo -g wheel rm Keychain.swift"))
+        self.assertIn("Keychain.swift", targets("sudo rm Keychain.swift"))  # no-option form still works
+
+    def test_repeated_xargs_stages_stay_linear(self):
+        # A3: N `| xargs rm` stages each emitting all_words was O(N^2); a 165KB command blew the 10s budget
+        import time
+        cmd = "echo a" + (" | xargs rm") * 15000
+        t0 = time.time()
+        bws.write_targets(cmd)
+        self.assertLess(time.time() - t0, 3.0, "repeated xargs stages must stay near-linear (was O(n^2))")
+        # correctness preserved: a real xargs-rm on a sensitive file still asks
+        self.assertIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs rm"))
+
+
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):
         big = "echo " + ("a" * 80000)

@@ -402,6 +402,15 @@ assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{
 assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 # a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
 assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (e) A2 (audit of #53): a pre-planted symlink at the sentinel path must NOT be written THROUGH (that would
+#     clobber the victim with the commit hash + chmod 600). The gate drops the link and atomically replaces it.
+reset_markers; marker_write lint fail
+_A2VICTIM="$(marker_dir)/a2-victim"; printf 'PRECIOUS_DO_NOT_TOUCH' > "$_A2VICTIM"
+_A2SENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str 'A2-ATTACKER')"
+ln -sf "$_A2VICTIM" "$_A2SENT"
+printf '{"stop_hook_active":false,"session_id":"A2-ATTACKER"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+if [ "$(cat "$_A2VICTIM" 2>/dev/null)" = "PRECIOUS_DO_NOT_TOUCH" ]; then ok; else fail "A2: sentinel write clobbered the symlink victim"; fi
+if [ -L "$_A2SENT" ]; then fail "A2: sentinel is still a symlink (not replaced)"; else ok; fi
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers

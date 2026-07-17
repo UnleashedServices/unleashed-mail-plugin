@@ -89,7 +89,10 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
         val = fm.get(field, "")
         if val in ("", ">", "|", ">-", "|-"):
             continue
-        for entry in (t.strip() for t in val.split(",")):
+        # normalize YAML flow-list (`[Task]`, `[Task, Read]`) and block-list (`- Task`) syntax before the
+        # stale/typo checks — the plain `val.split(",")` scalar form otherwise missed `[Task]`/`- Task`,
+        # letting a stale `Task` tool through in list form (audit of #53).
+        for entry in (t.strip().strip("[]").lstrip("-").strip() for t in val.split(",")):
             if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
                 continue
             if entry in STALE_TOOLS:  # B4: hard-reject a known-stale name (difflib wouldn't flag it)

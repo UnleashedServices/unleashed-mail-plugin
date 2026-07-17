@@ -53,17 +53,35 @@ def _parse_heredoc_delim(cmd: str, pos: int) -> tuple[str, int]:
     j = pos
     while j < n and cmd[j] in " \t":
         j += 1
-    if j < n and cmd[j] in "'\"":
-        q = cmd[j]; j += 1; s = j
-        while j < n and cmd[j] != q:
-            j += 1
-        return cmd[s:j], (j + 1 if j < n else j)
-    if j < n and cmd[j] == "\\":
-        j += 1
-    s = j
-    while j < n and (cmd[j].isalnum() or cmd[j] in "_-."):
-        j += 1
-    return cmd[s:j], j
+    # parse a FULL shell word as the delimiter, applying quote removal — bash accepts `<<EOF+`, `<<E@F`,
+    # `<<'E O F'`, `<<E\ F`, `<<EO'F'`. The prior alnum/`_-.` char class truncated `EOF+` to `EOF`, so the
+    # real terminator line `EOF+` never matched and every following command was swallowed as body (A4).
+    delim: list[str] = []
+    while j < n:
+        c = cmd[j]
+        if c in " \t\r\n" or c in "|&;()<>":
+            break                                    # unquoted whitespace/metacharacter ends the word
+        if c == "'":
+            k = cmd.find("'", j + 1)
+            if k == -1:
+                k = n
+            delim.append(cmd[j + 1:k]); j = k + 1
+        elif c == '"':
+            k = j + 1
+            while k < n and cmd[k] != '"':
+                if cmd[k] == "\\" and k + 1 < n and cmd[k + 1] in '"$`\\':
+                    delim.append(cmd[k + 1]); k += 2
+                else:
+                    delim.append(cmd[k]); k += 1
+            j = k + 1
+        elif c == "\\":
+            if j + 1 < n:
+                delim.append(cmd[j + 1]); j += 2
+            else:
+                j += 1
+        else:
+            delim.append(c); j += 1
+    return "".join(delim), j
 
 
 def _consume_heredoc_body(cmd: str, pos: int, delim: str, strip_tabs: bool) -> tuple[str, int]:
@@ -120,6 +138,9 @@ _PREFIX_VAL_OPTS = {
     "arch": {"-e", "-u"},
     "taskset": {"-c", "-p", "--cpu-list", "--pid"},
     "xcrun": {"--sdk", "--toolchain"},
+    "sudo": {"-u", "--user", "-g", "--group", "-U", "--other-user", "-C", "--close-from", "-p", "--prompt",
+             "-r", "--role", "-t", "--type", "-R", "--chroot", "-D", "--chdir", "-T", "--command-timeout"},
+    "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
 }
 # shell reserved words that precede a command (`! rm X`, `if rm X; then …`, `while rm X; do …`,
 # `function f { … }`): strip them so the real verb surfaces instead of `!`/`if`/`while` (codex review #53).
@@ -529,7 +550,8 @@ def _command_writes_operands(sub: list[str]) -> bool:
     return False
 
 
-def _scan_command(words: list[str], out: list[str], all_words: list[str], heredoc_bodies: list[str]) -> None:
+def _scan_command(words: list[str], out: list[str], all_words: list[str], heredoc_bodies: list[str],
+                  emitted_all: list | None = None) -> None:
     """Extract the write targets of ONE command (a pipeline stage, or a `find -exec` sub-command). Applies
     prefix/keyword stripping, then dispatches on the verb."""
     words = _strip_prefixes(words)
@@ -645,7 +667,7 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                         sub.append(operands[j])
                     j += 1
                 if sub:
-                    _scan_command(sub, out, all_words, [])
+                    _scan_command(sub, out, all_words, [], emitted_all)
                     exec_writes = exec_writes or _command_writes_operands(_strip_prefixes(sub))
                 m = j + 1
             else:
@@ -672,10 +694,16 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                     _emit_target(operands[k + 1], out)
     elif verb == "xargs":
         sub = _strip_prefixes(_strip_xargs_opts(operands))   # skip xargs's own options, THEN wrappers
-        if _command_writes_operands(sub):
-            # input words come from the pipe/stdin (not statically visible) — fail closed by treating
-            # every literal word in the whole pipeline as a candidate.
-            out.extend(all_words)
+        _scan_command(sub, out, all_words, heredoc_bodies, emitted_all)   # A7: scan the child's STATIC args
+        if _command_writes_operands(sub):                                #     + inline `-c`/`-e` code
+            # input words come from the pipe/stdin (not statically visible) — fail closed by treating every
+            # literal word in the whole pipeline as a candidate. Emit all_words AT MOST ONCE per statement:
+            # N xargs stages each copying O(N) words is O(N^2) and blew the 10s hook budget (A3, codex/audit
+            # of #53); the final dedup makes one emission byte-identical to N.
+            if emitted_all is None or not emitted_all:
+                out.extend(all_words)
+                if emitted_all is not None:
+                    emitted_all.append(True)
     elif verb in _INLINE_ALWAYS:
         _emit_scan_words(operands, out)
         _emit_scan_words(heredoc_bodies, out)
@@ -717,8 +745,9 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
             else:
                 cmds[-1].append(t["dq"])
 
+    emitted_all: list = []          # per-statement: emit the xargs fail-closed all_words at most once (A3)
     for words in cmds:
-        _scan_command(words, out, all_words, heredoc_bodies)
+        _scan_command(words, out, all_words, heredoc_bodies, emitted_all)
 
 
 def _iter_command_subs(cmd: str):

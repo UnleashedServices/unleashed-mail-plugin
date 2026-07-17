@@ -89,8 +89,9 @@ done
 
 # Loop guard #2: a stateful sentinel so a genuinely-broken build can still be
 # abandoned after it has blocked once on this commit.
-if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ] && [ "$(cat "$SENTINEL" 2>/dev/null)" = "$HEAD_COMMIT" ]; then
-    exit 0
+if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ] && [ ! -L "$SENTINEL" ] \
+    && [ "$(cat "$SENTINEL" 2>/dev/null)" = "$HEAD_COMMIT" ]; then
+    exit 0                                          # trust only a genuine regular file, never a symlink (A2)
 fi
 
 if [ "$BLOCKED_KIND" = "build" ]; then
@@ -108,10 +109,22 @@ REASON="Last ${BLOCKED_KIND} check FAILED (${BLOCKED_AGE}s ago, commit ${HEAD_CO
 # bypass through; gemini #53 flagged that BLOCKING anonymously wedges — failing open avoids the wedge and
 # matches the gate's own "can't record the loop-guard -> don't block" design.
 if [ "$MODE" = "enforce" ] && [ -n "$SENTINEL" ]; then
-    if printf '%s' "$HEAD_COMMIT" > "$SENTINEL" 2>/dev/null; then
-        chmod 600 "$SENTINEL" 2>/dev/null || true   # F5: not world-writable/plantable
-        hook_emit_block "$REASON"
-        exit 0
+    # A2 (audit of #53): never write THROUGH a pre-planted symlink/non-regular sentinel — a plain `> $SENTINEL`
+    # follows the link and clobbers an attacker-chosen file with the gate's privileges (then chmod 600 it).
+    # Drop any hostile pre-existing target, write to an UNPREDICTABLE temp (mktemp = O_EXCL, no-follow), then
+    # atomically rename INTO place (rename replaces the path itself, never following a link). Any failure
+    # falls through to the warn-log (preserving the fail-open-when-unwritable behavior).
+    if [ -L "$SENTINEL" ] || { [ -e "$SENTINEL" ] && [ ! -f "$SENTINEL" ]; }; then
+        rm -f "$SENTINEL" 2>/dev/null || true
+    fi
+    _STMP="$(mktemp "$(marker_dir)/.stopgate.XXXXXX" 2>/dev/null || true)"
+    if [ -n "$_STMP" ] && printf '%s' "$HEAD_COMMIT" > "$_STMP" 2>/dev/null; then
+        chmod 600 "$_STMP" 2>/dev/null || true      # not world-writable/plantable
+        if mv -f "$_STMP" "$SENTINEL" 2>/dev/null; then
+            hook_emit_block "$REASON"
+            exit 0
+        fi
+        rm -f "$_STMP" 2>/dev/null || true          # rename failed -> don't leak the temp
     fi
 fi
 
