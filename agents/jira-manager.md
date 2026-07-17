@@ -162,18 +162,22 @@ resolve, awaiting human adjudication). An issue carries at most one of the two a
   note below).
 - **Uncertain after triage** — if `release-manager` can obtain *neither* corroboration *nor* evidence of
   pre-existence (verdict: **unconfirmed**), **swap the marker**: remove `cfr-triage-pending` and add
-  **`cfr-needs-human`**, leave the issue UNLABELLED, and update the triage note (`escalated — causation
+  **`cfr-needs-human`**, leave the issue **without the counted `change-failure` label** (the
+  `cfr-needs-human` marker is a queue label, *not* counted toward CFR), and update the triage note (`escalated — causation
   indeterminate, awaiting evidence / human confirmation`). The swap moves the candidate off the
   release-manager dispatch queue onto a **distinct, independently queryable** human-review queue (`project
   in (COREDEV, FT) AND labels = cfr-needs-human`) — which you enumerate and surface for the invoking session
   the same way, but for **human adjudication**, never `release-manager` dispatch (release-manager is
   dispatched from the `cfr-triage-pending` queue only). This keeps the candidate discoverable (never
   silently dropped, which would understate CFR) **and** off `cfr-triage-pending`, so it is not re-dispatched
-  to `release-manager` on the next sweep (no churn); re-attribution happens only if new evidence arrives
-  (swap it back: remove `cfr-needs-human`, add `cfr-triage-pending`). `cfr-needs-human` is removed **only** on a terminal outcome — `change-failure`
+  to `release-manager` on the next sweep (no churn). Two distinct transitions leave `cfr-needs-human`, and
+  they must not be conflated: (1) **re-attribution** — if NEW evidence arrives, *swap back* to
+  `cfr-triage-pending` (a move between queues, NOT a resolution); (2) **resolution** — the candidate is
+  RESOLVED (its queue marker cleared, no marker remains) only on a **terminal** outcome: `change-failure`
   applied (causation confirmed), **proven** pre-existing (evidence it predates the release), or an explicit
-  **human dismissal** (a recorded review decision, never an agent guess). Never inflate or deflate CFR on a
-  guess.
+  **human dismissal** (a recorded review decision, never an agent guess). The "cleared only on a terminal
+  outcome" rule governs *resolution* (1 is a swap, not a clear-to-resolved). Never inflate or deflate CFR on
+  a guess.
 
 Mechanically: add the literal `change-failure` to the issue's Jira `labels` via the Atlassian MCP
 (`editJiraIssue`, or at `createJiraIssue` when confirmed at intake) — **alongside**, not instead of, the

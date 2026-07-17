@@ -27,38 +27,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
 
-from schema import canonical_path, parse_finding  # noqa: E402
+from schema import canonical_path, is_abs_or_traversal, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
-# A Windows drive-letter ABSOLUTE prefix — `C:/` or `C:\` (either separator). `git diff --name-only`
-# never emits one. The colon MUST be followed by a slash/backslash: a bare `C:` is NOT absolute (it is a
-# valid POSIX top-level filename, and on Windows `C:` alone is drive-RELATIVE), and `a:b` /
-# `C:fixture.swift` are ordinary POSIX names (colon is a valid filename char) — none may be rejected
-# (round 3 + round 4: gemini + codex).
-_DRIVE_ABS = re.compile(r"^[A-Za-z]:[/\\]")
-
-
-def _abs_or_traversal(path: str) -> bool:
-    """True if `path` is an ABSOLUTE or `..`-TRAVERSAL entry — something `git diff --name-only` never
-    emits. Checks the RAW (lightly-normalized) form, NOT canonical_path's output: canonical_path
-    collapses any dots/slashes-only path (`.`, `..`, `/`, `.//`) to "", so a bare `..` or `/` mixed
-    with a real file (`["A.swift", ".."]`) would make a walrus `(cp := canonical_path(c))` short-circuit
-    on the falsy "" and never be rejected (round 2: gemini).
-
-    Works on the RAW path (no `\\`->`/` folding): `git diff --name-only` emits `/`-separated paths on
-    EVERY platform, so a `\\` is a literal filename char, never a separator. Thus `foo\\..\\bar` is ONE
-    component (not traversal), `\\report.swift` is a repo-relative name (not absolute), and Windows
-    drive-absolutes are caught by `_DRIVE_ABS` in either separator (round 3 + round 4: codex). Leading
-    whitespace is still stripped: a ` /x` space-dir path is pathological and near-impossible in this repo,
-    and keeping `.strip()` matches canonical_path's own reviewer-copied-path normalization."""
-    r = path.strip()
-    while r.startswith("./"):
-        r = r[2:]
-    if not r:
-        return False
-    # `\\server\share\…` is a Windows UNC ABSOLUTE path (leading DOUBLE backslash); reject it too. A
-    # SINGLE leading `\` stays a valid POSIX filename (`\report.swift`), so only `\\` is absolute (r5: codex).
-    return bool(r.startswith("/") or r.startswith("\\\\") or _DRIVE_ABS.match(r) or ".." in r.split("/"))
+# Absolute / `..`-traversal detection lives in `schema.is_abs_or_traversal` — ONE shared helper used here
+# on `changed_files` AND in `parse_finding` on each finding's `file`, so the two sides can't disagree
+# (COREDEV-2503 F2/F3). It folds `\`->`/` (matching canonical_path), closing the fail-open where a
+# backslash entry slipped this guard's old raw-path check yet canonicalized to an absolute path.
 
 # Advertise the current finalized MCP revision, but still negotiate the prior one so older
 # clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
@@ -169,9 +144,10 @@ def _call_synthesize(arguments: dict) -> dict:
     # every real blocker to pre-existing -> a bogus provisional APPROVE (#44 independent review §5). The
     # empty-changeset guard only fires when ALL entries collapse to "" — a bare `..`/`/` MIXED with a real
     # file (`["A.swift", ".."]`) slips it, and canonical_path collapses `..`/`/` to "" so a canonical-based
-    # check would drop them too. `_abs_or_traversal` inspects the RAW path to catch them (round 2: gemini).
-    # Reject the call rather than filter — a caller sending impossible diff paths is untrustworthy input.
-    _bad = sorted({c for c in changed_files if _abs_or_traversal(c)})
+    # check would drop them too. `is_abs_or_traversal` catches them (it strips leading `./` but preserves
+    # `..`/absolute markers before canonicalization). Reject the call rather than filter — a caller sending
+    # impossible diff paths is untrustworthy input.
+    _bad = sorted({c for c in changed_files if is_abs_or_traversal(c)})
     if _bad:
         raise _RpcError(
             -32602,
@@ -182,7 +158,7 @@ def _call_synthesize(arguments: dict) -> dict:
     findings, quarantined = [], []
     for d in findings_in:
         try:
-            findings.append(parse_finding(d))
+            findings.append(parse_finding(d, reject_abs_traversal=True))  # F3: gating path quarantines abs/traversal
         except Exception as exc:  # noqa: BLE001 - quarantine, never drop
             quarantined.append((d, str(exc)))
     changed = set(changed_files)

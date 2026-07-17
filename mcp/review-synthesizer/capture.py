@@ -367,6 +367,25 @@ def _status_path(round_dir: str, agent: str) -> str:
     return os.path.join(round_dir, agent + ".status")
 
 
+def _open_private_tmp(tmp: str):
+    """Open a fresh private tmp for a tmp+replace write, never writing THROUGH a pre-planted target. The
+    `.tmp.<pid>` path is predictable, so a same-account attacker could plant a symlink there and make a
+    plain ``open(tmp, "w")`` write/truncate THROUGH to the link target (arbitrary-file clobber with the
+    gate's privileges). Two layers: first ``os.unlink`` clears any stale/planted entry — it operates on the
+    LINK ITSELF (never follows), so a planted symlink is removed as the symlink, its target untouched, and
+    a stale tmp from a crashed same-pid prior run no longer wedges the write (gemini review #53). Then
+    ``os.open`` with ``O_CREAT|O_EXCL`` (exclusive create) + ``O_NOFOLLOW`` (refuse a symlink atomically)
+    creates fresh: anything re-planted in the unlink→open race window makes the exclusive open FAIL
+    (EEXIST) rather than follow/clobber, so the "never clobber the victim" invariant holds either way;
+    mode 0600. COREDEV-2503 F11."""
+    try:
+        os.unlink(tmp)                          # clear a stale/planted entry (the LINK, never its target)
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
 def _write_status(round_dir: str, agent: str, status: dict) -> None:
     """Best-effort sibling `<agent>.status` write (tmp+replace, trailing newline). The self-describing
     `agent` is the hook-allowlisted name (never transcript text). Fully fail-open — NEVER raises, so
@@ -377,7 +396,7 @@ def _write_status(round_dir: str, agent: str, status: dict) -> None:
     dest = _status_path(round_dir, agent)
     tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with _open_private_tmp(tmp) as fh:
             # `agent` LAST so the trusted hook-allowlisted name always wins over any (transcript-
             # derived) `status` key; a dict literal also can't raise on a key collision the way
             # `dict(agent=..., **status)` can. Today `status` never carries an `agent` key (pinned
@@ -435,7 +454,7 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
             tmp = "%s.tmp.%d" % (dest, os.getpid())
             try:
                 os.makedirs(dest_dir, exist_ok=True)
-                with open(tmp, "w", encoding="utf-8") as fh:
+                with _open_private_tmp(tmp) as fh:
                     json.dump([], fh, ensure_ascii=False, indent=2)
                     fh.write("\n")
                 os.replace(tmp, dest)
@@ -459,7 +478,7 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
     tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with _open_private_tmp(tmp) as fh:
             json.dump(sanitized, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.replace(tmp, dest)

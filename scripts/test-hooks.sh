@@ -226,6 +226,57 @@ assert_contains "env command rm sensitive -> ask" "$(guard_bash '"env command rm
 # 6i. A punctuation heredoc delimiter (`<<EOF-1`) is still a heredoc.
 assert_contains "punctuation heredoc delim write -> ask" "$(guard_bash '"python3 <<EOF-1\nopen(OAuthService.swift)\nEOF-1"')" '"permissionDecision":"ask"'
 
+# == COREDEV-2503 F4/F12: structured quote-aware lexer, exit-2 fail-closed contract, 256KB DoS backstop ==
+# F4 mutation-kills — the pre-fix quote-BLIND parser got these WRONG (bypass on a mid-word quote, over-ask
+# on a quoted/escaped operator):
+assert_contains "mid-word-quote rm -> ask" "$(guard_bash '"rm Key\"chain\".swift"')" '"permissionDecision":"ask"'
+assert_empty "quoted redirect operator (literal) -> no decision" "$(guard_bash "\"echo '> Keychain.swift'\"")"
+assert_empty "escaped redirect operator (literal) -> no decision" "$(guard_bash '"echo \\> Keychain.swift"')"
+# F4 preservation: an ACTIVE redirect still writes.
+assert_contains "active redirect -> ask" "$(guard_bash '"echo x > Keychain.swift"')" '"permissionDecision":"ask"'
+# F12 write-form arms:
+assert_contains "subshell ( rm ) -> ask" "$(guard_bash '"( rm Keychain.swift )"')" '"permissionDecision":"ask"'
+assert_contains "sed --in-place=bak -> ask" "$(guard_bash '"sed --in-place=bak Info.plist"')" '"permissionDecision":"ask"'
+assert_contains "clobber >| -> ask" "$(guard_bash '"echo x >| Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "find -delete -> ask" "$(guard_bash "\"find . -name 'Keychain.swift' -delete\"")" '"permissionDecision":"ask"'
+assert_contains "xargs rm from pipe -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs rm\"")" '"permissionDecision":"ask"'
+assert_contains "xargs -n 1 rm (options before verb) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs -n 1 rm\"")" '"permissionDecision":"ask"'
+# Round-4 sweep (codex review of #53) end-to-end guard arms:
+assert_contains ">& file redirect -> ask" "$(guard_bash '"echo hi >& Keychain.swift"')" '"permissionDecision":"ask"'
+assert_empty    ">&2 fd-dup (not a write) -> no decision" "$(guard_bash '"echo err >&2"')"
+assert_contains "command-sub in rm operand -> ask" "$(guard_bash "\"rm \\\"\$(printf Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "-- end-of-options rm -> ask" "$(guard_bash '"rm -- -Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "timeout wrapper rm -> ask" "$(guard_bash '"timeout 5 rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "brace group { rm; } -> ask" "$(guard_bash '"{ rm Keychain.swift; }"')" '"permissionDecision":"ask"'
+assert_contains "git checkout -- path -> ask" "$(guard_bash '"git checkout -- Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "ruby -e inline code -> ask" "$(guard_bash "\"ruby -e 'File.delete(\\\"Keychain.swift\\\")'\"")" '"permissionDecision":"ask"'
+assert_empty    "input-redirect read source (tee out < sensitive) -> no decision" "$(guard_bash '"tee out.log < Keychain.swift"')"
+assert_contains "patch -oFILE attached short -> ask" "$(guard_bash '"patch -oKeychain.swift < change.diff"')" '"permissionDecision":"ask"'
+assert_contains "xargs sed -i (in-place child) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed -i 's/a/b/'\"")" '"permissionDecision":"ask"'
+assert_empty    "xargs sed (no -i, read) -> no decision" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed 's/a/b/'\"")"
+assert_contains "find start-path -delete -> ask" "$(guard_bash '"find Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "find start-path read (no action) -> no decision" "$(guard_bash '"find Keychain.swift -type f"')"
+assert_contains "writer inside command substitution -> ask" "$(guard_bash "\"echo \\\"\$(rm Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "function-definition body -> ask" "$(guard_bash '"f(){ rm Keychain.swift; }; f"')" '"permissionDecision":"ask"'
+assert_contains "rsync --remove-source-files -> ask" "$(guard_bash '"rsync --remove-source-files Keychain.swift /tmp/out/"')" '"permissionDecision":"ask"'
+assert_empty    "read inside command substitution -> no decision" "$(guard_bash "\"echo \\\"\$(cat Keychain.swift)\\\"\"")"
+assert_contains "coproc rm sensitive -> ask" "$(guard_bash '"coproc rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "here-string to bash -> ask" "$(guard_bash "\"bash <<< 'rm Keychain.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "find -- start path -delete -> ask" "$(guard_bash '"find -- Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "here-string to cat (read) -> no decision" "$(guard_bash "\"cat <<< 'Keychain.swift'\"")"
+# ANSI-C `$'…'` end-to-end quoting is painful through the JSON layer; decoding is covered by the unit test
+# AuditPR53Round2.test_ansi_c_quoting_decoded. Build the payload directly to keep an integration check too:
+_ANSIC="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm $'"'"'Keychain\\x2eswift'"'"'"}}' | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
+assert_contains "ANSI-C quoted target -> ask" "$_ANSIC" '"permissionDecision":"ask"'
+# F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
+BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
+assert_contains "256KB command -> ask (DoS backstop)" \
+    "$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$BIGCMD" | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)" \
+    '"permissionDecision":"ask"'
+# F4 exit-contract: an injected lexer parse failure -> exit-2 fail-closed DENY (never exit-0 no-decision).
+FAILOUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm InboxView.swift"}}' | _BWS_FORCE_FAIL=1 UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" >/dev/null 2>&1; printf 'RC=%s' "$?")"
+assert_contains "lexer parse failure -> exit-2 deny" "$FAILOUT" "RC=2"
+
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
@@ -293,10 +344,11 @@ assert_contains "build-verify reads stdin command" "$OUT" "xcodebuild build dete
 
 echo "== stop-quality-marker-gate (Item 4) =="
 
-# 12. Fresh failing marker, commit matches -> block (enforce).
+# 12. Fresh failing marker, commit matches -> block (enforce). Uses an identified session (production Stop
+#     payloads always carry session_id; an anonymous payload now fails OPEN — see the F5 (d) cases).
 reset_markers
 marker_write lint fail
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"T12"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_contains "fresh fail -> block" "$OUT" '"decision":"block"'
 if is_valid_json "$OUT"; then ok; else fail "block -> valid JSON"; fi
 assert_not_contains "block is root-level (not nested)" "$OUT" 'hookSpecificOutput'
@@ -325,12 +377,48 @@ marker_write lint pass
 OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_empty "pass marker -> no block" "$OUT"
 
-# 17. Sentinel == HEAD -> no re-block (loop guard #2).
+# 17. Sentinel == HEAD for THIS SESSION -> no re-block (loop guard #2, session-keyed by F5).
 reset_markers
 marker_write lint fail
-printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)"
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
-assert_empty "sentinel == HEAD -> no re-block" "$OUT"
+_SH17="$(marker_hash_str "SESS-17")"
+printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-${_SH17}"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"SESS-17"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "sentinel == HEAD (same session) -> no re-block" "$OUT"
+
+# 17-F5. COREDEV-2503 F5 — session keying discriminates a STABLE key from a nonce, + all-session reset.
+# (a) SAME-session dedup: a nonce impl would re-block the 2nd Stop and wedge; a stable key dedups it.
+reset_markers; marker_write lint fail
+_PA='{"stop_hook_active":false,"session_id":"F5-A"}'
+assert_contains "F5 session-A 1st Stop -> block" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_empty "F5 session-A 2nd Stop -> dedup (a nonce would re-block/wedge here)" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# (b) CROSS-session re-block: a fresh session_id gets its own block-once budget.
+assert_contains "F5 session-B -> blocks again (not deduped by A)" "$(printf '{"stop_hook_active":false,"session_id":"F5-B"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (c) ALL-session reset: a pass clears BOTH session sentinels, so both re-block on a fresh fail.
+reset_markers; marker_write lint fail
+printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+marker_write lint pass          # clears ALL repo-matching session sentinels
+marker_write lint fail          # fresh failure again
+assert_contains "F5 reset: S1 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_contains "F5 reset: S2 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (d) codex+gemini #53: an ANONYMOUS Stop (no session_id AND no transcript_path) has no identity to key a
+#     per-session sentinel. It must NOT share one (codex: a hash("") collision is a cross-session bypass)
+#     AND must NOT block-and-wedge (gemini: a durable loop-guard can't be recorded). Resolution: fail OPEN
+#     (fall through to warn-log), so NEITHER anonymous Stop blocks and no shared sentinel is ever written.
+reset_markers; marker_write lint fail
+assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
+assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (e) A2 (audit of #53): a pre-planted symlink at the sentinel path must NOT be written THROUGH (that would
+#     clobber the victim with the commit hash + chmod 600). The gate drops the link and atomically replaces it.
+reset_markers; marker_write lint fail
+_A2VICTIM="$(marker_dir)/a2-victim"; printf 'PRECIOUS_DO_NOT_TOUCH' > "$_A2VICTIM"
+_A2SENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str 'A2-ATTACKER')"
+ln -sf "$_A2VICTIM" "$_A2SENT"
+printf '{"stop_hook_active":false,"session_id":"A2-ATTACKER"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+if [ "$(cat "$_A2VICTIM" 2>/dev/null)" = "PRECIOUS_DO_NOT_TOUCH" ]; then ok; else fail "A2: sentinel write clobbered the symlink victim"; fi
+if [ -L "$_A2SENT" ]; then fail "A2: sentinel is still a symlink (not replaced)"; else ok; fi
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers
@@ -363,7 +451,7 @@ for _t in xcodebuild swiftlint; do
 done
 marker_write build fail
 T0="$(date +%s 2>/dev/null || echo 0)"
-OUT="$(printf '{"stop_hook_active":false}' \
+OUT="$(printf '{"stop_hook_active":false,"session_id":"TBUILD"}' \
     | PATH="$SHIMDIR:$PATH" UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 T1="$(date +%s 2>/dev/null || echo 0)"
 assert_contains "build fail -> block" "$OUT" '"decision":"block"'

@@ -154,25 +154,48 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, "one transcript must not back two approvals")
         self.assertIn("DISTINCT transcript", r.stdout + r.stderr)
 
-    def test_identical_content_with_distinct_capture_ids_passes(self):
-        """Content-inequality alone cannot tell two genuinely-separate reviews that happen to be
-        byte-identical from one file reused for both. A wrapper capture ID (a per-run token) is
-        authoritative provenance: two DIFFERENT files with IDENTICAL bytes but DISTINCT capture IDs are
-        two real reviews and must pass (full review, #41)."""
+    def test_identical_content_behind_distinct_capture_ids_is_REJECTED(self):
+        """COREDEV-2503 F1 (INVERTS the pre-fix test that wrongly ACCEPTED this). captureId has no
+        authenticity binding — `_provenance` only checks it is a non-empty string, and it is read verbatim
+        from a `.captureid` sidecar or hand-written into the artifact. So two DISTINCT (possibly FORGED)
+        capture IDs behind ONE identical transcript must NOT waive the content-digest floor; otherwise a
+        single review (or zero) manufactures a passing gemini+codex approval (GATE OK / exit 0). The floor
+        now runs unconditionally: identical bytes are rejected regardless of captureId."""
         id1 = os.path.join(self.d, "r1.txt")
         id2 = os.path.join(self.d, "r2.txt")
         for pth in (id1, id2):
             with open(pth, "w", encoding="utf-8") as fh:
-                fh.write("byte-identical review body\nVERDICT: APPROVE\n")
+                fh.write("byte-identical review body\nVERDICT: APPROVE\n")   # SAME bytes -> same digest
         with open(id1 + ".captureid", "w", encoding="utf-8") as fh:
-            fh.write("cap-A\n")
+            fh.write("forged-A\n")
         with open(id2 + ".captureid", "w", encoding="utf-8") as fh:
-            fh.write("cap-B\n")
+            fh.write("forged-B\n")
         run("snapshot", "--plan", self.plan)
         r = run("write", "--plan", self.plan, "--verdict", "APPROVE",
                 "--reviewer", f"gemini=APPROVE:{id1}", "--reviewer", f"codex=APPROVE:{id2}")
-        self.assertEqual(r.returncode, 0, r.stderr)   # digest floor would have WRONGLY rejected this
-        self.assertEqual(run("verify", "--plan", self.plan).returncode, 0)
+        self.assertNotEqual(r.returncode, 0, "distinct captureIds must NOT waive the content-digest floor (F1)")
+        self.assertIn("DISTINCT transcript", r.stdout + r.stderr)
+
+    def test_stray_reviewer_is_rejected_on_verify(self):
+        """COREDEV-2503 B2: `_quorum_problem` (shared by write AND verify) checked only for MISSING required
+        reviewers; the write-path `_reviewer_identity_problem` rejected strays but verify did not — so a
+        `{gemini, codex, mallory}` set could pass verification. A stray now fails BOTH paths."""
+        import glob
+        self.assertEqual(self._write().returncode, 0)
+        art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+        with open(art, encoding="utf-8") as fh:
+            a = json.load(fh)
+        a["verdict"] = "APPROVE"
+        a["reviewers"] = [
+            {"name": "gemini", "status": "APPROVE", "transcriptSha256": "a" * 64, "transcriptPath": "/x/g"},
+            {"name": "codex", "status": "APPROVE", "transcriptSha256": "b" * 64, "transcriptPath": "/x/c"},
+            {"name": "mallory", "status": "APPROVE", "transcriptSha256": "d" * 64, "transcriptPath": "/x/m"},
+        ]
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(a, fh)
+        v = run("verify", "--plan", self.plan)
+        self.assertNotEqual(v.returncode, 0, "a stray reviewer must not pass verify")
+        self.assertIn("not part of the gate", v.stdout + v.stderr)
 
     def test_a_symlinked_captureid_sidecar_is_ignored_not_trusted(self):
         """A `.captureid` SYMLINK (a pre-seeded, attacker-chosen value) must NOT be read as authoritative
@@ -191,6 +214,22 @@ class ReviewVerdictTest(unittest.TestCase):
         art = json.load(open(os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")))
         gem = next(r for r in art["reviewers"] if r["name"] == "gemini")
         self.assertNotIn("captureId", gem, "a symlinked sidecar must not be trusted as a captureId")
+
+    def test_an_oversized_captureid_sidecar_is_refused_not_trusted(self):
+        """COREDEV-2503 F8: `_read_regular_file` bounds the read (cap+1, refuse on overflow) — a size-only
+        fstat check races a grow-after-check, and a huge regular sidecar is not a genuine provenance token.
+        A >64 KiB `.captureid` must be refused (treated as absent), never read wholesale."""
+        tx = os.path.join(self.d, "r.txt")
+        with open(tx, "w", encoding="utf-8") as fh:
+            fh.write("review body\nVERDICT: APPROVE\n")
+        with open(tx + ".captureid", "w", encoding="utf-8") as fh:
+            fh.write("A" * (65536 + 10) + "\n")   # > 64 KiB regular file
+        run("snapshot", "--plan", self.plan)
+        run("write", "--plan", self.plan, "--verdict", "APPROVE_WITH_NOTES",
+            "--reviewer", f"gemini=APPROVE:{tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
+        art = json.load(open(os.path.join(self.d, ".verdicts", "FEATURE_NAME_PLAN.md.verdict.json")))
+        gem = next(r for r in art["reviewers"] if r["name"] == "gemini")
+        self.assertNotIn("captureId", gem, "an oversized sidecar must be refused, not trusted (F8)")
 
     def test_a_non_string_provenance_field_fails_closed_not_with_a_crash(self):
         """A hand-tampered non-string transcriptPath/captureId (a list/dict) would make `set(...)` raise

@@ -73,6 +73,27 @@ marker_repo_hash() {
     printf '%s' "$_MARKER_REPO_HASH_CACHE"
 }
 
+# Hash an arbitrary string ($1) to a stable 12-char slug via the same cascade as marker_repo_hash (PII-free
+# in the pure-bash fallback). Used for the Stop-gate's SESSION component (COREDEV-2503 F5) so a broken
+# commit's block-once budget is per-(session, commit), not global-per-commit.
+marker_hash_str() {
+    local s="$1" h=""
+    if command -v shasum >/dev/null 2>&1; then
+        h="$(printf '%s' "$s" | shasum 2>/dev/null | cut -d' ' -f1)"
+    elif command -v sha1sum >/dev/null 2>&1; then
+        h="$(printf '%s' "$s" | sha1sum 2>/dev/null | cut -d' ' -f1)"
+    elif command -v openssl >/dev/null 2>&1; then
+        h="$(printf '%s' "$s" | openssl dgst -sha1 2>/dev/null | awk '{print $NF}')"
+    elif command -v python3 >/dev/null 2>&1; then
+        h="$(printf '%s' "$s" | python3 -c 'import hashlib,sys; sys.stdout.write(hashlib.sha1(sys.stdin.buffer.read()).hexdigest())' 2>/dev/null)"
+    fi
+    if [ -z "$h" ] && command -v cksum >/dev/null 2>&1; then
+        h="$(printf '%s' "$s" | cksum 2>/dev/null | tr -cd '0-9')"
+    fi
+    [ -n "$h" ] || h="$(_marker_bash_hash "$s")"
+    printf '%s' "${h:0:12}"
+}
+
 # Absolute path of a marker file. $1 = kind (lint|build).
 marker_path() {
     printf '%s/quality-marker-%s-%s.json' "$(marker_dir)" "$1" "$(marker_repo_hash)"
@@ -106,7 +127,11 @@ marker_write() {
             fi
         done
         if [ "$_any_fail" = 0 ]; then
-            rm -f "$dir/stop-last-blocked-${hash}" 2>/dev/null || true
+            # F5 (COREDEV-2503): clear ALL repo-matching session sentinels — this function has NO session
+            # payload, so it cannot target one session's file. Glob-clears every `…-<session>` sentinel plus
+            # the legacy un-suffixed name. Without this, a session-suffixed sentinel would survive a pass and
+            # a later same-session regression would wrongly pass.
+            rm -f "$dir/stop-last-blocked-${hash}" "$dir/stop-last-blocked-${hash}"-* 2>/dev/null || true
         fi
     fi
 }

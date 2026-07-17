@@ -65,6 +65,11 @@ _MISSING_MEANS = "no usable verdict — the reviewer never ran, OR its transcrip
 # in the plan's progress log WITHOUT an approving artifact — never as a gate-passing verdict here.
 REQUIRED_REVIEWERS = {"gemini", "codex"}
 
+# F8 (COREDEV-2503): upper bound for a trusted regular-file read (sidecar digest / small artifact). A
+# size-only fstat check races a grow-after-check; `_read_regular_file` instead reads cap+1 and refuses on
+# overflow. 64 KiB is orders of magnitude above any real digest sidecar or verdict artifact.
+_MAX_TRUSTED_READ_BYTES = 65536
+
 
 def _quorum_problem(verdict, reviewers) -> str | None:
     """Reason string if an APPROVING verdict is NOT backed by a genuine dual approval (both required
@@ -83,6 +88,14 @@ def _quorum_problem(verdict, reviewers) -> str | None:
     missing = REQUIRED_REVIEWERS - set(names)
     if missing:
         return f"missing required reviewer(s) {sorted(missing)} — the mandatory gate is gemini + codex"
+    # B2 (COREDEV-2503): reject STRAY reviewers too. This shared enforcer (write + verify) checked only for
+    # MISSING required reviewers; `_reviewer_identity_problem` (write path) rejected strays but verify did
+    # not, so a `{gemini, codex, mallory}` set could pass verification. Mirror the stray check here so BOTH
+    # paths agree — an unknown name can't pad the quorum.
+    strays = set(names) - REQUIRED_REVIEWERS
+    if strays:
+        return (f"reviewer(s) {sorted(strays)} are not part of the gate "
+                f"({', '.join(sorted(REQUIRED_REVIEWERS))})")
     bad = [f"{r.get('name')}={r.get('status')}" for r in reviewers
            if str(r.get("status", "")).strip().upper() not in APPROVING]
     if bad:
@@ -171,15 +184,15 @@ def _quorum_problem(verdict, reviewers) -> str | None:
     if len(set(_cids)) < len(_cids):
         return ("an APPROVING combined verdict requires a DISTINCT capture per reviewer — the same "
                 "capture ID is recorded for more than one reviewer")
-    # 3. Capture IDs are AUTHORITATIVE only when EVERY reviewer has a distinct one: then two byte-identical
-    #    transcripts from distinct runs are legitimately two reviews, so skip the content-based floor.
-    #    Requiring all-present HERE is correct (unlike the duplicate checks) — a partial set cannot vouch
-    #    for the reviewer that has none, so it must not license bypassing the digest floor.
-    if _cids and len(_cids) == len(_dicts) and len(set(_cids)) == len(_dicts):
-        return None
-    # 3. Fallback (no capture IDs): distinct DIGESTS. Has a benign false-negative — two byte-identical
-    #    separate reviews are rejected — but that is astronomically rare, and pty-capture's capture IDs
-    #    (path 2) lift it whenever present.
+    # 3. Content-digest floor — ALWAYS runs (COREDEV-2503 F1). A prior version treated a full set of
+    #    distinct captureIds as AUTHORITATIVE and returned None HERE, skipping this floor. But captureId has
+    #    no authenticity binding (`_provenance` only checks it is a non-empty string; it is read verbatim
+    #    from a `.captureid` sidecar or hand-written into the artifact), so two DISTINCT FORGED captureIds
+    #    behind ONE identical transcript bypassed the only control that catches "same content = one review
+    #    standing in for two" -> GATE OK / APPROVE, exit 0. The floor now runs unconditionally; captureId
+    #    distinctness (checked above) SUPPLEMENTS it, never replaces it. The benign false-negative (two
+    #    byte-identical SEPARATE reviews rejected) is astronomically rare and fail-closed. Real authenticity
+    #    binding is deferred to COREDEV-2497 content validation.
     _digests = [str(r.get("transcriptSha256", "")).strip().lower() for r in _dicts]
     if len(set(_digests)) < len(_digests):
         return ("an APPROVING combined verdict requires a DISTINCT transcript per reviewer — the same "
@@ -210,7 +223,13 @@ def _read_regular_file(path: str) -> str | None:
             return None
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             fd = -1  # fdopen owns it now; the finally must not double-close
-            return fh.read()
+            # F8 (COREDEV-2503): bound the read. A size-only fstat check races a grow-after-check, so read
+            # cap+1 and refuse on overflow — a huge regular sidecar is not a genuine provenance digest, and
+            # this also caps memory on a pathological file. (Chars, not bytes; utf-8 keeps this ~cap-bounded.)
+            data = fh.read(_MAX_TRUSTED_READ_BYTES + 1)
+            if len(data) > _MAX_TRUSTED_READ_BYTES:
+                return None
+            return data
     except (OSError, UnicodeDecodeError):
         # invalid-UTF-8 bytes in a sidecar are "not a genuine digest" — return None (controlled
         # fail-closed/skip), never a traceback (round 7: codex).
