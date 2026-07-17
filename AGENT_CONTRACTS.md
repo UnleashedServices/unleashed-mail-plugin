@@ -364,6 +364,48 @@ consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
 
 ---
 
+## 12. Change-Failure Rate (CFR) Labeling
+
+**Owner (causation):** `release-manager` · **Owner (label mechanics):** `jira-manager`
+
+GitKraken Insights computes **Change Failure Rate** for `unleashedservices.atlassian.net` by counting
+Jira issues tagged with the literal label **`change-failure`** (lowercase, hyphenated; a standard label,
+not a custom field or issue type), divided by deployments over the window. Under-labeling **understates**
+CFR — each missed failure lowers the numerator, reading a false 0% only in a window where nothing was
+labeled; the metric is only as good as the labeling discipline.
+
+- **`release-manager` determines deploy-causation (analysis only, no Jira access)** — it returns one of
+  **three** verdicts for a production-impacting Bug: **confirmed** regression (corroborated evidence — bisect
+  to a shipped commit, worked-in-prior-release, or crash-first-seen-in-release), **proven pre-existing**
+  (positive evidence it predates the release), or **unconfirmed** (neither can be established). Absence of
+  evidence is never downgraded to pre-existing. A reporter's bare "broke after release X" is temporal
+  correlation, not proof — corroborate before attributing; severity alone never implies a change failure.
+  `release-manager`'s `tools:` allowlist grants no Atlassian MCP, so it never queries or edits Jira — it
+  receives a named candidate and returns the verdict.
+- **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
+  component) at creation only when causation is confirmed at intake; otherwise it runs a **two-label queue**,
+  *both* uncounted (only `change-failure` counts): **`cfr-triage-pending`** (fresh, awaiting attribution)
+  and **`cfr-needs-human`** (escalated, awaiting human), at most one per issue. It **enumerates each queue**
+  by JQL — `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter) and the parallel
+  `… labels = cfr-needs-human` — and surfaces candidates so the invoking session dispatches `release-manager`
+  for the *dispatch* queue only. Every label change is `editJiraIssue` read-modify-write (the `labels` field
+  replaces the whole array). On `release-manager`'s verdict: **confirmed** → add `change-failure`, clear the
+  marker; **proven pre-existing** → clear the marker, withhold; **unconfirmed** (neither corroboration nor
+  pre-existence evidence) → **swap `cfr-triage-pending` → `cfr-needs-human`**, leaving the issue UNLABELLED
+  on the human-review queue. Absence of evidence is never treated as pre-existing, no agent drops a marker on
+  a guess, and because an escalated candidate no longer carries `cfr-triage-pending` it is not re-dispatched
+  to `release-manager` absent new evidence (no churn). `cfr-needs-human` clears only on a terminal outcome —
+  `change-failure` (confirmed), proven pre-existing, or an explicit human dismissal (a recorded decision).
+- **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
+  Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
+  not an agent action.
+
+Do NOT apply `change-failure` to: pre-existing bugs, feature requests, or any issue whose root cause is not
+attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) and `release-manager`
+(Change-failure attribution) for the operational detail.
+
+---
+
 ## Cross-references
 
 > Cross-references below describe the **consumer project layout** (what UnleashedMail
