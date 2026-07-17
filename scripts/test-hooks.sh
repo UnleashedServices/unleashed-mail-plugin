@@ -254,6 +254,8 @@ assert_empty    "input-redirect read source (tee out < sensitive) -> no decision
 assert_contains "patch -oFILE attached short -> ask" "$(guard_bash '"patch -oKeychain.swift < change.diff"')" '"permissionDecision":"ask"'
 assert_contains "xargs sed -i (in-place child) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed -i 's/a/b/'\"")" '"permissionDecision":"ask"'
 assert_empty    "xargs sed (no -i, read) -> no decision" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed 's/a/b/'\"")"
+assert_contains "find start-path -delete -> ask" "$(guard_bash '"find Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "find start-path read (no action) -> no decision" "$(guard_bash '"find Keychain.swift -type f"')"
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \

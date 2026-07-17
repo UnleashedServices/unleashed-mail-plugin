@@ -276,6 +276,25 @@ class SweepRound6(unittest.TestCase):
                     "printf 'Keychain.swift' | xargs cat"):
             self.assertNotIn("Keychain.swift", targets(cmd), cmd)
 
+    def test_find_start_path_deleted(self):
+        # codex review of #53: a sensitive file as a find STARTING POINT (not behind -name) is deleted by a
+        # writing action (-delete, or an -exec that writes) -> emit it.
+        for cmd, want in (("find Keychain.swift -delete", "Keychain.swift"),
+                          ("find OAuthService.swift -maxdepth 0 -delete", "OAuthService.swift"),
+                          ("find . Keychain.swift -delete", "Keychain.swift"),
+                          ("find src Keychain.swift -type f -delete", "Keychain.swift"),
+                          ("find Keychain.swift -exec rm {} ;", "Keychain.swift"),
+                          ("find -L Keychain.swift -delete", "Keychain.swift"),
+                          ("find . -name Keychain.swift -delete", "Keychain.swift")):
+            self.assertIn(want, targets(cmd), cmd)
+
+    def test_find_non_destructive_or_read_exec_is_not_a_write(self):
+        # a start path with NO writing action is a search/list (read) — must NOT be a target
+        for cmd in ("find Keychain.swift -type f", "find Keychain.swift",
+                    "find . -type f -exec grep foo Keychain.swift ;",   # exec grep = read
+                    "find Keychain.swift -exec grep foo {} ;"):          # reads the matched start path
+            self.assertNotIn("Keychain.swift", targets(cmd), cmd)
+
 
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):

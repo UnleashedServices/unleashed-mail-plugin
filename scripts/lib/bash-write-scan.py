@@ -485,10 +485,10 @@ def _sed_is_inplace(operands: list[str]) -> bool:
     )
 
 
-def _xargs_child_writes(sub: list[str]) -> bool:
-    """True if an xargs CHILD command writes/deletes its (stdin-supplied) file operands, so every literal
-    word in the pipeline must be treated as a candidate — the operands are not statically visible. Covers
-    delete/move/tee/dest-copy AND in-place `sed`/`truncate` (codex review of #53)."""
+def _command_writes_operands(sub: list[str]) -> bool:
+    """True if a command WRITES/DELETES its file operands — used for a child whose operands are not
+    statically visible: an xargs child (operands from stdin) or a `find -exec` child (operands are the
+    matched `{}` files). Covers delete/move/tee/dest-copy AND in-place `sed`/`truncate` (codex review #53)."""
     if not sub:
         return False
     subverb = _basecmd(sub[0])
@@ -598,12 +598,9 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
             if o.startswith("of="):
                 _emit_target(o[3:], out)
     elif verb == "find":
-        destructive = any(o in ("-delete", "-exec", "-execdir", "-ok", "-okdir") for o in operands)
-        if destructive:
-            for m in range(len(operands) - 1):
-                if operands[m] in ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"):
-                    _emit_target(operands[m + 1], out)
-        # `-exec/-ok CMD … ;|+` runs a sub-command (`find . -exec rm K.swift \;`) — scan its write targets.
+        # First scan every `-exec/-ok CMD … ;|+` sub-command (`find . -exec rm K.swift \;`) and note whether
+        # any MODIFIES the matched files (rm/mv/sed -i/…) — if so, the matched START PATHS are writes too.
+        exec_writes = False
         m = 0
         while m < len(operands):
             if operands[m] in ("-exec", "-execdir", "-ok", "-okdir"):
@@ -615,12 +612,33 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                     j += 1
                 if sub:
                     _scan_command(sub, out, all_words, [])
+                    exec_writes = exec_writes or _command_writes_operands(_strip_prefixes(sub))
                 m = j + 1
             else:
                 m += 1
+        # If the files are actually deleted/modified (`-delete`, or a writing `-exec`), emit the STARTING
+        # POINTS (leading non-option operands, after find's global options) + `-name`/`-path` values as
+        # targets (codex review of #53). A read-only exec (`-exec grep …`) modifies nothing -> no over-ask.
+        if exec_writes or any(o == "-delete" for o in operands):
+            gi = 0
+            while gi < len(operands):
+                o = operands[gi]
+                if o in ("-H", "-L", "-P"):
+                    gi += 1                          # no-arg global option
+                elif o == "-D":
+                    gi += 2                          # `-D debugoptions`
+                elif o.startswith("-O"):
+                    gi += 1                          # `-Olevel`
+                elif o.startswith("-") or o in ("(", "!", ","):
+                    break                            # the expression begins here
+                else:
+                    _emit_target(o, out); gi += 1    # a starting point
+            for k in range(len(operands) - 1):
+                if operands[k] in ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"):
+                    _emit_target(operands[k + 1], out)
     elif verb == "xargs":
         sub = _strip_prefixes(_strip_xargs_opts(operands))   # skip xargs's own options, THEN wrappers
-        if _xargs_child_writes(sub):
+        if _command_writes_operands(sub):
             # input words come from the pipe/stdin (not statically visible) — fail closed by treating
             # every literal word in the whole pipeline as a candidate.
             out.extend(all_words)
