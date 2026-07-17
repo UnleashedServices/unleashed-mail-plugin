@@ -59,6 +59,7 @@ KNOWN_TOOLS = {
 # no-op — an unknown tool is accepted unless `difflib` finds a close match, and `Task` has none. The
 # sub-agent dispatcher is `Agent`, never `Task` (AGENT_CONTRACTS §9; validate-hooks.py agrees).
 STALE_TOOLS = {"Task"}
+_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}   # case-insensitive membership (gemini review #53)
 
 
 def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
@@ -95,7 +96,8 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
         for entry in (t.strip().strip("[]").lstrip("-").strip() for t in val.split(",")):
             if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
                 continue
-            if entry in STALE_TOOLS:  # B4: hard-reject a known-stale name (difflib wouldn't flag it)
+            if entry.lower() in _STALE_TOOLS_LOWER:  # B4: hard-reject a known-stale name (difflib wouldn't
+                # flag it). Case-INSENSITIVE so `task`/`TASK` can't slip past the exact-`Task` check (gemini #53).
                 problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — the "
                                 f"sub-agent dispatcher is `Agent`, not `{entry}` (AGENT_CONTRACTS §9)")
                 continue
