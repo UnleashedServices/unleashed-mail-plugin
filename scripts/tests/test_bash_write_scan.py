@@ -334,6 +334,19 @@ class SweepRound7(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("rm \"Keychain.\\\nswift\""))
         self.assertIn("OAuthService.swift", targets("rm \"OAuth\\\nService.swift\""))
 
+    def test_xargs_findexec_child_write_verbs_consistent(self):
+        # gemini #53: the child-writes predicate must match the main dispatch — touch/patch/git-write too
+        for cmd in ("printf 'Keychain.swift' | xargs touch", "printf 'Keychain.swift' | xargs patch",
+                    "printf 'Keychain.swift' | xargs git rm", "find Keychain.swift -exec touch {} ;",
+                    "find . -name Keychain.swift -exec patch {} ;",
+                    "find Keychain.swift -exec git checkout {} ;"):
+            self.assertIn("Keychain.swift", targets(cmd), cmd)
+
+    def test_xargs_findexec_read_child_not_flagged(self):
+        # a git READ subcommand (log/show) and other reads must NOT over-ask
+        for cmd in ("printf 'Keychain.swift' | xargs git log", "printf 'Keychain.swift' | xargs cat"):
+            self.assertNotIn("Keychain.swift", targets(cmd), cmd)
+
 
 class CRLF(unittest.TestCase):
     """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""

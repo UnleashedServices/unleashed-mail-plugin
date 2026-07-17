@@ -4,7 +4,7 @@ command. Replaces sensitive-file-guard.sh's O(n^2) `_split_segments` per-char lo
 `grep` extractions (redirects, rm/interpreter basenames, cp/mv operands), which BOTH over-asked on a
 *quoted* operator (`echo '> Keychain.swift'`) and bypassed on a mid-word quote (`rm Key"chain".swift`).
 
-Contract: read the command on stdin; print each candidate write-target word NUL-delimited on stdout, fully
+Contract: read the command on stdin; print each candidate write-target word NEWLINE-delimited on stdout, fully
 DE-QUOTED (so `Key"chain".swift` -> `Keychain.swift`). The caller (the guard) filters by its own
 sensitive-basename policy and emits the ask. Exit 0 on success; exit 3 on an internal parse failure so the
 guard can fail CLOSED (deny) rather than exit-0-without-decision. Whole-pipeline O(n): one linear lexer pass,
@@ -512,13 +512,21 @@ def _sed_is_inplace(operands: list[str]) -> bool:
 def _command_writes_operands(sub: list[str]) -> bool:
     """True if a command WRITES/DELETES its file operands — used for a child whose operands are not
     statically visible: an xargs child (operands from stdin) or a `find -exec` child (operands are the
-    matched `{}` files). Covers delete/move/tee/dest-copy AND in-place `sed`/`truncate` (codex review #53)."""
+    matched `{}` files). Kept CONSISTENT with the main-dispatch write verbs so `xargs touch`/`find -exec
+    patch` don't bypass: delete/move/tee/dest-copy, `truncate`, in-place `sed`, `touch`, `patch`, and a
+    git WRITE subcommand (rm/mv/checkout/restore) — but NOT a read like `git log` (gemini review of #53)."""
     if not sub:
         return False
     subverb = _basecmd(sub[0])
     if subverb in _DELETE_ALL or subverb in _MOVE_ALL or subverb in _TEE or subverb in _DEST_LAST or subverb in _TRUNCATE:
         return True
-    return subverb == "sed" and _sed_is_inplace(sub[1:])
+    if subverb in ("touch", "patch"):
+        return True
+    if subverb == "sed":
+        return _sed_is_inplace(sub[1:])
+    if subverb == "git":
+        return len(sub) > 1 and _basecmd(sub[1]) in ("rm", "mv", "checkout", "restore")
+    return False
 
 
 def _scan_command(words: list[str], out: list[str], all_words: list[str], heredoc_bodies: list[str]) -> None:
