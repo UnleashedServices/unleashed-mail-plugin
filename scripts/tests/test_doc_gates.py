@@ -34,7 +34,12 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
     consumer repo). This guard fails if ANY non-exact spelling is (re)introduced."""
 
     _TREES = ("agents", "skills")
-    _ANY = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\b[^}\n]*\}?")
+    # NOTE: `[a-zA-Z0-9_]*` BEFORE the word boundary is load-bearing (gemini COREDEV-2504 review):
+    # a bare `\b` right after ROOT does NOT match a same-word suffix typo like `${CLAUDE_PLUGIN_ROOT_DIR}`
+    # or `${CLAUDE_PLUGIN_ROOTT}` (T→_ / T→T is not a boundary) → the typo yields NO match and silently
+    # passes the exact-token assertion. Consuming trailing word chars makes the whole mis-spelled token
+    # match, so it is compared against — and flagged as — a non-exact spelling.
+    _ANY = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*\b[^}\n]*\}?")
 
     def _md_files(self):
         for tree in self._TREES:
