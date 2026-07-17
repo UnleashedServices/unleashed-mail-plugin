@@ -13,6 +13,33 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.5.1] — 2026-07-16
+
+### Fixed
+- **Quality/review-gate fail-open remediation** (COREDEV-2503): a v2.5.0 audit surfaced fail-opens in the
+  gates this plugin ships (the repo's own validators don't cover gate logic). All 14 confirmed findings are
+  closed, each with a regression test that fails when the fix is reverted; two audit items were excluded
+  after verification (a SIGPIPE claim refuted; a "dropped parity rule" reclassified as gate-drift, F9):
+  - **F1** `review-verdict.py` — removed the `captureId` short-circuit that let two forged distinct
+    captureIds behind one identical transcript manufacture a passing gemini+codex approval; the
+    content-digest floor now always runs.
+  - **F2/F3** `review-synthesizer` — one shared `is_abs_or_traversal` helper (folds separators) closes the
+    backslash-traversal `changed_files` bypass and quarantines absolute/`..` finding paths instead of
+    demoting them to a bogus provisional APPROVE.
+  - **F4/F12** `sensitive-file-guard.sh` — replaced the O(n²) parser + quote-blind greps with one structured
+    quote/escape/operator-aware linear lexer (`lib/bash-write-scan.py`): fixes the timeout fail-open, the
+    quoted-operator over-ask and mid-word-quote bypass, adds the missing write-form arms
+    (subshell/`sed -i`/`>|`/`find -delete`/`xargs`/`dd`), corrects the exit-code contract (`ask`=exit-0,
+    parse-failure=exit-2 deny), and adds a 256 KiB DoS backstop.
+  - **F5** Stop-gate sentinel is now keyed by session (not just repo+commit), `chmod 600`, with an
+    all-session reset on a passing marker.
+  - **F6** `swift-reviewer` Step-4 fails closed (`${…:-.}` + `exit "$BUILD_VERIFY"`) so build/lint/test can't
+    silently skip. **F8** bounded secure read. **F10** anchored model-id regex. **F11** `capture.py`
+    `O_NOFOLLOW|O_EXCL` writers. **F13** CFR state-machine contradictions. **F9** provider-parity gate drift.
+  - **B1** pty `--timeout=N` form. **B2** verify-path stray-reviewer reject. **B4** stale-`Task` reject.
+    **B6** `build-verify.sh` compiles once (`build-for-testing`/`test-without-building`). **B7** CFR
+    drift-guard. (B3 dropped — no real duplication; B5/B8 deferred to a follow-up.)
+
 ## [2.5.0] — 2026-07-16
 
 ### Added
