@@ -63,7 +63,10 @@ A PR cannot merge to `main` (or to the version branch) without:
 2. SwiftLint green — changed files via `swiftlint --strict <changed files>`; whole repo via `swiftlint lint --strict --baseline swiftlint-baseline.json` (the committed baseline suppresses the pre-existing NSRegularExpression backlog so only NEW violations fail — COREDEV-2290)
 3. Tests green (xcodebuild test)
 4. `swift-reviewer` verdict: APPROVE
-5. Provider parity audit: PASS or `// TODO: PARITY` with tracked Jira ticket
+5. Provider parity audit: PASS, or a **declared** gap — a `ServiceCapabilities` flag set `false` + a
+   `ProviderParityError.unsupportedForProvider` throw at the call site (per `skills/provider-parity`;
+   COREDEV-2503 F9). A bare `// TODO: PARITY` comment or a throwing stub without that declaration is not a
+   sanctioned gap.
 
 ## 2. Plan → Implement Contract
 

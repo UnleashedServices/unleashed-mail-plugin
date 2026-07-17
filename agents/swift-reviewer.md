@@ -349,7 +349,7 @@ echo "=== Protocol changes ===" && echo "$PROTO_FILES"
 ```
 
 **Parity checks:**
-- [ ] New `EmailServiceProtocol` methods have implementations in BOTH providers (or explicit `// TODO: PARITY` with tracking issue)
+- [ ] New `EmailServiceProtocol` methods have implementations in BOTH providers, OR the gap is **declared** via a `ServiceCapabilities` flag set `false` + a `ProviderParityError.unsupportedForProvider(...)` throw at the still-reachable call site (F9/COREDEV-2503 — the sanctioned parity-gap expression per `skills/provider-parity`; a bare throwing stub or an un-declared `// TODO: PARITY` comment is **not** sufficient)
 - [ ] Return types and error semantics are consistent across both providers
 - [ ] Provider-specific errors don't leak into ViewModels
 - [ ] Test coverage exists for both providers
@@ -364,7 +364,7 @@ grep -rn "GmailService\|MicrosoftGraphService\|MSALResult\|GmailAPI\." \
 **Parity severity:**
 - 🔴 BLOCKER: New protocol method with only one implementation and no stub
 - 🔴 BLOCKER: Provider-specific error type exposed to a ViewModel
-- 🔴 BLOCKER: Feature implemented for one provider with a `// TODO: PARITY` stub but **no tracking issue** (AGENT_CONTRACTS §5 makes a *tracked* stub the only allowed escape)
+- 🔴 BLOCKER: Feature implemented for one provider with an **undeclared** gap — a throwing stub or a `// TODO: PARITY` comment WITHOUT the `ServiceCapabilities`-flag + `ProviderParityError.unsupportedForProvider` declaration (that declaration, per `skills/provider-parity`, is the only sanctioned parity gap; a throwing `ProviderParityError` stub is NOT "an implementation in both")
 - 🟡 WARNING: Test coverage exists for one provider but not the other
 
 **Emit parity findings as structured rows** in the full Step 5 schema, with
@@ -386,11 +386,14 @@ and the missing-test scan — printing `✅`/`❌` per gate and **exiting non-ze
 ```bash
 # $CHANGED is from Step 1. The script reads it on stdin (no shared-shell-state assumption), so
 # pr-review relies on THIS same run — it does not invoke the script itself (one test run, not two).
-printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh"
+printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/build-verify.sh"
 BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed
 # ECHO it: a shell variable cannot survive this block, so an un-echoed assignment never reaches you.
 # 127 = the script itself did not run — which "no ❌ printed" would otherwise look identical to.
 echo "BUILD_VERIFY=$BUILD_VERIFY"
+exit "$BUILD_VERIFY"   # F6 (COREDEV-2503): FAIL CLOSED — mirror Step-2's `exit "$ROSTER"`. Without it the
+                       # block ends on `echo` and exits 0 even on a 127 (build-verify.sh not found), so
+                       # build/lint/test silently DON'T run yet report success. `${…:-.}` matches the siblings.
 ```
 
 > The verification logic (gate aggregation, changed-`.swift` filtering, missing-test scan) lives in the
