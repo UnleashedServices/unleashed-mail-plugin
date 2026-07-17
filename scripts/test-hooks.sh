@@ -383,6 +383,12 @@ marker_write lint pass          # clears ALL repo-matching session sentinels
 marker_write lint fail          # fresh failure again
 assert_contains "F5 reset: S1 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
 assert_contains "F5 reset: S2 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (d) codex #53 round-5: an ANONYMOUS Stop (no session_id AND no transcript_path) must NOT share a
+#     sentinel — an empty key would hash all anonymous sessions to one file, so the 1st block would unblock
+#     every later one. Both consecutive anonymous Stops must block (no cross-session-shared bypass).
+reset_markers; marker_write lint fail
+assert_contains "F5 anon Stop #1 -> block" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_contains "F5 anon Stop #2 (no shared-sentinel bypass) -> block again" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers

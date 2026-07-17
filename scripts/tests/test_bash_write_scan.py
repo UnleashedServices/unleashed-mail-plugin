@@ -203,6 +203,47 @@ class SweepRound4(unittest.TestCase):
         self.assertIn("out.log", targets("tee out.log < Keychain.swift"))  # the real write target survives
 
 
+class SweepRound5(unittest.TestCase):
+    """codex review of #53 (round 5) — further lexer classes."""
+
+    def test_patch_output_and_reject_files(self):
+        for cmd in ("patch --output=Keychain.swift < p.diff", "patch -o Keychain.swift orig.c < p.diff",
+                    "patch --reject-file Keychain.swift < p.diff", "patch --reject-file=Keychain.swift < p.diff",
+                    "patch -r Keychain.swift < p.diff", "patch AuthService.swift < p.diff"):
+            self.assertTrue(any(b in t for t in targets(cmd) for b in ("Keychain.swift", "AuthService.swift")), cmd)
+
+    def test_find_exec_subcommand(self):
+        self.assertIn("Keychain.swift", targets("find . -exec rm Keychain.swift ;"))
+        self.assertIn("Keychain.swift", targets("find . -name x -exec mv Keychain.swift /t ;"))
+        self.assertEqual(targets("find . -type f -exec grep foo Keychain.swift ;"), [])  # exec grep = read
+
+    def test_versioned_interpreters(self):
+        self.assertIn("Keychain.swift", targets('python3.12 -c \'open("Keychain.swift","w")\''))
+        self.assertIn("Keychain.swift", targets('ruby3.3 -e \'File.delete("Keychain.swift")\''))
+        self.assertIn("Keychain.swift", targets('node20 -e \'require("fs").unlinkSync("Keychain.swift")\''))
+        self.assertIn("Keychain.swift", targets('perl5.38 -e \'unlink "Keychain.swift"\''))
+
+    def test_versioned_stem_guard_no_false_normalize(self):
+        # `sha256` must NOT normalize to the `sha` interpreter (there is none) — it is not an interpreter arm
+        self.assertEqual(targets('sha256 Keychain.swift'), [])
+
+    def test_shell_keyword_prefixes(self):
+        for cmd in ("! rm Keychain.swift", "if rm Keychain.swift; then :; fi",
+                    "while rm Keychain.swift; do break; done", "until rm Keychain.swift; do :; done"):
+            self.assertIn("Keychain.swift", targets(cmd), cmd)
+
+    def test_git_broad_pathspec_documented_boundary(self):
+        # broad `.`/tree pathspec emits only the literal `.` (basename never matches the sensitive policy) —
+        # out of scope like `rm -rf <dir>`; NAMED pathspecs ARE caught.
+        self.assertEqual(targets("git restore ."), ["."])
+        self.assertIn("Keychain.swift", targets("git restore Keychain.swift"))
+        self.assertIn("OAuthService.swift", targets("git checkout -- OAuthService.swift"))
+
+    def test_patch_attached_output_only_via_equals_branch(self):
+        # the ATTACHED `--output=FILE` form has no positional to fall back on — proves the `=` branch
+        self.assertEqual(targets("patch --output=Keychain.swift < p.diff"), ["Keychain.swift"])
+
+
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):
         big = "echo " + ("a" * 80000)

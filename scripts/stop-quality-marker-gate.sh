@@ -56,8 +56,16 @@ REPO_HASH="$(marker_repo_hash)"
 # retry and wedge the session. (Loop-guard #1, stop_hook_active, still prevents the in-loop wedge.)
 SESSION_KEY="$(hook_str session_id)"
 [ -n "$SESSION_KEY" ] || SESSION_KEY="$(hook_str transcript_path)"
-SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
-SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
+# F5 (codex review of #53): an EMPTY session key (both fields absent) must NOT share a sentinel — a
+# hash("") would collide EVERY anonymous session into one file, so the first anonymous block would unblock
+# all later ones, reviving the cross-session bypass. With no identity, use NO sentinel and block fail-safe
+# each time (loop-guard #1 / stop_hook_active still prevents an in-loop wedge).
+if [ -n "$SESSION_KEY" ]; then
+    SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
+    SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
+else
+    SENTINEL=""
+fi
 
 BLOCKED_KIND=""
 BLOCKED_AGE=""
@@ -80,7 +88,7 @@ done
 
 # Loop guard #2: a stateful sentinel so a genuinely-broken build can still be
 # abandoned after it has blocked once on this commit.
-if [ -f "$SENTINEL" ] && [ "$(cat "$SENTINEL" 2>/dev/null)" = "$HEAD_COMMIT" ]; then
+if [ -n "$SENTINEL" ] && [ -f "$SENTINEL" ] && [ "$(cat "$SENTINEL" 2>/dev/null)" = "$HEAD_COMMIT" ]; then
     exit 0
 fi
 
@@ -92,6 +100,12 @@ fi
 REASON="Last ${BLOCKED_KIND} check FAILED (${BLOCKED_AGE}s ago, commit ${HEAD_COMMIT}). Fix it before stopping. Run: ${REMEDY}"
 
 if [ "$MODE" = "enforce" ]; then
+    if [ -z "$SENTINEL" ]; then
+        # No session identity: cannot record a per-session loop-guard, and a shared one would be a
+        # cross-session bypass. Block this Stop WITHOUT persisting any sentinel (fail-safe).
+        hook_emit_block "$REASON"
+        exit 0
+    fi
     # Only block once loop-guard #2 is durably recorded. If the sentinel can't be
     # written (data dir unwritable/full), DON'T block — otherwise a later Stop on
     # this same commit could keep re-blocking. Fail open to the warn-log path.
