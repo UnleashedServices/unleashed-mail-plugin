@@ -33,12 +33,16 @@ Docs: https://developers.openai.com/codex/cli/reference
 
 ```bash
 # Put the prompt in a workspace file, then run codex through the wrapper.
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/codex-out.txt -- \
+# Wrapper timeout is 1200s: mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
+# SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
+# (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
+# otherwise kill the run before the wrapper's cap fires.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/codex-out.txt -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
 # Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
 
 # Skill-based audit through the wrapper:
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 600 /tmp/security.txt -- \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/security.txt -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 ```
 

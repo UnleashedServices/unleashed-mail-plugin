@@ -14,13 +14,69 @@ def _read(rel):
 
 
 class F6_Step4FailClosed(unittest.TestCase):
-    def test_step4_uses_root_fallback_and_propagates_exit(self):
-        # Both strings are unique to the Step-4 build-verify fence.
+    def test_step4_uses_bare_root_token_and_propagates_exit(self):
+        # COREDEV-2504: Step-4 must reference the plugin script via the BARE ${CLAUDE_PLUGIN_ROOT} token
+        # (Claude Code substitutes it inline in agent bodies; the `:-.` form is NOT substituted → resolves
+        # to `.` = the consumer repo). Both strings are unique to the Step-4 build-verify fence.
         src = _read("agents/swift-reviewer.md")
-        self.assertIn("${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/build-verify.sh", src,
-                      "F6: Step-4 must use the ${…:-.} fallback like its siblings")
+        self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh", src,
+                      "COREDEV-2504: Step-4 must use the bare ${CLAUDE_PLUGIN_ROOT} token (not the :-. form)")
+        self.assertNotIn("${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/build-verify.sh", src,
+                         "COREDEV-2504: the :-. fallback form must NOT reappear at Step-4")
         self.assertIn('exit "$BUILD_VERIFY"', src,
                       "F6: Step-4 must exit the propagated code (fail closed on 127), not end on echo")
+
+
+class COREDEV2504_PluginRootConvention(unittest.TestCase):
+    """COREDEV-2504: agent/skill BODIES must reference the plugin root ONLY via the exact, inline-substituted
+    `${CLAUDE_PLUGIN_ROOT}` token. Claude Code does not substitute the bash-fallback `${…:-.}` (nor `-.`,
+    `:?`, `:=`, unbraced `$CLAUDE_PLUGIN_ROOT`), so those reach the shell literally → unset var → `.` (the
+    consumer repo). This guard fails if ANY non-exact spelling is (re)introduced."""
+
+    _TREES = ("agents", "skills")
+    _ANY = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\b[^}\n]*\}?")
+
+    def _md_files(self):
+        for tree in self._TREES:
+            base = os.path.join(_ROOT, tree)
+            for dirpath, _dirs, files in os.walk(base):
+                for fn in files:
+                    if fn.endswith(".md"):
+                        yield os.path.relpath(os.path.join(dirpath, fn), _ROOT)
+
+    def test_every_occurrence_is_the_exact_bare_token(self):
+        bad = []
+        for rel in self._md_files():
+            for m in self._ANY.findall(_read(rel)):
+                if m != "${CLAUDE_PLUGIN_ROOT}":
+                    bad.append(f"{rel}: {m!r}")
+        self.assertEqual(bad, [], f"COREDEV-2504: only the exact ${{CLAUDE_PLUGIN_ROOT}} token is allowed: {bad}")
+
+    def test_gate_script_references_present_via_bare_token(self):
+        # Defense-in-depth (codex R2): catch someone DELETING the token + replacing with a repo-relative
+        # path — the syntax guard above would then pass. Assert each gate-critical script is still referenced
+        # via the bare token.
+        expect = {
+            "agents/swift-reviewer.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review/reviewer-roster.sh",
+                                         "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh",
+                                         "${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"],
+            "skills/create-feature-plan/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            "skills/review-synthesis/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            "skills/brainstorm/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            "skills/implement/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            "skills/codex-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
+            "skills/gemini-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
+        }
+        for rel, refs in expect.items():
+            src = _read(rel)
+            for ref in refs:
+                self.assertIn(ref, src, f"COREDEV-2504: {rel} lost the bare-token reference {ref!r}")
+
+    def test_codex_review_pty_timeout_is_1200(self):
+        # COREDEV-2504 medium: the two codex-review pty caps must be 1200s (xhigh survives), not 600.
+        src = _read("skills/codex-review/SKILL.md")
+        self.assertEqual(src.count("--timeout 1200"), 2, "codex-review must use --timeout 1200 (x2)")
+        self.assertNotIn("--timeout 600", src, "codex-review must not keep the 600s cap that SIGTERMs xhigh")
 
 
 class F13_CFRStateMachine(unittest.TestCase):

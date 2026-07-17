@@ -129,9 +129,10 @@ if [ -z "$PLAN" ]; then
     exit 1
 else
     echo "Plan: $PLAN"
-    # Verify the persisted, digest-bound verdict for THAT plan. `:-.` so the recipe DOES what the prose
-    # says — unset would resolve to the absolute /scripts/review-verdict.py and fail (gemini, #41).
-    python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" verify --plan "$PLAN"
+    # Verify the persisted, digest-bound verdict for THAT plan. The bare `${CLAUDE_PLUGIN_ROOT}` token is
+    # substituted inline in the skill body -> the plugin install path; the `:-.` form is NOT recognized by
+    # that substitution (it would reach the shell literally and resolve to `.`) (COREDEV-2504).
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" verify --plan "$PLAN"
 fi
 ```
 
