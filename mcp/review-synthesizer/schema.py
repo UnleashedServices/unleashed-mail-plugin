@@ -184,15 +184,16 @@ def is_abs_or_traversal(path: str) -> bool:
     Trade-off (documented): a rare POSIX filename containing a literal backslash is treated as a separator
     and may be rejected — acceptable, since canonical_path already folds it identically and such a name is
     near-impossible in this repo."""
-    r = path.strip()
+    # Fold separators FIRST (codex review of #53): a dot-backslash / mixed-separator drive path like
+    # `.\C:\Auth.swift` canonicalizes to `C:/Auth.swift` (drive-absolute) yet slipped a raw-form drive
+    # check — normalizing before every test closes that. `\\`->`/` (UNC `\\` -> `//`), then strip leading
+    # `./` (which now also covers a folded `.\`).
+    r = path.strip().replace("\\", "/")
     while r.startswith("./"):
         r = r[2:]
     if not r:
         return False
-    if _DRIVE_ABS.match(r):          # drive-absolute on the RAW form: matches both `C:\` and `C:/`
-        return True
-    r = r.replace("\\", "/")         # fold separators to agree with canonical_path (UNC `\\` -> `//`)
-    return r.startswith("/") or ".." in r.split("/")
+    return bool(_DRIVE_ABS.match(r) or r.startswith("/") or ".." in r.split("/"))
 
 
 def parse_finding(d: dict, *, reject_abs_traversal: bool = False) -> Finding:

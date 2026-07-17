@@ -61,6 +61,16 @@ class F12Arms(unittest.TestCase):
     def test_find_delete(self):
         self.assertIn("Keychain.swift", targets("find . -name 'Keychain.swift' -delete"))
 
+    def test_heredoc_with_redirect_after_delimiter(self):
+        # codex review of #53: a redirect AFTER the heredoc delimiter (`cat <<EOF > sensitive`) is a real
+        # write and must be caught — the body is consumed at the newline, so the same-line redirect survives.
+        self.assertIn("Keychain.swift", targets("cat <<EOF > Keychain.swift\ndata\nEOF"))
+        self.assertIn("Keychain.swift", targets("cat <<EOF >> Keychain.swift\nx\nEOF"))
+        # a heredoc redirected to a NON-sensitive file must not ask
+        self.assertNotIn("Keychain.swift", targets("cat <<EOF > /tmp/safe.txt\ndata\nEOF"))
+        # the interpreter-heredoc-as-code path still works
+        self.assertIn("OAuthService.swift", targets("python3 <<PY\nopen(OAuthService.swift)\nPY"))
+
     def test_xargs_write_from_pipeline(self):
         self.assertIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs rm"))
 

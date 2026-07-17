@@ -172,7 +172,10 @@ class TestSynthesizeTool(unittest.TestCase):
         # so these fail closed. A rare literal-backslash POSIX filename being rejected is the accepted,
         # documented trade-off (canonical_path folds it identically anyway).
         for changed in (["\\Sources\\Auth.swift"], ["foo\\..\\bar.swift"], ["\\report.swift"],
-                        ["A.swift", "..\\..\\etc\\x.swift"]):
+                        ["A.swift", "..\\..\\etc\\x.swift"],
+                        # codex review of #53: a dot-backslash / mixed-separator drive path canonicalizes to
+                        # a drive-absolute (`C:/…`) and must fail closed too — normalize BEFORE the checks.
+                        [".\\C:\\Auth.swift"], [".\\\\C:\\\\x"], ["A.swift", ".\\D:\\y"]):
             out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": "synthesize_review",
                                       "arguments": {"findings": [good()], "changed_files": changed}}}])

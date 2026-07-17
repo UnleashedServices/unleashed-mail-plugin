@@ -29,10 +29,10 @@ _CODE_FILE_RE = re.compile(r"[A-Za-z0-9._/-]+\.(?:%s)[A-Za-z0-9._-]*" % "|".join
 _OPS = (">>", ">|", "&>>", "&>", "<<<", "<<-", "<<", "<&", ">&", "&&", "||", "|&", ";;", "|", "&", ";", "(", ")", "<", ">")
 
 
-def _consume_heredoc(cmd: str, pos: int, strip_tabs: bool) -> tuple[str, int]:
-    """After a `<<`/`<<-`, parse the delimiter (bare / quoted / backslashed) and return (body, next_index),
-    consuming lines up to a line equal to the delimiter (leading tabs stripped for `<<-`). The body is the
-    interpreter's code for `python3 <<PY … PY`, so a sensitive name inside it is caught."""
+def _parse_heredoc_delim(cmd: str, pos: int) -> tuple[str, int]:
+    """After a `<<`/`<<-`, parse the delimiter (bare / quoted / backslashed) and return (delim, index_after
+    the delimiter — still on the SAME line). The body is consumed later, at the next newline, so redirects
+    or args that follow `<<DELIM` on the same line (`cat <<EOF > file`) are still parsed (codex review #53)."""
     n = len(cmd)
     j = pos
     while j < n and cmd[j] in " \t":
@@ -41,20 +41,20 @@ def _consume_heredoc(cmd: str, pos: int, strip_tabs: bool) -> tuple[str, int]:
         q = cmd[j]; j += 1; s = j
         while j < n and cmd[j] != q:
             j += 1
-        delim = cmd[s:j]; j = j + 1 if j < n else j
-    else:
-        if j < n and cmd[j] == "\\":
-            j += 1
-        s = j
-        while j < n and (cmd[j].isalnum() or cmd[j] in "_-."):
-            j += 1
-        delim = cmd[s:j]
-    if not delim:
-        return "", j
-    nl = cmd.find("\n", j)
-    if nl == -1:
-        return "", n
-    k = nl + 1
+        return cmd[s:j], (j + 1 if j < n else j)
+    if j < n and cmd[j] == "\\":
+        j += 1
+    s = j
+    while j < n and (cmd[j].isalnum() or cmd[j] in "_-."):
+        j += 1
+    return cmd[s:j], j
+
+
+def _consume_heredoc_body(cmd: str, pos: int, delim: str, strip_tabs: bool) -> tuple[str, int]:
+    """From `pos` (start of the first body line) read lines up to a line == `delim` (leading tabs stripped
+    for `<<-`). Returns (body, index after the terminator line)."""
+    n = len(cmd)
+    k = pos
     body_lines: list[str] = []
     while k <= n:
         le = cmd.find("\n", k)
@@ -93,6 +93,7 @@ def _tokenize(cmd: str) -> list[list[dict]]:
     w_dq: list[str] = []          # dequoted chars of the current word
     w_raw: list[str] = []         # raw chars of the current word
     in_word = False
+    pending_heredocs: list = []   # (delim, strip_tabs) awaiting their body at the next unquoted newline
     i, n = 0, len(cmd)
 
     def flush_word():
@@ -121,8 +122,21 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             i += 1
             continue
         if c == "\n":
-            end_statement()
-            i += 1
+            if pending_heredocs:
+                # consume each pending heredoc body (in order) starting AFTER this newline — the redirect/
+                # args on the `cmd <<EOF > file` line were already tokenized, so they are preserved — then
+                # end the statement (codex review #53).
+                flush_word()          # flush the last word on this line (e.g. the redirect TARGET) BEFORE
+                pos = i + 1           # the H tokens, so `>` is followed by its target word, not by `H`
+                for delim, strip_tabs in pending_heredocs:
+                    body, pos = _consume_heredoc_body(cmd, pos, delim, strip_tabs)
+                    toks.append({"k": "H", "body": body})
+                pending_heredocs = []
+                end_statement()
+                i = pos
+            else:
+                end_statement()
+                i += 1
             continue
         # --- backslash escape (outside quotes): next char is a literal word char ---
         if c == "\\":
@@ -169,11 +183,13 @@ def _tokenize(cmd: str) -> list[list[dict]]:
                 i += 1
                 continue
             flush_word()
-            if matched in ("<<", "<<-"):     # heredoc: capture the body as an interpreter's inline code
-                body, newi = _consume_heredoc(cmd, i + len(matched), strip_tabs=(matched == "<<-"))
-                toks.append({"k": "H", "body": body})
-                end_statement()              # the closing-delimiter newline ends this command; a command
-                i = newi                     # AFTER the heredoc (`… EOF\nrm X`) is a SEPARATE statement
+            if matched in ("<<", "<<-"):     # heredoc: record the delimiter; the BODY is consumed at the
+                delim, after = _parse_heredoc_delim(cmd, i + len(matched))   # next newline, so a redirect
+                if delim:                    # or arg after `<<DELIM` on THIS line is still parsed
+                    pending_heredocs.append((delim, matched == "<<-"))
+                    i = after
+                else:
+                    toks.append({"k": "O", "op": matched}); i += len(matched)
                 continue
             if matched in ("(", ")"):        # standalone grouping: statement boundary, drop the token
                 end_statement()
