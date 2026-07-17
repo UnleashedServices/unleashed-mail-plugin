@@ -398,6 +398,9 @@ def _strip_prefixes(words: list[str]) -> list[str]:
             split_string = False
             val_consumed = False
             val_opts = _PREFIX_VAL_OPTS.get(base, ())
+            # single-letter forms of the value-taking options, for CLUSTERED short opts (`sudo -Su USER`,
+            # where `-u` is last so its value is the next token) — codex/gemini review of #53.
+            val_letters = {o[1] for o in val_opts if len(o) == 2 and o[0] == "-"}
             idx += 1
             # consume this prefix's option-args that take a following token
             while idx < len(words) and words[idx].startswith("-"):
@@ -413,6 +416,16 @@ def _strip_prefixes(words: list[str]) -> list[str]:
                 elif opt in val_opts:                 # option that consumes a separate-form value arg
                     if idx < len(words):
                         idx += 1; val_consumed = True
+                elif len(opt) > 2 and not opt.startswith("--"):
+                    # clustered short opts: the FIRST value-taking letter consumes a value. If it is the
+                    # LAST char the value is the NEXT token (`sudo -Su USER`); if more follows it is an
+                    # ATTACHED value (`sudo -uUSER`) and no extra token is consumed (codex/gemini #53).
+                    cluster = opt[1:]
+                    for _pos, _ch in enumerate(cluster):
+                        if _ch in val_letters:
+                            if _pos == len(cluster) - 1 and idx < len(words):
+                                idx += 1; val_consumed = True
+                            break
             if probe:
                 return []                             # a probe executes nothing -> no write target
             if split_string:

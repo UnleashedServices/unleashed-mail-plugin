@@ -387,6 +387,17 @@ class AuditPR53Round2(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("find -- Keychain.swift -delete"))
         self.assertEqual(targets("find -- src -type f"), [])     # non-destructive -> no ask
 
+    def test_clustered_short_option_with_value(self):
+        # gemini #53: `sudo -Su USER` — `-u` is the last cluster letter, so USER is the next token, not verb
+        self.assertIn("Keychain.swift", targets("sudo -Su root rm Keychain.swift"))
+        self.assertIn("Keychain.swift", targets("doas -Su root rm Keychain.swift"))
+        # attached-value cluster (`-uUSER`) must NOT consume the next token (the real verb)
+        self.assertIn("Keychain.swift", targets("sudo -uroot rm Keychain.swift"))
+        self.assertIn("Keychain.swift", targets("sudo -Suroot rm Keychain.swift"))
+        # no-arg flag clusters and bare forms unaffected
+        self.assertIn("Keychain.swift", targets("sudo -Sk rm Keychain.swift"))
+        self.assertIn("Keychain.swift", targets("sudo -n rm Keychain.swift"))
+
 
 class CRLF(unittest.TestCase):
     """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""
