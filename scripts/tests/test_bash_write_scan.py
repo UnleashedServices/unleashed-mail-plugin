@@ -64,6 +64,18 @@ class F12Arms(unittest.TestCase):
     def test_xargs_write_from_pipeline(self):
         self.assertIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs rm"))
 
+    def test_xargs_options_before_command(self):
+        # codex review of #53: options BEFORE the child verb must be skipped, else the write bypasses.
+        for cmd in ("printf 'Keychain.swift' | xargs -n 1 rm",
+                    "printf 'Keychain.swift' | xargs -I{} rm {}",
+                    "printf 'Keychain.swift' | xargs -0 -P4 rm",
+                    "printf 'Keychain.swift' | xargs --max-args 1 rm"):
+            self.assertIn("Keychain.swift", targets(cmd), cmd)
+
+    def test_xargs_read_child_not_flagged(self):
+        # a read-only child (grep) via xargs must NOT ask, even with options
+        self.assertNotIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs -n 1 grep foo"))
+
 
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):

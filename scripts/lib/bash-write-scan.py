@@ -268,6 +268,30 @@ def _emit_scan_words(words: list[str], out: list[str]) -> None:
         out.extend(_CODE_FILE_RE.findall(w))
 
 
+# xargs's OWN options that take a separate-form argument (`-n 1`, `-I {}`, `--max-args 1`).
+_XARGS_ARG_OPTS = {"-n", "-L", "-I", "-P", "-s", "-E", "-e", "-d", "-a",
+                   "--max-args", "--max-lines", "--replace", "--max-procs", "--max-chars",
+                   "--eof", "--delimiter", "--arg-file"}
+
+
+def _strip_xargs_opts(operands: list[str]) -> list[str]:
+    """Skip xargs's OWN options (and a separate-form arg) so the CHILD command word surfaces — otherwise
+    `xargs -n 1 rm` / `xargs -I{} rm {}` / `xargs -0 -P4 rm` read `-n`/`-I{}`/`-0` as the verb and the
+    sensitive-write bypasses the guard (COREDEV-2503 F12, codex review of #53)."""
+    i, n = 0, len(operands)
+    while i < n:
+        o = operands[i]
+        if o == "--":
+            return operands[i + 1:]
+        if not o.startswith("-"):
+            return operands[i:]
+        if o in _XARGS_ARG_OPTS:       # separate-form arg: `-n 1`, `-I {}`, `--max-args 1`
+            i += 2
+        else:                          # `--opt=val`, attached short arg (`-n1`/`-I{}`), or a no-arg/cluster flag
+            i += 1
+    return []
+
+
 def _scan_statement(stmt: list[dict], out: list[str]) -> None:
     # 1) active-redirect targets apply regardless of verb (the WORD after >, >>, >|, &>, &>>)
     for k in range(len(stmt) - 1):
@@ -340,7 +364,7 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
                     if operands[m] in ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"):
                         out.append(operands[m + 1])
         elif verb in ("xargs",):
-            sub = _strip_prefixes(operands)
+            sub = _strip_prefixes(_strip_xargs_opts(operands))   # skip xargs's own options, THEN wrappers
             subverb = _basecmd(sub[0]) if sub else ""
             if subverb in _DELETE_ALL or subverb in _MOVE_ALL or subverb in _TEE or subverb in _DEST_LAST:
                 # input words come from the pipe/stdin (not statically visible) — fail closed by treating

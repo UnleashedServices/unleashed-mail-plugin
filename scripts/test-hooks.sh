@@ -240,6 +240,7 @@ assert_contains "sed --in-place=bak -> ask" "$(guard_bash '"sed --in-place=bak I
 assert_contains "clobber >| -> ask" "$(guard_bash '"echo x >| Keychain.swift"')" '"permissionDecision":"ask"'
 assert_contains "find -delete -> ask" "$(guard_bash "\"find . -name 'Keychain.swift' -delete\"")" '"permissionDecision":"ask"'
 assert_contains "xargs rm from pipe -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs rm\"")" '"permissionDecision":"ask"'
+assert_contains "xargs -n 1 rm (options before verb) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs -n 1 rm\"")" '"permissionDecision":"ask"'
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \
