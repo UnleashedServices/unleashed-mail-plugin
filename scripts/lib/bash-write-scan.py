@@ -265,7 +265,9 @@ def _has_inline_code(words: list[str], verb: str) -> bool:
         code_flags = ("c",)
     for w in words[1:]:
         if not w.startswith("-") or w.startswith("--"):
-            if w in ("--eval", "--print") and verb in ("node", "nodejs"):
+            # node long-form inline code: `--eval`/`--print`, ALSO the documented `=` form `--eval=CODE`
+            # (codex review #53 — the bare-equality check missed it).
+            if verb in ("node", "nodejs") and w.split("=", 1)[0] in ("--eval", "--print"):
                 return True
             continue
         cluster = w[1:]

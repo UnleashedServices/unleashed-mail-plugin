@@ -86,6 +86,12 @@ class F12Arms(unittest.TestCase):
         # a read-only child (grep) via xargs must NOT ask, even with options
         self.assertNotIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs -n 1 grep foo"))
 
+    def test_node_eval_equals_form_is_inline_code(self):
+        # codex review of #53: node's documented `--eval=`/`--print=` equals form is inline code.
+        self.assertIn("Keychain.swift", targets('node --eval=\'require("fs").unlinkSync("Keychain.swift")\''))
+        self.assertIn("Keychain.swift", targets('node --print=\'require("fs").readFileSync("Keychain.swift")\''))
+        self.assertIn("Keychain.swift", targets('node -e \'fs.unlinkSync("Keychain.swift")\''))  # short form still
+
 
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):
