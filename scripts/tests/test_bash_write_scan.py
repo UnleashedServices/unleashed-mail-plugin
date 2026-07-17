@@ -357,6 +357,37 @@ class SweepRound7(unittest.TestCase):
             self.assertNotIn("Keychain.swift", targets(cmd), cmd)
 
 
+class AuditPR53Round2(unittest.TestCase):
+    """Second external-audit / bot round on #53: more shell forms that hide a writer."""
+
+    def test_coproc_keyword_stripped(self):
+        self.assertIn("Keychain.swift", targets("coproc rm Keychain.swift"))
+        self.assertEqual(targets("coproc foo bar"), [])          # no write -> no ask
+
+    def test_here_string_to_interpreter(self):
+        self.assertIn("Keychain.swift", targets("bash <<< 'rm Keychain.swift'"))
+        self.assertIn("Keychain.swift", targets('python3 <<< \'open("Keychain.swift","w")\''))
+        self.assertNotIn("Keychain.swift", targets("cat <<< 'Keychain.swift'"))   # read -> no over-ask
+
+    def test_ansi_c_quoting_decoded(self):
+        self.assertIn("Keychain.swift", targets("rm $'Keychain\\x2eswift'"))       # \xHH
+        self.assertIn("Keychain.swift", targets("rm $'Keychain\\056swift'"))       # octal
+        self.assertEqual(targets("echo $'hi\\n'"), [])
+
+    def test_git_global_options_in_child_predicate(self):
+        self.assertIn("Keychain.swift", targets("printf 'Keychain.swift' | xargs git -C /tmp rm"))
+        self.assertIn("Keychain.swift", targets("find Keychain.swift -exec git --work-tree /tmp rm {} ;"))
+
+    def test_dd_as_find_xargs_child(self):
+        # find -exec dd writes the matched start path; xargs dd fail-closes on the pipeline words
+        self.assertIn("Keychain.swift", targets("find Keychain.swift -exec dd of={} ;"))
+        self.assertTrue(any("Keychain.swift" in t for t in bws.write_targets("printf 'of=Keychain.swift' | xargs dd")))
+
+    def test_find_dashdash_before_start_paths(self):
+        self.assertIn("Keychain.swift", targets("find -- Keychain.swift -delete"))
+        self.assertEqual(targets("find -- src -type f"), [])     # non-destructive -> no ask
+
+
 class CRLF(unittest.TestCase):
     """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""
 

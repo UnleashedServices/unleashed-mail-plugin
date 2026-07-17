@@ -260,6 +260,14 @@ assert_contains "writer inside command substitution -> ask" "$(guard_bash "\"ech
 assert_contains "function-definition body -> ask" "$(guard_bash '"f(){ rm Keychain.swift; }; f"')" '"permissionDecision":"ask"'
 assert_contains "rsync --remove-source-files -> ask" "$(guard_bash '"rsync --remove-source-files Keychain.swift /tmp/out/"')" '"permissionDecision":"ask"'
 assert_empty    "read inside command substitution -> no decision" "$(guard_bash "\"echo \\\"\$(cat Keychain.swift)\\\"\"")"
+assert_contains "coproc rm sensitive -> ask" "$(guard_bash '"coproc rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "here-string to bash -> ask" "$(guard_bash "\"bash <<< 'rm Keychain.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "find -- start path -delete -> ask" "$(guard_bash '"find -- Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "here-string to cat (read) -> no decision" "$(guard_bash "\"cat <<< 'Keychain.swift'\"")"
+# ANSI-C `$'…'` end-to-end quoting is painful through the JSON layer; decoding is covered by the unit test
+# AuditPR53Round2.test_ansi_c_quoting_decoded. Build the payload directly to keep an integration check too:
+_ANSIC="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm $'"'"'Keychain\\x2eswift'"'"'"}}' | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
+assert_contains "ANSI-C quoted target -> ask" "$_ANSIC" '"permissionDecision":"ask"'
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \

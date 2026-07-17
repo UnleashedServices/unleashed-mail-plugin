@@ -147,6 +147,10 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
         elif current is not None and line.strip() and line[:1].isspace():
             # continuation / block-scalar body -> the key has content
             body = line.strip()
+            if body.startswith("-"):                 # block-list item: drop a trailing YAML inline comment
+                hp = body.find(" #")                 # (`- Task # legacy`) so it doesn't hide a stale tool
+                if hp != -1:
+                    body = body[:hp].rstrip()
             if fm.get(current, "") in ("", ">", "|", ">-", "|-"):
                 fm[current] = body
             else:

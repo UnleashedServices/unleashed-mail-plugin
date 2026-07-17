@@ -64,6 +64,15 @@ class StaleToolRejectTest(unittest.TestCase):
         self.assertTrue(any("stale" in x or "Agent" in x for x in p),
                         f"`Task` in a multi-line block list must be rejected: {p} (tools={fm.get('tools')!r})")
 
+    def test_stale_task_with_inline_comment(self):
+        # codex/gemini #53: a YAML inline comment on a block-list item must be stripped before the check
+        md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task # legacy\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        self.assertTrue(any("stale" in x or "Agent" in x for x in p),
+                        f"`Task # legacy` must be rejected: {p} (tools={fm.get('tools')!r})")
+
     def test_multiline_block_list_clean_passes(self):
         md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Agent\n---\nbody\n"
         fm = vpa.parse_frontmatter(md)

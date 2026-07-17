@@ -46,6 +46,45 @@ _CODE_FILE_RE = re.compile(r"[A-Za-z0-9._/-]+\.(?:%s)[A-Za-z0-9._-]*" % "|".join
 _OPS = (">>", ">|", "&>>", "&>", "<<<", "<<-", "<<", "<&", ">&", "&&", "||", "|&", ";;", "|", "&", ";", "(", ")", "{", "}", "<", ">")
 
 
+_ANSI_C = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+           "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def _decode_ansi_c(s: str) -> str:
+    """Decode a bash ANSI-C `$'…'` body — `\\n`, `\\t`, `\\xHH`, octal `\\NNN`, `\\uHHHH`, `\\UHHHHHHHH` — so
+    `$'Keychain\\x2eswift'` becomes `Keychain.swift` (codex review of #53)."""
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c); i += 1; continue
+        nxt = s[i + 1]
+        if nxt in _ANSI_C:
+            out.append(_ANSI_C[nxt]); i += 2
+        elif nxt in ("x", "u", "U"):
+            width = {"x": 2, "u": 4, "U": 8}[nxt]
+            j = i + 2; h = ""
+            while j < n and len(h) < width and s[j] in "0123456789abcdefABCDEF":
+                h += s[j]; j += 1
+            if h:
+                try:
+                    out.append(chr(int(h, 16)))
+                except (ValueError, OverflowError):
+                    out.append(nxt)
+                i = j
+            else:
+                out.append(nxt); i += 2
+        elif nxt in "01234567":
+            j = i + 1; o = ""
+            while j < n and len(o) < 3 and s[j] in "01234567":
+                o += s[j]; j += 1
+            out.append(chr(int(o, 8) & 0xFF)); i = j
+        else:
+            out.append(nxt); i += 2                       # unknown escape -> the literal char
+    return "".join(out)
+
+
 def _parse_heredoc_delim(cmd: str, pos: int) -> tuple[str, int]:
     """After a `<<`/`<<-`, parse the delimiter (bare / quoted / backslashed) and return (delim, index_after
     the delimiter — still on the SAME line). The body is consumed later, at the next newline, so redirects
@@ -145,7 +184,7 @@ _PREFIX_VAL_OPTS = {
 }
 # shell reserved words that precede a command (`! rm X`, `if rm X; then …`, `while rm X; do …`,
 # `function f { … }`): strip them so the real verb surfaces instead of `!`/`if`/`while` (codex review #53).
-_SHELL_KEYWORDS = {"!", "if", "then", "elif", "else", "while", "until", "do", "function"}
+_SHELL_KEYWORDS = {"!", "if", "then", "elif", "else", "while", "until", "do", "function", "coproc"}
 # a function-definition header `name()` / `name(){` — strip it so the body command is scanned
 # (`f(){ rm K.swift; }; f` deletes K.swift when called). codex review of #53.
 _FUNC_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\{?$")
@@ -227,6 +266,15 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             else:
                 w_raw.append(c); w_dq.append(c); in_word = True
                 i += 1
+            continue
+        # --- ANSI-C quoting `$'…'`: bash decodes escapes BEFORE running the command, so `rm $'K\x2eswift'`
+        #     deletes `K.swift`. Decode the body (respecting `\'` inside) — codex review of #53. ---
+        if c == "$" and i + 1 < n and cmd[i + 1] == "'":
+            j = i + 2
+            while j < n and cmd[j] != "'":
+                j += 2 if (cmd[j] == "\\" and j + 1 < n) else 1
+            w_dq.append(_decode_ansi_c(cmd[i + 2:j])); w_raw.append(cmd[i:min(j + 1, n)]); in_word = True
+            i = j + 1
             continue
         # --- single quotes: everything literal to the next ' ---
         if c == "'":
@@ -545,12 +593,15 @@ def _command_writes_operands(sub: list[str]) -> bool:
     subverb = _basecmd(sub[0])
     if subverb in _DELETE_ALL or subverb in _MOVE_ALL or subverb in _TEE or subverb in _DEST_LAST or subverb in _TRUNCATE:
         return True
-    if subverb in ("touch", "patch"):
+    if subverb in ("touch", "patch", "dd"):           # dd writes via `of=` (codex review of #53)
         return True
     if subverb == "sed":
         return _sed_is_inplace(sub[1:])
-    if subverb == "git":
-        return len(sub) > 1 and _basecmd(sub[1]) in ("rm", "mv", "checkout", "restore")
+    if subverb == "git":                              # skip git's global opts to reach the subcommand
+        i, gn = 1, len(sub)                            # (`git -C DIR rm …`) — codex review of #53
+        while i < gn and sub[i].startswith("-"):
+            i += 2 if sub[i] in _GIT_VAL_OPTS else 1
+        return i < gn and _basecmd(sub[i]) in ("rm", "mv", "checkout", "restore")
     return False
 
 
@@ -689,6 +740,8 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                     gi += 2                          # `-D debugoptions`
                 elif o.startswith("-O"):
                     gi += 1                          # `-Olevel`
+                elif o == "--":
+                    gi += 1                          # end-of-options: keep collecting start paths (codex #53)
                 elif o.startswith("-") or o in ("(", "!", ","):
                     break                            # the expression begins here
                 else:
@@ -737,15 +790,20 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
     all_words = [t["dq"] for t in stmt if t["k"] == "W"]
     heredoc_bodies = [t["body"] for t in stmt if t["k"] == "H"]
     cmds: list[list[str]] = [[]]
-    after_redir = False
+    after_redir = False; herestring_next = False
     for t in stmt:
         if t["k"] == "O" and t["op"] in ("|", "|&"):
-            cmds.append([]); after_redir = False
+            cmds.append([]); after_redir = False; herestring_next = False
         elif t["k"] == "O":
             after_redir = t["op"] in _REDIR_ANY
+            herestring_next = t["op"] == "<<<"
         elif t["k"] == "W":
             if after_redir:
-                after_redir = False                  # this word is a redirect target/source, skip it
+                if herestring_next:
+                    # `bash <<< 'rm K.swift'` / `python3 <<< '…'` feed the here-string to the interpreter as
+                    # CODE via stdin — scan it like a heredoc body, not as an inert read source (codex #53).
+                    heredoc_bodies.append(t["dq"])
+                after_redir = False; herestring_next = False
             else:
                 cmds[-1].append(t["dq"])
 
