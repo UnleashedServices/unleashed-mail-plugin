@@ -477,23 +477,38 @@ def _has_inline_code(words: list[str], verb: str) -> bool:
     return False
 
 
+# `${var:-DEFAULT}` / `${var:=DEFAULT}` / `${var:+ALT}` (and the colon-less forms): capture the DEFAULT/ALT
+# value so `rm ${x:-Info.plist}` isn't emitted as `-Info.plist` (the `:-` glue breaks an EXACT basename
+# match). codex review of #53.
+_PARAM_EXPANSION = re.compile(r"\$\{[A-Za-z_]\w*(?:\[[^\]]*\])?:?[-=+?]([^}]*)\}")
+
+
+def _files_in_word(word: str) -> list[str]:
+    """Extension-shaped path tokens in a word: the direct matches PLUS the default/alternate value of any
+    `${var:-…}` parameter expansion (whose `:-`/`:=` operator otherwise glues onto the name)."""
+    files = _CODE_FILE_RE.findall(word)
+    for default in _PARAM_EXPANSION.findall(word):
+        files += _CODE_FILE_RE.findall(default)
+    return files
+
+
 def _emit_scan_words(words: list[str], out: list[str]) -> None:
     """Extract file-extension-shaped path tokens from inline-code / eval operands (a sensitive name is a
     SUBSTRING of the de-quoted code, e.g. `open("OAuthService.swift","w")`)."""
     for w in words:
-        out.extend(_CODE_FILE_RE.findall(w))
+        out.extend(_files_in_word(w))
 
 
 def _emit_target(word: str, out: list[str]) -> None:
     """Emit ONE write-target word: the literal (basename-matched by the guard) PLUS any extension-shaped
     token embedded in it. The embedded scan gives old-grep parity for command-substitution / expansion
     forms whose literal basename slips the policy: `$(printf Keychain.swift)` and `` `echo K.swift` `` (the
-    trailing `)`/`` ` `` glue on), a trailing subshell paren (`(rm K.swift)` -> `K.swift)`), and a brace
-    suffix (`K.swift{,.bak}`). A determined adversary can still hide a name (base64/indirection) — the
-    module is best-effort by contract."""
+    trailing `)`/`` ` `` glue on), a trailing subshell paren (`(rm K.swift)` -> `K.swift)`), a brace suffix
+    (`K.swift{,.bak}`), and a `${var:-DEFAULT}` default value. A determined adversary can still hide a name
+    (base64/indirection) — the module is best-effort by contract."""
     if word:
         out.append(word)
-    out.extend(_CODE_FILE_RE.findall(word))
+    out.extend(_files_in_word(word))
 
 
 def _is_fd_ref(word: str) -> bool:
@@ -700,6 +715,18 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                 _emit_target(o, out)                          # the patched file (modified in place)
     elif verb == "git":
         _scan_git(operands, out)
+    elif verb == "trap":
+        # `trap 'ACTION' SIGSPEC…` runs ACTION when the signal fires (e.g. a deferred `rm K.swift` on EXIT)
+        # — scan the ACTION string as a command. Skip query forms (`-p`/`-l`) and reset/ignore (`-`/'')
+        # (codex review of #53).
+        action = None
+        for o in operands:
+            if o == "--" or (o.startswith("-") and len(o) > 1):
+                continue                                      # -p (print), -l (list), or `--`
+            action = o
+            break
+        if action and action != "-":
+            out.extend(write_targets(action))                # the action is itself a command string
     elif iverb in _AWK:
         prog = None; uses_progfile = False; skip = False
         for o in operands:

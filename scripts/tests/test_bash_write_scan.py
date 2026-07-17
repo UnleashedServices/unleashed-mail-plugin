@@ -387,6 +387,24 @@ class AuditPR53Round2(unittest.TestCase):
         self.assertIn("Keychain.swift", targets("find -- Keychain.swift -delete"))
         self.assertEqual(targets("find -- src -type f"), [])     # non-destructive -> no ask
 
+    def test_param_expansion_default_value(self):
+        # codex #53: `${var:-DEFAULT}` — the `:-`/`:=` operator glues onto the token (`-Info.plist`),
+        # breaking an EXACT basename match; the clean default must be extracted.
+        self.assertIn("Info.plist", targets("rm ${x:-Info.plist}"))
+        self.assertIn("project.pbxproj", targets("rm ${x:-project.pbxproj}"))
+        self.assertIn("OAuthService.swift", targets("rm ${x:=OAuthService.swift}"))
+        self.assertIn("Keychain.swift", targets("cp a ${dst:-Keychain.swift}"))
+        self.assertEqual(targets("echo ${x:-hello}"), [])       # no extension -> no ask
+
+    def test_trap_action_scanned(self):
+        # codex #53: `trap 'ACTION' EXIT` runs ACTION on exit — scan the deferred command
+        self.assertIn("Keychain.swift", targets("trap 'rm Keychain.swift' EXIT"))
+        self.assertIn("Info.plist", targets("trap 'rm Info.plist' INT TERM"))
+        # query/reset/ignore/read forms must NOT ask
+        for cmd in ("trap -p", "trap - EXIT", "trap '' EXIT", "trap 'echo hi' EXIT",
+                    "trap 'cat Keychain.swift' EXIT"):
+            self.assertEqual(targets(cmd), [], cmd)
+
     def test_clustered_short_option_with_value(self):
         # gemini #53: `sudo -Su USER` — `-u` is the last cluster letter, so USER is the next token, not verb
         self.assertIn("Keychain.swift", targets("sudo -Su root rm Keychain.swift"))
