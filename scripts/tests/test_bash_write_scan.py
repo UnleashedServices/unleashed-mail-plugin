@@ -323,6 +323,17 @@ class SweepRound7(unittest.TestCase):
         # plain rsync (copy) does NOT delete the source -> read
         self.assertNotIn("Keychain.swift", targets("rsync Keychain.swift /tmp/out/"))
 
+    def test_command_sub_balance_is_quote_aware(self):
+        # codex #53: a quoted `)` inside the sub must not be mistaken for the closer
+        self.assertIn("Keychain.swift", targets("echo \"$(printf ')'; rm Keychain.swift)\""))
+        self.assertIn("OAuthService.swift", targets("echo \"$(echo '('; rm OAuthService.swift)\""))
+        self.assertIn("Keychain.swift", targets("echo \"$(printf '%s' \")\" ; rm Keychain.swift)\""))
+
+    def test_line_continuation_inside_double_quotes(self):
+        # codex #53: `\<nl>` is removed inside "" too
+        self.assertIn("Keychain.swift", targets("rm \"Keychain.\\\nswift\""))
+        self.assertIn("OAuthService.swift", targets("rm \"OAuth\\\nService.swift\""))
+
 
 class CRLF(unittest.TestCase):
     """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""

@@ -220,7 +220,11 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             buf_dq: list[str] = []
             buf_raw = ['"']
             while j < n and cmd[j] != '"':
-                if cmd[j] == "\\" and j + 1 < n and cmd[j + 1] in '"$`\\':
+                if cmd[j] == "\\" and j + 1 < n and cmd[j + 1] == "\n":
+                    buf_raw.append(cmd[j:j + 2]); j += 2         # `\<nl>` line continuation inside "" (codex #53)
+                elif cmd[j] == "\\" and j + 2 < n and cmd[j + 1] == "\r" and cmd[j + 2] == "\n":
+                    buf_raw.append(cmd[j:j + 3]); j += 3         # CRLF continuation
+                elif cmd[j] == "\\" and j + 1 < n and cmd[j + 1] in '"$`\\':
                     buf_dq.append(cmd[j + 1]); buf_raw.append(cmd[j:j + 2]); j += 2
                 else:
                     buf_dq.append(cmd[j]); buf_raw.append(cmd[j]); j += 1
@@ -731,11 +735,28 @@ def _iter_command_subs(cmd: str):
             i = j + 1
             continue
         if c == "$" and i + 1 < n and cmd[i + 1] == "(":
+            # balance parens, but SKIP quoted/backticked spans and `\`-escapes so a quoted `)` inside the
+            # sub (`$(printf ')'; rm K.swift)`) is not mistaken for the closer (codex review of #53).
             depth = 1; j = i + 2; s = j
             while j < n and depth:
-                if cmd[j] == "(":
+                cj = cmd[j]
+                if cj == "\\":
+                    j += 2; continue
+                if cj == "'":
+                    k = cmd.find("'", j + 1); j = n if k == -1 else k + 1; continue
+                if cj == '"':
+                    j += 1
+                    while j < n and cmd[j] != '"':
+                        j += 2 if (cmd[j] == "\\" and j + 1 < n) else 1
+                    j += 1; continue
+                if cj == "`":
+                    k = j + 1
+                    while k < n and cmd[k] != "`":
+                        k += 2 if (cmd[k] == "\\" and k + 1 < n) else 1
+                    j = k + 1; continue
+                if cj == "(":
                     depth += 1
-                elif cmd[j] == ")":
+                elif cj == ")":
                     depth -= 1
                     if depth == 0:
                         break
