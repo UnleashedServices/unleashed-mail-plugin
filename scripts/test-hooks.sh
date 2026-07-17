@@ -348,12 +348,30 @@ marker_write lint pass
 OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_empty "pass marker -> no block" "$OUT"
 
-# 17. Sentinel == HEAD -> no re-block (loop guard #2).
+# 17. Sentinel == HEAD for THIS SESSION -> no re-block (loop guard #2, session-keyed by F5).
 reset_markers
 marker_write lint fail
-printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)"
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
-assert_empty "sentinel == HEAD -> no re-block" "$OUT"
+_SH17="$(marker_hash_str "SESS-17")"
+printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-${_SH17}"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"SESS-17"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "sentinel == HEAD (same session) -> no re-block" "$OUT"
+
+# 17-F5. COREDEV-2503 F5 — session keying discriminates a STABLE key from a nonce, + all-session reset.
+# (a) SAME-session dedup: a nonce impl would re-block the 2nd Stop and wedge; a stable key dedups it.
+reset_markers; marker_write lint fail
+_PA='{"stop_hook_active":false,"session_id":"F5-A"}'
+assert_contains "F5 session-A 1st Stop -> block" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_empty "F5 session-A 2nd Stop -> dedup (a nonce would re-block/wedge here)" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# (b) CROSS-session re-block: a fresh session_id gets its own block-once budget.
+assert_contains "F5 session-B -> blocks again (not deduped by A)" "$(printf '{"stop_hook_active":false,"session_id":"F5-B"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (c) ALL-session reset: a pass clears BOTH session sentinels, so both re-block on a fresh fail.
+reset_markers; marker_write lint fail
+printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+marker_write lint pass          # clears ALL repo-matching session sentinels
+marker_write lint fail          # fresh failure again
+assert_contains "F5 reset: S1 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_contains "F5 reset: S2 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers

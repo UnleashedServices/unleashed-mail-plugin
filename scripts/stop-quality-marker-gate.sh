@@ -49,7 +49,15 @@ HEAD_COMMIT="$(git rev-parse --short HEAD 2>/dev/null)" || HEAD_COMMIT=""
 [ -n "$HEAD_COMMIT" ] || exit 0
 
 REPO_HASH="$(marker_repo_hash)"
-SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}"
+# F5 (COREDEV-2503): key loop-guard-#2 by SESSION, not just repo+commit. Without it, a broken commit that
+# blocked once passes freely in EVERY later session — and with `enforce` the default that makes the sentinel
+# load-bearing (and a plantable, cross-session bypass). Prefer the Stop payload's session_id; fall back to a
+# STABLE hash of transcript_path (session-stable). NEVER a per-invocation nonce — that would re-block every
+# retry and wedge the session. (Loop-guard #1, stop_hook_active, still prevents the in-loop wedge.)
+SESSION_KEY="$(hook_str session_id)"
+[ -n "$SESSION_KEY" ] || SESSION_KEY="$(hook_str transcript_path)"
+SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
+SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
 
 BLOCKED_KIND=""
 BLOCKED_AGE=""
@@ -88,6 +96,7 @@ if [ "$MODE" = "enforce" ]; then
     # written (data dir unwritable/full), DON'T block — otherwise a later Stop on
     # this same commit could keep re-blocking. Fail open to the warn-log path.
     if printf '%s' "$HEAD_COMMIT" > "$SENTINEL" 2>/dev/null; then
+        chmod 600 "$SENTINEL" 2>/dev/null || true   # F5: not world-writable/plantable
         hook_emit_block "$REASON"
         exit 0
     fi
