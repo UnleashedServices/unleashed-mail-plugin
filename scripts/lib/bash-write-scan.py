@@ -643,9 +643,9 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                 skip = False
             elif o in ("-f", "--file"):
                 uses_progfile = True; skip = True
-            elif o in ("-v", "--assign"):
-                skip = True
-            elif o.startswith("-f"):
+            elif o in ("-v", "--assign", "-F", "--field-separator"):
+                skip = True                                   # separate-form value (`-F ','`) — consume it
+            elif o.startswith("-f"):                          # so it isn't mistaken for the program (gemini #53)
                 uses_progfile = True
             elif o.startswith("-"):
                 pass

@@ -163,6 +163,15 @@ class SweepRound4(unittest.TestCase):
         self.assertIn("Info.plist", targets('gawk \'{printf "x" >> "Info.plist"}\''))
         self.assertEqual(targets("awk '{print}' data.swift"), [])       # reads data.swift, no `>` -> no ask
 
+    def test_awk_field_separator_value_not_mistaken_for_program(self):
+        # gemini review of #53: `-F SEP` / `--field-separator SEP` consume a value; it must not be read as
+        # the program (which would ignore the real program's write redirect).
+        self.assertIn("Keychain.swift", targets('awk -F \',\' \'BEGIN{print > "Keychain.swift"}\''))
+        self.assertIn("OAuthService.swift", targets('gawk -F , \'{print > "OAuthService.swift"}\''))
+        self.assertIn("Keychain.swift", targets('awk --field-separator : \'BEGIN{print > "Keychain.swift"}\''))
+        self.assertIn("Migration001.swift", targets('awk -v x=1 -F , \'{print > "Migration001.swift"}\''))
+        self.assertEqual(targets("awk -F , '{print $1}' data.swift"), [])   # read with -F -> no over-ask
+
     def test_osascript_dash_e_is_code(self):
         self.assertIn("Keychain.swift", targets('osascript -e \'do shell script "rm Keychain.swift"\''))
 
