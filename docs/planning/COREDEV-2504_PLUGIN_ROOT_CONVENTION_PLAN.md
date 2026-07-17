@@ -1,11 +1,14 @@
 # COREDEV-2504 — `${CLAUDE_PLUGIN_ROOT}` convention + reviewer-recipe timeout hardening
 
-**Status:** 🔬 **v2 — awaiting re-review.** R1: gemini `APPROVE`; codex `REQUEST_CHANGES` (3 must-fix, all
-verified real and folded in below → §2/§4/§6): (a) stale `:-.` prose/comments + CHANGELOG.md left false by
-the edits; (b) the regression guard must enforce the EXACT `${CLAUDE_PLUGIN_ROOT}` token, not just reject
-`:-` (evaded by `-.`/`:?`/`:=`/unbraced `$CLAUDE_PLUGIN_ROOT`); (c) state the version bump is conditional on
-2.5.1 staying unpublished. Do not implement until both APPROVE / APPROVE_WITH_NOTES and `review-synthesis`
-records the Combined verdict.
+**Status:** ✅ **APPROVED (v2) — dual plan-review gate satisfied at Round 2: gemini `APPROVE`, codex
+`APPROVE_WITH_NOTES` (no must-fix).** Ready to implement per §7.
+Convergence: R1 gemini `APPROVE` / codex `REQUEST_CHANGES` (3 must-fix: stale `:-.` prose+CHANGELOG; exact-
+token guard vs `:-`-only; conditional version bump) → all folded into v2. R2 gemini `APPROVE` + codex
+`APPROVE_WITH_NOTES`. Codex R2 non-blocking notes ADOPTED into §4: (i) the guard also asserts the EXPECTED
+COUNT of bare tokens per tree (catches someone deleting `${CLAUDE_PLUGIN_ROOT}` and replacing with a
+repo-relative path, which the syntax-only guard would miss); (ii) add a doc-gate assertion for the two
+`--timeout 1200` codex-review recipes (no `600` remains). Other R2 notes (clarify manual-fallback prose in
+create-feature-plan/brainstorm; future line-229 cleanup) deferred as out-of-scope.
 **Ticket:** COREDEV-2504 (Bug, High) · **Branch:** `fix/COREDEV-2504-plugin-root-convention` (off
 `origin/alpha`, HEAD `8a803a2`) · **Targets:** `alpha` (then rides #52 → main on the user's word).
 **Source:** A2Z audit (60 agents, adversarially verified), re-triaged against post-#53 alpha.
@@ -133,3 +136,47 @@ the guard.)
    verification (§5): zero `:-` rows, bare sites intact, `--timeout 1200` ×2, no `--timeout 600`.
 6. PR → alpha; drive codex/gemini bot review to convergence. Confirm the version question (§6) with the user
    before #52 promotes.
+
+## Plan-Review Synthesis (Round 2)
+**Combined verdict:** APPROVE_WITH_NOTES
+
+### Agreement
+- Root cause correct: Claude Code inline-substitutes only the exact `${CLAUDE_PLUGIN_ROOT}` token in agent/
+  skill bodies; `:-.` reaches the shell literally → unset var → `.` (consumer repo). `:-.`→bare fixes it.
+- Grep independently confirmed exactly 8 `:-.` sites across `agents/`+`skills/`; all in scope, none should keep it.
+- Do NOT add repo-relative fallbacks to the 7 gate-critical commands — failing closed beats sourcing a
+  coincidental consumer-repo script. Keep the one pre-existing `swift-reviewer.md:229` check.
+- Exact-token regression guard is the right defense; 600→1200 pty bump justified by mandated `xhigh`.
+
+### Disagreement
+- None substantive. (R1 divergence — gemini APPROVE vs codex REQUEST_CHANGES — resolved by folding codex's
+  3 must-fix items into v2; R2 both approve.)
+
+### Minority report (codex only, non-blocking, ADOPTED)
+- Guard should also assert the EXPECTED COUNT of bare tokens (catch delete-and-replace-with-repo-relative).
+- Add a doc-gate assertion for the two `--timeout 1200` codex recipes.
+
+### Minority report (codex only, DEFERRED as out-of-scope)
+- `create-feature-plan`/`brainstorm` prose could state the manual repo-relative fallback as explicitly as
+  `implement`/`review-synthesis`; a future cleanup could replace line-229's silent fallback with an explicit
+  manual-mode note.
+
+### Risk register
+| Risk | Raised by | Likelihood | Mitigation |
+|---|---|---|---|
+| A future edit reintroduces `:-.` or a non-exact spelling | both | low | exact-token guard test + count assertion |
+| 2.5.1 already served via an alpha channel → installs miss the fix | codex | unknown | confirm channel before #52 promotes; bump to 2.5.2 if served |
+| Manual copy-paste from plugin repo loses `.` fallback | codex | low | not the supported path; skill prose documents repo-relative |
+
+### Conditions that would change the recommendation
+- Evidence that Claude Code does substitute `${CLAUDE_PLUGIN_ROOT:-.}` (it does not — doc-verified) → whole fix moot.
+- 2.5.1 confirmed published to a served channel → require a 2.5.2 bump.
+
+### Confidence
+- **high** — both transcripts full and substantive (codex R2 237 KB / gemini R2 929 B, explicit verdicts);
+  root cause doc-verified + empirically reproduced.
+
+> Note: recorded as a human-auditable synthesis. The digest-bound `.verdicts/` artifact is intentionally NOT
+> written — no pre-review `snapshot` was taken at gate launch (create-feature-plan bypassed), and faking one
+> against post-review bytes is disallowed. Implementation proceeds directly (not via `/implement`'s
+> digest-verify gate); the gate's substance (two independent reviews → convergence) is satisfied above.
