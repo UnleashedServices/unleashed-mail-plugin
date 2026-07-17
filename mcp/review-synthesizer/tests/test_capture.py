@@ -690,3 +690,39 @@ class TestPromptReviewAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecureTmpWriteTest(unittest.TestCase):
+    """COREDEV-2503 F11: the tmp+replace writes must refuse a pre-planted symlink at the predictable
+    `.tmp.<pid>` path (O_NOFOLLOW) rather than write/truncate THROUGH it to an attacker-chosen target."""
+
+    def test_open_private_tmp_refuses_a_planted_symlink(self):
+        d = tempfile.mkdtemp()
+        victim = os.path.join(d, "victim")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS")
+        tmp = os.path.join(d, "x.tmp.%d" % os.getpid())
+        os.symlink(victim, tmp)
+        with self.assertRaises(OSError):        # O_NOFOLLOW refuses the symlink atomically at open
+            C._open_private_tmp(tmp)
+        self.assertEqual(open(victim, encoding="utf-8").read(), "PRECIOUS",
+                         "the write must not follow the planted symlink to the victim")
+
+    def test_write_status_does_not_clobber_through_symlink(self):
+        d = tempfile.mkdtemp()
+        victim = os.path.join(d, "victim")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS")
+        dest = C._status_path(d, "security-reviewer")
+        tmp = "%s.tmp.%d" % (dest, os.getpid())   # the EXACT path _write_status will open
+        os.symlink(victim, tmp)
+        C._write_status(d, "security-reviewer", {"status": "COMPLETE"})   # fail-open: swallows the refusal
+        self.assertEqual(open(victim, encoding="utf-8").read(), "PRECIOUS",
+                         "_write_status must not truncate the victim through the planted symlink")
+
+    def test_no_plain_tmp_open_remains_in_source(self):
+        # Guards a revert of ANY of the three tmp-write sites (status / status-only / findings) back to a
+        # plain open(tmp, "w") — every one must route through _open_private_tmp.
+        src = open(os.path.join(os.path.dirname(__file__), "..", "capture.py"), encoding="utf-8").read()
+        self.assertNotIn('with open(tmp, "w"', src,
+                         "every tmp write must go through _open_private_tmp (O_NOFOLLOW|O_EXCL)")
