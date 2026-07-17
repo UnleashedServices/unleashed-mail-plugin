@@ -34,12 +34,17 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
     consumer repo). This guard fails if ANY non-exact spelling is (re)introduced."""
 
     _TREES = ("agents", "skills")
-    # NOTE: `[a-zA-Z0-9_]*` BEFORE the word boundary is load-bearing (gemini COREDEV-2504 review):
-    # a bare `\b` right after ROOT does NOT match a same-word suffix typo like `${CLAUDE_PLUGIN_ROOT_DIR}`
-    # or `${CLAUDE_PLUGIN_ROOTT}` (T→_ / T→T is not a boundary) → the typo yields NO match and silently
-    # passes the exact-token assertion. Consuming trailing word chars makes the whole mis-spelled token
-    # match, so it is compared against — and flagged as — a non-exact spelling.
-    _ANY = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*\b[^}\n]*\}?")
+    # Two branches, NO `\b` immediately after ROOT (COREDEV-2504 gemini review, rounds 1+2):
+    #   1. `\$\{CLAUDE_PLUGIN_ROOT[^}\n]*\}?`  — a braced ref; `[^}\n]*` consumes any suffix/operator up to
+    #      the closing brace, so a suffix typo (`${CLAUDE_PLUGIN_ROOT_DIR}`), a `:-.`/`:?`/`#…` param form,
+    #      and an unterminated `${CLAUDE_PLUGIN_ROOT` all match as ONE non-exact token → flagged.
+    #   2. `\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*`  — an unbraced ref; the char class stops at the first
+    #      non-word char, so it matches exactly `$CLAUDE_PLUGIN_ROOT[suffix]` WITHOUT greedily eating the
+    #      rest of the line (the round-2 imprecision).
+    # A bare `\b` right after ROOT (either round-1's original OR gemini's round-2 suggestion) silently
+    # DROPS same-word suffix typos to a zero-length match set → they bypass the exact-token assertion.
+    # `test_guard_regex_flags_adversarial_spellings` pins this against regression.
+    _ANY = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT[^}\n]*\}?|\$CLAUDE_PLUGIN_ROOT[a-zA-Z0-9_]*")
 
     def _md_files(self):
         for tree in self._TREES:
@@ -56,6 +61,40 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                 if m != "${CLAUDE_PLUGIN_ROOT}":
                     bad.append(f"{rel}: {m!r}")
         self.assertEqual(bad, [], f"COREDEV-2504: only the exact ${{CLAUDE_PLUGIN_ROOT}} token is allowed: {bad}")
+
+    def test_guard_regex_flags_adversarial_spellings(self):
+        # COREDEV-2504 (gemini rounds 1+2): pin the guard regex's behaviour so a future "cleanup" that
+        # reintroduces a `\b`-after-ROOT (which silently drops suffix typos) is caught HERE, not by luck of
+        # a real file happening to contain the typo. Guard verdict := FAIL iff any match != the exact token.
+        exact = "${CLAUDE_PLUGIN_ROOT}"
+
+        def verdict(s):
+            matches = self._ANY.findall(s)
+            return "FAIL" if any(m != exact for m in matches) else "PASS"
+
+        must_flag = [
+            "${CLAUDE_PLUGIN_ROOT:-.}",                             # the bug this whole ticket fixes
+            "${CLAUDE_PLUGIN_ROOT_DIR}",                            # round-1 hole: same-word suffix typo
+            "${CLAUDE_PLUGIN_ROOTT}",                               # round-1 hole
+            "$CLAUDE_PLUGIN_ROOT",                                  # unbraced
+            "echo $CLAUDE_PLUGIN_ROOT and more text",              # round-2: unbraced + trailing text
+            "$CLAUDE_PLUGIN_ROOTX/scripts",                        # unbraced suffix typo
+            "${CLAUDE_PLUGIN_ROOT}/a ${CLAUDE_PLUGIN_ROOT_DIR}/b",  # a valid + a bad on one line
+            "${CLAUDE_PLUGIN_ROOT:?err}",                          # :? param form
+            "${CLAUDE_PLUGIN_ROOT",                                 # unterminated brace
+        ]
+        must_pass = [
+            "${CLAUDE_PLUGIN_ROOT}",
+            "Run ${CLAUDE_PLUGIN_ROOT}/scripts/x.py and echo done",
+            "See ${CLAUDE_PLUGIN_ROOT} then $HOME/x",
+            "${CLAUDE_PLUGIN_ROOT}/a ${CLAUDE_PLUGIN_ROOT}/b",     # two valid on one line
+            "prefix${CLAUDE_PLUGIN_ROOT}suffix",
+            "no reference at all",
+        ]
+        for s in must_flag:
+            self.assertEqual(verdict(s), "FAIL", f"COREDEV-2504: guard must FLAG {s!r} (findall={self._ANY.findall(s)})")
+        for s in must_pass:
+            self.assertEqual(verdict(s), "PASS", f"COREDEV-2504: guard must PASS {s!r} (findall={self._ANY.findall(s)})")
 
     def test_gate_script_references_present_via_bare_token(self):
         # Defense-in-depth (codex R2): catch someone DELETING the token + replacing with a repo-relative
