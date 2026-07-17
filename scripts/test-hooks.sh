@@ -256,6 +256,10 @@ assert_contains "xargs sed -i (in-place child) -> ask" "$(guard_bash "\"printf '
 assert_empty    "xargs sed (no -i, read) -> no decision" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed 's/a/b/'\"")"
 assert_contains "find start-path -delete -> ask" "$(guard_bash '"find Keychain.swift -delete"')" '"permissionDecision":"ask"'
 assert_empty    "find start-path read (no action) -> no decision" "$(guard_bash '"find Keychain.swift -type f"')"
+assert_contains "writer inside command substitution -> ask" "$(guard_bash "\"echo \\\"\$(rm Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "function-definition body -> ask" "$(guard_bash '"f(){ rm Keychain.swift; }; f"')" '"permissionDecision":"ask"'
+assert_contains "rsync --remove-source-files -> ask" "$(guard_bash '"rsync --remove-source-files Keychain.swift /tmp/out/"')" '"permissionDecision":"ask"'
+assert_empty    "read inside command substitution -> no decision" "$(guard_bash "\"echo \\\"\$(cat Keychain.swift)\\\"\"")"
 # F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
 BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
 assert_contains "256KB command -> ask (DoS backstop)" \

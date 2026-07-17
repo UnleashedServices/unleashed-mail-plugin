@@ -296,6 +296,34 @@ class SweepRound6(unittest.TestCase):
             self.assertNotIn("Keychain.swift", targets(cmd), cmd)
 
 
+class SweepRound7(unittest.TestCase):
+    """codex review of #53 (round 7): writers hidden by outer syntax."""
+
+    def test_writer_inside_command_substitution(self):
+        for cmd in ('echo "$(rm Keychain.swift)"', 'echo `rm Keychain.swift`', 'x=$(rm OAuthService.swift)',
+                    'echo "$(sed -i s/a/b/ Keychain.swift)"', 'echo "$(rm $(echo Keychain.swift))"'):
+            self.assertTrue(any(b in t for t in targets(cmd) for b in ("Keychain.swift", "OAuthService.swift")), cmd)
+
+    def test_command_sub_reads_and_single_quotes_do_not_over_ask(self):
+        for cmd in ('echo "$(cat Keychain.swift)"', 'echo "$(grep x Keychain.swift)"',
+                    "echo '$(rm Keychain.swift)'"):   # single-quoted -> literal, not executed
+            self.assertNotIn("Keychain.swift", targets(cmd), cmd)
+
+    def test_backslash_newline_line_continuation(self):
+        self.assertIn("Keychain.swift", targets("rm Keychain.\\\nswift"))
+        self.assertIn("OAuthService.swift", targets("rm OAuth\\\nService.swift"))
+
+    def test_function_definition_body_scanned(self):
+        for cmd in ("f(){ rm Keychain.swift; }; f", "f() { rm Keychain.swift; }; f",
+                    "function f { rm Keychain.swift; }; f", "function f() { mv OAuthService.swift /t; }; f"):
+            self.assertTrue(any(b in t for t in targets(cmd) for b in ("Keychain.swift", "OAuthService.swift")), cmd)
+
+    def test_rsync_remove_source_files_deletes_sources(self):
+        self.assertIn("Keychain.swift", targets("rsync --remove-source-files Keychain.swift /tmp/out/"))
+        # plain rsync (copy) does NOT delete the source -> read
+        self.assertNotIn("Keychain.swift", targets("rsync Keychain.swift /tmp/out/"))
+
+
 class CRLF(unittest.TestCase):
     """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""
 

@@ -121,9 +121,12 @@ _PREFIX_VAL_OPTS = {
     "taskset": {"-c", "-p", "--cpu-list", "--pid"},
     "xcrun": {"--sdk", "--toolchain"},
 }
-# shell reserved words that precede a command (`! rm X`, `if rm X; then …`, `while rm X; do …`): strip them
-# so the real verb surfaces instead of `!`/`if`/`while` (codex review of #53).
-_SHELL_KEYWORDS = {"!", "if", "then", "elif", "else", "while", "until", "do"}
+# shell reserved words that precede a command (`! rm X`, `if rm X; then …`, `while rm X; do …`,
+# `function f { … }`): strip them so the real verb surfaces instead of `!`/`if`/`while` (codex review #53).
+_SHELL_KEYWORDS = {"!", "if", "then", "elif", "else", "while", "until", "do", "function"}
+# a function-definition header `name()` / `name(){` — strip it so the body command is scanned
+# (`f(){ rm K.swift; }; f` deletes K.swift when called). codex review of #53.
+_FUNC_DEF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\{?$")
 # interpreter stems, for normalizing versioned executables (`python3.12`->`python`, `node20`->`node`).
 _INTERP_STEMS = {"python", "ruby", "node", "nodejs", "perl", "bash", "sh", "zsh", "dash", "ksh",
                  "osascript", "awk", "gawk", "mawk", "nawk"}
@@ -187,6 +190,15 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             continue
         # --- backslash escape (outside quotes): next char is a literal word char ---
         if c == "\\":
+            # `\<newline>` (and CRLF `\<\r\n>`) is a LINE CONTINUATION — bash removes the pair, joining the
+            # word across the break (`rm Keychain.\<nl>swift` -> `Keychain.swift`). Don't emit the newline
+            # (write_targets discards newline-bearing targets, which would drop the name) — codex review #53.
+            if i + 1 < n and cmd[i + 1] == "\n":
+                i += 2
+                continue
+            if i + 2 < n and cmd[i + 1] == "\r" and cmd[i + 2] == "\n":
+                i += 3
+                continue
             if i + 1 < n:
                 w_dq.append(cmd[i + 1]); w_raw.append(c + cmd[i + 1]); in_word = True
                 i += 2
@@ -298,8 +310,13 @@ def _strip_prefixes(words: list[str]) -> list[str]:
     while idx < len(words):
         w = words[idx]
         base = _basecmd(w)
-        if w in _SHELL_KEYWORDS:
-            idx += 1; continue                       # `!`/`if`/`while`/… precede the real command
+        if w == "function":                          # `function NAME [()] { body }` -> skip the keyword AND
+            idx += 2 if idx + 1 < len(words) else 1   # the NAME/header word so the body command surfaces
+            continue
+        if w in _SHELL_KEYWORDS or w == "{":
+            idx += 1; continue                       # `!`/`if`/`while`/… or a group `{` open
+        if _FUNC_DEF_RE.match(w):
+            idx += 1; continue                       # `name()` / `name(){` header -> scan the body that follows
         if "=" in w and not w.startswith("-") and w.split("=", 1)[0].isidentifier() and base == w:
             idx += 1; continue                       # VAR=val assignment
         if base in _PREFIXES:
@@ -541,6 +558,8 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
             elif not o.startswith("-"):
                 last = o
         _emit_target(tdir or last, out)
+        if verb == "rsync" and "--remove-source-files" in operands:
+            _targets_nonflag(operands, out)          # `rsync --remove-source-files` DELETES the sources
     elif verb == "touch":
         skip = False; after_dd = False
         for o in operands:
@@ -690,11 +709,53 @@ def _scan_statement(stmt: list[dict], out: list[str]) -> None:
         _scan_command(words, out, all_words, heredoc_bodies)
 
 
-def write_targets(cmd: str) -> list[str]:
-    """The de-quoted write-target words of `cmd` (deduped, no empties, no embedded newlines)."""
+def _iter_command_subs(cmd: str):
+    """Yield the inner text of each EXECUTED command substitution — `$(...)` (balanced) and `` `...` `` —
+    skipping ones inside SINGLE quotes (literal, never executed). Double-quoted subs DO execute, so they
+    are yielded. Lets write_targets recurse into a writer nested in a substitution (`echo "$(rm X)"`)."""
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "'":                                 # single-quoted: literal, no substitution
+            j = cmd.find("'", i + 1)
+            i = n if j == -1 else j + 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == "`":
+            j = i + 1
+            while j < n and cmd[j] != "`":
+                j += 2 if (cmd[j] == "\\" and j + 1 < n) else 1
+            yield cmd[i + 1:j]
+            i = j + 1
+            continue
+        if c == "$" and i + 1 < n and cmd[i + 1] == "(":
+            depth = 1; j = i + 2; s = j
+            while j < n and depth:
+                if cmd[j] == "(":
+                    depth += 1
+                elif cmd[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            yield cmd[s:j]
+            i = j + 1
+            continue
+        i += 1
+
+
+def write_targets(cmd: str, _depth: int = 0) -> list[str]:
+    """The de-quoted write-target words of `cmd` (deduped, no empties, no embedded newlines). Recurses into
+    executed command substitutions so a writer nested in `$()`/backticks is caught regardless of the outer
+    verb (`echo "$(rm K.swift)"` deletes K.swift). Depth-bounded as a cheap runaway guard."""
     out: list[str] = []
     for stmt in _tokenize(cmd):
         _scan_statement(stmt, out)
+    if _depth < 24:
+        for inner in _iter_command_subs(cmd):
+            out.extend(write_targets(inner, _depth + 1))
     seen: set[str] = set()
     return [t for t in out if t and "\n" not in t and not (t in seen or seen.add(t))]
 
