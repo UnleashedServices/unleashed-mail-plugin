@@ -296,6 +296,33 @@ class SweepRound6(unittest.TestCase):
             self.assertNotIn("Keychain.swift", targets(cmd), cmd)
 
 
+class CRLF(unittest.TestCase):
+    """gemini review of #53: CRLF (\\r\\n) commands must not bypass the guard."""
+
+    def test_cr_does_not_glue_onto_a_word(self):
+        # `\r` is treated as whitespace so `Keychain.swift\r` does not miss the basename policy. Assert the
+        # EMITTED word is CR-clean (isolates the whitespace fix; the _emit_target substring scan is a second
+        # layer that also strips a trailing \r, so it alone can't prove the tokenizer change).
+        raw = bws.write_targets("rm Keychain.swift\r\ncd foo")
+        self.assertIn("Keychain.swift", raw)
+        self.assertTrue(all("\r" not in t for t in raw), raw)
+        self.assertIn("Keychain.swift", targets("echo x > Keychain.swift\r\n"))
+        self.assertIn("OAuthService.swift", targets("true\r\nrm OAuthService.swift\r\n"))
+
+    def test_crlf_heredoc_terminator_closes(self):
+        # `EOF\r` must still terminate the `EOF` heredoc, else a write AFTER it is swallowed as body
+        self.assertIn("Keychain.swift", targets("cat <<EOF > /tmp/safe\r\ndata\r\nEOF\r\nrm Keychain.swift\r\n"))
+        self.assertIn("OAuthService.swift", targets("cat <<EOF\r\nbody\r\nEOF\r\nmv OAuthService.swift /tmp\r\n"))
+
+    def test_crlf_heredoc_body_is_not_executed(self):
+        # a sensitive name INSIDE the (now correctly-terminated) heredoc body is data, not a command
+        self.assertNotIn("Keychain.swift", targets("cat <<EOF\r\nrm Keychain.swift\r\nEOF\r\ncd .\r\n"))
+
+    def test_lf_still_works(self):
+        self.assertIn("Keychain.swift", targets("rm Keychain.swift\ncd foo"))
+        self.assertIn("Keychain.swift", targets("cat <<EOF > /tmp/safe\ndata\nEOF\nrm Keychain.swift\n"))
+
+
 class Robustness(unittest.TestCase):
     def test_large_command_is_fast_and_linear(self):
         big = "echo " + ("a" * 80000)

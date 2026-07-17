@@ -78,7 +78,9 @@ def _consume_heredoc_body(cmd: str, pos: int, delim: str, strip_tabs: bool) -> t
             le = n
         line = cmd[k:le]
         cand = line.lstrip("\t") if strip_tabs else line
-        if cand == delim:
+        # tolerate a CRLF terminator: `EOF\r` must still match the `EOF` delimiter, else the heredoc never
+        # closes and the rest of the command is swallowed as body (a write after it bypasses — gemini #53).
+        if cand.rstrip("\r") == delim:
             return "\n".join(body_lines), (le + 1 if le < n else n)
         body_lines.append(line)
         if le == n:
@@ -160,8 +162,9 @@ def _tokenize(cmd: str) -> list[list[dict]]:
             while i < n and cmd[i] != "\n":
                 i += 1
             continue
-        # --- whitespace (unquoted) ends a word ---
-        if c in " \t":
+        # --- whitespace (unquoted) ends a word. `\r` too: a CRLF command must not glue `\r` onto a word
+        #     (`Keychain.swift\r` would miss the basename policy — gemini review of #53). ---
+        if c in " \t\r":
             flush_word()
             i += 1
             continue
