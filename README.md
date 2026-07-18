@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.5.1
+# UnleashedMail — Claude Code Plugin v2.5.2
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,16 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.5.2
+
+Consumer-install fix for the Plan Review Gate (COREDEV-2504). The plan-gate script references in agent/skill
+bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does **not** substitute
+(only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline) — so it reached the shell literally and
+resolved to `.` (the consumer app repo, which ships none of these scripts), making every reviewer read as
+"missing" and the fail-closed gate un-passable in any consumer install. All 8 sites are back to the bare
+token (correcting a v2.5.1 F6 regression), `codex-review`'s pty timeout is raised 600→1200 s to survive
+`xhigh` runs, and a mutation-proved doc-gate test now enforces the exact-token convention going forward.
 
 ### v2.5.1
 

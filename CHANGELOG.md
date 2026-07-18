@@ -13,6 +13,21 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.5.2] — 2026-07-17
+
+### Fixed
+- **Plugin scripts unreachable in consumer installs** (COREDEV-2504): the plan-gate script references in
+  agent/skill bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does
+  **not** substitute (only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in agent/skill
+  content) — so it reached the shell literally and resolved to `.` (the consumer app repo, which ships none
+  of these scripts), making every reviewer read as "missing" and the fail-closed Plan Review Gate
+  un-passable in any consumer install. Reverted the 8 sites to the bare token (this corrects the F6
+  regression in 2.5.1, which had introduced `:-.` at `swift-reviewer.md` Step-4). Also raised `codex-review`'s
+  pty capture timeout 600→1200 s to survive mandated `xhigh` runs, and added a mutation-proved doc-gate test
+  (`test_doc_gates.py`) whose contract regex enforces the exact `${CLAUDE_PLUGIN_ROOT}` token — flagging the
+  `:-.`/`:?` fallback, suffix typos, unbraced, brace-spacing, and case variants, while documenting the
+  identifier-typo / unicode-homoglyph boundary as out of scope.
+
 ## [2.5.1] — 2026-07-16
 
 ### Fixed
@@ -40,15 +55,6 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - **B1** pty `--timeout=N` form. **B2** verify-path stray-reviewer reject. **B4** stale-`Task` reject.
     **B6** `build-verify.sh` compiles once (`build-for-testing`/`test-without-building`). **B7** CFR
     drift-guard. (B3 dropped — no real duplication; B5/B8 deferred to a follow-up.)
-- **Plugin scripts unreachable in consumer installs** (COREDEV-2504): the plan-gate script references in
-  agent/skill bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does
-  **not** substitute (only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in agent/skill
-  content) — so it reached the shell literally and resolved to `.` (the consumer app repo, which ships none
-  of these scripts), making every reviewer read as "missing" and the fail-closed Plan Review Gate
-  un-passable in any consumer install. Reverted the 8 sites to the bare token (this corrects the F6
-  regression above, which had introduced `:-.` at `swift-reviewer.md` Step-4). Also raised `codex-review`'s
-  pty capture timeout 600→1200 s to survive mandated `xhigh` runs, and added a doc-gate test that enforces
-  the exact `${CLAUDE_PLUGIN_ROOT}` token going forward.
 
 ## [2.5.0] — 2026-07-16
 
