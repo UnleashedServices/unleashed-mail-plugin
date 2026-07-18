@@ -67,7 +67,7 @@ Open questions, alternatives considered, lessons learned.
    time `/unleashed-mail:review-synthesis` runs (COREDEV-2499). Use the `snapshot` subcommand, which
    writes a git-ignored sidecar beside the plan:
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" snapshot \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
        --plan docs/planning/FEATURE_NAME_PLAN.md
    ```
    `review-verdict.py write` auto-reads that sidecar and refuses to record an approval if the plan

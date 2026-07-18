@@ -170,7 +170,7 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
 1. **Snapshot the reviewed digest BEFORE dispatching the reviews** — this binds the eventual approval to
    the bytes the reviewers saw, and an **APPROVING** `write` now REQUIRES it (fails closed otherwise):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" snapshot \
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
        --plan docs/planning/FEATURE_NAME_PLAN.md
    ```
 2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
@@ -184,9 +184,10 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
    step 1, so no `--reviewed-sha256` is needed):
 
    ```bash
-   # :-. — unset would resolve to the absolute /scripts/... and fail to persist the artifact, so
-   # /implement would then report "no artifact" (codex + gemini, #41 review). Matches implement.
-   python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
+   # The bare `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in the skill body -> the plugin install
+   # path; the `:-.` form is NOT substituted (it would resolve to `.`) and would fail to persist the
+   # artifact, so /implement would report "no artifact" (COREDEV-2504). Matches implement.
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
        --plan docs/planning/FEATURE_NAME_PLAN.md \
        --verdict <COMBINED_VERDICT> \
        --reviewer gemini=<STATUS>:/tmp/agy-out.txt \

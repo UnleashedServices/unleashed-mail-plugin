@@ -118,7 +118,7 @@ auto-reads the snapshot sidecar and aborts if the plan changed since, so **no `-
 argument is needed** in the normal flow:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review-verdict.py" write \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
     --plan docs/planning/FEATURE_NAME_PLAN.md \
     --verdict <COMBINED_VERDICT> \
     --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \

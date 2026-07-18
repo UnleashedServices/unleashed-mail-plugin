@@ -175,7 +175,7 @@ printf '%s\n' \
     `#  ux-perf-reviewer` \
     `#  accessibility-auditor` \
     `#  prompt-review` \
-  | bash "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/reviewer-roster.sh"
+  | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/reviewer-roster.sh"
 ROSTER=$?
 echo "ROSTER=$ROSTER"   # echo it: a shell var cannot survive this block
 # 0 = every reviewer asserted held, nothing to act on · 2 = RATCHET only · 3 = ≥1 UNATTRIBUTED ·
@@ -226,7 +226,7 @@ output that disagrees with the exit code, a malformed line, or a **non-empty** r
 reading — they cannot certify, but they can contribute findings:
 
 ```bash
-CTX="${CLAUDE_PLUGIN_ROOT:-.}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
+CTX="${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
 . "$CTX"
 BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"
 for agent in security-reviewer concurrency-reviewer ux-perf-reviewer accessibility-auditor prompt-review; do
@@ -386,14 +386,15 @@ and the missing-test scan — printing `✅`/`❌` per gate and **exiting non-ze
 ```bash
 # $CHANGED is from Step 1. The script reads it on stdin (no shared-shell-state assumption), so
 # pr-review relies on THIS same run — it does not invoke the script itself (one test run, not two).
-printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT:-.}/scripts/review/build-verify.sh"
+printf '%s\n' "$CHANGED" | bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh"
 BUILD_VERIFY=$?   # 0 = build+lint+tests all passed; non-zero = a hard gate failed
 # ECHO it: a shell variable cannot survive this block, so an un-echoed assignment never reaches you.
 # 127 = the script itself did not run — which "no ❌ printed" would otherwise look identical to.
 echo "BUILD_VERIFY=$BUILD_VERIFY"
 exit "$BUILD_VERIFY"   # F6 (COREDEV-2503): FAIL CLOSED — mirror Step-2's `exit "$ROSTER"`. Without it the
                        # block ends on `echo` and exits 0 even on a 127 (build-verify.sh not found), so
-                       # build/lint/test silently DON'T run yet report success. `${…:-.}` matches the siblings.
+                       # build/lint/test silently DON'T run yet report success. The bare `${CLAUDE_PLUGIN_ROOT}`
+                       # token (substituted inline in agent bodies; NOT the `:-.` form) matches the siblings.
 ```
 
 > The verification logic (gate aggregation, changed-`.swift` filtering, missing-test scan) lives in the
