@@ -7,8 +7,12 @@ description: >
   when swift build or xcodebuild returns errors, when SPM package resolution fails,
   when seeing "cannot find type", "has no member", "module not found", linker errors,
   code signing errors, or any compilation failure.
-model: opus
-allowed-tools: Read, Bash, Grep, Glob, Write, Edit, WebFetch, WebSearch
+model: inherit
+skills:
+  - macos-debugging
+  - spm-management
+memory: project
+tools: Read, Bash, Grep, Glob, Write, Edit, WebFetch, WebSearch
 ---
 
 You are a build system specialist for **UnleashedMail**, a macOS 15+ app built with Swift 6.0+, SwiftUI, and Xcode-managed package dependencies (including GRDB.swift).

@@ -34,7 +34,11 @@ func getComposerHTML() async throws -> String {
     ) as? String ?? ""
 }
 
-func execFormatCommand(_ command: String, value: String? = nil) {
+@MainActor
+func execFormatCommand(_ command: String, value: String? = nil) async throws {
+    // Never evaluate JS while the user is typing — a mid-keystroke DOM mutation resets
+    // caret/IME state (CLAUDE.md). The composer sets isUserTyping from JS input events.
+    guard !isUserTyping else { return }
     let escapedCommand = command.jsEscaped()
     let js: String
     if let value {
@@ -43,7 +47,8 @@ func execFormatCommand(_ command: String, value: String? = nil) {
     } else {
         js = "document.execCommand('\(escapedCommand)', false, null)"
     }
-    webView.evaluateJavaScript(js, completionHandler: nil)
+    // Await instead of fire-and-forget (completionHandler: nil) so a JS failure surfaces.
+    _ = try await webView.evaluateJavaScript(js)
 }
 
 // String extension for safe JS interpolation
@@ -59,9 +64,11 @@ private extension String {
 
 ### Rules
 
-1. **Always `await`** evaluateJavaScript when you need the return value.
-2. **Sanitize interpolated values** — escape quotes in any user-provided strings.
-3. **Batch commands** where possible to avoid round-trip overhead.
+1. **Always `await`** evaluateJavaScript — even for fire-and-forget mutations — so a JS failure surfaces instead of being silently swallowed.
+2. **Never evaluate JS while the user is typing** — guard every DOM-mutating call on `isUserTyping` (CLAUDE.md); a mid-keystroke `evaluateJavaScript` resets caret/IME state.
+3. **Sanitize interpolated values** — escape quotes in any user-provided strings.
+4. **Batch commands** where possible to avoid round-trip overhead.
+5. **JS→Swift uses `WKScriptMessageHandler`** (next section) — never signal Swift with a fire-and-forget `evaluateJavaScript`.
 
 ## JavaScript → Swift Communication
 

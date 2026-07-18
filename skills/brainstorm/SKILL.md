@@ -1,5 +1,7 @@
 ---
+name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
+argument-hint: [feature description]
 allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion
 disable-model-invocation: true
 ---
@@ -158,4 +160,41 @@ without a tracked plan.
 
 Update the Jira ticket with a link to the plan document.
 
-Wait for approval before proceeding to `/unleashed-mail:implement`.
+## Step 10: Plan Review Gate (Mandatory — do this BEFORE `/implement`)
+
+`/unleashed-mail:implement` runs a **deterministic** Design Gate: it calls
+`scripts/review-verdict.py verify` and refuses to write code unless an **approving, plan-digest-bound
+Combined-verdict artifact** exists. Going straight from here to `/implement` therefore fails with
+`GATE FAILED — no Combined-verdict artifact`. Walk the gate first:
+
+1. **Snapshot the reviewed digest BEFORE dispatching the reviews** — this binds the eventual approval to
+   the bytes the reviewers saw, and an **APPROVING** `write` now REQUIRES it (fails closed otherwise):
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
+       --plan docs/planning/FEATURE_NAME_PLAN.md
+   ```
+2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
+   `/gemini-review` and `/codex-review` on `docs/planning/FEATURE_NAME_PLAN.md`.
+   Route non-TTY runs through `scripts/pty-capture.py` (see those skills).
+3. **Iterate to convergence** — revise the plan and re-run until **both** return
+   `APPROVE` / `APPROVE_WITH_NOTES` (typically 2–6 rounds). If you revise the plan, **re-run `snapshot`**
+   (step 1) and the reviews on the new bytes — an approval is only valid for the exact plan reviewed.
+4. **Synthesize:** run `/unleashed-mail:review-synthesis` to combine the two transcripts into one
+   auditable Combined verdict — it also **persists** the artifact (`write` auto-reads the snapshot from
+   step 1, so no `--reviewed-sha256` is needed):
+
+   ```bash
+   # The bare `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in the skill body -> the plugin install
+   # path; the `:-.` form is NOT substituted (it would resolve to `.`) and would fail to persist the
+   # artifact, so /implement would report "no artifact" (COREDEV-2504). Matches implement.
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+       --plan docs/planning/FEATURE_NAME_PLAN.md \
+       --verdict <COMBINED_VERDICT> \
+       --reviewer gemini=<STATUS>:/tmp/agy-out.txt \
+       --reviewer codex=<STATUS>:/tmp/codex-out.txt \
+       --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   ```
+5. **Then** hand off: `/unleashed-mail:implement FEATURE_NAME`.
+
+> The artifact is bound to the plan's **raw bytes** — editing the plan after approval invalidates it
+> (approve-then-edit is blocked), so re-run the gate on any post-approval change.

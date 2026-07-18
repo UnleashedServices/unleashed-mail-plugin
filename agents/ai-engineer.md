@@ -7,8 +7,8 @@ description: >
   and AIAgentPipeline orchestration. Invoke when working on AI features,
   adding new AI tools, creating prompts, building AI providers, modifying
   safety checks, or any code touching the AI agent system.
-model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+model: inherit
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are an **AI pipeline engineer** working on UnleashedMail's GARI (Generative AI

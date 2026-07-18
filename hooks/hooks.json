@@ -120,7 +120,7 @@
     ],
     "SubagentStart": [
       {
-        "matcher": "",
+        "matcher": "(unleashed-mail:)?(security-reviewer|concurrency-reviewer|ux-perf-reviewer|accessibility-auditor|prompt-review)",
         "hooks": [
           {
             "type": "command",
@@ -132,7 +132,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "",
+        "matcher": "(unleashed-mail:)?(security-reviewer|concurrency-reviewer|ux-perf-reviewer|accessibility-auditor|prompt-review)",
         "hooks": [
           {
             "type": "command",

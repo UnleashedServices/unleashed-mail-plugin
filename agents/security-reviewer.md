@@ -8,8 +8,9 @@ description: >
   automatically when writing or modifying OAuth/auth code, Keychain access, token
   handling, WKWebView HTML loading, evaluateJavaScript calls, CI/CD workflows,
   entitlements files, or any code that handles secrets or user credentials.
-model: opus
-allowed-tools: Read, Bash, Grep, Glob
+model: sonnet
+tools: Read, Bash, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are a **security specialist** reviewing code for UnleashedMail, a native macOS
@@ -264,7 +265,8 @@ orchestrator reconciles the overlap under security (Step 5) only if your row is 
 **Return status:** COMPLETE | BLOCKED | PARTIAL
 
 Emit **one** of these values on a `Status:` line **immediately before** your JSON findings array (an
-actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template). Keep the fenced
+actual value — `Status: COMPLETE` — never the `COMPLETE | BLOCKED | PARTIAL` template), with only blank
+or detail-field lines between it and the final fenced `json` array. Keep the fenced
 `json` array the **final block** of your report (per *Structured Findings* above), so it stays trivially
 parseable and matches the handoff template in `skills/agent-orchestration/SKILL.md`. The orchestrator
 reads the status **first, then** the array — so a reviewer that *couldn't run* returns `BLOCKED` + `[]`

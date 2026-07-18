@@ -1,12 +1,58 @@
-# UnleashedMail — Claude Code Plugin v2.4.2
+# UnleashedMail — Claude Code Plugin v2.5.2
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
-**21 agents · 18 skills · 3 commands · 1 MCP server**
+**21 agents · 21 skills · 0 commands · 1 MCP server**
 
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.5.2
+
+Consumer-install fix for the Plan Review Gate (COREDEV-2504). The plan-gate script references in agent/skill
+bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does **not** substitute
+(only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline) — so it reached the shell literally and
+resolved to `.` (the consumer app repo, which ships none of these scripts), making every reviewer read as
+"missing" and the fail-closed gate un-passable in any consumer install. All 8 sites are back to the bare
+token (correcting a v2.5.1 F6 regression), `codex-review`'s pty timeout is raised 600→1200 s to survive
+`xhigh` runs, and a mutation-proved doc-gate test now enforces the exact-token convention going forward.
+
+### v2.5.1
+
+Quality/review-gate fail-open remediation (COREDEV-2503). A v2.5.0 audit found fail-opens in the very gates
+this plugin ships; all 14 are closed and mutation-proved: the `review-verdict` captureId dual-review bypass,
+the review-synthesizer backslash/`..` traversal fail-opens, the sensitive-file guard's O(n²) parser and
+quote-blindness (replaced by one structured linear lexer with a corrected exit-code contract), the Stop-gate
+sentinel now keyed per-session, and secure-IO / validator / doc-consistency fixes. Every fix ships with a
+regression test that fails when reverted.
+
+### v2.5.0
+
+The Plan Review Gate hardening release — the gate is now usable end-to-end and cannot be talked out of
+its own guarantees.
+
+- **Plan Review Gate, usable and hardened (COREDEV-2492).** `/implement <feature|path>` resolves to *the*
+  tracked plan (exact-stem match; a bare substring must be named), refuses any plan outside
+  `docs/planning/` (realpath containment closes the `" "`/`.`/`..`/symlink/symlinked-root/same-basename
+  bypasses that let a stray argument or an out-of-tree file satisfy the gate), and verifies a
+  plan-digest-bound Combined-verdict artifact before code is written. That artifact demands a non-empty,
+  real-SHA-256, **distinct** transcript per reviewer — by capture path or wrapper capture-id, so two
+  genuine reviews with identical text aren't rejected and one review can't stand in for two — a validated
+  combined verdict, and the mandatory gemini+codex identities, enforced identically at write and verify.
+- **The `WAIVED` promise dropped, not faked (COREDEV-2493).** `AGENT_CONTRACTS.md` §2 had promised a
+  user-authorized scripted waiver that nothing implemented and nothing could; it now documents the
+  recovery that actually exists. `agy` review timeouts raised so a real multi-file plan review stops
+  dying at the 5-minute default.
+- **Correctness + CI hardening (COREDEV-2494).** `swift-lint-check.sh` now honours every `swiftlint:disable`
+  form (region / `:next` / `:this` / `:previous` / `all`), ignores prose and typo'd directives, and no
+  longer flags IUO types (`Registry!`, `Canvas!`) as force operations — 15/15 sampled real app files were
+  false positives before. `pty-capture.py` runs on macOS system Python 3.9 again (a new py3.9 CI job
+  guards it), the gitleaks exemption is commit-scoped (no permanent blind spot), and `alpha` is now
+  gated by CI + history-aware secret scanning.
+- **Review tooling on Codex `gpt-5.6-sol` @ `xhigh` (COREDEV-2495).** Every codex review call forces
+  `-c model_reasoning_effort=xhigh`, resilient to the config reset the 5.6 upgrade introduced.
+- Built on the v2.4.x plugin-audit remediation (Epic COREDEV-2485, 17 PRs) already integrated on `alpha`.
 
 ### v2.4.2
 
@@ -95,7 +141,7 @@ This repo is both the plugin **and** its own marketplace (the repo ships [`.clau
 
 ```bash
 # 1. Add the marketplace (one-time)
-claude plugin marketplace add npranson/unleashed-mail-plugin
+claude plugin marketplace add UnleashedServices/unleashed-mail-plugin
 
 # 2. Install the plugin
 claude plugin install unleashed-mail
@@ -106,10 +152,22 @@ claude plugin install unleashed-mail
 To pull a newer version after upstream changes:
 
 ```bash
-claude plugin marketplace update npranson/unleashed-mail-plugin
+claude plugin marketplace update UnleashedServices/unleashed-mail-plugin
 claude plugin update unleashed-mail
 # Restart Claude Code
 ```
+
+> **Migrating from the old `npranson-unleashed-mail-plugin` marketplace?** The marketplace was
+> renamed to `UnleashedServices/unleashed-mail-plugin`, and Claude Code's plugin-rename migration
+> does not cover marketplace-name changes — an install keyed as
+> `unleashed-mail@npranson-unleashed-mail-plugin` will stop resolving. Re-point it once:
+>
+> ```bash
+> claude plugin marketplace remove npranson-unleashed-mail-plugin
+> claude plugin marketplace add UnleashedServices/unleashed-mail-plugin
+> claude plugin install unleashed-mail   # reinstall under the new marketplace
+> # Restart Claude Code
+> ```
 
 For local development against an unpushed clone:
 
@@ -227,9 +285,12 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 | `create-feature-plan` | Scaffolds a `FEATURE_NAME_PLAN.md` under `docs/planning/` using the project template |
 | `review-synthesis` | Combines the two captured plan-review transcripts (gemini + codex) into one auditable **Combined verdict** block; read-only, run after both reviews and before implementation |
 
-## Commands (3)
+## Workflow skills (3)
 
-| Command | Usage |
+These three orchestration workflows ship as `disable-model-invocation` **skills** (custom commands
+have merged into skills) — you invoke them exactly as before, and Claude won't auto-trigger them:
+
+| Skill | Usage |
 |---|---|
 | `/unleashed-mail:brainstorm` | Design feature → Context7 research → spec → plan document → Jira ticket |
 | `/unleashed-mail:implement` | Plan → db → logic → ui (layered agents) → multi-agent review → Jira updates |
@@ -273,12 +334,23 @@ The `.env` file is gitignored and will not be distributed with the plugin.
 
 ## Hooks
 
-The plugin includes PostToolUse hooks that run automatically:
+The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch — including `swift-lint-check.sh`, which emits `decision:block` and arms the Stop gate, so it is the one that most needs an escape (`UNLEASHED_LINT_CHECK=off`). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
 
-| Hook | Trigger | Behavior |
-|---|---|---|
-| `swift-lint-check.sh` | After Write/Edit | Syntax check, SwiftLint, `try!`/`as!` detection, token logging — **blocks on critical violations** |
-| `swift-build-verify.sh` | After Write/Edit & Bash | Detects build/test commands and reminds to verify results |
+| Event | Script | Behavior | Default | Kill switch |
+|---|---|---|---|---|
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` |
+| PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | `UNLEASHED_LINT_CHECK=off` |
+| PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
+| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` |
+| StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
+| PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
+| PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |
+| PreCompact | `precompact-snapshot.sh` | Snapshots work context before compaction | on | `UNLEASHED_COMPACT_SNAPSHOT=off` |
+| SessionStart | `sessionstart-restore.sh` | Restores the pre-compaction context as `additionalContext` | on | `UNLEASHED_COMPACT_RESTORE=off` |
+| SubagentStart | `capture-reviewer-round-start.sh` | Binds a review round to each spawned reviewer | on | `UNLEASHED_CAPTURE_REVIEWERS=off`, `UNLEASHED_REVIEW_ROUND_SIGNAL=off` |
+| SubagentStop | `capture-reviewer-verdict.sh` | Captures each reviewer's findings for the synthesizer | on | `UNLEASHED_CAPTURE_REVIEWERS=off` |
+
+> **PostToolUse hooks run *after* the tool call**, so they cannot undo a write — they feed findings back to the model (a top-level `{"decision":"block","reason":…}` or `additionalContext`). The Stop gate in `enforce` mode is the only hook that blocks a turn.
 
 ## MCP Servers (1)
 
@@ -289,7 +361,7 @@ The plugin bundles one local, zero-dependency **stdio MCP server**, declared in 
 | `review-synthesizer` | `synthesize_review` | Deterministic Step-5 synthesis for the [code-review pipeline](AGENT_CONTRACTS.md). Validates the sub-reviewers' JSON findings, filters to changed + `structural-pipeline` scope, dedups via category-family + line-overlap with cross-family ownership routing (**cluster-and-cross-link — never silently drops a fix**), and returns a provisional verdict + `blockersToVerify`. `swift-reviewer` then confirms each blocker against the code (the verify gate) and issues the final verdict. |
 
 - **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.
-- **Agent tool name:** `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` (in `swift-reviewer`'s `allowed-tools`). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
+- **Agent tool name:** `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` (inherited by `swift-reviewer`, whose `tools:` list includes it). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
 - **Source + tests:** [`mcp/review-synthesizer/`](mcp/review-synthesizer/) — run `python3 -m unittest discover -s mcp/review-synthesizer/tests` (159 cases, stdlib only).
 
 ## Baked-In Knowledge

@@ -2,11 +2,20 @@ firebase-debug.log
 *.log
 .env
 .env.*
+# committed placeholders-only template (real .env / .env.* stay ignored above)
+!.env.example
 .DS_Store
+# Plan Review Gate artifacts — per-session Combined-verdict handoff state, never committed
+.verdicts/
 **/.DS_Store
+
+# Claude Code local settings — machine-specific, may hold tokens/paths. Never commit
+# (COREDEV-2486, audit critic.1: same accidental-commit class as the firebase-debug.log incident).
+.claude/settings.local.json
 
 # Transient review prompt files (per-invocation, not source of truth)
 .agy-prompt.md
+.gate-*-prompt.md
 .codex-prompt.md
 
 # Python bytecode (MCP review-synthesizer is stdlib Python)

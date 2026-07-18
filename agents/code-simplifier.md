@@ -8,8 +8,8 @@ description: >
   provider parity, dead code removal, security patterns, GRDB best practices, and
   general code quality. Invoke after completing a feature, before a PR, when the
   user says "simplify", "clean up", or "refactor", or via the /simplify skill.
-model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+model: inherit
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **code simplification and refinement specialist** for UnleashedMail, a native
@@ -248,7 +248,7 @@ Ensure robust, consistent error handling.
 
 **Error handling:**
 - Every `catch` block must log with `Logger` — no empty catches
-- Use typed errors (`MailProviderError`, domain-specific enums) — not generic `Error`
+- Use typed errors (`EmailServiceError`, domain-specific enums) — not generic `Error`
 - Service layer catches and wraps API errors; ViewModel layer catches provider errors
 - No `try?` silently swallowing — always `do-catch` with logging
 
@@ -303,7 +303,7 @@ Check that both mail providers are consistent.
 
 ```bash
 # Find provider-specific code in ViewModels (should be zero)
-grep -rn "GmailMailProvider\|GraphMailProvider\|MSALResult\|GmailAPI\." --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/" 2>/dev/null
+grep -rn "GmailService\|MicrosoftGraphService\|MSALResult\|GmailAPI\." --include='*.swift' "Unleashed Mail/Sources/ViewModels/" "Unleashed Mail/Sources/Views/" 2>/dev/null
 ```
 
 - ViewModels never reference concrete provider types

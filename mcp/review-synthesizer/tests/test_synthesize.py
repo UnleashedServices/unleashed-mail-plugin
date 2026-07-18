@@ -18,6 +18,50 @@ def f(**over):
     return parse_finding(d)
 
 
+class TestAuditPR53CLIHardening(unittest.TestCase):
+    """Audit of #53 (A1): the standalone CLI is a GATING path too and must quarantine an absolute/`..`
+    finding `file` + refuse an absolute/`..` changed entry, matching mcp_server.py (was permissive)."""
+
+    _FINDING = dict(severity="warning", confidence="high", sourceAgent="codex", category="logic",
+                    line=1, lineEnd=1, finding="secret", evidence="e", fix="x")
+
+    def _write(self, d, obj):
+        p = os.path.join(d, "f.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh)
+        return p
+
+    def test_load_quarantines_absolute_path_finding(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, {"findings": [dict(self._FINDING, file="/private/project/AuthService.swift")]})
+            findings, bad = S._load([p])
+            self.assertEqual(findings, [], "an absolute-path finding must be quarantined, not loaded")
+            self.assertTrue(bad, "the absolute-path finding must land in the quarantine list")
+
+    def test_load_quarantines_traversal_finding(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, {"findings": [dict(self._FINDING, file="../../../etc/passwd")]})
+            findings, bad = S._load([p])
+            self.assertEqual(findings, [])
+            self.assertTrue(bad)
+
+    def test_relative_path_finding_still_loads(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, {"findings": [dict(self._FINDING, file="Sources/AuthService.swift")]})
+            findings, bad = S._load([p])
+            self.assertEqual(len(findings), 1, "a normal relative-path finding must still load")
+            self.assertEqual(bad, [])
+
+    def test_main_fails_closed_on_absolute_changed_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            fp = self._write(d, {"findings": []})
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write("/abs/AuthService.swift\n")
+            self.assertEqual(S.main([fp, "--changed", ch]), 2,
+                             "an absolute changed entry must fail closed (exit 2)")
+
+
 class TestDedup(unittest.TestCase):
     def test_same_family_overlap_clusters(self):
         cs = S.cluster_findings([f(category="logic", line=10, lineEnd=20),

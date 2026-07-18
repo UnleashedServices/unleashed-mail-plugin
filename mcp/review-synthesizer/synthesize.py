@@ -1,7 +1,7 @@
 """Deterministic review synthesizer — the coded half of the hybrid.
 
-Input:  validated Finding objects (from the markdown reviewers' JSON, or from
-        API tool calls — see reviewers.py).
+Input:  validated Finding objects (from the markdown reviewers' JSON fences,
+        captured + schema-checked by capture.py).
 Output: a consolidated review (clustered, ownership-routed) and a verdict —
         computed in plain Python, not by an LLM parsing a markdown table.
 
@@ -27,7 +27,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from schema import Finding, SEVERITY_EMOJI, SEVERITY_RANK, canonical_path, parse_finding
+from schema import Finding, SEVERITY_EMOJI, SEVERITY_RANK, canonical_path, is_abs_or_traversal, parse_finding
 
 # --------------------------------------------------------------------------- #
 # scope filter
@@ -45,6 +45,9 @@ def in_gating_scope(f: Finding, changed_files: set[str]) -> bool:
     # in the changeset.
     if f.family in _ALWAYS_GATING_FAMILIES:
         return True
+    # `f.file` is already canonicalised at parse (schema.parse_finding) and `changed_files` by the caller,
+    # so both sides collapse `Sources/./Auth.swift` / `Sources//Auth.swift` to `Sources/Auth.swift` and
+    # a reviewer's noncanonical path still matches git's clean changed entry (round 4: codex).
     return f.scope == "structural-pipeline" or f.file in changed_files
 
 
@@ -364,7 +367,10 @@ def _load(paths: list[str]) -> tuple[list[Finding], list[tuple[dict, str]]]:
             continue
         for d in items:
             try:
-                findings.append(parse_finding(d))
+                # A2/F3 (audit of #53): the CLI is a GATING path too — quarantine an absolute/`..` finding
+                # `file` (git diff never emits those, so it can never match `changed` and would silently
+                # demote a real blocker to a bogus APPROVE), matching mcp_server.py's reject_abs_traversal=True.
+                findings.append(parse_finding(d, reject_abs_traversal=True))
             except Exception as exc:  # noqa: BLE001 - quarantine, don't crash
                 bad.append((d, str(exc)))
     return findings, bad
@@ -409,6 +415,13 @@ def main(argv: list[str]) -> int:
     if os.path.exists(changed_path):
         with open(changed_path, encoding="utf-8") as fh:
             changed = {ln.strip() for ln in fh if ln.strip()}
+    # A2/F3: refuse an absolute/traversal changed entry (git diff --name-only never emits these) — it can
+    # only mis-scope findings to a bogus APPROVE. Fail CLOSED, matching mcp_server.py's changed_files guard.
+    _bad_changed = sorted({c for c in changed if is_abs_or_traversal(c)})
+    if _bad_changed:
+        print(f"error: --changed contains absolute/traversal paths ({', '.join(_bad_changed)}); "
+              "git diff --name-only never emits these — refusing to synthesize", file=sys.stderr)
+        return 2
     findings, bad = _load(paths)
     review = synthesize(findings, changed, quarantined=bad)
     print(render_markdown(review))

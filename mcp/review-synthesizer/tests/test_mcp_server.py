@@ -39,8 +39,14 @@ class TestProtocol(unittest.TestCase):
     def test_initialize_unsupported_version_falls_back(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
                        "params": {"protocolVersion": "2024-01-01", "capabilities": {}}}])
-        # must NOT echo an unsupported version — reply with the one we actually speak
-        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-06-18")
+        # must NOT echo an unsupported version — reply with the current one we speak
+        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-11-25")
+
+    def test_initialize_current_revision_negotiates(self):
+        # The current finalized revision (2025-11-25) negotiates cleanly (COREDEV-2488).
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                       "params": {"protocolVersion": "2025-11-25", "capabilities": {}}}])
+        self.assertEqual(out[0]["result"]["protocolVersion"], "2025-11-25")
 
     def test_tools_list(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
@@ -105,6 +111,104 @@ class TestSynthesizeTool(unittest.TestCase):
                        "params": {"name": "synthesize_review",
                                   "arguments": {"findings": findings, "changed_files": changed}}}])
         return out[0]["result"]
+
+    def test_empty_changed_files_with_findings_fails_closed(self):
+        # findings present + an EFFECTIVELY-empty changeset would scope every finding to pre-existing
+        # and yield a bogus provisional APPROVE -> must be rejected -32602, never synthesized. Covers
+        # the [] case AND the blank/'.'-only entries that canonicalize to "" — the list-truthiness
+        # bypass an adversarial pass found ([""] / ["   "] / ["\t"] / ["./"]) (Item 17).
+        for changed in ([], [""], ["   "], ["\t"], ["./"], ["."], ["/"], ["./."], ["", "  "], [".."], ["..//"]):
+            out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()], "changed_files": changed}}}])
+            self.assertEqual(out[0]["error"]["code"], -32602, f"changed_files={changed!r} must fail closed")
+            self.assertIn("refusing", out[0]["error"]["message"])
+
+    def test_absolute_and_traversal_changed_files_fail_closed(self):
+        # `git diff --name-only` NEVER emits an absolute path or a `..` component. Such an entry
+        # canonicalizes to a NON-empty string that matches no finding's repo-relative file, so it
+        # survives the empty-changeset guard and scopes every real blocker to pre-existing -> a bogus
+        # APPROVE. Reject the call (#44 independent review §5 — the residual of the bare-dot fix).
+        # Windows drive-letter roots (`C:\…`, `c:/…`) are absolute too — canonical_path turns `\` into
+        # `/`, so `C:\etc` arrives as `C:/etc` and its `startswith("/")` is False; the drive-letter
+        # regex is what fails it closed alongside the POSIX-absolute and traversal vectors.
+        # The MIXED cases (`["A.swift", ".."]`, `["A.swift", "/"]`) are the loophole: a bare `..`/`/`
+        # canonicalizes to "" so the real file keeps the changeset non-empty (empty guard doesn't fire)
+        # and a canonical-based reject would drop the "" — only the raw-path check catches them (round 2).
+        for changed in (["/etc/passwd"], ["../../etc/passwd"], ["Sources/../Sources/Auth.swift"],
+                        ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"],
+                        ["C:/etc/passwd"], ["C:\\repo\\Auth.swift"], ["c:/x"], ["A.swift", "D:/y"],
+                        ["A.swift", ".."], ["A.swift", "/"], ["good/path.swift", "../escape"],
+                        ["\\\\server\\share\\A.swift"], ["A.swift", "\\\\host\\x"]):
+            out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()], "changed_files": changed}}}])
+            self.assertEqual(out[0]["error"]["code"], -32602,
+                             f"changed_files={changed!r} (absolute/traversal) must fail closed")
+            self.assertIn("absolute or traversal", out[0]["error"]["message"])
+
+    def test_real_changed_file_alongside_blanks_still_synthesizes(self):
+        # A real path mixed with blank entries is NOT empty after canonicalization -> proceed normally
+        # (the guard must not over-reject a legitimate changeset that happens to carry noise entries).
+        res = self._call([good()], ["", "A.swift", "./"])
+        self.assertFalse(res["isError"])
+
+    def test_colon_and_backslash_repo_paths_are_not_rejected(self):
+        # A colon (`a:b`, `C:fixture.swift`) is a VALID POSIX filename char and must NOT be mistaken for a
+        # Windows drive-absolute — only `C:/`-style (colon+slash) drive roots are. A backslash that does not
+        # fold to an absolute/`..` path (`src/\weird.swift` -> `src//weird.swift`) also stays valid.
+        # NOTE (COREDEV-2503 F2): `is_abs_or_traversal` now folds `\`->`/` (matching canonical_path), so a
+        # backslash that DOES form an absolute/traversal path after folding is rejected — see
+        # `test_backslash_separator_absolute_or_traversal_fail_closed`.
+        for changed in (["a:b"], ["C:fixture.swift"], ["src/C:thing.swift"], ["C:"], ["src/\\weird.swift"]):
+            res = self._call([good()], changed)
+            self.assertFalse(res["isError"], f"changed_files={changed!r} is a valid repo path, not absolute")
+
+    def test_backslash_separator_absolute_or_traversal_fail_closed(self):
+        # COREDEV-2503 F2 (reproduced): the old guard checked the RAW path and treated `\` as a literal
+        # filename char, but canonical_path folds `\`->`/` — so `\Sources\Auth.swift` slipped the guard yet
+        # canonicalized to the absolute `/Sources/Auth.swift`, and `..\..\x` to a traversal, demoting every
+        # real blocker to pre-existing (a bogus provisional APPROVE). `is_abs_or_traversal` now folds first,
+        # so these fail closed. A rare literal-backslash POSIX filename being rejected is the accepted,
+        # documented trade-off (canonical_path folds it identically anyway).
+        for changed in (["\\Sources\\Auth.swift"], ["foo\\..\\bar.swift"], ["\\report.swift"],
+                        ["A.swift", "..\\..\\etc\\x.swift"],
+                        # codex review of #53: a dot-backslash / mixed-separator drive path canonicalizes to
+                        # a drive-absolute (`C:/…`) and must fail closed too — normalize BEFORE the checks.
+                        [".\\C:\\Auth.swift"], [".\\\\C:\\\\x"], ["A.swift", ".\\D:\\y"]):
+            out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()], "changed_files": changed}}}])
+            self.assertEqual(out[0]["error"]["code"], -32602,
+                             f"changed_files={changed!r} folds to absolute/traversal — must fail closed")
+            self.assertIn("absolute or traversal", out[0]["error"]["message"])
+
+    def test_absolute_or_traversal_finding_path_quarantines_not_demotes(self):
+        # COREDEV-2503 F3 (reproduced): a blocker whose `file` is absolute or contains `..` can never match
+        # the (guarded) changed_files set, so WITHOUT the reject it silently demotes to pre-existing and the
+        # verdict provisionally APPROVEs (fail-open). With the F3 reject (parse_finding
+        # reject_abs_traversal=True) the finding is QUARANTINED, which forces NEEDS_DISCUSSION — never a
+        # clean APPROVE. changed_files is a plain in-scope file so only the finding path is abnormal input.
+        for bad_file in ("../../etc/passwd.swift", "/etc/passwd.swift", "..\\..\\x.swift", "\\Sources\\Auth.swift"):
+            res = self._call([good(file=bad_file, severity="blocker")], ["Auth.swift"])
+            self.assertFalse(res["isError"], f"{bad_file!r}: quarantine is not an RPC error")
+            self.assertNotEqual(res["structuredContent"]["provisionalVerdict"], "APPROVE",
+                                f"an abs/traversal blocker ({bad_file!r}) must not demote to a bogus APPROVE")
+
+    def test_noncanonical_interior_changed_path_still_scopes_the_finding(self):
+        # A reviewer's noncanonical file (`Sources/./Auth.swift`, `Sources//Auth.swift`) must still match
+        # git's clean `Sources/Auth.swift` changed entry — otherwise the blocker scopes to pre-existing and
+        # is silently dropped from the provisional verdict (round 4: codex). canonical_path collapses both.
+        res = self._call([good(file="Sources/./Auth.swift")], ["Sources//Auth.swift"])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "REQUEST_CHANGES",
+                         "a blocker on a noncanonical in-scope path must not be dropped to pre-existing")
+
+    def test_empty_changed_files_with_no_findings_is_allowed(self):
+        # A genuinely clean review (findings []) with an empty changeset is legitimate, not an error.
+        res = self._call([], [])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["provisionalVerdict"], "APPROVE")
 
     def test_provisional_verdict_and_findings_only_text(self):
         res = self._call([good()], ["A.swift"])

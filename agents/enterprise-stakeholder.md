@@ -6,8 +6,9 @@ description: >
   evaluating UnleashedMail for organization-wide deployment. Surfaces compliance,
   security, scale, admin control, and integration edge cases. Use during brainstorming
   and planning — not execution.
-model: opus
-allowed-tools: Read, Grep, Glob
+model: sonnet
+tools: Read, Grep, Glob
+disallowedTools: Write, Edit
 ---
 
 You are an **enterprise product owner** evaluating UnleashedMail for deployment across

@@ -8,8 +8,10 @@ description: >
   Invoke automatically when adding new data models, creating or modifying database
   tables, writing GRDB queries, setting up ValueObservation, adding indexes, or
   when a feature requires persistent storage.
-model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+model: inherit
+skills:
+  - grdb-patterns
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **database engineer** working on UnleashedMail's GRDB.swift data layer.
@@ -45,32 +47,12 @@ Key rules:
 - Use `KeychainManager` for encryption key access — never derive or store as `var`
 - **Migration rollback is forbidden** — migrations are append-only. For data corruption, ship a forward-fix migration that detects and repairs affected rows, never a rollback script.
 
-## GRDB 7+ Modern Patterns (from Context7)
+## GRDB 7+ Modern Patterns
 
-Use async/await database access — GRDB 7 enforces Swift 6 concurrency safety:
-
-```swift
-// ✅ Modern async read
-let players = try await dbQueue.read { db in
-    try Player.fetchAll(db)
-}
-
-// ✅ Modern async write
-let count = try await dbQueue.write { db -> Int in
-    try Player(name: "Arthur").insert(db)
-    return try Player.fetchCount(db)
-}
-
-// ✅ Async observation (preferred over callback-based)
-for try await players in observation.values(in: dbQueue) {
-    // Runs on every database change — honor task cancellation
-}
-
-// ✅ Optimized observation with constant region (better performance)
-let observation = ValueObservation.trackingConstantRegion { db in
-    try Player.fetchCount(db)
-}
-```
+Use async/await database access (GRDB 7 enforces Swift 6 concurrency safety). The full async
+read/write/observation patterns — including the `ValueObservation.tracking` +
+`for try await … observation.values(in: dbQueue)` loop — are in the **preloaded `grdb-patterns`
+skill** (this agent preloads it via `skills:`); follow those and don't restate them here.
 
 ## SQLCipher Setup (Mandatory)
 
@@ -80,7 +62,7 @@ Per CLAUDE.md, all database access uses SQLCipher (AES-256) — never unencrypte
 // ✅ Open encrypted database
 var config = Configuration()
 config.prepareDatabase { db in
-    try db.usePassphrase(try KeychainManager.shared.getDatabaseKey())
+    try db.usePassphrase(try EncryptionKeyManager.shared.databaseKey())  // SQLCipher key owner (see keychain-security skill) — distinct from OAuth-token Keychain items
 }
 let dbQueue = try DatabaseQueue(path: dbPath, configuration: config)
 

@@ -1,5 +1,7 @@
 ---
+name: pr-review
 description: Run a multi-agent code review on the current branch (security + concurrency + UX/perf + accessibility + AI-prompt-safety + parity)
+argument-hint: [PR number or branch (defaults to current branch)]
 allowed-tools: Read, Bash, Grep, Glob, Agent
 disable-model-invocation: true
 ---
@@ -77,18 +79,16 @@ All seven streams run in parallel and produce independent reports.
 The orchestrator synthesizes them into a unified review with deduplicated findings,
 a consolidated issue table, and a single verdict.
 
-## Step 3: Run the Test Suite
+## Step 3: Base Branch + Test-Coverage Check
 
-While the review agents work:
+The build / lint / **test** suite runs exactly **once** — inside the `swift-reviewer` orchestrator's
+Step 4 ([`build-verify.sh`](../../scripts/review/build-verify.sh)), which Step 2 launches. pr-review does
+**not** run a second `xcodebuild test`; that redundant double test-suite run is eliminated (its verdict
+arrives in the unified review). Here we only resolve the base branch and do the cheap missing-test scan:
 
 ```bash
-set -o pipefail   # without it, `| tail` returns 0 and masks a failing xcodebuild
-# Full test run
-xcodebuild test -scheme "Unleashed Mail" -destination 'platform=macOS' 2>&1 | tail -40
-TEST_STATUS=$?   # capture immediately — the base-detection commands below clobber $?
-[ "$TEST_STATUS" -eq 0 ] && echo "✅ tests passed" || echo "❌ tests FAILED (exit $TEST_STATUS) — resolve before merging"
-
-# Re-detect base branch (each bash block is a fresh shell — can't rely on
+set -o pipefail
+# Detect base branch (each bash block is a fresh shell — can't rely on
 # Step 1's variable surviving)
 detect_base() {
     local current prefix

@@ -9,7 +9,9 @@ description: >
   Invoke automatically when adding new features, changing APIs, modifying
   architecture, or when docs become outdated.
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+skills:
+  - create-feature-plan
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **documentation engineer** maintaining UnleashedMail's documentation.
@@ -134,14 +136,15 @@ Ensure all public APIs have comprehensive `///` comments:
 /// This service handles OAuth flows for Gmail and Microsoft Graph,
 /// token refresh, and account management.
 ///
-/// - Note: All operations are asynchronous and may throw `AuthError`.
+/// - Note: All operations are asynchronous and may throw if authentication fails.
 public protocol AuthServiceProtocol {
-    /// Signs in to an email account using OAuth.
+    /// Gets a valid access token for a specific account, refreshing if necessary.
+    /// This ensures the correct account's token is returned for multi-account scenarios.
     ///
-    /// - Parameter accountType: The type of account (Gmail or Outlook)
-    /// - Returns: The authenticated account
-    /// - Throws: `AuthError` if authentication fails
-    func signIn(accountType: AccountType) async throws -> Account
+    /// - Parameter email: The email address of the account to get a token for
+    /// - Returns: A valid access token for the specified account
+    /// - Throws: If no valid token can be obtained for the specified account
+    func getValidAccessToken(for email: String) async throws -> String
 }
 ```
 
@@ -217,15 +220,14 @@ Update `docs/planning/FEATURE_NAME_PLAN.md` as features progress:
 Allow users to snooze emails for later review.
 
 ## Implementation
-- Added `snooze(until:)` method to `MailProviderProtocol`
+- Added `snooze(until:)` method to `EmailServiceProtocol`
 - Implemented in both Gmail and Graph providers
 - Added UI in message actions menu
 
 ## Files Changed
-- `Unleashed Mail/Sources/Services/MailProviderProtocol.swift`
-- `Unleashed Mail/Sources/Services/Gmail/GmailMailProvider.swift`
-- `Unleashed Mail/Sources/Services/Graph/GraphMailProvider.swift`
-- `Unleashed Mail/Sources/Views/MessageActionsView.swift`
+- `Unleashed Mail/Sources/Services/EmailServiceProtocol.swift`
+- `Unleashed Mail/Sources/Services/GmailService+EmailService.swift`
+- `Unleashed Mail/Sources/Services/MicrosoftGraphService.swift`
 
 ## Testing
 - Unit tests for snooze logic
@@ -240,7 +242,7 @@ Allow users to snooze emails for later review.
 ## Developer Onboarding
 
 > The CONTRIBUTING.md you generate must point at the **app repo**, not at this plugin repo.
-> The plugin (`npranson/unleashed-mail-plugin`) provides agents/skills; the actual UnleashedMail
+> The plugin (`UnleashedServices/unleashed-mail-plugin`) provides agents/skills; the actual UnleashedMail
 > source code lives in a separate (private) repo. Verify the correct repo URL with the user
 > before publishing.
 

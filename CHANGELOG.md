@@ -13,6 +13,126 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.5.2] — 2026-07-17
+
+### Fixed
+- **Plugin scripts unreachable in consumer installs** (COREDEV-2504): the plan-gate script references in
+  agent/skill bodies used the shell-fallback spelling `${CLAUDE_PLUGIN_ROOT:-.}`, which Claude Code does
+  **not** substitute (only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in agent/skill
+  content) — so it reached the shell literally and resolved to `.` (the consumer app repo, which ships none
+  of these scripts), making every reviewer read as "missing" and the fail-closed Plan Review Gate
+  un-passable in any consumer install. Reverted the 8 sites to the bare token (this corrects the F6
+  regression in 2.5.1, which had introduced `:-.` at `swift-reviewer.md` Step-4). Also raised `codex-review`'s
+  pty capture timeout 600→1200 s to survive mandated `xhigh` runs, and added a mutation-proved doc-gate test
+  (`test_doc_gates.py`) whose contract regex enforces the exact `${CLAUDE_PLUGIN_ROOT}` token — flagging the
+  `:-.`/`:?` fallback, suffix typos, unbraced, brace-spacing, and case variants, while documenting the
+  identifier-typo / unicode-homoglyph boundary as out of scope.
+
+## [2.5.1] — 2026-07-16
+
+### Fixed
+- **Quality/review-gate fail-open remediation** (COREDEV-2503): a v2.5.0 audit surfaced fail-opens in the
+  gates this plugin ships (the repo's own validators don't cover gate logic). All 14 confirmed findings are
+  closed, each with a regression test that fails when the fix is reverted; two audit items were excluded
+  after verification (a SIGPIPE claim refuted; a "dropped parity rule" reclassified as gate-drift, F9):
+  - **F1** `review-verdict.py` — removed the `captureId` short-circuit that let two forged distinct
+    captureIds behind one identical transcript manufacture a passing gemini+codex approval; the
+    content-digest floor now always runs.
+  - **F2/F3** `review-synthesizer` — one shared `is_abs_or_traversal` helper (folds separators) closes the
+    backslash-traversal `changed_files` bypass and quarantines absolute/`..` finding paths instead of
+    demoting them to a bogus provisional APPROVE.
+  - **F4/F12** `sensitive-file-guard.sh` — replaced the O(n²) parser + quote-blind greps with one structured
+    quote/escape/operator-aware linear lexer (`lib/bash-write-scan.py`): fixes the timeout fail-open, the
+    quoted-operator over-ask and mid-word-quote bypass, adds the missing write-form arms
+    (subshell/`sed -i`/`>|`/`find -delete`/`xargs`/`dd`), corrects the exit-code contract (`ask`=exit-0,
+    parse-failure=exit-2 deny), and adds a 256 KiB DoS backstop.
+  - **F5** Stop-gate sentinel is now keyed by session (not just repo+commit), `chmod 600`, with an
+    all-session reset on a passing marker.
+  - **F6** `swift-reviewer` Step-4 fails closed (build-verify fence + `exit "$BUILD_VERIFY"`) so
+    build/lint/test can't silently skip. **F8** bounded secure read. **F10** anchored model-id regex.
+    **F11** `capture.py` `O_NOFOLLOW|O_EXCL` writers. **F13** CFR state-machine contradictions. **F9**
+    provider-parity gate drift.
+  - **B1** pty `--timeout=N` form. **B2** verify-path stray-reviewer reject. **B4** stale-`Task` reject.
+    **B6** `build-verify.sh` compiles once (`build-for-testing`/`test-without-building`). **B7** CFR
+    drift-guard. (B3 dropped — no real duplication; B5/B8 deferred to a follow-up.)
+
+## [2.5.0] — 2026-07-16
+
+### Added
+- **Plan Review Gate made usable end-to-end and hardened** (COREDEV-2492): `/implement` now resolves a
+  feature name or path to *the* tracked plan (exact-stem match; a pure substring must be named
+  explicitly), refuses anything outside `docs/planning/` (realpath containment — closes the
+  `..`/symlink/symlinked-root and same-basename bypasses), and deterministically verifies a
+  plan-digest-bound Combined-verdict artifact via [`scripts/review-verdict.py`](scripts/review-verdict.py)
+  before any code is written. The artifact requires a non-empty, real-SHA-256, DISTINCT transcript per
+  reviewer (by capture path / wrapper capture-id, falling back to digest), a validated combined verdict,
+  and the mandatory gemini+codex identities — enforced identically at write and verify, so neither a
+  mis-recording caller nor a hand-tampered artifact can manufacture a false approval. `pty-capture.py`
+  emits a `<out>.captureid` per run for that provenance.
+
+### Changed
+- **Dropped the unimplementable scripted `WAIVED` path** (COREDEV-2493): `AGENT_CONTRACTS.md` §2 had
+  promised a user-authorized `WAIVED:` marker that nothing implemented and nothing could — "only the
+  user may waive" is unenforceable when the agent is the process running the script. Removed rather than
+  faked; §2 now documents the real recovery (the user chooses; a workflow exception is recorded without
+  claiming the gate passed). `agy` gets `--print-timeout 18m` so a real plan review no longer dies at the
+  5-minute default, and the wrapper timeout sits above it so a diagnosable error survives.
+- **Review tooling refreshed to Codex `gpt-5.6-sol` @ `xhigh`** (COREDEV-2495): Codex 5.6 "Sol"
+  (`codex-cli` 0.144.4). The upgrade silently reset the config's reasoning effort to `low`, so every
+  review recipe now passes `-c model_reasoning_effort=xhigh` explicitly — resilient to that reset and
+  correct on any machine, instead of trusting a config value the upgrade proved fragile.
+
+### Fixed
+- **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
+  only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
+  reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
+  executed on the branch they were added to. Triggers are now `[main, alpha]`, and `SECURITY.md` records it.
+- **`firebase-debug.log` secret-scan exemption is commit-scoped** (COREDEV-2494): it was a blanket path
+  allowlist, so a brand-new credential committed into that exact filename scanned clean — a permanent blind
+  spot on precisely the filename that caused the original leak. Now pinned to the two commits the file ever
+  existed in; verified against gitleaks 8.30.1 that a new secret in that filename is still caught.
+- **`swift-lint-check.sh` respects `swiftlint:disable` directives** (COREDEV-2494): waived lines no longer
+  produce false blocks. The waiver must NAME the rule, and a trailing ` - <rationale>` (this project's
+  mandated convention) is no longer parsed as a rule list. A broken/misconfigured SwiftLint CLI now falls
+  back to the greps instead of silently disarming the Stop gate. Force-try/cast elevation is production-only.
+- **`pty-capture.py` runs on macOS system Python again** (COREDEV-2494): a PEP-604 `X | None` annotation
+  (added in #30) is a syntax error on 3.9.6, crashing every PTY-wrapped review capture.
+
+### Changed
+- **`swift-reviewer` Step 4 extracted to a shipped, unit-tested script** (COREDEV-2489 / Item 5):
+  the inline build / lint / test block moved to [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh)
+  (reads the Step-1 `$CHANGED` list on stdin; `✅`/`❌` per gate; exits non-zero if any hard gate failed).
+  Saves ~0.3k tokens/review-spawn (~24 lines; 4–5k is the projected total once all four inline blocks are extracted) and makes the gate logic testable — `scripts/tests/test_build_verify.py`
+  covers it with mocked `xcodebuild`/`swiftlint` (runs in CI without a toolchain). `pr-review` now relies
+  on that single Step-4 run instead of launching its own `xcodebuild test`, **deduping the double
+  test-suite run**. Only the self-contained Step-4 block was extracted; the `$CHANGED`/`$BASE_BRANCH`
+  state-sharing steps stay inline, and a **canary** (`scripts/review/README.md`) covers the live-review
+  verification neither the gate nor unit tests can do autonomously.
+
+### Added
+- **P0 audit remediation** (COREDEV-2486): fixed six fleet-wide silent-failure classes — sub-agent
+  `tools:`/`disallowedTools:` frontmatter (removing the silently-ignored `allowed-tools` key), positional
+  SwiftLint invocation, the PostToolUse JSON contract, plugin-scoped reviewer-capture prefixing,
+  gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
+
+### Changed
+- Org/marketplace renamed to `UnleashedServices/unleashed-mail-plugin` — see the README install
+  section for the one-time migration from the old `npranson-unleashed-mail-plugin` marketplace.
+- `AGENT_CONTRACTS.md` §9/§10 updated to the omit-`tools:`-to-inherit-MCP mechanism (portable across
+  install prefixes; restricted via `disallowedTools`), with `prompt-review`'s deliberate Bash drop noted.
+- **The 3 orchestration commands are now skills** (COREDEV-2489 / P2-16): `brainstorm`, `implement`,
+  and `pr-review` moved from `commands/*.md` to `skills/<name>/SKILL.md` as `disable-model-invocation`
+  skills (custom commands have merged into skills). The `/unleashed-mail:brainstorm | implement |
+  pr-review` invocations are unchanged. Asset counts are now **21 agents · 21 skills · 0 commands · 1 MCP**.
+- **Enforcement hooks now default to their active modes** (COREDEV-2489 / audit hooks-scripts.5).
+  `sensitive-file-guard.sh` defaults to `ask` (was `warn`) — editing a sensitive file
+  (Keychain/OAuth/entitlements/DB/WebView) now surfaces a permission prompt; in non-interactive /
+  `dontAsk` / `-p` contexts the "ask" **denies** the operation that would prompt (the intended
+  fail-safe). Opt out with `UNLEASHED_SENSITIVE_GUARD_MODE=warn|off`. `stop-quality-marker-gate.sh`
+  defaults to `enforce` (was `warn`) — a lint-fail marker now blocks the turn once
+  (`decision:block`+`reason`, fail-open + TTL/commit-guarded). Opt out with
+  `UNLEASHED_STOP_GATE_MODE=warn|off`.
+
 ## [2.4.2] — 2026-06-27
 
 Hook-manifest integrity gate (COREDEV-2338). Surfaced while auditing whether the plugin's hooks

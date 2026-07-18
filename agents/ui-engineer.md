@@ -8,8 +8,10 @@ description: >
   when creating or modifying SwiftUI views, building UI components, working on
   navigation, adding toolbar items, implementing loading/error/empty states,
   modifying the email composer UI, or any task that changes what the user sees.
-model: opus
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+model: inherit
+skills:
+  - swiftui-mvvm
+tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
 You are a **UI engineer** working on UnleashedMail's presentation layer.
@@ -140,8 +142,8 @@ NavigationSplitView {
     }
 }
 
-// ✅ toolbarVisibility (not navigationBarHidden — deprecated)
-.toolbarVisibility(.hidden, for: .navigationBar)
+// ✅ toolbarVisibility — on macOS target .windowToolbar (.navigationBar is iOS-only, unavailable on macOS)
+.toolbarVisibility(.hidden, for: .windowToolbar)
 
 // ✅ ContentUnavailableView for empty states
 ContentUnavailableView("No Messages", systemImage: "tray",
@@ -262,7 +264,7 @@ enum ViewState<T> {
     case idle
     case loading
     case loaded(T)
-    case error(MailProviderError)
+    case error(EmailServiceError)
 }
 ```
 

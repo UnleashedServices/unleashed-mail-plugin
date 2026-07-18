@@ -40,7 +40,7 @@ Button("Send", systemImage: "paperplane") {
 ```swift
 // Custom gesture-based control
 Rectangle()
-    .fill(Color.blue)
+    .fill(Color.curatorPrimary)   // Curator token, not raw Color.blue (see Semantic Colors below)
     .frame(width: 50, height: 50)
     .onTapGesture {
         toggleStar()
@@ -71,7 +71,7 @@ struct MessageRow: View {
     var body: some View {
         HStack {
             Circle()
-                .fill(message.isRead ? Color.clear : Color.blue)
+                .fill(message.isRead ? Color.clear : Color.curatorSecondary)  // unread dot token
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)  // Decorative
 
@@ -136,25 +136,41 @@ TextEditor(text: $body)
 ### Scalable Text
 
 ```swift
+// UnleashedMail scales text APP-WIDE via CuratorTheme, not SwiftUI Dynamic Type.
+// Use the Curator typography sizes (CGFloat point sizes):
+// SCALABLE text uses the Curator scaler — the ONLY form that responds to the user's font-scale
+// preference (appState.uiPreferences.uiFontScale). This is the accessible default:
+Text("Message")
+    .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.bodySize,
+                                  weight: .regular,
+                                  scale: appState.uiPreferences.uiFontScale))
+
+// A bare `.system(size: CuratorTheme.Typography.…)` is the BASE point size and is NOT user-scalable —
+// it does not change with uiFontScale. Use it only where fixed sizing is intentional (chrome that must
+// not reflow); it is NOT the answer for "scalable text".
 Text("Welcome to UnleashedMail")
-    .font(.largeTitle)  // Scales with Dynamic Type
+    .font(.system(size: CuratorTheme.Typography.headlineSize, weight: .semibold))  // fixed 18pt base
 
-// Custom font that scales
-Text("Message")
-    .font(.system(size: 16, weight: .medium, design: .default))  // ❌ Doesn't scale
-
-Text("Message")
-    .font(.body)  // ✅ Scales automatically
+// ❌ Do NOT use SwiftUI semantic fonts — the design system uses CuratorTheme.Typography
+//    (displaySize 44, headlineSize 18, titleSize 16, bodySize 14, bodySmallSize 13,
+//    labelSize 11, microSize 10), matching the shipped Curator components.
+Text("Message").font(.body)      // ❌
+Text("Title").font(.largeTitle)  // ❌
 ```
 
 ### Layout Adaptation
 
 ```swift
+// Content text must SCALE — use the Curator scaler, not a bare `.system(size:)` (fixed, chrome-only).
 VStack {
     Text("Subject")
-        .font(.headline)
+        .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.titleSize,
+                                      weight: .semibold,
+                                      scale: appState.uiPreferences.uiFontScale))
     Text(subject)
-        .font(.body)
+        .font(CuratorTheme.scaledFont(size: CuratorTheme.Typography.bodySize,
+                                      weight: .regular,
+                                      scale: appState.uiPreferences.uiFontScale))
         .lineLimit(nil)  // Allow wrapping
         .fixedSize(horizontal: false, vertical: true)  // Grow vertically
 }
@@ -165,27 +181,31 @@ VStack {
 ### Semantic Colors
 
 ```swift
-// ✅ Adapts to light/dark mode and high contrast
-Color.primary
-Color.secondary
-Color.accentColor
+// ✅ Curator semantic colors (adapt to light/dark; per CLAUDE.md, never raw Color.*)
+Color.curatorOnSurface          // primary text
+Color.curatorOnSurfaceVariant   // secondary / metadata text
+Color.curatorPrimary            // accent / selection
+Color.curatorSecondary          // unread dots / badges
+Color.curatorError              // error
 
-// ❌ Hardcoded colors
+// ❌ Raw SwiftUI colors AND bare semantic colors — none are the sanctioned Curator tokens
 Color.blue
 Color.white
+Color.primary
+Color.accentColor
 ```
 
 ### State Indicators
 
 ```swift
-// ✅ Multiple indicators
+// ✅ Multiple indicators (icon + text — don't convey state by color alone) + Curator colors
 HStack {
     Image(systemName: message.isStarred ? "star.fill" : "star")
     Text(message.subject)
 }
-.foregroundStyle(message.isStarred ? .yellow : .gray)
+.foregroundStyle(message.isStarred ? Color.curatorAccent : Color.curatorOnSurfaceVariant)
 
-// ❌ Color only
+// ❌ Color only, and raw (.yellow/.primary) instead of Curator tokens
 Text(message.subject)
     .foregroundStyle(message.isStarred ? .yellow : .primary)
 ```

@@ -8,9 +8,11 @@
 # COVERAGE NOTE (COREDEV-2338): this harness exercises hook *behavior* but hardcodes the
 # hook-script paths it drives — it does NOT prove hooks/hooks.json actually points at those
 # scripts (that manifest<->script linkage, event names, and matcher tokens are gated by
-# scripts/validate-hooks.py). Known behavioral gap: the PostToolUse `swift-lint-check.sh`
-# hook is not simulated here (it needs SwiftLint + a Swift-file context unavailable on the
-# Linux CI runner); its manifest wiring is still validated by validate-hooks.py.
+# scripts/validate-hooks.py). NOTE (COREDEV-2494): `swift-lint-check.sh` IS behaviorally covered
+# here now — the grep-fallback path needs no SwiftLint, and the swiftlint-present paths are driven
+# by stub binaries on PATH (see `$LINTDIR/{badbin,warnbin,silentbin}`), so all of it runs on the
+# Linux CI runner. This header used to declare the hook untestable; that claim outlived its truth
+# by ~20 assertions and would have talked the next contributor out of testing it.
 set -uo pipefail
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -111,6 +113,170 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ Keycha
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_contains "sed -i sensitive -> ask" "$OUT" '"permissionDecision":"ask"'
 
+# == #44 independent review §6: mutating commands the redirect-only parse missed must fail closed ==
+guard_bash() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$1" \
+    | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null; }
+# 5a. Deletion of a sensitive file.
+assert_contains "rm sensitive -> ask" "$(guard_bash '"rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "unlink sensitive -> ask" "$(guard_bash '"unlink KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5b. Interpreter one-liner writing a sensitive file (the exact review bypass).
+assert_contains "python3 -c open(sensitive) -> ask" "$(guard_bash '"python3 -c \"open(\\\"OAuthService.swift\\\",\\\"w\\\").write(1)\""')" '"permissionDecision":"ask"'
+assert_contains "perl -e unlink(sensitive) -> ask" "$(guard_bash '"perl -e \"unlink(q(KeychainManager.swift))\""')" '"permissionDecision":"ask"'
+# 5c. Symlink clobber over a sensitive file.
+assert_contains "ln -sf over sensitive -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5d. SCOPING — must NOT over-fire: a sensitive file READ as a cp/interpreter SOURCE, or plain reads,
+#     or a non-sensitive deletion.
+assert_empty "cp sensitive SOURCE -> no decision (read, not write)" "$(guard_bash '"cp KeychainManager.swift /backup/"')"
+assert_empty "cat sensitive -> no decision" "$(guard_bash '"cat OAuthService.swift"')"
+assert_empty "rm non-sensitive -> no decision" "$(guard_bash '"rm InboxView.swift"')"
+assert_empty "python3 running a script (no sensitive name) -> no decision" "$(guard_bash '"python3 build.py"')"
+# 5e. Inline-code flags the old -(c|e)[space=] form MISSED: combined clusters (`-xc`, `-we`) and code
+#     directly adjacent to the flag (`-c"..."`). Round 1 (gemini + codex).
+assert_contains "bash -xc combined flag -> ask" "$(guard_bash '"bash -xc unlink OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "perl -we combined flag -> ask" "$(guard_bash '"perl -we OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "python3 -c no-space code -> ask" "$(guard_bash '"python3 -c\"open(OAuthService.swift)\""')" '"permissionDecision":"ask"'
+# 5f. FD dup (`2>&1`) is NOT a file write — must NOT over-fire on a sensitive file merely READ as input.
+assert_empty "interpreter read + 2>&1 FD-dup -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift 2>&1"')"
+# 5g. base_verb normalization: an absolute path or an `env` prefix resolves to the real verb (the old
+#     `/*rm` path-glob list was fragile and had no `env`/`/bin/cp` coverage). Round 1: gemini.
+assert_contains "/usr/bin/rm sensitive -> ask" "$(guard_bash '"/usr/bin/rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env rm sensitive -> ask" "$(guard_bash '"env rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "/usr/bin/cp DEST sensitive -> ask" "$(guard_bash '"/usr/bin/cp template.swift KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5h. touch creates/updates a file -> mutating; but `-r SENSITIVE` is a READ reference, not a write.
+assert_contains "touch sensitive -> ask" "$(guard_bash '"touch OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "touch -r sensitive (reference read) -> no decision" "$(guard_bash '"touch -r OAuthService.swift /tmp/marker"')"
+assert_contains "touch -r marker over sensitive TARGET -> ask" "$(guard_bash '"touch -r /tmp/marker KeychainManager.swift"')" '"permissionDecision":"ask"'
+# == round 2 (codex + gemini): prefix unwrap, over-scan scoping, prefixed tee ==
+# 5i. Bare `VAR=val cmd` (no `env`) must unwrap to the real verb — `FOO=1 rm SENSITIVE` still mutates.
+assert_contains "VAR=val rm sensitive -> ask" "$(guard_bash '"FOO=1 rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "VAR=val env python3 -c sensitive -> ask" "$(guard_bash '"FOO=1 env python3 -c open(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5j. `env -u NAME` / `env -C DIR` CONSUME the next token — the command word is after it, not it.
+assert_contains "env -u NAME rm sensitive -> ask" "$(guard_bash '"env -u PATH rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5k. Interpreter whose ONLY mutation is a redirect must NOT broad-scan its READ args (write is the
+#     redirect target). `python3 report.py SENSITIVE > /tmp/out` reads SENSITIVE, writes /tmp/out.
+assert_empty "interpreter read-arg + file redirect -> no decision" "$(guard_bash '"python3 report.py OAuthService.swift > /tmp/out.txt"')"
+# 5l. Prefixed tee must record the FILE operand, not the command path. `/usr/bin/tee SENSITIVE` writes it.
+assert_contains "/usr/bin/tee sensitive -> ask" "$(guard_bash '"/usr/bin/tee KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "env tee -a sensitive -> ask" "$(guard_bash '"env tee -a OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 3 (codex + gemini): verb-aware -e, quoting, ln/cp -t sources, env -S/-P, quoted-; ==
+# 5m. Shell -e is errexit, NOT inline code — a read script arg must NOT be flagged (only the redirect writes).
+assert_empty "bash -e script + read arg -> no decision" "$(guard_bash '"bash -e report.sh OAuthService.swift > /tmp/out"')"
+assert_contains "perl -e inline code IS code -> ask" "$(guard_bash '"perl -e unlink(OAuthService.swift)"')" '"permissionDecision":"ask"'
+# 5n. Single-quoted target must be seen through the quotes.
+assert_contains "touch single-quoted sensitive -> ask" "$(guard_bash "\"touch 'OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5o. ln SOURCE is a READ (LINK is the write); cp -t DIR SOURCE is a READ source.
+assert_empty "ln -s sensitive SOURCE -> no decision" "$(guard_bash '"ln -s OAuthService.swift /tmp/link"')"
+assert_contains "ln clobber over sensitive DEST -> ask" "$(guard_bash '"ln -sf /tmp/evil OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_empty "cp -t DIR sensitive SOURCE -> no decision" "$(guard_bash '"cp -t /tmp KeychainManager.swift"')"
+# 5p. env -S runs the split string as a command; -P consumes its path arg.
+assert_contains "env -S rm sensitive -> ask" "$(guard_bash '"env -S rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env -P PATH rm sensitive -> ask" "$(guard_bash '"env -P /opt/bin rm KeychainManager.swift"')" '"permissionDecision":"ask"'
+# 5q. Inline code with a QUOTED semicolon keeps the filename in the interpreter segment.
+assert_contains "python3 -c quoted-; write sensitive -> ask" "$(guard_bash "\"python3 -c 'import x; open(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_empty "interpreter code then unquoted read -> no decision" "$(guard_bash "\"python3 -c 'print(1)' ; cat OAuthService.swift\"")"
+# 5r. Quoted env-assignment value with a space must still resolve the real verb.
+assert_contains "FOO=quoted-space rm sensitive -> ask" "$(guard_bash "\"FOO='a b' rm OAuthService.swift\"")" '"permissionDecision":"ask"'
+# == round 4 (codex + gemini): eval/source, node/perl inline long-forms, quoted env -S, multiline -c ==
+# 5s. eval/source/. execute arbitrary code/files -> scan for sensitive names.
+assert_contains "eval sensitive -> ask" "$(guard_bash "\"eval 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "source sensitive -> ask" "$(guard_bash '"source KeychainManager.swift"')" '"permissionDecision":"ask"'
+assert_contains "dot-source sensitive -> ask" "$(guard_bash '". OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5t. Non-shell inline-code long/upper forms: perl -E, node --eval, node --print.
+assert_contains "perl -E inline sensitive -> ask" "$(guard_bash "\"perl -E 'unlink q(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+assert_contains "node --eval sensitive -> ask" "$(guard_bash '"node --eval writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_contains "node --print sensitive -> ask" "$(guard_bash '"node --print OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5u. env -S SPLIT STRING is the command (quoted single token) -> resolve the real verb.
+assert_contains "env -S quoted rm sensitive -> ask" "$(guard_bash "\"env -S 'rm OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# 5v. A quoted MULTILINE inline script stays in one segment (NUL-delimited), so a filename after an
+#     embedded newline is still scanned (the \n is a JSON escape -> a real newline in the command).
+assert_contains "multiline -c write sensitive -> ask" "$(guard_bash "\"python3 -c 'print(1)\nopen(OAuthService.swift)'\"")" '"permissionDecision":"ask"'
+# == round 5 (codex): unquoted-newline split, per-interpreter inline flags, comments, env prefixes ==
+# 5w. An UNQUOTED newline IS a command separator — the 2nd command's write must be seen (round-4
+#     NUL-delimiting kept it in-segment). `\n` here is a JSON escape decoded to a real newline in $CMD.
+assert_contains "unquoted newline then rm sensitive -> ask" "$(guard_bash '"echo benign\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 5x. Inline-code flags are interpreter-specific: node -p IS code; python/ruby -E are NOT (env/encoding).
+assert_contains "node -p write sensitive -> ask" "$(guard_bash '"node -p writeFileSync(OAuthService.swift)"')" '"permissionDecision":"ask"'
+assert_empty "python3 -E read arg (not code) -> no decision" "$(guard_bash '"python3 -E report.py OAuthService.swift > /tmp/o"')"
+assert_empty "ruby -E encoding read arg (not code) -> no decision" "$(guard_bash '"ruby -E utf-8 report.rb OAuthService.swift > /tmp/o"')"
+# 5y. A protected name only in a trailing shell COMMENT is not an operand -> must not prompt.
+assert_empty "sensitive name only in a # comment -> no decision" "$(guard_bash '"rm InboxView.swift # OAuthService.swift"')"
+# 5z. env option ARG (`-u NAME`) must not be collected as an mv operand; env -S split-string cp DEST fires.
+assert_empty "env -u NAME mv (NAME is an unset var) -> no decision" "$(guard_bash '"env -u OAuthService.swift mv a.swift b.swift"')"
+assert_contains "env -S quoted cp DEST sensitive -> ask" "$(guard_bash "\"env -S 'cp benign.swift OAuthService.swift'\"")" '"permissionDecision":"ask"'
+# == round 6 (codex): heredoc body kept with interpreter; comments not collected as operands ==
+# 6a. A heredoc body stays in the interpreter's segment (round-5 unquoted-newline split had severed it).
+assert_contains "heredoc body writes sensitive -> ask" "$(guard_bash '"python3 <<PY\nopen(OAuthService.swift)\nPY"')" '"permissionDecision":"ask"'
+# 6b. A protected name in a trailing shell comment is not a tee operand.
+assert_empty "tee then # comment naming sensitive -> no decision" "$(guard_bash '"tee /tmp/output # OAuthService.swift"')"
+# 6c. A `.bak` of a sensitive file is NOT the sensitive basename — the broad scan must read the whole token.
+assert_empty "rm sensitive.swift.bak -> no decision" "$(guard_bash '"rm OAuthService.swift.bak"')"
+# == round 7 (codex): heredoc-then-command split, backslash/`command` delimiters ==
+# 6d. A command AFTER a heredoc terminator is a SEPARATE command (must split off the heredoc segment).
+assert_contains "heredoc then rm sensitive -> ask" "$(guard_bash '"cat <<EOF\ntext\nEOF\nrm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6e. A backslash-quoted heredoc delimiter (`<<\\EOF`) is still a heredoc — body stays with interpreter.
+assert_contains "backslash heredoc body write -> ask" "$(guard_bash '"python3 <<\\EOF\nopen(OAuthService.swift)\nEOF"')" '"permissionDecision":"ask"'
+# 6f. The `command` builtin prefix must unwrap to the real verb.
+assert_contains "command rm sensitive -> ask" "$(guard_bash '"command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# == round 8 (codex): command -v/-V probe (not a mutation), command/env chaining, non-alnum heredoc delim ==
+# 6g. `command -v rm X` only DESCRIBES rm (doesn't run it) -> no decision.
+assert_empty "command -v probe -> no decision" "$(guard_bash '"command -v rm OAuthService.swift"')"
+# 6h. Nested command/env prefixes both resolve to the real verb.
+assert_contains "command env rm sensitive -> ask" "$(guard_bash '"command env rm OAuthService.swift"')" '"permissionDecision":"ask"'
+assert_contains "env command rm sensitive -> ask" "$(guard_bash '"env command rm OAuthService.swift"')" '"permissionDecision":"ask"'
+# 6i. A punctuation heredoc delimiter (`<<EOF-1`) is still a heredoc.
+assert_contains "punctuation heredoc delim write -> ask" "$(guard_bash '"python3 <<EOF-1\nopen(OAuthService.swift)\nEOF-1"')" '"permissionDecision":"ask"'
+
+# == COREDEV-2503 F4/F12: structured quote-aware lexer, exit-2 fail-closed contract, 256KB DoS backstop ==
+# F4 mutation-kills — the pre-fix quote-BLIND parser got these WRONG (bypass on a mid-word quote, over-ask
+# on a quoted/escaped operator):
+assert_contains "mid-word-quote rm -> ask" "$(guard_bash '"rm Key\"chain\".swift"')" '"permissionDecision":"ask"'
+assert_empty "quoted redirect operator (literal) -> no decision" "$(guard_bash "\"echo '> Keychain.swift'\"")"
+assert_empty "escaped redirect operator (literal) -> no decision" "$(guard_bash '"echo \\> Keychain.swift"')"
+# F4 preservation: an ACTIVE redirect still writes.
+assert_contains "active redirect -> ask" "$(guard_bash '"echo x > Keychain.swift"')" '"permissionDecision":"ask"'
+# F12 write-form arms:
+assert_contains "subshell ( rm ) -> ask" "$(guard_bash '"( rm Keychain.swift )"')" '"permissionDecision":"ask"'
+assert_contains "sed --in-place=bak -> ask" "$(guard_bash '"sed --in-place=bak Info.plist"')" '"permissionDecision":"ask"'
+assert_contains "clobber >| -> ask" "$(guard_bash '"echo x >| Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "find -delete -> ask" "$(guard_bash "\"find . -name 'Keychain.swift' -delete\"")" '"permissionDecision":"ask"'
+assert_contains "xargs rm from pipe -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs rm\"")" '"permissionDecision":"ask"'
+assert_contains "xargs -n 1 rm (options before verb) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs -n 1 rm\"")" '"permissionDecision":"ask"'
+# Round-4 sweep (codex review of #53) end-to-end guard arms:
+assert_contains ">& file redirect -> ask" "$(guard_bash '"echo hi >& Keychain.swift"')" '"permissionDecision":"ask"'
+assert_empty    ">&2 fd-dup (not a write) -> no decision" "$(guard_bash '"echo err >&2"')"
+assert_contains "command-sub in rm operand -> ask" "$(guard_bash "\"rm \\\"\$(printf Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "-- end-of-options rm -> ask" "$(guard_bash '"rm -- -Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "timeout wrapper rm -> ask" "$(guard_bash '"timeout 5 rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "brace group { rm; } -> ask" "$(guard_bash '"{ rm Keychain.swift; }"')" '"permissionDecision":"ask"'
+assert_contains "git checkout -- path -> ask" "$(guard_bash '"git checkout -- Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "ruby -e inline code -> ask" "$(guard_bash "\"ruby -e 'File.delete(\\\"Keychain.swift\\\")'\"")" '"permissionDecision":"ask"'
+assert_empty    "input-redirect read source (tee out < sensitive) -> no decision" "$(guard_bash '"tee out.log < Keychain.swift"')"
+assert_contains "patch -oFILE attached short -> ask" "$(guard_bash '"patch -oKeychain.swift < change.diff"')" '"permissionDecision":"ask"'
+assert_contains "xargs sed -i (in-place child) -> ask" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed -i 's/a/b/'\"")" '"permissionDecision":"ask"'
+assert_empty    "xargs sed (no -i, read) -> no decision" "$(guard_bash "\"printf 'Keychain.swift' | xargs sed 's/a/b/'\"")"
+assert_contains "find start-path -delete -> ask" "$(guard_bash '"find Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "find start-path read (no action) -> no decision" "$(guard_bash '"find Keychain.swift -type f"')"
+assert_contains "writer inside command substitution -> ask" "$(guard_bash "\"echo \\\"\$(rm Keychain.swift)\\\"\"")" '"permissionDecision":"ask"'
+assert_contains "function-definition body -> ask" "$(guard_bash '"f(){ rm Keychain.swift; }; f"')" '"permissionDecision":"ask"'
+assert_contains "rsync --remove-source-files -> ask" "$(guard_bash '"rsync --remove-source-files Keychain.swift /tmp/out/"')" '"permissionDecision":"ask"'
+assert_empty    "read inside command substitution -> no decision" "$(guard_bash "\"echo \\\"\$(cat Keychain.swift)\\\"\"")"
+assert_contains "coproc rm sensitive -> ask" "$(guard_bash '"coproc rm Keychain.swift"')" '"permissionDecision":"ask"'
+assert_contains "here-string to bash -> ask" "$(guard_bash "\"bash <<< 'rm Keychain.swift'\"")" '"permissionDecision":"ask"'
+assert_contains "find -- start path -delete -> ask" "$(guard_bash '"find -- Keychain.swift -delete"')" '"permissionDecision":"ask"'
+assert_empty    "here-string to cat (read) -> no decision" "$(guard_bash "\"cat <<< 'Keychain.swift'\"")"
+# ANSI-C `$'…'` end-to-end quoting is painful through the JSON layer; decoding is covered by the unit test
+# AuditPR53Round2.test_ansi_c_quoting_decoded. Build the payload directly to keep an integration check too:
+_ANSIC="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm $'"'"'Keychain\\x2eswift'"'"'"}}' | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
+assert_contains "ANSI-C quoted target -> ask" "$_ANSIC" '"permissionDecision":"ask"'
+# F4 DoS backstop: a command over 256 KiB asks unconditionally (fail-closed; can't parse in the hook budget).
+BIGCMD="echo $(head -c 300000 /dev/zero | tr '\0' 'a')"
+assert_contains "256KB command -> ask (DoS backstop)" \
+    "$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$BIGCMD" | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)" \
+    '"permissionDecision":"ask"'
+# F4 exit-contract: an injected lexer parse failure -> exit-2 fail-closed DENY (never exit-0 no-decision).
+FAILOUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"rm InboxView.swift"}}' | _BWS_FORCE_FAIL=1 UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" >/dev/null 2>&1; printf 'RC=%s' "$?")"
+assert_contains "lexer parse failure -> exit-2 deny" "$FAILOUT" "RC=2"
+
 # 5. cp with the signature as SOURCE -> no decision (only writes are guarded).
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"cp KeychainManager.swift /tmp/copy.txt"}}' \
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
@@ -146,6 +312,15 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"mv a.swift b.swift"}
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_empty "benign mv -> no decision" "$OUT"
 
+# 7f. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
+# other case here overrides explicitly, so nothing exercised the shipped default. Mutation-proved: with
+# this test absent, flipping the default to `:-warn` leaves the whole suite byte-identical + exit 0 —
+# silently downgrading the Keychain/OAuth/entitlements BLOCKING confirmation to a non-blocking advisory
+# with CI green. `env -u` beats a hostile exported var from the caller's environment.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
+    | env -u UNLEASHED_SENSITIVE_GUARD_MODE bash "$GUARD" 2>/dev/null)"
+assert_contains "default mode (unset) -> ask" "$OUT" '"permissionDecision":"ask"'
+
 # 8. Warn mode -> systemMessage advisory, NO permissionDecision.
 OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
     | UNLEASHED_SENSITIVE_GUARD_MODE=warn bash "$GUARD" 2>/dev/null)"
@@ -169,10 +344,11 @@ assert_contains "build-verify reads stdin command" "$OUT" "xcodebuild build dete
 
 echo "== stop-quality-marker-gate (Item 4) =="
 
-# 12. Fresh failing marker, commit matches -> block (enforce).
+# 12. Fresh failing marker, commit matches -> block (enforce). Uses an identified session (production Stop
+#     payloads always carry session_id; an anonymous payload now fails OPEN — see the F5 (d) cases).
 reset_markers
 marker_write lint fail
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"T12"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_contains "fresh fail -> block" "$OUT" '"decision":"block"'
 if is_valid_json "$OUT"; then ok; else fail "block -> valid JSON"; fi
 assert_not_contains "block is root-level (not nested)" "$OUT" 'hookSpecificOutput'
@@ -201,12 +377,48 @@ marker_write lint pass
 OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 assert_empty "pass marker -> no block" "$OUT"
 
-# 17. Sentinel == HEAD -> no re-block (loop guard #2).
+# 17. Sentinel == HEAD for THIS SESSION -> no re-block (loop guard #2, session-keyed by F5).
 reset_markers
 marker_write lint fail
-printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)"
-OUT="$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
-assert_empty "sentinel == HEAD -> no re-block" "$OUT"
+_SH17="$(marker_hash_str "SESS-17")"
+printf '%s' "$(git rev-parse --short HEAD 2>/dev/null)" > "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-${_SH17}"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"SESS-17"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "sentinel == HEAD (same session) -> no re-block" "$OUT"
+
+# 17-F5. COREDEV-2503 F5 — session keying discriminates a STABLE key from a nonce, + all-session reset.
+# (a) SAME-session dedup: a nonce impl would re-block the 2nd Stop and wedge; a stable key dedups it.
+reset_markers; marker_write lint fail
+_PA='{"stop_hook_active":false,"session_id":"F5-A"}'
+assert_contains "F5 session-A 1st Stop -> block" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_empty "F5 session-A 2nd Stop -> dedup (a nonce would re-block/wedge here)" "$(printf '%s' "$_PA" | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# (b) CROSS-session re-block: a fresh session_id gets its own block-once budget.
+assert_contains "F5 session-B -> blocks again (not deduped by A)" "$(printf '{"stop_hook_active":false,"session_id":"F5-B"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (c) ALL-session reset: a pass clears BOTH session sentinels, so both re-block on a fresh fail.
+reset_markers; marker_write lint fail
+printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+marker_write lint pass          # clears ALL repo-matching session sentinels
+marker_write lint fail          # fresh failure again
+assert_contains "F5 reset: S1 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S1"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+assert_contains "F5 reset: S2 re-blocks after pass cleared its sentinel" "$(printf '{"stop_hook_active":false,"session_id":"F5-S2"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (d) codex+gemini #53: an ANONYMOUS Stop (no session_id AND no transcript_path) has no identity to key a
+#     per-session sentinel. It must NOT share one (codex: a hash("") collision is a cross-session bypass)
+#     AND must NOT block-and-wedge (gemini: a durable loop-guard can't be recorded). Resolution: fail OPEN
+#     (fall through to warn-log), so NEITHER anonymous Stop blocks and no shared sentinel is ever written.
+reset_markers; marker_write lint fail
+assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
+assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (e) A2 (audit of #53): a pre-planted symlink at the sentinel path must NOT be written THROUGH (that would
+#     clobber the victim with the commit hash + chmod 600). The gate drops the link and atomically replaces it.
+reset_markers; marker_write lint fail
+_A2VICTIM="$(marker_dir)/a2-victim"; printf 'PRECIOUS_DO_NOT_TOUCH' > "$_A2VICTIM"
+_A2SENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str 'A2-ATTACKER')"
+ln -sf "$_A2VICTIM" "$_A2SENT"
+printf '{"stop_hook_active":false,"session_id":"A2-ATTACKER"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
+if [ "$(cat "$_A2VICTIM" 2>/dev/null)" = "PRECIOUS_DO_NOT_TOUCH" ]; then ok; else fail "A2: sentinel write clobbered the symlink victim"; fi
+if [ -L "$_A2SENT" ]; then fail "A2: sentinel is still a symlink (not replaced)"; else ok; fi
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers
@@ -239,7 +451,7 @@ for _t in xcodebuild swiftlint; do
 done
 marker_write build fail
 T0="$(date +%s 2>/dev/null || echo 0)"
-OUT="$(printf '{"stop_hook_active":false}' \
+OUT="$(printf '{"stop_hook_active":false,"session_id":"TBUILD"}' \
     | PATH="$SHIMDIR:$PATH" UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 T1="$(date +%s 2>/dev/null || echo 0)"
 assert_contains "build fail -> block" "$OUT" '"decision":"block"'
@@ -480,6 +692,19 @@ printf '{"agent_type":"security-reviewer","last_assistant_message":"```json\\n[]
     | UNLEASHED_CAPTURE_REVIEWERS=off bash "$CAPTURE" 2>/dev/null
 if [ -e "$REVDIR/security-reviewer.json" ]; then fail "capture kill switch -> no write"; else ok; fi
 
+# 37. COREDEV-2486 (audit hooks-scripts.4): a PLUGIN-SCOPED agent_type
+#     (`unleashed-mail:security-reviewer`, how plugin-shipped subagents actually surface) must
+#     normalize to the bare name and still capture — the pipeline was a silent no-op before.
+rm -rf "$(context_reviews_dir)" 2>/dev/null
+printf '{"agent_type":"unleashed-mail:security-reviewer","last_assistant_message":%s}' "$(json_str "$SEC_MSG")" \
+    | bash "$CAPTURE" 2>/dev/null
+if [ -f "$REVDIR/security-reviewer.json" ]; then ok; else fail "plugin-scoped agent_type -> normalized + captured"; fi
+
+# 38. COREDEV-2486: SubagentStart with a plugin-scoped agent_type binds the round under the BARE
+#     name, so the (also-normalized) SubagentStop looks it up successfully.
+printf '{"agent_type":"unleashed-mail:prompt-review","agent_id":"scoped1","session_id":"sess1"}' | bash "$ROUND_START" 2>/dev/null
+if [ -n "$(context_review_round_lookup prompt-review scoped1 sess1)" ]; then ok; else fail "plugin-scoped SubagentStart binds under bare name"; fi
+
 echo "== COREDEV-2328 context_latest_round_dir =="
 # Pure-function tests for the Step-2 round-lookup helper: highest NUMERIC round holding the agent's
 # findings, robust to hyphenated base paths and oversized suffixes (no GNU sort, no -gt overflow).
@@ -667,6 +892,308 @@ if command -v zsh >/dev/null 2>&1; then
     ZHR=". \"$_DIR/lib/context.sh\"; context_highest_round \"$TMPROOT/zsh-hr/slug\""
     if [ "$(zsh -c "$ZHR" 2>&1)" = "0" ]; then ok; else fail "zsh NOMATCH: highest_round no-rounds -> 0"; fi
 fi
+
+
+# == COREDEV-2494: swift-lint-check.sh honours `swiftlint:disable` + has a kill switch ==
+# The old COVERAGE NOTE said this hook can't be simulated because it "needs SwiftLint … unavailable on
+# the Linux CI runner". That only ever applied to the swiftlint-PRESENT path — the grep FALLBACK path is
+# precisely what a toolchain-less runner takes, so it IS testable, and it is the path that was wrong:
+# the greps filtered only lines that are THEMSELVES comments, so `// swiftlint:disable:next force_try`
+# never protected the line below. Measured on the consumer app: 120/273 production `try!` sites carry
+# that waiver -> 120 false positives, each telling the model to strip a waiver CLAUDE.md REQUIRES.
+LINT_CHECK="$_DIR/swift-lint-check.sh"
+LINTDIR="$TMPROOT/lint"; mkdir -p "$LINTDIR/nobin"
+printf 'import Foundation\nstruct A {\n    // swiftlint:disable:next force_try\n    private static let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Waived.swift"
+printf 'import Foundation\nstruct B {\n    private static let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Unwaived.swift"
+printf 'import Foundation\nstruct C {\n    // swiftlint:disable:next force_cast\n    let x = y as! String\n}\n' > "$LINTDIR/WaivedCast.swift"
+
+# Force the fallback: an empty PATH dir hides swiftlint/swiftc (mirrors the Linux runner).
+lint_run() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/nobin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run "$LINTDIR/Waived.swift")"
+assert_not_contains "lint fallback: swiftlint:disable:next force_try -> NOT flagged" "$OUT" "try!"
+OUT="$(lint_run "$LINTDIR/WaivedCast.swift")"
+assert_not_contains "lint fallback: swiftlint:disable:next force_cast -> NOT flagged" "$OUT" "as!"
+# ...but a genuinely UNWAIVED force-try must STILL block — the fix must not disable detection.
+OUT="$(lint_run "$LINTDIR/Unwaived.swift")"
+assert_contains "lint fallback: unwaived try! -> still BLOCKS" "$OUT" "try!"
+# Kill switch: this was the only hook that emitted decision:block with no way to turn it off.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | UNLEASHED_LINT_CHECK=off bash "$LINT_CHECK" 2>/dev/null)"
+assert_empty "lint: UNLEASHED_LINT_CHECK=off -> silent" "$OUT"
+# Non-Swift files are ignored entirely.
+printf 'x' > "$LINTDIR/notes.md"
+OUT="$(lint_run "$LINTDIR/notes.md")"
+assert_empty "lint: non-.swift file -> no output" "$OUT"
+
+# == COREDEV-2494 PR review: a BROKEN swiftlint CLI must not disarm the gate ==
+# `SWIFTLINT_RAN=1` was set on `command -v swiftlint` ALONE, so when the CLI failed before producing
+# findings (bad config / missing toolchain) the grep fallback was SKIPPED and an unwaived `try!` got a
+# non-blocking advisory with NO lint=fail marker -> Stop gate UNARMED. alpha's greps ran
+# unconditionally and DID block, so this PR had introduced a regression.
+mkdir -p "$LINTDIR/badbin"
+printf '#!/bin/sh\necho "error: unknown option" >&2\nexit 2\n' > "$LINTDIR/badbin/swiftlint"
+chmod +x "$LINTDIR/badbin/swiftlint"
+lint_run_broken() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/badbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run_broken "$LINTDIR/Unwaived.swift")"
+assert_contains "lint: broken swiftlint CLI -> unwaived try! still BLOCKS" "$OUT" '"decision":"block"'
+OUT="$(lint_run_broken "$LINTDIR/Waived.swift")"
+assert_not_contains "lint: broken CLI -> waived try! still NOT flagged" "$OUT" "try!"
+
+# == COREDEV-2494 PR review round 2 (codex): severity is a config knob, policy is not ==
+# force_try/force_cast BLOCK at whatever severity SwiftLint assigned. The app's .swiftlint.yml sets
+# `force_try: severity: error` TODAY — which was the only reason the error branch caught them. SwiftLint
+# explicitly supports `force_try: severity: warning`; under that config an unwaived try! produced an
+# advisory with NO lint=fail marker, so the Stop gate never armed. Reproduced before fixing.
+mkdir -p "$LINTDIR/warnbin"
+cat > "$LINTDIR/warnbin/swiftlint" <<'SL'
+#!/bin/sh
+echo "/x/B.swift:2:30: warning: Force Try Violation: Force tries should be avoided. (force_try)"
+exit 0
+SL
+chmod +x "$LINTDIR/warnbin/swiftlint"
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_contains "lint: force_try at WARNING severity still BLOCKS" "$OUT" '"decision":"block"'
+
+# == COREDEV-2494 full review (codex): IUO type declarations are not force operations ==
+# An implicitly-unwrapped optional ends in `!`, so `IntentPatternRegistry!` contains `try!` and
+# `Canvas!` contains `as!`. Bare greps flagged legitimate IUO declarations and BLOCKED them.
+printf 'import Foundation\nstruct IU {\n    var reg: IntentPatternRegistry!\n    var canvas: Canvas!\n}\n' > "$LINTDIR/Iuo.swift"
+OUT="$(lint_run "$LINTDIR/Iuo.swift")"
+assert_not_contains "lint: IUO type Registry-bang is not flagged as force_try" "$OUT" "try!"
+assert_not_contains "lint: IUO type Canvas-bang is not flagged as force_cast" "$OUT" "as!"
+# ...while real force operations on the same file still block.
+printf 'import Foundation\nstruct IU2 {\n    var reg: Registry!\n    let r = try! NSRegularExpression(pattern: "a")\n    let c = x as! Y\n}\n' > "$LINTDIR/IuoMixed.swift"
+OUT="$(lint_run "$LINTDIR/IuoMixed.swift")"
+assert_contains "lint: a real try-bang next to an IUO type still BLOCKS" "$OUT" "4:"
+assert_contains "lint: a real as-bang still BLOCKS" "$OUT" "5:"
+
+# == COREDEV-2494 full review (gemini): the rule-token boundary must be structural ==
+# `${_norm#* "$_rule" }` relied on a trailing space before `}` that a formatter could strip, collapsing
+# force_try into a prefix that also matches force_try_extra. Now `[[ ]]` with explicit boundary spaces.
+printf 'import Foundation\nstruct RB {\n    // swiftlint:disable:next force_try_extra\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/RuleBoundary.swift"
+OUT="$(lint_run "$LINTDIR/RuleBoundary.swift")"
+assert_contains "lint: 'force_try_extra' does NOT waive force_try (token boundary, not prefix)" "$OUT" "try!"
+
+# == COREDEV-2494 review round 9 (codex): a malformed scope is not a waiver ==
+# `:next*` etc. are PREFIX globs, so `:nextforce_try` stripped `:next` and read `force_try` as a rule —
+# a typo SwiftLint ignores became a fail-open waiver. And `:bogus force_try` fell through as an
+# unscoped region. The scope must be a WHOLE token; an unknown `:scope` is malformed and waives nothing.
+printf 'import Foundation\nstruct MS {\n    // swiftlint:disable:nextforce_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalNext.swift"
+OUT="$(lint_run "$LINTDIR/MalNext.swift")"
+assert_contains "lint: malformed ':nextforce_try' does NOT waive (region path)" "$OUT" "try!"
+printf 'import Foundation\nstruct MS2 {\n    let r = try! NSRegularExpression(pattern: "a") // swiftlint:disable:thisforce_try\n}\n' > "$LINTDIR/MalThis.swift"
+OUT="$(lint_run "$LINTDIR/MalThis.swift")"
+assert_contains "lint: malformed ':thisforce_try' does NOT waive (this path)" "$OUT" "try!"
+printf 'import Foundation\nstruct MS3 {\n    // swiftlint:disable:bogus force_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalScope.swift"
+OUT="$(lint_run "$LINTDIR/MalScope.swift")"
+assert_contains "lint: unknown scope ':bogus' does NOT open a region" "$OUT" "try!"
+# ...and the same malformed scope TWO lines up must not open a region either — this is the case that
+# reaches the AWK region scanner (the preceding-line case above is handled by the shell _waives). Under
+# the old prefix logic `:bogus force_try` fell through to "region" and waived every hit below it.
+printf 'import Foundation\nstruct MS4 {\n    // swiftlint:disable:bogus force_try\n    let filler = 0\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/MalScopeRegion.swift"
+OUT="$(lint_run "$LINTDIR/MalScopeRegion.swift")"
+assert_contains "lint: unknown scope ':bogus' does NOT open a region for LATER lines (awk path)" "$OUT" "try!"
+
+# == COREDEV-2494 review round 8 (codex): the directive predicate had three separate holes ==
+# (a) `//` inside a STRING ate the trailing directive — and this app is full of regex URLs.
+printf 'import Foundation\nstruct UR {\n    let r = try! NSRegularExpression(pattern: "https://example.com") // swiftlint:disable:this force_try\n}\n' > "$LINTDIR/UrlThis.swift"
+OUT="$(lint_run "$LINTDIR/UrlThis.swift")"
+assert_not_contains "lint: a URL in the code does not eat the trailing :this waiver" "$OUT" "try!"
+# ...and the scan is LEFT-to-right, so a URL in the RATIONALE does not steal the directive either.
+printf 'import Foundation\nstruct UR2 {\n    // swiftlint:disable:next force_try - see http://x/y\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/UrlRationale.swift"
+OUT="$(lint_run "$LINTDIR/UrlRationale.swift")"
+assert_not_contains "lint: a URL in the rationale does not break the directive" "$OUT" "try!"
+# (b) `swiftlint:disable*` is a PREFIX glob — the typo `swiftlint:disabled` waived. Fail-open.
+printf 'import Foundation\nstruct TY {\n    // swiftlint:disabled force_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Typo.swift"
+OUT="$(lint_run "$LINTDIR/Typo.swift")"
+assert_contains "lint: the typo 'swiftlint:disabled' does NOT waive (exact token required)" "$OUT" "try!"
+printf 'import Foundation\nstruct TY2 {\n    // swiftlint:disableXforce_try\n    let r = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Typo2.swift"
+OUT="$(lint_run "$LINTDIR/Typo2.swift")"
+assert_contains "lint: 'swiftlint:disableXforce_try' (no separator) does NOT waive" "$OUT" "try!"
+# (c) A SCOPED enable is line-scoped and must not close a whole region.
+printf 'import Foundation\nstruct SE {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable:this force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/ScopedEnable.swift"
+OUT="$(lint_run "$LINTDIR/ScopedEnable.swift")"
+assert_not_contains "lint: a scoped ':this' enable does NOT close the region" "$OUT" "try!"
+# ...while an UNSCOPED enable still does.
+printf 'import Foundation\nstruct UE {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/UnscopedEnable.swift"
+OUT="$(lint_run "$LINTDIR/UnscopedEnable.swift")"
+assert_contains "lint: an UNSCOPED enable still closes the region" "$OUT" "6:"
+
+# == COREDEV-2494 review round 7 (codex): SwiftLint has THREE line scopes, not one ==
+# The fallback only ever read the PRECEDING line, so `:this` (same line) and `:previous` (following
+# line) — both documented — were ignored and legitimately-waived code was BLOCKED. `:this` is live in
+# the consumer app (16 sites). False positives, so the gate stayed closed; but a hook demanding an edit
+# the project's own convention forbids still burns the developer's afternoon.
+printf 'import Foundation\nstruct TH {\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:this force_try\n}\n' > "$LINTDIR/This.swift"
+OUT="$(lint_run "$LINTDIR/This.swift")"
+assert_not_contains "lint: same-line ':this' waiver is honoured" "$OUT" "try!"
+printf 'import Foundation\nstruct PV {\n    let r = try! NSRegularExpression(pattern: "x")\n    // swiftlint:disable:previous force_try\n}\n' > "$LINTDIR/Prev.swift"
+OUT="$(lint_run "$LINTDIR/Prev.swift")"
+assert_not_contains "lint: following-line ':previous' waiver is honoured" "$OUT" "try!"
+# ...but a scope must not waive the WRONG line.
+printf 'import Foundation\nstruct TW {\n    // swiftlint:disable:this force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ThisWrong.swift"
+OUT="$(lint_run "$LINTDIR/ThisWrong.swift")"
+assert_contains "lint: ':this' on the PRECEDING line does NOT waive this line" "$OUT" "try!"
+printf 'import Foundation\nstruct PW {\n    // swiftlint:disable:previous force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/PrevWrong.swift"
+OUT="$(lint_run "$LINTDIR/PrevWrong.swift")"
+assert_contains "lint: ':previous' on the PRECEDING line does NOT waive this line" "$OUT" "try!"
+# A directive on the HIT line whose scope points ELSEWHERE must not waive it. These pin the scope
+# MATCH itself: the wrong-line cases above only exercise the `next` branch, so dropping the
+# `_got == _want` check left the suite green — a test that cannot fail is not a test.
+printf 'import Foundation\nstruct SW {\n    let a = 1\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:previous force_try\n}\n' > "$LINTDIR/ScopeWrong1.swift"
+OUT="$(lint_run "$LINTDIR/ScopeWrong1.swift")"
+assert_contains "lint: ':previous' ON the hit line waives the line ABOVE, not the hit line" "$OUT" "try!"
+printf 'import Foundation\nstruct SW2 {\n    let r = try! NSRegularExpression(pattern: "x")\n    // swiftlint:disable:next force_try\n    let b = 1\n}\n' > "$LINTDIR/ScopeWrong2.swift"
+OUT="$(lint_run "$LINTDIR/ScopeWrong2.swift")"
+assert_contains "lint: ':next' on the FOLLOWING line waives the line BELOW it, not the hit line" "$OUT" "try!"
+
+# ...and a scoped waiver for a DIFFERENT rule must not waive force_try.
+printf 'import Foundation\nstruct TO {\n    let r = try! NSRegularExpression(pattern: "x") // swiftlint:disable:this force_cast\n}\n' > "$LINTDIR/ThisOther.swift"
+OUT="$(lint_run "$LINTDIR/ThisOther.swift")"
+assert_contains "lint: ':this force_cast' does NOT waive force_try" "$OUT" "try!"
+
+# == COREDEV-2494 review round 6 (codex): a directive must BE the comment, and `all` is a keyword ==
+# Both `_waives` and `_in_disabled_region` used a bare "contains swiftlint:disable" test, so prose ABOUT
+# the linter silenced the linter — all FAIL-OPEN. And SwiftLint's documented `all` keyword was handled
+# in neither direction (confirmed against the SwiftLint docs via Context7).
+printf 'import Foundation\nstruct PR {\n    // TODO: remove any swiftlint:disable force_try here\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/Prose.swift"
+OUT="$(lint_run "$LINTDIR/Prose.swift")"
+assert_contains "lint: prose naming the rule does NOT waive (directive must BE the comment)" "$OUT" "try!"
+printf 'import Foundation\nstruct PR2 {\n    // NOTE: we used to swiftlint:disable force_try here, but not anymore\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/ProseRegion.swift"
+OUT="$(lint_run "$LINTDIR/ProseRegion.swift")"
+assert_contains "lint: prose does NOT open a disable REGION" "$OUT" "try!"
+# `swiftlint:enable all` closes the region for EVERY rule (documented keyword).
+printf 'import Foundation\nstruct EA {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable all\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/EnableAll.swift"
+OUT="$(lint_run "$LINTDIR/EnableAll.swift")"
+assert_contains "lint: 'swiftlint:enable all' CLOSES the region -> the site after it BLOCKS" "$OUT" "6:"
+# ...and `swiftlint:disable all` opens it for every rule.
+printf 'import Foundation\nstruct DA {\n    // swiftlint:disable all\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable all\n}\n' > "$LINTDIR/DisableAll.swift"
+OUT="$(lint_run "$LINTDIR/DisableAll.swift")"
+assert_not_contains "lint: 'swiftlint:disable all' waives every rule" "$OUT" "try!"
+# `:next all` on the preceding line waives too.
+printf 'import Foundation\nstruct NA {\n    // swiftlint:disable:next all\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/NextAll.swift"
+OUT="$(lint_run "$LINTDIR/NextAll.swift")"
+assert_not_contains "lint: 'disable:next all' waives force_try" "$OUT" "try!"
+# An `enable` must never be read as a waiver.
+printf 'import Foundation\nstruct EN {\n    // swiftlint:enable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n}\n' > "$LINTDIR/EnableOnly.swift"
+OUT="$(lint_run "$LINTDIR/EnableOnly.swift")"
+assert_contains "lint: a bare 'swiftlint:enable' never waives" "$OUT" "try!"
+
+# == COREDEV-2494 pre-merge audit: the REGION form of swiftlint:disable ==
+# `_waives` only ever looks at the PRECEDING line, so it covered `:next` and a directive directly above
+# but NOT the region form — which is what 15 real app files actually use. The 2nd+ site in a region has
+# CODE on its preceding line, so it was a FALSE POSITIVE. Latent until this PR stopped gating the greps
+# on SWIFTLINT_RAN: the region gap and the widened fallback are each correct and jointly a regression.
+# Measured: 15/15 real app files false-blocked without _in_disabled_region; 0/15 with it.
+printf 'import Foundation\nstruct RG {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n    // swiftlint:enable force_try\n}\n' > "$LINTDIR/Region.swift"
+OUT="$(lint_run "$LINTDIR/Region.swift")"
+assert_not_contains "lint: try! inside a disable REGION -> NOT flagged (2nd site too)" "$OUT" "try!"
+# The region must CLOSE at :enable — a site after it is unwaived.
+printf 'import Foundation\nstruct RC {\n    // swiftlint:disable force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_try\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/RegionClose.swift"
+OUT="$(lint_run "$LINTDIR/RegionClose.swift")"
+assert_contains "lint: try! AFTER swiftlint:enable -> BLOCKS (region closed)" "$OUT" "6:"
+# A region for a DIFFERENT rule must not waive force_try.
+printf 'import Foundation\nstruct RO {\n    // swiftlint:disable force_cast\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable force_cast\n}\n' > "$LINTDIR/RegionOther.swift"
+OUT="$(lint_run "$LINTDIR/RegionOther.swift")"
+assert_contains "lint: a force_cast REGION does NOT waive force_try" "$OUT" "try!"
+# A blanket region (no rule list) waives everything inside it.
+printf 'import Foundation\nstruct RB {\n    // swiftlint:disable\n    let a = try! NSRegularExpression(pattern: "a")\n    // swiftlint:enable\n}\n' > "$LINTDIR/RegionBlanket.swift"
+OUT="$(lint_run "$LINTDIR/RegionBlanket.swift")"
+assert_not_contains "lint: blanket disable REGION waives force_try" "$OUT" "try!"
+# `:next` must NOT open a region — the site two lines below stays unwaived.
+printf 'import Foundation\nstruct RN {\n    // swiftlint:disable:next force_try\n    let a = try! NSRegularExpression(pattern: "a")\n    let b = try! NSRegularExpression(pattern: "b")\n}\n' > "$LINTDIR/RegionNext.swift"
+OUT="$(lint_run "$LINTDIR/RegionNext.swift")"
+assert_contains "lint: ':next' does NOT open a region -> the 2nd site still BLOCKS" "$OUT" "5:"
+
+# == COREDEV-2494 review round 5 (codex): SILENCE IS NOT PROOF OF ENFORCEMENT ==
+# The fallback was gated on SWIFTLINT_RAN, i.e. "the binary executed". But the repo config can disable
+# these rules (`disabled_rules`/`only_rules`) or exclude the path (`excluded:` — the consumer app
+# excludes GRDB/SwiftSoup/Vendor/build/.build). swiftlint then exits 0 with NO output, which is
+# byte-identical to a clean file — so the net was dropped for exactly the files it never policed.
+mkdir -p "$LINTDIR/silentbin"
+printf '#!/bin/sh\nexit 0\n' > "$LINTDIR/silentbin/swiftlint"   # ran fine, enforced nothing
+chmod +x "$LINTDIR/silentbin/swiftlint"
+lint_run_silent() {
+    printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$1" \
+        | PATH="$LINTDIR/silentbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null
+}
+OUT="$(lint_run_silent "$LINTDIR/Unwaived.swift")"
+assert_contains "lint: swiftlint ran but enforced NOTHING -> unwaived try! still BLOCKS" "$OUT" '"decision":"block"'
+# ...and the waiver is still honoured on that same path (the fix must not resurrect the 120 false positives).
+OUT="$(lint_run_silent "$LINTDIR/Waived.swift")"
+assert_not_contains "lint: silent swiftlint -> waived try! still NOT flagged" "$OUT" "try!"
+# When swiftlint DID report the rule it is authoritative — no duplicate grep report.
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_not_contains "lint: swiftlint reported force_try -> no duplicate grep-fallback message" "$OUT" "grep fallback"
+
+# == COREDEV-2494 review round 4 (gemini): the RATIONALE is not a rule list ==
+# This project MANDATES a trailing rationale after a ` - ` delimiter (CLAUDE.md: "note the ` - `
+# rationale delimiter"), and the app has them in the wild. Scanning the whole tail meant
+# `disable:next force_cast - force_try is handled by caller` falsely waived force_try.
+printf 'import Foundation\nstruct I {\n    // swiftlint:disable:next force_cast - force_try is handled by caller\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Rationale.swift"
+OUT="$(lint_run "$LINTDIR/Rationale.swift")"
+assert_contains "lint: a rationale mentioning force_try does NOT waive it" "$OUT" "try!"
+# ...and the project's own documented shape (rule + ` - ` + ticket) still waives.
+printf 'import Foundation\nstruct J {\n    // swiftlint:disable:next force_try - COREDEV-1234 regex migration\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/RuleWithTicket.swift"
+OUT="$(lint_run "$LINTDIR/RuleWithTicket.swift")"
+assert_not_contains "lint: 'force_try - <ticket>' (the documented shape) DOES waive" "$OUT" "try!"
+
+# == COREDEV-2494 review round 3 (gemini): the policy is PRODUCTION-only ==
+# My stage-2 force_try/force_cast elevation had no test-file guard, so a `try!` in an XCTestCase started
+# BLOCKING — a regression vs alpha, which guards tests in all three places. Force-try in a test is
+# legitimate (a fixture that must fail loudly); CLAUDE.md restricts it in PRODUCTION code.
+mkdir -p "$LINTDIR/Tests"
+printf 'import XCTest\nfinal class T: XCTestCase { func t() { let r = try! NSRegularExpression(pattern: "x") } }\n' > "$LINTDIR/Tests/T.swift"
+OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/warnbin/../Tests/T.swift" \
+    | PATH="$LINTDIR/warnbin:/usr/bin:/bin" bash "$LINT_CHECK" 2>/dev/null)"
+assert_not_contains "lint: try! in a TEST file does NOT block (production-only policy)" "$OUT" '"decision":"block"'
+
+# == COREDEV-2494 review round 3 (codex): the directive's SCOPE must be honoured ==
+# The fallback only ever passes the PRECEDING line, so only `:next` (or a bare region-opening
+# `disable`) can waive the line below. Stripping `:previous`/`:this` identically meant
+# `// swiftlint:disable:this force_try` on line N-1 silently waived line N too.
+printf 'import Foundation\nstruct G {\n    // swiftlint:disable:this force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ScopeThis.swift"
+OUT="$(lint_run "$LINTDIR/ScopeThis.swift")"
+assert_contains "lint: disable:this on the PREVIOUS line does NOT waive this one" "$OUT" "try!"
+printf 'import Foundation\nstruct H {\n    // swiftlint:disable:previous force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ScopePrev.swift"
+OUT="$(lint_run "$LINTDIR/ScopePrev.swift")"
+assert_contains "lint: disable:previous does NOT waive the following line" "$OUT" "try!"
+
+# == COREDEV-2494 PR review round 2 (gemini): the waiver must match the rule as a WHOLE TOKEN ==
+# `${_tail#*$_rule}` was a SUBSTRING test, so `force_try_custom` / `some_force_try` falsely waived
+# `force_try`. Reproduced before fixing.
+printf 'import Foundation\nstruct E {\n    // swiftlint:disable:next force_try_custom\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/SubstringRule.swift"
+OUT="$(lint_run "$LINTDIR/SubstringRule.swift")"
+assert_contains "lint: force_try_custom does NOT waive force_try" "$OUT" "try!"
+# ...but a comma-separated list that really does name it still waives.
+printf 'import Foundation\nstruct F {\n    // swiftlint:disable:next no_legacy_nsregex,force_try\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/ListRule.swift"
+OUT="$(lint_run "$LINTDIR/ListRule.swift")"
+assert_not_contains "lint: a comma-list (NO space — pins tr ',' ' ') naming force_try DOES waive it" "$OUT" "try!"
+
+# == COREDEV-2494 PR review round 2 (gemini): a hit on LINE 1 has no preceding line ==
+printf 'let r = try! NSRegularExpression(pattern: "x")\n' > "$LINTDIR/Line1.swift"
+OUT="$(lint_run "$LINTDIR/Line1.swift")"
+assert_contains "lint: unwaived try! on line 1 -> blocks (no sed 0p)" "$OUT" "try!"
+
+# == COREDEV-2494 PR review: the waiver must name the RULE ==
+# The fallback treated ANY preceding `swiftlint:disable` as a force_try waiver, so a directive for a
+# DIFFERENT rule suppressed a real violation. `swiftlint:disable:next no_legacy_nsregex` before a
+# `try! NSRegularExpression(...)` is a REAL pattern here (the regex-migration epic).
+printf 'import Foundation\nstruct C {\n    // swiftlint:disable:next no_legacy_nsregex\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/OtherRule.swift"
+OUT="$(lint_run "$LINTDIR/OtherRule.swift")"
+assert_contains "lint: a DIFFERENT rule's directive does NOT waive force_try" "$OUT" "try!"
+# ...but a blanket `swiftlint:disable:next` (no rule list) still waives everything.
+printf 'import Foundation\nstruct D {\n    // swiftlint:disable:next\n    let r = try! NSRegularExpression(pattern: "x")\n}\n' > "$LINTDIR/Blanket.swift"
+OUT="$(lint_run "$LINTDIR/Blanket.swift")"
+assert_not_contains "lint: a blanket directive waives force_try" "$OUT" "try!"
 
 echo ""
 echo "hook tests: ${PASS} passed, ${FAIL} failed"

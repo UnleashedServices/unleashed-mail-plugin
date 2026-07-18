@@ -9,9 +9,13 @@ name: plugin-ci
 
 on:
   push:
-    branches: [main]
+    # `alpha` is the integration branch releases are cut from — it MUST be gated. Until COREDEV-2494
+    # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
+    # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
+    # added actionlint — neither ever executed on the branch they were added to.
+    branches: [main, alpha]
   pull_request:
-    branches: [main]
+    branches: [main, alpha]
   workflow_dispatch:
 
 permissions:
@@ -34,11 +38,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Byte-compile the review-synthesizer MCP
-        run: python3 -m py_compile mcp/review-synthesizer/*.py
+      - name: Byte-compile Python (MCP + load-bearing scripts)
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+
+      - name: pty-capture.py smoke test (--timeout + capture)
+        run: |
+          set -euo pipefail
+          out="$(mktemp)"
+          # A wedged child must time out (exit 124) with the partial transcript preserved.
+          rc=0; python3 scripts/pty-capture.py --timeout 1 "$out" -- bash -c 'echo captured; sleep 5' || rc=$?
+          test "$rc" = "124" || { echo "expected exit 124, got $rc"; exit 1; }
+          grep -q "captured" "$out" || { echo "partial transcript not preserved"; cat "$out"; exit 1; }
+          # A fast command completes normally and captures its output.
+          python3 scripts/pty-capture.py "$out" -- echo ok
+          grep -q "ok" "$out" || { echo "fast-path capture missing"; exit 1; }
+          echo "pty-capture: --timeout=124 + capture OK"
 
       - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
+
+      - name: Run the scripts test suite (review-verdict gate artifact)
+        run: python3 -m unittest discover -s scripts/tests -v
 
       - name: Validate version sync (strict)
         run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
@@ -46,8 +66,49 @@ jobs:
       - name: Validate plugin assembly (strict)
         run: python3 scripts/validate-plugin-assembly.py --root . --strict
 
+      - name: Set up Node (for the Claude Code CLI)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'   # @anthropic-ai/claude-code requires Node >=22
+
+      - name: Validate plugin with the Claude Code CLI (authoritative schema)
+        env:
+          # Manual pin: there is no package.json here, so Dependabot's npm ecosystem does not
+          # cover this. Bump it alongside the actionlint/gitleaks version pins below.
+          CLAUDE_CODE_VERSION: 2.1.209
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+          # Marketplace manifest schema (top-level entry point). --strict promotes warnings to
+          # failures; verified green on the pinned CLI above before enabling (COREDEV-2494).
+          claude plugin validate --strict .
+          # Deep plugin validation — agents/skills/hooks schemas. Exits 0 on the expected
+          # "root CLAUDE.md is a contributor doc, not shipped context" warning, non-zero on a
+          # real schema error. House conventions (missing name/description, agent-key hygiene,
+          # registry set-equality) are enforced more strictly by validate-plugin-assembly.py above.
+          # FOLLOW-UP (PR #36 review): (1) once the root-CLAUDE.md warning is resolved, add `--strict`
+          # here so an unrecognized/stale manifest field fails CI (not just warns); (2) integrity-verify
+          # the pinned @anthropic-ai/claude-code tarball (npm pack + sha512) like actionlint/gitleaks.
+          claude plugin validate .claude-plugin/plugin.json
+
       - name: ShellCheck plugin scripts
-        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh .githooks/pre-commit
+        run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+
+      - name: Install actionlint (pinned + checksum-verified)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      - name: Lint GitHub Actions workflows (actionlint)
+        run: actionlint -color
 
       - name: Validate hooks manifest (strict)
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
@@ -63,11 +124,86 @@ jobs:
             echo ""
             echo "| Gate | Status |"
             echo "| --- | --- |"
-            echo "| py_compile (review-synthesizer) | ${{ job.status }} |"
+            echo "| py_compile (MCP + scripts) | ${{ job.status }} |"
+            echo "| pty-capture smoke (--timeout) | ${{ job.status }} |"
             echo "| unittest discover (synthesizer suite) | ${{ job.status }} |"
+            echo "| unittest discover (scripts suite) | ${{ job.status }} |"
             echo "| version-sync (strict) | ${{ job.status }} |"
             echo "| plugin-assembly (strict) | ${{ job.status }} |"
+            echo "| claude plugin validate (marketplace + deep) | ${{ job.status }} |"
             echo "| shellcheck (-S warning) | ${{ job.status }} |"
+            echo "| actionlint | ${{ job.status }} |"
             echo "| hooks-manifest (strict) | ${{ job.status }} |"
             echo "| hook stdin-simulation tests | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  py39-smoke:
+    # macOS ships Python 3.9.6 as /usr/bin/python3, and the review CLIs run the plugin's scripts under
+    # it. The main `validate` job uses 3.12, where a PEP-604 `X | None` annotation in a runtime-evaluated
+    # position is legal — so it did NOT catch pty-capture.py crashing on 3.9.6 (COREDEV-2494). This job
+    # byte-compiles the load-bearing scripts on 3.9 (which is exactly what fails on such a syntax error)
+    # and runs the pty-capture smoke test, so the target-runtime regression cannot recur unseen.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Python 3.9 (the macOS stock runtime)
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.9'
+      - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+      - name: pty-capture.py smoke test on 3.9 (the exact file that regressed)
+        run: |
+          set -euo pipefail
+          out="$(mktemp)"
+          python3 scripts/pty-capture.py "$out" -- echo ok
+          grep -q "ok" "$out" || { echo "3.9 capture missing"; exit 1; }
+          test -s "$out.captureid" || { echo "3.9 capture-id sidecar missing"; exit 1; }
+          # Session-safety (#44 review §4): the transcript + sidecar must be 0600, and a pre-existing
+          # symlink at the output path must be REFUSED (not written through).
+          test "$(stat -c '%a' "$out")" = "600" || { echo "capture not 0600"; stat -c '%a' "$out"; exit 1; }
+          victim="$(mktemp)"; link="$(mktemp -u)"; ln -s "$victim" "$link"
+          python3 scripts/pty-capture.py "$link" -- echo pwned || true
+          test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
+          echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
+
+  secret-scan:
+    # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the
+    # accidental-commit class that leaked firebase-debug.log. History is NOT rewritten; the one
+    # accepted historical exposure is allowlisted in .gitleaks.toml (see SECURITY.md).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history — history-aware scan)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned + checksum-verified)
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full git history for secrets
+        # .gitleaks.toml exempts ONLY the accepted historical exposure; any other secret fails.
+        run: gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### secret-scan"
+            echo ""
+            echo "| Gate | Status |"
+            echo "| --- | --- |"
+            echo "| gitleaks (full history) | ${{ job.status }} |"
           } >> "$GITHUB_STEP_SUMMARY"

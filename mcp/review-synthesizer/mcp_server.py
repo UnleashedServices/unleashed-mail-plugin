@@ -22,15 +22,24 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
 
-from schema import parse_finding  # noqa: E402
+from schema import canonical_path, is_abs_or_traversal, parse_finding  # noqa: E402
 from synthesize import render_report, synthesize          # noqa: E402
 
-PROTOCOL_VERSION = "2025-06-18"
-SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_VERSION})
+# Absolute / `..`-traversal detection lives in `schema.is_abs_or_traversal` — ONE shared helper used here
+# on `changed_files` AND in `parse_finding` on each finding's `file`, so the two sides can't disagree
+# (COREDEV-2503 F2/F3). It folds `\`->`/` (matching canonical_path), closing the fail-open where a
+# backslash entry slipped this guard's old raw-path check yet canonicalized to an absolute path.
+
+# Advertise the current finalized MCP revision, but still negotiate the prior one so older
+# clients keep working (COREDEV-2488 / audit mcp-server). Nothing this server uses (stdio
+# framing, tools/list, tools/call shapes) changed between these revisions.
+PROTOCOL_VERSION = "2025-11-25"
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({"2025-11-25", "2025-06-18"})
 SERVER_INFO = {"name": "review-synthesizer", "version": "0.1.0"}
 
 TOOL = {
@@ -116,10 +125,40 @@ def _call_synthesize(arguments: dict) -> dict:
         # Fail CLOSED: a string/None would set()-coerce to characters/empty and
         # silently push every real finding to pre-existing -> a provisional APPROVE.
         raise _RpcError(-32602, "changed_files must be an array of strings")
+    # Fail CLOSED on an EFFECTIVELY-empty changeset carrying findings. `changed_files: []` — or a
+    # list whose entries all canonicalize to "" (`[""]`, `["   "]`, `["./"]`) — scopes EVERY finding
+    # to pre-existing (nothing is in-scope), so the synthesizer would return a provisional APPROVE
+    # while blockers exist. Canonicalize with the SAME function synthesize() scopes against so the
+    # two sides agree: a plain `not changed_files` list-truthiness check let `[""]`/`["./"]` slip a
+    # real blocker straight to APPROVE (adversarial verify, Item 17). An empty changeset legitimately
+    # has nothing to review and therefore no findings; a genuinely clean review sends findings: [].
+    if findings_in and not {p for p in (canonical_path(c) for c in changed_files) if p}:
+        raise _RpcError(
+            -32602,
+            "changed_files is empty (or all-blank/'.'-only) but findings were provided; refusing "
+            "to synthesize (every finding would mis-scope to pre-existing and yield a bogus APPROVE)",
+        )
+    # Fail CLOSED on ABSOLUTE or TRAVERSAL entries. `git diff --name-only` only ever emits repo-relative
+    # paths with no leading `/` and no `..` component. An absolute path (`/etc/passwd`) or `../..` escape
+    # matches no finding's repo-relative `file`, so it survives the empty-changeset guard above and scopes
+    # every real blocker to pre-existing -> a bogus provisional APPROVE (#44 independent review §5). The
+    # empty-changeset guard only fires when ALL entries collapse to "" — a bare `..`/`/` MIXED with a real
+    # file (`["A.swift", ".."]`) slips it, and canonical_path collapses `..`/`/` to "" so a canonical-based
+    # check would drop them too. `is_abs_or_traversal` catches them (it strips leading `./` but preserves
+    # `..`/absolute markers before canonicalization). Reject the call rather than filter — a caller sending
+    # impossible diff paths is untrustworthy input.
+    _bad = sorted({c for c in changed_files if is_abs_or_traversal(c)})
+    if _bad:
+        raise _RpcError(
+            -32602,
+            "changed_files contains absolute or traversal paths "
+            f"({', '.join(_bad)}); `git diff --name-only` never emits these, so they cannot be a real "
+            "changeset — refusing to synthesize (they would mis-scope findings to a bogus APPROVE)",
+        )
     findings, quarantined = [], []
     for d in findings_in:
         try:
-            findings.append(parse_finding(d))
+            findings.append(parse_finding(d, reject_abs_traversal=True))  # F3: gating path quarantines abs/traversal
         except Exception as exc:  # noqa: BLE001 - quarantine, never drop
             quarantined.append((d, str(exc)))
     changed = set(changed_files)

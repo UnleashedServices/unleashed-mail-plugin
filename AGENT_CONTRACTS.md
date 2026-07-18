@@ -63,7 +63,10 @@ A PR cannot merge to `main` (or to the version branch) without:
 2. SwiftLint green — changed files via `swiftlint --strict <changed files>`; whole repo via `swiftlint lint --strict --baseline swiftlint-baseline.json` (the committed baseline suppresses the pre-existing NSRegularExpression backlog so only NEW violations fail — COREDEV-2290)
 3. Tests green (xcodebuild test)
 4. `swift-reviewer` verdict: APPROVE
-5. Provider parity audit: PASS or `// TODO: PARITY` with tracked Jira ticket
+5. Provider parity audit: PASS, or a **declared** gap — a `ServiceCapabilities` flag set `false` + a
+   `ProviderParityError.unsupportedForProvider` throw at the call site (per `skills/provider-parity`;
+   COREDEV-2503 F9). A bare `// TODO: PARITY` comment or a throwing stub without that declaration is not a
+   sanctioned gap.
 
 ## 2. Plan → Implement Contract
 
@@ -78,11 +81,61 @@ Use the `/create-feature-plan` skill to scaffold (bundled as `/unleashed-mail:cr
 
 Before any implementation begins:
 
+0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
+   --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
+   fails closed without it. Re-run it on any plan revision.
 1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/codex-review` (uses `codex exec -s read-only`)
+2. Plan author runs `/codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
+
+### Preflight & unavailable-reviewer recovery
+
+The gate depends on the `agy` (gemini) and `codex` CLIs being installed and authenticated. On a fresh
+machine or in CI they may be absent — the gate must NOT silently pass, and must NOT hard-wedge the dev
+loop with no escape.
+
+- **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
+  isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
+  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
+  only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
+  unavailable and sends you down the recovery path for no reason (bare
+  `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
+  codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
+  is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
+  A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
+  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 18m`; a tiny transcript
+  (e.g. `Error: timeout waiting for response`) is a *failure*, never a verdict. Fix the invocation and
+  re-run; that is not a reviewer-unavailable situation.
+- **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
+  `REQUEST_CHANGES` — a missing/empty transcript is never `APPROVE` (see 3a); implementation does not start.
+- **Recovery — the user chooses; there is no scripted waiver (COREDEV-2493).** If either reviewer is
+  unavailable or unauthenticated, **stop**: a missing or empty transcript never counts as approval, and
+  **no scripted waiver is recognized**. The **user** chooses the recovery — install/authenticate the CLI,
+  obtain and capture the review on another machine, or explicitly direct work outside `/implement`. That
+  last choice is a **workflow exception, not a passed Plan Review Gate**: record it as such in the plan's
+  progress log and do **not** emit an approving Combined verdict. An agent may present these choices but
+  must **never select or infer the exception**, and must never self-waive.
+
+  > **Why there is no `WAIVED:` marker.** §2 previously promised a "user-authorized, scoped, recorded"
+  > waiver. Nothing implemented it, so the gate hard-wedged — the very outcome the promise forbade. It was
+  > removed rather than built because **"only the user may waive" is not enforceable here**: the agent is
+  > the process that would run the script, so any flag or marker it could be asked to supply, it can also
+  > supply unprompted (a TTY proves terminal attachment, not human presence — this repo's own
+  > `pty-capture.py` creates one). A mechanical control documented as user-authorized but forgeable would
+  > misdescribe the system. Note this does **not** make the rest of the gate cryptographically
+  > trustworthy — it is a cooperative attestation too — but it declines to add a *sanctioned* bypass to
+  > it. The audit record and the bypass are separable: record the exception in the plan
+  > **without** claiming the gate passed. (This used to cite `docs/planning/OCTO_ADOPTION_PLAN.md` as the
+  > exemplar. It is the opposite: that plan excluded gemini and then declared **"GATE SATISFIED"** on
+  > codex alone — a reviewer exclusion *plus* a gate-passed claim, i.e. precisely what COREDEV-2493
+  > forbids. An agent copying the cited precedent would do the wrong thing and believe the contract
+  > endorsed it. No exemplar is cited now because none exists.) A genuinely
+  > unforgeable waiver would need new trust infrastructure (an external signer holding a key outside the
+  > agent's authority, releasing a plan-digest-bound token on user presence) — disproportionate for a
+  > single-developer, non-CI workflow. Gated + decided at COREDEV-2493 (gemini `APPROVE`, codex
+  > `APPROVE_WITH_NOTES`).
 
 ### Diagnostic agent scope (`xcode-build-fixer`, `graph-api-debugger`)
 
@@ -266,21 +319,25 @@ Each agent type has minimum tool requirements:
 
 | Agent kind | Required tools |
 |------------|---------------|
-| Reviewers (read-only) | Read, Bash, Grep, Glob |
+| Reviewers (read-only) | Read, Bash, Grep, Glob — **exception:** `prompt-review` is `Read, Grep, Glob` (Bash deliberately dropped; it inspects AI call sites, not shell state) |
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
 | Orchestrator (swift-reviewer) | + Agent (subagent dispatch) |
 | Diagnostic | + WebFetch (look up vendor docs mid-debug) |
-| Planner (modern-standards-planner) | + WebFetch, WebSearch, Context7 MCP, Agent |
+| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools` |
 | Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | + Atlassian MCP (multi-prefix whitelist) |
+| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent` keeps it non-mutating |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
 
 ## 10. MCP Tool Prefixes
 
-MCP tool names are install-specific. Plugin agents that whitelist MCP tools should use a
-**multi-prefix** whitelist to remain portable:
+MCP tool names are install-specific (the prefix depends on how the MCP server was installed).
+An agent that sets a `tools:` allowlist would have to enumerate every possible prefix and would
+still break on an unlisted one — so **agents that need MCP tools OMIT `tools:` entirely** (inheriting
+all tools, including whatever MCP prefix is installed) and restrict with `disallowedTools:` instead.
+The prefixes below are the ones a given server surfaces under, for reference (e.g. when reading a
+tool name in a transcript), **not** a whitelist to hardcode:
 
 - Atlassian (jira-manager):
   - `mcp__claude_ai_Atlassian__*` (VSCode-shipped MCP)
@@ -293,6 +350,62 @@ MCP tool names are install-specific. Plugin agents that whitelist MCP tools shou
 
 If none of the prefixes resolve, agents must degrade gracefully (log to stdout for the user, do
 not block implementation).
+
+## 11. Model Tiering Policy
+
+Agent `model:` is set by role so future model generations are a one-line policy update, not a
+fleet-wide edit:
+
+| Tier | `model:` | Agents |
+|------|----------|--------|
+| Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, db/logic/ui/ai-engineer, tester, code-simplifier, docs/ci-engineer, release-manager, modern-standards-planner, jira-manager, xcode-build-fixer, graph-api-debugger |
+| First-pass reviewers + planning personas | `sonnet` | security/concurrency/ux-perf-reviewer, accessibility-auditor, prompt-review, smb-entrepreneur, enterprise-stakeholder |
+
+Rationale: the orchestrator and engineers inherit so they match whatever the user is running (and
+scale up on demanding work); first-pass reviewers and personas pin `sonnet` for cost-efficient,
+consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
+
+---
+
+## 12. Change-Failure Rate (CFR) Labeling
+
+**Owner (causation):** `release-manager` · **Owner (label mechanics):** `jira-manager`
+
+GitKraken Insights computes **Change Failure Rate** for `unleashedservices.atlassian.net` by counting
+Jira issues tagged with the literal label **`change-failure`** (lowercase, hyphenated; a standard label,
+not a custom field or issue type), divided by deployments over the window. Under-labeling **understates**
+CFR — each missed failure lowers the numerator, reading a false 0% only in a window where nothing was
+labeled; the metric is only as good as the labeling discipline.
+
+- **`release-manager` determines deploy-causation (analysis only, no Jira access)** — it returns one of
+  **three** verdicts for a production-impacting Bug: **confirmed** regression (corroborated evidence — bisect
+  to a shipped commit, worked-in-prior-release, or crash-first-seen-in-release), **proven pre-existing**
+  (positive evidence it predates the release), or **unconfirmed** (neither can be established). Absence of
+  evidence is never downgraded to pre-existing. A reporter's bare "broke after release X" is temporal
+  correlation, not proof — corroborate before attributing; severity alone never implies a change failure.
+  `release-manager`'s `tools:` allowlist grants no Atlassian MCP, so it never queries or edits Jira — it
+  receives a named candidate and returns the verdict.
+- **`jira-manager` owns all Jira mechanics** — adds `change-failure` (**additive** to type / priority /
+  component) at creation only when causation is confirmed at intake; otherwise it runs a **two-label queue**,
+  *both* uncounted (only `change-failure` counts): **`cfr-triage-pending`** (fresh, awaiting attribution)
+  and **`cfr-needs-human`** (escalated, awaiting human), at most one per issue. It **enumerates each queue**
+  by JQL — `project in (COREDEV, FT) AND labels = cfr-triage-pending` (no status filter) and the parallel
+  `… labels = cfr-needs-human` — and surfaces candidates so the invoking session dispatches `release-manager`
+  for the *dispatch* queue only. Every label change is `editJiraIssue` read-modify-write (the `labels` field
+  replaces the whole array). On `release-manager`'s verdict: **confirmed** → add `change-failure`, clear the
+  marker; **proven pre-existing** → clear the marker, withhold; **unconfirmed** (neither corroboration nor
+  pre-existence evidence) → **swap `cfr-triage-pending` → `cfr-needs-human`**, leaving the issue UNLABELLED
+  on the human-review queue. Absence of evidence is never treated as pre-existing, no agent drops a marker on
+  a guess, and because an escalated candidate no longer carries `cfr-triage-pending` it is not re-dispatched
+  to `release-manager` absent new evidence (no churn). `cfr-needs-human` clears only on a terminal outcome —
+  `change-failure` (confirmed), proven pre-existing, or an explicit human dismissal (a recorded decision).
+- **Scope:** GitKraken defect detection covers projects **`COREDEV` and `FT` only** (LW / UV excluded).
+  Labeling an out-of-scope issue does not affect CFR; widening scope is a GitKraken Insights config change,
+  not an agent action.
+
+Do NOT apply `change-failure` to: pre-existing bugs, feature requests, or any issue whose root cause is not
+attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) and `release-manager`
+(Change-failure attribution) for the operational detail.
 
 ---
 
@@ -310,7 +423,7 @@ not block implementation).
   `Unleashed Mail/Sources/Services/CLAUDE.md`, `Unleashed Mail/Sources/Views/CLAUDE.md`,
   `Unleashed Mail/Sources/Models/CLAUDE.md`, `Unleashed Mail/Sources/Utilities/CLAUDE.md`,
   `Unleashed Mail/Sources/Components/CLAUDE.md`, `Unleashed Mail/Sources/ViewModels/CLAUDE.md`
-- Review skills (shipped with the plugin, current v2.4.1): the **canonical** workspace invocation is the
+- Review skills (shipped with the plugin): the **canonical** workspace invocation is the
   bare `/gemini-review` / `/codex-review` / `/create-feature-plan` — the host app ships local copies and
   prefers them over the plugin's generic ones. The plugin also bundles them namespaced as
   `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review` / `/unleashed-mail:create-feature-plan`

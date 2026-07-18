@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -33,6 +34,76 @@ from pathlib import Path
 
 KEBAB = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 TOP_KEY = re.compile(r"^([A-Za-z0-9_-]+):(.*)$")  # column-0 key: value
+
+# Documented sub-agent frontmatter fields (code.claude.com/docs/en/sub-agents, 2026-07-14).
+# `allowed-tools` is DELIBERATELY absent: it is a skills/commands key, NOT a sub-agent key —
+# using it in an agent silently nullifies every tool restriction (the agent inherits ALL tools).
+# This whole check exists to stop that recurring (audit pm-diagnostic.1 / orchestration.1).
+KNOWN_AGENT_KEYS = {
+    "name", "description", "tools", "disallowedTools", "model", "permissionMode",
+    "maxTurns", "skills", "mcpServers", "hooks", "memory", "background",
+    "effort", "isolation", "color", "initialPrompt",
+}
+MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
+# Built-in tool names an agent may list. The MCP namespace is install-defined and NOT
+# enumerable, so `mcp__*` entries are always accepted; an unknown non-mcp entry is accepted
+# too (it may be a newer tool), but a CLOSE typo of a known tool is flagged — a misspelled
+# tool name silently disables that tool (mirrors validate-hooks.py's difflib guard).
+KNOWN_TOOLS = {
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "BashOutput",
+    "Glob", "Grep", "Agent", "WebFetch", "WebSearch", "TodoWrite",
+    "Skill", "SlashCommand", "ExitPlanMode", "KillShell", "AskUserQuestion",
+}
+
+# B4 (COREDEV-2503): stale/invalid tool names to HARD-reject. Merely dropping `Task` from KNOWN_TOOLS is a
+# no-op — an unknown tool is accepted unless `difflib` finds a close match, and `Task` has none. The
+# sub-agent dispatcher is `Agent`, never `Task` (AGENT_CONTRACTS §9; validate-hooks.py agrees).
+STALE_TOOLS = {"Task"}
+_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}   # case-insensitive membership (gemini review #53)
+
+
+def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
+    """Agent-only frontmatter validation: unknown keys, model alias, tool-name typos.
+
+    Skills/commands are intentionally exempt — `allowed-tools` is a real key for them.
+    """
+    for key in fm:
+        if key in KNOWN_AGENT_KEYS:
+            continue
+        hint = ""
+        if key == "allowed-tools":
+            hint = (" — `allowed-tools` is a skills/commands key; sub-agents use "
+                    "`tools`/`disallowedTools`. As written the restriction is silently "
+                    "ignored and the agent inherits ALL tools.")
+        problems.append(f"{rel}: unknown agent frontmatter key `{key}`{hint}")
+
+    model = fm.get("model", "")
+    # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not. F10
+    # (COREDEV-2503): `re.fullmatch` anchors BOTH ends — the prior `re.match` (start-only, no end anchor)
+    # accepted a valid prefix + trailing garbage/newline (`claude-opus-4-8 rm -rf`). `\Z`-style fullmatch,
+    # not `$` (which allows a terminal newline). The trailing `[a-z0-9-]*` allows ids ending in a letter.
+    if model and model not in MODEL_ALIASES and not re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", model):
+        problems.append(
+            f"{rel}: `model: {model}` is not a known alias {sorted(MODEL_ALIASES)} or a model id")
+
+    for field in ("tools", "disallowedTools"):
+        val = fm.get(field, "")
+        if val in ("", ">", "|", ">-", "|-"):
+            continue
+        # normalize YAML flow-list (`[Task]`, `[Task, Read]`) and block-list (`- Task`) syntax before the
+        # stale/typo checks — the plain `val.split(",")` scalar form otherwise missed `[Task]`/`- Task`,
+        # letting a stale `Task` tool through in list form (audit of #53).
+        for entry in (t.strip().strip("[]").lstrip("-").strip() for t in val.split(",")):
+            if not entry or entry.startswith("mcp__") or entry in KNOWN_TOOLS:
+                continue
+            if entry.lower() in _STALE_TOOLS_LOWER:  # B4: hard-reject a known-stale name (difflib wouldn't
+                # flag it). Case-INSENSITIVE so `task`/`TASK` can't slip past the exact-`Task` check (gemini #53).
+                problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — the "
+                                f"sub-agent dispatcher is `Agent`, not `{entry}` (AGENT_CONTRACTS §9)")
+                continue
+            near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
+            if near:
+                problems.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of `{near[0]}`")
 
 
 def parse_frontmatter(text: str) -> dict[str, str] | None:
@@ -47,6 +118,7 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
     fm: dict[str, str] = {}
     i, n = 1, len(lines)
     current: str | None = None
+    block_scalar_keys: set[str] = set()
     while i < n:
         line = lines[i]
         if line.strip() == "---":
@@ -74,11 +146,28 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
                 if hashpos != -1:
                     val = val[:hashpos].strip()
             fm[key] = val  # may be "", ">", "|", or an inline value
+            if val in (">", "|", ">-", "|-"):
+                block_scalar_keys.add(key)           # `key: |`/`>` body is PROSE — space-join, never comma
             current = key
         elif current is not None and line.strip() and line[:1].isspace():
             # continuation / block-scalar body -> the key has content
+            body = line.strip()
+            is_list_item = body.startswith("-") and current not in block_scalar_keys
+            if is_list_item:                         # block-list item: drop a trailing YAML inline comment
+                hp = body.find(" #")                 # (`- Task # legacy`) so it doesn't hide a stale tool
+                if hp != -1:
+                    body = body[:hp].rstrip()
             if fm.get(current, "") in ("", ">", "|", ">-", "|-"):
-                fm[current] = line.strip()
+                fm[current] = body
+            elif is_list_item:
+                # ACCUMULATE every subsequent block-LIST item, comma-joined — a multi-line YAML block list
+                # (`tools:\n  - Read\n  - Task`) otherwise recorded only its FIRST item, so a stale tool past
+                # line 1 escaped validation (gemini #53). Matches the flow-list form.
+                fm[current] = fm[current] + ", " + body
+            else:
+                # a block SCALAR (`description: |`) or wrapped value: SPACE-join, not comma — comma-joining
+                # prose corrupts the text (gemini review of #53).
+                fm[current] = fm[current] + " " + body
         i += 1
     return None  # no closing '---'
 
@@ -86,6 +175,47 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
 def has(fm: dict[str, str], key: str) -> bool:
     v = fm.get(key, "")
     return v not in ("", ">", "|", ">-", "|-")
+
+
+# The agent-orchestration skill's "## Agent Registry" section documents every agent in
+# markdown tables. Its first column (a `backtick`-wrapped agent name) must be EXACTLY the set
+# of agents/*.md stems — so a new/renamed/removed agent can't drift out of the orchestration
+# doc, and no table row can name an agent that doesn't exist (audit orchestration.2 / P1c-10).
+REGISTRY_ROW = re.compile(r"^\|\s*`([a-z][a-z0-9-]*)`\s*\|")
+
+
+def check_agent_registry(root: Path, agent_names: set[str], problems: list[str]) -> None:
+    reg = root / "skills" / "agent-orchestration" / "SKILL.md"
+    rel = "skills/agent-orchestration/SKILL.md"
+    if not reg.is_file():
+        problems.append(f"{rel}: missing (the agent registry lives here)")
+        return
+    try:
+        content = reg.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        problems.append(f"{rel}: cannot read ({e})")
+        return
+    # Capture the "## Agent Registry" section: its heading through the next top-level "## ".
+    # Sub-headings ("### …") stay inside the section; only a new "## " ends it. Collect rows in a
+    # LIST (not a set) so a name registered twice — possibly with contradictory guidance in each
+    # row — is caught rather than silently collapsing.
+    in_section = False
+    rows: list[str] = []
+    for ln in content.splitlines():
+        if ln.startswith("## "):
+            in_section = ln.strip() == "## Agent Registry"
+            continue
+        if in_section:
+            m = REGISTRY_ROW.match(ln)
+            if m:
+                rows.append(m.group(1))
+    registered = set(rows)
+    for name in sorted({n for n in rows if rows.count(n) > 1}):
+        problems.append(f"{rel}: agent `{name}` is listed more than once in the Agent Registry tables")
+    for name in sorted(agent_names - registered):
+        problems.append(f"{rel}: agent `{name}` is missing from the Agent Registry tables")
+    for name in sorted(registered - agent_names):
+        problems.append(f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist")
 
 
 def main() -> int:
@@ -97,7 +227,7 @@ def main() -> int:
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
     problems: list[str] = []
 
-    def check_frontmatter(path: Path, require_name: bool) -> None:
+    def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
         rel = path.relative_to(root)
         try:
             text = path.read_text(encoding="utf-8-sig")  # utf-8-sig strips a BOM (PR #11)
@@ -115,6 +245,13 @@ def main() -> int:
                 problems.append(f"{rel}: frontmatter missing non-empty `name`")
             elif not KEBAB.match(fm["name"]):
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
+        if is_agent:
+            check_agent_fields(rel, fm, problems)
+            # The frontmatter `name` is the identifier Claude Code registers; if it diverges from the
+            # filename stem, the registry set-equality check (keyed on stems) would enforce the wrong
+            # identifier. Require them equal.
+            if has(fm, "name") and fm["name"] != path.stem:
+                problems.append(f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`")
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
@@ -122,7 +259,9 @@ def main() -> int:
     commands = sorted((root / "commands").glob("*.md"))
 
     for p in agents:
-        check_frontmatter(p, require_name=True)
+        check_frontmatter(p, require_name=True, is_agent=True)
+    # The orchestration registry must list exactly the set of agents that exist.
+    check_agent_registry(root, {p.stem for p in agents}, problems)
     for p in skills:
         check_frontmatter(p, require_name=True)
     # commands: name is the filename — require description + a kebab-case stem.

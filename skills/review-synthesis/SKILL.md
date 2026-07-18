@@ -1,15 +1,20 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Read-only; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep
+allowed-tools: Read, Grep, Bash
 ---
 
 # Plan-Review Synthesis
 
-A **read-only** skill that combines the two plan-review transcripts into a single auditable record — the
-proof that the `AGENT_CONTRACTS.md §2` "both reviewers must return APPROVE / APPROVE_WITH_NOTES" gate
-passed, with any disagreement **surfaced** rather than averaged away. It runs nothing and gates nothing
-automatically; it produces a Markdown block for the human running the gate.
+A **source-preserving** skill that combines the two plan-review transcripts into a single auditable
+record — the proof that the `AGENT_CONTRACTS.md §2` "both reviewers must return APPROVE / APPROVE_WITH_NOTES"
+gate passed, with any disagreement **surfaced** rather than averaged away. It runs nothing and gates
+nothing automatically; it produces a Markdown block for the human running the gate.
+
+> **Not read-only in the filesystem sense.** It never edits the plan, the gates, or any source, but it
+> DOES write session state: it persists the plan-digest-bound Combined-verdict artifact under the plan's
+> `.verdicts/` dir (step below). "Source-preserving, session-state-writing" is the accurate description;
+> the earlier "read-only" label was wrong about the write (full review, #41).
 
 Run it **after** both review transcripts are captured (see `/gemini-review` and
 `/codex-review`):
@@ -92,6 +97,50 @@ Map each reviewer's raw verdict to one canonical token:
 - **[high | medium | low]** — [one line; low whenever a transcript was MISSING or a verdict was inferred from ambiguous prose]
 ```
 
+## Persist the verdict (bind it to the plan)
+
+After emitting the block, **persist the Combined verdict as a plan-digest-bound artifact** so
+`implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit).
+
+**Prerequisite — the reviewed digest was snapshotted at gate LAUNCH.** `create-feature-plan` runs
+`review-verdict.py snapshot --plan …` *before* dispatching `/gemini-review` + `/codex-review`, writing
+a git-ignored `.reviewed-sha256` sidecar beside the plan. That snapshot binds the approval to the bytes
+the reviewers actually saw. It CANNOT be a shell variable — each skill step is a separate tool
+invocation, so a `REVIEWED_PLAN_SHA256=…` shell-local would be empty here (#44 review §4; COREDEV-2499).
+If no valid pre-review snapshot exists — none was taken, or the plan was edited AFTER the reviews ran —
+do **NOT** snapshot the current bytes here and continue: that would bind the approval to bytes the
+reviewers never saw. Instead **re-run `/gemini-review` + `/codex-review` on the current plan** (with a
+fresh `snapshot` taken before dispatch), then synthesize those transcripts. An approval is only valid for
+the exact plan the reviewers actually reviewed.
+
+Then persist — pass the plan that was reviewed plus each reviewer's status + transcript. `write`
+auto-reads the snapshot sidecar and aborts if the plan changed since, so **no `--reviewed-sha256`
+argument is needed** in the normal flow:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+    --plan docs/planning/FEATURE_NAME_PLAN.md \
+    --verdict <COMBINED_VERDICT> \
+    --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
+    --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
+    --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+`write` aborts if the plan changed since the snapshot. An **APPROVING** verdict REQUIRES a reviewed-digest
+binding: if no snapshot sidecar exists (and no `--reviewed-sha256` is passed) `write` FAILS CLOSED rather
+than record an approval bound to unreviewed bytes — so the snapshot in `create-feature-plan` is
+mandatory, not optional, for an approval. You may still pass `--reviewed-sha256 <digest>` explicitly to
+override the sidecar (e.g. a caller that tracks the digest itself); a passed-but-EMPTY
+`--reviewed-sha256 ""` fails loudly rather than silently skipping the binding.
+
+For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:transcript` path
+(the artifact fails closed — `implement`'s verify blocks on a non-approving verdict), e.g. `--reviewer codex=MISSING`.
+
+This records the plan's **raw-byte SHA-256** (+ the two transcript digests) in a private `.verdicts/`
+dir beside the plan (git-ignored session state). It writes the artifact for ANY combined verdict —
+`implement` is what refuses to proceed on a non-approving one, so the audit trail is complete either
+way. If `${CLAUDE_PLUGIN_ROOT}` is unset, use the repo-relative `scripts/review-verdict.py`.
+
 ## Guardrails
 
 - **No PII.** Plan transcripts may quote email addresses, subjects, or message bodies. Reference findings
@@ -100,5 +149,6 @@ Map each reviewer's raw verdict to one canonical token:
   return; treat it as `MISSING` (rule 1), never as a silent `APPROVE`.
 - **Surface, don't average.** `DISAGREEMENT` is a real verdict — keep both reviewers' positions visible
   rather than collapsing a one-approve / one-reject split into either extreme.
-- **Passive and read-only.** This skill reads two files and emits one block; it never edits the plan,
-  re-runs a reviewer, or gates anything on its own.
+- **Never edits the plan or gates.** This skill reads the two transcripts, emits one block, and persists
+  the verdict artifact beside the plan (the `.verdicts/` handoff). It never edits the plan itself,
+  re-runs a reviewer, or decides to proceed — `implement`'s Design Gate is the only consumer that gates.

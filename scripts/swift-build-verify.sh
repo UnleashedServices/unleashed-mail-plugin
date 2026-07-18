@@ -3,8 +3,12 @@
 # Runs after Bash tool invocations to catch failed builds and test runs.
 #
 # UnleashedMail is an Xcode project — `xcodebuild` is the canonical tool.
-# `swift build`/`swift test` are flagged as warnings (likely user error invoking
+# `swift build`/`swift test` are flagged as advisories (likely user error invoking
 # the wrong tool against this xcodeproj).
+#
+# PostToolUse plain stdout is NOT shown to the model, so the build/test advisory is
+# delivered via hookSpecificOutput.additionalContext (COREDEV-2486, audit hooks-scripts.3);
+# JSON output is only processed on exit 0.
 #
 # COREDEV-2324: input read migrated to the shared hook-io helper (stdin-JSON first,
 # CLAUDE_TOOL_ARG_* fallback) so this hook is not silently inert if the installed
@@ -21,6 +25,11 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
 [ -f "$_DIR/lib/log.sh" ] && . "$_DIR/lib/log.sh"
 
+# Defensive fallback if the shared lib is unavailable (it ships alongside this hook).
+if ! command -v hook_emit_posttool_context >/dev/null 2>&1; then
+    hook_emit_posttool_context() { printf '%s\n' "$1" >&2; }
+fi
+
 if command -v hook_io_read >/dev/null 2>&1; then
     hook_io_read
     COMMAND="$(hook_command)"
@@ -33,21 +42,19 @@ fi
 CLASS=""
 command -v build_class >/dev/null 2>&1 && CLASS="$(build_class "$COMMAND")"
 
+ADVISORY=""
 case "$CLASS" in
     xcodebuild-build)
-        echo "🔨 xcodebuild build detected — verify BUILD SUCCEEDED in the output above."
+        ADVISORY="🔨 xcodebuild build detected — verify BUILD SUCCEEDED in the output above."
         ;;
     xcodebuild-test)
-        echo "🧪 xcodebuild test detected — verify all tests passed in the output above."
-        echo "   If tests failed, fix the failures before proceeding."
+        ADVISORY="🧪 xcodebuild test detected — verify all tests passed in the output above. If tests failed, fix the failures before proceeding."
         ;;
     swift-build)
-        echo "⚠️  'swift build' detected — but this project is an Xcode project, not a SwiftPM package."
-        echo "   Use: xcodebuild build -scheme \"Unleashed Mail\" -destination 'platform=macOS'"
+        ADVISORY="⚠️  'swift build' detected — but this project is an Xcode project, not a SwiftPM package. Use: xcodebuild build -scheme \"Unleashed Mail\" -destination 'platform=macOS'"
         ;;
     swift-test)
-        echo "⚠️  'swift test' detected — but this project is an Xcode project, not a SwiftPM package."
-        echo "   Use: xcodebuild test -scheme \"Unleashed Mail\" -destination 'platform=macOS'"
+        ADVISORY="⚠️  'swift test' detected — but this project is an Xcode project, not a SwiftPM package. Use: xcodebuild test -scheme \"Unleashed Mail\" -destination 'platform=macOS'"
         ;;
     xcodebuild-other) ;;   # analyze/archive/clean — logged for pairing, no build/test advisory
     *) exit 0 ;;           # not a build/test command
@@ -57,5 +64,10 @@ esac
 # build-failure-log.sh (failed=true). Gated by UNLEASHED_FAILURE_LOG.
 if [ "${UNLEASHED_FAILURE_LOG:-on}" != "off" ] && command -v log_append >/dev/null 2>&1; then
     log_append "build-log.jsonl" "$(printf '{"ts":"%s","kind":"build","class":"%s","failed":false}' "$(log_ts)" "$CLASS")"
+fi
+
+# Deliver the advisory to the model via additionalContext (invisible on plain stdout for PostToolUse).
+if [ -n "$ADVISORY" ]; then
+    hook_emit_posttool_context "$ADVISORY"
 fi
 exit 0

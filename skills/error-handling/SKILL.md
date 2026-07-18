@@ -17,64 +17,53 @@ email addresses, subjects, and content.
 
 ## Error Types
 
-Define typed errors for each domain:
+Providers throw the app's **real** typed errors — do NOT invent your own. The canonical
+provider-agnostic error is **`EmailServiceError`** (`Services/EmailServiceProtocol.swift`): both
+`GmailService` and `MicrosoftGraphService` conform to `EmailServiceProtocol`, and
+`AccountScopedServiceProvider.activeService()` returns `any EmailServiceProtocol`, so a
+provider-agnostic caller catches `EmailServiceError`:
 
 ```swift
-enum MailProviderError: Error, LocalizedError, Sendable {
+// The app's real type — REFERENCE it, don't redefine it. Exact cases/signatures:
+internal enum EmailServiceError: LocalizedError, Sendable {
     case notAuthenticated
-    case tokenExpired
-    case interactionRequired
-    case permissionDenied(scope: String)
-    case messageNotFound(id: String)
-    case rateLimited(retryAfter: TimeInterval?)
-    case serverError(code: Int, message: String)
-    case networkError(description: String)
-    case unsupportedOperation(provider: MailProviderType, operation: String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notAuthenticated:
-            return "Not signed in to email account"
-        case .tokenExpired:
-            return "Authentication token has expired"
-        case .interactionRequired:
-            return "User interaction required for authentication"
-        case .permissionDenied(let scope):
-            return "Missing permission: \(scope)"
-        case .messageNotFound(let id):
-            return "Message not found: \(id)"
-        case .rateLimited(let retryAfter):
-            if let seconds = retryAfter {
-                return "Rate limited. Try again in \(Int(seconds)) seconds"
-            }
-            return "Rate limited. Please wait before retrying"
-        case .serverError(let code, let message):
-            return "Server error (\(code)): \(message)"
-        case .networkError(let description):
-            return "Network error: \(description)"
-        case .unsupportedOperation(let provider, let operation):
-            return "\(operation) is not supported by \(provider.rawValue)"
-        }
-    }
+    case invalidResponse
+    case requestFailed(statusCode: Int)
+    case rateLimited                         // NO associated value
+    case notFound
+    case folderNotFound(folderName: String)
+    case networkError(Error)                 // UNLABELED associated value — .networkError(err)
+    case decodingError(Error)                // UNLABELED
+    case operationNotSupported
+    // helpers: errorDescription, isAuthenticationError, isRateLimited
 }
 ```
+
+Provider-/domain-specific errors also exist — catch these where you touch that layer directly:
+
+- `GmailError` (`GmailService+APIModels.swift`) — Gmail internals; may surface from the Gmail path even through `EmailServiceProtocol`.
+- `MicrosoftAuthError` (`MicrosoftAuthService+Errors.swift`) — Microsoft auth.
+- `AuthError` (`AuthService.swift`) — Google OAuth.
+- Unsupported-provider-operation: `EmailServiceError.operationNotSupported` **or** `ProviderParityError` (`AccountScopedServiceProvider.swift`).
+
+Match their real conformances (`LocalizedError, Sendable`) and case signatures — e.g. `.networkError(error)` (unlabeled, not `.networkError(underlying:)`/`.networkError(description:)`), `.requestFailed(statusCode:)`, `.rateLimited` (no payload). Prefer the helpers `isAuthenticationError` / `isRateLimited` over pattern-matching invented cases. (`Email` below is an illustrative row model — use the app's real email model type in real code.)
 
 ## Error Handling Patterns
 
 ### Service Layer
 
 ```swift
-func fetchMessage(id: String) async throws -> MailMessage {
+func fetchMessage(id: String) async throws -> Email {
     do {
         let token = try await tokenManager.validAccessToken()
         let response = try await api.getMessage(id: id, token: token)
-        return try response.toMailMessage()
-    } catch let error as APIError {
-        Logger.debug("API error fetching message \(id): \(error)", category: .network)
-        throw MailProviderError(from: error)
+        return try response.toEmail()
+    } catch let error as EmailServiceError {
+        Logger.debug("Email service error fetching \(id): \(error)", category: .network)
+        throw error
     } catch {
-        Logger.debug("Unexpected error fetching message \(id): \(error)", category: .network)
-        throw MailProviderError.networkError(underlying: error)
+        Logger.debug("Unexpected error fetching \(id): \(error)", category: .network)
+        throw EmailServiceError.networkError(error)   // unlabeled associated value
     }
 }
 ```
@@ -84,8 +73,8 @@ func fetchMessage(id: String) async throws -> MailMessage {
 ```swift
 @Observable @MainActor
 final class InboxViewModel {
-    var state: ViewState<[MailMessage]> = .idle
-    var error: MailProviderError?
+    var state: ViewState<[Email]> = .idle
+    var error: EmailServiceError?
 
     func fetchMessages() async {
         state = .loading
@@ -93,13 +82,13 @@ final class InboxViewModel {
             let messages = try await emailService.fetchInbox()
             state = .loaded(messages)
             error = nil
-        } catch let error as MailProviderError {
+        } catch let error as EmailServiceError {
             state = .idle
             self.error = error
             Logger.debug("Failed to fetch inbox: \(error.localizedDescription)", category: .ui)
         } catch {
             state = .idle
-            self.error = MailProviderError.networkError(underlying: error)
+            self.error = EmailServiceError.networkError(error)
             Logger.debug("Unexpected error fetching inbox: \(error)", category: .ui)
         }
     }
@@ -129,7 +118,7 @@ struct InboxView: View {
         ), presenting: viewModel.error) { _ in
             Button("OK") { viewModel.error = nil }
         } message: { error in
-            Text(error.localizedDescription)
+            Text(error.localizedDescription)   // EmailServiceError conforms to LocalizedError
         }
     }
 }
@@ -215,25 +204,28 @@ func withRetry<T: Sendable>(
 ### Graceful Degradation
 
 ```swift
-func loadMessages() async {
+func loadMessages(accountEmail: String) async {
     do {
         // Try to load from API
         let messages = try await api.fetchMessages()
         self.messages = messages
-    } catch MailProviderError.networkError {
+    } catch EmailServiceError.networkError {
         // Fall back to cached messages
         Logger.debug("Network unavailable, using cached messages", category: .network)
         do {
             self.messages = try await dbQueue.read { db in
-                try MailMessage.fetchAll(db)
+                // Scope EVERY query by account_email — never fetch across accounts (CLAUDE.md invariant).
+                try Email
+                    .filter(Column("account_email") == accountEmail)
+                    .fetchAll(db)
             }
         } catch {
             Logger.debug("Cache fallback also failed: \(error)", category: .database)
-            self.error = MailProviderError.networkError(description: error.localizedDescription)
+            self.error = EmailServiceError.networkError(error)
         }
     } catch {
-        // Show error for other failures
-        self.error = error
+        // Other failures — keep the typed error if it is one, else wrap
+        self.error = (error as? EmailServiceError) ?? .networkError(error)
     }
 }
 ```
@@ -243,14 +235,17 @@ func loadMessages() async {
 ```swift
 func test_fetchMessages_handlesNetworkError() async throws {
     // Arrange
-    mockService.shouldThrow = .networkError(underlying: URLError(.notConnectedToInternet))
+    mockService.shouldThrow = EmailServiceError.networkError(URLError(.notConnectedToInternet))
 
     // Act
     await sut.fetchMessages()
 
     // Assert
     XCTAssertEqual(sut.state, .idle)
-    XCTAssertNotNil(sut.error)
-    XCTAssertEqual(sut.error, .networkError)
+    // EmailServiceError isn't Equatable (its .networkError wraps a non-Equatable Error),
+    // so match the case rather than XCTAssertEqual on the whole value.
+    guard case .networkError = sut.error else {
+        return XCTFail("expected .networkError, got \(String(describing: sut.error))")
+    }
 }
 ```

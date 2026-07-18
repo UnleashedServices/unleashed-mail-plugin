@@ -123,10 +123,14 @@ custom_rules:
 
   pii_logging_check:
     name: "PII in logging"
-    regex: "Logger.*\\$\\{.*email\\|Logger.*\\$\\{.*subject\\|Logger.*\\$\\{.*body"
+    # Matches a Logger call whose Swift string interpolation \(…) mentions email/subject/body.
+    # Swift interpolates with \(…), NOT ${…}; and `|` (not \|) is the regex alternator. In a
+    # double-quoted YAML scalar, \\\\\\( encodes the regex \\\( which matches a literal \( .
+    regex: "Logger.*\\\\\\([^)]*([Ee]mail|[Ss]ubject|[Bb]ody)[^)]*\\)"
     message: "Potential PII in log statement — use PIIRedactor"
     severity: warning
 
+  # SAMPLE — NOT YET ENABLED in the app's .swiftlint.yml (rollout tracked by the regex-migration epic).
   no_legacy_nsregex:
     name: "Legacy NSRegularExpression"
     regex: "\\bNSRegularExpression\\b"

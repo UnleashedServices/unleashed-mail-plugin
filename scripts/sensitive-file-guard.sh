@@ -11,7 +11,9 @@
 # the loop. No-match / warn-mode / kill-switch-off emit no decision.
 #
 # Kill switch:  UNLEASHED_SENSITIVE_GUARD=off            -> emit nothing, exit 0
-# Mode:         UNLEASHED_SENSITIVE_GUARD_MODE=warn|ask  -> default warn (advisory)
+# Mode:         UNLEASHED_SENSITIVE_GUARD_MODE=warn|ask|off  -> default ask (permission prompt;
+#               COREDEV-2489/P1c-12). In non-interactive / dontAsk / -p contexts an "ask" DENIES
+#               the operation that would prompt — that is the intended fail-safe for sensitive files.
 set -uo pipefail
 
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -54,74 +56,34 @@ sensitive_category() {
     esac
 }
 
-# Best-effort: print the basename of a sensitive WRITE target in a Bash command,
-# else nothing. Read-only commands (grep/cat) and signatures used only as a SOURCE
-# (e.g. `cp Keychain.swift /backup/`) must print nothing. Phase-1 heuristic; tuned
-# during the warn window. Quoted redirection targets with spaces are handled; a
-# quoted cp/mv destination with spaces is a known best-effort gap.
+# COREDEV-2503 F4: the guard's Bash write-target extraction was an O(n^2) per-char segmenter plus
+# quote-BLIND greps that both over-asked on a quoted operator (`echo '> Keychain.swift'`) and bypassed on a
+# mid-word quote (`rm Key"chain".swift`). It is replaced by ONE structured, quote/escape/operator-aware
+# linear lexer in `lib/bash-write-scan.py`, which prints the (de-quoted) write-target words; this function
+# just applies the sensitive-basename policy. Best-effort by design (arbitrary shell can evade any textual
+# heuristic — the robust guard is the Edit/Write file_path path).
+#
+# Return: prints the first sensitive write-target basename (empty if none); exit status 2 means the lexer
+# could not parse the command -> the caller FAILS CLOSED (deny). If python3 is unavailable the best-effort
+# Bash heuristic is skipped (empty, status 0) — never a blanket deny of every command.
 guard_bash_write_target() {
-    local cmd="$1" cand="" seg="" line="" t="" bn="" verb="" tok="" last=""
-    local -a toks=()
-    # Split on shell separators so a chained command (`cp a b && git diff`) is parsed
-    # per-segment, not by a single trailing token (codex/gemini PR #12). Best-effort:
-    # the Bash path is a warn-first speed-bump — the robust guard is the Edit/Write
-    # file_path path; arbitrary shell can always evade a textual heuristic.
-    while IFS= read -r seg; do
-        [ -n "$seg" ] || continue
-        # Redirection targets within the segment: >FILE / >>FILE (quoted or not).
-        while IFS= read -r line; do
-            line="$(printf '%s' "$line" | sed -E 's/^>>?[[:space:]]*//; s/^"//; s/"$//')"
-            [ -n "$line" ] && cand="${cand}
-${line}"
-        done < <(printf '%s\n' "$seg" | grep -oE '>>?[[:space:]]*("[^"]+"|[^"[:space:]|&;]+)' 2>/dev/null)
-        read -ra toks <<<"$seg"
-        verb="${toks[0]:-}"
-        case "$verb" in
-            cp|install)
-                # destination = last non-flag operand.
-                last=""
-                for tok in "${toks[@]}"; do
-                    case "$tok" in -*) ;; *) last="$tok" ;; esac
-                done
-                [ -n "$last" ] && cand="${cand}
-${last}"
-                ;;
-            mv|rename)
-                # a rename can modify/remove the SOURCE too — check every non-flag operand.
-                for tok in "${toks[@]:1}"; do
-                    case "$tok" in -*) ;; *) cand="${cand}
-${tok}" ;; esac
-                done
-                ;;
-            sed)
-                if printf '%s' "$seg" | grep -qE 'sed[[:space:]]+-i' 2>/dev/null; then
-                    cand="${cand}
-${toks[*]: -1}"
-                fi
-                ;;
-            tee)
-                cand="${cand}
-$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*tee[[:space:]]+(-a[[:space:]]+)?//; s/[[:space:]].*$//; s/^"//; s/"$//')"
-                ;;
-        esac
-    done < <(printf '%s\n' "$cmd" | sed -E 's/(\&\&|\|\||[;&|])/\n/g')
-    # Evaluate candidates by basename (while-read avoids globbing on a `*` operand).
+    local cmd="$1" out="" t="" bn=""
+    command -v python3 >/dev/null 2>&1 || return 0
+    out="$(printf '%s' "$cmd" | python3 "$_DIR/lib/bash-write-scan.py")" || return 2
     while IFS= read -r t; do
         [ -n "$t" ] || continue
-        t="${t#\"}"; t="${t%\"}"
         bn="${t##*/}"
         if is_sensitive_basename "$bn"; then
             printf '%s' "$bn"
             return 0
         fi
-    done <<EOF
-$cand
-EOF
+    done <<< "$out"
     return 0
 }
 
 [ "${UNLEASHED_SENSITIVE_GUARD:-on}" = "off" ] && exit 0
-MODE="${UNLEASHED_SENSITIVE_GUARD_MODE:-warn}"
+MODE="${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}"
+[ "$MODE" = "off" ] && exit 0   # `_MODE=off` also disables (parity with the README kill-switch cell)
 
 hook_io_read
 TOOL="$(hook_tool_name)"
@@ -134,7 +96,27 @@ case "$TOOL" in
         ;;
     Bash)
         CMD="$(hook_command)"
-        [ -n "$CMD" ] && TARGET="$(guard_bash_write_target "$CMD")"
+        if [ -n "$CMD" ]; then
+            # F4 DoS backstop: a command too large to parse within the 10s hook timeout must NOT time out
+            # (a killed hook fails open). Over 256 KiB (bytes, LC_ALL=C) -> ask unconditionally, fail-closed.
+            NBYTES=$(LC_ALL=C printf '%s' "$CMD" | wc -c | tr -d ' ')
+            if [ "${NBYTES:-0}" -gt 262144 ]; then
+                if [ "$MODE" = ask ]; then
+                    hook_emit_ask "This command is very large (${NBYTES} bytes); the sensitive-file guard cannot fully parse it in time. Proceed?"
+                else
+                    hook_emit_warn "Very large command (${NBYTES} bytes) — the sensitive-file guard could not fully scan it."
+                fi
+                exit 0
+            fi
+            TARGET="$(guard_bash_write_target "$CMD")"; GRC=$?
+            # F4 exit-contract: a lexer PARSE FAILURE (not a mere no-match) is undecidable -> FAIL CLOSED
+            # with an exit-2 deny + stderr reason (Claude Code ignores stdout JSON on exit 2, so an `ask`
+            # cannot be exit-2; a hard deny can). python3-absent is handled inside as a best-effort skip.
+            if [ "$GRC" -eq 2 ]; then
+                printf 'sensitive-file guard: could not parse this Bash command; blocking (fail-closed).\n' >&2
+                exit 2
+            fi
+        fi
         ;;
     *)
         exit 0

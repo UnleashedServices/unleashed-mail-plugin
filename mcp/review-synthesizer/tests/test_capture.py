@@ -518,7 +518,9 @@ class TestExtractStatus(unittest.TestCase):
         self.assertEqual(r, {"status": "PARTIAL", "remaining": "first", "completed": "done"})
 
     def test_multiline_field_wrap_aborts_trailer(self):
-        # a label-less wrapped continuation line is "other content" -> trailer aborts -> face value.
+        # A label-less wrapped continuation line is "other content" -> the trailer aborts -> no status.
+        # The sidecar is then ABSENT, which the consumer reads as UNATTRIBUTED -> re-dispatch
+        # (COREDEV-2490). It does NOT mean "face value" — that reading was the fail-open.
         self.assertIsNone(self._s("Status: BLOCKED\nBlocker Description: line one\nline two wrap\n" + jfence()))
 
 
@@ -558,6 +560,48 @@ class TestStatusSidecar(unittest.TestCase):
             rd = self._round1(root)
             self.assertTrue(os.path.isfile(os.path.join(rd, "security-reviewer.json")))
             self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
+
+    def test_no_fence_blocked_persists_empty_findings_and_status(self):
+        # A BLOCKED reviewer that emits its Output-Contract Status but NO ```json fence must still
+        # persist an empty findings capture + the .status sidecar, so it reads as BLOCKED — never as
+        # a clean absent reviewer (COREDEV-2328 / Item 17).
+        with tempfile.TemporaryDirectory() as root:
+            msg = "could not complete the review\n\nStatus: BLOCKED\nBlocker Description: x\n"
+            self.assertEqual(self._cap(root, msg), "status-only")
+            rd = self._round1(root)
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.json")), [])
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.status"))["status"], "BLOCKED")
+
+    def test_no_fence_partial_persists_status(self):
+        with tempfile.TemporaryDirectory() as root:
+            msg = "reviewed part of the diff\n\nStatus: PARTIAL\nRemaining: A.swift\n"
+            self.assertEqual(self._cap(root, msg), "status-only")
+            rd = self._round1(root)
+            self.assertEqual(self._json(os.path.join(rd, "security-reviewer.status"))["status"], "PARTIAL")
+
+    def test_no_fence_complete_writes_nothing(self):
+        # A COMPLETE with no findings fence is malformed — do NOT fabricate a clean-looking [] capture;
+        # leave it absent so swift-reviewer's missing-reviewer path handles it (fail closed).
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, "all good\n\nStatus: COMPLETE\n"), "no-fence")
+            rd = self._round1(root)
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.json")))
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.status")))
+
+    def test_no_fence_no_status_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, "just prose, no fence, no status line"), "no-fence")
+            rd = self._round1(root)
+            self.assertFalse(os.path.exists(os.path.join(rd, "security-reviewer.json")))
+
+    def test_no_fence_blocked_does_not_clobber_real_findings(self):
+        # A real findings capture must survive a later no-fence BLOCKED rerun (never downgraded to []).
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self._cap(root, fenced([raw()]), agent_id="id1"), "written")
+            rd = self._round1(root)
+            self.assertEqual(len(self._json(os.path.join(rd, "security-reviewer.json"))), 1)
+            self._cap(root, "prose\n\nStatus: BLOCKED\nBlocker Description: y\n", agent_id="id2")
+            self.assertEqual(len(self._json(os.path.join(rd, "security-reviewer.json"))), 1)
 
     def test_stale_status_cleared_on_statusless_overwrite(self):
         with tempfile.TemporaryDirectory() as root:
@@ -614,7 +658,10 @@ class TestStatusSidecar(unittest.TestCase):
     def test_write_status_survives_unencodable_detail_field(self):
         # A lone surrogate in a detail field makes json.dump->utf-8 raise UnicodeEncodeError (a
         # ValueError); _write_status must swallow it so capture() still returns "written", the findings
-        # are persisted, the sidecar is simply absent (face value), and no tmp file leaks.
+        # are persisted, the sidecar is simply ABSENT, and no tmp file leaks.
+        # The producer stays fail-open BY DESIGN and COREDEV-2490 now RELIES on that: an absent
+        # sidecar is UNATTRIBUTED at the consumer (-> re-dispatch), never "face value". This asserts
+        # WRITER behaviour only, so it is unchanged by 2490 — only the rationale moved.
         with tempfile.TemporaryDirectory() as root:
             msg = status_msg("Status: BLOCKED\nBlocker Description: \ud800 lone surrogate", [raw()])
             self.assertEqual(self._cap(root, msg), "written")
@@ -643,3 +690,53 @@ class TestPromptReviewAgent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecureTmpWriteTest(unittest.TestCase):
+    """COREDEV-2503 F11: the tmp+replace writes must never write/truncate THROUGH a pre-planted symlink at
+    the predictable `.tmp.<pid>` path to an attacker-chosen target. The invariant is "the victim is never
+    clobbered" — the planted symlink is removed (as the symlink) and a fresh file is created, not followed."""
+
+    def test_open_private_tmp_does_not_clobber_planted_symlink_target(self):
+        d = tempfile.mkdtemp()
+        victim = os.path.join(d, "victim")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS")
+        tmp = os.path.join(d, "x.tmp.%d" % os.getpid())
+        os.symlink(victim, tmp)
+        with C._open_private_tmp(tmp) as fh:    # unlink removes the symlink; O_EXCL|O_NOFOLLOW creates fresh
+            fh.write("STATUS")
+        self.assertEqual(open(victim, encoding="utf-8").read(), "PRECIOUS",
+                         "the write must not follow the planted symlink to the victim")
+        self.assertFalse(os.path.islink(tmp), "tmp must be a fresh regular file, not the planted symlink")
+        self.assertEqual(open(tmp, encoding="utf-8").read(), "STATUS")
+
+    def test_open_private_tmp_clears_a_stale_regular_tmp(self):
+        # gemini review #53: a leftover tmp from a crashed same-pid run must not persistently wedge the
+        # write — it is cleared and recreated (not a fail).
+        d = tempfile.mkdtemp()
+        tmp = os.path.join(d, "x.tmp.%d" % os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("STALE")
+        with C._open_private_tmp(tmp) as fh:
+            fh.write("FRESH")
+        self.assertEqual(open(tmp, encoding="utf-8").read(), "FRESH")
+
+    def test_write_status_does_not_clobber_through_symlink(self):
+        d = tempfile.mkdtemp()
+        victim = os.path.join(d, "victim")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS")
+        dest = C._status_path(d, "security-reviewer")
+        tmp = "%s.tmp.%d" % (dest, os.getpid())   # the EXACT path _write_status will open
+        os.symlink(victim, tmp)
+        C._write_status(d, "security-reviewer", {"status": "COMPLETE"})   # fail-open: swallows the refusal
+        self.assertEqual(open(victim, encoding="utf-8").read(), "PRECIOUS",
+                         "_write_status must not truncate the victim through the planted symlink")
+
+    def test_no_plain_tmp_open_remains_in_source(self):
+        # Guards a revert of ANY of the three tmp-write sites (status / status-only / findings) back to a
+        # plain open(tmp, "w") — every one must route through _open_private_tmp.
+        src = open(os.path.join(os.path.dirname(__file__), "..", "capture.py"), encoding="utf-8").read()
+        self.assertNotIn('with open(tmp, "w"', src,
+                         "every tmp write must go through _open_private_tmp (O_NOFOLLOW|O_EXCL)")

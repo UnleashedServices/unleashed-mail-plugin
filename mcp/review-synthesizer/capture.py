@@ -367,6 +367,25 @@ def _status_path(round_dir: str, agent: str) -> str:
     return os.path.join(round_dir, agent + ".status")
 
 
+def _open_private_tmp(tmp: str):
+    """Open a fresh private tmp for a tmp+replace write, never writing THROUGH a pre-planted target. The
+    `.tmp.<pid>` path is predictable, so a same-account attacker could plant a symlink there and make a
+    plain ``open(tmp, "w")`` write/truncate THROUGH to the link target (arbitrary-file clobber with the
+    gate's privileges). Two layers: first ``os.unlink`` clears any stale/planted entry — it operates on the
+    LINK ITSELF (never follows), so a planted symlink is removed as the symlink, its target untouched, and
+    a stale tmp from a crashed same-pid prior run no longer wedges the write (gemini review #53). Then
+    ``os.open`` with ``O_CREAT|O_EXCL`` (exclusive create) + ``O_NOFOLLOW`` (refuse a symlink atomically)
+    creates fresh: anything re-planted in the unlink→open race window makes the exclusive open FAIL
+    (EEXIST) rather than follow/clobber, so the "never clobber the victim" invariant holds either way;
+    mode 0600. COREDEV-2503 F11."""
+    try:
+        os.unlink(tmp)                          # clear a stale/planted entry (the LINK, never its target)
+    except OSError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
 def _write_status(round_dir: str, agent: str, status: dict) -> None:
     """Best-effort sibling `<agent>.status` write (tmp+replace, trailing newline). The self-describing
     `agent` is the hook-allowlisted name (never transcript text). Fully fail-open — NEVER raises, so
@@ -377,7 +396,7 @@ def _write_status(round_dir: str, agent: str, status: dict) -> None:
     dest = _status_path(round_dir, agent)
     tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with _open_private_tmp(tmp) as fh:
             # `agent` LAST so the trusted hook-allowlisted name always wins over any (transcript-
             # derived) `status` key; a dict literal also can't raise on a key collision the way
             # `dict(agent=..., **status)` can. Today `status` never carries an `agent` key (pinned
@@ -404,7 +423,7 @@ def _clear_status(round_dir: str, agent: str) -> None:
 
 def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: str = "") -> str:
     """Capture one reviewer message. Returns a status string (for tests/logging):
-    rejected | skipped | no-fence | invalid | written."""
+    rejected | skipped | no-fence | invalid | written | status-only."""
     if agent not in VALID_AGENTS:
         return "rejected"
     base = os.path.join(capture_root, slug)
@@ -424,6 +443,32 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
         return "skipped"
     block = extract_last_json_block(message)
     if block is None:
+        # No findings fence. A BLOCKED/PARTIAL reviewer still carries an Output-Contract
+        # `Status:` — persist an EMPTY findings capture + the status sidecar (COREDEV-2328) so a
+        # can't-review reviewer is read as BLOCKED, never as a clean []. Restricted to
+        # BLOCKED/PARTIAL (a COMPLETE with no fence is malformed -> stays absent -> the
+        # missing-reviewer path in swift-reviewer Step 5) and it never overwrites a real capture.
+        status = extract_status(message)
+        if (status and status.get("status") in ("BLOCKED", "PARTIAL")
+                and not is_final_capture(dest)):
+            tmp = "%s.tmp.%d" % (dest, os.getpid())
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                with _open_private_tmp(tmp) as fh:
+                    json.dump([], fh, ensure_ascii=False, indent=2)
+                    fh.write("\n")
+                os.replace(tmp, dest)
+            except OSError:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return "no-fence"
+            if agent_id:
+                _add_agentid(dest_dir, agent, agent_id)
+            _clear_status(dest_dir, agent)
+            _write_status(dest_dir, agent, status)
+            return "status-only"
         return "no-fence"
     try:
         items = validate_findings(block)
@@ -433,7 +478,7 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
     tmp = "%s.tmp.%d" % (dest, os.getpid())
     try:
         os.makedirs(dest_dir, exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with _open_private_tmp(tmp) as fh:
             json.dump(sanitized, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.replace(tmp, dest)
@@ -454,8 +499,15 @@ def capture(capture_root: str, slug: str, agent: str, message: str, agent_id: st
     # Status sidecar (COREDEV-2328) — runs only after the findings replace SUCCEEDED, OUTSIDE the
     # try/except above, so a status-side issue can never flip this into "invalid". Clear any prior
     # occupant's status FIRST, then write the freshly-extracted one (if any): a write failure OR a
-    # status-less overwrite leaves the sidecar ABSENT (face value), never a stale BLOCKED/PARTIAL.
+    # status-less overwrite leaves the sidecar ABSENT, never a stale BLOCKED/PARTIAL.
     # `_clear_status`/`_write_status` never raise.
+    #
+    # An ABSENT sidecar is producer-FAIL-OPEN and consumer-UNATTRIBUTED (COREDEV-2490). This writer is
+    # deliberately best-effort and that is now RELIED UPON, not merely tolerated: the consumer treats
+    # absent/corrupt/COMPLETE/PARTIAL alike as "nobody vouched that this reviewer ran" and re-dispatches
+    # it. It does NOT mean "face value" any more — that reading is exactly the fail-open 2490 fixed, and
+    # it could never be fixed here anyway: `context_latest_round_dir` skips rounds this writer failed in,
+    # so the reader never even sees them.
     _clear_status(dest_dir, agent)
     status = extract_status(message)
     if status:
