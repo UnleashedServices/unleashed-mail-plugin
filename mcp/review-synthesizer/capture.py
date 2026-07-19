@@ -37,11 +37,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import schema  # noqa: E402  (sibling module; path inserted above)
 
-# --- PII redaction (mirrors scripts/lib/hook-io.sh `hook_redact_pii` 1:1) ----------------
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# --- PII redaction (mirrors scripts/lib/hook-io.sh `hook_redact_pii`) ---------------------
+# Two DELIBERATE, tested divergences from the shell redactor live in _EMAIL and _TILDE below (MIN-13).
+# They exist because this module redacts validated finding `file`/`evidence` fields — where retina-asset
+# filenames and Swift suppressed-conformance syntax legitimately appear — whereas hook-io.sh redacts hook
+# advisory text that never carries those literals. The exemptions use regex lookahead, which POSIX ERE
+# (`sed -E`) cannot express, so they are Python-only by necessity, not drift. Every other pattern matches
+# hook-io.sh byte-for-byte.
+# _EMAIL: the `@(?!…)` lookahead skips `@Nx` retina-asset filenames (`AppIcon@2x.png`, `Icon@3x.jpg`) so a
+# captured `file`/`evidence` value keeps its real path — those are NOT emails, and redacting them to
+# `[redacted-email]` destroys the path and breaks the capture ratchet for image-budget findings. A real
+# address like `user@2xmail.com` still redacts (its domain is not `<digits>x.<image-ext>`).
+_EMAIL = re.compile(
+    r"[A-Za-z0-9._%+-]+@(?![0-9]+x\.(?i:png|jpe?g|gif|pdf|webp|heic|tiff?)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+)
 _USERS = re.compile(r"/Users/[^/\s\"]+")
 _HOME = re.compile(r"/home/[^/\s\"]+")
-_TILDE = re.compile(r"~[A-Za-z0-9._-]+")
+# _TILDE: the `(?!…)` lookahead exempts Swift's `~Copyable`/`~Escapable` suppressed-conformance syntax so
+# evidence text keeps the real type name; a genuine `~alice/Library/…` home reference still redacts.
+_TILDE = re.compile(r"~(?!(?:Copyable|Escapable)\b)[A-Za-z0-9._-]+")
 _BEARER = re.compile(r"bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)
 _JWT = re.compile(r"eyJ[A-Za-z0-9._-]{10,}")
 _SECRET = re.compile(r"(?:sk-|pk_)[A-Za-z0-9._-]{8,}")

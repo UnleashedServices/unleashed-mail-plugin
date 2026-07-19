@@ -193,6 +193,14 @@ def is_abs_or_traversal(path: str) -> bool:
         r = r[2:]
     if not r:
         return False
+    # A leading `~` HOME reference (`~/…`, `~user/…`, or a bare `~`) is a shell-expanded ABSOLUTE path
+    # that `git diff --name-only` never emits — reviewers copying `ls ~/…` output produce these at least
+    # as often as the `C:\` forms above (MAJ-4/COREDEV-2503). Left unrejected, `canonical_path` keeps the
+    # tilde as a truthy scope key that matches no changed file, silently demoting every real blocker to
+    # pre-existing -> a bogus provisional APPROVE. A plain `~backup.swift` (tilde with no following `/`)
+    # is a legal repo filename and is NOT matched — only a home-dir REFERENCE (tilde + `/`, or bare `~`).
+    if r == "~" or r.startswith("~/") or re.match(r"^~[^/]+/", r):
+        return True
     return bool(_DRIVE_ABS.match(r) or r.startswith("/") or ".." in r.split("/"))
 
 

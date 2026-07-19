@@ -54,9 +54,13 @@ The server returns `blockersToVerify` precisely because it cannot read the repo.
    (surfaced, non-gating).
 2. **Merge-candidate.** Two findings are candidates iff same `file`, **overlapping**
    `line..lineEnd`, **and** same category-family — except the deliberate cross-family
-   ownership pairs (`token-race`↔credential/oauth/keychain; `perceived-perf`↔
-   `html-sanitization`/`webview`). File-level (`line:0`) overlaps only other
-   file-level findings. The category→family map:
+   ownership pairs: `token-race`↔credential/oauth/keychain; `perceived-perf`↔
+   `html-sanitization`/`webview`; and the COREDEV-2332 ai-safety↔security pairs
+   `pii-log-leak`↔`privacy`, `unsanitized-ingress`↔`webview`/`html-sanitization`, and
+   `unscoped-tool`↔`privacy` (prompt-review owns the merged cluster). `network` (ATS/TLS/cert)
+   is deliberately **not** paired — it is not untrusted-content sanitization, so an
+   `unsanitized-ingress`↔`network` overlap stays two clusters. File-level (`line:0`) overlaps
+   only other file-level findings. The category→family map:
    - *security* — `credential` `keychain` `oauth` `webview` `network` `privacy` `sqlcipher` `html-sanitization` `entitlements` `ci`
    - *concurrency* — `actor-isolation` `data-race` `async-await` `grdb-threading` `webview-threading` `token-race` `combine-lifecycle` `sendable`
    - *correctness* — `logic` `error-handling`

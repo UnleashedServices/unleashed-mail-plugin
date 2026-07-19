@@ -135,11 +135,15 @@ class TestSynthesizeTool(unittest.TestCase):
         # The MIXED cases (`["A.swift", ".."]`, `["A.swift", "/"]`) are the loophole: a bare `..`/`/`
         # canonicalizes to "" so the real file keeps the changeset non-empty (empty guard doesn't fire)
         # and a canonical-based reject would drop the "" — only the raw-path check catches them (round 2).
+        # Tilde HOME references (`~/…`, `~user/…`, bare `~`) are shell-expanded absolutes that git never
+        # emits; without the MAJ-4 reject they stay truthy scope keys matching no finding -> bogus APPROVE.
         for changed in (["/etc/passwd"], ["../../etc/passwd"], ["Sources/../Sources/Auth.swift"],
                         ["/Users/x/repo/Sources/Auth.swift"], ["A.swift", "/abs"], ["a/../../b"],
                         ["C:/etc/passwd"], ["C:\\repo\\Auth.swift"], ["c:/x"], ["A.swift", "D:/y"],
                         ["A.swift", ".."], ["A.swift", "/"], ["good/path.swift", "../escape"],
-                        ["\\\\server\\share\\A.swift"], ["A.swift", "\\\\host\\x"]):
+                        ["\\\\server\\share\\A.swift"], ["A.swift", "\\\\host\\x"],
+                        ["~/repo/Sources/Auth.swift"], ["~alice/x.swift"], ["A.swift", "~"],
+                        ["A.swift", "~/etc/x"], ["~root/Auth.swift"]):
             out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": "synthesize_review",
                                       "arguments": {"findings": [good()], "changed_files": changed}}}])
@@ -189,7 +193,8 @@ class TestSynthesizeTool(unittest.TestCase):
         # verdict provisionally APPROVEs (fail-open). With the F3 reject (parse_finding
         # reject_abs_traversal=True) the finding is QUARANTINED, which forces NEEDS_DISCUSSION — never a
         # clean APPROVE. changed_files is a plain in-scope file so only the finding path is abnormal input.
-        for bad_file in ("../../etc/passwd.swift", "/etc/passwd.swift", "..\\..\\x.swift", "\\Sources\\Auth.swift"):
+        for bad_file in ("../../etc/passwd.swift", "/etc/passwd.swift", "..\\..\\x.swift", "\\Sources\\Auth.swift",
+                         "~/repo/Auth.swift", "~alice/Auth.swift", "~"):  # MAJ-4: tilde home refs
             res = self._call([good(file=bad_file, severity="blocker")], ["Auth.swift"])
             self.assertFalse(res["isError"], f"{bad_file!r}: quarantine is not an RPC error")
             self.assertNotEqual(res["structuredContent"]["provisionalVerdict"], "APPROVE",
@@ -234,6 +239,15 @@ class TestSynthesizeTool(unittest.TestCase):
                     "confidence", "finding", "clusterSeverity", "clusterSize"):
             self.assertIn(key, b)
         self.assertEqual(b["clusterSeverity"], "blocker")
+
+    def test_exact_duplicate_blocker_collapses_to_one(self):
+        # MIN-14: the same blocker dict passed twice must yield ONE cluster and ONE blockersToVerify
+        # entry (a capture replay of an unchanged finding must not double the verify workload or inflate
+        # corroboration).
+        res = self._call([good(), good()], ["A.swift"])
+        self.assertFalse(res["isError"])
+        self.assertEqual(res["structuredContent"]["clusters"], 1)
+        self.assertEqual(len(res["structuredContent"]["blockersToVerify"]), 1)
 
     def test_malformed_finding_quarantines_not_crashes(self):
         res = self._call([good(sourceAgent=123)], ["A.swift"])

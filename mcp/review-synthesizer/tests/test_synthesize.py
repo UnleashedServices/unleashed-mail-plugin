@@ -61,6 +61,49 @@ class TestAuditPR53CLIHardening(unittest.TestCase):
             self.assertEqual(S.main([fp, "--changed", ch]), 2,
                              "an absolute changed entry must fail closed (exit 2)")
 
+    def test_main_refuses_explicit_findings_without_changed(self):
+        # MAJ-5: explicit findings + no --changed must NOT silently scope against the bundled demo
+        # changeset (which demotes every out-of-sample blocker to pre-existing and exits 0 APPROVE — a
+        # CI-gating fail-open). Fail closed (exit 2) instead.
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, {"findings": [dict(self._FINDING, severity="blocker",
+                                                  category="credential", file="MyApp/RealFile.swift")]})
+            self.assertEqual(S.main([p]), 2,
+                             "findings without --changed must fail closed, not APPROVE against the demo set")
+
+    def test_main_refuses_unknown_flag(self):
+        # MAJ-5: a typo'd/unknown --flag must exit 2, not be silently swallowed (which drops the
+        # changeset value and APPROVEs).
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, {"findings": []})
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write("MyApp/RealFile.swift\n")
+            self.assertEqual(S.main([p, "--chnged", ch]), 2, "an unknown --flag must fail closed (exit 2)")
+
+
+class TestExactDedup(unittest.TestCase):
+    def test_byte_identical_duplicates_collapse(self):
+        # MIN-14: the SAME finding ingested twice (a capture replay unioned with fresh arrays) must
+        # collapse to one — else clusterSize inflates (presented as corroboration weight) and the verify
+        # gate sees two identical blockersToVerify entries.
+        dup = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                   category="credential", file="A.swift", line=10, lineEnd=10,
+                   finding="same", evidence="same", fix="same")
+        review = S.synthesize([parse_finding(dup), parse_finding(dict(dup))], {"A.swift"})
+        self.assertEqual(len(review.clusters), 1)
+        self.assertEqual(len(review.clusters[0].findings), 1, "an exact duplicate must collapse to one")
+
+    def test_different_reviewer_same_defect_kept_as_corroboration(self):
+        # Distinct sourceAgent => NOT byte-identical => real cross-reviewer corroboration => cluster the
+        # two (never drop), so clusterSize legitimately reflects two reviewers.
+        base = dict(severity="blocker", confidence="high", category="credential",
+                    file="A.swift", line=10, lineEnd=10, finding="f", evidence="e", fix="x")
+        review = S.synthesize([parse_finding(dict(base, sourceAgent="security-reviewer")),
+                               parse_finding(dict(base, sourceAgent="concurrency-reviewer"))], {"A.swift"})
+        self.assertEqual(len(review.clusters), 1)
+        self.assertEqual(len(review.clusters[0].findings), 2, "two different reviewers => real corroboration")
+
 
 class TestDedup(unittest.TestCase):
     def test_same_family_overlap_clusters(self):
