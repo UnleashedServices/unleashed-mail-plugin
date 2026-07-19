@@ -7,7 +7,7 @@ description: >
   compliance, function/file/type length limits, Swift 6 concurrency correctness,
   provider parity, dead code removal, security patterns, GRDB best practices, and
   general code quality. Invoke after completing a feature, before a PR, when the
-  user says "simplify", "clean up", or "refactor", or via the /simplify skill.
+  user says "simplify", "clean up", or "refactor".
 model: inherit
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
