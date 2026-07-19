@@ -501,3 +501,29 @@ class Robustness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FetchToFile(unittest.TestCase):
+    # MIN-15: download/extract writers were neither modeled nor listed as gaps — `curl -so F URL` etc.
+    # produced no target and no ask, silently overwriting an auth-critical file with remote content.
+    def test_curl_clustered_short_output(self):
+        self.assertIn("OAuthService.swift", targets("curl -so OAuthService.swift https://x"))
+
+    def test_curl_o_and_long_output(self):
+        self.assertIn("Keychain.swift", targets("curl -o Keychain.swift https://x"))
+        self.assertIn("Info.plist", targets("curl --output Info.plist https://x"))
+        self.assertIn("Keychain.swift", targets("curl --output=Keychain.swift https://x"))
+        self.assertIn("Keychain.swift", targets("curl -oKeychain.swift https://x"))
+
+    def test_wget_output_document(self):
+        self.assertIn("Info.plist", targets("wget -O Info.plist https://x"))
+        self.assertIn("Keychain.swift", targets("wget --output-document=Keychain.swift https://x"))
+        self.assertIn("Keychain.swift", targets("wget -qO Keychain.swift https://x"))
+
+    def test_sponge_operand_is_a_write(self):
+        self.assertIn("OAuthService.swift", targets("sponge OAuthService.swift"))
+
+    def test_plain_fetch_without_output_names_nothing(self):
+        # `curl -O` (URL-derived remote name) and a bare fetch name no local path -> no target (documented).
+        self.assertEqual(targets("curl -fsSL https://example.com/install.sh"), [])
+        self.assertEqual(targets("curl -O https://example.com/file"), [])

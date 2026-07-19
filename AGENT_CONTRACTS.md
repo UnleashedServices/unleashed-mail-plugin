@@ -356,14 +356,23 @@ not block implementation).
 Agent `model:` is set by role so future model generations are a one-line policy update, not a
 fleet-wide edit:
 
+Agent names below are listed in full (no `/` shorthand) so this table stays machine-checkable:
+`validate-plugin-assembly.py` parses these two rows and asserts every agent's frontmatter `model:`
+(defaulting to `inherit` when the key is omitted) equals its tier here, and that every `agents/*.md`
+appears in exactly one row — so this policy can no longer silently drift from the shipped frontmatter.
+
 | Tier | `model:` | Agents |
 |------|----------|--------|
-| Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, db/logic/ui/ai-engineer, tester, code-simplifier, docs/ci-engineer, release-manager, modern-standards-planner, jira-manager, xcode-build-fixer, graph-api-debugger |
-| First-pass reviewers + planning personas | `sonnet` | security/concurrency/ux-perf-reviewer, accessibility-auditor, prompt-review, smb-entrepreneur, enterprise-stakeholder |
+| Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, ai-engineer, ci-engineer, code-simplifier, db-engineer, graph-api-debugger, logic-engineer, modern-standards-planner, tester, ui-engineer, xcode-build-fixer |
+| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, concurrency-reviewer, docs-engineer, enterprise-stakeholder, jira-manager, prompt-review, release-manager, security-reviewer, smb-entrepreneur, ux-perf-reviewer |
 
-Rationale: the orchestrator and engineers inherit so they match whatever the user is running (and
-scale up on demanding work); first-pass reviewers and personas pin `sonnet` for cost-efficient,
-consistent breadth. Prefer `inherit`/`sonnet` over hard-pinning `opus`.
+Rationale: the orchestrator and implementation/diagnostic engineers inherit so they match whatever the
+user is running (and scale up on demanding work); first-pass reviewers and personas pin `sonnet` for
+cost-efficient, consistent breadth. `docs-engineer`, `jira-manager`, and `release-manager` also pin
+`sonnet` — their work is bounded-scope bookkeeping (doc edits, the CFR label state machine, release/ticket
+hygiene) where sonnet is capable and a costlier session model is wasted; a maintainer who wants any of the
+three to scale with the session can flip its frontmatter to `model: inherit` and move it to the first row
+in the same edit (the validator keeps the two in sync). Prefer `inherit`/`sonnet` over hard-pinning `opus`.
 
 ---
 

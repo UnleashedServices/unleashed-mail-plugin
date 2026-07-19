@@ -240,6 +240,17 @@ def main() -> int:
             if not isinstance(entry, dict):
                 problems.append(f"{where}: entry must be an object")
                 continue
+            # MIN-20: a misspelled `matcher` key (e.g. `matchers`) is a silent trap — `entry.get("matcher")`
+            # then defaults to match-ALL, so the hook fires on EVERY tool call. Flag any key outside
+            # {matcher, hooks}; a near-match of `matcher` is almost certainly that typo (hard problem).
+            for key in entry:
+                if key in ("matcher", "hooks"):
+                    continue
+                if difflib.get_close_matches(key, ["matcher"], n=1, cutoff=0.6):
+                    problems.append(f"{where}: unknown entry key {key!r} — did you mean 'matcher'? A hook "
+                                    f"entry with no `matcher` silently matches ALL tools.")
+                else:
+                    warnings.append(f"{where}: unknown entry key {key!r} (expected 'matcher' or 'hooks')")
             matcher = entry.get("matcher", "")
             if not isinstance(matcher, str):
                 problems.append(f"{where}: `matcher` must be a string")
@@ -254,6 +265,10 @@ def main() -> int:
                 if not isinstance(hook, dict):
                     problems.append(f"{whereh}: must be an object")
                     continue
+                for key in hook:  # MIN-20: an unknown hook key (typo'd `timeout`/`command`) is silently ignored
+                    if key not in ("type", "command", "args", "timeout"):
+                        warnings.append(f"{whereh}: unknown hook key {key!r} "
+                                        f"(expected type/command/args/timeout)")
                 invocations += 1
                 if hook.get("type") != "command":
                     problems.append(

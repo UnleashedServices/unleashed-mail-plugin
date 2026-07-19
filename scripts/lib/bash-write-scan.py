@@ -14,8 +14,9 @@ Coverage (adversarial sweep, codex review of #53): redirect writes incl. `>&`(fi
 `--` end-of-options; command wrappers (env/sudo/nice/timeout/nohup/doas/arch/xcrun/taskset/chrt/...) with
 their arg/positional consumption; brace-group `{ …; }`; command-substitution/expansion inside a target
 (`$(…)`, backticks, trailing subshell `)`, brace suffix) via a substring scan for old-grep parity; verbs
-rm/mv/cp/ln/install/ditto/rsync/tee/sed-i/dd/truncate/touch/find(+ `-exec CMD …`)/patch(+ `--output=`/
-`--reject-file`)/git(rm|mv|checkout --|restore) and interpreters bash/sh/python/perl/ruby(-e; -E is
+rm/mv/cp/ln/install/ditto/rsync/tee/sponge/sed-i/dd/truncate/touch/find(+ `-exec CMD …`)/patch(+
+`--output=`/`--reject-file`)/git(rm|mv|checkout --|restore); fetch-to-file `curl -o/--output` and
+`wget -O/--output-document` incl. clustered short forms (`curl -so F`); and interpreters bash/sh/python/perl/ruby(-e; -E is
 encoding)/node/osascript/awk(`print > "f"`), INCLUDING versioned executables (`python3.12`, `node20`). Shell
 reserved-word prefixes (`! rm X`, `if rm X; then …`) are unwrapped. Input redirects (`tee out < K.swift`) are
 reads, not writes — their source is NOT emitted.
@@ -24,9 +25,11 @@ Best-effort by design: a determined adversary can hide a target from ANY textual
 indirection). Deliberately NOT modeled (documented gaps, no worse than the old grep): runtime GLOB/wildcard
 metachars (`rm Key?.swift`, `[K]eychain.swift`) and brace expansion that splits the stem from the extension
 (`Keychain.{swift,bak}`); read-vs-write discrimination INSIDE arbitrary interpreter code (a referenced file
-over-asks — the fail-SAFE direction); and BROAD tree operations that do not NAME a file (`git restore .`,
+over-asks — the fail-SAFE direction); BROAD tree operations that do not NAME a file (`git restore .`,
 `rm -rf <dir>`) — out of scope for a basename policy exactly as a bare directory delete is (a `.`/directory
-pathspec cannot be enumerated without repo access). This closes the quote-blindness + O(n^2)-timeout
+pathspec cannot be enumerated without repo access); and ARCHIVE EXTRACTION (`tar -x`, `unzip`) whose written
+names come from the archive, not the command line, so a basename policy cannot enumerate them (same class as
+`rm -rf <dir>`; `curl -O`/`wget`'s URL-derived remote-name is likewise unnamable on the command line). This closes the quote-blindness + O(n^2)-timeout
 fail-opens, the sweep's write classes, and catches accidental writes.
 """
 from __future__ import annotations
@@ -157,7 +160,7 @@ _STMT_SEP = (";", "&&", "||", "&", ";;", "\n")   # statement boundaries (NOT `|`
 _DELETE_ALL = {"rm", "unlink", "shred", "rmdir"}          # every non-flag operand
 _MOVE_ALL = {"mv", "rename"}                              # every non-flag operand (source removed + dest)
 _DEST_LAST = {"cp", "install", "ln", "ditto", "rsync"}   # dest = -t DIR, else last non-flag operand
-_TEE = {"tee"}                                           # every non-flag operand
+_TEE = {"tee", "sponge"}                                 # every non-flag operand (`sponge FILE` writes FILE)
 _TRUNCATE = {"truncate"}                                 # non-flag operands (skip -s SIZE / -r REF value args)
 _AWK = {"awk", "gawk", "mawk", "nawk"}                   # `print > "f"` inside the program string writes files
 _INLINE_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "python", "python2", "python3", "osascript"}
@@ -633,6 +636,31 @@ def _command_writes_operands(sub: list[str]) -> bool:
     return False
 
 
+def _scan_fetch_output(operands: list[str], out: list[str], long_flags: tuple[str, ...],
+                       short_letter: str) -> None:
+    """MIN-15: emit the output-file target of a download-to-file (`curl -o F`, `wget -O F`). `long_flags`
+    are the `--long` forms that take the path; `short_letter` is the value-taking short option (curl `o`,
+    wget `O`). Handles `-o F`, attached `-oF`, `--output=F`, AND a short CLUSTER ending in the letter
+    (`curl -so F` / `-fsSo F`) — the exact `curl -so OAuthService.swift URL` form the guard was missing.
+    `curl -O`/`wget`'s URL-derived remote-name forms name no local path here and are intentionally left
+    to the best-effort contract (over-ask is the fail-SAFE direction)."""
+    emit_next = False
+    for o in operands:
+        if emit_next:
+            _emit_target(o, out)
+            emit_next = False
+        elif o in long_flags:
+            emit_next = True
+        elif any(o.startswith(lf + "=") for lf in long_flags):
+            _emit_target(o.split("=", 1)[1], out)
+        elif o.startswith("-") and not o.startswith("--") and short_letter in o[1:]:
+            rest = o[o.index(short_letter, 1) + 1:]
+            if rest:
+                _emit_target(rest, out)          # attached value: `-oF` / `-soF`
+            else:
+                emit_next = True                 # letter is last in the cluster -> value is the next arg
+
+
 def _scan_command(words: list[str], out: list[str], all_words: list[str], heredoc_bodies: list[str],
                   emitted_all: list | None = None) -> None:
     """Extract the write targets of ONE command (a pipeline stage, or a `find -exec` sub-command). Applies
@@ -713,6 +741,10 @@ def _scan_command(words: list[str], out: list[str], all_words: list[str], heredo
                 skip = True
             elif not o.startswith("-"):
                 _emit_target(o, out)                          # the patched file (modified in place)
+    elif verb == "curl":
+        _scan_fetch_output(operands, out, ("--output",), "o")   # `curl -o F URL` fetches remote -> F
+    elif verb == "wget":
+        _scan_fetch_output(operands, out, ("--output-document",), "O")  # `wget -O F URL`
     elif verb == "git":
         _scan_git(operands, out)
     elif verb == "trap":

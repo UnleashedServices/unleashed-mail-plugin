@@ -60,7 +60,9 @@ shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh 
 ```
 
 The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
-version-sync/assembly/hooks validators + a PII scan. It does **not** build/test the Swift app (this is a
+version-sync/assembly/hooks validators + an **advisory** secret/PII pattern scan over all staged text files
+(enforced by `gitleaks --staged` when installed, and by the history-aware gitleaks job in CI). It does
+**not** build/test the Swift app (this is a
 Linux-friendly plugin repo — no Xcode).
 
 ## Mandatory processes

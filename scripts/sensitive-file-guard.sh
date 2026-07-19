@@ -21,37 +21,45 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$_DIR/lib/hook-io.sh"
 
 # True if a basename matches the sensitive signature set. Excludes tests and docs.
+# MIN-17: match CASE-INSENSITIVELY. The consumer app lives on macOS where the default APFS volume is
+# case-insensitive, so `info.plist`, `oauthservice.swift`, `KEYCHAINMANAGER.SWIFT` all resolve to the
+# protected file — but exact-case globs (and the same-case `*.md`/`*Tests.swift` exclusions) missed them,
+# defeating the very path the script documents as "the robust guard". Lowercase the basename ONCE (tr —
+# bash-3.2-safe; `${b,,}` is bash 4+) and match all-lowercase globs so a case-variant path can't slip.
 is_sensitive_basename() {
-    local b="$1"
+    local b
+    b="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     case "$b" in
-        *Tests.swift|*Test.swift) return 1 ;;
+        *tests.swift|*test.swift) return 1 ;;
         *.md) return 1 ;;
     esac
     case "$b" in
-        Info.plist|project.pbxproj) return 0 ;;
+        info.plist|project.pbxproj) return 0 ;;
         *.entitlements|*.mobileprovision|*.xcodeproj) return 0 ;;
     esac
     # .swift stem allowlist — explicit high-signal stems only (no broad *auth* that
     # would hit Author/Authorization).
     case "$b" in
-        Keychain*.swift|*Keychain*.swift) return 0 ;;
-        MSAL*.swift|OAuth*.swift|*TokenStore*.swift|*AuthService*.swift) return 0 ;;
-        DatabaseService*.swift|*Migration*.swift|*Repository*.swift|*SQLCipher*.swift) return 0 ;;
-        *WebView*.swift|*EmailWeb*.swift|HTMLSanitiz*.swift) return 0 ;;
+        keychain*.swift|*keychain*.swift) return 0 ;;
+        msal*.swift|oauth*.swift|*tokenstore*.swift|*authservice*.swift) return 0 ;;
+        databaseservice*.swift|*migration*.swift|*repository*.swift|*sqlcipher*.swift) return 0 ;;
+        *webview*.swift|*emailweb*.swift|htmlsanitiz*.swift) return 0 ;;
     esac
     return 1
 }
 
-# A short human category for the confirmation reason (no path, no contents).
+# A short human category for the confirmation reason (no path, no contents). Also matches
+# case-insensitively (MIN-17); the printed labels stay human-readable regardless of input case.
 sensitive_category() {
-    local b="$1"
+    local b
+    b="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
     case "$b" in
-        Info.plist) printf 'the app Info.plist' ;;
+        info.plist) printf 'the app Info.plist' ;;
         project.pbxproj|*.xcodeproj) printf 'Xcode project structure' ;;
         *.entitlements|*.mobileprovision) printf 'app entitlements/provisioning' ;;
-        Keychain*|*Keychain*|MSAL*|OAuth*|*TokenStore*|*AuthService*) printf 'auth / token / Keychain handling' ;;
-        DatabaseService*|*Migration*|*Repository*|*SQLCipher*) printf 'database / migration code' ;;
-        *WebView*|*EmailWeb*|HTMLSanitiz*) printf 'WebView / HTML-sanitization code' ;;
+        keychain*|*keychain*|msal*|oauth*|*tokenstore*|*authservice*) printf 'auth / token / Keychain handling' ;;
+        databaseservice*|*migration*|*repository*|*sqlcipher*) printf 'database / migration code' ;;
+        *webview*|*emailweb*|htmlsanitiz*) printf 'WebView / HTML-sanitization code' ;;
         *) printf 'a protected asset' ;;
     esac
 }
