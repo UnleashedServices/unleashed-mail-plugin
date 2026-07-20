@@ -4,7 +4,7 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # MIN-27: this user-invoked workflow is nothing BUT pty-capture Bash pipelines, yet granted no tools — so
 # every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
 # what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(agy *)
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
 ---
 
 # Antigravity (`agy`) Review
