@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.5.2
+# UnleashedMail — Claude Code Plugin v2.5.3
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,19 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.5.3
+
+Correctness-audit remediation (COREDEV-2525) — 49 findings across the plugin's own assets, none of which
+the shipped validators caught. Highlights: the review-synthesizer MCP now rejects tilde/home paths and
+refuses to scope real findings against the demo changeset (closing two gate fail-opens); the `/implement`
+Design Gate binds `$ARGUMENTS` through a quoted heredoc (no shell injection); the plan-review skills
+pre-clean their fixed `/tmp` transcript paths so a stale previous-round APPROVE can't satisfy the gate;
+eight auto-triggering knowledge skills no longer pre-approve unscoped `Bash`; `swift-reviewer` bridges
+`CLAUDE_PLUGIN_DATA` so its capture pipeline resolves the same dir the hooks write to; and the validators
+gained real coverage (model-tier alignment, the six-copy reviewer roster, hook `matcher`-key typos, agent
+`skills:`/`.mcp.json` path resolution, manifest-description + CHANGELOG counts). No agents/skills added
+(counts stay 21 · 21 · 0 · 1).
 
 ### v2.5.2
 
@@ -89,7 +102,7 @@ its own guarantees.
 
 - **Deterministic review-synthesizer MCP server** — the plugin now bundles a local, zero-dependency stdio MCP server ([`mcp/review-synthesizer/`](mcp/review-synthesizer/), declared in [`.mcp.json`](.mcp.json)) that performs the review orchestrator's Step-5 synthesis **in code** instead of LLM prose. It validates the sub-reviewers' JSON findings, scope-filters (changeset + `structural-pipeline`), and dedups via category-family + line-overlap with cross-family ownership routing — **cluster-and-cross-link, never silently dropping a fix** — then returns a provisional verdict plus `blockersToVerify`. `swift-reviewer` calls it via `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`, then owns the verify gate. The server has **no repo access, no network, no secrets** — pure compute. See [MCP Servers](#mcp-servers-1).
 - **Review-agent overhaul** — the four sub-reviewers now emit a structured **JSON findings array** (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope · finding · evidence · fix`) instead of a prose table, so `swift-reviewer` cross-references and deduplicates on `file:line`, not paraphrase. `concurrency-reviewer` broadened to the **correctness owner** (logic/error-handling); provider-parity, test-coverage, and build/lint/test emit gating `verification` rows; a **verify gate** confirms each blocker against the code before REQUEST CHANGES (unconfirmable → NEEDS DISCUSSION); and **structural-pipeline** review widens scope to the whole pipeline (not just the diff) when key subsystems — API calls, AI flows, syncs — change. All five review agents now run on `opus`.
-- **78 unit tests** for the synthesizer ([`mcp/review-synthesizer/tests/`](mcp/review-synthesizer/tests/), stdlib `unittest`, no deps) covering schema validation/quarantine, dedup/ownership/scope/verdict, render, and the full JSON-RPC protocol via subprocess. Run: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
+- **The full stdlib-only unit suite** for the synthesizer ([`mcp/review-synthesizer/tests/`](mcp/review-synthesizer/tests/), stdlib `unittest`, no deps), discovered — not a hardcoded count — covering schema validation/quarantine, dedup/ownership/scope/verdict, render, and the full JSON-RPC protocol via subprocess. Run: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
 - **Reviewed to convergence** by Codex (`gpt-5.5`) and Gemini (`gemini-3.1-pro`) over four rounds until both approved. A new [`CHANGELOG.md`](CHANGELOG.md) tracks releases going forward.
 
 ### v2.2.4
@@ -152,7 +165,7 @@ claude plugin install unleashed-mail
 To pull a newer version after upstream changes:
 
 ```bash
-claude plugin marketplace update UnleashedServices/unleashed-mail-plugin
+claude plugin marketplace update unleashedservices-unleashed-mail-plugin
 claude plugin update unleashed-mail
 # Restart Claude Code
 ```
@@ -322,16 +335,6 @@ The plugin enforces these non-negotiable processes:
 
 See [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) for the cross-agent boundaries that operationalize these processes.
 
-## Environment Setup
-
-Copy `.env.example` to `.env` and fill in your values:
-
-```bash
-cp .env.example .env
-```
-
-The `.env` file is gitignored and will not be distributed with the plugin.
-
 ## Hooks
 
 The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](hooks/hooks.json)). All are **fail-open** — a hook error never blocks your work — and every telemetry/enforcement hook has an environment kill switch — including `swift-lint-check.sh`, which emits `decision:block` and arms the Stop gate, so it is the one that most needs an escape (`UNLEASHED_LINT_CHECK=off`). State (markers, logs, snapshots) lives under the plugin data dir (`~/.claude/unleashed-mail/`), never in your repo.
@@ -362,7 +365,7 @@ The plugin bundles one local, zero-dependency **stdio MCP server**, declared in 
 
 - **Pure compute** — no repo access, no network, no secrets. The repo-reading half (the verify gate) stays in `swift-reviewer`, which is the only side that can open `file:line`.
 - **Agent tool name:** `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review` (inherited by `swift-reviewer`, whose `tools:` list includes it). The orchestrator falls back to the documented rules in [`mcp/review-synthesizer/README.md`](mcp/review-synthesizer/README.md) if the server is unavailable.
-- **Source + tests:** [`mcp/review-synthesizer/`](mcp/review-synthesizer/) — run `python3 -m unittest discover -s mcp/review-synthesizer/tests` (159 cases, stdlib only).
+- **Source + tests:** [`mcp/review-synthesizer/`](mcp/review-synthesizer/) — run `python3 -m unittest discover -s mcp/review-synthesizer/tests` (the full stdlib-only suite, discovered by `unittest`).
 
 ## Baked-In Knowledge
 

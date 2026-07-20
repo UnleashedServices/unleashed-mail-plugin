@@ -1,7 +1,7 @@
 # COREDEV-2328 — Persist reviewer Output-Contract status in the SubagentStop capture path
 
 **Ticket:** COREDEV-2328 (child of Epic **COREDEV-2321**, octo-adoption hardening)
-**Status:** PLAN (v8 — adversarial review + dual-gate rounds 1–6) — pre-implementation re-gate pending
+**Status:** IMPLEMENTED in v2.4.0 (v8 — adversarial review + dual-gate rounds 1–6; gate passed and shipped)
 **Branch:** `feat/COREDEV-2328-capture-reviewer-status` (worktree, off `origin/main@7111a28`, plugin v2.3.1)
 **Relates to:** Item 6 (SubagentStop capture, COREDEV-2325) · Item 12 (Output-Contract enum, COREDEV-2327)
 **Created:** 2026-06-26
