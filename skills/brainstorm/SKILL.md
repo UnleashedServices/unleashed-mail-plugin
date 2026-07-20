@@ -2,7 +2,7 @@
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion
+allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
 disable-model-invocation: true
 ---
 
@@ -174,7 +174,7 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
        --plan docs/planning/FEATURE_NAME_PLAN.md
    ```
 2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
-   `/gemini-review` and `/codex-review` on `docs/planning/FEATURE_NAME_PLAN.md`.
+   `/unleashed-mail:gemini-review` and `/unleashed-mail:codex-review` on `docs/planning/FEATURE_NAME_PLAN.md` (the plugin registers its skills namespaced; the bare `/gemini-review` form resolves only where the consumer workspace ships its own `.claude/skills/` copies).
    Route non-TTY runs through `scripts/pty-capture.py` (see those skills).
 3. **Iterate to convergence** — revise the plan and re-run until **both** return
    `APPROVE` / `APPROVE_WITH_NOTES` (typically 2–6 rounds). If you revise the plan, **re-run `snapshot`**

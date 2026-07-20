@@ -4,7 +4,7 @@ description: >
   Systematic debugging methodology for macOS/Swift issues in UnleashedMail.
   Activates when encountering crashes, memory leaks, performance issues,
   Xcode build failures, or unexpected runtime behavior.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
+allowed-tools: Read, Write, Edit, Bash(xcodebuild *), Bash(xcrun *), Grep, Glob, Agent
 ---
 
 # Systematic macOS Debugging — UnleashedMail

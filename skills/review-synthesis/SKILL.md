@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
-description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Read-only; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep, Bash
+description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
+allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)
 ---
 
 # Plan-Review Synthesis
@@ -35,7 +35,12 @@ prompt (e.g. "synthesize `/tmp/a.txt` and `/tmp/b.txt`"), read those instead.
 ## Inputs
 
 1. Read `/tmp/agy-out.txt` (gemini) and `/tmp/codex-out.txt` (codex). Treat a **missing, empty, or
-   0-byte** file as **"reviewer did not return"** — never as silent approval.
+   0-byte** file as **"reviewer did not return"** — never as silent approval. **Staleness (MAJ-10):**
+   these are fixed, shared paths, so a transcript left by a *previous* round or plan is neither missing
+   nor empty and would otherwise read as this round's verdict. `/gemini-review` and `/codex-review` now
+   `rm -f` the path **before** each dispatch, so a wrapper that never started leaves it *absent* → MISSING.
+   Still confirm each transcript is **this round's** review (it names the current plan / matches the
+   feedback you just sent); if you cannot confirm it is fresh, treat it as MISSING and re-run the review.
 2. From each transcript, extract the reviewer's verdict token. Each review skill asks the reviewer to end
    with an explicit `VERDICT:` / `Verdict:` line — prefer that. If it is absent, infer the verdict from
    the prose **conservatively**: when ambiguous, pick the **more conservative** verdict and lower the

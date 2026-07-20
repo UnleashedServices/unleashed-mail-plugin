@@ -5,7 +5,7 @@ description: >
   resolution via Xcode, security auditing, version pinning in the project file, and
   CI integration. Activates when adding dependencies, updating packages, or managing
   package security.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+allowed-tools: Read, Write, Edit, Bash(swift *), Bash(xcodebuild *), Bash(xcrun *), Grep, Glob
 ---
 
 # Xcode Package Dependency Management — UnleashedMail

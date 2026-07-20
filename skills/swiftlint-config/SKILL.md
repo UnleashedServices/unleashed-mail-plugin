@@ -4,7 +4,7 @@ description: >
   SwiftLint configuration and code style enforcement for UnleashedMail. Covers
   strict linting rules, custom patterns, IDE integration, and common violations.
   Activates when configuring code style, fixing linting issues, or enforcing standards.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+allowed-tools: Read, Write, Edit, Bash(swiftlint *), Grep, Glob
 ---
 
 # SwiftLint Configuration and Code Style Enforcement — UnleashedMail

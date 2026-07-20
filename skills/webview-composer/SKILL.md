@@ -4,7 +4,7 @@ description: >
   WKWebView-based rich text email composer patterns. Activates when working on
   the email composition UI, contenteditable integration, formatting commands,
   image handling, or Swift↔JavaScript bridge code.
-allowed-tools: Read, Write, Edit, Grep, Glob
+allowed-tools: Read, Grep, Glob
 ---
 
 # WKWebView Composer — UnleashedMail
