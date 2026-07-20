@@ -15,7 +15,7 @@ this file in their bodies; conflicts between agents and this document are bugs.
 
 ### Version format: `MAJOR.MINORRELEASE.YYMMBB`
 
-Authoritative source: [`docs/VERSIONING.md`](../Unleashed%20Mail/docs/VERSIONING.md) and `Config/Base.xcconfig`.
+Authoritative source: `<consumer-root>/docs/VERSIONING.md` and `Config/Base.xcconfig`.
 
 - `MAJOR` = breaking redesigns (e.g., `1`)
 - `MINOR` = new features, backwards compatible (e.g., `0`)
@@ -28,13 +28,13 @@ Two xcconfig fields:
 
 Current state: `1.02.260601` (Beta) — `Config/Base.xcconfig` is authoritative (the BB byte auto-bumps, so don't trust this literal once it ages).
 
-> **BB byte is automated.** [`scripts/bump-build-number.sh`](../Unleashed%20Mail/scripts/bump-build-number.sh)
+> **BB byte is automated.** `<consumer-root>/scripts/bump-build-number.sh`
 > runs from a **Run Script Build Phase on the app target** (install/Archive builds only, gated by
 > `runOnlyForDeploymentPostprocessing = 1`) and increments BB — **not** a Scheme Pre-Action. Pre-Actions
 > run before "Process Info.plist," so a Pre-Action bump lands one archive too late (confirmed empirically,
-> Xcode 16.1.1, 2026-04-29); see [`docs/VERSIONING.md`](../Unleashed%20Mail/docs/VERSIONING.md). A successful
+> Xcode 16.1.1, 2026-04-29); see `<consumer-root>/docs/VERSIONING.md`. A successful
 > bump drops the gitignored `.bump-build-number.pending` sentinel that blocks the next archive until the bump
-> is committed; the Scheme Post-Action [`post-archive-commit-bump.sh`](../Unleashed%20Mail/scripts/post-archive-commit-bump.sh)
+> is committed; the Scheme Post-Action `<consumer-root>/scripts/post-archive-commit-bump.sh`
 > commits and pushes it. `release-manager` MUST NOT manually edit BB — racing the script corrupts the sentinel.
 
 ### Branch convention
@@ -75,7 +75,7 @@ A PR cannot merge to `main` (or to the version branch) without:
 ### Plan creation
 
 Every feature, refactor, or multi-step development requires `docs/planning/FEATURE_NAME_PLAN.md`.
-Use the `/create-feature-plan` skill to scaffold (bundled as `/unleashed-mail:create-feature-plan`; the bare workspace name is canonical — see Cross-references).
+Use `/unleashed-mail:create-feature-plan` to scaffold (a bare `/create-feature-plan` resolves only where the consumer workspace ships its own local copy — see Cross-references).
 
 ### Plan review gate (mandatory)
 
@@ -84,8 +84,8 @@ Before any implementation begins:
 0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
    --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
    fails closed without it. Re-run it on any plan revision.
-1. Plan author runs `/gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
+1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
+2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
@@ -239,7 +239,7 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 ### Order of operations
 
 1. `code-simplifier` runs first (clean before review)
-2. `swift-reviewer` orchestrates: spawns 5 sub-reviewers in parallel + `jira-manager`. Each sub-reviewer returns a structured **JSON findings array** (not prose) **plus an Output Contract status** — `COMPLETE | BLOCKED | PARTIAL` — read **before** the findings (a `BLOCKED` reviewer returning `[]` means "could not review," not "clean"). On the **pre-collected (SubagentStop capture) path**, that status is persisted as a self-describing sibling `<agent>.status` JSON beside the findings (`mcp/review-synthesizer/capture.py`, COREDEV-2328), so the BLOCKED-can't-read-as-clean guarantee holds there too — `swift-reviewer` reads the highest round's `<agent>.json` + `<agent>.status` (via `context_latest_round_dir`) and validates the sidecar's `agent`+`status` before trusting it; an absent/corrupt/unrecognized sidecar degrades to face value (never a false fail-closed)
+2. `swift-reviewer` orchestrates: spawns 5 sub-reviewers in parallel + `jira-manager`. Each sub-reviewer returns a structured **JSON findings array** (not prose) **plus an Output Contract status** — `COMPLETE | BLOCKED | PARTIAL` — read **before** the findings (a `BLOCKED` reviewer returning `[]` means "could not review," not "clean"). On the **pre-collected (SubagentStop capture) path**, that status is persisted as a self-describing sibling `<agent>.status` JSON beside the findings (`mcp/review-synthesizer/capture.py`, COREDEV-2328). **A persisted capture may only RATCHET a review toward caution — it can NEVER certify completion (COREDEV-2490 roster redesign).** So on that path: a *valid* `BLOCKED` sidecar is the only on-disk state honored (→ Needs Confirmation → **NEEDS DISCUSSION**); a `COMPLETE`, `PARTIAL`, absent, corrupt, or unrecognized sidecar is **UNATTRIBUTED** and forces an in-session **re-dispatch** of that reviewer — a captured `COMPLETE` never reads as a clean pass, and there is no on-disk artifact that certifies "reviewer ran clean." (The earlier "degrades to face value / never a false fail-closed" wording described the pre-2490 fail-OPEN and is wrong.) The normative procedure is `scripts/review/reviewer-roster.sh` (which "NEVER prints TRUST") and `swift-reviewer` Step 2
 3. `swift-reviewer` runs provider parity audit itself
 4. `swift-reviewer` calls the **`synthesize_review` MCP tool** (bundled `review-synthesizer` server) to dedup / scope-filter / ownership-merge the collected JSON findings in code — pure compute, no repo access
 5. `swift-reviewer` owns the **verify gate**: it opens each `blockersToVerify` `file:line`, confirms the blocker against the code, and only then decides the final verdict (unconfirmed blockers → NEEDS DISCUSSION, not REQUEST CHANGES). A sub-reviewer that returned **BLOCKED** is the explicit form of a did-not-run uncertainty → a Needs-Confirmation item → **NEEDS DISCUSSION** (**not** a `verification` blocker, which is confirmed-by-construction and gates REQUEST CHANGES); a **PARTIAL** reviewer's findings are kept for its completed scope plus a non-gating `verification` warning naming the files it did not reach. If the tool is unavailable it applies the documented rules in `mcp/review-synthesizer/README.md` manually
@@ -323,9 +323,9 @@ Each agent type has minimum tool requirements:
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
 | Orchestrator (swift-reviewer) | + Agent (subagent dispatch) |
 | Diagnostic | + WebFetch (look up vendor docs mid-debug) |
-| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools` |
+| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
 | Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent` keeps it non-mutating |
+| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github` blocks file edits, subagent dispatch, and the github MCP write surface. It is **not** fully non-mutating: Bash is retained for `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
@@ -432,10 +432,12 @@ attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) an
   `Unleashed Mail/Sources/Services/CLAUDE.md`, `Unleashed Mail/Sources/Views/CLAUDE.md`,
   `Unleashed Mail/Sources/Models/CLAUDE.md`, `Unleashed Mail/Sources/Utilities/CLAUDE.md`,
   `Unleashed Mail/Sources/Components/CLAUDE.md`, `Unleashed Mail/Sources/ViewModels/CLAUDE.md`
-- Review skills (shipped with the plugin): the **canonical** workspace invocation is the
-  bare `/gemini-review` / `/codex-review` / `/create-feature-plan` — the host app ships local copies and
-  prefers them over the plugin's generic ones. The plugin also bundles them namespaced as
+- Review skills (shipped with the plugin): the plugin registers them **namespaced** —
   `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review` / `/unleashed-mail:create-feature-plan`
-  (use the namespaced form only where no bare workspace copy exists). Skill sources at
-  `skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`. The earlier workspace-only
+  — and that is the invocation that **always resolves** (per the plugins-reference, a plugin's skills
+  register exclusively under the `plugin-name:` namespace). The **bare** `/gemini-review` /
+  `/codex-review` / `/create-feature-plan` aliases resolve **only** where the consumer workspace ships its
+  own local copies under `.claude/skills/` (the host app does, and prefers them over the plugin's generic
+  ones); in a fresh consumer checkout — or in this plugin repo itself — use the namespaced form. Skill
+  sources at `skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`. The earlier workspace-only
   `.claude/prompts/*.md` files were retired when the skills moved into the plugin.

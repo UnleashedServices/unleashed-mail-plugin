@@ -11,6 +11,11 @@ EXIT_CODE=0
 
 # COREDEV-2324: shared marker writer for the Stop-gate (build marker). Sourced
 # defensively — absence must not break the commit hook.
+# MAJ-6 caveat: these marker writes only reach the Claude Code Stop-gate when this git hook runs with
+# CLAUDE_PLUGIN_DATA exported to the SAME value the plugin's hooks see (~/.claude/plugins/data/{id}). A git
+# hook does not inherit it, so by default marker.sh falls back to ~/.claude/unleashed-mail and the Stop
+# gate (which runs as a plugin hook, under plugins/data/{id}) never sees these markers — the writes are a
+# harmless local no-op for the gate. To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env.
 _PCC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/marker.sh
 [ -f "$_PCC_DIR/lib/marker.sh" ] && . "$_PCC_DIR/lib/marker.sh"

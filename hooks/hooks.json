@@ -24,15 +24,12 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/swift-lint-check.sh\""
-          },
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/swift-build-verify.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/swift-lint-check.sh\"",
+            "timeout": 60
           }
         ]
       },
@@ -41,7 +38,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/swift-build-verify.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/swift-build-verify.sh\"",
+            "timeout": 60
           }
         ]
       }
