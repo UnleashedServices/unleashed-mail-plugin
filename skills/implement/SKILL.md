@@ -21,10 +21,13 @@ any code:
 # The argument is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
 #
 # MAJ-9: bind the argument ONCE via a QUOTED heredoc so shell metacharacters in it (`"`, `$( )`, backticks)
-# are LITERAL data, never executed. `$ARGUMENTS` expands to the raw typed string BEFORE this block runs, so
-# splicing it into shell syntax was both a command-injection vector AND a benign-breakage bug (a feature
-# name containing a quote crashed the gate). The quoted delimiter disables all expansion of the body;
-# everything below uses "$ARG", never "$ARGUMENTS".
+# are LITERAL data, never executed. The argument placeholder (dollar-prefixed when Claude Code renders it)
+# is substituted TEXTUALLY across this ENTIRE fence BEFORE the shell runs — so the ONLY place it may appear
+# is the quoted-heredoc body just below. It must NOT appear anywhere earlier, not even in a comment: a
+# multi-line/pasted value would break out of the comment and run its second line as a command BEFORE the
+# guard below fires (that was the original injection bug — splicing it into shell syntax also broke on a
+# feature name with a quote). The quoted delimiter disables all expansion of the heredoc body; everything
+# after this uses "$ARG", never the raw placeholder.
 ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'
 $ARGUMENTS
 UM_IMPLEMENT_ARG_EOF
