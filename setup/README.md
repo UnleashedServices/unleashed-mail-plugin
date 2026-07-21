@@ -29,8 +29,11 @@ and falls back to an interactive browser login it can't complete headlessly.
 **Failure mode this caused:** such a blob "works" only until its ~1-hour access
 token expires; then agy can't refresh (no `auth_method`) and can never recover.
 On a headless/Linux host agy uses file storage and reads that file directly; on
-macOS it uses the login Keychain (service `gemini`, accounts
-`<email>:accessToken` / `:refreshToken` / `:tokenExpiry`).
+macOS it stores the login through **go-keyring** in the login Keychain under
+**service `gemini`, account `antigravity`**. go-keyring base64-encodes the
+secret with a `go-keyring-base64:` prefix, so the Keychain value is
+`go-keyring-base64:<base64-of-the-envelope-JSON>` — strip that prefix and what
+remains **is** `AGY_CREDS` (no re-encoding).
 
 ## `install-review-clis.sh` — run **in the remote environment**
 
@@ -66,15 +69,25 @@ bash setup/get-agy-creds.sh          # validates the envelope, prints AGY_CREDS
 Because agy auto-refreshes, this env's file stays current — re-run any time to
 pull a fresh `AGY_CREDS`.
 
-### B. From your Mac's Keychain
+### B. From your Mac's Keychain (fastest — no login, ~2s)
+
+This is the zero-cost path when a valid token already lives on your Mac (it
+almost always does — the refresh token auto-renews). Either run the script:
 
 ```bash
-bash setup/extract-agy-auth-macos.sh            # or: … you@example.com
+bash setup/extract-agy-auth-macos.sh
 ```
 
-Reads the `gemini` Keychain entries and rebuilds the envelope (with `expiry` set
-in the past so agy refreshes on first use). macOS will prompt to allow Keychain
-access — click Allow.
+…or paste this one-liner straight into Terminal (validates + copies to clipboard):
+
+```bash
+raw=$(security find-generic-password -a antigravity -s gemini -w 2>/dev/null); creds=${raw#go-keyring-base64:}; echo "$creds" | base64 -d 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);assert d.get("auth_method") and d.get("token",{}).get("refresh_token")' 2>/dev/null && { printf '%s' "$creds" | pbcopy; echo "✅ AGY_CREDS copied"; } || echo "❌ token missing/rotated — re-login needed"
+```
+
+It reads the `gemini`/`antigravity` Keychain entry, strips go-keyring's
+`go-keyring-base64:` prefix (the remainder is already `AGY_CREDS`), verifies it's
+the refreshable envelope, and copies it. macOS may prompt to allow Keychain
+access — click Allow. Then paste into the env's `AGY_CREDS` secret.
 
 ### C. Fresh login (only if the refresh token was revoked)
 
