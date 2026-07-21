@@ -104,6 +104,16 @@ credentials.
 | `AGY_CREDS` (+ `AGY_CREDS_PATH`) | base64 of agy's token file (`auth_method`+`token`) | ✅ auto-refreshes **once auth_method is present** | `bash setup/get-agy-creds.sh` (see §A–C above) |
 | `GH_TOKEN` | GitHub token (fine-grained `github_pat_…` here) | ✅ until PAT expiry; `ghs_…` variants are ~1h and not worth storing | `bash setup/get-github-token.sh` |
 
+These extractors run **both locally (macOS) and in the remote environment**:
+- `get-codex-creds.sh` reads `~/.codex/auth.json` (same path on macOS if you've
+  run `codex login` locally).
+- `get-github-token.sh` uses `$GH_TOKEN`/`$GITHUB_TOKEN`, falling back to
+  `gh auth token` on your Mac.
+- For **agy on macOS** use `extract-agy-auth-macos.sh` (Keychain); `get-agy-creds.sh`
+  is for file-mode hosts (the remote env) where the token file exists.
+Each prints the value to stdout — copy it into your environment's variable/secret
+settings to update the env.
+
 Notes:
 - **codex** and **GitHub** were already correct in this environment — just store
   the values. Only **agy** needed the format fix documented above (the injected

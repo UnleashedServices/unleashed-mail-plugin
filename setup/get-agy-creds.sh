@@ -35,4 +35,5 @@ for k in ("access_token","refresh_token"):
 print(f"OK: auth_method={d['auth_method']!r}, token keys={sorted(t)}")
 PY
 
-base64 -w0 "$TOK"; echo
+# portable base64 (macOS BSD base64 has no -w flag; strip any wrapping)
+base64 < "$TOK" | tr -d '\n'; echo

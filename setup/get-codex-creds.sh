@@ -28,4 +28,5 @@ assert t.get("refresh_token"), "FAIL: no tokens.refresh_token (not a durable Cha
 print(f"OK: auth_mode={d.get('auth_mode')!r}, token keys={sorted(t)}")
 PY
 
-base64 -w0 "$AUTH"; echo
+# portable base64 (macOS BSD base64 has no -w flag; strip any wrapping)
+base64 < "$AUTH" | tr -d '\n'; echo
