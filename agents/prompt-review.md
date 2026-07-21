@@ -86,8 +86,8 @@ Output: risk level + tables (kind, file:line, finding, suggested gate) for
 blockers/warnings/suggestions + a migration note that flagged inline gates co-locate with
 existing `LLMInputSanitizer`/`PIIRedactor` and must NOT call `AISafetyPipeline` (unshipped).
 
-Boundaries: Read/Grep/Glob plus read-only Bash inspection ONLY — never run mutating
-commands, tests, app launches, or network calls; never write/edit. Does not review
+Boundaries: Read/Grep/Glob ONLY — Bash is deliberately not granted (AGENT_CONTRACTS §9), so never
+run commands, tests, app launches, or network calls; never write/edit. Does not review
 correctness/concurrency/perf/a11y/UI (other reviewers own those) and avoids
 WKWebView/security-general findings (security-reviewer) and runtime-pipeline implementation
 (ai-engineer). Complements, not replaces, runtime safety.

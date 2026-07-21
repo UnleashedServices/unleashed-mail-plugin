@@ -1,6 +1,9 @@
 ---
 name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
+# MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
+# 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(codex *), Bash(rm -f /tmp/codex-out.txt*)
 ---
 
 # Codex CLI Review
@@ -37,6 +40,11 @@ Docs: https://developers.openai.com/codex/cli/reference
 # SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
 # (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
 # otherwise kill the run before the wrapper's cap fires.
+# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (codex absent / auth
+# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
+# previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
+# MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
+rm -f /tmp/codex-out.txt /tmp/codex-out.txt.captureid
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/codex-out.txt -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
 # Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.

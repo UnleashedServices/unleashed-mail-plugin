@@ -61,6 +61,9 @@ assert_not_contains() {
 assert_empty() {
     if [ -z "$2" ]; then ok; else fail "$1 — expected empty, got [$2]"; fi
 }
+assert_eq() {
+    if [ "$2" = "$3" ]; then ok; else fail "$1 — expected [$3], got [$2]"; fi
+}
 
 is_valid_json() {
     if command -v python3 >/dev/null 2>&1; then
@@ -74,8 +77,14 @@ is_valid_json() {
 }
 
 reset_markers() {
+    # MIN-19: the shipped gate writes SESSION-SUFFIXED sentinels (stop-last-blocked-<repohash>-<sessionhash>,
+    # stop-quality-marker-gate.sh), so clearing only the un-suffixed name never reset the loop-guard state —
+    # every stop-gate case passed only because it hand-picked a never-reused session_id. Clear the glob form
+    # too, mirroring marker.sh's own pass-path clear, so a future case that reuses a session_id can't inherit
+    # a stale sentinel and silently test the wrong branch.
     rm -f "$(marker_path lint)" "$(marker_path build)" \
-          "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)" 2>/dev/null || true
+          "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)" \
+          "$(marker_dir)/stop-last-blocked-$(marker_repo_hash)"-* 2>/dev/null || true
 }
 
 # Portably backdate a file's mtime by N seconds (GNU then BSD form).
@@ -339,8 +348,14 @@ assert_empty "tests file excluded -> no decision" "$OUT"
 
 # 11. swift-build-verify input-read migration (stdin JSON) still fires its advisory.
 OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"xcodebuild build -scheme X"}}' \
-    | bash "$BUILD_VERIFY" 2>/dev/null)"
+    | bash "$BUILD_VERIFY" 2>/dev/null)"; RC=$?
 assert_contains "build-verify reads stdin command" "$OUT" "xcodebuild build detected"
+# MIN-18: assert the advisory rides the PostToolUse additionalContext ENVELOPE (not plain stdout, which the
+# model never sees on PostToolUse) and that the hook exits 0 (JSON is only honored on exit 0). Reverting
+# hook_emit_posttool_context to a bare `echo` would keep the substring above green but fail these.
+assert_contains "build-verify uses hookSpecificOutput.additionalContext" "$OUT" '"additionalContext"'
+assert_contains "build-verify tags the PostToolUse event" "$OUT" '"hookEventName":"PostToolUse"'
+assert_eq "build-verify exits 0 (PostToolUse JSON honored only on exit 0)" "$RC" "0"
 
 echo "== stop-quality-marker-gate (Item 4) =="
 
@@ -348,8 +363,11 @@ echo "== stop-quality-marker-gate (Item 4) =="
 #     payloads always carry session_id; an anonymous payload now fails OPEN — see the F5 (d) cases).
 reset_markers
 marker_write lint fail
-OUT="$(printf '{"stop_hook_active":false,"session_id":"T12"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+OUT="$(printf '{"stop_hook_active":false,"session_id":"T12"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"; RC=$?
 assert_contains "fresh fail -> block" "$OUT" '"decision":"block"'
+# MIN-18: a Stop hook's decision:block is only honored on exit 0 — a regression to `exit 1` after emitting
+# the block JSON would be silently ignored (the session ends unguarded) yet keep the substring assert green.
+assert_eq "stop block exits 0 (Stop JSON honored only on exit 0)" "$RC" "0"
 if is_valid_json "$OUT"; then ok; else fail "block -> valid JSON"; fi
 assert_not_contains "block is root-level (not nested)" "$OUT" 'hookSpecificOutput'
 
@@ -917,8 +935,10 @@ assert_not_contains "lint fallback: swiftlint:disable:next force_try -> NOT flag
 OUT="$(lint_run "$LINTDIR/WaivedCast.swift")"
 assert_not_contains "lint fallback: swiftlint:disable:next force_cast -> NOT flagged" "$OUT" "as!"
 # ...but a genuinely UNWAIVED force-try must STILL block — the fix must not disable detection.
-OUT="$(lint_run "$LINTDIR/Unwaived.swift")"
+OUT="$(lint_run "$LINTDIR/Unwaived.swift")"; RC=$?
 assert_contains "lint fallback: unwaived try! -> still BLOCKS" "$OUT" "try!"
+# MIN-18: swift-lint-check blocks via decision:block, which PostToolUse only honors on exit 0.
+assert_eq "lint block exits 0 (PostToolUse JSON honored only on exit 0)" "$RC" "0"
 # Kill switch: this was the only hook that emitted decision:block with no way to turn it off.
 OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$LINTDIR/Unwaived.swift" \
     | UNLEASHED_LINT_CHECK=off bash "$LINT_CHECK" 2>/dev/null)"

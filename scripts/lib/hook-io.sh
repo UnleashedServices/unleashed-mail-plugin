@@ -218,7 +218,11 @@ if isinstance(d, dict):
 # JWT/Bearer tokens (not just the first segment); sk-/pk_ secrets; api keys. Then
 # folds newlines/tabs to spaces. BSD/GNU-portable `sed -E` (POSIX classes, no `\s`),
 # `LC_ALL=C`. The Python `redact_pii` in mcp/review-synthesizer/capture.py mirrors
-# these patterns 1:1. The caller caps length and json_escapes. $1 = string.
+# these patterns, with TWO deliberate Python-only exemptions (MIN-13): its _EMAIL skips `@Nx` retina-asset
+# filenames and its _TILDE skips Swift `~Copyable`/`~Escapable`. Those use regex lookahead, which POSIX ERE
+# cannot express — and this shell redactor processes hook advisory text that never carries a finding's
+# `file`/`evidence` literal, so it needs neither exemption. Every other pattern here is byte-identical.
+# The caller caps length and json_escapes. $1 = string.
 hook_redact_pii() {
     printf '%s' "$1" | LC_ALL=C sed -E \
         -e 's#[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}#[redacted-email]#g' \

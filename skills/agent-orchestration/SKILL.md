@@ -5,7 +5,7 @@ description: >
   when coordinating multi-agent workflows, determining which agents to run, or
   deciding execution order. Defines dependency rules and parallelization strategies
   for all agent combinations.
-allowed-tools: Agent, Read, Grep, Glob, Bash
+allowed-tools: Agent, Read, Grep, Glob
 ---
 
 # Agent Orchestration — Flexible Parallel Execution
@@ -226,7 +226,11 @@ Handoff: Review complete
 - Severity: [highest severity found]
 - Findings: [count by severity, with confidence]
 - Structured Findings: a fenced json array of objects, each
-    { severity, confidence, sourceAgent, category, file, line, lineEnd, finding, evidence, fix }
+    { severity, confidence, sourceAgent, category, file, line, lineEnd, scope, finding, evidence, fix }
+    (`scope` is optional, default `"changeset"`; set `"structural-pipeline"` for a finding a
+    structural-pipeline trace surfaced OUTSIDE the diff — omitting it makes `schema.parse_finding`
+    default to `changeset`, which the scope filter demotes such a finding to non-gating, the one
+    demotion Step-1b forbids)
 - Report: [prose review + the JSON array]
 ```
 

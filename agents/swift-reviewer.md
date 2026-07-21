@@ -164,6 +164,15 @@ command: they are a positive assertion, and a name you do not type is a reviewer
 session.** The fence below is **empty by default on purpose**: run it verbatim and it classifies all five.
 
 ```bash
+# MAJ-6: bridge CLAUDE_PLUGIN_DATA into this Bash-tool shell so the roster script resolves the SAME
+# reviews dir the SubagentStop CAPTURE hooks wrote to. That env var is exported only to hook / MCP / LSP
+# subprocesses — NOT to the Bash tool — so without this export reviewer-roster.sh (which sources
+# context.sh) falls back to ~/.claude/unleashed-mail while the hooks wrote under ~/.claude/plugins/data/{id},
+# and every persisted capture/.status/ratchet is invisible. The `${CLAUDE_PLUGIN_DATA}` placeholder IS
+# substituted inline in agent content (plugins-reference: "Skill and agent content — anywhere the
+# placeholder appears"), so this resolves to the real data dir; if unset it expands empty and context.sh's
+# `:-` fallback keeps today's behaviour (no regression).
+export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
 # UNCOMMENT a line ONLY for a reviewer whose report + readable `Status:` you HOLD from this session.
 # Every line left commented is a reviewer you are NOT vouching for -> it gets classified.
 # Type names literally; do NOT reference a shell variable — every Bash block is a fresh shell, so a
@@ -226,6 +235,12 @@ output that disagrees with the exit code, a malformed line, or a **non-empty** r
 reading — they cannot certify, but they can contribute findings:
 
 ```bash
+# MAJ-6: bridge CLAUDE_PLUGIN_DATA (exported only to hooks/MCP, not the Bash tool) so this collection loop
+# reads the SAME reviews dir the capture hooks wrote — otherwise context.sh falls back to
+# ~/.claude/unleashed-mail while the captures live under ~/.claude/plugins/data/{id} and every array is
+# invisible. The placeholder is substituted inline in agent content; unset -> empty -> context.sh `:-`
+# fallback (no regression). Must precede the context.sh source.
+export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
 CTX="${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
 . "$CTX"
 BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"

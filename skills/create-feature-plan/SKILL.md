@@ -9,16 +9,9 @@ Required for any feature, refactor, or multi-step development — no exceptions.
 
 ## Location
 
-[`docs/planning/`](../../docs/planning/) with filename `FEATURE_NAME_PLAN.md` (SCREAMING_SNAKE_CASE).
-
-### Subfolders
-
-- `completed/` — move finished plans here
-- `testing/` — plans in testing / validation
-- `backlog/` — plans queued but not active
-- `docs-archive/` — archived reference documentation
-
-The canonical template lives at [`docs/planning/TEMPLATE.md`](../../docs/planning/TEMPLATE.md).
+`docs/planning/` in the **consumer project** (a plain project-relative path — not a link, which from
+this skill would resolve into the plugin's own install dir) with filename `FEATURE_NAME_PLAN.md`
+(SCREAMING_SNAKE_CASE).
 
 ## Template (copy into the new file)
 

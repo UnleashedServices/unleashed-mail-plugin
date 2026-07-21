@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -60,6 +61,20 @@ KNOWN_TOOLS = {
 # sub-agent dispatcher is `Agent`, never `Task` (AGENT_CONTRACTS §9; validate-hooks.py agrees).
 STALE_TOOLS = {"Task"}
 _STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}   # case-insensitive membership (gemini review #53)
+
+
+def skill_preload_list(fm: dict[str, str]) -> list[str]:
+    """Normalize a `skills:` frontmatter value (inline `[a, b]`, comma, or accumulated block-list) into
+    skill names, tolerating an optional `unleashed-mail:`/`<plugin>:` namespace prefix (MIN-22)."""
+    raw = fm.get("skills", "")
+    if raw in ("", ">", "|", ">-", "|-"):
+        return []
+    out = []
+    for entry in (t.strip().strip("[]").lstrip("-").strip() for t in raw.split(",")):
+        if not entry:
+            continue
+        out.append(entry.split(":", 1)[1] if ":" in entry else entry)  # drop a plugin prefix
+    return out
 
 
 def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
@@ -149,8 +164,15 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
             if val in (">", "|", ">-", "|-"):
                 block_scalar_keys.add(key)           # `key: |`/`>` body is PROSE — space-join, never comma
             current = key
-        elif current is not None and line.strip() and line[:1].isspace():
-            # continuation / block-scalar body -> the key has content
+        elif current is not None and line.strip() and (
+                line[:1].isspace()
+                or (line.lstrip().startswith("- ") and current not in block_scalar_keys)
+                or (line.rstrip() == "-" and current not in block_scalar_keys)):
+            # continuation / block-scalar body / block-LIST item -> the key has content.
+            # MIN-21: a COLUMN-0 block-list item (`tools:\n- Read\n- Task`) is legal YAML that PyYAML and
+            # Claude Code read as `['Read','Task']`, but the old `line[:1].isspace()`-only gate dropped the
+            # whole list (leaving `tools: ''`), so a stale `Task`/typo in a column-0 list bypassed
+            # check_agent_fields. Treat a column-0 `- item` under a non-block-scalar key as a list item too.
             body = line.strip()
             is_list_item = body.startswith("-") and current not in block_scalar_keys
             if is_list_item:                         # block-list item: drop a trailing YAML inline comment
@@ -218,6 +240,149 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
         problems.append(f"{rel}: Agent Registry lists `{name}` but agents/{name}.md does not exist")
 
 
+# §11 (Model Tiering Policy) in AGENT_CONTRACTS.md files every agent under exactly one `model:` tier.
+# MAJ-1: the table drifted from the shipped frontmatter (docs-engineer/jira-manager/release-manager pinned
+# `sonnet` while §11 filed them under `inherit`) with no CI signal. Parse the two rows and assert the tier
+# equals each agent's frontmatter `model:` (default `inherit`), and that the two sets are the same agents.
+_TIER_ROW = re.compile(r"^\|[^|]*\|\s*`([a-z]+)`[^|]*\|\s*([^|]+?)\s*\|\s*$")
+_AGENT_TOKEN = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list[str]) -> None:
+    contracts = root / "AGENT_CONTRACTS.md"
+    rel = "AGENT_CONTRACTS.md"
+    if not contracts.is_file():
+        problems.append(f"{rel}: missing (the Model Tiering Policy §11 lives here)")
+        return
+    try:
+        content = contracts.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        problems.append(f"{rel}: cannot read ({e})")
+        return
+    in_section = False
+    tier_of: dict[str, str] = {}
+    rows = 0
+    for ln in content.splitlines():
+        if ln.startswith("## "):
+            in_section = ln.strip().startswith("## 11.")
+            continue
+        if not in_section:
+            continue
+        m = _TIER_ROW.match(ln)
+        if not m:
+            continue
+        model, agents_cell = m.group(1), m.group(2)
+        rows += 1
+        for name in _AGENT_TOKEN.findall(agents_cell):
+            if name in tier_of and tier_of[name] != model:
+                problems.append(f"{rel} §11: `{name}` appears under two tiers (`{tier_of[name]}`/`{model}`)")
+            tier_of[name] = model
+    if rows < 2:
+        problems.append(f"{rel} §11: could not parse the Model Tiering table (found {rows} tier row(s))")
+        return
+    for stem, model in sorted(agent_models.items()):
+        tier = tier_of.get(stem)
+        if tier is None:
+            problems.append(f"{rel} §11: agent `{stem}` (model: {model}) is missing from the tiering table")
+        elif tier != model:
+            problems.append(f"{rel} §11: agent `{stem}` is filed under `{tier}` but its frontmatter pins "
+                            f"`model: {model}` — align §11 or the agent")
+    for name in sorted(set(tier_of) - set(agent_models)):
+        problems.append(f"{rel} §11: tiering table lists `{name}` but agents/{name}.md does not exist")
+
+
+def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]) -> None:
+    """MIN-16: the five-reviewer roster is hardcoded in six places with no cross-check. A reviewer rename
+    edits one (e.g. the SKILL.md registry) and leaves the others stale — the unanchored hooks matchers stop
+    matching, capture.py rejects the new name, and swift-reviewer Step-5 exits UNATTRIBUTED for a reviewer
+    that ran (fail-closed but undiagnosable). Assert all six agree and each name exists as an agent."""
+    sources: dict[str, "set[str] | None"] = {}
+
+    def read(rel: str) -> "str | None":
+        try:
+            return (root / rel).read_text(encoding="utf-8-sig")
+        except OSError:
+            return None
+
+    t = read("scripts/review/reviewer-roster.sh")
+    if t is not None:
+        m = re.search(r'_VALID="([^"]+)"', t)
+        sources["reviewer-roster.sh:_VALID"] = set(m.group(1).split()) if m else None
+
+    t = read("mcp/review-synthesizer/capture.py")
+    if t is not None:
+        m = re.search(r"VALID_AGENTS\s*=\s*\((.*?)\)", t, re.DOTALL)
+        sources["capture.py:VALID_AGENTS"] = set(re.findall(r'"([a-z][a-z0-9-]*)"', m.group(1))) if m else None
+
+    t = read("hooks/hooks.json")
+    if t is not None:
+        try:
+            data = json.loads(t)
+            hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
+        except ValueError:
+            hooks = {}
+        for ev in ("SubagentStart", "SubagentStop"):
+            got: "set[str] | None" = None
+            entries = hooks.get(ev) if isinstance(hooks.get(ev), list) else []
+            for entry in entries:
+                matcher = entry.get("matcher", "") if isinstance(entry, dict) else ""
+                mm = re.search(r"\(([a-z0-9-]+(?:\|[a-z0-9-]+)+)\)", matcher)
+                if mm:
+                    got = set(mm.group(1).split("|"))
+            sources[f"hooks.json:{ev}"] = got
+
+    for fn in ("scripts/capture-reviewer-round-start.sh", "scripts/capture-reviewer-verdict.sh"):
+        t = read(fn)
+        if t is not None:
+            m = re.search(r"^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)+)\)\s*;;", t, re.MULTILINE)
+            sources[fn.rsplit("/", 1)[-1] + ":case"] = set(m.group(1).split("|")) if m else None
+
+    for k, v in sources.items():
+        if v is None:
+            problems.append(f"reviewer-roster: could not extract the reviewer set from `{k}`")
+    parsed = {k: v for k, v in sources.items() if v is not None}
+    if len(parsed) < 2:
+        return
+    ref_key = next(iter(parsed))
+    ref = parsed[ref_key]
+    for k, v in parsed.items():
+        if v != ref:
+            problems.append(f"reviewer-roster: `{k}` roster {sorted(v)} != `{ref_key}` {sorted(ref)}")
+    for name in sorted(ref - agent_names):
+        problems.append(f"reviewer-roster: `{name}` is rostered but agents/{name}.md does not exist")
+
+
+def check_mcp_server_paths(root: Path, problems: list[str]) -> None:
+    """MIN-23: .mcp.json is only JSON-parsed; nothing checks that each server's command/args target
+    (`${CLAUDE_PLUGIN_ROOT}/mcp/.../mcp_server.py`) resolves to an existing, non-empty file. A path typo
+    keeps every validator and the pinned-path MCP test suite green while the shipped server never starts."""
+    mcp = root / ".mcp.json"
+    if not mcp.is_file():
+        return
+    try:
+        data = json.loads(mcp.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return  # JSON validity is already reported by the manifest loop
+    servers = data.get("mcpServers", {}) if isinstance(data, dict) else {}
+    root_str = str(root)
+    for name, cfg in (servers.items() if isinstance(servers, dict) else []):
+        if not isinstance(cfg, dict):
+            continue
+        toks = [cfg["command"]] if isinstance(cfg.get("command"), str) else []
+        toks += [a for a in cfg.get("args", []) if isinstance(a, str)] if isinstance(cfg.get("args"), list) else []
+        for tok in toks:
+            if "${CLAUDE_PLUGIN_ROOT}" not in tok:
+                continue
+            relpath = tok.replace("${CLAUDE_PLUGIN_ROOT}", "").lstrip("/")
+            target = root / relpath
+            if not (str(target.resolve()) + os.sep).startswith(root_str + os.sep):
+                problems.append(f".mcp.json: server `{name}` target {tok!r} escapes the plugin root")
+            elif not target.is_file():
+                problems.append(f".mcp.json: server `{name}` references missing file {relpath} ({tok!r})")
+            elif target.stat().st_size == 0:
+                problems.append(f".mcp.json: server `{name}` references empty file {relpath}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate unleashed-mail plugin assets.")
     ap.add_argument("--root", default=None, help="plugin repo root (default: parent of scripts/)")
@@ -226,6 +391,7 @@ def main() -> int:
 
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
     problems: list[str] = []
+    agent_models: dict[str, str] = {}   # stem -> effective model (default "inherit"); fed to §11 tier check
 
     def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
         rel = path.relative_to(root)
@@ -252,6 +418,14 @@ def main() -> int:
             # identifier. Require them equal.
             if has(fm, "name") and fm["name"] != path.stem:
                 problems.append(f"{rel}: agent `name: {fm['name']}` != filename stem `{path.stem}`")
+            # Record the effective model (omitted `model:` defaults to `inherit`) for the §11 tier check.
+            agent_models[path.stem] = fm.get("model", "").strip() or "inherit"
+        # MIN-22: a `skills:` preload must resolve to skills/<name>/SKILL.md on disk, else the preload
+        # silently never happens (a typo'd/renamed skill ships with no CI signal — the silent-load-failure
+        # class this validator exists to catch). Applies to agents (and any skill that preloads siblings).
+        for skill_name in skill_preload_list(fm):
+            if not (root / "skills" / skill_name / "SKILL.md").is_file():
+                problems.append(f"{rel}: `skills:` preload `{skill_name}` has no skills/{skill_name}/SKILL.md")
 
     # agents/*.md and skills/*/SKILL.md require name+description.
     agents = sorted((root / "agents").glob("*.md"))
@@ -262,6 +436,11 @@ def main() -> int:
         check_frontmatter(p, require_name=True, is_agent=True)
     # The orchestration registry must list exactly the set of agents that exist.
     check_agent_registry(root, {p.stem for p in agents}, problems)
+    # §11 Model Tiering must equal the shipped frontmatter (MAJ-1); the reviewer roster must agree across
+    # its six hardcoded copies (MIN-16); .mcp.json server paths must resolve on disk (MIN-23).
+    check_model_tiering(root, agent_models, problems)
+    check_reviewer_roster(root, {p.stem for p in agents}, problems)
+    check_mcp_server_paths(root, problems)
     for p in skills:
         check_frontmatter(p, require_name=True)
     # commands: name is the filename — require description + a kebab-case stem.

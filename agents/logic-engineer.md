@@ -32,11 +32,13 @@ those belong to other agents.
 
 ## Standards You Follow
 
-Before writing logic code, check these skills:
-- `swiftui-mvvm` — ViewModel conventions
-- `gmail-api-integration` — Gmail API patterns
-- `microsoft-graph-integration` — Graph API patterns
-- `provider-parity` — Dual-provider requirements
+Before writing logic code, Read the relevant skill file(s) on demand. This agent's `tools:` allowlist
+omits the Skill tool (and no `skills:` preload exists), so reference them by path — `${CLAUDE_PLUGIN_ROOT}`
+is substituted inline to the plugin's install directory, so the Read resolves in a consumer checkout too:
+- `${CLAUDE_PLUGIN_ROOT}/skills/swiftui-mvvm/SKILL.md` — ViewModel conventions
+- `${CLAUDE_PLUGIN_ROOT}/skills/gmail-api-integration/SKILL.md` — Gmail API patterns
+- `${CLAUDE_PLUGIN_ROOT}/skills/microsoft-graph-integration/SKILL.md` — Graph API patterns
+- `${CLAUDE_PLUGIN_ROOT}/skills/provider-parity/SKILL.md` — Dual-provider requirements
 
 Key rules from project CLAUDE.md and `.claude/rules/`:
 - ViewModels are `@Observable`, marked `@MainActor`, explicit `internal`/`private` access
@@ -84,7 +86,7 @@ protocol DraftServiceProtocol {
 ### 2. Implement for Both Providers
 
 Always implement Gmail and Graph together. Reference the parity mapping table
-in the `provider-parity` skill.
+in the `provider-parity` skill (`${CLAUDE_PLUGIN_ROOT}/skills/provider-parity/SKILL.md`).
 
 ```swift
 // MARK: - Gmail Implementation
@@ -228,7 +230,8 @@ provider-agnostic error is `EmailServiceError` (both `GmailService` and `Microso
 conform to `EmailServiceProtocol`, and `AccountScopedServiceProvider.activeService()` returns
 `any EmailServiceProtocol`) — catch it directly. Provider-specific paths may throw `GmailError`
 (`GmailService+APIModels.swift`) or `MicrosoftAuthError`; Google OAuth throws `AuthError`. See the
-`error-handling` skill for `EmailServiceError`'s exact cases — note `.networkError(Error)` is
+`error-handling` skill (`${CLAUDE_PLUGIN_ROOT}/skills/error-handling/SKILL.md`) for `EmailServiceError`'s
+exact cases — note `.networkError(Error)` is
 **unlabeled**, `.rateLimited` has no payload, and there is `.requestFailed(statusCode:)` /
 `.operationNotSupported`. Prefer the `isAuthenticationError` / `isRateLimited` helpers.
 

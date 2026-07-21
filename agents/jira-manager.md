@@ -9,14 +9,19 @@ description: >
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
 model: sonnet
-disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent
+# Blocks the file-editing tools + subagent dispatch, and (MIN-5) the github MCP write surface — it drives
+# GitHub via the `gh` CLI (Bash), never mcp__github. Bash is deliberately retained (`gh pr view`), so this
+# agent is NOT fully non-mutating; it mutates Jira via the Atlassian MCP by design.
+disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github
 ---
 
 > **MCP prefix portability:** Atlassian MCP tools may be exposed under three different
 > prefixes depending on the user's setup — `mcp__claude_ai_Atlassian__*` (VSCode-shipped),
 > `mcp__atlassian__*` (standalone), or `mcp__plugin_atlassian_atlassian__*` (Anthropic-marketplace
 > plugin). This agent **omits `tools:`** so it inherits whichever prefix is installed (a `tools:`
-> allowlist would block an unlisted one); `disallowedTools` keeps it non-mutating. See
+> allowlist would block an unlisted one); `disallowedTools` blocks the file-editing tools, subagent
+> dispatch, and the github MCP write surface — but it is **not** fully non-mutating: Bash is retained for
+> `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design. See
 > `AGENT_CONTRACTS.md §10`.
 
 You are the **Jira ticket manager** for UnleashedMail. You enforce the project's

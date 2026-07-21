@@ -240,6 +240,25 @@ class Review:
     quarantined: list[tuple[dict, str]]
 
 
+def _dedup_exact(findings: list[Finding]) -> list[Finding]:
+    """Drop byte-identical duplicate findings (the same reviewer row ingested twice, or a capture
+    replay of an unchanged finding that Step-5 unions with the fresh arrays). Two findings equal on
+    ALL schema fields are the same defect by identity, so collapsing them cannot violate the cluster-
+    never-collapse invariant (which only forbids merging DISTINCT defects). Left in, a pure duplicate
+    inflates `clusterSize` (presented as corroboration weight) and emits two identical `blockersToVerify`
+    entries, doubling the verify-gate workload (MIN-14). Order-stable: first occurrence wins."""
+    seen: set[tuple] = set()
+    out: list[Finding] = []
+    for f in findings:
+        key = (f.severity, f.confidence, f.sourceAgent, f.category, f.file,
+               f.line, f.lineEnd, f.scope, f.finding, f.evidence, f.fix)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
 def synthesize(
     findings: list[Finding],
     changed_files: set[str],
@@ -249,6 +268,7 @@ def synthesize(
     quarantined: Optional[list[tuple[dict, str]]] = None,
 ) -> Review:
     changed_files = {canonical_path(c) for c in changed_files}  # canonical on both sides
+    findings = _dedup_exact(findings)  # collapse byte-identical duplicates before scope/cluster (MIN-14)
     gating, pre = [], []
     for f in findings:  # single pass — in_gating_scope was computed twice per finding
         (gating if in_gating_scope(f, changed_files) else pre).append(f)
@@ -397,18 +417,32 @@ def main(argv: list[str]) -> int:
             i += 2
             continue
         if a.startswith("--"):
-            i += 1
-            continue
+            # An unrecognized `--flag` (e.g. a typo'd `--chnged`) must fail CLOSED, not be silently
+            # skipped: swallowing it means `--changed`'s value is lost, findings scope against the demo
+            # changeset, and the CLI exits 0 APPROVE (MAJ-5). Exit 2, matching the other bad-args paths.
+            print(f"error: unrecognized option: {a!r}", file=sys.stderr)
+            return 2
         paths.append(a)
         i += 1
+    findings_explicit = bool(paths)
     # Fail CLOSED on an explicit but unusable --changed: an empty `changed` set would
     # reclassify every changeset finding as pre-existing and exit 0 APPROVE on a typo.
     if changed_explicit and (changed_path is None or not os.path.exists(changed_path)):
         print(f"error: --changed file not found: {changed_path!r}", file=sys.stderr)
         return 2
     if changed_path is None:
+        # Only fall back to the bundled demo changeset in PURE demo mode (no findings paths either).
+        # With EXPLICIT findings and no --changed, refuse (MAJ-5): scoping real findings against
+        # samples/changed_files.txt silently demotes every out-of-sample blocker to pre-existing and
+        # prints APPROVE (exit 0) — the exact fail-open the explicit-but-missing --changed branch above
+        # already closes, and this module's docstring advertises the CLI for CI gating.
+        if findings_explicit:
+            print("error: findings files were passed without --changed. Refusing to scope them against "
+                  "the bundled demo changeset (that would demote real blockers to pre-existing and "
+                  "APPROVE). Pass --changed <`git diff --name-only` output>.", file=sys.stderr)
+            return 2
         changed_path = os.path.join(here, "samples", "changed_files.txt")
-    if not paths:  # default demo uses the bundled fixtures
+    if not paths:  # pure demo mode only: bundled fixtures + bundled changeset
         paths = sorted(glob.glob(os.path.join(here, "samples", "*.json")))
 
     changed: set[str] = set()

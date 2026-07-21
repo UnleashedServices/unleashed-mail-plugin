@@ -1,6 +1,6 @@
 # COREDEV-2329 — Full-pipeline wiring for the `prompt-review` reviewer agent
 
-**Status:** DRAFT — pending plan-review gate (codex + gemini)   **Created:** 2026-06-27
+**Status:** IMPLEMENTED in v2.4.0 — plan-review gate passed (codex APPROVE_WITH_NOTES + gemini APPROVE_WITH_NITS)   **Created:** 2026-06-27
 **Lands on:** PR #18 (branch `feat/COREDEV-2330-prompt-review-agent`, off `main` @ `ed6f5f9`)
 **Tickets:** COREDEV-2329 (wiring) + COREDEV-2330 (the agent, authored by the owner) — one PR.
 **Parent epic:** COREDEV-2126 (GARI safety / audit AI-01..06).

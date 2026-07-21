@@ -104,7 +104,8 @@ final class MockEmailService: EmailServiceProtocol, @unchecked Sendable {
     }
 
     // … the REMAINING EmailServiceProtocol requirements (getCurrentUser, fetchMessage, folder ops,
-    // draft ops, attachments, etc. — see skills/provider-parity/SKILL.md for the full interface) are
+    // draft ops, attachments, etc. — see ${CLAUDE_PLUGIN_ROOT}/skills/provider-parity/SKILL.md for the
+    // full interface; this agent's tools omit Skill, so Read it by path — it resolves in a consumer checkout) are
     // stubbed the SAME way: record the inputs you assert on, return realistic stub data, honour
     // `shouldThrow`. Elided here to keep the example focused; a real mock must implement them all to conform.
 }

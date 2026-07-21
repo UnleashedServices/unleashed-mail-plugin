@@ -292,7 +292,7 @@ case .error(let error):
 
 When working on the compose editor:
 
-- Check the `webview-composer` skill for JS bridge patterns
+- Read the `webview-composer` skill (`${CLAUDE_PLUGIN_ROOT}/skills/webview-composer/SKILL.md`) for JS bridge patterns — this agent's `tools:` allowlist omits the Skill tool and preloads only `swiftui-mvvm`, so reference it by path
 - HTML template lives in the app bundle — modify CSS for styling, not Swift for layout
 - Toolbar buttons (bold, italic, link, etc.) call `execFormatCommand` on the ViewModel
 - The ViewModel handles all JS ↔ Swift communication — views just bind to its state

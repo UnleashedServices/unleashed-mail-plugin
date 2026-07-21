@@ -97,6 +97,31 @@ elif [[ -n "$README_MCP" && "$README_MCP" != "0" ]]; then
   fail "count drift: README says $README_MCP MCP server(s), but .mcp.json is missing"
 fi
 
+# --- manifest descriptions + CHANGELOG entry (MIN-24) -----------------------
+# The asset counts are ALSO hardcoded in plugin.json and marketplace.json `description` — the text
+# actually rendered on the marketplace listing — but the gate above only checked the README bold line,
+# so adding agent #22 with a README edit left the manifests advertising the old count. And no gate
+# asserted a CHANGELOG entry for the release, despite CLAUDE.md's mandatory "Bump + CHANGELOG on release".
+MARKETPLACE_JSON="$ROOT/.claude-plugin/marketplace.json"
+check_desc_counts() { # file  label
+  local file="$1" label="$2" a s
+  [[ -f "$file" ]] || return 0
+  a="$(grep -oE '[0-9]+ specialized agents' "$file" | head -1 | grep -oE '^[0-9]+' || true)"
+  s="$(grep -oE '[0-9]+ skills' "$file" | head -1 | grep -oE '^[0-9]+' || true)"
+  [[ -z "$a" || "$a" == "$DISK_AGENTS" ]] || fail "count drift: $label description says $a specialized agents, disk has $DISK_AGENTS"
+  [[ -z "$s" || "$s" == "$DISK_SKILLS" ]] || fail "count drift: $label description says $s skills, disk has $DISK_SKILLS"
+}
+check_desc_counts "$PLUGIN_JSON" "plugin.json"
+check_desc_counts "$MARKETPLACE_JSON" "marketplace.json"
+
+CHANGELOG="$ROOT/CHANGELOG.md"
+if [[ -f "$CHANGELOG" ]]; then
+  grep -qE "^##[[:space:]]+\[$PLUGIN_VERSION\]" "$CHANGELOG" \
+    || fail "CHANGELOG.md has no '## [$PLUGIN_VERSION]' entry (bump + CHANGELOG on release — CLAUDE.md)"
+else
+  fail "missing CHANGELOG.md (version-sync asserts a '## [x.y.z]' entry per release)"
+fi
+
 # --- result -----------------------------------------------------------------
 if [[ "$errors" -eq 0 ]]; then
   echo "✅ version-sync OK — plugin $PLUGIN_VERSION == README (H1 & What's-New); counts ${DISK_AGENTS}/${DISK_SKILLS}/${DISK_COMMANDS}${README_MCP:+/${README_MCP}} match disk"

@@ -4,7 +4,7 @@ description: >
   GRDB.swift database patterns for UnleashedMail. Activates when working with
   database models, migrations, queries, or any SQLite/GRDB-related code.
   Covers Record types, migrations, associations, and observation.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+allowed-tools: Read, Write, Edit, Grep, Glob
 ---
 
 # GRDB.swift Patterns — UnleashedMail

@@ -13,6 +13,37 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.5.3] — 2026-07-20
+
+Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/PLUGIN_AUDIT_2026-07-19.md`
+(10 major, 29 minor, 10 info), none caught by the shipped validators. No agents/skills added (21/21/0/1).
+
+### Fixed
+- **Review-synthesizer gate fail-opens** (MAJ-4/5): `is_abs_or_traversal` now rejects tilde/home paths
+  (`~/…`, `~user/…`), and the `synthesize.py` CLI refuses to scope explicit findings against the bundled
+  demo changeset (and exits 2 on unknown flags) instead of silently printing APPROVE.
+- **`/implement` `$ARGUMENTS` shell injection** (MAJ-9): the Design Gate binds the argument once via a
+  quoted heredoc, so quotes / `$( )` / backticks in it are literal data; multi-line values are refused.
+- **Stale plan-review transcripts** (MAJ-10): `/gemini-review` + `/codex-review` `rm -f` their fixed
+  `/tmp` transcript path before each dispatch, so a never-started/killed wrapper leaves it absent
+  (→ MISSING → fail-closed) instead of a previous round's APPROVE.
+- **`CLAUDE_PLUGIN_DATA` split** (MAJ-6): `swift-reviewer`'s Step-2 Bash fences export the placeholder so
+  the capture-collection path resolves the same reviews dir the hooks wrote to.
+- **`AGENT_CONTRACTS` drift** (MAJ-1/2): §11 model tiers aligned to the shipped frontmatter; §5 step 2
+  rewritten to the shipped ratchet (a capture never certifies).
+- **Pre-commit PII scan was a no-op** (MAJ-7): rewritten to a correct `grep -nE` scan over all staged
+  text files (advisory) plus enforcing `gitleaks --staged`.
+- **Skill/agent grant over-reach** (MAJ-8, MIN-27/28): eight knowledge skills no longer pre-approve
+  unscoped `Bash`; five no longer grant `Write`/`Edit`; the review workflow skills gained scoped grants.
+- Numerous doc-drift, dead-reference, case-sensitivity (sensitive-file-guard), fetch-to-file
+  (bash-write-scan), hook-matcher (MultiEdit symmetry, no-op removal, timeouts), and stale-plan-status
+  fixes (MIN-1/3/4/5/6/7/8/9/10/11/13/15/17/25/26/29; INF-1/3/4/5/6/7/10).
+
+### Added
+- Validator coverage for what previously drifted silently: §11 model-tier alignment, the six-copy
+  reviewer roster, hook `matcher`-key typos, agent `skills:` and `.mcp.json` path resolution, and
+  manifest-description + CHANGELOG-entry counts. 15 new regression tests across the MCP and scripts suites.
+
 ## [2.5.2] — 2026-07-17
 
 ### Fixed
@@ -69,6 +100,10 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   and the mandatory gemini+codex identities — enforced identically at write and verify, so neither a
   mis-recording caller nor a hand-tampered artifact can manufacture a false approval. `pty-capture.py`
   emits a `<out>.captureid` per run for that provenance.
+- **P0 audit remediation** (COREDEV-2486): fixed six fleet-wide silent-failure classes — sub-agent
+  `tools:`/`disallowedTools:` frontmatter (removing the silently-ignored `allowed-tools` key), positional
+  SwiftLint invocation, the PostToolUse JSON contract, plugin-scoped reviewer-capture prefixing,
+  gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
 
 ### Changed
 - **Dropped the unimplementable scripted `WAIVED` path** (COREDEV-2493): `AGENT_CONTRACTS.md` §2 had
@@ -81,24 +116,6 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   (`codex-cli` 0.144.4). The upgrade silently reset the config's reasoning effort to `low`, so every
   review recipe now passes `-c model_reasoning_effort=xhigh` explicitly — resilient to that reset and
   correct on any machine, instead of trusting a config value the upgrade proved fragile.
-
-### Fixed
-- **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
-  only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
-  reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
-  executed on the branch they were added to. Triggers are now `[main, alpha]`, and `SECURITY.md` records it.
-- **`firebase-debug.log` secret-scan exemption is commit-scoped** (COREDEV-2494): it was a blanket path
-  allowlist, so a brand-new credential committed into that exact filename scanned clean — a permanent blind
-  spot on precisely the filename that caused the original leak. Now pinned to the two commits the file ever
-  existed in; verified against gitleaks 8.30.1 that a new secret in that filename is still caught.
-- **`swift-lint-check.sh` respects `swiftlint:disable` directives** (COREDEV-2494): waived lines no longer
-  produce false blocks. The waiver must NAME the rule, and a trailing ` - <rationale>` (this project's
-  mandated convention) is no longer parsed as a rule list. A broken/misconfigured SwiftLint CLI now falls
-  back to the greps instead of silently disarming the Stop gate. Force-try/cast elevation is production-only.
-- **`pty-capture.py` runs on macOS system Python again** (COREDEV-2494): a PEP-604 `X | None` annotation
-  (added in #30) is a syntax error on 3.9.6, crashing every PTY-wrapped review capture.
-
-### Changed
 - **`swift-reviewer` Step 4 extracted to a shipped, unit-tested script** (COREDEV-2489 / Item 5):
   the inline build / lint / test block moved to [`scripts/review/build-verify.sh`](scripts/review/build-verify.sh)
   (reads the Step-1 `$CHANGED` list on stdin; `✅`/`❌` per gate; exits non-zero if any hard gate failed).
@@ -108,14 +125,6 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   test-suite run**. Only the self-contained Step-4 block was extracted; the `$CHANGED`/`$BASE_BRANCH`
   state-sharing steps stay inline, and a **canary** (`scripts/review/README.md`) covers the live-review
   verification neither the gate nor unit tests can do autonomously.
-
-### Added
-- **P0 audit remediation** (COREDEV-2486): fixed six fleet-wide silent-failure classes — sub-agent
-  `tools:`/`disallowedTools:` frontmatter (removing the silently-ignored `allowed-tools` key), positional
-  SwiftLint invocation, the PostToolUse JSON contract, plugin-scoped reviewer-capture prefixing,
-  gitleaks secret-scanning (checksum-pinned) + `SECURITY.md`, and the org rename to UnleashedServices.
-
-### Changed
 - Org/marketplace renamed to `UnleashedServices/unleashed-mail-plugin` — see the README install
   section for the one-time migration from the old `npranson-unleashed-mail-plugin` marketplace.
 - `AGENT_CONTRACTS.md` §9/§10 updated to the omit-`tools:`-to-inherit-MCP mechanism (portable across
@@ -132,6 +141,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   defaults to `enforce` (was `warn`) — a lint-fail marker now blocks the turn once
   (`decision:block`+`reason`, fail-open + TTL/commit-guarded). Opt out with
   `UNLEASHED_STOP_GATE_MODE=warn|off`.
+
+### Fixed
+- **Secret scanning now gates `alpha`** (COREDEV-2494): the `plugin-ci.yml` triggers filtered on `main`
+  only, so 56 of `alpha`'s 57 commits merged with **zero checks** — every audit PR targeted `alpha` and
+  reported "no checks". `claude plugin validate` (added in #36) and actionlint (#31) had therefore never
+  executed on the branch they were added to. Triggers are now `[main, alpha]`, and `SECURITY.md` records it.
+- **`firebase-debug.log` secret-scan exemption is commit-scoped** (COREDEV-2494): it was a blanket path
+  allowlist, so a brand-new credential committed into that exact filename scanned clean — a permanent blind
+  spot on precisely the filename that caused the original leak. Now pinned to the two commits the file ever
+  existed in; verified against gitleaks 8.30.1 that a new secret in that filename is still caught.
+- **`swift-lint-check.sh` respects `swiftlint:disable` directives** (COREDEV-2494): waived lines no longer
+  produce false blocks. The waiver must NAME the rule, and a trailing ` - <rationale>` (this project's
+  mandated convention) is no longer parsed as a rule list. A broken/misconfigured SwiftLint CLI now falls
+  back to the greps instead of silently disarming the Stop gate. Force-try/cast elevation is production-only.
+- **`pty-capture.py` runs on macOS system Python again** (COREDEV-2494): a PEP-604 `X | None` annotation
+  (added in #30) is a syntax error on 3.9.6, crashing every PTY-wrapped review capture.
 
 ## [2.4.2] — 2026-06-27
 
@@ -451,7 +476,7 @@ and needed no change.)
 - Removed the superseded `prototypes/hybrid-review-synthesizer/` sandbox — a buggier
   duplicate of the shipped server; its design is captured in the server's README.
 
-## [2.2.4]
+## [2.2.4] — 2026-06-25
 
 ### Added
 - Shared PTY capture wrapper (`scripts/pty-capture.py`) so the `codex-review` and

@@ -4,7 +4,7 @@ description: >
   Gmail REST API integration patterns for UnleashedMail. Activates when working
   with email fetching, sending, label management, OAuth flows, Pub/Sub push
   notifications, or any Google API interaction.
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob
+allowed-tools: Read, Write, Edit, Grep, Glob
 ---
 
 # Gmail API Integration — UnleashedMail
@@ -103,7 +103,10 @@ Build the RFC 2822 message with proper MIME boundaries for attachments.
 
 Gmail pushes new message notifications via Google Cloud Pub/Sub.
 
-> **Note:** Replace `<your-gcp-project-id>` with the value of `GCP_PROJECT_ID` from the plugin `.env` file.
+> **Note:** Replace `<your-gcp-project-id>` with your GCP project id. Keep that id in the **consumer
+> project's** own config (its `CLAUDE.md`, or a project-local config your backend reads at runtime) —
+> **not** by editing this skill: the plugin cache is replaced on every plugin update, so an edit here is
+> silently lost. This plugin ships no `.env` reader, so there is no plugin `.env` to read it from.
 
 ### Setup
 

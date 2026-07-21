@@ -1,6 +1,10 @@
 ---
 name: gemini-review
 description: Plan and debug review via the Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Use before implementing any plan or fix.
+# MIN-27: this user-invoked workflow is nothing BUT pty-capture Bash pipelines, yet granted no tools — so
+# every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
+# what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
 ---
 
 # Antigravity (`agy`) Review
@@ -35,6 +39,11 @@ Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]
 # Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
 # BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
 # `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (agy absent / auth
+# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
+# previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
+# maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
+rm -f /tmp/agy-out.txt /tmp/agy-out.txt.captureid
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
@@ -87,6 +96,11 @@ EOF
 # Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
 # BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
 # `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
+# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (agy absent / auth
+# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
+# previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
+# maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
+rm -f /tmp/agy-out.txt /tmp/agy-out.txt.captureid
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
     agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 # Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.

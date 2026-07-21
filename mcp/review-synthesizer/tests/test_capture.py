@@ -87,6 +87,27 @@ class TestRedaction(unittest.TestCase):
                   "api-key : ABCDEFGHIJKLMNOP", "apikey=ABCDEFGHIJKLMNOP"):
             self.assertNotIn("ABCDEFGHIJKLMNOP", C.redact_pii(s), s)
 
+    def test_retina_asset_not_mangled_as_email(self):
+        # MIN-13: `@2x`/`@3x` retina asset filenames are NOT emails — redacting them destroys the captured
+        # file path so it can never match changed_files, silently breaking the ratchet for image-budget
+        # findings. Must survive both the raw redactor and normalize_file (which the finding `file` uses).
+        for p in ("Assets/AppIcon@2x.png", "UI/Button@3x.jpg", "X@2x.pdf", "Icon@10x.webp"):
+            self.assertEqual(C.redact_pii(p), p, p)
+            self.assertEqual(C.normalize_file(p), p, p)
+
+    def test_real_email_still_redacted_despite_retina_exemption(self):
+        for s in ("user@2xmail.com", "a.b@corp.com", "x@sub.example.co"):
+            self.assertNotIn("@", C.redact_pii(s), s)
+
+    def test_swift_suppressed_conformance_not_redacted_as_home(self):
+        # MIN-13: Swift 6 `~Copyable`/`~Escapable` are type syntax, not a `~username` home reference.
+        self.assertEqual(C.redact_pii("~Copyable"), "~Copyable")
+        self.assertEqual(C.redact_pii("~Escapable"), "~Escapable")
+        self.assertEqual(C.redact_pii("force-unwrap on ~Copyable type"), "force-unwrap on ~Copyable type")
+
+    def test_home_tilde_still_redacted(self):
+        self.assertNotIn("alice", C.redact_pii("~alice/Library/x"))
+
 
 class TestSanitizeFinding(unittest.TestCase):
     def test_valid_passes_and_normalizes_sourceagent(self):

@@ -39,9 +39,11 @@ jobs:
           python-version: '3.12'
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        id: py_compile
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
+        id: pty_smoke
         run: |
           set -euo pipefail
           out="$(mktemp)"
@@ -55,15 +57,19 @@ jobs:
           echo "pty-capture: --timeout=124 + capture OK"
 
       - name: Run the review-synthesizer test suite (discovery — count not hardcoded)
+        id: mcp_tests
         run: python3 -m unittest discover -s mcp/review-synthesizer/tests -v
 
       - name: Run the scripts test suite (review-verdict gate artifact)
+        id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
 
       - name: Validate version sync (strict)
+        id: version_sync
         run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
 
       - name: Validate plugin assembly (strict)
+        id: plugin_assembly
         run: python3 scripts/validate-plugin-assembly.py --root . --strict
 
       - name: Set up Node (for the Claude Code CLI)
@@ -72,6 +78,7 @@ jobs:
           node-version: '22'   # @anthropic-ai/claude-code requires Node >=22
 
       - name: Validate plugin with the Claude Code CLI (authoritative schema)
+        id: claude_validate
         env:
           # Manual pin: there is no package.json here, so Dependabot's npm ecosystem does not
           # cover this. Bump it alongside the actionlint/gitleaks version pins below.
@@ -93,6 +100,7 @@ jobs:
           claude plugin validate .claude-plugin/plugin.json
 
       - name: ShellCheck plugin scripts
+        id: shellcheck_gate
         run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 
       - name: Install actionlint (pinned + checksum-verified)
@@ -108,33 +116,39 @@ jobs:
           actionlint --version
 
       - name: Lint GitHub Actions workflows (actionlint)
+        id: actionlint_gate
         run: actionlint -color
 
       - name: Validate hooks manifest (strict)
+        id: hooks_manifest
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
 
       - name: Hook stdin-simulation tests (COREDEV-2324)
+        id: hook_tests
         run: bash scripts/test-hooks.sh
 
       - name: Job summary
         if: ${{ always() }}
+        # INF-2: report each gate's OWN outcome, not the single overall job.status (which made every row
+        # show the same value — a failed shellcheck rendered "failure" next to gates that passed). A gate
+        # that never ran (fail-fast stopped before it) has an empty outcome -> shown as "did not run".
         run: |
           {
             echo "### plugin-ci"
             echo ""
             echo "| Gate | Status |"
             echo "| --- | --- |"
-            echo "| py_compile (MCP + scripts) | ${{ job.status }} |"
-            echo "| pty-capture smoke (--timeout) | ${{ job.status }} |"
-            echo "| unittest discover (synthesizer suite) | ${{ job.status }} |"
-            echo "| unittest discover (scripts suite) | ${{ job.status }} |"
-            echo "| version-sync (strict) | ${{ job.status }} |"
-            echo "| plugin-assembly (strict) | ${{ job.status }} |"
-            echo "| claude plugin validate (marketplace + deep) | ${{ job.status }} |"
-            echo "| shellcheck (-S warning) | ${{ job.status }} |"
-            echo "| actionlint | ${{ job.status }} |"
-            echo "| hooks-manifest (strict) | ${{ job.status }} |"
-            echo "| hook stdin-simulation tests | ${{ job.status }} |"
+            echo "| py_compile (MCP + scripts) | ${{ steps.py_compile.outcome || 'did not run' }} |"
+            echo "| pty-capture smoke (--timeout) | ${{ steps.pty_smoke.outcome || 'did not run' }} |"
+            echo "| unittest discover (synthesizer suite) | ${{ steps.mcp_tests.outcome || 'did not run' }} |"
+            echo "| unittest discover (scripts suite) | ${{ steps.scripts_tests.outcome || 'did not run' }} |"
+            echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
+            echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
+            echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"
+            echo "| shellcheck (-S warning) | ${{ steps.shellcheck_gate.outcome || 'did not run' }} |"
+            echo "| actionlint | ${{ steps.actionlint_gate.outcome || 'did not run' }} |"
+            echo "| hooks-manifest (strict) | ${{ steps.hooks_manifest.outcome || 'did not run' }} |"
+            echo "| hook stdin-simulation tests | ${{ steps.hook_tests.outcome || 'did not run' }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   py39-smoke:
@@ -153,7 +167,16 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+      - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
+        # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
+        # stock 3.9. A PEP-604 `X | None` in a def signature byte-compiles fine on 3.9 and only raises
+        # TypeError at import — so exercise the module, not just compile it (`|| return 2` in the guard
+        # turns such an import crash into a hard deny of every Bash tool call).
+        run: |
+          set -euo pipefail
+          out="$(printf 'echo hi > Keychain.swift' | python3 scripts/lib/bash-write-scan.py)"
+          printf '%s\n' "$out" | grep -q 'Keychain.swift' || { echo "3.9 bash-write-scan did not emit target"; exit 1; }
       - name: pty-capture.py smoke test on 3.9 (the exact file that regressed)
         run: |
           set -euo pipefail

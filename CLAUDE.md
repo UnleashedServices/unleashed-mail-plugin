@@ -60,14 +60,16 @@ shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh 
 ```
 
 The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
-version-sync/assembly/hooks validators + a PII scan. It does **not** build/test the Swift app (this is a
+version-sync/assembly/hooks validators + an **advisory** secret/PII pattern scan over all staged text files
+(enforced by `gitleaks --staged` when installed, and by the history-aware gitleaks job in CI). It does
+**not** build/test the Swift app (this is a
 Linux-friendly plugin repo — no Xcode).
 
 ## Mandatory processes
 
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
-  reviewed by **both** `/gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/codex-review`
-  (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation. Route non-TTY runs through `scripts/pty-capture.py`.
+  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/unleashed-mail:codex-review`
+  (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.
 - **Jira hygiene:** every change references a `COREDEV-XXXX` ticket (create one if none); update it with notes

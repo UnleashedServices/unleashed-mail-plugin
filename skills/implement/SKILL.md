@@ -17,8 +17,27 @@ plan **for this feature**, then **verify its Combined-verdict artifact determini
 any code:
 
 ```bash
-# Resolve THE plan for $ARGUMENTS — never let an unrelated approved plan satisfy the gate.
-# $ARGUMENTS is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
+# Resolve THE plan for the feature the user named — never let an unrelated approved plan satisfy the gate.
+# The argument is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
+#
+# MAJ-9: bind the argument ONCE via a QUOTED heredoc so shell metacharacters in it (`"`, `$( )`, backticks)
+# are LITERAL data, never executed. The argument placeholder (dollar-prefixed when Claude Code renders it)
+# is substituted TEXTUALLY across this ENTIRE fence BEFORE the shell runs — so the ONLY place it may appear
+# is the quoted-heredoc body just below. It must NOT appear anywhere earlier, not even in a comment: a
+# multi-line/pasted value would break out of the comment and run its second line as a command BEFORE the
+# guard below fires (that was the original injection bug — splicing it into shell syntax also broke on a
+# feature name with a quote). The quoted delimiter disables all expansion of the heredoc body; everything
+# after this uses "$ARG", never the raw placeholder.
+ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'
+$ARGUMENTS
+UM_IMPLEMENT_ARG_EOF
+)"
+# A slash argument is single-line; reject a multi-line value (only a crafted paste produces one, and it is
+# never a valid feature name or plan path) so a newline cannot smuggle a second line past the heredoc.
+if [ "$ARG" != "${ARG%%$'\n'*}" ]; then
+    echo "REFUSED: multi-line argument is not a valid plan name/path." >&2
+    exit 1
+fi
 
 # PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
 #
@@ -48,22 +67,22 @@ _refuse_uncontained() {
     exit 1
 }
 
-if [ -f "$ARGUMENTS" ]; then
-    _p="${ARGUMENTS#./}"
+if [ -f "$ARG" ]; then
+    _p="${ARG#./}"
     case "$_p" in
         docs/planning/*PLAN*.md) ;;
-        *) { echo "REFUSED: '$ARGUMENTS' is not a tracked plan."
+        *) { echo "REFUSED: '$ARG' is not a tracked plan."
              echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
            exit 1 ;;
     esac
-    _contained "$_p" || _refuse_uncontained "$ARGUMENTS"
+    _contained "$_p" || _refuse_uncontained "$ARG"
     PLAN="$_p"
 else
     # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
     # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
     # space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
     # the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
-    KEY=$(printf '%s' "$ARGUMENTS" | tr '[:upper:] .-' '[:lower:]___')
+    KEY=$(printf '%s' "$ARG" | tr '[:upper:] .-' '[:lower:]___')
     # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
     # `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
     # fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
@@ -109,14 +128,14 @@ else
     fi
     # Prefer EXACT: a full name wins over any coincidental substring.
     if [ "${#EXACT[@]}" -gt 1 ]; then
-        { echo "AMBIGUOUS: '$ARGUMENTS' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
+        { echo "AMBIGUOUS: '$ARG' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
         exit 2
     elif [ "${#EXACT[@]}" -eq 1 ]; then
         PLAN="${EXACT[0]}"
     elif [ "${#SUBSTR[@]}" -ge 1 ]; then
         # A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
         # the user only partially named. Require an exact name (full review, #41).
-        { echo "No plan is named exactly '$ARGUMENTS'. Did you mean one of these? Name it exactly:"
+        { echo "No plan is named exactly '$ARG'. Did you mean one of these? Name it exactly:"
           printf '%s\n' "${SUBSTR[@]}"; } >&2
         exit 2
     fi
@@ -125,7 +144,7 @@ fi
 if [ -z "$PLAN" ]; then
     # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
     # plan exists — so a FAILED resolution reported success.
-    { echo "No plan matches '$ARGUMENTS'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
+    { echo "No plan matches '$ARG'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
     exit 1
 else
     echo "Plan: $PLAN"
@@ -138,7 +157,7 @@ fi
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
   `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it's `disable-model-invocation: true`, so it's
-  user-run only), then the Plan Review Gate (`/gemini-review` + `/codex-review` →
+  user-run only), then the Plan Review Gate (`/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review` →
   `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the
   AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.

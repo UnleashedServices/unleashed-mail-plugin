@@ -101,5 +101,78 @@ class StaleToolRejectTest(unittest.TestCase):
         self.assertEqual(p, [], f"a clean multi-line block list must pass: {p}")
 
 
+class Column0BlockListTest(unittest.TestCase):
+    def test_column0_block_list_parses_and_catches_stale(self):
+        # MIN-21: a COLUMN-0 block list under `tools:` is legal YAML that Claude Code reads as a list,
+        # but the old parser dropped it (leaving tools=''), so a stale `Task` in that form escaped.
+        md = "---\nname: x\ndescription: y\ntools:\n- Read\n- Task\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        self.assertIn("Read", fm.get("tools", ""))
+        self.assertIn("Task", fm.get("tools", ""))
+        p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        self.assertTrue(any("stale" in x for x in p), f"stale Task in a column-0 list must be caught: {p}")
+
+    def test_column0_clean_block_list_passes(self):
+        md = "---\nname: x\ndescription: y\ntools:\n- Read\n- Agent\n---\nbody\n"
+        fm = vpa.parse_frontmatter(md)
+        p: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        self.assertEqual(p, [], f"a clean column-0 block list must pass: {p}")
+
+
+class SkillPreloadListTest(unittest.TestCase):
+    def test_forms_and_prefix(self):
+        self.assertEqual(vpa.skill_preload_list({"skills": "[a, b]"}), ["a", "b"])
+        self.assertEqual(vpa.skill_preload_list({"skills": "- a, - b"}), ["a", "b"])
+        self.assertEqual(vpa.skill_preload_list({"skills": "unleashed-mail:swift-tdd"}), ["swift-tdd"])
+        self.assertEqual(vpa.skill_preload_list({}), [])
+
+
+class ModelTieringTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_real_repo_tiers_match_frontmatter(self):
+        # Guard rail: the shipped §11 table must equal the shipped model frontmatter (MAJ-1). Build the
+        # model map the same way the validator does, from agents/*.md, then assert zero tier problems.
+        models = {}
+        for ap in sorted((self.ROOT / "agents").glob("*.md")):
+            fm = vpa.parse_frontmatter(ap.read_text(encoding="utf-8-sig")) or {}
+            models[ap.stem] = fm.get("model", "").strip() or "inherit"
+        p: list[str] = []
+        vpa.check_model_tiering(self.ROOT, models, p)
+        self.assertEqual(p, [], f"§11 must equal the shipped frontmatter: {p}")
+
+    def test_mismatched_model_is_flagged(self):
+        p: list[str] = []
+        vpa.check_model_tiering(self.ROOT, {"jira-manager": "opus"}, p)
+        self.assertTrue(any("jira-manager" in x and "opus" in x for x in p), p)
+
+
+class ReviewerRosterTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_real_repo_roster_agrees(self):
+        agents = {p.stem for p in (self.ROOT / "agents").glob("*.md")}
+        p: list[str] = []
+        vpa.check_reviewer_roster(self.ROOT, agents, p)
+        self.assertEqual(p, [], f"the six roster copies must agree and all exist as agents: {p}")
+
+    def test_missing_reviewer_agent_is_flagged(self):
+        # If agents/<name>.md is gone but the roster still lists it, that must be flagged.
+        p: list[str] = []
+        vpa.check_reviewer_roster(self.ROOT, {"security-reviewer"}, p)
+        self.assertTrue(any("does not exist" in x for x in p), p)
+
+
+class McpServerPathTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_real_repo_mcp_paths_resolve(self):
+        p: list[str] = []
+        vpa.check_mcp_server_paths(self.ROOT, p)
+        self.assertEqual(p, [], f".mcp.json server targets must resolve on disk: {p}")
+
+
 if __name__ == "__main__":
     unittest.main()

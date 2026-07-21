@@ -11,6 +11,11 @@ EXIT_CODE=0
 
 # COREDEV-2324: shared marker writer for the Stop-gate (build marker). Sourced
 # defensively — absence must not break the commit hook.
+# MAJ-6 caveat: these marker writes only reach the Claude Code Stop-gate when this git hook runs with
+# CLAUDE_PLUGIN_DATA exported to the SAME value the plugin's hooks see (~/.claude/plugins/data/{id}). A git
+# hook does not inherit it, so by default marker.sh falls back to ~/.claude/unleashed-mail and the Stop
+# gate (which runs as a plugin hook, under plugins/data/{id}) never sees these markers — the writes are a
+# harmless local no-op for the gate. To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env.
 _PCC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/marker.sh
 [ -f "$_PCC_DIR/lib/marker.sh" ] && . "$_PCC_DIR/lib/marker.sh"
@@ -118,28 +123,63 @@ if [ "$HAS_XCODEPROJ" = false ]; then
     fi
 fi
 
-# --- 4. PII check in staged files (universal) ---
-echo "🔒 Checking for PII in new/modified files..."
+# --- 4. Secret / PII scan in staged files (universal, ADVISORY) ---
+# MAJ-7: the previous scan was a complete no-op — it only inspected *.swift files (this plugin repo has
+# none), its email/alternation patterns used ERE syntax under BRE `grep` so they could never match, and it
+# never set EXIT_CODE so it could not block. It is replaced by a correct `grep -nE` scan over ALL staged
+# TEXT files. It is ADVISORY (warn) by design: this repo legitimately contains secret-SHAPED test fixtures
+# and redaction-regex literals, so a hard block here would false-positive constantly. The ENFORCING gate is
+# `gitleaks --staged` below (which honours .gitleaks.toml's allowlist) when installed, plus the history-aware
+# gitleaks job in CI. See CLAUDE.md and SECURITY.md.
+echo "🔒 Scanning staged files for secrets / PII (advisory)..."
 if command -v git >/dev/null; then
-    # Use null-delimited paths so "Unleashed Mail/..." with embedded spaces survives.
-    # `for file in $VAR` would split on the spaces and skip real project files.
-    PII_PATTERNS=(
-        "apikey\|api_key\|API_KEY"
-        "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-        "Bearer [A-Za-z0-9_-]\{20,\}"
-        "sk-\|pk_\|secret"
+    # ERE patterns (grep -nE) — portable across GNU and BSD grep (no `\|`/`\{n\}` BRE forms).
+    SECRET_PATTERNS=(
+        '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'                                 # email
+        '[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[A-Za-z0-9._-]{20,}'                        # bearer token
+        'eyJ[A-Za-z0-9._-]{10,}'                                                          # JWT
+        '(sk-|pk_)[A-Za-z0-9._-]{16,}'                                                    # sk-/pk_ secret
+        '[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*[A-Za-z0-9._-]{12,}'   # api key = <value>
     )
-
+    FOUND_PII=0
+    # Null-delimited paths so "Unleashed Mail/..." with embedded spaces survives (word-splitting would skip them).
     while IFS= read -r -d '' file; do
-        case "$file" in *.swift) ;; *) continue ;; esac
         [ -f "$file" ] || continue
-        for pattern in "${PII_PATTERNS[@]}"; do
-            if grep -n "$pattern" "$file" >/dev/null 2>&1; then
-                echo "⚠️  Potential PII found in $file (pattern: $pattern)"
-                echo "   Please review and use environment variables or secure storage"
+        grep -Iq . "$file" 2>/dev/null || continue   # `-I` => skip binary files (no text line)
+        for pattern in "${SECRET_PATTERNS[@]}"; do
+            if grep -nE "$pattern" "$file" >/dev/null 2>&1; then
+                echo "⚠️  Possible secret/PII in $file (pattern: $pattern)"
+                echo "   Review: use environment variables / secure storage, or allowlist a known-safe fixture in .gitleaks.toml."
+                FOUND_PII=1
             fi
         done
     done < <(git diff --cached --name-only -z --diff-filter=ACM)
+
+    # Enforcing pass: gitleaks honours .gitleaks.toml (fixtures/history allowlisted there), so it can BLOCK
+    # a real staged secret without false-positiving on this repo. Only runs when installed; a tooling error
+    # (unsupported subcommand, bad config) must NOT block a commit — only a clean "leaks found" (exit 1) does.
+    if command -v gitleaks >/dev/null 2>&1; then
+        echo "🔒 Running gitleaks on staged changes..."
+        # gitleaks reorganized its CLI across v8: `git --staged` (>=8.19) replaced `protect --staged`.
+        if gitleaks git --help >/dev/null 2>&1; then
+            GL_CMD=(gitleaks git --staged)
+        else
+            GL_CMD=(gitleaks protect --staged)
+        fi
+        "${GL_CMD[@]}" --no-banner --redact --config .gitleaks.toml >/dev/null 2>&1
+        GL_RC=$?
+        if [ "$GL_RC" -eq 1 ]; then
+            echo "❌ gitleaks flagged a staged secret. Run '${GL_CMD[*]} --verbose' to see it."
+            echo "   If it is a known-safe fixture, allowlist it in .gitleaks.toml."
+            EXIT_CODE=1
+        elif [ "$GL_RC" -ne 0 ]; then
+            echo "⚠️  gitleaks could not run cleanly (exit $GL_RC) — skipping enforcement (CI runs the authoritative scan)."
+        else
+            echo "✅ gitleaks: no staged secrets"
+        fi
+    elif [ "$FOUND_PII" -eq 1 ]; then
+        echo "   (gitleaks not installed — the pattern scan above is advisory only; CI runs the enforcing scan.)"
+    fi
 fi
 
 # --- Summary ---
