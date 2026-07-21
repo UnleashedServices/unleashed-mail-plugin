@@ -91,3 +91,24 @@ bash setup/get-agy-creds.sh                       # -> new AGY_CREDS
 ⚠️ `AGY_CREDS` contains a live OAuth refresh token — set it only in the
 environment's secret store; never paste it into chat, tickets, or screenshots.
 Keep `AGY_CREDS_PATH=~/.gemini/antigravity-cli/antigravity-oauth-token`.
+
+## Storing all credentials for re-provisioning
+
+The environment injects three credentials. All extractors below print to stdout —
+capture them into your **secret manager** (never plaintext/chat). They are live
+credentials.
+
+| Env var | What | Durable? | Re-extract with |
+|---------|------|----------|-----------------|
+| `CODEX_AUTH_JSON` | base64 of `~/.codex/auth.json` (ChatGPT-mode, has refresh_token) | ✅ auto-refreshes | `bash setup/get-codex-creds.sh` |
+| `AGY_CREDS` (+ `AGY_CREDS_PATH`) | base64 of agy's token file (`auth_method`+`token`) | ✅ auto-refreshes **once auth_method is present** | `bash setup/get-agy-creds.sh` (see §A–C above) |
+| `GH_TOKEN` | GitHub token (fine-grained `github_pat_…` here) | ✅ until PAT expiry; `ghs_…` variants are ~1h and not worth storing | `bash setup/get-github-token.sh` |
+
+Notes:
+- **codex** and **GitHub** were already correct in this environment — just store
+  the values. Only **agy** needed the format fix documented above (the injected
+  blob lacked `auth_method`).
+- `~/.codex/config.toml` (model `gpt-5.6-sol`, effort `xhigh`) is config, not a
+  secret — `install-review-clis.sh` recreates it, so it doesn't need storing.
+- To re-provision a fresh environment, set these env vars and run
+  `bash setup/install-review-clis.sh`.
