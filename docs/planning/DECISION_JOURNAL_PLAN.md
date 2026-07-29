@@ -7,9 +7,13 @@
 rewritten live-state)
 **Epic:** `COREDEV-2582` — Opus 5 readiness and autonomous end-to-end mode
 **Branch:** `feat/COREDEV-2585-decision-journal`
-**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) — must land first (epic ordering).
-**Sibling:** `AUTONOMOUS_END_TO_END_PLAN.md` (`COREDEV-2584`) — independent; either order after 2583.
-This plan is what makes a long autonomous run survivable, so in practice it wants to land close behind.
+**Target version:** `2.7.0` → **`2.7.1`** (patch: no asset-count change). Epic release chain:
+2.6.0 (`COREDEV-2583`) → 2.7.0 (`COREDEV-2584`) → **2.7.1 (this)**.
+**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) and then
+`AUTONOMOUS_END_TO_END_PLAN.md` (`COREDEV-2584`). **This plan lands third** — the chain is
+2583 → 2584 → 2585, not a free choice: §4.6's first checkpoint records rationale against the
+brainstorm fork sidecar that 2584 introduces, so landing this first would leave that checkpoint
+pointing at a store that does not exist yet.
 
 ---
 

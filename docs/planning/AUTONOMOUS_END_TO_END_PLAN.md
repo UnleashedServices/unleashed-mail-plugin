@@ -7,9 +7,21 @@
 arm/disarm state
 **Epic:** `COREDEV-2582` — Opus 5 readiness and autonomous end-to-end mode
 **Branch:** `feat/COREDEV-2584-autonomous-mode`
-**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) — **must land first**. Its §4.6 adds the skill
-frontmatter key check; without it this plan's `disallowed-tools:` is a silent no-op (§4.7 below).
-**Sibling:** `DECISION_JOURNAL_PLAN.md` (`COREDEV-2585`) — independent; either order after 2583.
+**Target version:** `2.6.0` → **`2.7.0`** (minor: adds a skill, `21/21/0/1` → `21/22/0/1`). Epic release
+chain: 2.6.0 (`COREDEV-2583`) → **2.7.0 (this)** → 2.7.1 (`COREDEV-2585`).
+**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) — **must land first**. Its §4.6 introduces
+the *only* frontmatter validation skills have ever had, so a new skill carrying security-relevant
+frontmatter should not land before it.
+**Landing order:** this plan lands **second**, before `DECISION_JOURNAL_PLAN.md` (`COREDEV-2585`) —
+that plan's §4.6 records rationale against the brainstorm fork sidecar this ticket introduces (§4.6
+below), so 2584 → 2585 is the required chain, not a free choice.
+
+> **Round-1 gate correction (carried from `COREDEV-2583`).** An earlier draft justified the 2583
+> dependency by claiming a camelCase `disallowedTools:` in a skill "silently no-ops". **That is false.**
+> The pinned 2.1.220 skill schema declares `disallowedTools` as a first-class *"Canonical (normalized)
+> alias of `disallowed-tools`"*. The inert camelCase key is **`allowedTools`**, which does not appear in
+> the schema at all. Both spellings of the *disallow* key work; this plan uses the kebab form for
+> consistency with the other skills, not for correctness.
 
 ---
 
@@ -506,7 +518,10 @@ stops and reports, consistent with §3, rather than silently truncating mid-impl
 **Note for the reviewer.** This interacts with §4.4's expiry and with spawn depth: `COREDEV-2583` §4.9
 documents that the reviewers sit at depth 2 and that the Claude Code default moved 5 → 1 → 3. **A
 Workflow layer pushes them to depth 3 — exactly the ≥2.1.219 default**, where the `Agent` tool is
-withheld and the panel dies while still emitting a normal-looking verdict. §4.10's boundary rule is what
+withheld. (`COREDEV-2583` §4.9 originally claimed the panel would then "emit a normal-looking verdict";
+that was **overstated and is corrected there** — `scripts/review/reviewer-roster.sh` already classifies
+an empty held-report set as five `UNATTRIBUTED` and exits 3, mutation-proved at
+`scripts/tests/test_reviewer_roster.py:105`. The panel fails **closed**, not silently.) §4.10's rule is what
 prevents that; the two findings must be read together.
 
 ### 4.12 — The count change touches nine sites; only three are gated (Medium)
@@ -571,7 +586,7 @@ plus a `## [X.Y.Z]` CHANGELOG heading. `## [Unreleased]` does **not** satisfy th
 | A Workflow layer pushes reviewers to spawn depth 3 and kills the panel silently | Medium | §4.10's boundary rule forbids Workflow-dispatched reviewers outright; coordinate with `COREDEV-2583` §4.9, which owns the detection. |
 | `_BWS_FORCE_FAIL` leaks into an unattended environment | Low | Denies 100% of Bash calls with a model-only message (§4.9 note). Cheap to guard; flagged so it is not discovered at runtime. |
 | Six ungated doc sites drift after the count change | **High** (over time) | Unavoidable with the current gate. §4.12 ships the full checklist and says plainly that only three are enforced. |
-| Merged before `COREDEV-2583` | Medium | Stated in the header and §4.6: `disallowed-tools` is a silent no-op until 2583 §4.6 lands. |
+| Merged before `COREDEV-2583` | Medium | Stated in the header. 2583 §4.6 introduces the only frontmatter validation skills have ever had; a new skill with security-relevant frontmatter should not land unvalidated. (The earlier "camelCase `disallowedTools` no-ops" justification was false — see the header note.) |
 
 ## 6. Verification
 
