@@ -172,10 +172,15 @@ marker_mtime() {
     local path="" m=""
     path="$(marker_path "$1")"
     [ -f "$path" ] || { printf '0'; return 0; }
-    if [ "$(uname 2>/dev/null)" = "Darwin" ]; then
-        m="$(stat -f %m "$path" 2>/dev/null)"
-    else
-        m="$(stat -c %Y "$path" 2>/dev/null)"
-    fi
+    # FEATURE-DETECT, do not branch on `uname` (COREDEV-2600 item 3). The old
+    # `uname == Darwin` form assumed only Darwin has BSD `stat`, so on FreeBSD it took the GNU
+    # branch, `stat -c %Y` failed, and this returned the `0` sentinel. Reproduced: with `uname`
+    # reporting FreeBSD the uname shape yields EMPTY while the form below yields the real mtime.
+    # A `0` here is not benign — `stop-quality-marker-gate.sh:77-81` computes AGE=999999 from it
+    # and SKIPS THE GATE ENTIRELY, so a platform quirk silently disabled a quality gate.
+    # Same shape as `context.sh::_context_file_mtime`; the `${m:-0}` sentinel is marker.sh's own
+    # contract and is preserved (context.sh returns "" instead — that difference is deliberate).
+    m="$(stat -f %m "$path" 2>/dev/null)" || m=""
+    [ -n "$m" ] || m="$(stat -c %Y "$path" 2>/dev/null)" || m=""
     printf '%s' "${m:-0}"
 }

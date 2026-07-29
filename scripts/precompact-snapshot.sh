@@ -38,17 +38,20 @@ PLAN="${PLAN:0:200}"   # bash substring (char-aware, no cut subprocess / BSD `cu
 
 # Round = newest reviews/<slug>/round-N bucket, else "unknown" (enriched once Item 6 captures).
 # Glob + arithmetic compare (no `ls | grep`) so a non-numeric/odd name can't trip it.
+# Use the SHARED scanner, not an inline copy (COREDEV-2600). The copy that used to live here was
+# missing two guards `context_highest_round` has, and both were live defects:
+#   * no `??????*` digit cap — a `round-<20-digit>` directory made `[ "$_n" -gt … ]` print
+#     `integer expression expected` to STDERR, violating the stderr-clean fail-open invariant
+#     (`scripts/lib/log.sh:11-12`). Such a directory is producible through shipped code via
+#     `UNLEASHED_REVIEW_ROUND` (`capture.py:230`), so this was reachable, not theoretical.
+#   * no `10#` decimal normalisation — `round-09` recorded `"09"` where the shared helper returns `9`.
+# context.sh is already sourced above, so this adds no dependency. The field stays a JSON STRING
+# (see the printf below): this normalises the VALUE, not the type.
 ROUND="unknown"
 _rev="$(context_reviews_dir)/$SLUG"
 if [ -d "$_rev" ]; then
-    _max=0
-    for _d in "$_rev"/round-*; do
-        [ -d "$_d" ] || continue
-        _n="${_d##*/round-}"
-        case "$_n" in ''|*[!0-9]*) continue ;; esac
-        [ "$_n" -gt "$_max" ] && _max="$_n"
-    done
-    [ "$_max" -gt 0 ] && ROUND="$_max"
+    _max="$(context_highest_round "$_rev")"
+    [ "$_max" -gt 0 ] 2>/dev/null && ROUND="$_max"
 fi
 
 SNAPTIME="$(date +%s 2>/dev/null)" || SNAPTIME=0

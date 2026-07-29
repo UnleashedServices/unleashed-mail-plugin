@@ -692,7 +692,10 @@ assert_not_contains "capture drops spoofed sourceAgent" "$(cat "$SECF" 2>/dev/nu
 
 # 34. Dedup: replay -> no second write. Backdate the file, replay; a skip leaves the
 #     old mtime, a rewrite stamps it to ~now (multi-second delta is reliable).
-file_mtime() { if [ "$(uname 2>/dev/null)" = "Darwin" ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi; }
+# FEATURE-DETECT, matching marker.sh/context.sh (COREDEV-2600 item 3). The harness had its own
+# diverged `uname == Darwin` copy — the very file that would have to PROVE the fix was itself
+# carrying the defect, which is why the CI grep below is scoped to all of scripts/, not scripts/lib/.
+file_mtime() { local m; m="$(stat -f %m "$1" 2>/dev/null)" || m=""; [ -n "$m" ] || m="$(stat -c %Y "$1" 2>/dev/null)" || m=""; printf %s "$m"; }
 backdate "$SECF" 120
 MT0="$(file_mtime "$SECF")"
 printf '{"agent_type":"security-reviewer","last_assistant_message":%s}' "$(json_str "$SEC_MSG")" \
@@ -766,6 +769,37 @@ mkdir -p "$LRD5/round-1" "$LRD5/round-08" "$LRD5/round-09"
 : > "$LRD5/round-09/security-reviewer.json"
 GOT5="$(context_latest_round_dir "$LRD5" security-reviewer 2>/dev/null)"
 if [ "$GOT5" = "$LRD5/round-09" ]; then ok; else fail "latest_round_dir: leading-zero rounds are base-10 not octal (got '$GOT5')"; fi
+
+# COREDEV-2600 item 2: precompact-snapshot.sh must use the SHARED context_highest_round, not an
+# inline copy. The copy it replaced was missing two guards, and BOTH were live defects reproduced
+# before the fix:
+#   * no `??????*` digit cap -> a round-<20-digit> dir made `[ "$n" -gt ... ]` print
+#     `integer expression expected` to STDERR, breaking the stderr-clean fail-open invariant.
+#     Such a dir is producible through shipped code via UNLEASHED_REVIEW_ROUND (capture.py:230).
+#   * no `10#` normalisation -> `round-09` was recorded as "09" rather than "9".
+# ASSERT BOTH, and assert the JSON TYPE: the field is a STRING ("9", not 9) because
+# precompact-snapshot.sh serialises with printf '..."round":"%s"...'. A test that accepted either
+# would not notice a serialisation change (codex r4 finding 4).
+PCR="$TMPROOT/pcround"
+PCREPO="$(cd "$_DIR/.." && pwd)"
+mkdir -p "$PCR"
+# Everything in ONE subshell that ECHOES its result — no temp-file round-trip, which silently
+# produced an empty read when this test was first written.
+PCOUT="$(
+  export CLAUDE_PLUGIN_DATA="$PCR"
+  _slug="$(context_branch_slug "$(context_branch)")"
+  _rd="$(context_reviews_dir)/$_slug"
+  mkdir -p "$_rd/round-3" "$_rd/round-09" "$_rd/round-99999999999999999999"
+  printf '{"session_id":"t","transcript_path":"/dev/null","cwd":"%s","hook_event_name":"PreCompact","trigger":"auto"}' "$PCREPO" \
+    | CLAUDE_PLUGIN_ROOT="$PCREPO" bash "$PRECOMPACT" 2>"$PCR/err"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); r=d["round"]; print(type(r).__name__ + ":" + str(r))' \
+    "$(context_snapshot_path)" 2>/dev/null
+)"
+PCERR="$(cat "$PCR/err" 2>/dev/null)"
+if [ -z "$PCERR" ]; then ok; else fail "precompact round scan leaked stderr: $PCERR"; fi
+# `str:9` — the VALUE is normalised (not "09") and the TYPE is still a JSON string (not numeric 9).
+# Asserting both together: a test that accepted either type would miss a serialisation change.
+if [ "$PCOUT" = "str:9" ]; then ok; else fail "precompact round must be the JSON string \"9\" (got '$PCOUT')"; fi
 
 # zsh portability: the swift-reviewer Step-2 recipe runs in a zsh Bash-tool context, where an
 # unmatched glob aborts (NOMATCH). A round-less base must return clean+empty, not 'no matches found'.
