@@ -1,8 +1,8 @@
 # CI & Workflow Hardening Plan
 
-**Status:** Planning — round 4, awaiting re-gate
+**Status:** Planning — round 5, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 4)
+**Last Updated:** 2026-07-29 (round 5)
 **Tickets (batched — see §1 for why):**
 - `COREDEV-2598` — CI proves the plugin **loads**, not just that it validates
 - `COREDEV-2600` — CI drift guard for duplicated primitives
@@ -119,7 +119,8 @@ load-layer breakage that schema validation misses, e.g. the duplicate hooks decl
 
 **Round 2 raises the severity, because the naïve adoption was reproduced and it silently passes.**
 Running upstream's own recipe — `claude plugin marketplace add "$GITHUB_WORKSPACE"` (verbatim line 27
-of their `plugin-load-check.yml`) then `claude plugin install` — against **our** manifest **git-cloned
+of their `plugin-load-check.yml` **as of commit-pinned `abdd61f`** — see the note in §9) then
+`claude plugin install` — against **our** manifest **git-cloned
 `UnleashedServices/unleashed-mail-plugin` main** into the cache and reported `enabled: true`. The
 installed tree was **v2.5.3**, not the branch's 2.6.1, and this plan file was absent from it. Upstream
 can use that recipe only because their marketplace entry is `"source": "./"`; ours
@@ -223,8 +224,32 @@ a *different* assertion:
    match `main` first, so the mutant reproduces the realistic case where the two versions agree. If it
    only fails on the version check, the identity assertion is not doing the work.
 4. **Each assertion is removed in turn, one at a time** → the mutant it owns must start passing, and no
-   other mutant may change. That maps assertions to mutants one-to-one and detects both redundancy and
-   sole-guard coupling.
+   other mutant may change.
+
+   **This requires a mutant PER ASSERTION, and rounds 3–4 did not have one.** §4.1 mandates eight
+   independent assertions — unique entry, `enabled == true`, `errors` absent/empty, `version` smoke
+   check, the sentinel, `protocolVersion`, `serverInfo.name`, `tools == ["synthesize_review"]`, plus the
+   hooks pair — against **four** mutants, so the one-to-one claim was arithmetically impossible.
+   Deleting the `errors` assertion, or any single MCP handshake assertion, changed no mutant at all.
+   The full mapping, each mutant scoped to exactly one assertion:
+
+   | mutant (applied to the scratch copy) | the ONLY assertion that may fail |
+   |---|---|
+   | `plugin.json` gains a `hooks` key | no-`hooks`-key |
+   | `.mcp.json` repointed at a nonexistent file | MCP launch-from-declaration |
+   | `marketplace.json` source left as `github`, **versions made equal** | sentinel |
+   | `.mcp.json` `name` changed | `serverInfo.name` |
+   | a second tool added to the MCP server | `tools == [...]` |
+   | `protocolVersion` echoed as a bogus string | `protocolVersion` |
+   | plugin installed twice under two marketplace names | unique-entry |
+   | `plugin.json` version desynced from the checkout | `version` smoke check |
+   | a stray file dropped in the cache to force a cache-refresh error | `errors` absent/empty |
+   | `hooks/hooks.json` given a duplicate event key | `validate-hooks --strict` |
+
+   If a mutant fails more than one assertion the assertions overlap and one is redundant; if it fails
+   none, that assertion is decoration. **Author the mutants first and watch each fail**, then write the
+   assertion — the reverse order is how round 1 shipped an assertion that passed against the very
+   defect it cited.
    *(Round 3 wrote "the check itself is deleted → the job must still fail, because mutants 1–3 target
    its assertions" — which is circular: delete the check and nothing is left to reject anything. A
    reviewer caught it. The durable form is the mapping above, run by a negative-test harness asserting
@@ -312,6 +337,12 @@ copies survive, so it cannot mutation-prove the single-source branch at all.)*
   | `env -u HOME -u CLAUDE_PLUGIN_DATA` | `/.claude/unleashed-mail` |
   | `HOME=/probe`, no `CLAUDE_PLUGIN_DATA` | `/probe/.claude/unleashed-mail` |
   | `CLAUDE_PLUGIN_DATA=/custom/d` | `/custom/d` |
+  | `HOME=/probe`, `CLAUDE_PLUGIN_DATA=` (set but EMPTY) | `/probe/.claude/unleashed-mail` |
+
+  **The fourth row is not padding — it is the only row that rejects `${CLAUDE_PLUGIN_DATA-…}`**, the
+  single-dash form. Executed: that expansion passes rows 1–3 identically to the correct `:-` form and
+  fails only here, returning empty. A three-row matrix accepts it, and an empty base silently relocates
+  every marker, log and snapshot to a relative path.
 
   **A single-environment assertion is not enough, and this is not theoretical.** An implementer who
   hard-codes the literal `/.claude/unleashed-mail` as the "fallback" produces a function that is
@@ -438,8 +469,26 @@ on the digest alone), so neither discriminates.
 5. **New:** plan in a directory with **no `.git` ancestor** → recorded absolute (fallback), and verify
    still round-trips.
 
-**Mutation proof:** revert `_plan_identity` to `os.path.realpath` → **assertion 3 must fail**. Shown
-failing, not assumed.
+6. **New:** `planPathKind` is **present, correct, and consistent with `planPath`** — `"repo-relative"`
+   for the in-repo and worktree cases, `"absolute"` for both fallback cases — and `verify` **rejects**
+   an artifact whose `planPathKind` is missing, unknown, or inconsistent with the recorded path.
+   *(Rounds 3–4 required the field in §4.3's Fix and asserted it nowhere: an implementation that never
+   wrote it, or wrote it wrong, passed the entire five-assertion set. A field nothing checks is a
+   comment.)*
+
+**Schema decision — made here, not left to the implementer.** The artifact is `schemaVersion: 2` and
+`verify` hard-compares it (`review-verdict.py:521`, `!= SCHEMA_VERSION`), so adding a required field is
+a schema change. **Bump to `schemaVersion: 3` and let the existing hard comparison reject version-2
+artifacts.** Rationale: the artifact is git-ignored, per-directory session state with no migration path
+and a lifetime of one review cycle, so "re-run the gate" is the correct and already-implemented
+recovery — the failure message even says so. Do **not** add a compatibility branch that accepts a
+version-2 artifact without `planPathKind`; that is the one shape where verify would compare a relative
+string against an absolute one and pass or fail by accident.
+
+**Mutation proof:** revert `_plan_identity` to `os.path.realpath` → **assertion 3 must fail**; omit
+`planPathKind` from the written artifact → **assertion 6 must fail**; leave `SCHEMA_VERSION` at 2 →
+a stale round-2 artifact must be **accepted**, which assertion 6 must catch. Each shown failing, not
+assumed.
 
 > *Round-3 correction — round 2 claimed a second mutation that is impossible by construction.* It said
 > "drop the `..` guard → assertion 4 must fail". **It cannot.** `_repo_root(real)` returns an *ancestor*
@@ -557,6 +606,10 @@ reviewer finds a residual choice anywhere in §4, that is a finding: the round-3
   execution** before this revision: the missing load check, the wrong-checkout install (reproduced,
   v2.5.3 over 2.6.1), the three base-path copies, the round-scanner stderr leak, the four `mtime` sites,
   and the verdict-path failure.
+- Upstream citations are pinned to `plugin-load-check.yml` sha256 `abdd61f6652ef882…` (33 lines,
+  fetched 2026-07-29): `marketplace add "$GITHUB_WORKSPACE"` is line **27**, `plugin list` line 29.
+  Re-fetch and re-pin before implementing rather than trusting the line number — it points into a
+  live `main`.
 - Items A and B adopt patterns from `ayghri/i-have-adhd` (MIT). No code is copied; the designs are
   reimplemented against this repo's conventions — and §4.1 documents specifically where the upstream
   recipe must **not** be copied.
@@ -651,3 +704,22 @@ All re-verified by execution.
 the tree under review; finding 1 is the same defect committed by the *author*. The rule now applies both
 ways: **a plan is frozen for the duration of a review round.** No edits between dispatching a review and
 recording its verdict.
+
+### Round 4 outcome
+
+**gemini `APPROVE` (no findings) · codex `REQUEST_CHANGES` (4 findings).** Both confirmed the plan was
+frozen — codex checked the target's working-tree and committed SHA-256 and found them equal, closing
+round 3's blocker. All four re-verified by execution.
+
+| # | finding | verdict | round-5 change |
+|---|---|---|---|
+| 1 | §4.1's mutation contract is still unsatisfiable | **confirmed by counting** — 8 assertions against 4 mutants, so "one-to-one" was arithmetically impossible, and deleting the `errors` or any MCP assertion changed no mutant | a 10-row mutant↔assertion table, one mutant per assertion |
+| 2 | the fallback matrix accepts a plausible wrong expansion | **confirmed by execution** — `${CLAUDE_PLUGIN_DATA-…}` (single `-`) passes all three rows and fails only when the variable is set-but-EMPTY | fourth row added: `CLAUDE_PLUGIN_DATA=` → `/probe/.claude/unleashed-mail` |
+| 3 | `planPathKind` is required and asserted nowhere | **confirmed** — the field appears once, in the Fix, and in none of the five assertions | assertion 6 added, plus the schema decision (bump to 3; the existing hard comparison rejects v2) |
+| 4 | the upstream line citation has drifted | **REFUTED on the fact, remedy adopted** | re-fetched: `marketplace add` is line **27**, `plugin list` line 29, line 25 is the `export`; file unchanged at 33 lines, sha256 `abdd61f6…`. codex placed them at 25/27 in both rounds 3 and 4, in opposite directions. But a line number into a live `main` **is** fragile, so the citation is now commit-pinned |
+
+**Finding 1 is the pattern worth naming.** Round 3 replaced a circular mutant with a mapping claim, and
+the mapping claim was itself unsatisfiable — a *second* inert proof written into the fix for the first
+one. Counting the assertions against the mutants would have caught it in ten seconds. The lesson the
+plan now carries in §4.1: author the mutants first, watch each one fail, and only then write the
+assertion.
