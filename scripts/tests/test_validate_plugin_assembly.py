@@ -296,3 +296,62 @@ class COREDEV2583_WarningsChannel(unittest.TestCase):
                 self.assertEqual(p, [], f"`{key}` is a legal key — must not be a problem")
                 self.assertTrue(w, f"`{key}` must warn: it is silently ignored for plugin sub-agents")
                 self.assertIn("IGNORED", w[0])
+
+
+class COREDEV2583_EffortPolicy(unittest.TestCase):
+    """§4.3 — the effort floor is asserted on BOTH axes and in the §11 policy text.
+
+    The first cut of `check_effort_policy` was called before the skills loop had run, so it
+    silently checked only agents and a missing SKILL pin passed. These cases pin both axes.
+    """
+
+    def _problems(self, efforts, policy_line=True):
+        p = []
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            body = ("## 11. Model Tiering Policy\n\n"
+                    + ("**Effort policy: every agent and every skill pins `effort: xhigh`.**\n"
+                       if policy_line else "**Effort policy: pick something sensible.**\n"))
+            (root / "AGENT_CONTRACTS.md").write_text(body, encoding="utf-8")
+            vpa.check_effort_policy(root, efforts, p)
+        return p
+
+    def test_all_pinned_is_clean(self):
+        self.assertEqual(
+            self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": "xhigh"}), [])
+
+    def test_missing_agent_pin_fails(self):
+        p = self._problems({"agents/a.md": "", "skills/s/SKILL.md": "xhigh"})
+        self.assertTrue(p)
+        self.assertIn("agents/a.md", p[0])
+
+    def test_missing_SKILL_pin_fails(self):
+        # The regression guard for the ordering bug: a skill must be checked too.
+        p = self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": ""})
+        self.assertTrue(p, "a skill missing its pin must fail — not only agents")
+        self.assertIn("skills/s/SKILL.md", p[0])
+
+    def test_downgraded_effort_fails(self):
+        for level in ("high", "medium", "low", "max"):
+            with self.subTest(level=level):
+                p = self._problems({"agents/a.md": level})
+                self.assertTrue(p, f"`effort: {level}` is not the mandated floor")
+
+    def test_policy_sentence_must_state_xhigh(self):
+        p = self._problems({"agents/a.md": "xhigh"}, policy_line=False)
+        self.assertTrue(p)
+        self.assertIn("effort policy line", p[0])
+
+
+class COREDEV2583_EffortPolicyWiring(unittest.TestCase):
+    """The check must run AFTER every asset walk, or it is inert for skills (ordering bug)."""
+
+    def test_effort_check_is_called_after_the_skills_loop(self):
+        src = Path(_MOD_PATH).read_text(encoding="utf-8")
+        call = src.index("check_effort_policy(root, asset_efforts, problems)",
+                         src.index("def main("))
+        skills_loop = src.index("for p in skills:", src.index("def main("))
+        self.assertGreater(call, skills_loop,
+                           "check_effort_policy must run after the skills loop populates "
+                           "asset_efforts — otherwise a missing SKILL pin passes silently")

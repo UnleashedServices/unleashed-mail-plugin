@@ -347,6 +347,39 @@ _TIER_ROW = re.compile(r"^\|[^|]*\|\s*`([a-z]+)`[^|]*\|\s*([^|]+?)\s*\|\s*$")
 _AGENT_TOKEN = re.compile(r"[a-z][a-z0-9-]*")
 
 
+def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: list[str]) -> None:
+    """§4.3 (COREDEV-2583) — assert the effort floor on BOTH axes and in the policy text.
+
+    Sibling of `check_model_tiering`, and deliberately a HARD assertion rather than a warning: a
+    silently under-powered gate is exactly the defect §4.1 exists to close, and it is invisible
+    at runtime. With `effort` load-bearing, an asset that silently loses its pin — or a new asset
+    landing without one — must fail CI, not merely be noted.
+
+    Mutation proof: drop the pin from any single agent or skill, or delete the §11 effort-policy
+    sentence, and strict validation fails naming the file.
+    """
+    for rel, effort in sorted(asset_efforts.items()):
+        if effort != "xhigh":
+            got = f"`effort: {effort}`" if effort else "no `effort:` key"
+            problems.append(
+                f"{rel}: {got} — every agent and skill must pin `effort: xhigh` "
+                f"(AGENT_CONTRACTS §11 effort policy; COREDEV-2583 §4.1)")
+
+    contracts = root / "AGENT_CONTRACTS.md"
+    if not contracts.is_file():
+        return                      # check_model_tiering already reports the missing file
+    try:
+        content = contracts.read_text(encoding="utf-8-sig")
+    except OSError:
+        return
+    # The policy sentence must SAY xhigh — otherwise the docs and the assets could drift apart
+    # while both halves individually look fine, which is the §3 failure this ticket exists to end.
+    if "every agent and every skill pins `effort: xhigh`" not in content:
+        problems.append(
+            "AGENT_CONTRACTS.md §11: the effort policy line is missing or does not state "
+            "`xhigh` — expected the sentence \"every agent and every skill pins `effort: xhigh`\"")
+
+
 def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list[str]) -> None:
     contracts = root / "AGENT_CONTRACTS.md"
     rel = "AGENT_CONTRACTS.md"
@@ -492,6 +525,7 @@ def main() -> int:
     problems: list[str] = []
     warnings: list[str] = []            # never affect the exit code (COREDEV-2583 §4.7)
     agent_models: dict[str, str] = {}   # stem -> effective model (default "inherit"); fed to §11 tier check
+    asset_efforts: dict[str, str] = {}  # rel path -> declared effort (""=absent); fed to the §4.3 check
 
     def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
         rel = path.relative_to(root)
@@ -511,6 +545,7 @@ def main() -> int:
                 problems.append(f"{rel}: frontmatter missing non-empty `name`")
             elif not KEBAB.match(fm["name"]):
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
+        asset_efforts[str(rel)] = fm.get("effort", "").strip()   # §4.3
         if not is_agent:
             check_skill_fields(rel, fm, problems, warnings)   # §4.6
         if is_agent:
@@ -550,6 +585,11 @@ def main() -> int:
         check_frontmatter(p, require_name=False)
         if not KEBAB.match(p.stem):
             problems.append(f"{p.relative_to(root)}: command filename stem `{p.stem}` is not kebab-case")
+
+    # §4.3 MUST run after EVERY asset has been walked — agents, skills and commands all feed
+    # `asset_efforts`. Called any earlier it silently checks only the agents walked so far, which
+    # is how the first cut of this check passed while a skill's pin was missing.
+    check_effort_policy(root, asset_efforts, problems)
 
     # JSON manifests must parse. plugin.json + marketplace.json are required;
     # .mcp.json + hooks/hooks.json are optional — validated only when present (the

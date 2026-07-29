@@ -32,8 +32,15 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 - If `tools:` is set, it is a strict allowlist: **MCP tools not listed are blocked**. To keep MCP access
   under install-defined server prefixes (Atlassian, Context7), **omit `tools:`** and scope with
   `disallowedTools:` (see jira-manager, modern-standards-planner).
-- `model:` ∈ `inherit`(default) | `sonnet` | `opus` | `haiku` | `fable` | a model id. Prefer `inherit`/`sonnet`
-  over hard-pinning `opus`.
+- `model:` ∈ the runtime alias table — `sonnet` | `opus` | `haiku` | `fable` | `best` | `opusplan` |
+  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default) or a full
+  model id. There is **no** `default` alias, and only sonnet/opus/fable take `[1m]`.
+  `opus` is an **alias** that tracks the current Opus generation; `claude-opus-5` is a hard version
+  pin. Prefer the alias. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
+  conflated the two and is superseded by AGENT_CONTRACTS §11's consequence-based tiering.)
+- **`effort:` is mandatory** — every agent and every skill pins `effort: xhigh`; CI enforces it.
+  Frontmatter effort is an override in BOTH directions (it pulls a `max` session down), and
+  `CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor is not enforceable from inside the plugin.
 - `skills:` (YAML list) preloads a skill's **SKILL.md body** (not its `references/`) at startup.
 - **`memory:` (`user`/`project`/`local`) auto-enables Read/Write/Edit** — **never add it to a read-only agent**
   (it silently re-grants write access; this bit swift-reviewer once).

@@ -13,6 +13,44 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.0] — 2026-07-29
+
+Opus 5 alignment (COREDEV-2583) — plan `docs/planning/OPUS5_ALIGNMENT_PLAN.md`, approved through the
+dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five rounds.
+
+### Added
+- `effort: xhigh` on all 21 agents and all 21 skills, with a hard CI assertion on both axes and on the
+  §11 policy sentence. Nothing set `effort` before, so every asset ran at the session's level.
+- A `warnings` channel in `validate-plugin-assembly.py`: prints, never affects the exit code. Used to
+  report `permissionMode`/`mcpServers`/`hooks`, which Claude Code ignores for plugin sub-agents.
+- `KNOWN_SKILL_KEYS` + `check_skill_fields` — skills had no frontmatter key validation at all. Derived
+  from the pinned 2.1.220 schema; `disallowedTools` is accepted (it is the runtime's canonical alias),
+  `allowedTools` is rejected (it is genuinely inert).
+- AGENT_CONTRACTS §5 now declares the subagent spawn-depth dependency and the ≥ 2.1.219 floor.
+
+### Changed
+- **Model tiering is three tiers**, set by consequence of being wrong rather than cost:
+  `security-reviewer`, `prompt-review`, `concurrency-reviewer` → `opus` (3); orchestrator and
+  implementation/diagnostic engineers → `inherit` (11); first-pass reviewers, personas and fixed-scope
+  managers → `sonnet` (7). §11's rationale is rewritten; the old one argued from cost.
+- `MODEL_ALIASES` is the pinned runtime's table verbatim, so `opus[1m]`/`sonnet[1m]`/`fable[1m]`, `best`
+  and `opusplan` validate. `haiku[1m]`, `best[1m]`, `opusplan[1m]`, `inherit[1m]` and `default` are
+  rejected — they are not in the table. The model-id regex is untouched, so COREDEV-2503 F10 holds.
+- The difflib tool-name typo guard is advisory (a warning) rather than a hard failure: the allowlist is
+  inherently incomplete, so a false reject blocked real tools while a missed typo merely fails at runtime.
+- CI pins Claude Code 2.1.220 (was 2.1.209, eleven releases below the Opus 5 floor).
+
+### Fixed
+- `TaskOutput` and `EnterPlanMode` were **false-rejected** as typos of `BashOutput`/`ExitPlanMode`.
+- `MultiEdit` is removed from `KNOWN_TOOLS` **and** hard-rejected — dropping it alone is a no-op because
+  unknown tools are accepted, which had left `agents/jira-manager.md`'s deny-list entry a silent no-op.
+  That entry is removed. Stale-tool messages are now per-tool; the shared one asserted "the dispatcher is
+  `Agent`, not `MultiEdit`", which is nonsense.
+- Four documentation defects, each now gated by a mutation-proved test: README's false "all five review
+  agents now run on `opus`"; CLAUDE.md's incomplete alias list and missing effort guidance; the
+  alias-versus-version-pin conflation in CLAUDE.md and AGENT_CONTRACTS; and a superseded
+  `claude-sonnet-4-6` id in `agents/ai-engineer.md`.
+
 ## [2.5.3] — 2026-07-20
 
 Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/PLUGIN_AUDIT_2026-07-19.md`

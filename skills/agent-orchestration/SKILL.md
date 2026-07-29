@@ -5,6 +5,7 @@ description: >
   when coordinating multi-agent workflows, determining which agents to run, or
   deciding execution order. Defines dependency rules and parallelization strategies
   for all agent combinations.
+effort: xhigh
 allowed-tools: Agent, Read, Grep, Glob
 ---
 

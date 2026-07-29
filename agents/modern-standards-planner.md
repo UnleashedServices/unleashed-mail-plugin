@@ -10,6 +10,7 @@ description: >
   approach for", "plan this feature", when starting a new feature, before any
   major refactor, or when the user asks about current best practices for any
   technology in the stack.
+effort: xhigh
 model: inherit
 # Scoped by DENY-LIST (not an allowlist) so the install-specific Context7 MCP prefix is still inherited
 # (an allowlist would block it). This planner researches UNTRUSTED web/Context7 content, so it must not be

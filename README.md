@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.5.3
+# UnleashedMail — Claude Code Plugin v2.6.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,24 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.6.0
+
+- **Opus 5 alignment (COREDEV-2583).** Requires **Claude Code ≥ 2.1.219** (Opus 5's floor); CI now pins
+  2.1.220.
+- **`effort: xhigh` is pinned on every agent and every skill** (42 assets) and enforced by CI. Previously
+  *nothing* set `effort`, so every asset ran at whatever the session carried — including `low`. Note the
+  pin is an override in both directions, and `CLAUDE_CODE_EFFORT_LEVEL` still outranks it.
+- **Model tiering is now three tiers, set by consequence rather than cost.** `security-reviewer`,
+  `prompt-review` and `concurrency-reviewer` move to `opus`; the orchestrator and implementation agents
+  stay `inherit`; first-pass reviewers, personas and fixed-scope managers stay `sonnet`.
+- **Validator fixes.** `model: opus[1m]` and the other long-context aliases now validate (they were
+  rejected, blocking long context). `MultiEdit` is hard-rejected as a removed tool; `TaskOutput` and
+  `EnterPlanMode` are no longer false-rejected as typos. Skills get frontmatter key validation for the
+  first time, derived from the pinned runtime schema. A new warnings channel reports keys Claude Code
+  ignores for plugin sub-agents without failing the build.
+- **Docs.** The subagent spawn-depth dependency is declared in AGENT_CONTRACTS §5, and four verified
+  documentation defects are corrected and gated by tests.
 
 ### v2.5.3
 
@@ -101,7 +119,7 @@ its own guarantees.
 ### v2.3.0
 
 - **Deterministic review-synthesizer MCP server** — the plugin now bundles a local, zero-dependency stdio MCP server ([`mcp/review-synthesizer/`](mcp/review-synthesizer/), declared in [`.mcp.json`](.mcp.json)) that performs the review orchestrator's Step-5 synthesis **in code** instead of LLM prose. It validates the sub-reviewers' JSON findings, scope-filters (changeset + `structural-pipeline`), and dedups via category-family + line-overlap with cross-family ownership routing — **cluster-and-cross-link, never silently dropping a fix** — then returns a provisional verdict plus `blockersToVerify`. `swift-reviewer` calls it via `mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`, then owns the verify gate. The server has **no repo access, no network, no secrets** — pure compute. See [MCP Servers](#mcp-servers-1).
-- **Review-agent overhaul** — the four sub-reviewers now emit a structured **JSON findings array** (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope · finding · evidence · fix`) instead of a prose table, so `swift-reviewer` cross-references and deduplicates on `file:line`, not paraphrase. `concurrency-reviewer` broadened to the **correctness owner** (logic/error-handling); provider-parity, test-coverage, and build/lint/test emit gating `verification` rows; a **verify gate** confirms each blocker against the code before REQUEST CHANGES (unconfirmable → NEEDS DISCUSSION); and **structural-pipeline** review widens scope to the whole pipeline (not just the diff) when key subsystems — API calls, AI flows, syncs — change. All five review agents now run on `opus`.
+- **Review-agent overhaul** — the four sub-reviewers now emit a structured **JSON findings array** (`severity · confidence · sourceAgent · category · file · line · lineEnd · scope · finding · evidence · fix`) instead of a prose table, so `swift-reviewer` cross-references and deduplicates on `file:line`, not paraphrase. `concurrency-reviewer` broadened to the **correctness owner** (logic/error-handling); provider-parity, test-coverage, and build/lint/test emit gating `verification` rows; a **verify gate** confirms each blocker against the code before REQUEST CHANGES (unconfirmable → NEEDS DISCUSSION); and **structural-pipeline** review widens scope to the whole pipeline (not just the diff) when key subsystems — API calls, AI flows, syncs — change. Review agents are tiered by consequence (AGENT_CONTRACTS §11): `security-reviewer`, `prompt-review` and `concurrency-reviewer` pin `opus`; `accessibility-auditor` and `ux-perf-reviewer` pin `sonnet`.
 - **The full stdlib-only unit suite** for the synthesizer ([`mcp/review-synthesizer/tests/`](mcp/review-synthesizer/tests/), stdlib `unittest`, no deps), discovered — not a hardcoded count — covering schema validation/quarantine, dedup/ownership/scope/verdict, render, and the full JSON-RPC protocol via subprocess. Run: `python3 -m unittest discover -s mcp/review-synthesizer/tests`.
 - **Reviewed to convergence** by Codex (`gpt-5.5`) and Gemini (`gemini-3.1-pro`) over four rounds until both approved. A new [`CHANGELOG.md`](CHANGELOG.md) tracks releases going forward.
 

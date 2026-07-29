@@ -82,7 +82,11 @@ jobs:
         env:
           # Manual pin: there is no package.json here, so Dependabot's npm ecosystem does not
           # cover this. Bump it alongside the actionlint/gitleaks version pins below.
-          CLAUDE_CODE_VERSION: 2.1.209
+          # Opus 5 requires >= 2.1.219 (COREDEV-2583 §4.8). This pin drives
+          # `claude plugin validate`, so the schema authority must not sit below the
+          # floor the plugin targets. 2.1.220 is the `latest` dist-tag; pinning ahead of
+          # `stable` is deliberate because stable is below the Opus 5 floor.
+          CLAUDE_CODE_VERSION: 2.1.220
         run: |
           set -euo pipefail
           npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"

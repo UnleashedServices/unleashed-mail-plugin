@@ -220,3 +220,62 @@ class B7_CFRProtocolConsistency(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class COREDEV2583_DocDefects(unittest.TestCase):
+    """§4.10 — all FOUR verified documentation defects, each independently mutation-proved.
+
+    Round 1 of this plan's gate promised assertions for only two of the four, which contradicted
+    its own §3 ("CI must be able to tell") and §6's blanket mutation requirement.
+    """
+
+    # (a) README claimed "All five review agents now run on `opus`" — false then (all five pinned
+    #     `sonnet`) and still false after §4.2 (3 of 5), which is worse because it reads plausible.
+    def test_a_readme_does_not_claim_all_five_reviewers_are_opus(self):
+        readme = _read("README.md")
+        self.assertNotIn("All five review agents now run on `opus`", readme)
+        self.assertNotRegex(readme, r"all five review agents.{0,20}`opus`",
+                            "README must not re-assert the uniform-opus claim in any casing")
+
+    def test_a_readme_states_the_actual_tiering(self):
+        readme = _read("README.md")
+        for agent in ("security-reviewer", "prompt-review", "concurrency-reviewer"):
+            self.assertIn(agent, readme, f"README must name {agent} as an `opus` reviewer")
+
+    # (b) the alias list must be complete against the pinned runtime table.
+    def test_b_claude_md_alias_list_is_complete(self):
+        claude_md = _read("CLAUDE.md")
+        for alias in ("`best`", "`opusplan`", "`sonnet[1m]`", "`opus[1m]`", "`fable[1m]`"):
+            self.assertIn(alias, claude_md, f"CLAUDE.md model alias list omits {alias}")
+
+    def test_b_claude_md_denies_the_nonexistent_default_alias(self):
+        # `default` is NOT in the runtime table; an earlier draft of this plan proposed adding it.
+        self.assertIn("no** `default` alias", _read("CLAUDE.md"))
+
+    def test_b_claude_md_documents_the_mandatory_effort_pin(self):
+        claude_md = _read("CLAUDE.md")
+        self.assertIn("`effort: xhigh`", claude_md)
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL", claude_md,
+                      "the honest limit (the env var outranks frontmatter) must be stated")
+
+    # (c) alias vs version pin — the old guidance argued against something the alias does not do.
+    def test_c_alias_versus_version_pin_is_distinguished(self):
+        for rel in ("CLAUDE.md", "AGENT_CONTRACTS.md"):
+            with self.subTest(rel=rel):
+                text = _read(rel)
+                self.assertNotIn("Prefer `inherit`/`sonnet` over hard-pinning `opus`", text,
+                                 f"{rel} still carries the superseded alias/pin conflation")
+                self.assertIn("alias", text)
+
+    # (d) no agent body may teach from a superseded model id.
+    def test_d_no_agent_body_cites_a_superseded_model_id(self):
+        stale = re.compile(r"claude-(?:sonnet|opus|haiku)-4-\d")
+        offenders = []
+        agents_dir = os.path.join(_ROOT, "agents")
+        for name in sorted(os.listdir(agents_dir)):
+            if not name.endswith(".md"):
+                continue
+            for m in stale.finditer(_read(os.path.join("agents", name))):
+                offenders.append(f"{name}: {m.group(0)}")
+        self.assertEqual(offenders, [],
+                         "agent bodies must not teach from a superseded model id")

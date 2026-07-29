@@ -4,6 +4,7 @@ description: >
   SwiftUI + AppKit hybrid architecture patterns for UnleashedMail. Activates when
   building UI components, creating views or view models, or working on navigation,
   state management, or AppKit/SwiftUI bridging.
+effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

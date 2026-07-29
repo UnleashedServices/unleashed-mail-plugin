@@ -245,6 +245,20 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 5. `swift-reviewer` owns the **verify gate**: it opens each `blockersToVerify` `file:line`, confirms the blocker against the code, and only then decides the final verdict (unconfirmed blockers → NEEDS DISCUSSION, not REQUEST CHANGES). A sub-reviewer that returned **BLOCKED** is the explicit form of a did-not-run uncertainty → a Needs-Confirmation item → **NEEDS DISCUSSION** (**not** a `verification` blocker, which is confirmed-by-construction and gates REQUEST CHANGES); a **PARTIAL** reviewer's findings are kept for its completed scope plus a non-gating `verification` warning naming the files it did not reach. If the tool is unavailable it applies the documented rules in `mcp/review-synthesizer/README.md` manually
 6. `jira-manager` logs verdict to Jira
 
+**Runtime dependency — subagent spawn depth (COREDEV-2583 §4.9).** The panel is a two-level dispatch:
+`swift-reviewer` sits at depth 1 and the five reviewers at depth 2. Claude Code's default spawn depth
+has moved three times — 5 (fixed) up to 2.1.216, **1** in 2.1.217–2.1.218, and 3 from 2.1.219 (tunable
+via `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). **At the limit Claude Code withholds the `Agent` tool**, so
+the panel cannot spawn. This plugin therefore requires **Claude Code ≥ 2.1.219**, which the CI pin
+(`.github/workflows/plugin-ci.yml`) tracks.
+
+It fails **closed**, not silently: with no reviewer reports held, `scripts/review/reviewer-roster.sh`
+classifies all five as `UNATTRIBUTED` and exits 3 (mutation-proved by
+`scripts/tests/test_reviewer_roster.py::test_empty_stdin_classifies_everyone_and_fails_closed`). No
+additional detection is warranted — and specifically **not** a "zero captures ⇒ NEEDS DISCUSSION" rule:
+zero captures does **not** imply the panel did not run, because five readable in-session handoffs are
+intentionally sufficient even when the capture hooks fail (`test_all_five_held_is_zero_cost`).
+
 ### Base branch detection
 
 `swift-reviewer` must detect the correct base — feature PRs target the matching `1.0X.0000` version
@@ -357,22 +371,40 @@ Agent `model:` is set by role so future model generations are a one-line policy 
 fleet-wide edit:
 
 Agent names below are listed in full (no `/` shorthand) so this table stays machine-checkable:
-`validate-plugin-assembly.py` parses these two rows and asserts every agent's frontmatter `model:`
+`validate-plugin-assembly.py` parses these rows and asserts every agent's frontmatter `model:`
 (defaulting to `inherit` when the key is omitted) equals its tier here, and that every `agents/*.md`
 appears in exactly one row — so this policy can no longer silently drift from the shipped frontmatter.
 
 | Tier | `model:` | Agents |
 |------|----------|--------|
+| Deep-review specialists | `opus` | security-reviewer, prompt-review, concurrency-reviewer |
 | Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, ai-engineer, ci-engineer, code-simplifier, db-engineer, graph-api-debugger, logic-engineer, modern-standards-planner, tester, ui-engineer, xcode-build-fixer |
-| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, concurrency-reviewer, docs-engineer, enterprise-stakeholder, jira-manager, prompt-review, release-manager, security-reviewer, smb-entrepreneur, ux-perf-reviewer |
+| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, docs-engineer, enterprise-stakeholder, jira-manager, release-manager, smb-entrepreneur, ux-perf-reviewer |
 
-Rationale: the orchestrator and implementation/diagnostic engineers inherit so they match whatever the
-user is running (and scale up on demanding work); first-pass reviewers and personas pin `sonnet` for
-cost-efficient, consistent breadth. `docs-engineer`, `jira-manager`, and `release-manager` also pin
-`sonnet` — their work is bounded-scope bookkeeping (doc edits, the CFR label state machine, release/ticket
-hygiene) where sonnet is capable and a costlier session model is wasted; a maintainer who wants any of the
-three to scale with the session can flip its frontmatter to `model: inherit` and move it to the first row
-in the same edit (the validator keeps the two in sync). Prefer `inherit`/`sonnet` over hard-pinning `opus`.
+Rationale (rewritten for COREDEV-2583; the previous version argued from **cost**, which is no longer a
+constraint the maintainer accepts): the tier is now set by **consequence of being wrong**.
+
+- **`opus` — deep-review specialists.** `security-reviewer` (credentials, OAuth, injection, CI),
+  `prompt-review` (AI prompt/call-site safety, injection, PII-in-logs) and `concurrency-reviewer` — the
+  declared **correctness owner**, which absorbs the logic and error-handling findings the other reviewers
+  explicitly punt. A miss by any of these ships a defect the rest of the pipeline is not looking for.
+- **`inherit` — orchestrator + implementation/diagnostic engineers.** They match whatever the user is
+  running and scale up on demanding work.
+- **`sonnet` — first-pass reviewers, planning personas, fixed-scope managers.** Breadth and
+  bounded-scope bookkeeping (doc edits, the CFR label state machine, release/ticket hygiene), where a
+  finding that is missed is caught by the deep-review tier or is low-consequence.
+
+A maintainer who wants any agent to scale with the session flips its frontmatter and moves it between
+rows **in the same edit** — the validator keeps the two in sync and fails otherwise.
+
+**Effort policy: every agent and every skill pins `effort: xhigh`. There is no effort tiering.** The
+floor is unconditional, so tier selection is a *capability* decision only. Note frontmatter `effort` is
+an override in both directions — it pulls a `low` session up and a `max` session down — and
+`CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor cannot be guaranteed from inside the plugin.
+
+Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
+updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
+replaces ("prefer `inherit`/`sonnet` over hard-pinning `opus`") conflated the two.
 
 ---
 
