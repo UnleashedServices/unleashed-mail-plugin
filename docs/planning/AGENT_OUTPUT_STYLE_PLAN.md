@@ -1,8 +1,7 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 5**, revised after four dual-gate rounds. Round 4: **both**
-`REQUEST_CHANGES` — the plan was found to violate its own §11 rule; §4.2 is rewritten in conditional
-form throughout and the F-exclusivity claim is retracted.
+**Status:** Planning — **round 6**, revised after five dual-gate rounds. Round 5: gemini `APPROVE`,
+codex `REQUEST_CHANGES` — rule 4 was a bare adopt that reopened §4.2-A; now adapted.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -89,7 +88,7 @@ adaptation. Every upstream rule now carries a recorded disposition:
 | 1 | Lead with the next action | **Adopt** | For a reviewer the "action" is the finding or verdict, not a shell command |
 | 2 | Number multi-step tasks | **Adopt** | Matches the existing phase/step vocabulary in `swift-reviewer` and the workflow skills |
 | 3 | End with one concrete next action | **Adapt — carve-out** | Where an output has a **mandated final element** (`VERDICT:` line, final fenced JSON block), the next action goes *before* it. Never last. See §4.2-C/E |
-| 4 | Suppress tangents | **Adopt** | |
+| 4 | Suppress tangents | **Adapt — carve-out** | Upstream offers a second issue "as a separate question". In a review, an independent **in-scope** finding deferred that way leaves the JSON array — the same failure §4.2-A protects. *Suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array.* See §4.2-A |
 | 5 | Restate state every turn | **Adopt** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost |
 | 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
 | 7 | Make completed work visible | **Adopt** | |
@@ -97,7 +96,7 @@ adaptation. Every upstream rule now carries a recorded disposition:
 | 9 | Cap lists at 5 items | **Adapt — restate positively** | Upstream says **split** a long list into "do now" vs "later" — it does not say drop. But a *deferred* item is still absent from a findings array, so: *rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings.* Prose only. See §4.2-A |
 | 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble**. See §4.2-B/D |
 
-Nothing is omitted; three rules are adapted and one is restated positively. **Pin the upstream commit in
+Nothing is omitted; **four** rules are adapted (3, 4, 6, 10) and one is restated positively (9). **Pin the upstream commit in
 the section** so this audit is reproducible when upstream moves.
 
 **Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
@@ -107,9 +106,20 @@ findings, statuses and verdicts elsewhere (`:90`, `:242`), so a whole-file grep 
 
 **Round-2 correction.** Asserting rule *titles* is not enough: reverting rule 9's positive restatement,
 deleting rule 3's mandated-final-element placement, or flipping an adapted rule back to a bare adopt
-would leave all ten titles intact and still pass. Each of the four **adapted** rules (3, 6, 9, 10) needs
-a marker phrase asserted and mutation-tested independently of its title — e.g. rule 3's "before it,
-never last", rule 9's "never cap, omit, or defer", rule 10's "payload, not preamble".
+would leave all ten titles intact and still pass. Each of the five rules that are **not** a bare adopt
+(3, 4, 6, 9, 10) needs a marker phrase asserted and mutation-tested independently of its title:
+
+| Rule | Required marker (asserted and independently deletion-mutated) |
+|---|---|
+| 3 | "before it, never last" |
+| 4 | "never defer an in-scope finding out of the current array" |
+| 6 | "whoever runs the steps" |
+| 9 | "never cap, **split**, omit, or defer" — the word **split** must be asserted separately |
+| 10 | "payload, not preamble" |
+
+**Round-5 correction.** Rule 9's marker previously omitted `split`, so reverting the row to its round-4
+wording — dropping both the source's split characterisation *and* the prohibition on splitting machine
+findings — would have satisfied every described test. The `split` token is now its own assertion.
 
 ### 4.2 — Six machine contracts would be damaged by the rules as written (High)
 
@@ -123,9 +133,9 @@ Each row states the **mechanism** the rule can set in motion and the **condition
 | | Contract | Where | Mechanism, and the conditional cost |
 |---|---|---|---|
 | **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | Rule 9 can prompt a reviewer to **split or defer** a long findings list (upstream says "split into *do now* vs *later*", not drop — but a deferred item is absent from the array all the same). The synthesizer dedups/merges assuming the array is complete, so **if** a deferred finding was a blocker, the verdict can downgrade. **Executed proof:** six findings including a blocker → `REQUEST_CHANGES`; the same set capped to five → `APPROVE_WITH_SUGGESTIONS` |
-| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | Rule 10 can prompt dropping it as preamble. **It does not become a clean pass** — a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). Cost is **one** re-dispatch whose *fresh* report is used (`swift-reviewer.md:217`); `NEEDS DISCUSSION` follows **only if** that retry is unavailable, exhausted, or still unusable |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | Rule 10 can prompt dropping it as preamble. **It does not become a clean pass** — a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). It requests **up to one** re-dispatch, whose *fresh* report is then used (`swift-reviewer.md:217`) — but the bound is *"at most ONE spawn per reviewer per review"*, and **if that reviewer's single retry is already spent, no further spawn is permitted**: it goes straight to Needs Confirmation → `NEEDS DISCUSSION` (`swift-reviewer.md:486-489`). So the cost is a retry *if the budget is unspent*, and a degraded verdict *if it is not* |
 | **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | Rule 3 can prompt appending a next action *after* it, breaching the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when **absent**, and `review-verdict.py` takes reviewer statuses as explicit CLI arguments rather than by transcript position |
-| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | Rule 10 can prompt treating it as preamble. It is the **only** channel a subagent has to signal it needs user confirmation — it has no `AskUserQuestion`. **If** stripped, the invoking session sees an ordinary result instead of a hand-back, so the confirmation the agent was demanding is silently never surfaced |
+| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | Rule 10 can prompt treating it as preamble. It is the standardised signal a subagent uses to hand back — it has no `AskUserQuestion`. **If** dropped, the invoking session sees an ordinary result rather than a recognisable hand-back. Note the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:20-24`), so the substance is not necessarily lost — what is lost is the machine-recognisable marker that this needs a human, which is what makes the omission easy to miss |
 | **E** | **Final fenced JSON block position** | all five reviewers | Same mechanism as C, from rule 3: content appended after the block breaches its mandated final position |
 | **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-286`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | Rule 9 can prompt splitting a long `Remaining:` list; rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
 
@@ -182,10 +192,10 @@ so a section-level notice suffices; no `LICENSE` vendoring.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | A reviewer splits or defers findings to satisfy a list cap, and a deferred item was a blocker | **High** without the carve-out | §4.2-A — **one of two contracts that can downgrade a verdict**, and the only one proven by execution (6 findings → `REQUEST_CHANGES`; capped to 5 → `APPROVE_WITH_SUGGESTIONS`). Rule 9 is restated positively so the prose-only boundary sits in the rule itself, not only the carve-out |
-| A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected across rounds 3–4:** not a fail-open (`test_absent_sidecar_is_unattributed` proves it fails **closed** to `UNATTRIBUTED`), and not a guaranteed `NEEDS DISCUSSION` either — it costs **one re-dispatch**, and only an unavailable or still-unusable retry degrades the verdict |
+| A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected across rounds 3–5:** not a fail-open (`test_absent_sidecar_is_unattributed` proves it fails **closed**), and not a guaranteed `NEEDS DISCUSSION` — it requests **up to one** re-dispatch, bounded by the "at most ONE spawn per reviewer" budget; the verdict degrades only when that budget is already spent or the retry is still unusable |
 | A reviewer splits `Remaining:` and the structural remainder falls in the deferred half | **High** without the carve-out | §4.2-F — the **other** contract that can downgrade a verdict: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and `reviewer-roster.sh` is the only reader that can preserve it. Earlier drafts wrongly called this the *only* such case |
 | Something is emitted after the `VERDICT:` line | Medium | §4.2-C/E; rule 3 is adapted to place the next action *before* a mandated final element |
-| An agent drops its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; it is the **only** channel a subagent has to demand user confirmation, so if dropped the hand-back is silently never surfaced. The clause states these are payload, not preamble |
+| An agent drops its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; the body normally still carries the diagnosis, so the substance survives — what is lost is the machine-recognisable hand-back marker, which is precisely what makes the loss easy to miss. The clause states these are payload, not preamble |
 | Style rules read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
 | **Ships documentation and a presence gate, but no behavioural change** | **Medium — accepted and stated** | Raised from Low in round 2. This ticket adds no runtime injection and no compliance evaluation. The doc gate proves the text is *present*, never that agents *obey* it. Obedience is a `COREDEV-2599` eval obligation, recorded there |
 | Upstream moves and the audit becomes unreproducible | Low | Commit pinned in the section (§4.4) |
@@ -346,3 +356,36 @@ the naming of it, in the rows earlier rounds had not scrutinised. The rule only 
 applied row-by-row rather than stated once. That is worth carrying into §13's implementation: a
 precedence clause is not self-enforcing, which is exactly why each rule and each contract gets its own
 mutation test rather than one assertion for the section.
+
+---
+
+## 13. Round-5 gate outcome
+
+**gemini `APPROVE`**, no findings — it re-cloned upstream to verify rule 9's wording and read all six
+rows adversarially for residual guaranteed phrasing.
+
+**codex `REQUEST_CHANGES`** — three findings, all confirmed and fixed:
+
+1. **High — rule 4 was a bare adopt that reopens §4.2-A.** Upstream rule 4 says to finish the first
+   issue and *"offer the second as a separate question"*. In a code review, an independent **in-scope**
+   finding deferred that way is absent from the current JSON array — exactly the failure A protects, and
+   exactly the failure proven to downgrade a verdict. Rule 4 is now **adapted**, distinguishing an
+   out-of-scope tangent (suppress) from an in-scope finding (never defer out of the array), with its own
+   mutation-tested marker. Five rounds of review passed over this because attention was on the rules
+   already flagged as dangerous; a bare adopt attracted none.
+2. **Medium — B and D still carried guaranteed outcomes.** B said omission "costs one re-dispatch";
+   the real bound is *"at most ONE spawn per reviewer per review"* and **if that retry is already spent
+   no further spawn is permitted** (`swift-reviewer.md:486-489`) — so it is *up to* one, and a spent
+   budget degrades the verdict immediately. D said the confirmation is "silently never surfaced"; in
+   fact the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:20-24`),
+   so what is lost is the machine-recognisable marker, not necessarily the substance.
+3. **Medium — the round-4 fidelity fix was not itself mutation-proved.** Rule 9's text gained "never
+   cap, **split**, omit, or defer", but the required marker omitted `split` — so reverting the row to its
+   round-4 wording would have satisfied every described test. `split` is now an independent assertion,
+   and §4.1 carries an explicit marker table rather than an "e.g." list.
+
+**The lesson this round adds.** Rounds 1–4 hardened the rules already known to be dangerous. Round 5
+found the risk in a rule marked **safe** — a bare adopt, which by construction has no carve-out, no
+marker, and no test. *Every* rule needed a disposition, and a disposition of "adopt" is a claim that
+must be defended, not a default. §4.1's table now carries five non-bare dispositions where round 1
+carried none.
