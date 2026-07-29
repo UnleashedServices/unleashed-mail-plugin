@@ -1,6 +1,7 @@
 # Agent Output Style Plan
 
-**Status:** Planning — round 2, revised after the round-1 dual gate (both `REQUEST_CHANGES`).
+**Status:** Planning — **round 3**, revised after two dual-gate rounds. Round 2: gemini `APPROVE`,
+codex `REQUEST_CHANGES` (two High findings, both confirmed by execution and fixed here).
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -22,9 +23,10 @@ this plugin's output is mostly consumed by *software*, not read by a person.
 
 That distinction is the whole ticket. Five reviewers emit JSON findings arrays that `synthesize_review`
 dedups and merges; each is preceded by a `Status:` line that `swift-reviewer` reads *before* the
-findings; the plan-review gate parses a trailing `VERDICT:` line deterministically; and a subagent with
-no user channel signals by prefixing its result `BLOCKED — …`. **Every one of those is a place where a
-well-meaning output-style rule can silently destroy a signal we depend on** (§4.2).
+findings, and a detail trailer (`Remaining:` and friends) that the roster forwards as safety
+information; the plan-review gate parses a trailing `VERDICT:` line deterministically; and a subagent
+with no user channel signals by prefixing its result `BLOCKED — …`. **Every one of those is a place
+where a well-meaning output-style rule can silently destroy a signal we depend on** (§4.2).
 
 **Maintainer decisions (2026-07-29), locked:**
 
@@ -46,7 +48,7 @@ governs cross-agent behaviour; and **importing upstream's persistence hook is de
 ## 2. Scope
 
 **In:** one new numbered section in `AGENT_CONTRACTS.md` carrying an explicit disposition for **all ten**
-upstream rules, the precedence carve-out naming **all five** protected machine contracts, and
+upstream rules, the precedence carve-out naming **all six** protected machine contracts, and
 doc-gate assertions with per-rule and per-contract mutation coverage. Attribution to the pinned source.
 
 **Out:** any new skill or agent; any change to the reviewers' JSON schema, `synthesize_review`, the
@@ -98,20 +100,28 @@ Nothing is omitted; three rules are adapted and one is restated positively. **Pi
 the section** so this audit is reproducible when upstream moves.
 
 **Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
-file — and asserts each adopted rule is present. Section-scoped extraction is required because
-`AGENT_CONTRACTS.md` already mentions JSON findings, statuses and verdicts elsewhere, so a whole-file
-grep would false-pass. **One deletion mutation per rule**: remove any single rule → that case fails.
+file — and asserts each rule is present **together with a required normative marker for its
+disposition**. Section-scoped extraction is required because `AGENT_CONTRACTS.md` already mentions JSON
+findings, statuses and verdicts elsewhere (`:90`, `:242`), so a whole-file grep would false-pass.
 
-### 4.2 — Five machine contracts would be damaged by the rules as written (High)
+**Round-2 correction.** Asserting rule *titles* is not enough: reverting rule 9's positive restatement,
+deleting rule 3's mandated-final-element placement, or flipping an adapted rule back to a bare adopt
+would leave all ten titles intact and still pass. Each of the four **adapted** rules (3, 6, 9, 10) needs
+a marker phrase asserted and mutation-tested independently of its title — e.g. rule 3's "before it,
+never last", rule 9's "never cap, omit, or defer", rule 10's "payload, not preamble".
 
-**Root cause — the load-bearing finding.** Round 1 named three collisions. There are **five**, and the
-two that were missed are the most dangerous because both are *position* contracts, which "no preamble"
-and "end with a next action" attack from opposite ends of the response.
+### 4.2 — Six machine contracts would be damaged by the rules as written (High)
+
+**Root cause — the load-bearing finding.** Round 1 named three collisions; round 2 named five. There are
+**six**. Two are *position* contracts, attacked from opposite ends of a response by "no preamble" and
+"end with a next action"; the sixth (**F**) is a *completeness* contract on a field whose truncation
+silently downgrades a gate.
 
 | | Contract | Where | What a naive rule does |
 |---|---|---|---|
 | **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | "Cap lists at 5" makes a reviewer drop findings to hit a count. The synthesizer dedups/merges **assuming the array is complete** — this is a correctness regression, not concision |
-| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. Consequence is severe and specific: the contract says *"a `BLOCKED` reviewer returning `[]` means 'could not review,' not 'clean'"* — so stripping the status makes a **blocked reviewer read as a clean pass**. A fail-open in the review gate, the exact class `COREDEV-2503` spent nine rounds closing |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. **It does not become a clean pass** — see the round-2 correction below — but attribution is lost: a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:188`). Cost is **mandatory re-dispatch → `NEEDS DISCUSSION`**: wasted work and a degraded verdict |
+| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-287`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded by `reviewer-roster.sh:238` | Rule 9 caps a long `Remaining:` list; rules 4/10 suppress the fields as "metadata". **This is the one that can actually downgrade a gate**: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — if it does not forward `remaining`, nothing can preserve it"*. Truncated remainder can become a non-gating warning |
 | **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | "End with one concrete next action" puts something *after* it; deterministic parsing degrades to prose inference |
 | **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | "No preamble" strips the house signal for a subagent with **no user channel** |
 | **E** | **Final fenced JSON block position** | all five reviewers | Same attack as C, from rule 3 |
@@ -122,17 +132,20 @@ explicitly says harness constraints win. The real conflict is upstream **rule 3*
 concrete next action"), which is a *positional* requirement. Attributing it to the wrong sentence would
 have sent an implementer looking for a rule that does not say what the plan claimed.
 
-**Fix.** The section carries a normative precedence clause naming **all five**:
+**Fix.** The section carries a normative precedence clause naming **all six**:
 
 > These rules govern **prose written for a human reader**. Where a rule conflicts with a
 > machine-readable contract — the completeness of a JSON findings array, the `Status:` line that
-> precedes it, the `VERDICT:` line that must end a review transcript, the final fenced JSON block, or a
-> `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and position of
-> a machine-consumed payload are never traded for brevity. `Status:` and `BLOCKED — …` are payload, not
-> preamble.
+> precedes it, the **Output Contract detail trailer** that follows it (`Blocker Description`,
+> `What Was Attempted`, `Completed`, `Remaining`, `Confidence`), the `VERDICT:` line that must end a
+> review transcript, the final fenced JSON block, or a `BLOCKED — …` result prefix — **the contract wins
+> and the rule yields**. Completeness and position of a machine-consumed payload are never traded for
+> brevity. In particular `Remaining:` is **safety information, never a list to shorten**. `Status:`,
+> the trailer, and `BLOCKED — …` are payload, not preamble.
 
-**Proof.** A doc-gate case asserting the clause exists **and names all five contracts**, with **one
-deletion mutation per contract** — remove any single name → the case fails. Mirrors the existing
+**Proof.** A doc-gate case asserting the clause exists **and names all six contracts**, with **one
+deletion mutation per contract** — remove any single name → the case fails. For **F**, additionally
+assert the five trailer field names and the "never a list to shorten" clause for `Remaining:`. Mirrors the existing
 `test_verdict_vocab_consistent_across_all_three` discipline in that file (13 cases pass today).
 
 ### 4.3 — Placement (Low)
@@ -160,7 +173,8 @@ so a section-level notice suffices; no `LICENSE` vendoring.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | A reviewer truncates a findings array to satisfy a list cap | **High** without the carve-out | §4.2-A, and rule 9 is restated positively so the prose-only boundary is in the rule itself, not only the carve-out |
-| A reviewer omits `Status:`, making a BLOCKED reviewer read as clean | **High** without the carve-out | §4.2-B. This is the most damaging failure in the set — a gate fail-open |
+| A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected in round 3:** this is *not* a fail-open — `test_absent_sidecar_is_unattributed` proves an absent status fails **closed** to `UNATTRIBUTED`. The real cost is mandatory re-dispatch and a degraded `NEEDS DISCUSSION`, not a clean pass |
+| A reviewer truncates `Remaining:` in the Output Contract trailer | **High** without the carve-out | §4.2-F — the one genuinely gate-downgrading case: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and `reviewer-roster.sh` is the only reader that can preserve it |
 | Something is emitted after the `VERDICT:` line | Medium | §4.2-C/E; rule 3 is adapted to place the next action *before* a mandated final element |
 | An agent strips its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; the clause states these are payload, not preamble |
 | Style rules read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
@@ -190,7 +204,7 @@ three contract names, so deleting an individual adopted rule would still have pa
 ## 7. Implementation order
 
 1. §4.3 — insert §13 with the ten-rule disposition.
-2. §4.2 — the precedence clause naming all five contracts. **Not separable from step 1**; the rules must
+2. §4.2 — the precedence clause naming all six contracts. **Not separable from step 1**; the rules must
    never land without it.
 3. §4.4 — attribution + pinned commit.
 4. §4.1 + §4.2 — the section-scoped doc-gate cases with per-rule and per-contract mutations.
@@ -222,3 +236,37 @@ The three round-1 open questions are settled; recorded so round 2 does not reope
   six-finding synthesizer probe (six in, six retained) and ran the existing doc gates (13/13).
 - This plan changes no runtime behaviour. It is documentation plus a drift gate — deliberately, and
   §5 records that limit rather than implying more.
+
+---
+
+## 10. Round-2 gate outcome
+
+**gemini `APPROVE`.** Cloned upstream at the pinned commit, confirmed exactly ten rules with ten
+dispositions, verified contracts A–E against the tree, **searched for a sixth and reported none**, and
+confirmed the whole-file-grep false-pass by showing `findings|status|verdict` appear dozens of times
+outside the insertion point.
+
+**codex `REQUEST_CHANGES`** — two High findings, both confirmed here by execution, both fixed above:
+
+1. **Contract B's consequence was factually wrong.** The draft claimed stripping `Status:` makes a
+   `BLOCKED` reviewer's `[]` read as a clean pass. It does not. The COREDEV-2490 roster redesign already
+   closed that: a bare array is not a handoff (`agents/swift-reviewer.md:148` — "THE STATUS IS THE
+   ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), an absent sidecar is
+   `UNATTRIBUTED` (`reviewer-roster.sh:188`), and `scripts/tests/test_reviewer_roster.py:216`
+   (`test_absent_sidecar_is_unattributed`) proves it fails **closed**. Verified by running the roster:
+   absent status → five `UNATTRIBUTED`, exit 3. The plan had invented a fail-open that does not exist.
+2. **A sixth contract was missing** — the Output Contract detail trailer. Confirmed real:
+   `agents/security-reviewer.md:280-287` mandates `Blocker Description` / `What Was Attempted` /
+   `Completed` / `Remaining` / `Confidence`; `capture.py` parses them via `_STATUS_FIELDS`; and
+   `reviewer-roster.sh:238` states it is *"the ONLY sidecar reader — so if it does not forward
+   `remaining`, nothing can preserve it. Discard the ATTRIBUTION, never the INFORMATION."* Rule 9 could
+   cap a long `Remaining:` list, downgrading a gating `NEEDS DISCUSSION` to a non-gating warning. This
+   is the genuinely dangerous case, and it is the one gemini's sixth-contract search missed.
+
+Codex's third (Medium) finding — that asserting rule *titles* would let an adapted rule silently revert
+— is fixed in §4.1's round-2 correction: each adapted rule now needs its own mutation-tested marker.
+
+**Pattern worth recording:** the draft was wrong in *both* directions at once — it overstated B's
+severity (claiming a fail-open the codebase had already closed) while understating coverage (missing F
+entirely). Severity inflation and coverage gaps are not opposite errors; both come from reasoning about
+the contract from the plan rather than from the code.
