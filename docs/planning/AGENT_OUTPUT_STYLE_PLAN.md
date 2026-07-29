@@ -154,11 +154,11 @@ Each row states the **mechanism** the rule can set in motion and the **condition
 | | Contract | Where | Mechanism, and the conditional cost |
 |---|---|---|---|
 | **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | Rule 9 can prompt a reviewer to **split or defer** a long findings list (upstream says "split into *do now* vs *later*", not drop — but a deferred item is absent from the array all the same). The synthesizer dedups/merges assuming the array is complete, so **if** a deferred finding was a blocker, the verdict can downgrade. **Executed proof:** six findings including a blocker → `REQUEST_CHANGES`; the same set capped to five → `APPROVE_WITH_SUGGESTIONS` |
-| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | Rule 10 can prompt dropping it as preamble. **It does not become a clean pass** — a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). It requests **up to one** re-dispatch, whose *fresh* report is then used (`swift-reviewer.md:217`) — but the bound is *"at most ONE spawn per reviewer per review"*, and **if that reviewer's single retry is already spent, no further spawn is permitted**: it goes straight to Needs Confirmation → `NEEDS DISCUSSION` (`swift-reviewer.md:486-489`). So the cost is a retry *if the budget is unspent*, and a degraded verdict *if it is not* |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:266-279` | Rule 10 can prompt dropping it as preamble. **It does not become a clean pass** — a bare array is not a handoff (`agents/swift-reviewer.md:149`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). It requests **up to one** re-dispatch, whose *fresh* report is then used (`swift-reviewer.md:218`) — but the bound is *"at most ONE spawn per reviewer per review"*, and **if that reviewer's single retry is already spent, no further spawn is permitted**: it goes straight to Needs Confirmation → `NEEDS DISCUSSION` (`swift-reviewer.md:487-490`). So the cost is a retry *if the budget is unspent*, and a degraded verdict *if it is not* |
 | **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | Rule 3 can prompt appending a next action *after* it, breaching the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when **absent**, and `review-verdict.py` takes reviewer statuses as explicit CLI arguments rather than by transcript position |
-| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | Rule 10 can prompt treating it as preamble. It is the standardised signal a subagent uses to hand back — it has no `AskUserQuestion`. **If** dropped, the invoking session sees an ordinary result rather than a recognisable hand-back. Note the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:20-24`), so the substance is not necessarily lost — what is lost is the machine-recognisable marker that this needs a human, which is what makes the omission easy to miss |
+| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:21-23`, `agents/jira-manager.md:253` | Rule 10 can prompt treating it as preamble. It is the standardised signal a subagent uses to hand back — it has no `AskUserQuestion`. **If** dropped, the invoking session sees an ordinary result rather than a recognisable hand-back. Note the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:21-25`), so the substance is not necessarily lost — what is lost is the machine-recognisable marker that this needs a human, which is what makes the omission easy to miss |
 | **E** | **Final fenced JSON block position** | all five reviewers | Same mechanism as C, from rule 3: content appended after the block breaches its mandated final position |
-| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-286`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | **Rule 2 is the sharpest path here and is proven:** the trailer is parsed one value per single field line, so numbering a multi-step `What Was Attempted:` or `Remaining:` **terminates the trailer scan and returns no status at all** — verified by execution (`Remaining: B.swift, C.swift` → full status; `Remaining:` + `1. B.swift` / `2. C.swift` → `None`). That is an absent sidecar → `UNATTRIBUTED` → a retry, or `NEEDS DISCUSSION` when the budget is spent. Separately, rule 9 can prompt splitting a long `Remaining:` list, and rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
+| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:281-287`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | **Rule 2 is the sharpest path here and is proven:** the trailer is parsed one value per single field line, so numbering a multi-step `What Was Attempted:` or `Remaining:` **terminates the trailer scan and returns no status at all** — verified by execution (`Remaining: B.swift, C.swift` → full status; `Remaining:` + `1. B.swift` / `2. C.swift` → `None`). That is an absent sidecar → `UNATTRIBUTED` → a retry, or `NEEDS DISCUSSION` when the budget is spent. Separately, rule 9 can prompt splitting a long `Remaining:` list, and rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
 
 **Note on the two gate-downgrading contracts.** A and F are the pair that can change a verdict rather
 than merely cost work. **A is proven**: a round-4 reviewer executed the synthesizer with six findings
@@ -191,7 +191,9 @@ assert the five trailer field names and the "never a list to shorten" clause for
 ### 4.3 — Placement (Low)
 
 **Root cause.** `AGENT_CONTRACTS.md` runs §1–§12 (`:12`–`:379`), then an **unnumbered**
-`## Cross-references` at `:421`; 443 lines total, no §13.
+`## Cross-references` at `:453`; 476 lines total, no §13. **(Re-derived after `COREDEV-2583` landed —
+it rewrote §11 and extended §5, and pinning `effort` shifted every agent file by one line. The plan
+predicted this shift; the numbers below are the post-2583 truth.)**
 
 **Fix.** Insert as **§13**, after §12's body and before `## Cross-references`.
 
@@ -297,13 +299,13 @@ outside the insertion point.
 
 1. **Contract B's consequence was factually wrong.** The draft claimed stripping `Status:` makes a
    `BLOCKED` reviewer's `[]` read as a clean pass. It does not. The COREDEV-2490 roster redesign already
-   closed that: a bare array is not a handoff (`agents/swift-reviewer.md:148` — "THE STATUS IS THE
+   closed that: a bare array is not a handoff (`agents/swift-reviewer.md:149` — "THE STATUS IS THE
    ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), an absent sidecar is
    `UNATTRIBUTED` (`reviewer-roster.sh:193`), and `scripts/tests/test_reviewer_roster.py:216`
    (`test_absent_sidecar_is_unattributed`) proves it fails **closed**. Verified by running the roster:
    absent status → five `UNATTRIBUTED`, exit 3. The plan had invented a fail-open that does not exist.
 2. **A sixth contract was missing** — the Output Contract detail trailer. Confirmed real:
-   `agents/security-reviewer.md:280-286` mandates `Blocker Description` / `What Was Attempted` /
+   `agents/security-reviewer.md:281-287` mandates `Blocker Description` / `What Was Attempted` /
    `Completed` / `Remaining` / `Confidence`; `capture.py` parses them via `_STATUS_FIELDS`; and
    `reviewer-roster.sh:239-242` states it is *"the ONLY sidecar reader — so if it does not forward
    `remaining`, nothing can preserve it. Discard the ATTRIBUTION, never the INFORMATION."*, forwarding
@@ -330,7 +332,7 @@ contract, finding none.
 **codex `REQUEST_CHANGES`** — three findings, all confirmed here and fixed:
 
 1. **High — B's consequence was still overstated.** "Mandatory re-dispatch → `NEEDS DISCUSSION`" is not
-   the rule. `agents/swift-reviewer.md:217` says `UNATTRIBUTED` triggers **one** re-dispatch *"and use
+   the rule. `agents/swift-reviewer.md:218` says `UNATTRIBUTED` triggers **one** re-dispatch *"and use
    its fresh report"*; `NEEDS DISCUSSION` follows only when that retry is unavailable, exhausted, or
    still unusable. A successful fresh `COMPLETE` preserves an ordinary verdict.
 2. **Medium — C's consequence was overstated.** `review-synthesis` extracts the `VERDICT:` token when
@@ -403,9 +405,9 @@ rows adversarially for residual guaranteed phrasing.
    already flagged as dangerous; a bare adopt attracted none.
 2. **Medium — B and D still carried guaranteed outcomes.** B said omission "costs one re-dispatch";
    the real bound is *"at most ONE spawn per reviewer per review"* and **if that retry is already spent
-   no further spawn is permitted** (`swift-reviewer.md:486-489`) — so it is *up to* one, and a spent
+   no further spawn is permitted** (`swift-reviewer.md:487-490`) — so it is *up to* one, and a spent
    budget degrades the verdict immediately. D said the confirmation is "silently never surfaced"; in
-   fact the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:20-24`),
+   fact the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:21-25`),
    so what is lost is the machine-recognisable marker, not necessarily the substance.
 3. **Medium — the round-4 fidelity fix was not itself mutation-proved.** Rule 9's text gained "never
    cap, **split**, omit, or defer", but the required marker omitted `split` — so reverting the row to its
