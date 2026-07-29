@@ -202,3 +202,42 @@ class EmailLookahead(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class EquivalenceModel(unittest.TestCase):
+    """`redactor_model.py` is the mechanical closure argument (COREDEV-2597 §4.5).
+
+    A static fixture cannot gate three unbounded generators, so the real invariant is an
+    equivalence: the ONLY divergence between the two implementations is the `@Nx` retina lookahead.
+    This runs a small corpus in-suite; CI runs a large one on both `ubuntu-latest` and
+    `macos-latest`, because one known root cause (`tr` on invalid UTF-8) INVERTS by platform.
+    """
+
+    def test_equivalence_holds_on_a_seeded_corpus(self):
+        import redactor_model as M
+        self.assertEqual(0, M.run(count=1500, seed=20260729, verbose=False),
+                         "UNEXPLAINED divergence — a new root cause exists; see stderr")
+
+    def test_the_classifier_calls_the_shipped_function(self):
+        """The classifier MUST NOT reimplement the pipeline.
+
+        It did, in the first version of redactor_model.py, and that made the gate partially inert:
+        two of four deliberate regressions (reverting the sequential secret passes, deleting the
+        whitespace canonicalisation) changed the real output but not the reimplementation, which
+        absorbed them as 'explained'. This asserts the classifier is sensitive to `redact_pii`'s
+        BODY, not just to its compiled patterns.
+        """
+        import redactor_model as M
+        probe = "pk_abcdefgh-sk-ijklmnop"
+        real_shell = shell_redact(probe)
+        # sanity: undisturbed, this input agrees, so it is not already "explained"
+        self.assertEqual(real_shell, C.redact_pii(probe))
+        original = C.redact_pii
+        try:
+            C.redact_pii = lambda s: "MUTANT"  # noqa: E731 - deliberate body swap
+            self.assertFalse(
+                M._email_lookahead_explains(probe, real_shell, "MUTANT"),
+                "classifier ignored a mutated redact_pii body — it is reimplementing the pipeline",
+            )
+        finally:
+            C.redact_pii = original

@@ -217,10 +217,13 @@ if isinstance(d, dict):
 # `/Users/<name>/…` path or `-archivePath` cannot leak the user; full dot-segmented
 # JWT/Bearer tokens (not just the first segment); sk-/pk_ secrets; api keys.
 # BSD/GNU-portable `sed -E` (POSIX classes, no `\s`), `LC_ALL=C`. The Python `redact_pii`
-# in mcp/review-synthesizer/capture.py mirrors these patterns; after COREDEV-2597 the ONLY
-# remaining divergences are the two POSIX-ERE lookahead gaps (MIN-13): Python's _EMAIL skips
-# `@Nx` retina-asset filenames and its _TILDE skips Swift `~Copyable`/`~Escapable`. Everything
-# else is byte-identical, and that equivalence is GATED — see mcp/review-synthesizer/redactor_model.py.
+# in mcp/review-synthesizer/capture.py mirrors these patterns; after COREDEV-2597 there is
+# EXACTLY ONE remaining divergence — the POSIX-ERE lookahead gap (MIN-13) where Python's _EMAIL
+# skips `@Nx` retina-asset filenames. Everything else is byte-identical, and that equivalence is
+# GATED: mcp/review-synthesizer/redactor_fixture.py is the single canonical vector list and
+# tests/test_redactor_parity.py drives BOTH implementations from it.
+# (_TILDE used to carry a second exemption for Swift `~Copyable`/`~Escapable`. It became dead code
+# once the tilde rule required a following `/`, and deleting it closed a leak. Do not restore it.)
 # The caller caps length and json_escapes. $1 = string.
 #
 # WHITESPACE CANONICALISATION RUNS FIRST, AND THAT ORDER IS LOAD-BEARING (COREDEV-2597 §8).

@@ -196,6 +196,44 @@ jobs:
           test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
           echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
 
+  redactor-equivalence:
+    # COREDEV-2597 §4.5 — the MECHANICAL closure of the shell/Python redactor equivalence.
+    #
+    # The two redactors (`scripts/lib/hook-io.sh::hook_redact_pii` and
+    # `mcp/review-synthesizer/capture.py::redact_pii`) must agree byte-for-byte except for ONE
+    # documented exemption. A static fixture table cannot gate that: three of the nine known
+    # divergence root causes have UNBOUNDED generators, which is why two successive plan-review
+    # rounds each found more divergences than the previous enumeration claimed existed. So the gate
+    # is an equivalence over a seeded corpus, asserting UNEXPLAINED == 0.
+    #
+    # RUNS ON BOTH RUNNERS ON PURPOSE. `sed`/`tr` differ between BSD (developer macOS) and GNU
+    # (Ubuntu), and one root cause — `tr` aborting on invalid UTF-8 outside `LC_ALL=C`, which
+    # TRUNCATES the message — literally inverts by platform: green on GNU, red on BSD. A
+    # single-platform run is half a result, and the half that passes is the half that hides it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report the sed/tr implementation under test
+        # Recorded so a red run can be attributed to the engine rather than to the patterns.
+        run: |
+          set -uo pipefail
+          echo "os: ${{ matrix.os }}"
+          sed --version 2>/dev/null | head -1 || echo "sed: BSD (no --version)"
+          tr --version 2>/dev/null | head -1 || echo "tr: BSD (no --version)"
+      - name: Redactor parity fixture (both implementations, single canonical vector list)
+        run: python3 -m unittest discover -s mcp/review-synthesizer/tests -p test_redactor_parity.py -v
+      - name: Equivalence over a seeded corpus — UNEXPLAINED must be 0
+        # The seed is FIXED so a red run is reproducible and bisectable. Do not randomise it.
+        run: python3 mcp/review-synthesizer/redactor_model.py --count 40000 --seed 20260729
+      - name: Second seed (the same invariant, a disjoint corpus)
+        run: python3 mcp/review-synthesizer/redactor_model.py --count 20000 --seed 31337
+
   secret-scan:
     # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the
     # accidental-commit class that leaked firebase-debug.log. History is NOT rewritten; the one

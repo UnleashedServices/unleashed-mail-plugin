@@ -38,24 +38,31 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import schema  # noqa: E402  (sibling module; path inserted above)
 
 # --- PII redaction (mirrors scripts/lib/hook-io.sh `hook_redact_pii`) ---------------------
-# Two DELIBERATE, tested divergences from the shell redactor live in _EMAIL and _TILDE below (MIN-13).
-# They exist because this module redacts validated finding `file`/`evidence` fields — where retina-asset
-# filenames and Swift suppressed-conformance syntax legitimately appear — whereas hook-io.sh redacts hook
-# advisory text that never carries those literals. The exemptions use regex lookahead, which POSIX ERE
-# (`sed -E`) cannot express, so they are Python-only by necessity, not drift. Every other pattern matches
-# hook-io.sh byte-for-byte.
+# EXACTLY ONE deliberate divergence from the shell redactor remains, in _EMAIL below (MIN-13).
+# It exists because this module redacts validated finding `file`/`evidence` fields — where retina-asset
+# filenames legitimately appear — whereas hook-io.sh redacts hook advisory text that never carries those
+# literals. It uses regex lookahead, which POSIX ERE (`sed -E`) cannot express, so it is Python-only by
+# necessity, not drift. Every other pattern matches hook-io.sh byte-for-byte, and that equivalence is
+# GATED by tests/test_redactor_parity.py driving both implementations from redactor_fixture.py.
+#
+# COREDEV-2597 removed the SECOND divergence that used to live here: _TILDE's
+# `~Copyable`/`~Escapable` lookahead became dead code once the tilde rule required a following `/`,
+# and deleting it also closed a leak (`~Copyable-alice` kept a real username, because `-` is outside
+# Unicode `\w` so the lookahead's `\b` was satisfied). Do not reintroduce it.
+#
 # _EMAIL: the `@(?!…)` lookahead skips `@Nx` retina-asset filenames (`AppIcon@2x.png`, `Icon@3x.jpg`) so a
 # captured `file`/`evidence` value keeps its real path — those are NOT emails, and redacting them to
 # `[redacted-email]` destroys the path and breaks the capture ratchet for image-budget findings. A real
 # address like `user@2xmail.com` still redacts (its domain is not `<digits>x.<image-ext>`).
+# The guard terminates with `(?![A-Za-z0-9.-])`, NOT `\b`: with `\b` a following dot satisfied it, so
+# `user@2x.png.example.com` — a routable address — was preserved entirely (COREDEV-2597 §4.4 F2).
 _EMAIL = re.compile(
     r"[A-Za-z0-9._%+-]+@(?![0-9]+x\.(?i:png|jpe?g|gif|pdf|webp|heic|tiff?)(?![A-Za-z0-9.-]))[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
-# `[^/\s"]` deliberately uses ASCII-only whitespace, NOT Python's Unicode `\s` (COREDEV-2597 RC-B):
-# the shell's `[[:space:]]` under LC_ALL=C is ASCII-only, and a Unicode-aware negated class here made
-# the two sides disagree in BOTH directions — Python leaked `/Users/<U+00A0>nick` while the shell
-# over-consumed and ate the `api` anchor of a following secret.
-_ASCII_WS = " \t\n\r\v\f"
+# These negated classes deliberately spell out ASCII whitespace instead of using Python's Unicode
+# `\s` (COREDEV-2597 RC-B): the shell's `[[:space:]]` under LC_ALL=C is ASCII-only, and a
+# Unicode-aware negated class here made the two sides disagree in BOTH directions — Python leaked
+# `/Users/<U+00A0>nick`, while the shell over-consumed and ate the `api` anchor of a following secret.
 _USERS = re.compile(r"/Users/[^/ \t\n\r\v\f\"]+")
 _HOME = re.compile(r"/home/[^/ \t\n\r\v\f\"]+")
 # _TILDE: redact `~` only in home-PATH position — a non-empty username starting `[A-Za-z_]` followed
