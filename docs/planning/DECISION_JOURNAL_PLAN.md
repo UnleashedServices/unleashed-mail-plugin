@@ -1,6 +1,10 @@
 # Decision Journal Plan
 
-**Status:** Planning — awaiting dual plan-review gate
+**Status:** ⏸️ **PAUSED — draft, NOT approved.** Round 1 of the dual gate ran: gemini
+`APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES`. The maintainer paused this ticket so `COREDEV-2583`
+lands first. **Do not implement.** Round-1 findings are recorded in §10. **Both reviewers independently
+recommended splitting the live redactor defects (§4.7) into a prerequisite ticket — done, as
+`COREDEV-2597`, which is no longer in this plan's scope.**
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2585` — Decision journal: model-written checkpoints (append-only journal +
@@ -494,3 +498,59 @@ new test must fail.
   citations.
 - `snapshot_time` is write-only dead metadata (§4.9). A new schema can drop it; keeping it needs a
   reason.
+
+---
+
+## 10. Round-1 gate outcome (recorded; this plan is paused)
+
+Both reviewers independently **confirmed every empirical claim in §4.7 by execution** — the redactor
+leaves personal names untouched, corrupts `task-oriented` / `risk-assessment` / `disk-utilization` /
+`~500ms` / `~40 percent`, and truncates on invalid UTF-8 while leaking `tr: Illegal byte sequence` to
+stderr; `capture.py:159` already persists model-authored `finding`/`evidence`/`fix`; and
+`precompact-snapshot.sh` never reads stdin. The §4.2–§4.4 restore-path reproductions were confirmed
+too. The diagnosis is sound; the **implementation contract** is what needs work.
+
+**gemini `APPROVE_WITH_NOTES`.** §8 answers: (1) split the redactor fixes into a separate ticket — they
+are live bugs corrupting shipped reviewer evidence today; (2) adopt the bounded enum + short capped
+free-text field; (3) retain the corrupt payload for forensic value, provided §4.10's GC sweeps it.
+
+**codex `REQUEST_CHANGES`** — six findings:
+
+1. **The plan promises a schema but never defines one.** §4.5 gives filenames and concepts but no exact
+   keys, types, schema version, per-field/total caps, checkpoint identity, ordering, deduplication, or
+   writer command — and never says how a model checkpoint *invokes* the writer or obtains the run id.
+2. **The atomic-write design can lose journal entries.** tmp+rename prevents torn files but **not
+   concurrent read-modify-write races**: two checkpoint writers, or a writer racing self-compaction, can
+   both read version N and replace it with different N+1 versions. Needs a single-writer or locking
+   protocol, tests for concurrent appends and append-versus-compaction, and a lost-update risk row.
+3. **Run scoping is not sound as written.** §4.9 calls session id a "candidate", but model-written
+   checkpoints have **no hook stdin** to obtain it from. Allowing empty ids to degrade to unkeyed
+   restore creates cross-run replay once parser availability changes. The review-round precedent is not
+   equivalent — it also discriminates on agent id, slug and TTL. Require a **non-empty exact run match**;
+   missing or mismatched identity emits nothing.
+4. **Corrupt-payload retention is not closed by the proposed GC.** §4.10 compacts only an oversized
+   journal; it never collects corrupt `live-state` files. Retaining corruption at the *active* path also
+   repeats logging and lets the next checkpoint destroy the evidence. Atomically **quarantine** it under
+   a private bounded TTL/count policy and clear the active path. (This overrides gemini's §8 Q3 answer.)
+5. **Scope and ordering contradict themselves.** "No change to the reviewer capture pipeline" (§2)
+   conflicts with modifying `capture.py`'s redactor — resolved by the `COREDEV-2597` split. The header
+   requires 2583 → 2584 → 2585 while §4.6 said either order works. And because 2584 lands first, this
+   ticket's baseline is unambiguously **21 agents / 22 skills / 0 commands / 1 MCP and 11 hook events** —
+   the conditional "if this ticket adds a hook event" language must be resolved, and no new event or
+   kill switch is actually named.
+6. **The mutation-proof suite is incomplete.** §4.2 tests two checkpoints rather than two *compactions*,
+   so it can pass while the legacy overwrite remains; §§4.8–4.11 lack concrete proofs; §4.6 checkpoint
+   wiring is excluded from the blanket requirement; the redactor preservation tests would pass if
+   secret/home redaction were disabled entirely (needs positive controls for real `sk-…`, `pk_…`,
+   `~alice/…`, email and bearer inputs on both paths, with the invalid-byte case as a shell-ingress test
+   and a separate Python-ingress test proving replacement without truncation); and a fixed shape does
+   not prove the token budget — assert an explicit serialized cap.
+
+Its §8 answers: (1) split the redactor defects into a prerequisite ticket landing **before** this one;
+(2) bounded rejection-reason enum + optional short rationale with exact per-field and whole-payload
+caps — "pointers, not prose" is valuable minimisation but **not sufficient** as the primary PII control,
+because the remaining prose is exactly where names leak; (3) do **not** retain corruption at the active
+path — quarantine privately with bounded retention.
+
+**Maintainer decision (2026-07-29):** paused; `COREDEV-2583` lands first. The redactor split is
+actioned as `COREDEV-2597`.

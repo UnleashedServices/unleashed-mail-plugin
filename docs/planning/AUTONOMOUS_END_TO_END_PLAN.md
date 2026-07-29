@@ -1,6 +1,9 @@
 # Autonomous End-to-End Mode Plan
 
-**Status:** Planning — awaiting dual plan-review gate
+**Status:** ⏸️ **PAUSED — draft, NOT approved.** Round 1 of the dual gate ran: gemini `APPROVE`,
+codex `REQUEST_CHANGES`. The maintainer paused this ticket so `COREDEV-2583` lands first; the
+allow-vs-report-only decision (§8 Q1) is deferred to a later session. **Do not implement.** The
+round-1 findings are recorded in §10 so they are not re-derived.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2584` — Autonomous end-to-end mode: user-invoked skill, PermissionRequest hook,
@@ -257,8 +260,8 @@ fails today if the prefix is chosen carelessly, which is the point.
 ### 4.5 — The effort preflight guards the only thing frontmatter cannot (Medium)
 
 **Root cause.** `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter. Every `effort: xhigh` pin
-`COREDEV-2583` §4.1 adds to the 21 agents and 3 workflow skills is silently defeated by that one env
-var, and nothing inside the plugin can detect it after the fact.
+`COREDEV-2583` §4.1 adds — **all 21 agents and all 21 skills**, 42 assets — is silently defeated by that
+one env var, and nothing inside the plugin can detect it after the fact.
 
 **Fix.** Refuse to arm unless `${CLAUDE_EFFORT}` reports `xhigh`. This is a **runtime** check at the one
 moment the plugin has an opportunity to look — the arm step — and it is the only guard that exists.
@@ -583,7 +586,7 @@ plus a `## [X.Y.Z]` CHANGELOG heading. `## [Unreleased]` does **not** satisfy th
 | Reviewers reject reversing the auto-allow ban (§4.3) | Medium | Accepted as the likeliest `REQUEST_CHANGES`. Fallback is §8 Q1: report-only mode, no allow path at all. |
 | Armed state survives a compaction that erased the justifying context | Medium | Proven behaviour, not speculation (§4.4). Mitigated by an arm expiry in addition to the session key; a plain session key is insufficient. |
 | "No prompts" is read as "no gates" by a future maintainer | Medium | §3 is stated as the guiding principle, and §4.9 excludes guard-flagged paths from the allow set. |
-| A Workflow layer pushes reviewers to spawn depth 3 and kills the panel silently | Medium | §4.10's boundary rule forbids Workflow-dispatched reviewers outright; coordinate with `COREDEV-2583` §4.9, which owns the detection. |
+| A Workflow layer pushes reviewers to spawn depth 3, so the panel cannot spawn | Medium | It fails **closed**, not silently — `reviewer-roster.sh` returns five `UNATTRIBUTED` + exit 3 on empty input (`scripts/tests/test_reviewer_roster.py:105`). §4.10's boundary rule forbids Workflow-dispatched reviewers outright; `COREDEV-2583` §4.9 owns the **documentation** of the version floor (it adds no detection — the detection already exists). |
 | `_BWS_FORCE_FAIL` leaks into an unattended environment | Low | Denies 100% of Bash calls with a model-only message (§4.9 note). Cheap to guard; flagged so it is not discovered at runtime. |
 | Six ungated doc sites drift after the count change | **High** (over time) | Unavoidable with the current gate. §4.12 ships the full checklist and says plainly that only three are enforced. |
 | Merged before `COREDEV-2583` | Medium | Stated in the header. 2583 §4.6 introduces the only frontmatter validation skills have ever had; a new skill with security-relevant frontmatter should not land unvalidated. (The earlier "camelCase `disallowedTools` no-ops" justification was false — see the header note.) |
@@ -662,3 +665,58 @@ inverted or replaced — never left contradictory.
 - `scripts/lib/marker.sh:48-51`'s `_MARKER_REPO_HASH_CACHE` is a no-op in every shipped call path (every
   caller uses `$(marker_repo_hash)`, a subshell). It forks `shasum` on every call. Not this ticket's
   problem, but do not describe the hash as computed once per invocation.
+
+---
+
+## 10. Round-1 gate outcome (recorded; this plan is paused)
+
+**gemini `APPROVE`** — verified §4.1, §4.3, §4.4, §4.9, §4.10 and §4.12 against the tree and called the
+brief corrections "spot on". Its §8 answers: (1) ship the allow path; (2) wall-clock 600 s expiry to
+match the existing TTLs; (3) add `Workflow` to `KNOWN_TOOLS`, not a deny set.
+
+**codex `REQUEST_CHANGES`** — seven findings. Recorded verbatim in substance so the next session does
+not re-derive them:
+
+1. **§4.1 pins the wrong I/O contract.** In 2.1.220, `permissionDecision` /
+   `permissionDecisionReason` are **PreToolUse-only**. A `PermissionRequest` hook must return
+   `hookSpecificOutput.decision` carrying an allow-or-deny object, and a denial uses **`message`**, not
+   `permissionDecisionReason`. §4.1 never defines that JSON shape, and its proof validates only manifest
+   wiring — so an implementation could be structurally valid and runtime-invalid. **This must be pinned
+   from the 2.1.220 schema before any implementation.**
+2. **§4.3's distinction is insufficient.** User invocation, arming and session scoping are necessary but
+   do not scope *which operation* may be allowed: while armed, model-triggered requests outside the
+   intended sequence are still allowed. The risk register also omits the residual capability window —
+   expiry is defined but there is **no guaranteed disarm** on completion, failure, or `BLOCKED`.
+3. **§4.4 identifies the split-directory trap but does not solve it.** Exporting `CLAUDE_PLUGIN_DATA`
+   in one Bash fence does not affect *later* Bash tool processes. Consequently §4.8's "run a passing
+   pre-commit" remedy can still write the pass marker where the Stop hook never reads it. Needs one
+   shared producer/consumer path contract for every marker writer, plus a test using deliberately
+   different default directories. The §4.4 proof also omits the GC behaviour it promises.
+4. **The workflow itself is under-specified.** `brainstorm`, `implement` and `pr-review` are
+   `disable-model-invocation: true`, so **the proposed autonomous skill cannot invoke them via the Skill
+   tool at all.** The plan must choose: inline their protocols, refactor shared protocol assets, change
+   their invocation policy, or implement an independent state machine. It also lacks a contract for tool
+   grants, gate transitions, `BLOCKED` propagation, final-report consumption, PR creation and cleanup.
+5. **§4.9's exclusion design can drift.** A `PermissionRequest` does not identify which PreToolUse hook
+   asked, so the new hook must reclassify. Requires a **shared** sensitive-policy helper rather than a
+   copied match set — otherwise adding a pattern to the guard silently creates an auto-allow bypass —
+   with parity tests that mutation-kill either side drifting.
+6. **The human-wait inventory is incomplete.** Missing at least `skills/spm-management/SKILL.md:46` and
+   `skills/microsoft-graph-integration/SKILL.md:38`. The proposed agent-body assertion would not catch
+   `skills/implement/SKILL.md:256` or synonyms like "confirm with user". Converting an attended
+   main-session prompt to an unconditional `BLOCKED` would also change normal interactive behaviour —
+   the conversion needs an autonomous-mode condition.
+7. **Several proofs are not mutation-proof**: §4.1 (reverting the manifest entry fails no gate), §4.4
+   (no GC proof), §4.7 (checks agents while the waits live in skills), §4.8 (checks explanation text,
+   not cross-directory marker clearing), §4.9 (no parity or report-consumption test), §4.11 (no numeric
+   `maxTurns`, no agent list, no enforcement test — and agent `maxTurns` is global, not
+   autonomous-path-only), §4.12 (a checklist cannot fail CI). Also overlooks the workflow-skill list
+   near `CLAUDE.md:18-19`.
+
+Its §8 answers: (1) **report-only for this ticket**; (2) wall-clock backstop **plus deterministic
+disarm** on completion / `BLOCKED` / failure / next `UserPromptSubmit` / `SessionEnd`, with the TTL
+chosen from measured workflow duration rather than a copied 600 s; (3) `Workflow` legal-but-tracked in
+`KNOWN_TOOLS` with an assertion that no agent declares it.
+
+**Maintainer decision (2026-07-29):** paused. `COREDEV-2583` lands first; the allow-vs-report-only fork
+is reopened in a later session with fresh context.

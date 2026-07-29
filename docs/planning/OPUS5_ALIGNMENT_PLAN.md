@@ -201,14 +201,15 @@ MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
 
 and the id pattern `re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", model)` at `:100`.
 
-Sub-agent `model:` accepts *the same values as the `--model` flag*, which includes `best`, `default`,
-`opusplan`, and the bracketed long-context aliases `opus[1m]` / `sonnet[1m]`.
+Sub-agent `model:` accepts *the same values as the `--model` flag*. The runtime's alias table (2.1.220 `h1e`) is
+exactly `sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan` — note it
+contains **no `default`**, and only three aliases take the `[1m]` long-context suffix.
 
 **Executed against the live validator**, confirming the blocker rather than asserting it:
 
 | Value | Today |
 |---|---|
-| `opus[1m]`, `sonnet[1m]`, `best`, `default`, `opusplan` | **REJECTED** |
+| `opus[1m]`, `sonnet[1m]`, `fable[1m]`, `best`, `opusplan` | **REJECTED** |
 | `opus`, `inherit`, `claude-opus-5` | accepted |
 | `claude-opus-5 rm -rf`, `claude-opus-5; evil`, `claude-opus-5\nmalicious` | REJECTED (correct) |
 
@@ -217,17 +218,43 @@ Long context is in scope, so `model: opus[1m]` failing the plugin's own CI is a 
 **Fix — specified concretely in round 2, because "accept an optional bracketed suffix" is not
 security-reviewable.** Do **not** widen the character class. Instead:
 
-1. Add `best`, `default`, `opusplan` to `MODEL_ALIASES`.
-2. Strip **exactly one** terminal, **literal** context suffix from an enumerated set (`[1m]` today —
-   an explicit tuple, not a pattern), and only from the end of the string.
-3. Validate the remainder with the **unchanged** anchored alias/id rules.
+1. Replace `MODEL_ALIASES` with the runtime's **exact** alias table, transcribed from the 2.1.220
+   bundle (`h1e`), plus `inherit` (a sub-agent-only value the runtime handles separately and which is
+   **not** in that table):
+
+   ```python
+   # Transcribed verbatim from Claude Code 2.1.220 (`h1e`). Re-check on every CLI pin bump.
+   MODEL_ALIASES = {
+       "sonnet", "opus", "haiku", "fable", "best", "opusplan",
+       "sonnet[1m]", "opus[1m]", "fable[1m]",
+       "inherit",                      # sub-agent only; not part of the runtime alias table
+   }
+   ```
+
+2. **Enumerate the bracketed forms; do not synthesise them.** Only `sonnet`, `opus` and `fable` take
+   `[1m]` in the runtime table. A "strip the suffix then validate the base" rule would
+   **over-accept** `haiku[1m]`, `best[1m]`, `opusplan[1m]` and `inherit[1m]`, none of which the runtime
+   recognises.
+3. Leave the model-**id** path (`re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", …)`) completely
+   unchanged. Because the bracketed forms are now literal set members, no bracket ever reaches the
+   regex and the COREDEV-2503 F10 anchoring is untouched by construction.
+
+**Round-2 correction (round-2 review).** The round-2 draft proposed adding **`default`** and stripping
+`[1m]` from any base. Both are wrong: `default` does **not** appear in the runtime alias table, and
+suffix-stripping over-accepts as above. The authoritative table is:
+
+```js
+h1e = ["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]","opusplan"]
+```
 
 The `re.fullmatch` (not `re.match`) discipline introduced by COREDEV-2503 F10 exists to stop
 `claude-opus-4-8 rm -rf` and trailing-newline injection from passing; because the suffix is stripped as
 a literal and the remainder still goes through `fullmatch`, no new bracket body is ever accepted.
 
 **Proof.** Extend `scripts/tests/test_validate_plugin_assembly.py`. Accept: the complete supported
-bracketed set (not only `opus`/`sonnet`), `claude-opus-5`, `best`, `default`, `opusplan`. Continue
+bracketed set `sonnet[1m]`/`opus[1m]`/`fable[1m]`, `claude-opus-5`, `best`, `opusplan`. **Reject the
+unsupported combinations** `haiku[1m]`, `best[1m]`, `opusplan[1m]`, `inherit[1m]`, and `default`
+(not an alias). Continue
 rejecting `claude-opus-5 rm -rf`, `claude-opus-5; evil`, `claude-opus-5\nmalicious`. **New hostile
 cases required:** `opus[1m;evil]`, `opus[1m\nmalicious]`, `opus[rm-rf]`, `opus[1m][1m]` (doubled),
 `opus[1m]x` (trailing content after a valid suffix), `opus[1m`, `opus[]`.
@@ -388,7 +415,7 @@ floor and the env var.
 | # | Location | Defect |
 |---|---|---|
 | a | `README.md:104` | "All five review agents now run on `opus`." **False** — all five pin `sonnet` today (verified). After §4.2 it becomes *partially* true (3 of 5), which is worse as a doc bug because it reads plausible. Rewrite to state the tiering explicitly. |
-| b | `CLAUDE.md:35` | Alias list omits `best`, `default`, `opusplan`, and the bracketed forms; guidance says nothing about effort. |
+| b | `CLAUDE.md:35` | Alias list omits `best`, `opusplan`, and the three bracketed forms; guidance says nothing about effort. |
 | c | `CLAUDE.md:35` + `AGENT_CONTRACTS.md:375` | "Prefer `inherit`/`sonnet` over hard-pinning `opus`." `opus` is an **alias** that tracks the latest Opus; `claude-opus-5` would be a hard pin. The guidance argues against something the alias does not do — and it now contradicts §4.2. Rewrite to distinguish alias from version pin. |
 | d | `agents/ai-engineer.md:78` | `let defaultModel = "claude-sonnet-4-6"` — a stale model id in the illustrative provider that the AI-pipeline agent teaches from (verified verbatim). |
 
