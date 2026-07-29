@@ -1,8 +1,8 @@
 # Redactor Defects Plan
 
-**Status:** Planning — round 3, awaiting re-gate
+**Status:** Planning — round 4, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 3)
+**Last Updated:** 2026-07-29 (round 4)
 **Ticket:** `COREDEV-2597` — `hook_redact_pii` corrupts ordinary prose and truncates on invalid UTF-8
 **Epic:** `COREDEV-2582` — Opus 5 readiness and autonomous end-to-end mode
 **Branch:** `feat/COREDEV-2597-redactor-defects`
@@ -56,9 +56,12 @@ so it is a reviewed decision rather than an accident.
 not ported to the shell side. *(Round 1 said "the two Python-only exemptions". The `_TILDE`
 `~Copyable`/`~Escapable` exemption is **dissolved** by §4.2's strict rule rather than excluded — it
 becomes dead code and is deleted. Only the `@2x` half remains out of scope.)* The honest reason is
-**caller impact, not expressibility**: §4.6's caller audit shows no shell caller carries an asset
-filename into a consumed artifact. Do **not** repeat the claim that POSIX ERE cannot express it — that
-is false, and a two-pass protect/restore in one `sed -E` reproduces the Python semantics byte-for-byte.
+**scope, not impossibility** — §4.6's audit shows corruption IS reachable by two routes, but is not
+observed, and the fix belongs with the `_EMAIL` rule rather than a ticket whose three defects are all
+in `_SECRET`/`_TILDE`/`tr`. *(Round 3 said "no shell caller carries an asset filename into a consumed
+artifact", which its own §4.6 table contradicts. Corrected there and here.)* Do **not** repeat the
+claim that POSIX ERE cannot express it — that is false, and a two-pass protect/restore in one
+`sed -E` reproduces the Python semantics byte-for-byte.
 `scripts/lib/hook-io.sh:221-224`'s comment must be corrected on both counts when this lands.
 
 **Ownership — settled in round 2.** §4.4's parity fixture **stays in this ticket.** Both plan
@@ -116,8 +119,30 @@ collision profiles:
 ```sh
 shell   -e 's#(^|[^A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
         -e 's#(^|[^A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
-python  _SECRET = re.compile(r"(?:(?<![A-Za-z0-9])sk-|(?<![A-Za-z0-9_])pk_)[A-Za-z0-9._-]{8,}")
+
+python  _SECRET_SK = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}")
+        _SECRET_PK = re.compile(r"(?<![A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}")
+        # TWO sequential passes, sk- then pk_, mirroring the shell fragment order.
+        text = _SECRET_SK.sub("[redacted-secret]", text)
+        text = _SECRET_PK.sub("[redacted-secret]", text)
 ```
+
+**Python must use two sequential passes, not one combined alternation — this is load-bearing.** A
+single `(?:(?<!…)sk-|(?<!…)pk_)[A-Za-z0-9._-]{8,}` looks equivalent and is not: it matches
+left-to-right and greedily, so on `pk_abcdefgh-sk-ijklmnop` it consumes the whole value from the
+leading `pk_` and emits **one** replacement, while the shell's two fragments replace the `sk-` run
+first and then the remaining `pk_`, emitting **two**:
+
+| input | shell (two fragments) | Python, combined regex | Python, sequential |
+|---|---|---|---|
+| `pk_abcdefgh-sk-ijklmnop` | `[redacted-secret][redacted-secret]` | `[redacted-secret]` ✗ | `[redacted-secret][redacted-secret]` ✓ |
+| `~a/pk_abcdefgh-sk-ijklmnop` | `~a/[redacted-secret][redacted-secret]` | `~a/[redacted-secret]` ✗ | matches shell ✓ |
+
+Neither output leaks — both redact — but they **differ**, which is a §4.4 parity failure in the
+implementation this plan itself prescribes. Verified across 16 vectors: the combined form mismatches on
+2, the sequential form on **0**. *(Round 3 specified the combined form. A reviewer constructed the
+counterexample; the eight adjacency vectors round 3 added did not cover it, because none placed both
+prefixes inside one contiguous token.)* Both counterexamples are now required fixture rows.
 
 **Underscore IS a boundary before `sk-`, and is NOT before `pk_`.** Rationale, per prefix:
 
@@ -404,19 +429,69 @@ use a skip-list — a skip makes exemption *removal* invisible (demonstrated: dr
 > identical. The plan was simultaneously deleting the mechanism and citing it. There is no tilde
 > exemption to enumerate.
 
-**The enumerated exemption set is therefore exactly two entries**, both genuine and both verified:
+**The exemption set is five entries, not two.** *(Round 3 said "exactly two". A reviewer found three
+more by execution — and unlike the whitespace-folding entry, these change **whether a secret is
+redacted at all**, with the shell missing what Python catches.)* All verified against the shipped
+implementations:
 
-1. `_EMAIL`'s `@Nx` retina-filename exemption (`capture.py:51-53`) — Python preserves `Icon@2x.png`,
-   shell redacts it (§2 keeps this out of scope on the caller-impact evidence in §4.6).
-2. Whitespace folding — `a\n\n\tb` → shell `a   b`, Python `a b`.
+| # | input | shell | Python | class |
+|---|---|---|---|---|
+| 1 | `Icon@2x.png` | `[redacted-email]` | preserved | `_EMAIL` `@Nx` exemption (`capture.py:51-53`) |
+| 2 | `a\n\n\tb` | `a   b` | `a b` | whitespace folding — cosmetic |
+| 3 | `Bearer\n<20+ token>` | **preserved (leak)** | `[redacted-token]` | `sed` is line-oriented; Python `\s` crosses newlines |
+| 4 | `api\nkey: <value>` | **preserved (leak)** | `[redacted-key]` | same cause |
+| 5 | `bearer<NBSP><20+ token>` | **preserved (leak)** | `[redacted-token]` | Python `\s` is Unicode-aware; ERE under `LC_ALL=C` is not |
 
-Do not add a tilde entry, and do not claim the tilde rules are merely "behaviourally equivalent" —
-after §4.2 they are byte-identical on every fixture, which is a stronger and checkable property.
+Entries 3–5 are **pre-existing** — nothing in this ticket causes them — but they must be enumerated,
+because a fixture that claims parity while three leak-direction divergences exist is worse than no
+fixture. A fourth reviewer example, `apiKey=abcdefgh`, was checked and is **REFUTED**: both sides
+redact it (the shell pattern is already case-insensitive by character class).
+
+**Entries 3 and 4 are closable without widening any pattern, and that should be done here.** Their
+cause is pipeline *order*, not pattern scope: `hook_redact_pii` folds newlines with `tr` **after**
+`sed` has run, so `sed` never sees the folded text. Executed — moving the fold **before** `sed` makes
+the shell agree with Python on both:
+
+| case | `sed`-then-`tr` (shipped) | `tr`-then-`sed` (proposed) |
+|---|---|---|
+| `Bearer\n<token>` | `Bearer <token>` | `[redacted-token]` |
+| `api\nkey: <value>` | `api key: <value>` | `[redacted-key]` |
+
+**But this needs a reviewer's judgement, so it is raised in §8 rather than assumed.** Folding first
+means every rule now sees text across former line boundaries — which is strictly *more* matching, and
+§3 forbids widening. The counter-argument is that the widening is confined to whitespace normalisation
+the function already performs one stage later, and it closes two leaks. If reviewers reject it, entries
+3–4 stay enumerated exemptions and the leak is documented rather than fixed.
+
+**Entry 5 is not closable either way.** Aligning it would require widening the shell (forbidden) or
+making Python ASCII-only (a deliberate loss of real coverage). Record it as a divergence where Python
+is stricter, and leave it.
+
+Do not add a tilde entry: after §4.2 the tilde rules are byte-identical on every fixture, which is a
+stronger and checkable property than "behaviourally equivalent".
 
 **Run the full pipeline, not isolated rules.** §4.2's rule executes *before* §4.1's in the same `sed`
 invocation and changes what text §4.1 sees. The fixture must drive the whole `hook_redact_pii` /
 `redact_pii` entry point, or rule-ordering regressions slip through. Include the `~a/~b/x` adjacency
 vector — that is the input that catches an implementer who reflexively adds a boundary guard.
+
+**Rule ordering is load-bearing, and until round 3 it was unpinned.** A reviewer constructed the input
+that proves it: **`~sk-abcdefgh123/`** is matched by *both* rules, and the order decides which wins.
+
+| ordering | result |
+|---|---|
+| tilde first (**the shipped order**) | `~[redacted]/` |
+| secret first | `~[redacted-secret]/` |
+
+Executed on both engines; shell and Python agree **under each ordering**, so this is not a parity bug
+today — it is an invariant nothing asserts. The shipped order is already tilde-before-secret in both
+implementations (`hook-io.sh:231` before `:234`; `capture.py:83` `_TILDE` before `:86` `_SECRET`), and
+**§4.1's new `pk_` fragment must be inserted after the tilde loop, not before it.**
+
+Required: pin `~sk-abcdefgh123/` → `~[redacted]/` and `~sk-abcdefgh123/more` → `~[redacted]/more` as
+fixture rows, and state the ordering as a contract in both files' comments. Either output redacts the
+secret, so neither is a leak — but an implementer who reorders the fragments silently changes shipped
+output, and if they reorder only one side the two implementations diverge.
 
 **Proof — production-side, because the fixture *is* the deliverable.** §6's blanket "revert the fix and
 the test must fail" is vacuous here: reverting the fixture merely deletes the assertion.
@@ -477,11 +552,22 @@ are exactly **four** shell callers of `hook_redact_pii`:
 > And a diagnostic log is a human-consumed artifact whether or not a parser exists.
 
 **What the corrected audit does and does not support.** It does **not** support "structurally
-impossible", and the honest position is weaker: **no realistic plan filename contains `@` or `~`, and
-nothing enforces that.** Every `*_PLAN.md` in-tree is `[A-Z0-9_-]+_PLAN.md`. So the residual risk is a
-naming convention nobody has broken, not a guarantee — which is enough to keep `@2x` out of scope
-under §3 (the fix would widen nothing, but the corruption has no realistic trigger), and **not** enough
-to call the row incapable.
+impossible". The honest position: **no plan filename in-tree contains `@` or `~`, and nothing enforces
+that.** *(Round 3 claimed every `*_PLAN.md` matches `[A-Z0-9_-]+_PLAN.md`. False —
+`COREDEV-2333_RELEASE_2.4.0_PLAN.md` contains dots. The narrower claim is the one the evidence
+supports, and it is enough.)*
+
+**And the `@2x` scope decision is restated to match, because round 3's rationale contradicted its own
+table.** §2 said "no shell caller carries an asset filename into a consumed artifact"; §4.6 then showed
+free-text diagnostic consumption **and** a PreCompact→SessionStart path reaching model context, and
+conceded a target-app asset denial would corrupt a line. Those cannot both stand. The decision and its
+real reason:
+
+> `@2x` stays out of scope **not** because corruption is impossible — it is possible, by two routes —
+> but because it is **not observed** (40 live records, zero `@`, zero `~`; no in-tree plan filename
+> carries either) and because the fix belongs with the `_EMAIL` rule rather than in a ticket whose
+> three defects are all in `_SECRET`/`_TILDE`/`tr`. It is a **deferral on scope**, not a dismissal on
+> impossibility. §4.4 entry 1 keeps it enumerated so it cannot be forgotten.
 
 **Caveat, stated rather than hidden:** this samples *this* repo (40 live records, zero `~`, zero `@`).
 The plugin's target is the Swift app repo, where `icon_512x512@2x.png` assets genuinely exist. A
@@ -530,9 +616,10 @@ error and is corrected in the same pass.)*
 **Mutation proof required for every fix, and it must reject plausible wrong implementations, not just
 reverts** (§3's second corollary):
 
-- **§4.1–§4.3:** revert the fix → the new test must fail. **Plus** §4.1's two named anti-implementation
-  mutants (drop `\1`; anchor only at `^`) must both be rejected, and §4.2's loop mutant (delete
-  `-e ':t' -e 'tt'`) must fail on `~a/~b/x`.
+- **§4.1–§4.3:** revert the fix → the new test must fail. **Plus** §4.1's **four** named anti-implementation
+  mutants — drop `\1`; anchor only at `^`; a `{9,}` threshold; a Unicode-aware Python guard — must all
+  be rejected, **and** the combined-alternation Python form must fail on `pk_abcdefgh-sk-ijklmnop`; and
+  §4.2's loop mutant (delete `-e ':t' -e 'tt'`) must fail on `~a/~b/x`.
 - **§4.4:** the fix *is* the test, so "revert it" is vacuous. Its proof is **production-side** — see
   §4.4's two mutations.
 
@@ -545,8 +632,8 @@ proof for regex forms developed against BSD `sed`.
 1. **First:** grep both suites for existing assertions that depend on `~<word>` or mid-word `sk-`
    being redacted. §4.2 changes behaviour a shipped test may encode.
 2. §4.3 — the `tr` locale/stderr fix + the engine-agnostic shadow test (shell only; no regex semantics).
-3. §4.1 — the `sk-`/`pk_` boundary, both sides, with the full control set and both anti-implementation
-   mutants.
+3. §4.1 — the asymmetric `sk-`/`pk_` boundary, both sides, with the full control set and **all four**
+   anti-implementation mutants plus the combined-alternation parity mutant.
 4. §4.2 — the strict `~` contract, both sides, including deletion of `capture.py:58`'s dead lookahead.
 5. §4.4 — the shared parity fixture (last of the code, so it can enumerate the real exemption set).
 6. §4.5 — the `DECISION_JOURNAL_PLAN.md` supersede pass (documentation only; may land in parallel).
@@ -584,21 +671,27 @@ proof for regex forms developed against BSD `sed`.
    `~9lives/x` preservation control so the residual is a tested decision rather than an omission —
    round 2 discussed the gap but never pinned it.
 
-**New for round 3 — asked, then answered rather than left open.** The asymmetric §4.1 rule is the one
-genuinely novel construct here, and it is two `-e` fragments rather than one, so the obvious risk is an
-interaction between them: could the `sk-` fragment consume a boundary character the `pk_` fragment then
-needs? **Executed across eight adjacency and ordering vectors — zero parity mismatches**, including the
-worst case `sk-abcdefgh123_pk_abcdefgh123`, where the `sk-` payload legitimately swallows the `_pk_`
-(because `_` is inside the payload class `[A-Za-z0-9._-]`) and both engines agree. Those eight vectors
-are added to §4.4's fixture so the property is enforced rather than remembered:
+**Round 3's question — can rule ordering change the result?** **Answered: yes**, and it is now pinned.
+A reviewer constructed `~sk-abcdefgh123/`, which both the tilde and secret rules match; tilde-first
+gives `~[redacted]/`, secret-first gives `~[redacted-secret]/`. Neither leaks, both engines agree under
+each ordering, and the shipped order is already tilde-first — so it was an unpinned invariant, now a
+fixture row (§4.4).
 
-`sk-… pk_…` · `pk_… sk-…` · `sk-…,pk_…` · `a sk-… pk_… b` · `_pk_abcdefgh123` (preserved) ·
-`_sk-abcdefgh123` (redacted) · `sk-abcdefgh123_pk_abcdefgh123` · `(sk-…)(pk_…)`
+**New for round 4 — the one decision this plan will not make unilaterally.** §4.4 entries 3 and 4 are
+**leak-direction** divergences: `Bearer\n<token>` and `api\nkey: <value>` are redacted by Python and
+**missed by the shell**, because `sed` is line-oriented and `hook_redact_pii` folds newlines with `tr`
+only *after* `sed` has run. Executed: moving the fold **before** `sed` closes both and aligns the two
+implementations, changing **no pattern**.
 
-**What is still worth a reviewer's attention:** the two fragments must run in the same `sed`
-invocation as §4.2's tilde loop, and §4.4's fixture drives the whole `hook_redact_pii` entry point
-precisely so a cross-rule ordering regression surfaces. If a reviewer can construct an input where
-tilde-then-secret ordering changes the result, that is the highest-value finding available in round 3.
+**The objection is that it still widens matching** — every rule would then see text across former line
+boundaries — and §3's rule is *never widen*. The defence is that the widening is confined to whitespace
+normalisation the function already performs one stage later, and that it converts two real leaks into
+two catches.
+
+**Reviewers: should §4.3's pipeline fold newlines before `sed`?** If yes, entries 3–4 disappear and the
+shell gains two redactions it should always have had. If no, they stay enumerated exemptions and the
+leak is documented rather than fixed. Either is defensible; the plan will not choose without a ruling,
+because it is the one change in this ticket that makes the redactor match *more*.
 
 ## 9. Notes
 
@@ -671,3 +764,28 @@ Fetched and checked: `marketplace add` is line **27**, `plugin list` is line **2
 asked reviewers to contest a stated trade; the reviewer contested it and proposed splitting the policy
 per prefix. Executed, it keeps every leak case *and* every identifier case, so §8 Q4 dissolved instead
 of being answered — a strictly better result than either side's opening position.
+
+### Round 3 outcome
+
+**gemini `APPROVE_WITH_NOTES` · codex `REQUEST_CHANGES` (4 findings).** All re-verified by execution.
+
+**gemini answered §8's ninth-vector question with a real construction** — `~sk-abcdefgh123/`, matched by
+both the tilde and secret rules, where ordering decides the winner. Confirmed on both engines; the
+shipped order is already tilde-first in both implementations, so it is an unpinned invariant rather
+than a live bug. Now pinned (§4.4), with the instruction that §4.1's `pk_` fragment goes *after* the
+tilde loop.
+
+**codex found a parity bug in round 3's own prescribed implementation** — the highest-value finding of
+the round, and one the eight adjacency vectors added in round 3 did not cover:
+
+| # | finding | verdict | round-4 change |
+|---|---|---|---|
+| 1 | a ninth ordering vector breaks shell/Python parity | **confirmed** | `pk_abcdefgh-sk-ijklmnop` → shell 2 replacements, combined-regex Python 1. **Python now uses two sequential passes** mirroring the shell fragment order; 0 mismatches across 16 vectors (was 2) |
+| 2 | the exemption set is not exactly two | **3 of 4 confirmed** | three leak-direction divergences found (`Bearer\n…`, `api\nkey:`, NBSP). Set is now **five**, and entries 3–4 are closable by folding newlines *before* `sed` — raised in §8, not assumed, because it widens matching. The fourth example (`apiKey=`) is **REFUTED** — both sides redact it |
+| 3 | §2's rationale contradicts §4.6's own table | **confirmed** | and the `[A-Z0-9_-]+_PLAN.md` claim is false (`COREDEV-2333_RELEASE_2.4.0_PLAN.md` has dots). `@2x` is now a **deferral on scope**, not a dismissal on impossibility |
+| 4 | mutation accounting stale in §6/§7 | **confirmed** | "two"/"both" → **four**, plus the combined-alternation parity mutant |
+
+**Process failure on my side, recorded because it invalidates a round.** The sibling plan was edited
+*while its codex review was running*, and that reviewer correctly refused: *"A mandatory digest-bound
+review cannot approve a moving target."* **The plan must be frozen for the duration of a review round.**
+That is the same discipline `COREDEV-2607` demands of the reviewer, applied to the author.

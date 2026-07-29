@@ -1,8 +1,8 @@
 # CI & Workflow Hardening Plan
 
-**Status:** Planning — round 3, awaiting re-gate
+**Status:** Planning — round 4, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 3)
+**Last Updated:** 2026-07-29 (round 4)
 **Tickets (batched — see §1 for why):**
 - `COREDEV-2598` — CI proves the plugin **loads**, not just that it validates
 - `COREDEV-2600` — CI drift guard for duplicated primitives
@@ -17,8 +17,13 @@
 > `${CLAUDE_PLUGIN_ROOT}` in an installed plugin (`hooks/hooks.json:101`; `README.md:378` lists the
 > script in the shipped hook table; `plugin.json` has no `files`/`include` filter and there is no
 > `.gitattributes`, so nothing excludes them). Under §4.2's chosen fixes the PreCompact hook's `round`
-> field changes from `"09"` to `9` — a **shipped behaviour change**, which belongs in the CHANGELOG
-> under *Changed*, not *Fixed*, and must be mutation-proved as such.
+> field changes from the JSON string `"09"` to the JSON string `"9"` — a **shipped behaviour change**,
+> which belongs in the CHANGELOG under *Changed*, not *Fixed*, and must be mutation-proved as such.
+> *(Rounds 1–3 wrote this as `"09"` → numeric `9`. Wrong: `precompact-snapshot.sh:67` serialises with
+> `printf '…"round":"%s"…'`, so the field is **always** a JSON string regardless of the scanner.
+> Reusing `context_highest_round` normalises the VALUE, not the TYPE. Confirmed by execution. If a
+> numeric `round` is actually wanted, that is a separate serialisation change with its own
+> compatibility tests against `sessionstart-restore.sh`'s reader — this plan does not propose it.)*
 > *(Round 1 asserted "no shipped-asset behaviour change". That was wrong on the files, and it also
 > pre-decided an outcome §8 Q2 had not yet resolved.)*
 
@@ -134,7 +139,11 @@ that path is GitHub's job, not ours. Say so in the workflow comment so nobody la
 **(b) Assert installed-BYTE identity, not version equality.** **Open question 1 is answered:
 `claude plugin list --json` IS supported on the pinned 2.1.220** (both reviewers confirmed; fields
 `id`, `version`, `scope`, `enabled`, `installPath`, `installedAt`, `lastUpdated`, `mcpServers`).
-Require exactly one entry matching `unleashed-mail@<scratch-marketplace-name>` with `enabled == true`.
+Require exactly one entry matching `unleashed-mail@<scratch-marketplace-name>` with `enabled == true`
+**and its `errors` field absent or empty.** The key is not present on a healthy local install, but a
+reviewer observed an entry carrying `enabled: true` **together with a non-empty `errors` array** during
+a read-only cache refresh — so the shape exists, and without the check the machine-readable gate can
+approve an entry the CLI is simultaneously reporting as broken.
 Do **not** grep for `✔ enabled`: the glyph does exist on 2.1.220, so a naïve port passes today and
 gives false confidence, which is exactly the brittleness this plan warned about.
 
@@ -143,14 +152,27 @@ gives false confidence, which is exactly the brittleness this plan warned about.
 a `source: github` regression would install remote bytes and still pass. Round 2's version check caught
 only today's accidental 2.5.3/2.6.1 skew.
 
-Assert instead that the **installed tree derives from the scratch checkout's bytes**. Either is
-acceptable, and the choice is the implementer's:
+Assert instead that the **installed tree derives from the scratch checkout's bytes**, via a
+**per-run sentinel**. One mechanism, mandated — not a choice:
 
-- a deterministic digest over a load-bearing payload — e.g. `git ls-files -s` over the scratch source
-  versus the same file set under `installPath` — compared for equality; or
-- a **per-run sentinel**: write a unique token into the scratch copy before `marketplace add` (a
-  comment line, or a file the manifest already ships), then assert that exact token is present under
-  `installPath`. Cheaper, and it cannot be satisfied by any remote clone.
+> Before `marketplace add`, append `# ci-load-sentinel: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT` as a
+> trailing comment line to `scripts/precompact-snapshot.sh` **in the scratch copy**. After install,
+> assert that exact string is present in `<installPath>/scripts/precompact-snapshot.sh`.
+
+Why this one, stated so it is not re-litigated:
+
+- **A remote clone cannot satisfy it.** The token is unique per run and exists only in the scratch
+  copy, so a `source: github` regression fails on content, not on a version that may coincide.
+- **The carrier is provably shipped** — `hooks/hooks.json:101` invokes it from `${CLAUDE_PLUGIN_ROOT}`,
+  so if it is missing from the install the plugin is broken anyway. A shell `#` comment cannot affect
+  parsing, validation or behaviour.
+- **The rejected alternative, and why.** A digest comparison (`git ls-files -s` over the scratch source
+  versus a walk of `installPath`) is stateless and appealing, but it must first establish which file
+  set the installer actually copies and how it normalises modes and line endings. Every one of those is
+  a source of false failures in a gate whose whole purpose is to be trustworthy when it goes red. The
+  sentinel needs none of that. *(Round 3 offered both and left the choice open; a reviewer correctly
+  called that a re-introduction of the "X or Y" defect this plan spent two rounds removing. A plan
+  resolves design ambiguity — it does not hand the implementer a multiple-choice question.)*
 
 Keep the version equality check as well — it is nearly free — but label it a smoke check, not the
 backstop.
@@ -200,10 +222,14 @@ a *different* assertion:
    must be run **without** relying on the version differing: bump the scratch copy's `plugin.json` to
    match `main` first, so the mutant reproduces the realistic case where the two versions agree. If it
    only fails on the version check, the identity assertion is not doing the work.
-4. **The check itself is deleted or reduced to `enabled`** → the job must still fail, because mutants
-   1–3 target three independent assertions. If removing any single assertion leaves all three mutants
-   failing, the assertions overlap and one is redundant; if removing it leaves any mutant passing, that
-   assertion is the sole guard and must be named as such.
+4. **Each assertion is removed in turn, one at a time** → the mutant it owns must start passing, and no
+   other mutant may change. That maps assertions to mutants one-to-one and detects both redundancy and
+   sole-guard coupling.
+   *(Round 3 wrote "the check itself is deleted → the job must still fail, because mutants 1–3 target
+   its assertions" — which is circular: delete the check and nothing is left to reject anything. A
+   reviewer caught it. The durable form is the mapping above, run by a negative-test harness asserting
+   the **outer** exit status of the load-check step, so "the step was deleted" is itself a failure
+   rather than a vacuous pass.)*
 
 **A load check that cannot fail is worse than none** — this remains the item most at risk of shipping
 inert. **Author the mutants first and watch them fail**, then write the assertions; the reverse order
@@ -275,18 +301,34 @@ copies survive, so it cannot mutation-prove the single-source branch at all.)*
   bases return `/.claude/unleashed-mail` with **empty stderr**; drop the `${HOME:-}` guard and the
   affected copy emits `HOME: unbound variable`. **State plainly that this vector does not break
   today** — it is regression-proofing, not a fix.
-  (ii) *Fallback path — mandatory, and round 2 omitted it:* **with `paths.sh` absent**, source each of
-  `marker.sh`, `log.sh` and `context.sh` **individually** (they are sourced standalone in real
-  usage — `agents/swift-reviewer.md:245-246` and `scripts/test-hooks.sh:39,42`) and assert each still
-  returns the correct base, exits 0 and leaves stderr empty. Without this, the suite exercises the
-  shared helper and never the three inline fallbacks — so a fallback that was written wrong, or omitted
-  entirely, passes. Since the fallback exists precisely to stop the dedup from converting three
-  independent fail-open paths into one shared point of failure, an untested fallback defeats the
-  reason the fallback was required.
+  (ii) *Fallback path — mandatory, and it must run the SAME environment matrix as (i):* **with
+  `paths.sh` absent**, source each of `marker.sh`, `log.sh` and `context.sh` **individually** (they are
+  sourced standalone in real usage — `agents/swift-reviewer.md:245-246` and
+  `scripts/test-hooks.sh:39,42`) and assert each exits 0, leaves stderr empty, and returns the correct
+  base **across three environments**:
+
+  | environment | required result |
+  |---|---|
+  | `env -u HOME -u CLAUDE_PLUGIN_DATA` | `/.claude/unleashed-mail` |
+  | `HOME=/probe`, no `CLAUDE_PLUGIN_DATA` | `/probe/.claude/unleashed-mail` |
+  | `CLAUDE_PLUGIN_DATA=/custom/d` | `/custom/d` |
+
+  **A single-environment assertion is not enough, and this is not theoretical.** An implementer who
+  hard-codes the literal `/.claude/unleashed-mail` as the "fallback" produces a function that is
+  **indistinguishable from the correct one** under `env -u HOME` alone — it exits 0, stderr is empty,
+  and the string matches. Executed: the hard-coded mutant passes row 1 and fails rows 2 and 3. Round 3
+  specified only the unset-`HOME` case and would have accepted the mutant.
+
+  Without vector (ii) at all, the suite exercises the shared helper and never the three inline
+  fallbacks — so a fallback written wrong, or omitted entirely, passes. Since the fallback exists
+  precisely to stop the dedup from converting three independent fail-open paths into one shared point
+  of failure, an untested fallback defeats the reason the fallback was required.
 - **Item 2:** with `round-3`, `round-09` and `round-999…9` (20 digits) present, the hook currently emits
   the `integer expression expected` stderr line and records `"round":"09"`; after the change stderr is
-  empty and it records `9`. **Assert both**, beside the existing round-08/09 and oversized-suffix cases
-  at `test-hooks.sh:745-768`.
+  empty and it records `"round":"9"` — **still a JSON string**, normalised in value only. **Assert
+  both**, and assert the **type** explicitly (a test that accepts either `"9"` or `9` would not notice
+  a serialisation change), beside the existing round-08/09 and oversized-suffix cases at
+  `test-hooks.sh:745-768`.
 - **Item 3:** stub `uname() { echo FreeBSD; }` with BSD `stat` on `PATH` — today `marker_mtime` returns
   `0`, which makes `stop-quality-marker-gate.sh:77-81` compute `AGE=999999` and **skip the gate
   entirely**; after the change it returns the real mtime. Also assert the GNU path explicitly: coreutils
@@ -431,7 +473,7 @@ constraint is documented even if C2 slips), C2 the identity change plus its five
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | The load check ships inert (asserts nothing) | **High** | §4.1 names three mutants, each failing a different assertion; the EOF-mutation trap is documented because it already fooled one attempt |
-| The load check silently tests the wrong bytes | **High — reproduced** | §4.1(a)'s scratch-marketplace source rewrite, plus the `version` equality assertion in (b) as the backstop |
+| The load check silently tests the wrong bytes | **High — reproduced** | §4.1(a)'s scratch-marketplace source rewrite, plus the **per-run sentinel** in (b) as the backstop. Version equality is only a smoke check — `main` and the branch share a version for most changes |
 | The load check is flaky in CI (network install) | Medium | Bounded runtime, pinned CLI. If flaky, quarantine rather than weaken the assertion |
 | Item B's `paths.sh` becomes a new shared point of failure | **Medium** | Mandatory inline fallback when `paths.sh` cannot be located — `swift-reviewer` and `test-hooks.sh` both source these libs standalone |
 | A byte-equality drift gate is red on an unmodified checkout | **High if adopted** | Explicitly forbidden in §4.2; the three base *lines* are not identical today, only the expression is |
@@ -499,12 +541,15 @@ not only a `git revert` — §3's corollary. Each item names its mutants above.
    identity representation rather than authenticate the absolute-path schema and then have to revise
    it. §7 reflects this ordering.
 
-**New for round 3 — what reviewers should contest now.** §4.1(b) drops version equality as the
-backstop in favour of installed-byte identity, and offers the implementer two ways to get it (a digest
-comparison, or a per-run sentinel token). **Is leaving that choice open a re-introduction of the
-"X or Y" defect this plan spent two rounds removing?** The argument for leaving it open is that both
-forms are fully specified and independently sufficient, unlike round 1's genuinely undecided
-alternatives — but that is a judgement call, and a reviewer may reasonably say pick one.
+5. **Round 3's question — does offering two byte-identity mechanisms re-introduce the "X or Y" defect?**
+   **Answered — YES, and it is fixed.** Both reviewers said so independently: a plan resolves design
+   ambiguity, it does not hand the implementer a multiple-choice question, and the two forms were not
+   equivalent (one stateless but dependent on `git ls-files` normalisation, the other stateful).
+   §4.1(b) now mandates exactly one — the per-run sentinel — and records why the digest was rejected.
+
+**New for round 4 — nothing is deliberately left open.** Every §8 entry is now a decision. If a
+reviewer finds a residual choice anywhere in §4, that is a finding: the round-3 review found two
+("X or Y" in §4.2 item 3, and the identity mechanism here) after round 2 claimed none remained.
 
 ## 9. Notes
 
@@ -576,3 +621,33 @@ failed closed correctly, but the side effects persisted and had to be reverted. 
 `--sandbox` and both combined were tested and **none prevents writes**. The round-2 gemini verdict
 recorded above is from a clean re-run inside a **disposable detached checkout**, with a before/after
 `git status --porcelain` assertion proving the real worktree was untouched.
+
+### Round 3 outcome
+
+**gemini `REQUEST_CHANGES` (2 findings) · codex `REQUEST_CHANGES` (5 findings, one a blocker).**
+All re-verified by execution.
+
+**gemini's two findings were both real, and both were answers to questions this plan asked it:**
+
+1. **Offering two byte-identity mechanisms *is* an unresolved contract.** Ruled against the plan's own
+   framing — "a plan resolves design ambiguity, it does not offer multiple-choice options". §4.1(b) now
+   mandates one (the per-run sentinel) and records why the digest was rejected.
+2. **§4.2 item 1's fallback proof accepts a hard-coded fallback.** Verified by construction: an
+   implementer who hard-codes the literal `/.claude/unleashed-mail` is **indistinguishable** from the
+   correct dynamic fallback under the single `env -u HOME` case round 3 specified. The proof is now a
+   three-environment matrix that separates them on rows 2 and 3.
+
+**codex — one blocker and four substantive:**
+
+| # | finding | verdict | round-4 change |
+|---|---|---|---|
+| 1 | **Blocker — the review target changed during the review** | **confirmed, and it was my doing** | the plan was edited while codex was reading it. *"A mandatory digest-bound review cannot approve a moving target."* Round 4 is gated on **frozen** committed bytes |
+| 2 | the sentinel decision was not propagated | **confirmed** | §8, the risk register and the gate history all still offered digest-or-sentinel; now consistent |
+| 3 | mutant 4 is circular | **confirmed** | "delete the check → it must still fail, because mutants 1–3 target its assertions" — delete the check and nothing is left to reject anything. Replaced with a one-at-a-time assertion-removal mapping, run by a harness asserting the step's **outer** exit status |
+| 4 | the `round` type claim is wrong | **confirmed** | `precompact-snapshot.sh:67` serialises `"round":"%s"`, so the field is **always** a JSON string. The change is `"09"` → `"9"`, a value normalisation, not `"09"` → numeric `9`. The test must assert the type, or a later serialisation change slips through |
+| 5 | `plugin list --json` can report `errors` with `enabled: true` | **confirmed by the reviewer's own environment** | not reproducible on this install (`errors` is absent), but the shape exists and the guard is free. `errors` must be absent or empty |
+
+**Finding 1 is the process lesson.** `COREDEV-2607` was filed this session because a *reviewer* mutated
+the tree under review; finding 1 is the same defect committed by the *author*. The rule now applies both
+ways: **a plan is frozen for the duration of a review round.** No edits between dispatching a review and
+recording its verdict.
