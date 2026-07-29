@@ -1,8 +1,8 @@
 # Redactor Defects Plan
 
-**Status:** Planning — round 2, awaiting re-gate
+**Status:** Planning — round 3, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 2)
+**Last Updated:** 2026-07-29 (round 3)
 **Ticket:** `COREDEV-2597` — `hook_redact_pii` corrupts ordinary prose and truncates on invalid UTF-8
 **Epic:** `COREDEV-2582` — Opus 5 readiness and autonomous end-to-end mode
 **Branch:** `feat/COREDEV-2597-redactor-defects`
@@ -108,36 +108,60 @@ Verified by execution:
 Mirrored at `capture.py:61` (`_SECRET`), so reviewer `finding`/`evidence`/`fix` prose is corrupted the
 same way today.
 
-**Fix — the boundary class is a decision, stated explicitly.** Require start-of-string or a
-**non-alphanumeric** character before the prefix, preserving that character in the replacement:
+**Fix — the boundary class is a decision, and it is ASYMMETRIC between the two prefixes.** Require
+start-of-string or a boundary character before the prefix, preserving that character in the
+replacement — but the boundary class differs per prefix, because the two prefixes have different
+collision profiles:
 
 ```sh
-shell   -e 's#(^|[^A-Za-z0-9])(sk-|pk_)[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
-python  _SECRET = re.compile(r"(?<![A-Za-z0-9])(?:sk-|pk_)[A-Za-z0-9._-]{8,}")
+shell   -e 's#(^|[^A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
+        -e 's#(^|[^A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
+python  _SECRET = re.compile(r"(?:(?<![A-Za-z0-9])sk-|(?<![A-Za-z0-9_])pk_)[A-Za-z0-9._-]{8,}")
 ```
 
-**Underscore counts as a boundary, so `foo_sk-abcdefgh123` IS redacted.** This is deliberate.
-`_sk-` and `_pk_` are not natural prose or identifier shapes (identifiers cannot contain `-`;
-hyphenated words do not contain `_`), whereas concatenated leak shapes such as `OPENAI_KEY_sk-proj-…`
-and `backup_sk-live-….json` are plausible and would silently survive a `\W` guard. **Accepted cost,
-recorded so it is visible:** a SQL-style name like `orders_pk_customer_id_idx` redacts to
-`orders_[redacted-secret]`. `pk_` is the conventional primary-key prefix, so this can appear in
-reviewer evidence about a GRDB schema — see §5 and §8.
+**Underscore IS a boundary before `sk-`, and is NOT before `pk_`.** Rationale, per prefix:
 
-**Non-ASCII is deliberately not in the guard.** Under `LC_ALL=C` (hook-io.sh:227) POSIX ERE cannot
-express a Unicode word class, so adding one would break the shell/Python parity §4.4 exists to
-guarantee. Both runtimes already agree that `cafésk-abcdefgh123` redacts.
+- **`sk-`** — an identifier cannot contain `-`, so `foo_sk-…` is never a real identifier, while
+  concatenated leak shapes such as `OPENAI_KEY_sk-proj-…` and `backup_sk-live-….json` are plausible.
+  Underscore-as-boundary costs nothing here and catches the leak.
+- **`pk_`** — `_pk_` **is** the conventional SQL/GRDB primary-key shape, so `orders_pk_customer_id_idx`
+  and `idx_pk_customer_id_lookup` are ordinary reviewer evidence in exactly the repo this plugin
+  serves. Treating underscore as a boundary there would corrupt correct text, which §3 forbids. And a
+  `pk_` value is a *publishable* key by convention — the lower-stakes half of the pair.
 
-> *Round-2 correction.* Round 1's text said "require a non-word character" (= `[^A-Za-z0-9_]`) in prose
-> while prescribing `[^A-Za-z0-9]` (underscore permitted) in the regex — **the paragraph contradicted
-> itself**, and an implementer could satisfy either reading. The contradiction, not the choice, was the
-> defect. A reviewer preferring the strict `\W` policy may say so — but then both the prose *and* the
-> regex must move together.
+Verified on both engines across ten vectors, with exact shell/Python parity: `OPENAI_KEY_sk-proj-…`
+redacts, `orders_pk_customer_id_idx` and `idx_pk_customer_id_lookup` are **preserved**,
+`pk_live_abcdefgh12345678` still redacts at start-of-string, and `(pk_abcdefgh123)` still redacts
+after punctuation.
+
+> *Round-3 change, and it removes a cost rather than trading one.* Round 2 used **one** guard for both
+> prefixes and recorded `orders_pk_customer_id_idx → orders_[redacted-secret]` as an accepted cost,
+> raising it in §8 as the thing reviewers should contest. A reviewer contested it and proposed
+> splitting the policy per prefix. Executed: the asymmetric rule keeps every leak case **and** every
+> identifier case. The §8 question dissolves rather than being answered — there is no trade left.
+
+**Non-ASCII is deliberately not in the guard, and the guard class is `[^A-Za-z0-9]` / `[^A-Za-z0-9_]`
+— ASCII, spelled out.** Do not write `\W` for it anywhere: in Python `\W` is Unicode-aware by default
+and would behave differently. Under `LC_ALL=C` (hook-io.sh:227) POSIX ERE cannot express a Unicode word
+class at all, so a Unicode-aware Python guard would break the shell/Python parity §4.4 exists to
+guarantee. Both runtimes as specified agree that `cafésk-abcdefgh123` → `café[redacted-secret]`.
+
+> *Round-2 correction, refined in round 3.* Round 1's text said "require a non-word character" in prose
+> while prescribing a different class in the regex — **the paragraph contradicted itself**, and an
+> implementer could satisfy either reading. The contradiction, not the choice, was the defect.
 >
 > A round-1 reviewer also reported that the guard "omits non-ASCII", citing `café-sk-…`. **Refuted by
-> execution:** the character immediately before `sk-` there is the hyphen, which no candidate guard
-> treats as a word character. Under true adjacency (`cafésk-…`) both candidate guards behave
-> identically. The claim cannot be demonstrated by any two-way comparison of the proposed guards.
+> execution:** the character immediately before `sk-` there is the hyphen, which no candidate ASCII
+> guard treats as a word character. Under true adjacency (`cafésk-…`) both candidate ASCII guards
+> behave identically — and independently confirmed by the other reviewer, which also supplied the
+> mechanism: under `LC_ALL=C` the `é`'s second UTF-8 byte (`0xA9`) is not alphanumeric, so it acts as
+> the boundary.
+>
+> **Round-3 narrowing of that refutation.** It holds only between the two *ASCII* classes. If `\W` is
+> read as Python's Unicode-aware class, the accent **does** decide: `(?<!\w)` preserves
+> `cafésk-abcdefgh123` entirely while the ASCII guard redacts it (executed). That is why the class is
+> now spelled out literally above, and why §4.4's fixture carries a true-adjacency row — so a
+> Unicode-aware Python mutant cannot pass unnoticed.
 
 **Proof — the round-1 set was insufficient and is replaced.** Round 1 named only the two
 start-of-string controls `sk-proj-abcdefgh12345678` and `pk_live_abcdefgh12345678`, which never
@@ -152,16 +176,26 @@ pass that set while leaking a real secret. Required set, on **both** implementat
   must be **byte-identical** in the output
 - **both-branches-in-one-pass:** `sk-abcdefgh123 sk-abcdefgh123` → `[redacted-secret] [redacted-secret]`
 - **start-of-string:** `sk-proj-abcdefgh12345678`, `pk_live_abcdefgh12345678`
-- **sub-threshold negative:** `sk-abcdefg` unchanged
-- **policy-sensitive rows** (pin the §4.1 decision): `foo_sk-abcdefgh123` → redacted;
-  `orders_pk_customer_id_idx` → redacted
+- **threshold pair — both required, one on each side of `{8,}`:** `sk-abcdefgh` (payload exactly **8**)
+  → redacted; `sk-abcdefg` (payload **7**) → unchanged
+- **asymmetric-policy rows** (pin §4.1's per-prefix decision, and they must move in opposite
+  directions): `foo_sk-abcdefgh123` → **redacted**; `OPENAI_KEY_sk-proj-abcdefgh12345678` →
+  `OPENAI_KEY_[redacted-secret]`; `orders_pk_customer_id_idx` → **preserved**;
+  `idx_pk_customer_id_lookup` → **preserved**
+- **true-adjacency non-ASCII row:** `cafésk-abcdefgh123` → `café[redacted-secret]` on **both** engines.
+  This is the row that rejects a Unicode-aware Python guard, which would preserve it entirely.
 
-**Anti-implementation controls — both must FAIL, and this is the mutation proof for §4.1:**
+**Anti-implementation controls — all four must FAIL, and this is the mutation proof for §4.1:**
 1. an implementation that drops `\1` from the shell replacement (eats the boundary character);
-2. an implementation anchored only at `^` (leaves `token sk-abcdefgh123` fully unredacted).
+2. an implementation anchored only at `^` (leaves `token sk-abcdefgh123` fully unredacted);
+3. a `{9,}` threshold mutant — rejected only by the exactly-8 positive above. *Every* round-2 positive
+   carried at least 11 payload characters while the only negative carried 7, so a `{9,}` mutant passed
+   the entire round-2 set while violating the retained `{8,}` contract;
+4. a Unicode-aware Python guard (`(?<!\w)`) — rejected only by the true-adjacency row above.
 
-Round 1's controls pass both. §6's blanket "revert it and the test fails" does **not** close this,
-because neither mutant is a revert.
+Round 1's controls pass mutants 1 and 2; round 2's pass mutants 3 and 4. §6's blanket "revert it and
+the test fails" closes none of them, because no mutant is a revert. **This list is the concrete
+instance of §3's second corollary; treat it as the template for the other sections.**
 
 ### 4.2 — The `~` rule has no path context and eats approximations (High)
 
@@ -201,7 +235,12 @@ Three things about that shell form are load-bearing and must not be "simplified"
   scanning *after* the previous match and can no longer see the boundary character, so `~a/~b/x`
   yields `~[redacted]/~b/x` while Python's lookbehind catches both — a silent divergence that lands
   straight in §4.4's parity fixture. Verified: with the loop, parity is exact on all vectors.
-- **The label must live in its own `-e`.** BSD `sed` rejects `:t;s/…`.
+- **The label must live in its own `-e`, and getting this wrong fails SILENTLY.** BSD `sed` does not
+  reject `-e ':t;s#…#…#'` — it **exits 0**, prints `unused label 't;s#…#…#'` to stderr, and performs
+  **no substitution at all** (executed: input `a` comes back as `a`). Inside `hook_redact_pii`, whose
+  `2>/dev/null` suppresses that diagnostic, the combined form would silently disable the whole rule.
+  That is strictly more dangerous than a rejection, so the test must assert redaction *happened*, not
+  merely that the command exited 0.
 - **The replacement keeps the trailing `/`.** Drop it and `~alice/secrets` mangles to
   `~[redacted]secrets`.
 
@@ -217,12 +256,19 @@ Three things about that shell form are load-bearing and must not be "simplified"
 > Neither reviewer noticed that **a leading-boundary guard is what creates the parity bug** (`~a/~b/x`),
 > so adopting either recommendation verbatim would have shipped a §4.4 failure. Hence the loop.
 
-**This is a consistency fix, not a new policy.** `mcp/review-synthesizer/schema.py:200-201` already
-ships and tests this exact definition: *"A plain `~backup.swift` (tilde with no following `/`) is a
-legal repo filename and is NOT matched — only a home-dir REFERENCE."* `capture.py:57`'s own positive
-control is `~alice/Library/…`, with a path. `hook-io.sh:216-217`'s purpose clause is path-shaped
-(`/Users/<name>/…`, `-archivePath`). No shipped test anywhere asserts a bare `~alice` is redacted.
-Both reviewers and the round-1 plan missed this precedent two files away.
+**The slash requirement is a consistency fix, not a new policy — but the precedent covers only that
+half.** `mcp/review-synthesizer/schema.py:200-201` already ships and tests the principle: *"A plain
+`~backup.swift` (tilde with no following `/`) is a legal repo filename and is NOT matched — only a
+home-dir REFERENCE."* `capture.py:57`'s own positive control is `~alice/Library/…`, with a path.
+`hook-io.sh:216-217`'s purpose clause is path-shaped (`/Users/<name>/…`, `-archivePath`). No shipped
+test anywhere asserts a bare `~alice` is redacted. Both reviewers and the round-1 plan missed this
+precedent two files away.
+
+> *Round-3 narrowing.* Round 2 called this "this exact definition". It is not. `schema.py:202`'s actual
+> rule is `^~[^/]+/`, which accepts **any** non-slash first character — including a digit, so it would
+> match `~9lives/x` and `~40/60`. It is precedent for **requiring the slash**, and precedent for
+> nothing else. The `[A-Za-z_]` first-character class is this plan's own addition, justified below on
+> corpus evidence rather than on precedent. Do not cite `schema.py` for it.
 
 **Proof.** Round 1's sole positive control `~alice/secrets` cannot discriminate — it redacts
 identically under the shipped buggy rule *and* both candidates. Required, on **both** implementations:
@@ -230,13 +276,21 @@ identically under the shipped buggy rule *and* both candidates. Required, on **b
 - **positive** (fail if redaction is disabled): `~alice/secrets` → `~[redacted]/secrets`;
   `~root/.ssh/id_rsa` → `~[redacted]/.ssh/id_rsa`; `(~bob/tmp)` → `(~[redacted]/tmp)` (punctuation
   prefix); `x-~carol/y` → `x-~[redacted]/y` (proves `-` is a boundary, so `--flag=~user/…` redacts);
-  `see /Users/nick/z and ~nick/z` → both halves redacted in one pass
+  `~_daemon/x` → `~[redacted]/x` — **underscore-leading, and required**: every other positive starts
+  with a letter, so without this row a `[A-Za-z]` mutant passes the whole set while missing a valid
+  contract input; `see /Users/nick/z and ~nick/z` → both halves redacted in one pass
 - **loop assertion:** `~a/~b/x` → `~[redacted]/~[redacted]/x`. Delete `-e ':t' -e 'tt'` and this must
-  fail. This is §4.2's mutation proof.
+  fail. This is §4.2's mutation proof. Assert the **redacted output**, not the exit status — see the
+  silent-no-op note above.
 - **preservation** (fail if the rule is widened back): `~500ms`, `~2x faster`, `~40 percent`,
   `~ten minutes`, `~half the rows`, `takes ~one second`, `~L147`, `~Copyable`, `~Escapable`,
   `~40/60 split`, `~1/2 of the rows`, `split ~50/50`, `~1a2b`, `cost ~$5`, `~/Documents`,
   `backup~alice/x` (embedded `~` must not match)
+- **pinned accepted-gap control #2 — the digit-leading username:** assert `~9lives/x` is **preserved**,
+  with an inline comment recording it as a deliberate residual of the `[A-Za-z_]` first-character
+  class. Round 2 discussed this gap in §8 but never pinned it, so nothing stopped a later widening.
+  `~1a2b` does not cover it — that input has no slash and would be preserved by the slash requirement
+  alone, so it cannot discriminate the first-character class.
 - **pinned accepted-gap control:** assert `hook_redact_pii "~alice"` == `~alice` and
   `redact_pii("~alice")` == `~alice`, with the inline comment: *"Deliberate. A bare `~user` with no
   path is regex-indistinguishable from `~ten`/`~half`/`~Copyable` — identical shape. §2 already accepts
@@ -278,15 +332,30 @@ to `scripts/test-hooks.sh` (reuse the `bash -c` + function-shadow pattern at `:5
 
 1. run the helper in a subshell with ambient `LC_ALL` set to a bogus sentinel (e.g. `zz_ZZ.UTF-8`) —
    **mandatory**: with an ambient `C` locale the *unfixed* code passes the locale assertion;
-2. shadow `tr` with a function that writes `"${LC_ALL-<unset>}"` to a **file** — not stderr, because
-   the fix's own `2>/dev/null` would swallow a stderr probe — then `builtin command tr "$@"`;
-3. assert the file contains exactly `C`; assert the helper's captured stderr is empty; assert normal
-   redaction output is unchanged.
+2. shadow `tr` with a function that does **two** things, then delegates via `builtin command tr "$@"`:
+   - writes `"${LC_ALL-<unset>}"` to a **file** — not stderr, because the fix's own `2>/dev/null`
+     would swallow a stderr probe;
+   - **unconditionally emits a known marker to stderr** (e.g. `SHADOW_STDERR_MARKER`);
+3. assert the probe file contains exactly `C` **and** the helper's captured stderr is empty, and that
+   normal redaction output is unchanged.
 
-Verified: unfixed fails both assertions, fixed passes both, on BSD and GNU alike. **Both traps above
-are stated because either one silently re-hollows the proof.** Add a one-line comment on the test
-noting that the shadow is a shell *function*, so a future refactor to `/usr/bin/tr` would make it go
-green vacuously.
+**The stderr marker is what makes the redirect half provable, and round 2 omitted it.** Without it the
+shadow never writes to stderr on ordinary input, so a mutant that correctly adds `LC_ALL=C` but drops
+`2>/dev/null` records `C`, produces unchanged output, and shows empty stderr — passing both
+assertions. That was verified by execution against round 2's design; the redirect at `hook-io.sh:236`
+was mutation-unproved. With the marker, all four cases separate cleanly:
+
+| implementation | probe | stderr | outcome |
+|---|---|---|---|
+| **fixed** (`LC_ALL=C tr … 2>/dev/null`) | `C` | empty | **passes both** |
+| locale added, redirect dropped | `C` | `SHADOW_STDERR_MARKER` | fails the **stderr** assertion |
+| redirect added, locale dropped | `zz_ZZ.UTF-8` | empty | fails the **locale** assertion |
+| shipped (neither) | `zz_ZZ.UTF-8` | `SHADOW_STDERR_MARKER` | fails both |
+
+Each half of the fix is now independently rejected by its own mutant — which is the property round 2
+claimed and did not have. **All three traps are stated because any one of them silently re-hollows the
+proof.** Add a one-line comment on the test noting that the shadow is a shell *function*, so a future
+refactor to `/usr/bin/tr` would make it go green vacuously.
 
 Keep the invalid-UTF-8 case, but demote it from *the* mutation proof to a **BSD-only behavioural
 check**, gated on a `tr --version` probe so it is *skipped*, not vacuous, on GNU. Also fix its weak
@@ -325,12 +394,24 @@ implementations genuinely disagree. **No finite fixture can close this.** The ho
 use a skip-list — a skip makes exemption *removal* invisible (demonstrated: dropping `Escapable` from
 `_TILDE` passes a skip-style guard and fails an assert-style one).
 
-**The one surviving tilde divergence, recorded honestly.** Under §4.2's rule the shell/Python tilde gap
-collapses from "shell corrupts every `~Word`" to a single enumerable case: the slash-joined Swift form
-`~Copyable/~Escapable`, where Python's lookahead preserves it and ERE cannot. Zero occurrences in-tree
-today, but it is plausible reviewer shorthand. **List exactly that input in the exemption set; do not
-claim byte-identical tilde rules.** Whitespace folding is a third enumerated exemption
-(`a\n\n\tb` → shell `a   b`, Python `a b`).
+**There is NO surviving tilde divergence — after §4.2 the two tilde rules agree exactly.**
+
+> *Round-3 correction of a self-contradiction round 2 introduced.* Round 2's §4.4 claimed the
+> slash-joined Swift form `~Copyable/~Escapable` was "the one surviving tilde divergence", on the
+> grounds that Python's `Copyable|Escapable` lookahead preserves it and ERE cannot express one. But
+> §4.2 **deletes that lookahead** as dead code. Executed with the new rules on both sides and the
+> lookahead removed: shell gives `~[redacted]/~Escapable` and Python gives `~[redacted]/~Escapable` —
+> identical. The plan was simultaneously deleting the mechanism and citing it. There is no tilde
+> exemption to enumerate.
+
+**The enumerated exemption set is therefore exactly two entries**, both genuine and both verified:
+
+1. `_EMAIL`'s `@Nx` retina-filename exemption (`capture.py:51-53`) — Python preserves `Icon@2x.png`,
+   shell redacts it (§2 keeps this out of scope on the caller-impact evidence in §4.6).
+2. Whitespace folding — `a\n\n\tb` → shell `a   b`, Python `a b`.
+
+Do not add a tilde entry, and do not claim the tilde rules are merely "behaviourally equivalent" —
+after §4.2 they are byte-identical on every fixture, which is a stronger and checkable property.
 
 **Run the full pipeline, not isolated rules.** §4.2's rule executes *before* §4.1's in the same `sed`
 invocation and changes what text §4.1 sees. The fixture must drive the whole `hook_redact_pii` /
@@ -378,14 +459,29 @@ are exactly **four** shell callers of `hook_redact_pii`:
 
 | caller | field | can it carry `@`/`~` literals? |
 |---|---|---|
-| `permission-denied-log.sh:35` | `reason` | **Yes — the only genuinely free text.** Writes to `logs/denied-commands.jsonl`, which has **no reader anywhere in the repo**, and `:11` documents that Claude Code ignores this hook's output |
-| `stop-failure-log.sh:33` | `error_type` / `error` | No — post-clamped by `tr -cd 'A-Za-z0-9_.-'`, which strips `~` and `@` regardless |
-| `sessionstart-restore.sh:77` | session hint | No — composed only from `ticket` (`COREDEV-NNNN`/`vX.Y.Z`/`1.0X`/`unknown`), `branch_slug` (that or a hex hash), a repo-relative `docs/planning/*_PLAN.md` path, and an integer round. **This is the one caller whose output reaches model context** |
-| `precompact-snapshot.sh:35` | `PLAN` | No — the same constrained plan path |
+| `permission-denied-log.sh:35` | `reason` | **Yes — genuinely free text.** Writes to `logs/denied-commands.jsonl` |
+| `stop-failure-log.sh:33` | `error_type` / `error` | **No — structurally.** Post-clamped by `tr -cd 'A-Za-z0-9_.-'`, which strips `~` and `@` regardless of what arrives |
+| `precompact-snapshot.sh:35` | `PLAN` | **Yes, in principle** — see below. Constrained to a `docs/planning/*_PLAN.md` path, but the glob restricts only the *suffix*, not the basename's characters |
+| `sessionstart-restore.sh:77` | session hint | **Yes, by consuming the above.** Composed from `ticket`, `branch_slug`, `round` (all constrained) **and the `plan` value produced by the row above**. This is the one caller whose output reaches model context |
 
-This is what converts a contested "High — live corruption" into a documented Medium: the asymmetry is
-real, but the only caller that can carry an asset filename writes to a file nothing reads. Keep this
-table — it is the audit trail, and it is also the reason §2's `@2x` exclusion is defensible.
+> *Round-3 correction — round 2's version of this table was materially wrong, and the error mattered
+> because it carried the severity argument.* Round 2 asserted the last two rows were **structurally
+> incapable** of carrying these literals. Refuted by execution: `docs/planning/AppIcon@2x.png_PLAN.md`
+> satisfies the `*_PLAN.md` glob, and the shipped redactor turns it into
+> `docs/planning/[redacted-email]_PLAN.md`. That value is persisted by the PreCompact hook, read back
+> without validation, and injected into model context — so the two rows claimed to be incapable are in
+> fact a **producer/consumer pair**, and the only one that is structurally safe is `stop-failure-log`.
+>
+> Round 2 also said `denied-commands.jsonl` has **"no reader anywhere in the repo"**. Also false:
+> `log_append` reads it for rotation (`log.sh:40`) and the hook suite reads it (`test-hooks.sh:507`).
+> And a diagnostic log is a human-consumed artifact whether or not a parser exists.
+
+**What the corrected audit does and does not support.** It does **not** support "structurally
+impossible", and the honest position is weaker: **no realistic plan filename contains `@` or `~`, and
+nothing enforces that.** Every `*_PLAN.md` in-tree is `[A-Z0-9_-]+_PLAN.md`. So the residual risk is a
+naming convention nobody has broken, not a guarantee — which is enough to keep `@2x` out of scope
+under §3 (the fix would widen nothing, but the corruption has no realistic trigger), and **not** enough
+to call the row incapable.
 
 **Caveat, stated rather than hidden:** this samples *this* repo (40 live records, zero `~`, zero `@`).
 The plugin's target is the Swift app repo, where `icon_512x512@2x.png` assets genuinely exist. A
@@ -401,7 +497,8 @@ before implementation is `grep -c '@\|~' denied-commands.jsonl` in the app repo'
 | A narrowed pattern stops redacting a real secret | **High if unguarded** | §3's corollary: every fix ships a positive control. A preservation-only test would pass with redaction disabled entirely. |
 | A proof is green on CI while proving nothing | **High — realised in round 1** | §4.3's GNU/BSD gap and §4.1's two passing-but-wrong implementations were both found only by execution. Every proof below names the mutant it rejects. |
 | The shell and Python fixes diverge because ERE lacks lookbehind | Medium | §4.4's parity fixture asserts behavioural agreement, not textual identity — and runs the full pipeline, not isolated rules |
-| §4.1's underscore boundary redacts a legitimate SQL identifier | Medium | Accepted and pinned: `orders_pk_customer_id_idx` is a fixture row with its expected output, so the decision is visible and a change trips a test. Raised for reviewers in §8 |
+| §4.1's boundary policy corrupts a legitimate SQL identifier | **Low — eliminated in round 3** | The asymmetric rule preserves `orders_pk_customer_id_idx` and `idx_pk_customer_id_lookup` while still redacting `OPENAI_KEY_sk-proj-…`. Both directions are pinned as fixture rows, so a later collapse back to one uniform guard trips a test |
+| A per-prefix rule is "simplified" back to one uniform guard | Medium | The two asymmetric-policy fixture rows move in **opposite** directions, so no single guard can satisfy both |
 | §4.2's accepted gap (bare `~alice`) is later "fixed" by widening | Medium | Pinned negative control + inline comment + §2 entry, so re-widening fails CI rather than passing silently |
 | Fixing `tr` changes output for existing callers | Low | Only affects inputs containing invalid UTF-8, which currently **truncate** — any change is strictly an improvement |
 | Scope creep into "make it a real PII scrubber" | Medium | §2 excludes it explicitly; that limitation is `COREDEV-2585`'s to design around |
@@ -473,18 +570,35 @@ proof for regex forms developed against BSD `sed`.
    **Answered — here.** Both reviewers concurred and `CI_WORKFLOW_HARDENING_PLAN.md` §2 already
    disclaims the redactor.
 
-**New for round 2 — the one thing reviewers should actively contest.** §4.1's boundary class treats
-underscore as a boundary, so `foo_sk-…` redacts and `orders_pk_customer_id_idx` redacts with it. The
-alternative (`\W`, underscore is a word character) preserves the SQL identifier but lets
-`OPENAI_KEY_sk-proj-…` survive. The plan picks leak-prevention over identifier preservation and pins
-both rows as fixtures. **Is that the right trade for a repo whose reviewer evidence discusses GRDB
-schemas?**
+4. **Round 2's question — is redacting `orders_pk_customer_id_idx` an acceptable cost of treating
+   underscore as a boundary?**
+   **DISSOLVED in round 3, not answered.** A reviewer proposed splitting the policy per prefix, and
+   execution shows that keeps *both* properties: `OPENAI_KEY_sk-proj-…` still redacts, and both SQL
+   identifiers are preserved. There is no trade to make, so the question no longer has a subject.
+   §4.1 now specifies the asymmetric rule and pins both directions as fixtures.
+5. **Round 2's second question — is `~9lives/x` reachable enough to matter?**
+   **Answered — accept the miss, and pin it.** Digit-leading accounts require `useradd --badname`;
+   `NAME_REGEX` and 134/134 local accounts are letter- or underscore-first. Widening to a slash-only
+   rule to catch it necessarily reintroduces the measured `~40/60`, `~1/2` and `~2x/day` corruption,
+   which §3 forbids. Both reviewers independently reached this conclusion. §4.2 now carries an explicit
+   `~9lives/x` preservation control so the residual is a tested decision rather than an omission —
+   round 2 discussed the gap but never pinned it.
 
-**Second, narrower:** §4.2's rule leaves `~9lives/x` unredacted (digit-leading username + slash). The
-argument for `[A-Za-z_]` is `useradd`/`adduser` `NAME_REGEX` and 134/134 local accounts being letter-
-or underscore-first. Some systems permit digit-leading names via `useradd --badname`. **If that is
-considered reachable, the fallback is the slash-only rule plus explicit fraction preservation** — which
-costs `~40/60`, `~1/2`, `~50/50`.
+**New for round 3 — asked, then answered rather than left open.** The asymmetric §4.1 rule is the one
+genuinely novel construct here, and it is two `-e` fragments rather than one, so the obvious risk is an
+interaction between them: could the `sk-` fragment consume a boundary character the `pk_` fragment then
+needs? **Executed across eight adjacency and ordering vectors — zero parity mismatches**, including the
+worst case `sk-abcdefgh123_pk_abcdefgh123`, where the `sk-` payload legitimately swallows the `_pk_`
+(because `_` is inside the payload class `[A-Za-z0-9._-]`) and both engines agree. Those eight vectors
+are added to §4.4's fixture so the property is enforced rather than remembered:
+
+`sk-… pk_…` · `pk_… sk-…` · `sk-…,pk_…` · `a sk-… pk_… b` · `_pk_abcdefgh123` (preserved) ·
+`_sk-abcdefgh123` (redacted) · `sk-abcdefgh123_pk_abcdefgh123` · `(sk-…)(pk_…)`
+
+**What is still worth a reviewer's attention:** the two fragments must run in the same `sed`
+invocation as §4.2's tilde loop, and §4.4's fixture drives the whole `hook_redact_pii` entry point
+precisely so a cross-rule ordering regression surfaces. If a reviewer can construct an input where
+tilde-then-secret ordering changes the result, that is the highest-value finding available in round 3.
 
 ## 9. Notes
 
@@ -499,7 +613,7 @@ costs `~40/60`, `~1/2`, `~50/50`.
 - Regex work was developed against **BSD `sed`** (no GNU `sed` on the dev host). Every construct used is
   POSIX-portable by design, and §6's portability assertion makes CI the GNU proof.
 
-## 10. Round-1 gate outcome and what changed
+## 10. Gate history — what each round changed
 
 **gemini `APPROVE_WITH_NOTES` · codex `REQUEST_CHANGES` (7 findings).** Both reviewers independently
 reproduced all three defects by execution; the diagnosis was never in dispute — the **implementation
@@ -525,3 +639,35 @@ shell/Python parity bug (`~a/~b/x`) that §4.4 exists to catch.
 
 **The direct reviewer conflict on §8 Q2 was resolved against both reviewers**, in favour of the
 conjunction of their rules, on measured corpus evidence (§4.2).
+
+### Round 2 outcome
+
+**gemini `APPROVE` · codex `REQUEST_CHANGES` (7 findings).**
+
+gemini independently re-executed all three of round 2's load-bearing refutations and confirmed each,
+supplying a better mechanism for one of them (under `LC_ALL=C` the `é`'s second UTF-8 byte `0xA9` is
+what acts as the boundary). It also confirmed both §4.1 anti-implementation mutants were genuinely
+rejected.
+
+**codex found three real defects that a 13-agent verification sweep had missed**, which is the reason
+the dual gate exists. All seven findings were re-verified by execution; **six confirmed, one refuted**:
+
+| # | finding | verdict | round-3 change |
+|---|---|---|---|
+| 1 | §4.3's shadow never proves the **stderr** half — a `LC_ALL=C`-but-no-`2>/dev/null` mutant passes both assertions | **confirmed** | shadow now emits a stderr marker; four-case table in §4.3 separates the halves |
+| 2 | §4.6's caller audit is materially wrong | **confirmed** | `AppIcon@2x.png_PLAN.md` passes the glob and reaches model context; "no reader" also false. Table rewritten, claim weakened from *structurally impossible* to *unenforced convention* |
+| 3 | §4.4 cites a lookahead §4.2 deletes | **confirmed** | self-contradiction removed; there is **no** surviving tilde divergence, exemption set is exactly two |
+| 4 | `schema.py` is not "the exact definition" | **confirmed** | its rule is `^~[^/]+/` — precedent for the slash only; `[A-Za-z_]` is this plan's own addition |
+| 5 | proof tables still admit plausible wrong implementations | **confirmed** | added the exactly-8 threshold positive, `~_daemon/x`, and the `~9lives/x` pin; mutant list grew to four |
+| 6 | the non-ASCII refutation is ASCII-only | **confirmed** | a Unicode-aware `(?<!\w)` *preserves* `cafésk-…`; class now spelled out literally, true-adjacency row added |
+| 7 | BSD `sed` "rejects" the combined label | **REFUTED as stated, and the truth is worse** | it exits **0**, warns `unused label`, and performs **no substitution** — a silent no-op the helper's own `2>/dev/null` would hide |
+
+**One codex finding was wrong and is not adopted.** It placed upstream's
+`claude plugin marketplace add "$GITHUB_WORKSPACE"` at line 25 and `claude plugin list` at line 27.
+Fetched and checked: `marketplace add` is line **27**, `plugin list` is line **29**, and line 25 is the
+`export CLAUDE_CONFIG_DIR`. The sibling plan's citation stands unchanged.
+
+**codex's asymmetric-boundary recommendation was adopted and is the round's best outcome.** Round 2
+asked reviewers to contest a stated trade; the reviewer contested it and proposed splitting the policy
+per prefix. Executed, it keeps every leak case *and* every identifier case, so §8 Q4 dissolved instead
+of being answered — a strictly better result than either side's opening position.
