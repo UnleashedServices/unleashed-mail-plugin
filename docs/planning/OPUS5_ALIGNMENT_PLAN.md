@@ -236,8 +236,9 @@ security-reviewable.** Do **not** widen the character class. Instead:
    **over-accept** `haiku[1m]`, `best[1m]`, `opusplan[1m]` and `inherit[1m]`, none of which the runtime
    recognises.
 3. Leave the model-**id** path (`re.fullmatch(r"[a-z]+-[a-z0-9-]*\d[a-z0-9-]*", …)`) completely
-   unchanged. Because the bracketed forms are now literal set members, no bracket ever reaches the
-   regex and the COREDEV-2503 F10 anchoring is untouched by construction.
+   unchanged. Supported bracketed forms are literal set members, so they short-circuit before the
+   regex; unsupported ones fall through to it and are rejected by its character class. The regex is not
+   edited, so the COREDEV-2503 F10 anchoring is untouched.
 
 **Round-2 correction (round-2 review).** The round-2 draft proposed adding **`default`** and stripping
 `[1m]` from any base. Both are wrong: `default` does **not** appear in the runtime alias table, and
@@ -248,10 +249,17 @@ h1e = ["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]
 ```
 
 The `re.fullmatch` (not `re.match`) discipline introduced by COREDEV-2503 F10 exists to stop
-`claude-opus-4-8 rm -rf` and trailing-newline injection from passing. It is preserved **by
-construction**: a bracketed alias is accepted only by **exact `MODEL_ALIASES` membership**, so a value
-containing `[` or `]` never reaches the model-id regex at all. Nothing is stripped, and no bracket body
-is ever parsed.
+`claude-opus-4-8 rm -rf` and trailing-newline injection from passing. It is preserved, and the exact
+mechanism matters — the guard at `:100` is
+`model not in MODEL_ALIASES and not re.fullmatch(...)`, so:
+
+- a **supported** bracketed alias (`opus[1m]`) matches `MODEL_ALIASES` and **short-circuits**, never
+  reaching the regex;
+- an **unsupported** bracketed value (`haiku[1m]`, `opus[1m;evil]`) **does** reach `re.fullmatch` and is
+  rejected there, because the character class `[a-z0-9-]` contains no `[` or `]`.
+
+Either way nothing is stripped and no bracket body is ever *parsed* — the regex is unchanged, so F10
+is untouched. (An earlier draft claimed no bracketed value ever reaches the regex; that was wrong.)
 
 **Proof.** Extend `scripts/tests/test_validate_plugin_assembly.py`. Accept: the complete supported
 bracketed set `sonnet[1m]`/`opus[1m]`/`fable[1m]`, `claude-opus-5`, `best`, `opusplan`. **Reject the
@@ -446,7 +454,7 @@ to 22 at 2.7.0; it must not merge before this one.
 | `CLAUDE_CODE_EFFORT_LEVEL` set below `xhigh` in a runner silently defeats every pin in §4.1 | Medium | **Cannot be fixed by frontmatter — the env var outranks it.** Documented here; the runtime guard is a preflight assertion owned by `COREDEV-2584`. Do not claim a guarantee this plan cannot deliver. |
 | Effort pin *lowers* effort for a maintainer running at `max` — now on all 42 assets | **High** | Widened in round 2 from 24 assets to 42. Accepted as the cost of an unconditional floor: a per-asset exemption is exactly the judgement call the round-2 decision removed. Flagged so it is not mistaken for a regression. |
 | Three reviewers moving to `opus` materially raises review wall-clock | High | Accepted. Cost and latency explicitly accepted by the maintainer. |
-| Bracketed-alias change reopens the COREDEV-2503 F10 injection hole | Low | §4.4 accepts bracketed aliases **only by exact `MODEL_ALIASES` membership** — nothing is stripped and no value containing a bracket ever reaches the model-id regex, which is unchanged. Hostile bracket-body negatives are still required. |
+| Bracketed-alias change reopens the COREDEV-2503 F10 injection hole | Low | §4.4 accepts bracketed aliases **only by exact `MODEL_ALIASES` membership**, and leaves the model-id regex unchanged. Supported aliases short-circuit before it; unsupported bracketed values reach it and are rejected because its character class has no `[`/`]`. Nothing is stripped. Hostile bracket-body negatives are still required. |
 | A validator key set is written from memory rather than the runtime schema | **High** (demonstrated) | This is what round 1 got wrong in §4.6. §3's round-2 corollary and §4.6 fix 1 require deriving from the pinned bundle and citing the version. |
 | Refreshed `KNOWN_TOOLS` goes stale again | High (over time) | Unavoidable — the tool surface moves. §4.5 demotes fuzzy matching to advisory so staleness degrades to a warning, not a false reject. |
 | §4.9 detection change breaks existing capture tests | **Eliminated** | Round 2 drops the behavioural change entirely; only documentation is added. |
