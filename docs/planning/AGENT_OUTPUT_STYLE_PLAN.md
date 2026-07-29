@@ -1,8 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 9**, revised after eight dual-gate rounds. Round 8: gemini `APPROVE`;
-codex `REQUEST_CHANGES` — §6 and §7 still instructed the *section-scoped* design §4.1 had just
-condemned, and a blanked Disposition cell still passed every assertion.
+**Status:** Planning — **round 10**, revised after nine dual-gate rounds. Round 9: gemini `APPROVE`;
+codex `REQUEST_CHANGES` — rule 3's own adaptation was **proven still broken by execution**, and §4.1's
+proof paragraph still prescribed the section-scoped design it condemned ten lines later.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -86,11 +86,11 @@ adaptation. Every upstream rule now carries a recorded disposition:
 
 | # | Upstream rule (pinned `07684c4a`) | Disposition | Molded to this tool |
 |---|---|---|---|
-| 1 | Lead with the next action | **Adapt — carve-out** | For a reviewer the "action" is the finding or verdict — which is exactly why this cannot be bare: *leading* with the finding would push `Status:` after it (§4.2-B), and leading with the verdict would move `VERDICT:` off the final line (§4.2-C/E). *Lead the human-facing prose with the actionable point; **never reorder a mandated payload** to do it.* |
+| 1 | Lead with the next action | **Adapt — carve-out** | For a reviewer the "action" is the finding or verdict — which is exactly why this cannot be bare: *leading* with the finding would push `Status:` after it (§4.2-B), and leading with the verdict would move `VERDICT:` off the final line (§4.2-C/E). *Lead the human-facing prose with the actionable point; **never reorder a mandated payload** to do it — the lead goes before `Status:`, per the payload-region invariant.* |
 | 2 | Number multi-step tasks | **Adapt — carve-out** | Matches the existing phase/step vocabulary — but the Output Contract trailer is parsed **one value per single field line**, and `What Was Attempted: <the steps you tried>` is literally a step list. *Number human-facing prose only; **machine trailer fields and JSON values keep their mandated single-line/schema shape**.* See §4.2-F |
-| 3 | End with one concrete next action | **Adapt — carve-out** | Where an output has a **mandated final element** (`VERDICT:` line, final fenced JSON block), the next action goes *before* it. Never last. See §4.2-C/E |
+| 3 | End with one concrete next action | **Adapt — carve-out** | *The next action goes **before the entire mandated payload** — before the `Status:` line, its detail trailer, and the final fenced JSON block; never merely before the fence.* **Proven necessary:** `Status: COMPLETE` / `Next: run the tests.` / fence returns `None` from `extract_status`, because only blank or detail-field lines may sit between `Status:` and the fence. Placing it before `Status:` parses correctly. See §4.2-B/C/E/F |
 | 4 | Suppress tangents | **Adapt — carve-out** | Upstream offers a second issue "as a separate question". In a review, an independent **in-scope** finding deferred that way leaves the JSON array — the same failure §4.2-A protects. *Suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array.* See §4.2-A |
-| 5 | Restate state every turn | **Adapt — carve-out** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost. But a subagent opening with a state summary would displace the `BLOCKED — …` prefix its result must *begin* with (§4.2-D). *Restate state in prose; **never before a mandated result prefix**.* |
+| 5 | Restate state every turn | **Adapt — carve-out** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost. But a subagent opening with a state summary would displace the `BLOCKED — …` prefix its result must *begin* with (§4.2-D). *Restate state in prose; **never before a mandated result prefix**, and never between `Status:` and the fence (payload-region invariant).* |
 | 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
 | 7 | Make completed work visible | **Adopt** | |
 | 8 | Matter-of-fact tone for errors | **Adopt** | |
@@ -104,10 +104,16 @@ Rule 7: the reviewers **disagreed** — one alleged a path into contract F — a
 (the alleged mechanism does not occur; the real effect is inert). See §15. **Pin the upstream commit in
 the section** so this audit is reproducible when upstream moves.
 
-**Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
-file — and asserts each rule is present **together with a required normative marker for its
-disposition**. Section-scoped extraction is required because `AGENT_CONTRACTS.md` already mentions JSON
-findings, statuses and verdicts elsewhere (`:90`, `:242`), so a whole-file grep would false-pass.
+**Proof — a TWO-STAGE extraction; the stages are not interchangeable.**
+
+1. **Bound to §13.** A whole-file grep would false-pass because `AGENT_CONTRACTS.md` already mentions
+   JSON findings, statuses and verdicts elsewhere (`:90`, `:242`).
+2. **Then row-scope every per-rule assertion** — §13 → the disposition table → the single row for rule
+   N — and assert the marker *within that row*. Section scope is reserved **solely** for the
+   per-contract assertions in the precedence clause.
+
+Stage 1 alone is the known-broken design: rule 10's marker also occurs in the precedence clause and a
+risk row, so deleting its disposition would still find the phrase somewhere in §13.
 
 **Round-2 correction.** Asserting rule *titles* is not enough: reverting rule 9's positive restatement,
 deleting rule 3's mandated-final-element placement, or flipping an adapted rule back to a bare adopt
@@ -125,7 +131,8 @@ then cannot mask a deleted disposition.
 |---|---|
 | 1 | `never reorder a mandated payload` |
 | 2 | `keep their mandated single-line/schema shape` |
-| 3 | `Never last.` |
+| 3 | `before the entire mandated payload` |
+| — | plus the **payload-region invariant** itself: `only the trailer's own detail-field lines and blank lines may appear` — asserted once, section-scoped, and deletion-mutated |
 | 4 | `defer an in-scope finding out of the current array` |
 | 5 | `never before a mandated result prefix` |
 | 6 | `whoever runs the steps` |
@@ -150,6 +157,27 @@ the rest are *completeness* contracts. **Two of the six (A and F) can downgrade 
 proven by execution, not asserted (see the note below the table).
 
 Each row states the **mechanism** the rule can set in motion and the **conditional** outcome, per §11.
+
+**The payload-region invariant — one rule that subsumes five carve-outs.** Executing every
+parser-touching adaptation against `capture.py::extract_status` (not reasoning about it) showed they all
+fail the same way:
+
+| what an adapted rule might emit | result |
+|---|---|
+| prose **before** `Status:` | parses |
+| a finding, next action, or state line **between** `Status:` and the fence | **`None`** |
+| a **numbered** `What Was Attempted:` / `Remaining:` | **`None`** |
+| `Status:` dropped entirely | **`None`** |
+
+So the boundary is structural, not per-rule:
+
+> **Between the `Status:` line and the final fenced JSON block, only the trailer's own detail-field
+> lines and blank lines may appear. Every piece of human-facing prose — the lead action, the next
+> action, the state restatement, any narration — goes *before* `Status:`.**
+
+Rules 1, 2, 3, 5 and 10 each reference this one invariant rather than restating an approximate boundary
+of their own. Round 9 proved why that matters: rule 3's carve-out said "before the final fenced JSON
+block", which *sounds* correct and still returns `None`.
 
 | | Contract | Where | Mechanism, and the conditional cost |
 |---|---|---|---|
@@ -186,19 +214,19 @@ have sent an implementer looking for a rule that does not say what the plan clai
 **Proof.** A doc-gate case asserting the clause exists **and names all six contracts**, with **one
 deletion mutation per contract** — remove any single name → the case fails. For **F**, additionally
 assert the five trailer field names and the "never a list to shorten" clause for `Remaining:`. Mirrors the existing
-`test_verdict_vocab_consistent_across_all_three` discipline in that file (13 cases pass today).
+`test_verdict_vocab_consistent_across_all_three` discipline in that file (20 cases pass today).
 
 ### 4.3 — Placement (Low)
 
-**Root cause.** `AGENT_CONTRACTS.md` runs §1–§12 (`:12`–`:379`), then an **unnumbered**
-`## Cross-references` at `:453`; 476 lines total, no §13. **(Re-derived after `COREDEV-2583` landed —
+**Root cause.** `AGENT_CONTRACTS.md` runs §1–§12 (`:12`–`:411`), then an **unnumbered**
+`## Cross-references` at `:453`; 475 lines total, no §13. **(Re-derived after `COREDEV-2583` landed —
 it rewrote §11 and extended §5, and pinning `effort` shifted every agent file by one line. The plan
 predicted this shift; the numbers below are the post-2583 truth.)**
 
 **Fix.** Insert as **§13**, after §12's body and before `## Cross-references`.
 
 **Note for the reviewer.** Verified independently by both round-1 reviewers. `COREDEV-2583` is approved
-and edits §5 (`:235`) and §11 (`:354`) of this file — disjoint from the insertion point, but line
+and edits §5 (`:235`) and §11 (`:368`) of this file — disjoint from the insertion point, but line
 numbers shift once it lands, so cite the **section number** in anything durable. (One round-1 reviewer
 reported 444 lines; `wc -l` gives 443, corroborated by the other reviewer.)
 
@@ -282,7 +310,8 @@ The three round-1 open questions are settled; recorded so round 2 does not reope
   the false "skills are necessarily per-session" claim). Both independently confirmed the §4.3
   placement facts and both `BLOCKED` citations.
 - Every structural claim re-verified against the worktree at `58e7205`. Codex additionally executed a
-  six-finding synthesizer probe (six in, six retained) and ran the existing doc gates (13/13).
+  six-finding synthesizer probe (six in, six retained) and ran the existing doc gates (13/13 at the
+  time; the suite is 20 cases after COREDEV-2583 added the §4.10 gates).
 - This plan changes no runtime behaviour. It is documentation plus a drift gate — deliberately, and
   §5 records that limit rather than implying more.
 
@@ -525,3 +554,45 @@ weaker copy of the old instruction somewhere downstream: the marker table was fi
 said section-scoped; row scoping was added while the *cell* remained unasserted. A plan that specifies
 its own test in three places will drift between them. **The implementer should write the doc-gate test
 first, from §4.1's table alone, and treat §6/§7 as summaries of it — not as independent specifications.**
+
+---
+
+## 17. Round-9 gate outcome — the adaptation itself was still unsafe
+
+**gemini `APPROVE`**, no findings; it re-verified every citation against the post-2583 tree.
+
+**codex `REQUEST_CHANGES`** — three findings, all confirmed, one by execution:
+
+1. **High — §4.1's proof paragraph still said "Section-scoped extraction is required"**, ten lines above
+   the row-scoped correction that condemns it. Rounds 8 and 9 fixed §6 and §7 but left the paragraph
+   that *introduces* the proof. Now an explicit two-stage operation: bound to §13, **then** row-scope
+   every per-rule assertion; section scope only for per-contract assertions.
+2. **High — rule 3's adaptation was still unsafe, and codex proved it.** The rule said the next action
+   goes "before the final fenced JSON block". That is not enough — only blank or detail-field lines may
+   sit between `Status:` and the fence, so a next action placed there destroys the **entire trailer**:
+
+   | placement | `extract_status` |
+   |---|---|
+   | before `Status:` | `{'status': 'COMPLETE'}` |
+   | after `Status:`, before the fence | **`None`** |
+   | after a full PARTIAL trailer | **`None`** |
+
+   Reproduced independently. The rule now says **before the entire mandated payload** — the `Status:`
+   line, its trailer, and the fence — and the marker changed from `Never last.` (which the unsafe
+   wording satisfied) to `before the entire mandated payload`.
+3. **Low — stale "post-2583 truth".** §12 is `:411` not `:379`; §11 is `:368` not `:354`; the file is
+   475 lines not 476; the doc-gate suite is 20 cases not 13 (COREDEV-2583 added the §4.10 gates).
+
+**The lesson this round adds — and it is the sharpest one.** Every previous round found the *plan's*
+machinery wrong. This round found an **adaptation itself** wrong: rule 3 had a carve-out, a marker and a
+planned mutation test, and was still unsafe, because the carve-out named the wrong boundary. A
+protection that names an approximate boundary is not a protection. **Every adaptation's boundary must be
+executed against the real parser, not reasoned about** — which is exactly how rule 2's hazard was found
+two rounds earlier, and would have found this one sooner had it been applied to all seven adaptations
+rather than only the rule under suspicion.
+
+**Round-9 addendum — what the probe changed.** Codex's lesson was that a boundary must be *executed*,
+not reasoned about. Applying that to **all** parser-touching adaptations (not just rule 3, the one under
+suspicion) showed they share a single failure mode, so five approximate carve-outs collapse into one
+structural invariant stated above §4.2's table. That is strictly stronger: an implementer can no longer
+satisfy a rule's wording while violating the parser, because the wording now *is* the parser's rule.
