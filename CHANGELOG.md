@@ -13,6 +13,59 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.2] — 2026-07-29
+
+Redactor defects (COREDEV-2597) — plan `docs/planning/COREDEV-2597_REDACTOR_DEFECTS_PLAN.md`, five
+review rounds. Implemented ahead of a final dual-gate APPROVE at the maintainer's explicit direction;
+recorded as a workflow exception, not a passed gate.
+
+### Fixed
+
+- `hook_redact_pii` corrupted ordinary prose. The `sk-` rule had no leading boundary and fired
+  mid-word (`task-oriented` → `ta[redacted-secret]`), and the `~` rule matched any `~`-prefixed token,
+  deleting the quantitative detail engineering rationale is made of (`~500ms`, `~40 percent`,
+  `~40/60 split`) plus Swift's `~Copyable`/`~Escapable`.
+- **Five leak classes**, each reproduced before being fixed: `api<U+00A0>key: <secret>` and
+  `bearer<U+00A0><token>` (Python's `\s` accepts 23 codepoints POSIX `[[:space:]]` under `LC_ALL=C`
+  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran *after* the rules);
+  the compound `/Users/nick<U+00A0>api key: <secret>` (the shell over-consumed and ate the `api`
+  anchor, so the rule never fired); `user@2x.png.example.com` — a **routable address** preserved
+  entirely because the retina-exemption lookahead's `\b` was satisfied by the following dot; and
+  `~Copyable-alice`, which **leaked a real username** for the same reason.
+- `tr` ran outside `LC_ALL=C`, so a single invalid UTF-8 byte aborted it — truncating the message and
+  leaking `tr: Illegal byte sequence` to stderr, against the repo's stderr-clean invariant.
+  `permission-denied-log.sh` and `stop-failure-log.sh` already did this correctly.
+
+### Changed
+
+- The `sk-`/`pk_` boundary is **asymmetric**: underscore is a boundary before `sk-` (an identifier
+  cannot contain `-`, so `OPENAI_KEY_sk-proj-…` redacts) and is not before `pk_` (the SQL/GRDB
+  primary-key convention, so `orders_pk_customer_id_idx` survives). Keeps both properties rather than
+  trading one for the other.
+- The `~` rule requires a home-*path* shape (`[A-Za-z_]` + `/`), matching the definition
+  `schema.py` already shipped. **Accepted residual:** a bare `~alice` with no path is no longer
+  redacted — it is regex-indistinguishable from `~ten`/`~Copyable`, and both are pinned by tests so a
+  future widening trips a gate.
+- Whitespace is canonicalised on **both** sides *before* any rule runs. Not a widening: no pattern
+  changes, only the input domain.
+- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did *Unicode* case-folding, matching
+  U+0130/U+0131/U+212A in the literals and admitting four codepoints into an ASCII value class, which
+  emitted `[redacted-key]` immediately *before* live secret material. Residual shared miss: COREDEV-2609.
+- Python's secret rule uses two sequential passes, not one combined alternation, which matched
+  greedily from the leading prefix and disagreed with the shell.
+
+### Added
+
+- `mcp/review-synthesizer/redactor_fixture.py` — the single canonical parity vector list, with
+  *generators* for the unbounded classes, since three root causes cannot be closed by any list.
+- `mcp/review-synthesizer/redactor_model.py` — the mechanical closure: over a seeded corpus the only
+  divergence must be the one documented exemption, `UNEXPLAINED == 0`. 40,000 inputs clean.
+- `redactor-equivalence` CI job on **`ubuntu-latest` and `macos-latest`**. Both, deliberately: the
+  `tr` root cause inverts between GNU and BSD, so a single-platform run is half a result — and the
+  half that passes is the half that hides it.
+- 26 parity tests with ten named mutation proofs, each rejecting a plausible wrong implementation
+  rather than a `git revert`.
+
 ## [2.6.1] — 2026-07-29
 
 Agent output style (COREDEV-2602) — plan `docs/planning/AGENT_OUTPUT_STYLE_PLAN.md`, approved through

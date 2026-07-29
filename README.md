@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.1
+# UnleashedMail — Claude Code Plugin v2.6.2
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,19 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.6.2
+
+- **Redactor defects fixed, and the two implementations are now gated as equivalent
+  (COREDEV-2597).** `hook_redact_pii` no longer corrupts ordinary prose — `task-oriented`,
+  `~500ms`, `~40/60 split` and Swift's `~Copyable` all survive intact — and **five leak classes are
+  closed**: Unicode whitespace in the api-key/bearer slots, newline-spanning secrets (`sed` is
+  line-oriented and the fold ran after the rules), the compound form where `/Users/…` over-consumed
+  and ate the `api` anchor, a *routable* address preserved entirely by the email exemption, and a real
+  username leaked by the tilde exemption. The `sk-`/`pk_` boundary is now asymmetric so
+  `OPENAI_KEY_sk-proj-…` redacts while `orders_pk_customer_id_idx` survives. Equivalence between the
+  shell and Python redactors is enforced by a new CI job on **both** `ubuntu-latest` and
+  `macos-latest`, because one root cause inverts between GNU and BSD `tr`.
 
 ### v2.6.1
 

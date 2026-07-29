@@ -13,7 +13,8 @@ rewritten live-state)
 **Branch:** `feat/COREDEV-2585-decision-journal`
 **Target version:** `2.7.0` → **`2.7.1`** (patch: no asset-count change). Epic release chain:
 2.6.0 (`COREDEV-2583`) → 2.7.0 (`COREDEV-2584`) → **2.7.1 (this)**.
-**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) and then
+**Depends on:** `COREDEV-2597` (redactor defects — must be landed and green first),
+`OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`) and then
 `AUTONOMOUS_END_TO_END_PLAN.md` (`COREDEV-2584`). **This plan lands third** — the chain is
 2583 → 2584 → 2585, not a free choice: §4.6's first checkpoint records rationale against the
 brainstorm fork sidecar that 2584 introduces, so landing this first would leave that checkpoint
@@ -69,6 +70,11 @@ journal inherits if it reuses the same shape (§4.2–§4.4).
 the reviewer capture pipeline, the synthesizer, or the verdict contract. **Asset counts do not change**
 — this ticket adds no skill and no agent, so `21/21/0/1` holds (or `21/22/0/1` if `COREDEV-2584` has
 already landed; this plan must not assert either number, only that it does not move it).
+
+**Out — done elsewhere:** the three `hook_redact_pii` defects (`sk-`/`pk_` boundary, `~` path
+context, `tr` locale/stderr) and their tests. Split out as `COREDEV-2597` on both reviewers'
+independent recommendation and implemented there. This plan DEPENDS on that work; it does not
+contain it.
 
 **Explicitly out of scope, with the reason recorded so a future reader does not re-investigate:**
 `PostCompact`. `scripts/sessionstart-restore.sh:4-8` already documents why, and it is correct:
@@ -279,18 +285,25 @@ The customer **name** and employer persisted verbatim; the email died; `task-ori
 
 **Fix.** Four parts, in priority order:
 
-1. **Fix the two regex defects** (`sk-`/`pk_` word boundary; `~` path context) and the `tr` locale/stderr
-   bug, in **both** implementations, with tests on both sides. These are live defects affecting shipped
-   callers today — arguably they should be split into their own fix rather than ride this ticket (§8 Q1).
+1. ~~**Fix the two regex defects** and the `tr` locale/stderr bug in both implementations.~~
+   **SUPERSEDED — DONE in `COREDEV-2597`.** Split out on both reviewers' independent recommendation
+   and implemented there, which also closed five leak classes this plan never identified (Unicode
+   whitespace in the api-key/bearer slots, the line-oriented `sed` case, the compound
+   `/Users/…`-eats-the-anchor form, a routable address preserved by the email lookahead, and a real
+   username leaked by the tilde lookahead). Treat the redactor as FIXED and GATED — the equivalence is
+   enforced by `mcp/review-synthesizer/redactor_model.py` on both `sed` engines. **Do not re-do this
+   work; verify the dependency landed instead.**
 2. **Do not rely on redaction as the PII control.** It cannot detect names. The real control is §3:
    persist pointers, not prose, and bound what prose is written to the narrow irrecoverable set (§4.6).
 3. **Instruct at write time.** The checkpoint prompt states explicitly that rationale must not name
    people, customers, or organizations, and must not paste credentials — the model is the only component
    in the system that can actually apply that rule.
-4. **Name which redactor.** The two are **not interchangeable**: the Python mirror exempts `@2x` and
-   `~Copyable` (`capture.py:51-62`); the shell one destroys both. Whitespace folding also diverges
-   (`a\n\n\tb` → shell `a   b`, Python `a b`). A plan that says "reuse the existing redactor" without
-   naming one is ambiguous in a way that silently mangles Swift rationale.
+4. ~~**Name which redactor.**~~ **SUPERSEDED by `COREDEV-2597`.** The two are now equivalent by
+   construction: exactly ONE documented divergence remains (Python's `@Nx` retina-filename exemption,
+   which POSIX ERE cannot express), and that equivalence is gated in CI on both `sed` engines. The
+   `~Copyable` exemption and the whitespace-folding divergence this bullet warned about are both gone —
+   the tilde rule now requires a path separator, and whitespace is canonicalised identically on both
+   sides before any rule runs. "Reuse the existing redactor" is no longer ambiguous.
 
 **Note for the reviewer — what will NOT catch a leak.** All three verified:
 
@@ -417,7 +430,7 @@ switch (every shipped hook has one; it is convention, not enforcement).
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Model-written rationale names a person, customer, or employer | **High** | The redactor provably cannot catch it (§4.7a). Controls are §3 (pointers not prose), a bounded checkpoint set (§4.6), and a write-time instruction. Stated as a residual risk, not a solved one. |
-| Redaction corrupts the rationale it is meant to protect | **High** (today) | §4.7 fix 1 repairs the `sk-`/`~`/`tr` defects in both implementations before any rationale flows through them. This is a prerequisite, not a nicety. |
+| Redaction corrupts the rationale it is meant to protect | **Low — RESOLVED upstream** | Was High. `COREDEV-2597` repaired the `sk-`/`~`/`tr` defects in both implementations, closed five further leak classes, and gated the shell/Python equivalence in CI on both engines. Verify the dependency landed; do not re-do it. |
 | A credential is pasted into rationale and survives | Medium | Only 4 credential shapes are covered; `ghp_`, `AKIA…`, `password=` are not. Nothing downstream scans a git-ignored file. Write-time instruction is the only control — say so. |
 | Journal grows unbounded over a long autonomous run | Medium | §4.10 self-compaction. Explicitly not `log_append`'s truncation. |
 | Restore injects noise instead of context after a corrupt write | Medium | §4.3 — emit nothing rather than an all-`unknown` hint, and retain the file as evidence. |
@@ -451,13 +464,14 @@ Asset counts must be **unchanged** by this ticket. The `scripts/test-hooks.sh` b
 **302 passed**; any behavioural change to the restore path must update the contradicting assertions in
 cases 28–32 (`:623-671`) rather than leave them inconsistent.
 
-**Mutation proof is required for every new assertion** (§4.1–§4.5, §4.7–§4.11): revert the fix, and the
+**Mutation proof is required for every new assertion** (§4.1–§4.5, §4.8–§4.11 — §4.7 is superseded by `COREDEV-2597`): revert the fix, and the
 new test must fail.
 
 ## 7. Implementation order
 
-1. §4.7 fix 1 — repair the `sk-`/`pk_` boundary, the `~` context, and the `tr` locale/stderr bug in both
-   redactors, with tests on both sides. **Nothing that writes rationale may land before this.**
+1. **Verify the `COREDEV-2597` dependency landed** — `hook_redact_pii` and `capture.redact_pii` fixed,
+   `redactor_model.py` green on both `sed` engines. This replaces the old "repair the redactor" step,
+   which 2597 has already done. **Nothing that writes rationale may land before this check passes.**
 2. §4.5 — the two-file schema and the path helpers, with the `0600` write idiom from §4.8/§4.11.
 3. §4.1 — add `hook_io_read` to the PreCompact producer; split mechanical vs model-written records.
 4. §4.9 — run-scoped freshness replacing the flat TTL.
@@ -470,12 +484,9 @@ new test must fail.
 
 ## 8. Open questions for the reviewers
 
-1. **Should the redactor fixes be their own ticket?** §4.7's three defects (`task-oriented` →
-   `ta[redacted-secret]`, `~500ms` → `~[redacted]`, silent UTF-8 truncation) are **live bugs affecting
-   shipped callers today** — `capture.py` already runs model-written findings through the same patterns,
-   so reviewer evidence is being corrupted right now. Splitting them out gets a fix in sooner and keeps
-   this plan's diff honest; keeping them here guarantees they land before any rationale is written. This
-   plan currently keeps them (§7 step 1) but the argument for splitting is strong.
+1. ~~**Should the redactor fixes be their own ticket?**~~ **ANSWERED AND DONE.** Both reviewers said
+   yes, independently; they became `COREDEV-2597` and are implemented. Five further leak classes were
+   found there that this plan had not identified. §7 step 1 is now a dependency CHECK, not the work.
 2. **How much free text is worth the residual risk?** §3 says pointers, not prose — but "why this fork
    was rejected" is irreducibly prose. Is there a tighter formulation (a bounded enum of rejection
    reasons plus a short free-text field, capped at 200 chars like
