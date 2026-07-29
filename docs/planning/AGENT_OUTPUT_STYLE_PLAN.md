@@ -1,7 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 6**, revised after five dual-gate rounds. Round 5: gemini `APPROVE`,
-codex `REQUEST_CHANGES` — rule 4 was a bare adopt that reopened §4.2-A; now adapted.
+**Status:** Planning — **round 7**, revised after six dual-gate rounds. Round 6: **both**
+`REQUEST_CHANGES` — three more bare adopts (1, 2, 5) were found to reach machine contracts; rule 2's
+path is proven by execution. Only rules 7 and 8 remain bare adopts.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -85,18 +86,21 @@ adaptation. Every upstream rule now carries a recorded disposition:
 
 | # | Upstream rule (pinned `07684c4a`) | Disposition | Molded to this tool |
 |---|---|---|---|
-| 1 | Lead with the next action | **Adopt** | For a reviewer the "action" is the finding or verdict, not a shell command |
-| 2 | Number multi-step tasks | **Adopt** | Matches the existing phase/step vocabulary in `swift-reviewer` and the workflow skills |
+| 1 | Lead with the next action | **Adapt — carve-out** | For a reviewer the "action" is the finding or verdict — which is exactly why this cannot be bare: *leading* with the finding would push `Status:` after it (§4.2-B), and leading with the verdict would move `VERDICT:` off the final line (§4.2-C/E). *Lead the human-facing prose with the actionable point; **never reorder a mandated payload** to do it.* |
+| 2 | Number multi-step tasks | **Adapt — carve-out** | Matches the existing phase/step vocabulary — but the Output Contract trailer is parsed **one value per single field line**, and `What Was Attempted: <the steps you tried>` is literally a step list. *Number human-facing prose only; **machine trailer fields and JSON values keep their mandated single-line/schema shape**.* See §4.2-F |
 | 3 | End with one concrete next action | **Adapt — carve-out** | Where an output has a **mandated final element** (`VERDICT:` line, final fenced JSON block), the next action goes *before* it. Never last. See §4.2-C/E |
 | 4 | Suppress tangents | **Adapt — carve-out** | Upstream offers a second issue "as a separate question". In a review, an independent **in-scope** finding deferred that way leaves the JSON array — the same failure §4.2-A protects. *Suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array.* See §4.2-A |
-| 5 | Restate state every turn | **Adopt** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost |
+| 5 | Restate state every turn | **Adapt — carve-out** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost. But a subagent opening with a state summary would displace the `BLOCKED — …` prefix its result must *begin* with (§4.2-D). *Restate state in prose; **never before a mandated result prefix**.* |
 | 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
 | 7 | Make completed work visible | **Adopt** | |
 | 8 | Matter-of-fact tone for errors | **Adopt** | |
 | 9 | Cap lists at 5 items | **Adapt — restate positively** | Upstream says **split** a long list into "do now" vs "later" — it does not say drop. But a *deferred* item is still absent from a findings array, so: *rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings.* Prose only. See §4.2-A |
 | 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble**. See §4.2-B/D |
 
-Nothing is omitted; **four** rules are adapted (3, 4, 6, 10) and one is restated positively (9). **Pin the upstream commit in
+Nothing is omitted. **Seven** rules are adapted (1, 2, 3, 4, 5, 6, 10), one is restated positively (9),
+and only **two** remain bare adopts — 7 ("make completed work visible") and 8 ("matter-of-fact tone for
+errors"), which **both** reviewers independently audited against all six contracts and found to have no
+path into any of them. **Pin the upstream commit in
 the section** so this audit is reproducible when upstream moves.
 
 **Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
@@ -106,13 +110,16 @@ findings, statuses and verdicts elsewhere (`:90`, `:242`), so a whole-file grep 
 
 **Round-2 correction.** Asserting rule *titles* is not enough: reverting rule 9's positive restatement,
 deleting rule 3's mandated-final-element placement, or flipping an adapted rule back to a bare adopt
-would leave all ten titles intact and still pass. Each of the five rules that are **not** a bare adopt
-(3, 4, 6, 9, 10) needs a marker phrase asserted and mutation-tested independently of its title:
+would leave all ten titles intact and still pass. Each of the **eight** rules that are not a bare adopt
+(1, 2, 3, 4, 5, 6, 9, 10) needs a marker phrase asserted and mutation-tested independently of its title:
 
 | Rule | Required marker (asserted and independently deletion-mutated) |
 |---|---|
+| 1 | "never reorder a mandated payload" |
+| 2 | "machine trailer fields and JSON values keep their mandated single-line/schema shape" |
 | 3 | "before it, never last" |
 | 4 | "never defer an in-scope finding out of the current array" |
+| 5 | "never before a mandated result prefix" |
 | 6 | "whoever runs the steps" |
 | 9 | "never cap, **split**, omit, or defer" — the word **split** must be asserted separately |
 | 10 | "payload, not preamble" |
@@ -137,7 +144,7 @@ Each row states the **mechanism** the rule can set in motion and the **condition
 | **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | Rule 3 can prompt appending a next action *after* it, breaching the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when **absent**, and `review-verdict.py` takes reviewer statuses as explicit CLI arguments rather than by transcript position |
 | **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | Rule 10 can prompt treating it as preamble. It is the standardised signal a subagent uses to hand back — it has no `AskUserQuestion`. **If** dropped, the invoking session sees an ordinary result rather than a recognisable hand-back. Note the body normally still carries the diagnosis and proposed edit (`graph-api-debugger.md:20-24`), so the substance is not necessarily lost — what is lost is the machine-recognisable marker that this needs a human, which is what makes the omission easy to miss |
 | **E** | **Final fenced JSON block position** | all five reviewers | Same mechanism as C, from rule 3: content appended after the block breaches its mandated final position |
-| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-286`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | Rule 9 can prompt splitting a long `Remaining:` list; rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
+| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-286`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | **Rule 2 is the sharpest path here and is proven:** the trailer is parsed one value per single field line, so numbering a multi-step `What Was Attempted:` or `Remaining:` **terminates the trailer scan and returns no status at all** — verified by execution (`Remaining: B.swift, C.swift` → full status; `Remaining:` + `1. B.swift` / `2. C.swift` → `None`). That is an absent sidecar → `UNATTRIBUTED` → a retry, or `NEEDS DISCUSSION` when the budget is spent. Separately, rule 9 can prompt splitting a long `Remaining:` list, and rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
 
 **Note on the two gate-downgrading contracts.** A and F are the pair that can change a verdict rather
 than merely cost work. **A is proven**: a round-4 reviewer executed the synthesizer with six findings
@@ -389,3 +396,40 @@ found the risk in a rule marked **safe** — a bare adopt, which by construction
 marker, and no test. *Every* rule needed a disposition, and a disposition of "adopt" is a claim that
 must be defended, not a default. §4.1's table now carries five non-bare dispositions where round 1
 carried none.
+
+---
+
+## 14. Round-6 gate outcome — the bare-adopt audit
+
+Round 5 concluded that a disposition of "adopt" is a claim to be defended. Round 6 tested that by
+auditing **all five** remaining bare adopts. Three of the five reached a machine contract.
+
+**codex `REQUEST_CHANGES` — High, proven by execution.** Rule 2 ("Number multi-step tasks") breaks
+contract F *and* destroys the status parse entirely. The trailer is parsed **one value per single field
+line** (`capture.py:295`), and any numbered continuation before the JSON fence terminates the scan
+(`capture.py:323`). Reproduced independently:
+
+| trailer form | `extract_status` |
+|---|---|
+| `Remaining: B.swift, C.swift` | full status dict |
+| `Remaining:` then `1. B.swift` / `2. C.swift` | **`None`** |
+| `What Was Attempted:` then numbered steps | **`None`** |
+
+`None` → absent sidecar → `UNATTRIBUTED` → a retry, or `NEEDS DISCUSSION` when the budget is spent.
+This was the *least* suspicious rule in the set: it was marked adopt with the note "matches the existing
+phase/step vocabulary", and `What Was Attempted: <the steps you tried>` is literally a step list.
+
+**gemini `REQUEST_CHANGES` — two positional bare adopts.** Rule 1 ("Lead with the next action") is
+dangerous *because of this plan's own adaptation note*: having said the "action" is the finding or
+verdict, leading with either displaces `Status:` (B) or moves `VERDICT:` off the final line (C/E). Rule
+5 ("Restate state every turn") would have a subagent open with a state summary, displacing the
+`BLOCKED — …` prefix its result must *begin* with (D).
+
+**Reviewer disagreement, resolved toward caution.** Codex judged rules 1, 5, 7, 8 as having no
+*independent* path — reasoning that rule 3's carve-out and the global precedence clause already cover
+positional conflicts. Gemini judged 1 and 5 as needing their own carve-outs. **Gemini's position is
+adopted**, because §12 already concluded a precedence clause is not self-enforcing, and a marker costs
+one line. Both reviewers agree 7 and 8 are safe, and they are the only bare adopts left.
+
+Final tally: **two adopt, seven adapt, one positive restatement** — where round 1 had eight rules, no
+markers, and three contracts.
