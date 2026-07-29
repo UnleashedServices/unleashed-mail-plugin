@@ -1,8 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 8**, revised after seven dual-gate rounds. Round 7: **both**
-`REQUEST_CHANGES` on the mutation-proof design itself — the marker assertions were not sound. Rules 7
-and 8 remain bare adopts, now with the audit evidence recorded.
+**Status:** Planning — **round 9**, revised after eight dual-gate rounds. Round 8: gemini `APPROVE`;
+codex `REQUEST_CHANGES` — §6 and §7 still instructed the *section-scoped* design §4.1 had just
+condemned, and a blanked Disposition cell still passed every assertion.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -99,8 +99,9 @@ adaptation. Every upstream rule now carries a recorded disposition:
 
 Nothing is omitted. **Seven** rules are adapted (1, 2, 3, 4, 5, 6, 10), one is restated positively (9),
 and only **two** remain bare adopts — 7 ("make completed work visible") and 8 ("matter-of-fact tone for
-errors"), which **both** reviewers independently audited against all six contracts and found to have no
-path into any of them. **Pin the upstream commit in
+errors"). Both were audited against all six contracts by both reviewers. Rule 8: agreement, no path.
+Rule 7: the reviewers **disagreed** — one alleged a path into contract F — and **execution resolved it**
+(the alleged mechanism does not occur; the real effect is inert). See §15. **Pin the upstream commit in
 the section** so this audit is reproducible when upstream moves.
 
 **Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
@@ -238,7 +239,10 @@ Counts stay **21 / 21 / 0 / 1**; hook events stay **10**.
 **Mutation proof — per item, not per section.** Round 1's proof only mutated whole-section presence and
 three contract names, so deleting an individual adopted rule would still have passed. Required now:
 **one deletion mutation per adopted rule** (§4.1) and **one per protected contract** (§4.2), against a
-**section-scoped** extraction of §13.
+**row-scoped** extraction for per-rule assertions (§13 → disposition table → the single row for rule N)
+and **section-scoped** extraction for the per-contract assertions in the precedence clause. The two are
+not interchangeable: a section-scoped per-rule assertion re-creates rule 10's false-pass, because its
+marker also appears in the precedence clause and a risk row.
 
 ## 7. Implementation order
 
@@ -246,7 +250,11 @@ three contract names, so deleting an individual adopted rule would still have pa
 2. §4.2 — the precedence clause naming all six contracts. **Not separable from step 1**; the rules must
    never land without it.
 3. §4.4 — attribution + pinned commit.
-4. §4.1 + §4.2 — the section-scoped doc-gate cases with per-rule and per-contract mutations.
+4. §4.1 + §4.2 — the doc-gate cases. **Per-rule assertions are row-scoped; per-contract assertions are
+   section-scoped.** Each case must additionally parse the disposition table's four cells, require
+   exactly one row per rule number 1–10, and assert the **exact disposition value** for every rule —
+   not only its title and marker. Round 8 modelled the gap: blanking rule 1's `Adapt — carve-out` cell,
+   or rule 7's `Adopt` cell, left every other described assertion green.
 5. Version bump to 2.6.1 + CHANGELOG, last.
 
 ## 8. Round-1 resolutions
@@ -487,3 +495,31 @@ this evidence is recorded so the question is not re-derived a third time.
 Two Low findings also fixed: §4.4 still said "four are deliberately altered" (now eight non-bare
 dispositions), and `capture.py:323` is the function declaration — the rule is documented at `:327` and
 implemented at `:369`.
+
+---
+
+## 16. Round-8 gate outcome
+
+**gemini `APPROVE`**, no findings — confirmed the row-scoped design closes both the false-pass and
+false-fail modes, and independently re-derived the `reviewer-roster.sh` PARTIAL-only reasoning.
+
+**codex `REQUEST_CHANGES`** — three findings, all confirmed:
+
+1. **High — the plan still handed the implementer the known-broken design.** §4.1 says extraction "must
+   be ROW-scoped, not section-scoped", but §6 and §7 step 4 *still said section-scoped*. An implementer
+   following the later, more operational instructions would have re-created rule 10's false-pass
+   exactly. Both now distinguish **row-scoped per-rule** assertions from **section-scoped per-contract**
+   assertions and say why they are not interchangeable.
+2. **Medium — a blanked Disposition cell still passed everything.** Row scoping catches a deleted row or
+   a deleted marker, but the described tests only asserted titles plus markers. Codex modelled it:
+   blanking rule 1's `Adapt — carve-out` cell, or rule 7's `Adopt` cell, left every assertion green —
+   defeating the plan's own requirement that all ten dispositions be explicit. The test must now parse
+   the four cells, require exactly one row per number 1–10, and assert the **exact disposition value**.
+3. **Low — §4.1 misstated the rule-7 history**, claiming both reviewers found no path. §15 records
+   correctly that one alleged a path and execution disproved the mechanism. §4.1 now matches §15.
+
+**Why the same defect kept regenerating.** Rounds 5–8 each fixed a proof mechanism and each left a
+weaker copy of the old instruction somewhere downstream: the marker table was fixed while §6/§7 still
+said section-scoped; row scoping was added while the *cell* remained unasserted. A plan that specifies
+its own test in three places will drift between them. **The implementer should write the doc-gate test
+first, from §4.1's table alone, and treat §6/§7 as summaries of it — not as independent specifications.**
