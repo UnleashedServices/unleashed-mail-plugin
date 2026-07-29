@@ -1,8 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 10**, revised after nine dual-gate rounds. Round 9: gemini `APPROVE`;
-codex `REQUEST_CHANGES` — rule 3's own adaptation was **proven still broken by execution**, and §4.1's
-proof paragraph still prescribed the section-scoped design it condemned ten lines later.
+**Status:** Planning — **round 11**, revised after ten dual-gate rounds. Round 10: **both**
+`REQUEST_CHANGES`, converging on the same defect — the invariant was introduced but only two of the five
+rows actually referenced it, and its own marker was not literal in its own clause.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -87,15 +87,15 @@ adaptation. Every upstream rule now carries a recorded disposition:
 | # | Upstream rule (pinned `07684c4a`) | Disposition | Molded to this tool |
 |---|---|---|---|
 | 1 | Lead with the next action | **Adapt — carve-out** | For a reviewer the "action" is the finding or verdict — which is exactly why this cannot be bare: *leading* with the finding would push `Status:` after it (§4.2-B), and leading with the verdict would move `VERDICT:` off the final line (§4.2-C/E). *Lead the human-facing prose with the actionable point; **never reorder a mandated payload** to do it — the lead goes before `Status:`, per the payload-region invariant.* |
-| 2 | Number multi-step tasks | **Adapt — carve-out** | Matches the existing phase/step vocabulary — but the Output Contract trailer is parsed **one value per single field line**, and `What Was Attempted: <the steps you tried>` is literally a step list. *Number human-facing prose only; **machine trailer fields and JSON values keep their mandated single-line/schema shape**.* See §4.2-F |
-| 3 | End with one concrete next action | **Adapt — carve-out** | *The next action goes **before the entire mandated payload** — before the `Status:` line, its detail trailer, and the final fenced JSON block; never merely before the fence.* **Proven necessary:** `Status: COMPLETE` / `Next: run the tests.` / fence returns `None` from `extract_status`, because only blank or detail-field lines may sit between `Status:` and the fence. Placing it before `Status:` parses correctly. See §4.2-B/C/E/F |
+| 2 | Number multi-step tasks | **Adapt — carve-out** | Matches the existing phase/step vocabulary — but the Output Contract trailer is parsed **one value per single field line**, and `What Was Attempted: <the steps you tried>` is literally a step list. *Number human-facing prose only — **and only before `Status:`, per the payload-region invariant**; machine trailer fields and JSON values keep their mandated single-line/schema shape.* A numbered step inside the payload region breaks the parse even though it is not prose (executed). See §4.2-F |
+| 3 | End with one concrete next action | **Adapt — carve-out** | *The next action goes **before `Status:`, per the payload-region invariant** — not merely before the fence.* **Proven necessary:** `Status: COMPLETE` / `Next: run the tests.` / fence returns `None` from `extract_status`, because only blank or detail-field lines may sit between `Status:` and the fence. Placing it before `Status:` parses correctly. See §4.2-B/C/E/F |
 | 4 | Suppress tangents | **Adapt — carve-out** | Upstream offers a second issue "as a separate question". In a review, an independent **in-scope** finding deferred that way leaves the JSON array — the same failure §4.2-A protects. *Suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array.* See §4.2-A |
 | 5 | Restate state every turn | **Adapt — carve-out** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost. But a subagent opening with a state summary would displace the `BLOCKED — …` prefix its result must *begin* with (§4.2-D). *Restate state in prose; **never before a mandated result prefix**, and never between `Status:` and the fence (payload-region invariant).* |
 | 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
 | 7 | Make completed work visible | **Adopt** | |
 | 8 | Matter-of-fact tone for errors | **Adopt** | |
 | 9 | Cap lists at 5 items | **Adapt — restate positively** | Upstream says **split** a long list into "do now" vs "later" — it does not say drop. But a *deferred* item is still absent from a findings array, so: *rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings.* Prose only. See §4.2-A |
-| 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble**. See §4.2-B/D |
+| 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble** — and per the **payload-region invariant** the cure for an unwanted opener is to delete it, never to move it below `Status:`. See §4.2-B/D |
 
 Nothing is omitted. **Seven** rules are adapted (1, 2, 3, 4, 5, 6, 10), one is restated positively (9),
 and only **two** remain bare adopts — 7 ("make completed work visible") and 8 ("matter-of-fact tone for
@@ -131,8 +131,8 @@ then cannot mask a deleted disposition.
 |---|---|
 | 1 | `never reorder a mandated payload` |
 | 2 | `keep their mandated single-line/schema shape` |
-| 3 | `before the entire mandated payload` |
-| — | plus the **payload-region invariant** itself: `only the trailer's own detail-field lines and blank lines may appear` — asserted once, section-scoped, and deletion-mutated |
+| 3 | `per the payload-region invariant` — occurs in rule 3's row and, by design, in rows 1/2/5/10 too, so this one is asserted **row-scoped** |
+| — | plus the **payload-region invariant** itself: `Within it, nothing but detail fields and blank lines.` — one physical line by construction; asserted once, section-scoped, deletion-mutated |
 | 4 | `defer an in-scope finding out of the current array` |
 | 5 | `never before a mandated result prefix` |
 | 6 | `whoever runs the steps` |
@@ -171,12 +171,15 @@ fail the same way:
 
 So the boundary is structural, not per-rule:
 
-> **Between the `Status:` line and the final fenced JSON block, only the trailer's own detail-field
-> lines and blank lines may appear. Every piece of human-facing prose — the lead action, the next
-> action, the state restatement, any narration — goes *before* `Status:`.**
+> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
+> **Within it, nothing but detail fields and blank lines.**
+> Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
+> payload** — a `VERDICT:` line there breaks the parse exactly as prose does. Everything else an agent
+> emits goes **before** `Status:`.
 
-Rules 1, 2, 3, 5 and 10 each reference this one invariant rather than restating an approximate boundary
-of their own. Round 9 proved why that matters: rule 3's carve-out said "before the final fenced JSON
+Rules 1, 2, 3, 5 and 10 each reference this one invariant **by name** rather than restating an
+approximate boundary of their own — verified mechanically, not asserted (each row must contain the
+literal `payload-region invariant`). Round 9 proved why that matters: rule 3's carve-out said "before the final fenced JSON
 block", which *sounds* correct and still returns `None`.
 
 | | Contract | Where | Mechanism, and the conditional cost |
@@ -227,7 +230,7 @@ predicted this shift; the numbers below are the post-2583 truth.)**
 
 **Note for the reviewer.** Verified independently by both round-1 reviewers. `COREDEV-2583` is approved
 and edits §5 (`:235`) and §11 (`:368`) of this file — disjoint from the insertion point, but line
-numbers shift once it lands, so cite the **section number** in anything durable. (One round-1 reviewer
+numbers shifted when it shipped (v2.6.0), so cite the **section number** in anything durable. (One round-1 reviewer
 reported 444 lines; `wc -l` gives 443, corroborated by the other reviewer.)
 
 ### 4.4 — Attribution and reproducibility (Low)
@@ -250,7 +253,7 @@ so a section-level notice suffices; no `LICENSE` vendoring.
 | Style rules read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
 | **Ships documentation and a presence gate, but no behavioural change** | **Medium — accepted and stated** | Raised from Low in round 2. This ticket adds no runtime injection and no compliance evaluation. The doc gate proves the text is *present*, never that agents *obey* it. Obedience is a `COREDEV-2599` eval obligation, recorded there |
 | Upstream moves and the audit becomes unreproducible | Low | Commit pinned in the section (§4.4) |
-| Merge conflict with `COREDEV-2583` | Medium | 2583 lands first; insertion point is disjoint from §5/§11 |
+| Merge conflict with `COREDEV-2583` | **Resolved** | 2583 **shipped** as v2.6.0; this plan's citations were re-derived against the post-2583 tree and the §13 insertion point (before `## Cross-references`) is untouched by it |
 
 ## 6. Verification
 
@@ -596,3 +599,49 @@ not reasoned about. Applying that to **all** parser-touching adaptations (not ju
 suspicion) showed they share a single failure mode, so five approximate carve-outs collapse into one
 structural invariant stated above §4.2's table. That is strictly stronger: an implementer can no longer
 satisfy a rule's wording while violating the parser, because the wording now *is* the parser's rule.
+
+---
+
+## 18. Round-10 gate outcome — the invariant was announced, not applied
+
+Both `REQUEST_CHANGES`, converging on one defect: **round 9 introduced the payload-region invariant and
+then only wired two of the five rows to it.**
+
+**Both reviewers, independently:** §4.2 claimed "Rules 1, 2, 3, 5 and 10 each reference this one
+invariant". Only **1 and 5** did. Rule 3 *restated* the boundary in its own words; rules **2 and 10 did
+not mention it at all**. A claim about the plan's own structure, contradicted by the plan's own table.
+
+**codex — High, executed.** Rule 2's wording was satisfiable while breaking the parser:
+
+```text
+Status: COMPLETE
+1. Run the tests.        ← numbered "human-facing prose", per rule 2 as written
+```json
+[]
+```
+```
+
+→ `None`. Moving the numbered line before `Status:` → `{'status': 'COMPLETE'}`. Rule 2 said to number
+prose and keep *machine fields* single-line — it never bound the **prose** to the payload region.
+
+**codex — Medium, and the sharpest irony of the gate.** The invariant's own required marker occurred
+**only in the marker table**, never in its normative clause, because a hard Markdown line break split
+`detail-field` from `lines`. That is *exactly* round 7's false-fail class — recreated by the fix for
+round 9. The clause is restructured so the marker sits on **one physical line by construction**.
+
+**gemini — High, mechanism right, attribution wrong** (a recurring shape for this reviewer). It argued
+`prompt-review` could emit `Status:` then `VERDICT:` and lose the status. The **parser behaviour is
+real** — verified — but **no code reviewer emits `VERDICT:`**; that belongs to the plan-review CLIs
+(`gemini-review`, `codex-review`, `review-synthesis`). The scenario is hypothetical; the **wording
+defect is not**, because the invariant said "human-facing *prose*" while the parser breaks on *any*
+non-detail content. The clause now says so explicitly, naming a stray `VERDICT:` as an example.
+
+**Fixes.** Rows 1, 2, 3, 5 and 10 now reference the invariant **by name**; rule 3 references instead of
+restating; the claim is verified mechanically rather than asserted; the invariant marker is one physical
+line; and 2583's shipped status is current throughout.
+
+**A note on verifying the verification.** After fixing the markers, a first check reported all eight
+literal — but it compared against the marker list *in the checking script*, not the marker **table** in
+the document. Re-running it against the table found rule 3's entry still carrying the pre-fix wording.
+**A check that restates its expectations instead of reading them from the artifact is not a check.**
+Same class as the two inert gates this epic has already produced.
