@@ -1,7 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 4**, revised after three dual-gate rounds. Round 3: gemini `APPROVE`,
-codex `REQUEST_CHANGES` on precision of consequence (confirmed by execution and fixed here).
+**Status:** Planning — **round 5**, revised after four dual-gate rounds. Round 4: **both**
+`REQUEST_CHANGES` — the plan was found to violate its own §11 rule; §4.2 is rewritten in conditional
+form throughout and the F-exclusivity claim is retracted.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -93,7 +94,7 @@ adaptation. Every upstream rule now carries a recorded disposition:
 | 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
 | 7 | Make completed work visible | **Adopt** | |
 | 8 | Matter-of-fact tone for errors | **Adopt** | |
-| 9 | Cap lists at 5 items | **Adapt — restate positively** | *Rank prose for readability; **never** cap, omit, or defer machine-consumed findings.* The cap applies to prose only. See §4.2-A |
+| 9 | Cap lists at 5 items | **Adapt — restate positively** | Upstream says **split** a long list into "do now" vs "later" — it does not say drop. But a *deferred* item is still absent from a findings array, so: *rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings.* Prose only. See §4.2-A |
 | 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble**. See §4.2-B/D |
 
 Nothing is omitted; three rules are adapted and one is restated positively. **Pin the upstream commit in
@@ -113,18 +114,26 @@ never last", rule 9's "never cap, omit, or defer", rule 10's "payload, not pream
 ### 4.2 — Six machine contracts would be damaged by the rules as written (High)
 
 **Root cause — the load-bearing finding.** Round 1 named three collisions; round 2 named five. There are
-**six**. Two are *position* contracts, attacked from opposite ends of a response by "no preamble" and
-"end with a next action"; the sixth (**F**) is a *completeness* contract on a field whose truncation
-silently downgrades a gate.
+**six**. Two are *position* contracts, which rules 10 and 3 pressure from opposite ends of a response;
+the rest are *completeness* contracts. **Two of the six (A and F) can downgrade a gate verdict** —
+proven by execution, not asserted (see the note below the table).
 
-| | Contract | Where | What a naive rule does |
+Each row states the **mechanism** the rule can set in motion and the **conditional** outcome, per §11.
+
+| | Contract | Where | Mechanism, and the conditional cost |
 |---|---|---|---|
-| **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | "Cap lists at 5" makes a reviewer drop findings to hit a count. The synthesizer dedups/merges **assuming the array is complete** — this is a correctness regression, not concision |
-| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. **It does not become a clean pass** — see the round-2 correction below — but attribution is lost: a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). Cost is **one mandatory re-dispatch**, whose *fresh* report is then used (`agents/swift-reviewer.md:217`). `NEEDS DISCUSSION` follows **only if** that retry is unavailable, exhausted, or still unusable — a successful fresh `COMPLETE` preserves an ordinary verdict |
-| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-287`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded by `reviewer-roster.sh:238` | Rule 9 caps a long `Remaining:` list; rules 4/10 suppress the fields as "metadata". **This is the one that can actually downgrade a gate**: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — if it does not forward `remaining`, nothing can preserve it"*. Truncated remainder can become a non-gating warning |
-| **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | "End with one concrete next action" puts something *after* it, violating the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when it is **absent**, and `review-verdict.py` receives reviewer statuses as explicit CLI arguments rather than by transcript position |
-| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | "No preamble" strips the house signal for a subagent with **no user channel** |
-| **E** | **Final fenced JSON block position** | all five reviewers | Same attack as C, from rule 3 |
+| **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | Rule 9 can prompt a reviewer to **split or defer** a long findings list (upstream says "split into *do now* vs *later*", not drop — but a deferred item is absent from the array all the same). The synthesizer dedups/merges assuming the array is complete, so **if** a deferred finding was a blocker, the verdict can downgrade. **Executed proof:** six findings including a blocker → `REQUEST_CHANGES`; the same set capped to five → `APPROVE_WITH_SUGGESTIONS` |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | Rule 10 can prompt dropping it as preamble. **It does not become a clean pass** — a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). Cost is **one** re-dispatch whose *fresh* report is used (`swift-reviewer.md:217`); `NEEDS DISCUSSION` follows **only if** that retry is unavailable, exhausted, or still unusable |
+| **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | Rule 3 can prompt appending a next action *after* it, breaching the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when **absent**, and `review-verdict.py` takes reviewer statuses as explicit CLI arguments rather than by transcript position |
+| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | Rule 10 can prompt treating it as preamble. It is the **only** channel a subagent has to signal it needs user confirmation — it has no `AskUserQuestion`. **If** stripped, the invoking session sees an ordinary result instead of a hand-back, so the confirmation the agent was demanding is silently never surfaced |
+| **E** | **Final fenced JSON block position** | all five reviewers | Same mechanism as C, from rule 3: content appended after the block breaches its mandated final position |
+| **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-286`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded at `reviewer-roster.sh:244` | Rule 9 can prompt splitting a long `Remaining:` list; rules 4/10 can prompt suppressing the fields as metadata. A held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — so if it does not forward `remaining`, nothing can preserve it"* (`reviewer-roster.sh:239-242`). **If** the truncated portion held the structural remainder, that escalation can become a non-gating warning |
+
+**Note on the two gate-downgrading contracts.** A and F are the pair that can change a verdict rather
+than merely cost work. **A is proven**: a round-4 reviewer executed the synthesizer with six findings
+including a blocker (`REQUEST_CHANGES`), then with the list capped to five (`APPROVE_WITH_SUGGESTIONS`).
+F is the same shape, on the `Remaining:` field. Earlier drafts called F "the one" gate-downgrading
+case; that exclusivity was wrong.
 
 **Round-2 correction to an overstated claim.** Round 1 attributed C to upstream's *"End when the answer
 is done"*. That sentence does **not** instruct an agent to omit a mandated verdict, and upstream
@@ -172,11 +181,11 @@ so a section-level notice suffices; no `LICENSE` vendoring.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| A reviewer truncates a findings array to satisfy a list cap | **High** without the carve-out | §4.2-A, and rule 9 is restated positively so the prose-only boundary is in the rule itself, not only the carve-out |
+| A reviewer splits or defers findings to satisfy a list cap, and a deferred item was a blocker | **High** without the carve-out | §4.2-A — **one of two contracts that can downgrade a verdict**, and the only one proven by execution (6 findings → `REQUEST_CHANGES`; capped to 5 → `APPROVE_WITH_SUGGESTIONS`). Rule 9 is restated positively so the prose-only boundary sits in the rule itself, not only the carve-out |
 | A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected across rounds 3–4:** not a fail-open (`test_absent_sidecar_is_unattributed` proves it fails **closed** to `UNATTRIBUTED`), and not a guaranteed `NEEDS DISCUSSION` either — it costs **one re-dispatch**, and only an unavailable or still-unusable retry degrades the verdict |
-| A reviewer truncates `Remaining:` in the Output Contract trailer | **High** without the carve-out | §4.2-F — the one genuinely gate-downgrading case: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and `reviewer-roster.sh` is the only reader that can preserve it |
+| A reviewer splits `Remaining:` and the structural remainder falls in the deferred half | **High** without the carve-out | §4.2-F — the **other** contract that can downgrade a verdict: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and `reviewer-roster.sh` is the only reader that can preserve it. Earlier drafts wrongly called this the *only* such case |
 | Something is emitted after the `VERDICT:` line | Medium | §4.2-C/E; rule 3 is adapted to place the next action *before* a mandated final element |
-| An agent strips its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; the clause states these are payload, not preamble |
+| An agent drops its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; it is the **only** channel a subagent has to demand user confirmation, so if dropped the hand-back is silently never surfaced. The clause states these are payload, not preamble |
 | Style rules read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
 | **Ships documentation and a presence gate, but no behavioural change** | **Medium — accepted and stated** | Raised from Low in round 2. This ticket adds no runtime injection and no compliance evaluation. The doc gate proves the text is *present*, never that agents *obey* it. Obedience is a `COREDEV-2599` eval obligation, recorded there |
 | Upstream moves and the audit becomes unreproducible | Low | Commit pinned in the section (§4.4) |
@@ -256,12 +265,14 @@ outside the insertion point.
    (`test_absent_sidecar_is_unattributed`) proves it fails **closed**. Verified by running the roster:
    absent status → five `UNATTRIBUTED`, exit 3. The plan had invented a fail-open that does not exist.
 2. **A sixth contract was missing** — the Output Contract detail trailer. Confirmed real:
-   `agents/security-reviewer.md:280-287` mandates `Blocker Description` / `What Was Attempted` /
+   `agents/security-reviewer.md:280-286` mandates `Blocker Description` / `What Was Attempted` /
    `Completed` / `Remaining` / `Confidence`; `capture.py` parses them via `_STATUS_FIELDS`; and
-   `reviewer-roster.sh:238` states it is *"the ONLY sidecar reader — so if it does not forward
-   `remaining`, nothing can preserve it. Discard the ATTRIBUTION, never the INFORMATION."* Rule 9 could
-   cap a long `Remaining:` list, downgrading a gating `NEEDS DISCUSSION` to a non-gating warning. This
-   is the genuinely dangerous case, and it is the one gemini's sixth-contract search missed.
+   `reviewer-roster.sh:239-242` states it is *"the ONLY sidecar reader — so if it does not forward
+   `remaining`, nothing can preserve it. Discard the ATTRIBUTION, never the INFORMATION."*, forwarding
+   it at `:244`. Rule 9 could split a long `Remaining:` list, and **if** the structural remainder fell
+   in the deferred half a gating `NEEDS DISCUSSION` could become a non-gating warning. *(Round 4
+   correction: this record originally called F "the genuinely dangerous case" and cited `:280-287` /
+   `:238`. Both were wrong — see §12. **A** can downgrade a verdict too, and is proven by execution.)*
 
 Codex's third (Medium) finding — that asserting rule *titles* would let an adapted rule silently revert
 — is fixed in §4.1's round-2 correction: each adapted rule now needs its own mutation-tested marker.
@@ -302,3 +313,36 @@ narrative rather than traced through the code path.
 The rule this plan should be read under, and which an implementer should carry into §13's own wording:
 **state the mechanism, then the conditional outcome — never a guaranteed outcome.** A contract is worth
 protecting because of what it *can* cost, not because of the worst thing imaginable if it is missing.
+
+---
+
+## 12. Round-4 gate outcome
+
+**Both `REQUEST_CHANGES`** — and both found the plan violating the rule it had itself introduced in §11
+one round earlier. That is the finding, more than any individual line.
+
+**gemini:** §4.2-A said a dropped finding *"is a correctness regression, not concision"* — guaranteed
+phrasing, and false for a duplicate or trivial finding. §4.2-D said rule 10 *"strips the house signal"*
+and then never stated what that costs.
+
+**codex:** three findings, all confirmed:
+
+1. **High — F was wrongly claimed to be the *only* gate-downgrading contract** (asserted in §4.2, §5 and
+   §10). **A can downgrade too, and codex proved it by execution**: six findings including a blocker
+   produced `REQUEST_CHANGES`; the same set capped to five produced `APPROVE_WITH_SUGGESTIONS`. The
+   exclusivity claim is retracted; both are now described conditionally.
+2. **Medium — §4.2 still used guaranteed verbs** ("makes", "caps", "suppresses", "puts", "strips").
+   Rewritten so every row states a mechanism the rule *can* set in motion and the outcome that follows
+   *if* it hides a blocker or structural remainder. Also a **fidelity error against the source**:
+   upstream rule 9 says to **split** an over-long list, not to drop items — the plan had been
+   paraphrasing it as a cap. A deferred item is still missing from an array, so the adaptation stands,
+   but the characterisation of upstream was wrong.
+3. **Low — two F citations overran.** `agents/security-reviewer.md` ends at line 286, so `280-287` was
+   out of range; and `reviewer-roster.sh:238` only opens the `PARTIAL` branch — the "only sidecar
+   reader" comment is `:239-242` and `REMAINING` is forwarded at `:244`.
+
+**Why this round mattered.** §11 named a pattern of overstatement; round 4 showed the pattern survived
+the naming of it, in the rows earlier rounds had not scrutinised. The rule only took effect once it was
+applied row-by-row rather than stated once. That is worth carrying into §13's implementation: a
+precedence clause is not self-enforcing, which is exactly why each rule and each contract gets its own
+mutation test rather than one assertion for the section.
