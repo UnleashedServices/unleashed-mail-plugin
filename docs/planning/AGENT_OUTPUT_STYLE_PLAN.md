@@ -1,138 +1,157 @@
 # Agent Output Style Plan
 
-**Status:** Planning — awaiting dual plan-review gate
+**Status:** Planning — round 2, revised after the round-1 dual gate (both `REQUEST_CHANGES`).
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
-**Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section (adapted from
-`i-have-adhd`)
+**Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
 **Epic:** `COREDEV-2485` — Plugin audit remediation / agent-skill-hook-CI modernization
 **Branch:** `feat/COREDEV-2602-agent-output-style`
 **Target version:** `2.6.0` → **`2.6.1`** (patch: documentation only, no asset-count change).
-**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`, **APPROVED**) — **must land first**. It also
-edits `AGENT_CONTRACTS.md` (§11 rewrite, §5 spawn-depth declaration), so this plan rebases onto it
-rather than racing it.
-**Source:** `github.com/ayghri/i-have-adhd` (MIT). Only the **Claude portion** is in scope.
+**Depends on:** `OPUS5_ALIGNMENT_PLAN.md` (`COREDEV-2583`, **APPROVED**) — lands first; it edits §5 and
+§11 of the same file, disjoint from this insertion point.
+**Source:** `github.com/ayghri/i-have-adhd`, MIT, pinned at commit
+**`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`** (2026-07-28). Only the **Claude portion** is in scope.
 
 ---
 
 ## 1. Context
 
 `ayghri/i-have-adhd` is a Claude Code plugin (MIT, ~13k★) whose single skill shapes model output for a
-reader with ADHD: lead with the next action, number multi-step work, restate state across turns,
-suppress tangents, give concrete estimates, cut preamble and closers.
+reader with ADHD. Its rules are good. **This plan does not migrate them — it adapts them**, because
+this plugin's output is mostly consumed by *software*, not read by a person.
 
-Reviewing it against this plugin, the **rules** are largely transferable but the **delivery mechanism**
-is not. Three reasons the mechanism is wrong for us:
+That distinction is the whole ticket. Five reviewers emit JSON findings arrays that `synthesize_review`
+dedups and merges; each is preceded by a `Status:` line that `swift-reviewer` reads *before* the
+findings; the plan-review gate parses a trailing `VERDICT:` line deterministically; and a subagent with
+no user channel signals by prefixing its result `BLOCKED — …`. **Every one of those is a place where a
+well-meaning output-style rule can silently destroy a signal we depend on** (§4.2).
 
-1. Installing it as a skill takes the counts `21/21/0/1` → `21/22/0/1`, which collides with the release
-   chain `COREDEV-2583` just locked, and touches nine documented count sites of which only three are
-   gated.
-2. Its skill body is written for a *human reader in a chat transcript*. Most of this plugin's output is
-   consumed by **other software** — five reviewers emit JSON findings arrays that `synthesize_review`
-   parses, and the review gate parses a literal `VERDICT:` line.
-3. A skill is an *opt-in, per-session* artifact. House style for 21 agents belongs in the document that
-   already governs cross-agent behaviour.
+**Maintainer decisions (2026-07-29), locked:**
 
-**Maintainer decision (2026-07-29), locked:** adopt the rules into `AGENT_CONTRACTS.md` as a numbered
-section; do **not** ship a 22nd skill; do **not** adopt the multi-harness distribution.
+| Decision | Value |
+|---|---|
+| Mechanism | Rules go in **`AGENT_CONTRACTS.md`**, not a 22nd skill |
+| Source scope | **Claude portion only** — no multi-harness distribution |
+| Posture | **Adapt, do not migrate.** Do not break what already works. |
+| Asset counts | Unchanged: `21 / 21 / 0 / 1` |
+
+**Why the contract rather than a skill** — corrected in round 2. The round-1 draft claimed a skill is
+"necessarily opt-in and per-session". **That is false**: upstream ships a `SessionStart` hook plus an
+opt-in flag file (`~/.claude/.i-have-adhd-always`) that injects the ruleset every session, so a skill
+*can* be made persistent. The real reasons are: a 22nd skill moves the counts and collides with the
+release chain `COREDEV-2583` locked; house style for 21 agents belongs in the document that already
+governs cross-agent behaviour; and **importing upstream's persistence hook is deliberately excluded**
+(this plugin already registers 10 hook events and is not taking an 11th for output styling).
 
 ## 2. Scope
 
-**In:** one new numbered section in `AGENT_CONTRACTS.md` stating the output-style rules that apply to
-agent-authored prose, the explicit carve-out where those rules yield to a machine-readable contract, and
-a doc-gate assertion so the carve-out cannot be silently dropped. Attribution to the MIT source.
+**In:** one new numbered section in `AGENT_CONTRACTS.md` carrying an explicit disposition for **all ten**
+upstream rules, the precedence carve-out naming **all five** protected machine contracts, and
+doc-gate assertions with per-rule and per-contract mutation coverage. Attribution to the pinned source.
 
-**Out:** any new skill or agent (counts stay `21/21/0/1`). Any change to the five reviewers' JSON
-schema, to `synthesize_review`, or to the `VERDICT:` contract. Any change to `hooks/hooks.json`.
+**Out:** any new skill or agent; any change to the reviewers' JSON schema, `synthesize_review`, the
+`Status:`/`VERDICT:` contracts, or `hooks/hooks.json`.
 
-**Explicitly out of scope, decided rather than overlooked:** the source repo's multi-harness
-distribution — `.cursor/skills/`, `.codex-plugin/`, `.agents/plugins/`, `gemini-extension.json`, and the
-`cursor-skill-sync.yml` workflow that keeps the Cursor copy in step. This plugin is Claude Code-specific
-(sub-agents, hook events, a bundled stdio MCP server); there is no second harness to sync to. *(The
-drift-guard **pattern** in that workflow is separately valuable and is owned by `COREDEV-2600` — this
-plan does not touch it.)*
+**Decided, not overlooked:** upstream's multi-harness distribution (`.cursor/`, `.codex-plugin/`,
+`.agents/`, `gemini-extension.json`, `cursor-skill-sync.yml`) — this plugin is Claude Code-specific and
+has no second harness. Upstream's `evals/` harness, `plugin-load-check.yml`, and the drift-guard pattern
+are owned by `COREDEV-2599`, `COREDEV-2598`, `COREDEV-2600` respectively.
 
 ## 3. Guiding principle
 
 > **The shape is house style; the contract is law.** Where an output rule and a machine-readable
-> contract disagree, the contract wins and the rule yields — silently truncating a findings array or
-> dropping a `VERDICT:` line to satisfy a style rule is a correctness regression, not concision.
+> contract disagree, the contract wins and the rule yields. Completeness and position of a
+> machine-consumed payload are never traded for brevity.
 
-The source skill states the same precedence for itself ("A rule fights the harness… the constraint wins,
-the shape stays"), which is why its rules are safe to adopt *provided the carve-out comes with them*.
-Adopting the rules without the carve-out is the single way this ticket could do damage.
+Upstream states the same precedence for itself — *"A rule fights the harness… the constraint wins, the
+shape stays"* — which is why its rules are safe to adapt **provided the carve-out comes with them, and
+names our contracts specifically**. Adopting the rules without that is the one way this ticket does harm.
 
 ---
 
 ## 4. Findings, fixes, and proofs
 
-### 4.1 — Agent output style is undocumented and inconsistent (Medium)
+### 4.1 — Agent output style is undocumented; all ten upstream rules need an explicit disposition (Medium)
 
-**Root cause.** `AGENT_CONTRACTS.md` governs ownership, tool floors, model tiering, CFR labelling and
-pipeline order — but says nothing about the *shape* of what an agent writes. Individual agents carry ad
-hoc guidance; there is no shared statement, so a new agent has nothing to conform to.
+**Root cause.** `AGENT_CONTRACTS.md` governs ownership, tool floors, tiering, CFR labelling and pipeline
+order — but says nothing about the *shape* of what an agent writes, so a new agent has nothing to
+conform to.
 
-**Fix.** Add a numbered section adopting these rules for **agent-authored prose**:
+**Round-2 correction.** The round-1 draft listed eight rules and **silently omitted upstream rules 2 and
+3** while §1 implied numbered work was adopted. Omission-by-silence is migration's failure mode, not
+adaptation. Every upstream rule now carries a recorded disposition:
 
-1. **Lead with the next action.** The first line is something the reader can act on, not context.
-2. **Restate state.** Do not assume the reader holds "round 3 of 5" across turns — a multi-round review
-   gate makes this acute.
-3. **Concrete estimates.** "About 15 minutes if tests already cover this" beats "some work".
-4. **Suppress tangents.** Finish the first issue; offer the second separately.
-5. **Matter-of-fact errors.** State cause and fix. No "Uh oh".
-6. **No preamble, no recap, no closing pleasantries.**
-7. **Rank rather than pad.** Five ranked items beat ten unranked. *(Applies to prose; see §4.2.)*
-8. **Make completed work concrete.** What now works, and how to see it.
+| # | Upstream rule (pinned `07684c4a`) | Disposition | Molded to this tool |
+|---|---|---|---|
+| 1 | Lead with the next action | **Adopt** | For a reviewer the "action" is the finding or verdict, not a shell command |
+| 2 | Number multi-step tasks | **Adopt** | Matches the existing phase/step vocabulary in `swift-reviewer` and the workflow skills |
+| 3 | End with one concrete next action | **Adapt — carve-out** | Where an output has a **mandated final element** (`VERDICT:` line, final fenced JSON block), the next action goes *before* it. Never last. See §4.2-C/E |
+| 4 | Suppress tangents | **Adopt** | |
+| 5 | Restate state every turn | **Adopt** | High value here: a 5-round review gate is exactly where "round 3 of 5" gets lost |
+| 6 | Give specific time estimates | **Adapt** | Our agents advise; they rarely execute. Estimates address **whoever runs the steps** — upstream's own rule-6 carve-out says the same |
+| 7 | Make completed work visible | **Adopt** | |
+| 8 | Matter-of-fact tone for errors | **Adopt** | |
+| 9 | Cap lists at 5 items | **Adapt — restate positively** | *Rank prose for readability; **never** cap, omit, or defer machine-consumed findings.* The cap applies to prose only. See §4.2-A |
+| 10 | No preamble, no recap, no closing pleasantries | **Adapt — carve-out** | `Status:` and `BLOCKED — …` are **payload, not preamble**. See §4.2-B/D |
 
-**Proof.** Doc-gate assertion in `scripts/tests/test_doc_gates.py` that the section exists and names its
-carve-out (§4.2). Delete the section → the test fails.
+Nothing is omitted; three rules are adapted and one is restated positively. **Pin the upstream commit in
+the section** so this audit is reproducible when upstream moves.
 
-### 4.2 — Three of the source rules would break shipped contracts (High)
+**Proof.** A `test_doc_gates.py` case that extracts **the new section specifically** — not the whole
+file — and asserts each adopted rule is present. Section-scoped extraction is required because
+`AGENT_CONTRACTS.md` already mentions JSON findings, statuses and verdicts elsewhere, so a whole-file
+grep would false-pass. **One deletion mutation per rule**: remove any single rule → that case fails.
 
-**Root cause — this is the finding that matters.** Adopted verbatim, three rules actively damage
-machine-consumed output:
+### 4.2 — Five machine contracts would be damaged by the rules as written (High)
 
-| Source rule | Collides with | Consequence |
-|---|---|---|
-| "Cap lists at 5 items" | the five reviewers' **JSON findings arrays**, consumed by `synthesize_review` | a reviewer dropping findings to hit a count is a **correctness regression**, and the synthesizer dedups/merges on the assumption the array is complete |
-| "End when the answer is done" | the review gate's required trailing **`VERDICT:` line** | the synthesis parses that line deterministically; without it the verdict must be inferred from prose |
-| "No preamble" | the **`BLOCKED — …`** result prefix (`agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252`) | that prefix *is* the house pattern for a subagent with no user channel; stripping it as preamble destroys the signal the invoking session reads |
+**Root cause — the load-bearing finding.** Round 1 named three collisions. There are **five**, and the
+two that were missed are the most dangerous because both are *position* contracts, which "no preamble"
+and "end with a next action" attack from opposite ends of the response.
 
-This is not hypothetical: this session's own gate saw a reviewer return a bare 17-byte
-`VERDICT: APPROVE` with no body, and `skills/gemini-review/SKILL.md` already classifies a tiny
-transcript as a **failure, never an approval**. A style rule pushing toward terseness in that direction
-makes that failure mode more likely, not less.
+| | Contract | Where | What a naive rule does |
+|---|---|---|---|
+| **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | "Cap lists at 5" makes a reviewer drop findings to hit a count. The synthesizer dedups/merges **assuming the array is complete** — this is a correctness regression, not concision |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. Consequence is severe and specific: the contract says *"a `BLOCKED` reviewer returning `[]` means 'could not review,' not 'clean'"* — so stripping the status makes a **blocked reviewer read as a clean pass**. A fail-open in the review gate, the exact class `COREDEV-2503` spent nine rounds closing |
+| **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | "End with one concrete next action" puts something *after* it; deterministic parsing degrades to prose inference |
+| **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | "No preamble" strips the house signal for a subagent with **no user channel** |
+| **E** | **Final fenced JSON block position** | all five reviewers | Same attack as C, from rule 3 |
 
-**Fix.** The section must carry an explicit precedence clause, in normative language:
+**Round-2 correction to an overstated claim.** Round 1 attributed C to upstream's *"End when the answer
+is done"*. That sentence does **not** instruct an agent to omit a mandated verdict, and upstream
+explicitly says harness constraints win. The real conflict is upstream **rule 3** ("End with one
+concrete next action"), which is a *positional* requirement. Attributing it to the wrong sentence would
+have sent an implementer looking for a rule that does not say what the plan claimed.
+
+**Fix.** The section carries a normative precedence clause naming **all five**:
 
 > These rules govern **prose written for a human reader**. Where a rule conflicts with a
-> machine-readable contract — a JSON findings array, a required `VERDICT:` line, a `BLOCKED — …` result
-> prefix — **the contract wins and the rule yields**. Completeness of a machine-consumed payload is
-> never traded for brevity.
+> machine-readable contract — the completeness of a JSON findings array, the `Status:` line that
+> precedes it, the `VERDICT:` line that must end a review transcript, the final fenced JSON block, or a
+> `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and position of
+> a machine-consumed payload are never traded for brevity. `Status:` and `BLOCKED — …` are payload, not
+> preamble.
 
-**Proof.** A `test_doc_gates.py` case asserting the section contains the precedence clause **and** names
-all three contracts. Remove any one name → the test fails. This mirrors the existing
-`test_verdict_vocab_consistent_across_all_three` discipline in that file.
+**Proof.** A doc-gate case asserting the clause exists **and names all five contracts**, with **one
+deletion mutation per contract** — remove any single name → the case fails. Mirrors the existing
+`test_verdict_vocab_consistent_across_all_three` discipline in that file (13 cases pass today).
 
 ### 4.3 — Placement (Low)
 
-**Root cause.** `AGENT_CONTRACTS.md` runs §1–§12 (`:12`–`:379`) followed by an **unnumbered**
-`## Cross-references` at `:421`, 443 lines total. There is no §13.
+**Root cause.** `AGENT_CONTRACTS.md` runs §1–§12 (`:12`–`:379`), then an **unnumbered**
+`## Cross-references` at `:421`; 443 lines total, no §13.
 
-**Fix.** Insert the new section as **§13**, after §12's body and **before** `## Cross-references`.
+**Fix.** Insert as **§13**, after §12's body and before `## Cross-references`.
 
-**Note for the reviewer.** `COREDEV-2583` is approved and edits the same file (§11 rewrite at `:354`,
-§5 spawn-depth declaration at `:235`). Neither touches §12's tail or the cross-references block, so the
-insertion point is stable — but line numbers **will** shift once 2583 lands. Cite the section number,
-not the line, in anything durable.
+**Note for the reviewer.** Verified independently by both round-1 reviewers. `COREDEV-2583` is approved
+and edits §5 (`:235`) and §11 (`:354`) of this file — disjoint from the insertion point, but line
+numbers shift once it lands, so cite the **section number** in anything durable. (One round-1 reviewer
+reported 444 lines; `wc -l` gives 443, corroborated by the other reviewer.)
 
-### 4.4 — Attribution (Low)
+### 4.4 — Attribution and reproducibility (Low)
 
-**Root cause.** The rules are adapted from an MIT-licensed third-party project.
-
-**Fix.** Name the source and its licence in the section header. No code is copied — the rules are
-restated in this repo's own vocabulary and the three conflicting rules are deliberately altered — so a
-notice in the section is sufficient; no `LICENSE` vendoring is required.
+**Fix.** Name the source, its MIT licence, and the **pinned commit** `07684c4a` in the section header.
+No code is copied — the rules are restated in this repo's vocabulary and four are deliberately altered —
+so a section-level notice suffices; no `LICENSE` vendoring.
 
 ---
 
@@ -140,12 +159,14 @@ notice in the section is sufficient; no `LICENSE` vendoring is required.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| A reviewer truncates a findings array to satisfy "rank rather than pad" | **High** if the carve-out is dropped | §4.2's precedence clause is the entire mitigation, and it is doc-gated so it cannot be quietly removed |
-| A reviewer omits the trailing `VERDICT:` line as a "closer" | Medium | Named explicitly in the carve-out; `gemini-review`/`codex-review` already treat a missing verdict as a failure |
-| An agent strips its `BLOCKED — …` prefix as "preamble" | Medium | Named explicitly in the carve-out |
-| Merge conflict with `COREDEV-2583` in `AGENT_CONTRACTS.md` | Medium | 2583 lands first and this rebases; the insertion point (§12 tail) is disjoint from 2583's edits (§5, §11) |
-| Style rules are read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
-| Adds churn without changing behaviour | Low | Accepted: the section is the reference a new agent conforms to; today there is none |
+| A reviewer truncates a findings array to satisfy a list cap | **High** without the carve-out | §4.2-A, and rule 9 is restated positively so the prose-only boundary is in the rule itself, not only the carve-out |
+| A reviewer omits `Status:`, making a BLOCKED reviewer read as clean | **High** without the carve-out | §4.2-B. This is the most damaging failure in the set — a gate fail-open |
+| Something is emitted after the `VERDICT:` line | Medium | §4.2-C/E; rule 3 is adapted to place the next action *before* a mandated final element |
+| An agent strips its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; the clause states these are payload, not preamble |
+| Style rules read as binding on JSON payload *content* | Medium | The section scopes itself to "prose written for a human reader" in its first sentence |
+| **Ships documentation and a presence gate, but no behavioural change** | **Medium — accepted and stated** | Raised from Low in round 2. This ticket adds no runtime injection and no compliance evaluation. The doc gate proves the text is *present*, never that agents *obey* it. Obedience is a `COREDEV-2599` eval obligation, recorded there |
+| Upstream moves and the audit becomes unreproducible | Low | Commit pinned in the section (§4.4) |
+| Merge conflict with `COREDEV-2583` | Medium | 2583 lands first; insertion point is disjoint from §5/§11 |
 
 ## 6. Verification
 
@@ -159,42 +180,45 @@ python3 -m unittest discover -s scripts/tests
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 ```
 
-Counts must remain **21 / 21 / 0 / 1** and hook events **10** — this ticket changes neither.
+Counts stay **21 / 21 / 0 / 1**; hook events stay **10**.
 
-**Mutation proof required** for §4.1 and §4.2: delete the section, or remove any one of the three named
-contracts from the carve-out, and the new `test_doc_gates.py` case must fail.
+**Mutation proof — per item, not per section.** Round 1's proof only mutated whole-section presence and
+three contract names, so deleting an individual adopted rule would still have passed. Required now:
+**one deletion mutation per adopted rule** (§4.1) and **one per protected contract** (§4.2), against a
+**section-scoped** extraction of §13.
 
 ## 7. Implementation order
 
-1. §4.3 — insert §13 with the eight rules.
-2. §4.2 — add the precedence clause naming all three contracts. **Not separable from step 1**; the rules
-   must not land without it.
-3. §4.4 — attribution line.
-4. §4.1 + §4.2 — the `test_doc_gates.py` assertions.
+1. §4.3 — insert §13 with the ten-rule disposition.
+2. §4.2 — the precedence clause naming all five contracts. **Not separable from step 1**; the rules must
+   never land without it.
+3. §4.4 — attribution + pinned commit.
+4. §4.1 + §4.2 — the section-scoped doc-gate cases with per-rule and per-contract mutations.
 5. Version bump to 2.6.1 + CHANGELOG, last.
 
-## 8. Open questions for the reviewers
+## 8. Round-1 resolutions
 
-1. **Should the rules bind agents, or agents *and* skills?** This plan scopes them to agent-authored
-   prose. Skill bodies are injected context rather than output, so they arguably do not need it — but
-   `swift-reviewer`'s Step-5 prose and the workflow skills do produce reader-facing text. Is a single
-   section covering both clearer than a boundary reviewers will have to adjudicate later?
-2. **Is a doc-gate assertion strong enough for §4.2?** It proves the clause is *present*, not that
-   agents *obey* it. Obedience is exactly what `COREDEV-2599`'s evals harness would measure. Should this
-   ticket wait for that, ship as documentation now, or ship now and add an eval case later?
-3. **Is "rank rather than pad" worth keeping at all**, given it is the rule most likely to be
-   misapplied to a findings array? Dropping it costs little; keeping it needs the carve-out to be
-   unmissable.
+The three round-1 open questions are settled; recorded so round 2 does not reopen them.
+
+1. **Scope — resolved: agents *and* output-producing workflow skills.** Both reviewers agreed. Covers
+   human-facing prose emitted by agents and while executing workflow skills; **excludes skill-body
+   documentation itself** (that is injected context, not output). The machine-contract precedence clause
+   applies throughout.
+2. **Doc-gate adequacy — resolved: ship now.** Both agreed not to wait for `COREDEV-2599`. The gate is
+   explicitly **drift protection for the contract text**, not a compliance test; §5 now says so, and
+   behavioural compliance is recorded as a 2599 eval obligation.
+3. **"Cap lists at 5" — resolved: keep, restated positively** (codex), *not* dropped (gemini). Codex's
+   framing preserves the rule's value while making the boundary part of the rule: rank prose for
+   readability; never cap, omit or defer machine-consumed findings. Dropping it entirely would have lost
+   a useful prose rule to avoid a hazard the carve-out already handles.
 
 ## 9. Notes
 
-- Every structural claim was verified against the worktree: `AGENT_CONTRACTS.md` §1–§12 with
-  `## Cross-references` unnumbered at `:421` (443 lines, no §13); the `BLOCKED — …` pattern at
-  `agents/graph-api-debugger.md:20-22` and `agents/jira-manager.md:252`; and
-  `scripts/tests/test_doc_gates.py` existing with unittest classes including
-  `test_verdict_vocab_consistent_across_all_three`.
-- The source repo's `evals/` harness and its `plugin-load-check.yml` are **not** part of this ticket;
-  they are `COREDEV-2599` and `COREDEV-2598` respectively. Its duplicate-drift guard pattern is
-  `COREDEV-2600`.
-- `COREDEV-2584` and `COREDEV-2585` are paused; their 2.7.0 / 2.7.1 version slots are provisional, so
-  this ticket takes 2.6.1 rather than assuming a slot after them.
+- Round 1: gemini `REQUEST_CHANGES` (found contract **B**), codex `REQUEST_CHANGES` (found the missing
+  rule dispositions, contracts **C/E**, the overstated attribution, the non-mutation-proof proof, and
+  the false "skills are necessarily per-session" claim). Both independently confirmed the §4.3
+  placement facts and both `BLOCKED` citations.
+- Every structural claim re-verified against the worktree at `58e7205`. Codex additionally executed a
+  six-finding synthesizer probe (six in, six retained) and ran the existing doc gates (13/13).
+- This plan changes no runtime behaviour. It is documentation plus a drift gate — deliberately, and
+  §5 records that limit rather than implying more.
