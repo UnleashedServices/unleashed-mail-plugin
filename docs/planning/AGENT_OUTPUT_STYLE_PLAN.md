@@ -1,7 +1,7 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 3**, revised after two dual-gate rounds. Round 2: gemini `APPROVE`,
-codex `REQUEST_CHANGES` (two High findings, both confirmed by execution and fixed here).
+**Status:** Planning — **round 4**, revised after three dual-gate rounds. Round 3: gemini `APPROVE`,
+codex `REQUEST_CHANGES` on precision of consequence (confirmed by execution and fixed here).
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -120,9 +120,9 @@ silently downgrades a gate.
 | | Contract | Where | What a naive rule does |
 |---|---|---|---|
 | **A** | **JSON findings array completeness** | five reviewers → `synthesize_review` | "Cap lists at 5" makes a reviewer drop findings to hit a count. The synthesizer dedups/merges **assuming the array is complete** — this is a correctness regression, not concision |
-| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. **It does not become a clean pass** — see the round-2 correction below — but attribution is lost: a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:188`). Cost is **mandatory re-dispatch → `NEEDS DISCUSSION`**: wasted work and a degraded verdict |
+| **B** | **`Status: COMPLETE \| BLOCKED \| PARTIAL`, read *before* the findings** | `AGENT_CONTRACTS.md:242`; emitted at e.g. `agents/security-reviewer.md:265-278` | "No preamble" strips it. **It does not become a clean pass** — see the round-2 correction below — but attribution is lost: a bare array is not a handoff (`agents/swift-reviewer.md:148`, "THE STATUS IS THE ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), and an absent sidecar is `UNATTRIBUTED` (`reviewer-roster.sh:193`). Cost is **one mandatory re-dispatch**, whose *fresh* report is then used (`agents/swift-reviewer.md:217`). `NEEDS DISCUSSION` follows **only if** that retry is unavailable, exhausted, or still unusable — a successful fresh `COMPLETE` preserves an ordinary verdict |
 | **F** | **The Output Contract detail trailer** — `Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence` | `agents/security-reviewer.md:280-287`; parsed by `capture.py` `_STATUS_FIELDS`; forwarded by `reviewer-roster.sh:238` | Rule 9 caps a long `Remaining:` list; rules 4/10 suppress the fields as "metadata". **This is the one that can actually downgrade a gate**: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and the roster is *"the ONLY sidecar reader — if it does not forward `remaining`, nothing can preserve it"*. Truncated remainder can become a non-gating warning |
-| **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | "End with one concrete next action" puts something *after* it; deterministic parsing degrades to prose inference |
+| **C** | **`VERDICT:` as the exact final line** | `skills/{gemini,codex}-review`, parsed by `review-synthesis` | "End with one concrete next action" puts something *after* it, violating the mandated final-line contract and risking ambiguity. **Not** guaranteed prose inference: `review-synthesis` extracts the token when present and infers only when it is **absent**, and `review-verdict.py` receives reviewer statuses as explicit CLI arguments rather than by transcript position |
 | **D** | **`BLOCKED — …` result prefix** | `agents/graph-api-debugger.md:20-22`, `agents/jira-manager.md:252` | "No preamble" strips the house signal for a subagent with **no user channel** |
 | **E** | **Final fenced JSON block position** | all five reviewers | Same attack as C, from rule 3 |
 
@@ -173,7 +173,7 @@ so a section-level notice suffices; no `LICENSE` vendoring.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | A reviewer truncates a findings array to satisfy a list cap | **High** without the carve-out | §4.2-A, and rule 9 is restated positively so the prose-only boundary is in the rule itself, not only the carve-out |
-| A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected in round 3:** this is *not* a fail-open — `test_absent_sidecar_is_unattributed` proves an absent status fails **closed** to `UNATTRIBUTED`. The real cost is mandatory re-dispatch and a degraded `NEEDS DISCUSSION`, not a clean pass |
+| A reviewer omits `Status:`, losing attribution | Medium | §4.2-B. **Corrected across rounds 3–4:** not a fail-open (`test_absent_sidecar_is_unattributed` proves it fails **closed** to `UNATTRIBUTED`), and not a guaranteed `NEEDS DISCUSSION` either — it costs **one re-dispatch**, and only an unavailable or still-unusable retry degrades the verdict |
 | A reviewer truncates `Remaining:` in the Output Contract trailer | **High** without the carve-out | §4.2-F — the one genuinely gate-downgrading case: a held PARTIAL with structural remainder escalates to `NEEDS DISCUSSION`, and `reviewer-roster.sh` is the only reader that can preserve it |
 | Something is emitted after the `VERDICT:` line | Medium | §4.2-C/E; rule 3 is adapted to place the next action *before* a mandated final element |
 | An agent strips its `BLOCKED — …` prefix as preamble | Medium | §4.2-D; the clause states these are payload, not preamble |
@@ -252,7 +252,7 @@ outside the insertion point.
    `BLOCKED` reviewer's `[]` read as a clean pass. It does not. The COREDEV-2490 roster redesign already
    closed that: a bare array is not a handoff (`agents/swift-reviewer.md:148` — "THE STATUS IS THE
    ATTRIBUTION"), a statusless capture leaves its sidecar absent (`capture.py:513`), an absent sidecar is
-   `UNATTRIBUTED` (`reviewer-roster.sh:188`), and `scripts/tests/test_reviewer_roster.py:216`
+   `UNATTRIBUTED` (`reviewer-roster.sh:193`), and `scripts/tests/test_reviewer_roster.py:216`
    (`test_absent_sidecar_is_unattributed`) proves it fails **closed**. Verified by running the roster:
    absent status → five `UNATTRIBUTED`, exit 3. The plan had invented a fail-open that does not exist.
 2. **A sixth contract was missing** — the Output Contract detail trailer. Confirmed real:
@@ -270,3 +270,35 @@ Codex's third (Medium) finding — that asserting rule *titles* would let an ada
 severity (claiming a fail-open the codebase had already closed) while understating coverage (missing F
 entirely). Severity inflation and coverage gaps are not opposite errors; both come from reasoning about
 the contract from the plan rather than from the code.
+
+---
+
+## 11. Round-3 gate outcome — and a pattern in this plan's own errors
+
+**gemini `APPROVE`.** Verified every round-2 correction against the tree, and searched for a seventh
+contract, finding none.
+
+**codex `REQUEST_CHANGES`** — three findings, all confirmed here and fixed:
+
+1. **High — B's consequence was still overstated.** "Mandatory re-dispatch → `NEEDS DISCUSSION`" is not
+   the rule. `agents/swift-reviewer.md:217` says `UNATTRIBUTED` triggers **one** re-dispatch *"and use
+   its fresh report"*; `NEEDS DISCUSSION` follows only when that retry is unavailable, exhausted, or
+   still unusable. A successful fresh `COMPLETE` preserves an ordinary verdict.
+2. **Medium — C's consequence was overstated.** `review-synthesis` extracts the `VERDICT:` token when
+   present and falls back to prose inference only when it is **absent**; `review-verdict.py` takes
+   reviewer statuses as explicit CLI arguments, not by transcript position. C is still a real positional
+   violation, but the harm is contract breach and ambiguity, not guaranteed inference.
+3. **Low — a miscited line.** `reviewer-roster.sh:188` merely constructs the sidecar path; the
+   absent-sidecar branch runs `:189-194` with `emit_unattributed` at **`:193`**. Corrected in both
+   places.
+
+**The pattern worth naming, because this plan has now made the same error three times.** Round 2
+claimed a fail-open that COREDEV-2490 had already closed. Round 3 replaced it with a guaranteed
+`NEEDS DISCUSSION` that the recovery ladder does not guarantee. Round 3 also asserted guaranteed prose
+inference that the synthesis contract does not produce. Each time the correction of an overstatement
+introduced a *smaller* overstatement, because the consequence was reasoned about from the plan's own
+narrative rather than traced through the code path.
+
+The rule this plan should be read under, and which an implementer should carry into §13's own wording:
+**state the mechanism, then the conditional outcome — never a guaranteed outcome.** A contract is worth
+protecting because of what it *can* cost, not because of the worst thing imaginable if it is missing.
