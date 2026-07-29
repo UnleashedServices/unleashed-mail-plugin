@@ -1,8 +1,8 @@
 # CI & Workflow Hardening Plan
 
-**Status:** Planning — round 2, awaiting re-gate
+**Status:** Planning — round 3, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 2)
+**Last Updated:** 2026-07-29 (round 3)
 **Tickets (batched — see §1 for why):**
 - `COREDEV-2598` — CI proves the plugin **loads**, not just that it validates
 - `COREDEV-2600` — CI drift guard for duplicated primitives
@@ -131,13 +131,29 @@ form. **Never mutate `$GITHUB_WORKSPACE` itself.** Accept and state the fidelity
 manifest differing from the shipped one by one field, so the `source: github` path is never exercised —
 that path is GitHub's job, not ours. Say so in the workflow comment so nobody later "fixes" it back.
 
-**(b) Assert on parsed JSON.** **Open question 1 is answered: `claude plugin list --json` IS supported
-on the pinned 2.1.220** (both reviewers confirmed; fields `id`, `version`, `scope`, `enabled`,
-`installPath`, `installedAt`, `lastUpdated`, `mcpServers`). Require exactly one entry matching
-`unleashed-mail@<scratch-marketplace-name>` with `enabled == true`, **and** assert `version` equals the
-checkout's `plugin.json` version — that second assertion is what catches the remote-clone regression in
-(a). Do **not** grep for `✔ enabled`: the glyph does exist on 2.1.220, so a naïve port passes today and
+**(b) Assert installed-BYTE identity, not version equality.** **Open question 1 is answered:
+`claude plugin list --json` IS supported on the pinned 2.1.220** (both reviewers confirmed; fields
+`id`, `version`, `scope`, `enabled`, `installPath`, `installedAt`, `lastUpdated`, `mcpServers`).
+Require exactly one entry matching `unleashed-mail@<scratch-marketplace-name>` with `enabled == true`.
+Do **not** grep for `✔ enabled`: the glyph does exist on 2.1.220, so a naïve port passes today and
 gives false confidence, which is exactly the brittleness this plan warned about.
+
+**The identity assertion must be byte-based.** Version equality is **not** a sufficient backstop:
+`main` and the branch share a version for every change that does not bump it, which is most of them, so
+a `source: github` regression would install remote bytes and still pass. Round 2's version check caught
+only today's accidental 2.5.3/2.6.1 skew.
+
+Assert instead that the **installed tree derives from the scratch checkout's bytes**. Either is
+acceptable, and the choice is the implementer's:
+
+- a deterministic digest over a load-bearing payload — e.g. `git ls-files -s` over the scratch source
+  versus the same file set under `installPath` — compared for equality; or
+- a **per-run sentinel**: write a unique token into the scratch copy before `marketplace add` (a
+  comment line, or a file the manifest already ships), then assert that exact token is present under
+  `installPath`. Cheaper, and it cannot be satisfied by any remote clone.
+
+Keep the version equality check as well — it is nearly free — but label it a smoke check, not the
+backstop.
 
 **(c) `enabled` is registry state — necessary, not sufficient.** Proven twice over: with `.mcp.json`
 repointed at a nonexistent file the install still exits 0 and reports `enabled: true` (and the reported
@@ -146,16 +162,25 @@ manifest, not runtime state); and **issue #61's own duplicate-hooks defect insta
 `enabled: true`, and passes `claude plugin validate --strict`**, because that error surfaces on
 **reload**, not install. So the step must additionally assert:
 
-- **MCP actually starts** — drive an `initialize` + `notifications/initialized` + `tools/list`
-  handshake against `mcp/review-synthesizer/mcp_server.py` resolved from the reported `installPath`,
-  and assert the negotiated `protocolVersion`, `serverInfo.name == "review-synthesizer"` and
-  `tools == ["synthesize_review"]`. The server's readiness banner is on **stderr**, so stdout stays
-  clean JSON-lines; run under `set -o pipefail`.
+- **MCP actually starts — launched from the installed `.mcp.json`, not from a known path.** Read
+  `<installPath>/.mcp.json`, substitute `installPath` for `${CLAUDE_PLUGIN_ROOT}` in its **declared**
+  command and arguments, and launch exactly that. Then drive `initialize` +
+  `notifications/initialized` + `tools/list` and assert the negotiated `protocolVersion`,
+  `serverInfo.name == "review-synthesizer"` and `tools == ["synthesize_review"]`. The readiness banner
+  is on **stderr**, so stdout stays clean JSON-lines; run under `set -o pipefail`.
+  **Why the indirection is mandatory:** if the check hard-codes
+  `<installPath>/mcp/review-synthesizer/mcp_server.py`, then repointing `.mcp.json` at a nonexistent
+  file still starts the real server and **mutant 2 below goes green** — the assertion would test that a
+  file exists, not that the plugin's own declaration resolves. Driving the declaration is the whole
+  point.
 - **Hooks load** — the CLI exposes no reload/hook-load surface, so use the existing
   `scripts/validate-hooks.py --strict --require-manifest` **plus an explicit assertion that
   `plugin.json` has no `hooks` key**, since `hooks/hooks.json` is auto-loaded and re-declaring it
   silently drops the whole hook set. That is #61's exact defect class, and it is the one the MCP
   handshake alone does **not** catch.
+  **Run both against the INSTALLED tree** (`installPath`), not the workspace. A workspace-only
+  assertion proves the source is well-formed, which the schema validators already cover; it proves
+  nothing about what the loader actually installed, which is the entire subject of §4.1.
 
 *(Round 1's §4.1 claimed the check would catch "an MCP server that fails to start" while proposing only
 an enabled assertion. Round 2 either proves it or drops it — it proves it.)*
@@ -169,12 +194,20 @@ a *different* assertion:
 1. `plugin.json` gains a `hooks` key (#61's defect) → **(c) hooks assertion** fails; `validate --strict`
    and `enabled` both still pass, which is the point.
 2. `.mcp.json` repointed at a nonexistent server file → **(c) MCP handshake** fails; install still
-   reports `enabled: true`.
-3. `marketplace.json` source left as `github` → **(b) version assertion** fails, because the installed
-   version is main's, not the checkout's.
+   reports `enabled: true`. **This mutant only discriminates if the handshake launches the declaration
+   rather than a known path** — see (c).
+3. `marketplace.json` source left as `github` → **(b) byte-identity assertion** fails. Note the mutant
+   must be run **without** relying on the version differing: bump the scratch copy's `plugin.json` to
+   match `main` first, so the mutant reproduces the realistic case where the two versions agree. If it
+   only fails on the version check, the identity assertion is not doing the work.
+4. **The check itself is deleted or reduced to `enabled`** → the job must still fail, because mutants
+   1–3 target three independent assertions. If removing any single assertion leaves all three mutants
+   failing, the assertions overlap and one is redundant; if removing it leaves any mutant passing, that
+   assertion is the sole guard and must be named as such.
 
 **A load check that cannot fail is worse than none** — this remains the item most at risk of shipping
-inert, and it now has three specific mutants instead of one adjective.
+inert. **Author the mutants first and watch them fail**, then write the assertions; the reverse order
+is how round 1's version shipped an assertion that passed against the defect it cited.
 
 ### 4.2 — B: duplicated primitives have already diverged (Medium)
 
@@ -224,17 +257,32 @@ Lead with that.
    the sentinels differ (`0` vs `""`), and `stop-quality-marker-gate.sh` sources only `hook-io` +
    `marker`. Apply the same change to `scripts/test-hooks.sh:695`. Then a one-line CI grep asserting no
    `uname` + `Darwin` branch survives **anywhere under `scripts/`** (not just `scripts/lib/`, or it is
-   inert against the harness copy) becomes a real gate rather than a tautology. State whether
-   `sessionstart-restore.sh:41-44`'s third shape is normalised too or deliberately left alone.
+   inert against the harness copy) becomes a real gate rather than a tautology.
+   **`sessionstart-restore.sh:41-44` is deliberately left unchanged** — decided, not deferred. Its
+   probe-then-rerun shape is a third idiom, but it is already feature-detecting rather than
+   `uname`-branching, so it is not the defect this item fixes, and it is the one caller whose output
+   reaches model context — the smallest possible diff there is the right risk posture. Record that
+   reasoning in a comment at the site so the next reader does not "finish the job". *(Round 2 left this
+   as "normalised too or deliberately left alone", which is exactly the X-or-Y contract defect round 2
+   was supposed to eliminate.)*
 
 **Proof — behavioural, per item. No assertion in this section may be source-line equality.**
 *(Round 1's "edit one base expansion without the others → CI fails naming both files" presupposes the
 copies survive, so it cannot mutation-prove the single-source branch at all.)*
 
-- **Item 1:** under `env -u HOME -u CLAUDE_PLUGIN_DATA` with `set -euo pipefail`, all three bases return
-  `/.claude/unleashed-mail` with **empty stderr**; drop the `${HOME:-}` guard in any one copy and that
-  copy emits `HOME: unbound variable` and returns empty. **State plainly that this vector does not break
+- **Item 1 — two vectors, and the second is the one that matters.**
+  (i) *Shared path:* under `env -u HOME -u CLAUDE_PLUGIN_DATA` with `set -euo pipefail`, all three
+  bases return `/.claude/unleashed-mail` with **empty stderr**; drop the `${HOME:-}` guard and the
+  affected copy emits `HOME: unbound variable`. **State plainly that this vector does not break
   today** — it is regression-proofing, not a fix.
+  (ii) *Fallback path — mandatory, and round 2 omitted it:* **with `paths.sh` absent**, source each of
+  `marker.sh`, `log.sh` and `context.sh` **individually** (they are sourced standalone in real
+  usage — `agents/swift-reviewer.md:245-246` and `scripts/test-hooks.sh:39,42`) and assert each still
+  returns the correct base, exits 0 and leaves stderr empty. Without this, the suite exercises the
+  shared helper and never the three inline fallbacks — so a fallback that was written wrong, or omitted
+  entirely, passes. Since the fallback exists precisely to stop the dedup from converting three
+  independent fail-open paths into one shared point of failure, an untested fallback defeats the
+  reason the fallback was required.
 - **Item 2:** with `round-3`, `round-09` and `round-999…9` (20 digits) present, the hook currently emits
   the `integer expression expected` stderr line and records `"round":"09"`; after the change stderr is
   empty and it records `9`. **Assert both**, beside the existing round-08/09 and oversized-suffix cases
@@ -342,13 +390,28 @@ on the digest alone), so neither discriminates.
 2. Different bytes, same path → still fails on the digest.
 3. **New:** a real `git worktree add`, artifact copied across, byte-identical plan → verify **passes**.
    This is the regression the item exists to fix and there is no test for it today.
-4. **New:** plan reached via a symlink whose target is outside the repo root → `planPath` recorded
-   **absolute**, and no stored identity ever begins with `..`. Assert on the stored string.
+4. **New:** a plan **outside every git repository** — reached directly, and again via a symlink from
+   inside the repo whose target is outside it — records `planPath` **absolute**, and no stored identity
+   ever begins with `..`. Assert on the stored string.
 5. **New:** plan in a directory with **no `.git` ancestor** → recorded absolute (fallback), and verify
    still round-trips.
 
-**Mutation proof:** revert `_plan_identity` to `os.path.realpath` → assertion 3 must fail; drop the `..`
-guard → assertion 4 must fail. Both must be **shown** failing, not assumed.
+**Mutation proof:** revert `_plan_identity` to `os.path.realpath` → **assertion 3 must fail**. Shown
+failing, not assumed.
+
+> *Round-3 correction — round 2 claimed a second mutation that is impossible by construction.* It said
+> "drop the `..` guard → assertion 4 must fail". **It cannot.** `_repo_root(real)` returns an *ancestor*
+> of `real`, so `relpath(real, root)` can never escape with `..`; and when no root is found,
+> `_plan_identity` returns the absolute path **before** the guard is reached. Executed both with and
+> without the guard on an in-repo plan and on a symlink pointing outside the repo: **byte-identical
+> output in both cases.** The guard is therefore **unproved defence-in-depth** and must be labelled as
+> such — keep it (it costs nothing and protects against a future `_repo_root` that returns a
+> non-ancestor), but do **not** claim a mutation proof for it. This is the same inert-gate class §3's
+> corollary exists to catch, and round 2 wrote one into its own replacement proof.
+>
+> Assertion 4 is also narrowed for a real reason: a symlink into a **different checkout** resolves
+> repo-relative to *that* checkout, which is correct behaviour, not a `..` escape. Only "outside every
+> git repository" produces the absolute form the assertion is about.
 
 **One trap that makes the whole suite inert.** The existing fixture uses `tempfile.mkdtemp()`, which is
 **not a git repo** — under repo-relative it silently exercises only the absolute fallback. An
@@ -429,10 +492,19 @@ not only a `git revert` — §3's corollary. Each item names its mutants above.
    `AGENT_CONTRACTS.md`). Repo-relative lands second as the backstop for when the ordering is not
    followed. **Neither enables CI or a second developer** — see §2's Out.
 
-**New for round 2 — the thing reviewers should contest.** §4.3 Part 2 changes a provenance field on the
-strength of the finding that the artifact is unsigned anyway. If a reviewer believes the artifact
-*should* become authenticated first (`COREDEV-2497`), then C2 should wait behind it and only C1 lands
-here. **Is the ordering C1 → C2 → 2497 right, or should it be C1 → 2497 → C2?**
+4. **Round 2's question — should the ordering be C1 → C2 → `COREDEV-2497`, or C1 → 2497 → C2?**
+   **Answered — `C1 → C2 → 2497`, and both reviewers agreed independently.** C2 introduces **zero net
+   security risk**, because the artifact is already entirely forgeable; blocking a genuine usability
+   fix behind authenticity work would be the wrong trade. And 2497 should authenticate the *final*
+   identity representation rather than authenticate the absolute-path schema and then have to revise
+   it. §7 reflects this ordering.
+
+**New for round 3 — what reviewers should contest now.** §4.1(b) drops version equality as the
+backstop in favour of installed-byte identity, and offers the implementer two ways to get it (a digest
+comparison, or a per-run sentinel token). **Is leaving that choice open a re-introduction of the
+"X or Y" defect this plan spent two rounds removing?** The argument for leaving it open is that both
+forms are fully specified and independently sufficient, unlike round 1's genuinely undecided
+alternatives — but that is a judgement call, and a reviewer may reasonably say pick one.
 
 ## 9. Notes
 
@@ -451,7 +523,7 @@ here. **Is the ordering C1 → C2 → 2497 right, or should it be C1 → 2497 �
 - All round-2 verification ran on macOS against CLI 2.1.220 — the version CI pins (`plugin-ci.yml:89`).
   The clone-from-GitHub behaviour in §4.1 should be re-confirmed once on an Ubuntu runner.
 
-## 10. Round-1 gate outcome and what changed
+## 10. Gate history — what each round changed
 
 **gemini `APPROVE` (no factual inaccuracies found) · codex `REQUEST_CHANGES` (4 findings).**
 
@@ -472,3 +544,35 @@ correctly elsewhere in its own review. Recorded as a calibration data point, not
 **The direct reviewer conflict on open question 3 was resolved against both reviewers** — adopt both,
 doc-first, keep C batched — after reproducing the failure, the fix, and the inertness of both proposed
 proofs.
+
+### Round 2 outcome
+
+**gemini `APPROVE` · codex `REQUEST_CHANGES` (5 findings).** All five re-verified by execution;
+**four confirmed, one refuted.**
+
+| # | finding | verdict | round-3 change |
+|---|---|---|---|
+| 1 | the wrong-checkout proof is **version**-dependent, not byte-dependent | **confirmed** | `main` and the branch share a version for any change that does not bump it, so a `source: github` mutant passes. §4.1(b) now requires installed-byte identity (digest or per-run sentinel); version equality is demoted to a smoke check, and mutant 3 must be run with the versions deliberately equal |
+| 2 | the MCP mutant is not bound to `.mcp.json` | **confirmed** | a hard-coded `<installPath>/mcp/.../mcp_server.py` starts the real server even when `.mcp.json` is repointed, so mutant 2 goes green. §4.1(c) now requires parsing the **installed** `.mcp.json` and launching its declaration; hooks assertions also move to the installed tree |
+| 3 | §4.3's `..`-guard mutation proof is **impossible** | **confirmed** | `_repo_root` returns an ancestor, so `relpath` can never escape; with no root the function returns absolute before the guard. Executed with and without the guard — byte-identical. The guard is relabelled unproved defence-in-depth, and assertion 4 is narrowed to "outside every git repository" |
+| 4 | §4.2 still has one "X or Y" and one unexercised fallback | **confirmed** | `sessionstart-restore.sh` is now **decided** (left unchanged, with the reasoning recorded at the site); item 1 gains a second vector that runs with `paths.sh` **absent**, so the three inline fallbacks are actually tested |
+| 5 | the upstream line citation is wrong | **REFUTED** | fetched and checked: `marketplace add "$GITHUB_WORKSPACE"` **is** line 27, `plugin list` is line 29, and line 25 is the `export`. The citation stands unchanged |
+
+**Finding 3 is the one worth dwelling on.** Round 2 replaced two inert proofs and wrote a third inert
+proof into the replacement — a mutation that cannot fail under the plan's own helper definition. That
+is precisely the failure §3's corollary exists to prevent, committed by the section that added the
+corollary. It is the strongest argument in this plan for *executing* every mutation rather than
+reasoning about it.
+
+**gemini approved, and was wrong on one point** — it stated §4.2 "contains no X-or-Y ambiguities" when
+item 3 still did. Recorded as calibration: its independent audit of `cmd_verify` and its confirmation
+of the 20-digit stderr overflow were both correct and useful, but a clean APPROVE from it is not
+sufficient evidence that a contract is complete.
+
+**Process defect found during this round, and filed separately as `COREDEV-2607`:** the gemini reviewer
+**implemented item B into the working tree instead of reviewing it** — 6 shipped scripts modified, 5
+files created, including a stray root `marketplace.json`. It emitted no `VERDICT:` line, so the gate
+failed closed correctly, but the side effects persisted and had to be reverted. `--mode plan`,
+`--sandbox` and both combined were tested and **none prevents writes**. The round-2 gemini verdict
+recorded above is from a clean re-run inside a **disposable detached checkout**, with a before/after
+`git status --porcelain` assertion proving the real worktree was untouched.
