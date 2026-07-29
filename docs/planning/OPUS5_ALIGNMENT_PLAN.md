@@ -1,8 +1,8 @@
 # Opus 5 Alignment Plan
 
-**Status:** Planning — round 2, revised after the round-1 dual gate (gemini `APPROVE_WITH_NOTES`,
-codex `REQUEST_CHANGES`). Round-1 transcripts are captured under
-`docs/planning/reviews/COREDEV-2583_{gemini,codex}_plan_review_r1.txt`, which is **gitignored**
+**Status:** Planning — **round 4**, revised after three dual-gate rounds. Round 3: gemini `APPROVE`,
+codex `REQUEST_CHANGES` on one leftover passage (now fixed). Transcripts are captured under
+`docs/planning/reviews/COREDEV-2583_{gemini,codex}_plan_review_r*.txt`, which is **gitignored**
 (`.gitignore:29 reviews/`) — they are local working artifacts, not committed. Every round-1 finding
 acted on is restated inline below, so this document stands alone without them. (Note:
 `COREDEV-2503_GATE_FAILOPEN_REMEDIATION_PLAN.md:15` cites the same directory as though it were
@@ -248,8 +248,10 @@ h1e = ["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]
 ```
 
 The `re.fullmatch` (not `re.match`) discipline introduced by COREDEV-2503 F10 exists to stop
-`claude-opus-4-8 rm -rf` and trailing-newline injection from passing; because the suffix is stripped as
-a literal and the remainder still goes through `fullmatch`, no new bracket body is ever accepted.
+`claude-opus-4-8 rm -rf` and trailing-newline injection from passing. It is preserved **by
+construction**: a bracketed alias is accepted only by **exact `MODEL_ALIASES` membership**, so a value
+containing `[` or `]` never reaches the model-id regex at all. Nothing is stripped, and no bracket body
+is ever parsed.
 
 **Proof.** Extend `scripts/tests/test_validate_plugin_assembly.py`. Accept: the complete supported
 bracketed set `sonnet[1m]`/`opus[1m]`/`fable[1m]`, `claude-opus-5`, `best`, `opusplan`. **Reject the
@@ -444,7 +446,7 @@ to 22 at 2.7.0; it must not merge before this one.
 | `CLAUDE_CODE_EFFORT_LEVEL` set below `xhigh` in a runner silently defeats every pin in §4.1 | Medium | **Cannot be fixed by frontmatter — the env var outranks it.** Documented here; the runtime guard is a preflight assertion owned by `COREDEV-2584`. Do not claim a guarantee this plan cannot deliver. |
 | Effort pin *lowers* effort for a maintainer running at `max` — now on all 42 assets | **High** | Widened in round 2 from 24 assets to 42. Accepted as the cost of an unconditional floor: a per-asset exemption is exactly the judgement call the round-2 decision removed. Flagged so it is not mistaken for a regression. |
 | Three reviewers moving to `opus` materially raises review wall-clock | High | Accepted. Cost and latency explicitly accepted by the maintainer. |
-| Bracketed-alias change reopens the COREDEV-2503 F10 injection hole | Low | §4.4 strips a **literal** enumerated suffix and re-validates the remainder with the unchanged `fullmatch` rules; hostile bracket-body negatives are required. |
+| Bracketed-alias change reopens the COREDEV-2503 F10 injection hole | Low | §4.4 accepts bracketed aliases **only by exact `MODEL_ALIASES` membership** — nothing is stripped and no value containing a bracket ever reaches the model-id regex, which is unchanged. Hostile bracket-body negatives are still required. |
 | A validator key set is written from memory rather than the runtime schema | **High** (demonstrated) | This is what round 1 got wrong in §4.6. §3's round-2 corollary and §4.6 fix 1 require deriving from the pinned bundle and citing the version. |
 | Refreshed `KNOWN_TOOLS` goes stale again | High (over time) | Unavoidable — the tool surface moves. §4.5 demotes fuzzy matching to advisory so staleness degrades to a warning, not a false reject. |
 | §4.9 detection change breaks existing capture tests | **Eliminated** | Round 2 drops the behavioural change entirely; only documentation is added. |
