@@ -1,8 +1,8 @@
 # Redactor Defects Plan
 
-**Status:** Planning — round 4, awaiting re-gate
+**Status:** Planning — round 5, awaiting re-gate
 **Created:** 2026-07-29
-**Last Updated:** 2026-07-29 (round 4)
+**Last Updated:** 2026-07-29 (round 5)
 **Ticket:** `COREDEV-2597` — `hook_redact_pii` corrupts ordinary prose and truncates on invalid UTF-8
 **Epic:** `COREDEV-2582` — Opus 5 readiness and autonomous end-to-end mode
 **Branch:** `feat/COREDEV-2597-redactor-defects`
@@ -80,6 +80,16 @@ sentence is deleted; see §10.)*
 Corollary: every fix needs a **positive control**. A test that only proves `task-oriented` survives
 would also pass if redaction were disabled entirely — which is the exact failure mode the reviewers
 flagged when this was still part of 2585.
+
+**Third corollary, added in round 5 — canonicalisation is not widening.** §3's "never widen" was
+blocking three leak fixes at once. The resolution, stated as a rule rather than as a one-off exception:
+
+> A leak may be closed by **canonicalising the input before any rule runs**, provided no redaction
+> pattern is altered. Canonicalisation changes the input domain, not the match set.
+
+This is the principle under which §8's fold-order change is legal, and it closes RC-A, RC-B and RC-C
+together. It does **not** license widening a pattern; the secret-before-email reordering was rejected
+under the unchanged rule (§4.4).
 
 **Second corollary, added in round 2 and load-bearing: a mutation proof must reject *plausible wrong
 implementations*, not only reverts.** Round 1's proofs failed this. Two independently plausible
@@ -429,46 +439,74 @@ use a skip-list — a skip makes exemption *removal* invisible (demonstrated: dr
 > identical. The plan was simultaneously deleting the mechanism and citing it. There is no tilde
 > exemption to enumerate.
 
-**The exemption set is five entries, not two.** *(Round 3 said "exactly two". A reviewer found three
-more by execution — and unlike the whitespace-folding entry, these change **whether a secret is
-redacted at all**, with the shell missing what Python catches.)* All verified against the shipped
-implementations:
+**The exemption set is exactly TWO — but only after seven ALIGNMENTS, and it is closed by
+construction rather than by enumeration.** *(Round 3 said two; round 4 said five; both were built by
+whack-a-mole and both were wrong. Round 5 replaces the search with a model.)*
 
-| # | input | shell | Python | class |
-|---|---|---|---|---|
-| 1 | `Icon@2x.png` | `[redacted-email]` | preserved | `_EMAIL` `@Nx` exemption (`capture.py:51-53`) |
-| 2 | `a\n\n\tb` | `a   b` | `a b` | whitespace folding — cosmetic |
-| 3 | `Bearer\n<20+ token>` | **preserved (leak)** | `[redacted-token]` | `sed` is line-oriented; Python `\s` crosses newlines |
-| 4 | `api\nkey: <value>` | **preserved (leak)** | `[redacted-key]` | same cause |
-| 5 | `bearer<NBSP><20+ token>` | **preserved (leak)** | `[redacted-token]` | Python `\s` is Unicode-aware; ERE under `LC_ALL=C` is not |
+An exhaustive sweep built a **9-delta parameterised model of the shell** and validated it two ways over
+a 40,000-input seeded corpus: with all deltas ON it equals `hook_redact_pii` byte-for-byte (0
+mismatches); with all deltas OFF it equals `redact_pii` byte-for-byte (0 mismatches). Divergence is
+therefore a *derivable function of the two pattern sets*, not a search result. Attributing all 13,950
+observed divergences against the full 2⁹ delta powerset gave **0 unexplained**.
 
-Entries 3–5 are **pre-existing** — nothing in this ticket causes them — but they must be enumerated,
-because a fixture that claims parity while three leak-direction divergences exist is worse than no
-fixture. A fourth reviewer example, `apiKey=abcdefgh`, was checked and is **REFUTED**: both sides
-redact it (the shell pattern is already case-insensitive by character class).
+**Nine root causes. Seven are ALIGNED (must become byte-identical); two are permanent exemptions.**
 
-**Entries 3 and 4 are closable without widening any pattern, and that should be done here.** Their
-cause is pipeline *order*, not pattern scope: `hook_redact_pii` folds newlines with `tr` **after**
-`sed` has run, so `sed` never sees the folded text. Executed — moving the fold **before** `sed` makes
-the shell agree with Python on both:
+| RC | cause | direction | disposition |
+|---|---|---|---|
+| A | Python `\s` vs POSIX `[[:space:]]` in the 3 `_APIKEY` slots + 1 `_BEARER` slot | **LEAK** | align |
+| B | same class difference in `_USERS`/`_HOME` **negated** classes — polarity inverts, shell over-consumes and eats the `api`/`bearer` anchor | **compound LEAK** | align |
+| C | `sed` is line-oriented and `tr` runs *after* it | **LEAK** | align |
+| D | `re.IGNORECASE` folds `_APIKEY`'s literals (`i`←U+0130/U+0131, `k`←U+212A) | **LEAK** | align — narrow Python |
+| E | `re.IGNORECASE` widens the value class `[A-Za-z0-9._-]` by {U+0130, U+0131, U+017F, U+212A} | **LEAK — worst shape** | align — narrow Python |
+| F | `_EMAIL` `@Nx` retina lookahead (POSIX ERE has none) | corruption | **EXEMPT** (F2/F5/F6 align) |
+| G | `_TILDE` `~Copyable`/`~Escapable` lookahead | corruption | **EXEMPT** (G2 aligns) |
+| H | fold arity — `tr` is 1:1, Python's `[\r\n\t]+` collapses runs | cosmetic | align — drop the `+` |
+| I | `tr` runs outside `LC_ALL=C` (`hook-io.sh:236`) | corruption | align — this is §4.3 |
 
-| case | `sed`-then-`tr` (shipped) | `tr`-then-`sed` (proposed) |
-|---|---|---|
-| `Bearer\n<token>` | `Bearer <token>` | `[redacted-token]` |
-| `api\nkey: <value>` | `api key: <value>` | `[redacted-key]` |
+**RC-E is the worst shape in the sweep** and deserves naming: the value-tail form emits
+`[redacted-key]` *immediately followed by live secret material*, so it passes any assertion of the form
+`'[redacted-key]' in output`. Any test written that way is worthless here.
 
-**But this needs a reviewer's judgement, so it is raised in §8 rather than assumed.** Folding first
-means every rule now sees text across former line boundaries — which is strictly *more* matching, and
-§3 forbids widening. The counter-argument is that the widening is confined to whitespace normalisation
-the function already performs one stage later, and it closes two leaks. If reviewers reject it, entries
-3–4 stay enumerated exemptions and the leak is documented rather than fixed.
+**Three of the nine have UNBOUNDED generators, which is why enumerating inputs could never terminate:**
 
-**Entry 5 is not closable either way.** Aligning it would require widening the shell (forbidden) or
-making Python ASCII-only (a deliberate loss of real coverage). Record it as a divergence where Python
-is stricter, and leave it.
+- **F** = 104 ASCII case spellings of `png|jpe?g|gif|pdf|webp|heic|tiff?` (plus U+0130/U+0131 for the
+  `i` of `heic`) × unbounded `[0-9]+` × arbitrary local part × any codepoint outside `[A-Za-z0-9.-]`.
+- **G** = 2 keywords × (end-of-input ∪ every codepoint outside Unicode `\w`), firing mid-string
+  (`x~Copyable`) and after a second tilde (`~~Copyable`) too.
+- **A/B/C** = slot × 23 codepoints × unbounded run length.
 
-Do not add a tilde entry: after §4.2 the tilde rules are byte-identical on every fixture, which is a
-stronger and checkable property than "behaviourally equivalent".
+**The fixture must therefore assert the RULE, not a list of inputs.** Write the two exemptions as
+generators, exactly as above.
+
+**Nine MUST-AGREE negative controls are mandatory**, because each looks like it should diverge and does
+not — without them the fixture drifts toward over-exempting: `AppIcon@2X.png` (capital `X` sits outside
+the `(?i:)` group), `user@2xmail.com`, `~Copyable2`, `~copyable`, `bKarer …`, `sk-ABCDEFGKHIJ`,
+`a\x0b\x0cb`, `api<U+200B>key:…`, `Icon@2x.pngsk-TOPSECRET1`.
+
+**Two sub-shapes are real defects, not exemptions, and both are Python-side leaks:**
+
+- **F2** — `user@2x.png.example.com`, a routable address, is **preserved entirely** by Python: the
+  lookahead's terminating `\b` is satisfied by the following `.`. Fix: `\b` → `(?![A-Za-z0-9.-])`.
+  Verified against 12 must-stay-exempt and 7 must-redact cases, 19/19 correct.
+- **G2** — exactly 2 codepoints (`-`, `.`) are both outside `\w` and inside the tilde body class, so
+  `~Copyable-alice` **leaks a real username**. Fix: `\b` → `(?![A-Za-z0-9._-])`.
+
+**F3 survives the F2 fix and stays exempt** — for `<local>@<N>x.<ext>@<real-domain>` the two sides
+redact *different, partially overlapping spans*. Record it so nobody later "fixes" the shell by
+widening its email pattern.
+
+**F4 is cross-rule and emits DIFFERENT placeholders** (`~[redacted-email]` vs `~[redacted]@2x.png`), so
+an assertion of the form "both contain `[redacted]`" misses it entirely. A per-rule fixture files this
+under "email" and never generates it — which is precisely how rounds 3 and 4 missed it.
+
+**REJECTED, with evidence, so it is not re-proposed:** moving the SECRET rule ahead of the EMAIL rule.
+It was executed. It does close the F5 leak, but it destroys legitimate addresses —
+`support@sk-corp.com` → `support@[redacted-secret]` — and creates a new divergence. Trading a leak for
+corruption is exactly what §3 forbids.
+
+**Honest limits.** All of the above is a **BSD-sed** result; `gsed` is absent on the dev host and CI is
+Ubuntu/GNU, so RC-I *inverts* by platform. NUL bytes, lone surrogates, and the Python-side `cap()` /
+`normalize_file()` wrappers were not swept. See §4.5 for the mechanical check that closes the GNU gap.
 
 **Run the full pipeline, not isolated rules.** §4.2's rule executes *before* §4.1's in the same `sed`
 invocation and changes what text §4.1 sees. The fixture must drive the whole `hook_redact_pii` /
@@ -501,7 +539,35 @@ the test must fail" is vacuous here: reverting the fixture merely deletes the as
 2. Delete an enumerated exemption from `capture.py` → the parity assertion must fail because the
    exemption no longer holds.
 
-### 4.5 — The 2585 split left drift behind (Low–Medium, documentation integrity)
+### 4.5 — Mechanical closure of the exemption set (new in round 5)
+
+**A static fixture table cannot close this and must not be the gate.** Three of the nine root causes
+have unbounded generators (§4.4), so any list of inputs is incomplete by kind — which is exactly why
+rounds 3 and 4 each found more divergences than the previous enumeration claimed existed.
+
+**Ship the model and the seeded corpus as a CI job, on `ubuntu-latest` AND `macos-latest`**, asserting:
+
+1. `shell_model(x) == hook_redact_pii(x)` for every `x` in a fixed 40k seeded corpus. **This is the
+   load-bearing assertion** — it fails the moment either implementation gains a behaviour the model
+   does not encode, which is precisely the statement "a new root cause exists". It converts *"did we
+   find them all?"* into a checkable equivalence.
+2. `py_model(x) == redact_pii(x)` on the same corpus.
+3. Post-alignment, every `shell != python` case is attributable to the email or tilde lookahead, and
+   `UNEXPLAINED == 0`.
+
+Running (1) on both platforms also settles the BSD/GNU question mechanically instead of by argument —
+which matters because RC-I *inverts* by platform. The §4.4 table then serves its proper role: human
+documentation of the exemptions, not the proof.
+
+**Harness gotcha that must be in the test file's comment:** U+212A and U+0131 written as source
+literals **silently normalise to ASCII** in some toolchains. Build every non-ASCII vector with `chr()`
+or the fixture under-tests without failing. Two sweep agents hit this.
+
+**Attribution gotcha:** leave-one-out attribution manufactures phantom root causes whenever two deltas
+are *conjunctively* required — it reported 32 false residuals that the full 2⁹ powerset reduced to 0.
+Any future sweep must attribute against the powerset.
+
+### 4.6 — The 2585 split left drift behind (Low–Medium, documentation integrity)
 
 **Root cause.** The commit that split these defects out of `DECISION_JOURNAL_PLAN.md` was
 **header-only** (61 insertions, all in the top 5 lines and the file tail). Its header says
@@ -527,7 +593,7 @@ whoever picks it up reads §7 step 1 as their first instruction and re-does this
 The pause defers the cost, it does not remove it. A six-line doc edit now beats a duplicated
 implementation two tickets from now.
 
-### 4.6 — Caller audit: what actually flows through the shell redactor (evidence, not a fix)
+### 4.7 — Caller audit: what actually flows through the shell redactor (evidence, not a fix)
 
 Round 1 had no caller audit, which is why the `@2x` question could not be settled on evidence. There
 are exactly **four** shell callers of `hook_redact_pii`:
@@ -629,18 +695,31 @@ proof for regex forms developed against BSD `sed`.
 
 ## 7. Implementation order
 
-1. **First:** grep both suites for existing assertions that depend on `~<word>` or mid-word `sk-`
-   being redacted. §4.2 changes behaviour a shipped test may encode.
-2. §4.3 — the `tr` locale/stderr fix + the engine-agnostic shadow test (shell only; no regex semantics).
-3. §4.1 — the asymmetric `sk-`/`pk_` boundary, both sides, with the full control set and **all four**
-   anti-implementation mutants plus the combined-alternation parity mutant.
-4. §4.2 — the strict `~` contract, both sides, including deletion of `capture.py:58`'s dead lookahead.
-5. §4.4 — the shared parity fixture (last of the code, so it can enumerate the real exemption set).
-6. §4.5 — the `DECISION_JOURNAL_PLAN.md` supersede pass (documentation only; may land in parallel).
-7. Correct `scripts/lib/hook-io.sh:221-224`'s comment (exemption count + the false expressibility claim).
-8. Version bump to **2.6.2** (or 2.6.3 — see header sequencing) + CHANGELOG.
+1. **First:** grep both suites for assertions that depend on `~<word>` or mid-word `sk-` being
+   redacted, **and for any assertion of the form `'[redacted-key]' in output`** — RC-E proves that
+   shape is worthless here, because the placeholder can be emitted immediately before live secret
+   material.
+2. §4.3 — the `tr` locale/stderr fix (RC-I) + the engine-agnostic shadow test.
+3. **§8's canonicalisation pre-pass** — `\n\r\t` **plus the 23 Unicode space codepoints**, on both
+   sides, before any rule runs. Closes RC-A, RC-B and RC-C together, changing no pattern.
+4. §4.1 — the asymmetric `sk-`/`pk_` boundary, both sides (Python: **two sequential passes**), with the
+   full control set and all four anti-implementation mutants plus the combined-alternation parity mutant.
+5. §4.2 — the strict `~` contract, both sides, including deletion of `capture.py:58`'s dead lookahead.
+6. **RC-D + RC-E** — narrow Python: drop `re.IGNORECASE` from `_APIKEY`/`_BEARER`, spell literals as
+   ASCII classes. **File the shared-miss security follow-up in the same commit** (§8).
+7. **F2 + G2** — narrow the two lookaheads: `_EMAIL` `\b` → `(?![A-Za-z0-9.-])`,
+   `_TILDE` `\b` → `(?![A-Za-z0-9._-])`. Both close real Python-side leaks.
+8. **RC-H** — drop the `+` from Python's `re.sub(r"[\r\n\t]+", …)`. Do **not** use `tr -s`, which
+   would squeeze pre-existing literal spaces.
+9. §4.4 — the shared parity fixture, written as **generators plus the nine negative controls**.
+10. §4.5 — the model-equivalence CI job on both `ubuntu-latest` and `macos-latest`. **Re-run the whole
+    sweep under GNU `sed` before freezing the fixture** — every result to date is BSD-only.
+11. §4.6 — the `DECISION_JOURNAL_PLAN.md` supersede pass (docs only; may land in parallel).
+12. Correct `scripts/lib/hook-io.sh:221-224`'s comment, **and the stale top-level parity commentary in
+    `capture.py`** — round 4 named only the shell comment.
+13. Version bump to **2.6.2** (or 2.6.3 — see header sequencing) + CHANGELOG.
 
-## 8. Open questions — all three answered in round 2
+## 8. Open questions
 
 1. **Should the shell side gain the two Python exemptions (`@2x`, `~Copyable`)?**
    **Answered — split.** The `~Copyable`/`~Escapable` half is **dissolved**, not ported: §4.2's strict
@@ -677,21 +756,39 @@ gives `~[redacted]/`, secret-first gives `~[redacted-secret]/`. Neither leaks, b
 each ordering, and the shipped order is already tilde-first — so it was an unpinned invariant, now a
 fixture row (§4.4).
 
-**New for round 4 — the one decision this plan will not make unilaterally.** §4.4 entries 3 and 4 are
-**leak-direction** divergences: `Bearer\n<token>` and `api\nkey: <value>` are redacted by Python and
-**missed by the shell**, because `sed` is line-oriented and `hook_redact_pii` folds newlines with `tr`
-only *after* `sed` has run. Executed: moving the fold **before** `sed` closes both and aligns the two
-implementations, changing **no pattern**.
+**Round 4's question — should `hook_redact_pii` fold newlines before `sed`? ANSWERED YES by both
+reviewers independently — and the agreed answer is INSUFFICIENT.**
 
-**The objection is that it still widens matching** — every rule would then see text across former line
-boundaries — and §3's rule is *never widen*. The defence is that the widening is confined to whitespace
-normalisation the function already performs one stage later, and that it converts two real leaks into
-two catches.
+Both reviewers ruled the same way, with sound reasoning (it changes no pattern; the boundary anchors
+`(^|[^…])` mean a folded newline merely shifts the match branch; a secret wrapped across a newline is
+not "correct text" that must be preserved). Executed and confirmed: 0 correct-text regressions across
+the wrapped-correct-text corpus, and two real leaks closed.
 
-**Reviewers: should §4.3's pipeline fold newlines before `sed`?** If yes, entries 3–4 disappear and the
-shell gains two redactions it should always have had. If no, they stay enumerated exemptions and the
-leak is documented rather than fixed. Either is defensible; the plan will not choose without a ruling,
-because it is the one change in this ticket that makes the redactor match *more*.
+**But folding only `\n\r\t` closes 1 of the 3 root causes in that class.** Executed:
+
+| case | shipped | fold `\n\r\t` (as approved) | fold + the 23 Unicode spaces |
+|---|---|---|---|
+| `api<U+00A0>key: <secret>` | leak | **still leaks** | `[redacted-key]` |
+| `api key:\n <secret>` | leak | `[redacted-key]` | `[redacted-key]` |
+| `/Users/nick<U+00A0>api key: <secret>` | leak | **still leaks** | `[redacted-key]` |
+
+**So §8 is widened: canonicalise `\n\r\t` PLUS the 23 codepoints in Python's `\s` that POSIX
+`[[:space:]]` under `LC_ALL=C` does not accept** — U+001C–001F, U+0085, U+00A0, U+1680, U+2000–200A,
+U+2028, U+2029, U+202F, U+205F, U+3000. The set is closed by enumeration over all of 0x110000 on the
+Python side and by a byte-scan of 0x01–0xFF on the shell side; the difference is exactly 23. Negative
+controls U+200B, U+FEFF and U+180E must **agree unchanged** — they are not Unicode `White_Space`.
+
+*This is the clearest evidence in the whole ticket for sweeping rather than iterating: a direct question
+was put to both reviewers, they agreed with each other, and the agreed fix was one third of the answer.
+Neither had enumerated the whitespace axis.*
+
+**New for round 5 — the one thing this plan now asks reviewers to weigh.** Aligning RC-D and RC-E
+requires **narrowing Python** (dropping `re.IGNORECASE` from `_APIKEY`/`_BEARER` and spelling the
+literals as ASCII classes). That is §3-compliant — it widens nothing — but it converts RC-E's
+*divergence* into a **shared miss**: after the fix, *both* implementations leak
+`api key: SECRET<U+017F>MORE`. The plan states this rather than hiding it, and it needs its own security
+ticket. **Is converting a one-sided leak into a two-sided one the right call, or should `_APIKEY`/
+`_BEARER` gain explicit ASCII-plus-fold classes on both sides instead?**
 
 ## 9. Notes
 
@@ -789,3 +886,51 @@ the round, and one the eight adjacency vectors added in round 3 did not cover:
 *while its codex review was running*, and that reviewer correctly refused: *"A mandatory digest-bound
 review cannot approve a moving target."* **The plan must be frozen for the duration of a review round.**
 That is the same discipline `COREDEV-2607` demands of the reviewer, applied to the author.
+
+### Round 4 outcome, and the sweep that replaced the enumeration
+
+**gemini `APPROVE_WITH_NOTES` · codex `REQUEST_CHANGES` (2 findings).** Both confirmed the plan was
+frozen (codex checked the target's SHA-256 twice mid-review and found it unchanged), closing round 3's
+blocker. codex additionally ran **2,954 constructed adjacency and ordering vectors** against round 4's
+sequential-passes fix and found the two engines agreed on all of them.
+
+Both codex findings were confirmed by execution:
+
+| # | finding | round-5 change |
+|---|---|---|
+| 1 | the five-entry exemption set is still materially incomplete — 7 more divergences, from Unicode `\s` and `re.IGNORECASE` | **all 7 reproduced.** Triggered the sweep below |
+| 2 | a new fixture row gives the isolated-rule result, not the full-pipeline result §4.4 mandates | confirmed — `~a/pk_…-sk-…` yields `~[redacted]/[redacted-secret][redacted-secret]` through the real pipeline. The table is now labelled fragment-only, with the full-pipeline output pinned separately |
+
+**Then the enumeration was abandoned for a model.** Rounds 3 and 4 each found more divergences than the
+previous round claimed existed (2 → 5 → 12). That is a search that does not terminate, so an exhaustive
+sweep built a **9-delta parameterised model of the shell** instead, validated byte-for-byte against
+both implementations over a 40,000-input seeded corpus (0 mismatches in each direction). Divergence
+became a derivable function of the two pattern sets; attributing all 13,950 observed divergences against
+the full 2⁹ powerset left **0 unexplained**. §4.4 now carries nine root causes and two permanent
+exemptions, expressed as **generators**, because three of the nine are provably unbounded.
+
+**What the sweep found that four review rounds had not:**
+
+- **Two real Python-side leaks.** `user@2x.png.example.com` — a routable address — is preserved
+  entirely, because the retina lookahead's `\b` is satisfied by the following `.`. And
+  `~Copyable-alice` leaks a real username, because exactly two codepoints (`-`, `.`) are both outside
+  Unicode `\w` and inside the tilde body class.
+- **The fix both reviewers approved was one third of the answer.** Folding `\n\r\t` before `sed` closes
+  RC-C but leaves RC-A and RC-B — the Unicode-whitespace forms — leaking. §8 records the executed
+  three-way comparison.
+- **RC-E, the worst shape found:** the value-tail form emits `[redacted-key]` immediately followed by
+  live secret material, so it passes any `'[redacted-key]' in output` assertion. §7 step 1 now greps
+  the suites for exactly that shape.
+- **A harmful recommendation, rejected with evidence.** One sweep agent proposed reordering SECRET
+  ahead of EMAIL as "a pure reordering". Executed: it destroys legitimate addresses
+  (`support@sk-corp.com` → `support@[redacted-secret]`). Trading a leak for corruption is what §3
+  forbids; the rejection is recorded so it is not re-proposed.
+- **Three corrections to the sweep's own agents**, made by its synthesis stage: the bearer
+  case-folding attribution was wrong (`b`/`e`/`a`/`r` have no non-ASCII folds — `bKarer …` agrees on
+  both sides); leave-one-out attribution manufactured 32 phantom residuals that the powerset reduced to
+  0; and one divergence class (`heic` fold inside the `(?i:)` group) appeared in no agent's report.
+
+**The honest limit, stated rather than buried:** every result is **BSD-sed only** — `gsed` is absent on
+the dev host while CI is Ubuntu/GNU, and RC-I *inverts* by platform. §4.5's model-equivalence CI job on
+both runners is what closes that, and §7 step 10 requires re-running the sweep under GNU `sed` before
+the fixture is frozen.
