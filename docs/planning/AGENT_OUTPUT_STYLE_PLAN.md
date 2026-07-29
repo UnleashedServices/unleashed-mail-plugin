@@ -1,8 +1,8 @@
 # Agent Output Style Plan
 
-**Status:** Planning — **round 7**, revised after six dual-gate rounds. Round 6: **both**
-`REQUEST_CHANGES` — three more bare adopts (1, 2, 5) were found to reach machine contracts; rule 2's
-path is proven by execution. Only rules 7 and 8 remain bare adopts.
+**Status:** Planning — **round 8**, revised after seven dual-gate rounds. Round 7: **both**
+`REQUEST_CHANGES` on the mutation-proof design itself — the marker assertions were not sound. Rules 7
+and 8 remain bare adopts, now with the audit evidence recorded.
 **Created:** 2026-07-29
 **Last Updated:** 2026-07-29
 **Ticket:** `COREDEV-2602` — AGENT_CONTRACTS: add an agent output-style section
@@ -111,22 +111,35 @@ findings, statuses and verdicts elsewhere (`:90`, `:242`), so a whole-file grep 
 **Round-2 correction.** Asserting rule *titles* is not enough: reverting rule 9's positive restatement,
 deleting rule 3's mandated-final-element placement, or flipping an adapted rule back to a bare adopt
 would leave all ten titles intact and still pass. Each of the **eight** rules that are not a bare adopt
-(1, 2, 3, 4, 5, 6, 9, 10) needs a marker phrase asserted and mutation-tested independently of its title:
+(1, 2, 3, 4, 5, 6, 9, 10) needs a marker phrase asserted and mutation-tested independently of its title.
 
-| Rule | Required marker (asserted and independently deletion-mutated) |
+**Extraction must be ROW-scoped, not section-scoped.** Round 7 found that a section-scoped marker
+assertion false-passes whenever the same phrase appears elsewhere in §13 — rule 10's marker
+(`payload, not preamble`) also occurs in the precedence clause and a risk row, so deleting rule 10's
+disposition would still find it. The test therefore extracts **§13 → the disposition table → the single
+row for rule N**, and asserts the marker *within that row*. Phrase collisions elsewhere in the section
+then cannot mask a deleted disposition.
+
+| Rule | Required marker — a **literal** substring of that rule's own row |
 |---|---|
-| 1 | "never reorder a mandated payload" |
-| 2 | "machine trailer fields and JSON values keep their mandated single-line/schema shape" |
-| 3 | "before it, never last" |
-| 4 | "never defer an in-scope finding out of the current array" |
-| 5 | "never before a mandated result prefix" |
-| 6 | "whoever runs the steps" |
-| 9 | "never cap, **split**, omit, or defer" — the word **split** must be asserted separately |
-| 10 | "payload, not preamble" |
+| 1 | `never reorder a mandated payload` |
+| 2 | `keep their mandated single-line/schema shape` |
+| 3 | `Never last.` |
+| 4 | `defer an in-scope finding out of the current array` |
+| 5 | `never before a mandated result prefix` |
+| 6 | `whoever runs the steps` |
+| 9 | `cap, split, omit, or defer` — the token `split` asserted separately |
+| 10 | `payload, not preamble` |
 
-**Round-5 correction.** Rule 9's marker previously omitted `split`, so reverting the row to its round-4
-wording — dropping both the source's split characterisation *and* the prohibition on splitting machine
-findings — would have satisfied every described test. The `split` token is now its own assertion.
+Each marker must be verified to appear **verbatim** in its row. Round 7 also found the inverse defect:
+rules 3 and 4 had idealised markers (`"before it, never last"`, `"never defer an in-scope finding…"`)
+that did **not** occur literally in their dispositions, because markdown emphasis (`*before* it`,
+`**never** defer`) broke the string. A marker that does not match its own row is worse than none — it
+fails on a correct document.
+
+**Round-5 correction, retained.** Rule 9's marker previously omitted `split`, so reverting the row to its
+round-4 wording — dropping both the source's split characterisation *and* the prohibition on splitting
+machine findings — would have satisfied every described test. The `split` token is now its own assertion.
 
 ### 4.2 — Six machine contracts would be damaged by the rules as written (High)
 
@@ -189,7 +202,7 @@ reported 444 lines; `wc -l` gives 443, corroborated by the other reviewer.)
 ### 4.4 — Attribution and reproducibility (Low)
 
 **Fix.** Name the source, its MIT licence, and the **pinned commit** `07684c4a` in the section header.
-No code is copied — the rules are restated in this repo's vocabulary and four are deliberately altered —
+No code is copied — the rules are restated in this repo's vocabulary and **eight of the ten carry a non-bare disposition** (seven adapted, one positively restated) —
 so a section-level notice suffices; no `LICENSE` vendoring.
 
 ---
@@ -406,8 +419,9 @@ auditing **all five** remaining bare adopts. Three of the five reached a machine
 
 **codex `REQUEST_CHANGES` — High, proven by execution.** Rule 2 ("Number multi-step tasks") breaks
 contract F *and* destroys the status parse entirely. The trailer is parsed **one value per single field
-line** (`capture.py:295`), and any numbered continuation before the JSON fence terminates the scan
-(`capture.py:323`). Reproduced independently:
+line** (`capture.py:295`), and any numbered continuation before the JSON fence terminates the scan — documented
+at `capture.py:327` ("ANY other content … ") and implemented by the stop branch at `capture.py:369`.
+Reproduced independently:
 
 | trailer form | `extract_status` |
 |---|---|
@@ -433,3 +447,43 @@ one line. Both reviewers agree 7 and 8 are safe, and they are the only bare adop
 
 Final tally: **two adopt, seven adapt, one positive restatement** — where round 1 had eight rules, no
 markers, and three contracts.
+
+---
+
+## 15. Round-7 gate outcome — the mutation proof was not itself sound
+
+Both `REQUEST_CHANGES`, and both landed on the same High finding: **the marker assertions did not work.**
+
+**Rule 10's marker collided** (found independently by both reviewers). `payload, not preamble` appears in
+rule 10's disposition, in the global precedence clause, and in a §5 risk row. A section-scoped assertion
+would still find it after rule 10's disposition was deleted — so the per-rule mutation test this plan
+insisted on could not actually fail.
+
+**Sweeping every marker found the inverse defect too** (neither reviewer caught this; it surfaced from
+counting occurrences): rules 3 and 4 had markers that appear **only in the marker table** and not in
+their own dispositions, because markdown emphasis broke the literal string. Those assertions would have
+failed against a *correct* document.
+
+Fix: extraction is now **row-scoped** — §13 → disposition table → the single row for rule N — so
+collisions elsewhere cannot mask a deletion, and every marker is required to be a literal substring of
+its own row.
+
+**Rule 7 — reviewers disagreed; execution settled it.** Gemini argued rule 7 ("Make completed work
+visible") breaks contract F by prompting `Completed:` prose that corrupts the trailer scan and drops the
+status — "the same `UNATTRIBUTED` failure mode proven for Rule 2". Codex audited 7 and 8 and found no
+independent path. **Tested directly:**
+
+| input | `extract_status` |
+|---|---|
+| `Completed:` prose *before* `Status:` | `{'status': 'COMPLETE'}` — unaffected |
+| real PARTIAL trailer, then `Completed:` prose | real values retained; first occurrence wins |
+| `Status: COMPLETE` + `Remaining: nothing — everything shipped.` | `{'status':'COMPLETE','remaining':'…'}` — **a spurious field is injected** |
+
+So gemini's *mechanism* was wrong (no status loss), but a stray trailer keyword in prose **can** inject a
+field. It is inert in practice: `reviewer-roster.sh:244` emits `REMAINING` only inside the `PARTIAL`
+branch, so a spurious `remaining` on a `COMPLETE` is never forwarded. **Rule 7 stays a bare adopt**, and
+this evidence is recorded so the question is not re-derived a third time.
+
+Two Low findings also fixed: §4.4 still said "four are deliberately altered" (now eight non-bare
+dispositions), and `capture.py:323` is the function declaration — the rule is documented at `:327` and
+implemented at `:369`.
