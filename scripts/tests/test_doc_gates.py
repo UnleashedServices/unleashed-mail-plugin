@@ -279,3 +279,119 @@ class COREDEV2583_DocDefects(unittest.TestCase):
                 offenders.append(f"{name}: {m.group(0)}")
         self.assertEqual(offenders, [],
                          "agent bodies must not teach from a superseded model id")
+
+
+class COREDEV2602_AgentOutputStyle(unittest.TestCase):
+    """§13 Agent Output Style — per-rule assertions are ROW-scoped; per-contract are SECTION-scoped.
+
+    The two are NOT interchangeable. A section-scoped per-rule assertion false-passes, because a
+    rule's marker phrase also occurs in the precedence clause and elsewhere in §13 — that was the
+    round-7 defect. Row scoping is what makes a deleted disposition detectable.
+    """
+
+    # --- extraction helpers: read the artifact, never restate expectations ------------------
+    def _section13(self):
+        text = _read("AGENT_CONTRACTS.md")
+        start = text.index("## 13. Agent Output Style")
+        end = text.index("## Cross-references", start)
+        return text[start:end]
+
+    def _rows(self):
+        """rule number -> its single disposition row.
+
+        §13's table is `| # | Rule | Disposition |` — three columns, four pipes. Derive the shape
+        from the header rather than hardcoding a count, so a future column cannot silently make
+        every row invisible and turn this whole class into a no-op.
+        """
+        lines = self._section13().split("\n")
+        header = next(l for l in lines if l.startswith("| # |"))
+        ncols = header.count("|")
+        rows = {}
+        for line in lines:
+            m = re.match(r"^\| (\d+) \|", line)
+            if m and line.count("|") == ncols:
+                self.assertNotIn(int(m.group(1)), rows,
+                                 f"rule {m.group(1)} has more than one disposition row")
+                rows[int(m.group(1))] = line
+        return rows
+
+    # --- the section exists and is complete -------------------------------------------------
+    def test_section_13_exists_before_cross_references(self):
+        text = _read("AGENT_CONTRACTS.md")
+        self.assertIn("## 13. Agent Output Style", text)
+        self.assertLess(text.index("## 13. Agent Output Style"),
+                        text.index("## Cross-references"))
+
+    def test_exactly_ten_dispositions_one_row_each(self):
+        self.assertEqual(sorted(self._rows()), list(range(1, 11)))
+
+    def test_every_rule_declares_an_explicit_disposition(self):
+        # A blanked or flipped Disposition cell must fail — asserting titles + markers alone
+        # would not catch it (round-8 finding).
+        expected = {1: "Adapted", 2: "Adapted", 3: "Adapted", 4: "Adapted", 5: "Adapted",
+                    6: "Adapted", 7: "Adopted", 8: "Adopted", 9: "Restated positively",
+                    10: "Adapted"}
+        rows = self._rows()
+        for n, disposition in expected.items():
+            with self.subTest(rule=n):
+                self.assertIn(f"**{disposition}**", rows[n],
+                              f"rule {n} must declare `{disposition}` explicitly")
+
+    # --- per-rule markers: ROW-scoped ---------------------------------------------------------
+    def test_each_adapted_rule_carries_its_marker_in_its_own_row(self):
+        markers = {
+            1: "never reorder a mandated payload",
+            2: "keep their mandated single-line/schema shape",
+            3: "per the payload-region invariant",
+            4: "defer an in-scope finding out of the current array",
+            5: "never before a mandated result prefix",
+            6: "whoever runs the steps",
+            9: "cap, split, omit, or defer",
+            10: "payload, not preamble",
+        }
+        rows = self._rows()
+        for n, marker in markers.items():
+            with self.subTest(rule=n):
+                self.assertIn(marker, rows[n],
+                              f"rule {n}'s marker must be literal IN ITS OWN ROW (row-scoped)")
+
+    def test_parser_touching_rules_reference_the_invariant_by_name(self):
+        rows = self._rows()
+        # The approved plan requires 1, 2, 3, 5 AND 10 to reference it by name.
+        for n in (1, 2, 3, 5, 10):
+            with self.subTest(rule=n):
+                self.assertIn("payload-region invariant", rows[n])
+
+    # --- the invariant: SECTION-scoped --------------------------------------------------------
+    def test_payload_region_invariant_is_present_on_one_physical_line(self):
+        # One physical line by construction: a Markdown line break inside the marker made exact
+        # matching fail against a CORRECT document in round 10.
+        marker = "Within it, nothing but detail fields and blank lines."
+        lines = [l for l in self._section13().split("\n") if marker in l]
+        self.assertTrue(lines, "the invariant marker must appear literally on a single line")
+
+    def test_invariant_covers_non_prose_payloads_too(self):
+        # It breaks on ANY non-detail content, not only prose — a stray VERDICT: included.
+        self.assertIn("VERDICT:", self._section13())
+
+    # --- the precedence clause: SECTION-scoped, all six contracts ------------------------------
+    def test_precedence_clause_names_all_six_contracts(self):
+        section = self._section13()
+        for contract in ("JSON findings array", "`Status:`", "Remaining", "`VERDICT:`",
+                         "final fenced JSON block", "BLOCKED"):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, section)
+
+    def test_precedence_clause_states_the_contract_wins(self):
+        self.assertIn("the contract wins and the rule yields", self._section13())
+
+    def test_remaining_is_marked_safety_information(self):
+        self.assertIn("never a list to shorten", self._section13())
+
+    # --- attribution -------------------------------------------------------------------------
+    def test_attribution_names_the_source_licence_and_pinned_commit(self):
+        section = self._section13()
+        self.assertIn("i-have-adhd", section)
+        self.assertIn("MIT", section)
+        self.assertIn("07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba", section,
+                      "pin the upstream commit so the adaptation stays auditable")

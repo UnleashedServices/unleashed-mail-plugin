@@ -13,6 +13,26 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.1] — 2026-07-29
+
+Agent output style (COREDEV-2602) — plan `docs/planning/AGENT_OUTPUT_STYLE_PLAN.md`, approved through
+the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
+
+### Added
+- `AGENT_CONTRACTS.md` **§13 Agent Output Style** — ten rules adapted from `ayghri/i-have-adhd` (MIT,
+  pinned at `07684c4a`). Two adopted, seven adapted, one restated positively. Adapted rather than
+  migrated: four upstream rules would have damaged machine-consumed output.
+- The **payload-region invariant** — between the `Status:` line and the final fenced JSON block, nothing
+  but detail fields and blank lines. Not a style preference: it is
+  `capture.py::extract_status`'s behaviour, and violating it yields `None` → no sidecar →
+  `UNATTRIBUTED` → a re-dispatch or `NEEDS DISCUSSION`.
+- A precedence clause naming all six machine contracts the style rules must yield to, and 14 doc-gate
+  tests (per-rule **row-scoped**, per-contract **section-scoped**), each mutation-proved.
+
+### Notes
+- Enforcement is documentary. `COREDEV-2604` covers the mechanical guard (report the cause, route it,
+  feed it to the retry); `COREDEV-2599` covers measuring whether agents actually comply.
+
 ## [2.6.0] — 2026-07-29
 
 Opus 5 alignment (COREDEV-2583) — plan `docs/planning/OPUS5_ALIGNMENT_PLAN.md`, approved through the
