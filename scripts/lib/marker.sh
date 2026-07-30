@@ -14,9 +14,20 @@
 # Freshness source of truth is the marker FILE's mtime, not the `ts` field.
 
 marker_base() {
-    # ${HOME:-} so a missing HOME under `set -u` never aborts a hook; if both are
-    # unset the path becomes "/.claude/..." and the later mkdir simply fails open.
-    printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
+    # Delegate to the single source (scripts/lib/paths.sh, COREDEV-2600 item 1), but FALL BACK to
+    # the literal expansion if it cannot be located — never abort. This lib is sourced standalone
+    # (see paths.sh's header), so aborting here would turn three independent fail-open paths into
+    # one shared point of failure. `:-` not `-`, and keep the `${HOME:-}` guard, in BOTH forms.
+    if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+        _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+        # shellcheck source=scripts/lib/paths.sh
+        [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
+    fi
+    if command -v unleashed_plugin_base >/dev/null 2>&1; then
+        unleashed_plugin_base
+    else
+        printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
+    fi
 }
 
 marker_dir() {

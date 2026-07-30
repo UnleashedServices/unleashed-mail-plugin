@@ -20,7 +20,22 @@
 # so a PreCompact snapshot or reviewer capture in repo A can never be restored into / mixed with
 # repo B, even when two checkouts share a branch/ticket slug (codex PR review). The repo-root path
 # is hashed only — never written/emitted (the hash is PII-free; see _context_hash).
-context_base()        { printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"; }
+context_base() {
+    # Delegate to the single source (scripts/lib/paths.sh, COREDEV-2600 item 1), but FALL BACK to
+    # the literal expansion if it cannot be located — never abort. This lib is sourced standalone
+    # (see paths.sh's header), so aborting here would turn three independent fail-open paths into
+    # one shared point of failure. `:-` not `-`, and keep the `${HOME:-}` guard, in BOTH forms.
+    if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+        _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+        # shellcheck source=scripts/lib/paths.sh
+        [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
+    fi
+    if command -v unleashed_plugin_base >/dev/null 2>&1; then
+        unleashed_plugin_base
+    else
+        printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
+    fi
+}
 context_state_dir()   { printf '%s/.state' "$(context_base)"; }
 
 # The repo root (or $PWD when not in a repo). Used both as the per-checkout discriminator AND to

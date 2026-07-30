@@ -20,6 +20,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -81,19 +84,66 @@ class BasePathExpansion(unittest.TestCase):
     #: marker, log and snapshot to a relative path.
     EXPECTED = "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
 
+    #: (env, expected). The FOURTH row is the only one that rejects `${CLAUDE_PLUGIN_DATA-…}`
+    #: (single dash): that form passes rows 1-3 identically to the correct `:-` form and returns
+    #: EMPTY only when the variable is set-but-empty, which would relocate every marker, log and
+    #: snapshot to a relative path.
+    MATRIX = (
+        ({"__unset__": ["HOME", "CLAUDE_PLUGIN_DATA"]}, "/.claude/unleashed-mail"),
+        ({"HOME": "/probe", "__unset__": ["CLAUDE_PLUGIN_DATA"]}, "/probe/.claude/unleashed-mail"),
+        ({"HOME": "/probe", "CLAUDE_PLUGIN_DATA": "/custom/d"}, "/custom/d"),
+        ({"HOME": "/probe", "CLAUDE_PLUGIN_DATA": ""}, "/probe/.claude/unleashed-mail"),
+    )
+    LIBS = (("marker.sh", "marker_base"), ("log.sh", "log_base"), ("context.sh", "context_base"))
+
+    def _run(self, libdir, lib, fn, envspec):
+        env = {k: v for k, v in os.environ.items()}
+        for k in envspec.get("__unset__", []):
+            env.pop(k, None)
+        for k, v in envspec.items():
+            if k != "__unset__":
+                env[k] = v
+        return subprocess.run(
+            ["bash", "-c", f"set -euo pipefail; . '{libdir}/{lib}'; {fn}"],
+            capture_output=True, text=True, env=env,
+        ).stdout
+
     def test_every_copy_is_the_same_expression(self):
-        found = {}
-        for name in ("marker.sh", "log.sh", "context.sh"):
-            path = os.path.join(SCRIPTS, "lib", name)
-            with open(path, encoding="utf-8") as fh:
-                src = fh.read()
-            found[name] = self.EXPECTED in src
-        missing = [k for k, v in found.items() if not v]
+        missing = [
+            n for n in ("marker.sh", "log.sh", "context.sh")
+            if self.EXPECTED not in open(os.path.join(SCRIPTS, "lib", n), encoding="utf-8").read()
+        ]
         self.assertEqual(
             [], missing,
-            "base-path expansion diverged (or dropped the `:-` / `${HOME:-}` guard) in: "
+            "base-path fallback expansion diverged (or dropped the `:-` / `${HOME:-}` guard) in: "
             + ", ".join(missing),
         )
+
+    def test_matrix_with_paths_sh_present(self):
+        libdir = os.path.join(SCRIPTS, "lib")
+        for lib, fn in self.LIBS:
+            for envspec, expected in self.MATRIX:
+                with self.subTest(lib=lib, env=str(envspec)):
+                    self.assertEqual(expected, self._run(libdir, lib, fn, envspec))
+
+    def test_matrix_with_paths_sh_ABSENT(self):
+        """The inline fallback is the whole reason `paths.sh` is safe to add.
+
+        These libs are sourced standalone (swift-reviewer sources context.sh alone into a zsh
+        Bash tool; test-hooks.sh sources marker.sh/context.sh without hook-io.sh). If a missing
+        paths.sh aborted them, the dedup would convert three independent fail-open paths into one
+        shared point of failure — worse than the triplication it replaced. So the fallback must
+        produce IDENTICAL results across the whole matrix, not merely 'not crash'.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in os.listdir(os.path.join(SCRIPTS, "lib")):
+                if f.endswith(".sh") and f != "paths.sh":
+                    shutil.copy(os.path.join(SCRIPTS, "lib", f), tmp)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "paths.sh")))
+            for lib, fn in self.LIBS:
+                for envspec, expected in self.MATRIX:
+                    with self.subTest(lib=lib, env=str(envspec)):
+                        self.assertEqual(expected, self._run(tmp, lib, fn, envspec))
 
     def test_no_single_dash_default_anywhere(self):
         """`${CLAUDE_PLUGIN_DATA-` (single dash) is the plausible-wrong form: it treats an
