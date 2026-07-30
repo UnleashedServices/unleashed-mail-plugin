@@ -1,6 +1,6 @@
 # Session handoff — unleashed-mail plugin, Opus-5 campaign
 
-**Written:** 2026-07-30 · **Branch:** `claude/plugin-opus5-review-xs81o0` · **HEAD:** `48d60c2` ·
+**Written:** 2026-07-30 · **Branch:** `claude/plugin-opus5-review-xs81o0` · **HEAD:** see `git log -1` (was `48d60c2` at writing; round-3 fixes committed after) ·
 **Version:** `2.6.4` · **Tree:** clean · **2 commits ahead of `origin/main`**, both pushed.
 
 Paste the **Prompt** section below into a new session. Everything after it is reference.
@@ -17,19 +17,15 @@ Paste the **Prompt** section below into a new session. Everything after it is re
 > Read `docs/planning/HANDOFF.md` first, then `~/.claude/projects/.../memory/opus5-campaign-state.md`
 > and `memory/precompact-hook-does-not-fire.md`.
 >
-> **Immediate task:** a COREDEV-2497 round-3 dual gate was launched in the previous session and its
-> transcripts land at `/tmp/rev/2497r3-codex.txt` and `/tmp/rev/2497r3-agy.txt` (the prompt is
-> `.agy-prompt-2497r3.md`, gitignored). Check whether they completed:
+> **Immediate task: run the COREDEV-2497 round-4 gate.** Round 3 completed —
+> **gemini APPROVE / codex REQUEST_CHANGES ×4** — and all four findings were verified and fixed; §10 of
+> the plan records them. The plan is clean and committed, so re-freeze at current HEAD and run both
+> reviewers. Transcripts from round 3 are at `/tmp/rev/2497r3-{agy,codex}.txt` if you want the detail.
 >
-> ```bash
-> ls -la /tmp/rev/2497r3-*.txt
-> grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' /tmp/rev/2497r3-codex.txt | tail -1
-> grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' /tmp/rev/2497r3-agy.txt | tail -1
-> ```
->
-> If both are present, triage the findings **by execution** — verify every claim before acting on it;
-> across three rounds roughly half of all reviewer findings needed correcting, in both directions. If a
-> transcript is missing or under ~1 KB, that is a **failed run, not a review** — re-run that reviewer.
+> Triage every finding **by execution** — across three rounds roughly half needed correcting, in both
+> directions, and round 3 is the sharpest example: gemini called the C9 proof pair "airtight" while codex
+> found it **vacuous** (it patched a seam without asserting the seam ran). **On mechanism-level
+> specifics, prefer codex.** A transcript under ~1 KB is a failed run, not a review — re-run it.
 >
 > Then, in order: re-run the **COREDEV-2605** gate (round 1 was killed mid-round), draft the
 > **COREDEV-2617** plan, and implement 2497 once it gates. Never merge to `main` without me saying so.
@@ -42,7 +38,7 @@ Paste the **Prompt** section below into a new session. Everything after it is re
 |---|---|---|
 | **2583 / 2602 / 2597 / 2598 / 2600 / 2603 / 2607 / 2609** | **DONE — merged to `main` as `ff83f02` (PR #62), v2.6.0→v2.6.4** | none |
 | **2606** — PreCompact snapshot inert | root-caused and install fixed; **hook dispatch still unproven** | see *Open questions* |
-| **2497** — forgeable verdict artifact | plan **rescoped** to §4.1+§4.2 at `48d60c2`; **round-3 gate running** | triage the round-3 transcripts |
+| **2497** — forgeable verdict artifact | plan **rescoped** to §4.1+§4.2; **round 3 gated: gemini APPROVE / codex REQUEST_CHANGES ×4, all four fixed** (§10) | run round 4 |
 | **2605** — narrow AGENT_CONTRACTS §13 | plan drafted; **round 1 killed mid-round.** gemini already returned `REQUEST_CHANGES` (preserved: `/tmp/rev/agy-2605r1.txt`, 2,798 B); codex never finished | re-freeze, re-run both. Prompt: `/tmp/rev/.agy-prompt-2605r1.md` |
 | **2617** — plugin state splits across two base dirs | **filed, High, no plan yet** | draft the plan |
 | **2618** — verdict-token cross-check | filed (split from 2497), no plan | after 2497 |
