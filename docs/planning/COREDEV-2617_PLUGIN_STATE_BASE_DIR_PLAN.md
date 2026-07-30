@@ -1,11 +1,14 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 2 gated** (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
+**Status:** Planning — **round 3 gated** (**gemini REQUEST_CHANGES ×1 / codex REQUEST_CHANGES ×5**).
+Both confirm **D′** and no escape hatch, but "refuse at the call site" is **unsafe in Bash** — an empty
+substitution still composes a root path. §4.2 and §7 now specify per-consumer control flow. See §12.
+Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
 root; the consumer enumeration is now in the implementation order. Round 1 is in §10. Awaiting round 3.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-30 (round 2, post-gate revision)
+**Last Updated:** 2026-07-30 (round 3, post-gate revision)
 **Measured against:** HEAD `1485c54` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -109,6 +112,12 @@ whichever half it happened to land in.
 **Fix.** Whatever base is chosen (§4.2), taking the fallback must be **observable**: a one-line
 diagnostic to the plugin's own log, and a field in the marker/log record naming **which resolution ran**.
 
+> **Round 3: this section's fix text is scoped to the SET case.** D′ means an *unset* variable persists
+> nothing at all — so there is no record to carry an enum and no plugin-log diagnostic to write. The enum
+> below applies when the base **resolves**; when it does not, the only output is the bounded stderr
+> diagnostic N1 requires. Round 3 caught §4.1 still requiring a plugin-log diagnostic and
+> derived/legacy enums that D′ makes unreachable.
+>
 > **Round 1: do NOT record the base directory itself.** Marker and log records are explicitly PII-free
 > (`scripts/lib/marker.sh:7`, `scripts/lib/log.sh:7`; `context.sh` hashes the repo root for the same
 > reason). An absolute base path contains the username and home directory. Record an **enum** —
@@ -178,8 +187,17 @@ cache-root/`--plugin-dir` ambiguity in exchange for a contract that is not curre
 > redirects writes to **filesystem root**: `marker_dir` → `/.state` (`scripts/lib/marker.sh:33`),
 > `log_dir` → `/logs` (`scripts/lib/log.sh:31`), context → `/.state` or `/reviews/…`
 > (`scripts/lib/context.sh:39`). The Stop gate also builds and writes its own log directly
-> (`scripts/stop-quality-marker-gate.sh:131`). D′ must therefore **refuse at the call site**, not return
-> an empty string.
+> (`scripts/stop-quality-marker-gate.sh:131`).
+>
+> **Round 3: "refuse at the call site" does NOT fix this in Bash, and the round-2 wording was unsafe.**
+> Returning non-zero from inside `$(marker_base)` does not halt the caller unless `set -e` is active —
+> and `scripts/stop-quality-marker-gate.sh:18` uses `set -uo pipefail`, **without** `-e`. Executed:
+> with a resolver that returns 1, `LOGDIR="$(marker_base)/logs"` still evaluates to **`/logs`** and the
+> script continues. `marker.sh:34` composes `"$(marker_base)/.state"` the same way.
+>
+> **So D′ must be enforced at every CONSUMER, not only at the resolver.** Each call site must test for
+> an empty/failed base **before composing any path**, and skip persistence rather than write. §7 lists
+> them, with the control-flow requirement for each.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -203,6 +221,10 @@ return the same string today.
 asserting it delegates when `paths.sh` is present. Keep the existing absent-file matrix unchanged so the
 fail-open property is preserved.
 
+> **Load order is part of the mutation, not an implementation detail.** The sentinel must be injected
+> **after** `_UNLEASHED_PATHS_SH_LOADED=1` is set, or sourcing `paths.sh` overwrites it and the mutation
+> silently does not apply — reproduced by codex in round 3. §11 said this was noted here; it was not.
+
 ### 4.4 — The 21 orphaned files need a decision, not a migration script by default (Medium)
 
 The fallback holds 21 files, newest 2026-07-17: quality markers, one `build-log.jsonl`, and the stranded
@@ -217,7 +239,11 @@ fallback path still resolves.
 preserving an **inventory and checksums** so nothing is lost. The one-file `-inline` residue needs its
 own explicit disposition in the same step — round 1 noted the draft left it undecided.
 
-**Proof — N4:** after quarantine, a test asserts the fallback path is not silently readable.
+**Proof — N4 (strengthened in round 3):** asserting only that the fallback is unreadable is satisfied
+the moment D′'s guards land, **even if the quarantine never happens**. So N4 must also prove the move
+occurred safely: every source file **absent** from the old location, each quarantine directory holding
+the **exact inventory**, and **every checksum matching**. The `-inline` file is quarantined separately
+with its own inventory.
 
 ## 5. Risk register
 
@@ -254,12 +280,22 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
 2. Make the fallback observable (§4.1) and add N1.
 3. Implement the chosen resolution; add N2 with the **unset** case.
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
-5. **Enumerate and guard every consumer** before quarantine — round 2 found §9 claims they are
-   enumerated while §7 never acts on them:
-   - markers: `swift-lint-check.sh`, `pre-commit-checks.sh`, `stop-quality-marker-gate.sh`
-   - logs: `swift-build-verify.sh`, `build-failure-log.sh`, `stop-failure-log.sh`,
-     `permission-denied-log.sh`, plus the Stop gate's direct log (`:131`)
-   - context: PreCompact, SessionStart, both capture hooks, `reviewer-roster.sh`, both agent Bash blocks
+5. **Enumerate and guard every consumer** before quarantine, each with its **required control flow** —
+   round 2 found §9 claiming they were enumerated while §7 never acted on them, and round 3 established
+   that suppressing persistence must not change any consumer's primary behaviour:
+
+   | consumer | on an unresolved base |
+   |---|---|
+   | `pre-commit-checks.sh` (`:44`, `:69`) | skip the marker write; **must not** bypass its final `EXIT_CODE` (`:185`) |
+   | `swift-lint-check.sh` (`:424`) | skip persistence; **still emit** the model-visible block |
+   | `swift-build-verify.sh` (`:63`) | skip the log; **still emit** the advisory |
+   | `reviewer-roster.sh` (`:33`, `:53`, `:256`) | deliberately **fail-closed** — classify reviewers `UNATTRIBUTED` and exit **3**, never fail open |
+   | `stop-quality-marker-gate.sh` (`:131-132`) | test before composing; it builds its log path directly |
+   | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
+
+   Remaining sites to guard:
+   - logs: `build-failure-log.sh`, `stop-failure-log.sh`, `permission-denied-log.sh`
+   - context: PreCompact, SessionStart, both capture hooks
    - docs/tests: README, `.gitignore`, pre-commit comments, the resolver matrix, hook/roster fixtures
 6. Quarantine the 21 orphans with inventory and checksums, and quarantine the one `-inline` file
    **separately** with its own inventory — its provenance is unknown, so it must not be merged with the
@@ -301,9 +337,12 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
   Bash-tool shell, and the four resolver sites.
 - `scripts/lib/paths.sh` already defines the intended single primitive, `unleashed_plugin_base()`
   (`:34-36`). This ticket is not about creating it; it is about the fact that its **answer** is wrong
-  outside a hook, and that three other files re-derive the same wrong answer independently.
-- The `-inline` base directory is the residue of the project-scoped install described in
-  `precompact-hook-does-not-fire`. It is evidence for §4.2's ambiguity argument, not a separate defect.
+  outside a hook. *(Round 3: this bullet previously said three files "re-derive the same wrong answer
+  independently" — they **delegate** (`marker.sh:21`, `log.sh:19`, `context.sh:28`) and keep the literal
+  form only as an absent-file fallback. §11 claimed this had been corrected; it had not been, here.)*
+- The `-inline` base directory is residue of **unknown provenance** — evidence for §4.2's ambiguity
+  argument, not a separate defect. *(Round 3: this bullet previously asserted a project-scoped origin,
+  contradicting the withdrawal in §2. §11 claimed all retractions were applied; this one was not.)*
 
 ## 10. Round-1 gate outcome
 
@@ -363,3 +402,28 @@ Q1 records that the maintainer may overrule, since D′ is a visible behaviour c
 legacy sentinel `0 / 1`. One measurement moved — the active base's newest write is now later than the
 recorded `12:10`, because this very session keeps writing to it. That does not weaken the divergent
 marker, and it is recorded rather than quietly refreshed.
+
+## 12. Round-3 gate outcome
+
+**gemini `REQUEST_CHANGES` (1 High) · codex `REQUEST_CHANGES` (5).** Frozen at `51642a49…`, sha256
+`e07fe1ec…`. Transcripts: `/tmp/rev/2617r3-agy.txt` (2,736 B, `TREE=clean`) and
+`/tmp/rev/2617r3-codex.txt` (380,012 B).
+
+**Both reviewers confirmed the round-2 decisions**: **D′** over the hybrid (gemini reversed its own
+round-2 position after checking `pre-commit-checks.sh:14-18` and finding the marker writes documented as
+unreachable no-ops), and **no escape hatch** for §8 Q6 — codex noting that `UNLEASHED_ALLOW_LEGACY_BASE`
+would deliberately recreate the ambiguous second store.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | gemini | **"refuse at the call site" is unsafe in Bash** — without `set -e`, a non-zero return inside `$(…)` still yields an empty string and composes a root path | **confirmed by execution**: `stop-quality-marker-gate.sh:18` is `set -uo pipefail`; a refusing resolver still produced `LOGDIR=[/logs]` | D′ is enforced at **every consumer**; each must test before composing any path |
+| 2 | codex | **per-consumer control flow was unspecified** — suppressing persistence must not change primary behaviour | **confirmed** | §7 gains a table: `pre-commit-checks.sh` must keep its `EXIT_CODE`, `swift-lint-check.sh` its model-visible block, `swift-build-verify.sh` its advisory, `reviewer-roster.sh` must stay **fail-closed** (`UNATTRIBUTED`, exit 3) |
+| 3 | codex | **§4.1 still contradicted D′** — requiring a plugin-log diagnostic and derived/legacy enums that D′ makes unreachable | **confirmed** | §4.1 scoped to the resolves case; unset yields only the stderr diagnostic |
+| 4 | codex | **§11 claimed corrections that were never applied** — §9 still said the libs re-derive independently and still assigned `-inline` a provenance | **confirmed** | both corrected at the source, and the false claim in §11 is noted here rather than silently fixed |
+| 5 | codex | **N3 omitted its load-order requirement** — the sentinel must be injected after `_UNLEASHED_PATHS_SH_LOADED=1` or sourcing overwrites it | **confirmed** by codex's reproduction | stated in §4.3 |
+| 6 | codex | **N4 did not prove the quarantine happened** — it becomes true the moment D′ lands | **confirmed** | N4 now requires sources absent, exact inventory, matching checksums |
+
+**Evidence reproduced again:** `76 / 21 / 1`; the divergent marker exactly `e6f1f0ab` vs `a39790f5`;
+sentinel counts `0 / 1`; both plugin variables unset in an ordinary shell; one active registry id. The
+active base's newest write advanced again (now `13:36:55`) — the expected moving measurement, recorded
+rather than quietly refreshed.

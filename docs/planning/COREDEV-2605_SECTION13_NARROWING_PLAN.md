@@ -1,13 +1,16 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 3 gated** (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×4**). The
+**Status:** Planning — **round 4 gated** (**gemini REQUEST_CHANGES ×5 / codex REQUEST_CHANGES ×4**). The
+schema now validates approved **triples**, not independent column allowlists; **M5b's polarity was
+backwards** and is corrected; and `BLOCKED — …` gets a **new shared section §14**. See §13. Previously —
+round 3 gated (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×4**). The
 scope table gains a **closed lexical schema** (free text cannot reject paraphrase); M5's
 "exists and is collected" is strengthened because collection permits a no-op; and `BLOCKED — …` is
 reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contracts in two agent bodies.
 See §12. Rounds 1-2 are in §10-§11. Awaiting round 4.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-30 (round 3, post-gate revision)
+**Last Updated:** 2026-07-30 (round 4, post-gate revision)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -175,7 +178,19 @@ each of the four is named, individually, so removing one is not masked by the ot
 > **Fix — a parseable scope table, not a prose paragraph.** §13's Scope becomes a two-column table
 > (surface → `in`/`out`), and the gate asserts on the parsed table rather than on substring presence:
 >
-> **CLOSED LEXICAL SCHEMA — round 3 made this concrete.** A free-text two-column table cannot reject
+> **CLOSED LEXICAL SCHEMA — round 3 made it concrete; round 4 made it CLOSED.**
+>
+> **Round 4: independent column allowlists are not a closed schema.** Both reviewers showed the same
+> hole from different sides — validating `surface_id`, `producer_id` and `scope` *separately* permits
+> false Cartesian products. gemini's counterexample `| brainstorm-summary | implement | in |` passes
+> every check (all three terms are valid, the `in` surface set still matches exactly, and `implement`
+> is disjoint from `VALID_AGENTS`) while asserting that `implement` produces the brainstorm summary.
+> codex reached the same conclusion via M12b's blind spot for same-scope false pairings.
+>
+> **So the schema validates an exact finite set of approved `(surface_id, producer_id, scope)` TRIPLES**,
+> not membership in three independent vocabularies. Any triple outside the approved set is a hard
+> failure, and **M12c** *(round 4)* is its mutant: swap the `producer_id` of one `in` row for another
+> valid producer → the gate must fail. A free-text two-column table cannot reject
 > semantic paraphrase; codex's counterexample row `| every report emitted by the review orchestrator,
 > including its Step-5 report | out |` leaves the exact `in` set and tuple-disjointness unchanged and
 > passes. So the table's columns are **`surface_id | producer_id | scope`**, every field drawn from a
@@ -201,8 +216,9 @@ each of the four is named, individually, so removing one is not masked by the ot
 > substring present; the gate must fail.
 > **M12** *(round 2, made concrete in round 3)* — two named mutants, not an abstraction:
 > **M12a** add a row whose `surface_id` is not in the allowlist (the catch-all/paraphrase shape);
-> **M12b** add a second row with an **existing `producer_id` but the opposite `scope`** (same-producer
-> overlap). Both must fail. M10/M11 catch only wholesale inversion and name relocation.
+> **M12b** add a second row with an **existing `producer_id` but the opposite `scope`**;
+> **M12c** *(round 4)* re-pair a valid `surface_id` with a **different valid `producer_id`** at the same
+> scope — the false-Cartesian-product shape neither M12a nor M12b catches. All three must fail. M10/M11 catch only wholesale inversion and name relocation.
 >
 > **Known residual, stated rather than papered over.** A table gate gives structure, not semantics:
 > surrounding prose could redefine what `in` and `out` mean. Making the table normative and exclusive
@@ -264,9 +280,22 @@ contains none, passing vacuously.
 3. **M5** asserts the named test **exists, is collected, and actually exercises the ticket example** —
    round 3's finding: *collection permits a no-op*, so a renamed shim or an assertion-free body would
    satisfy "exists and is collected". Assert the reference resolves **and** that the test's own
-   mutation holds: **M5a** delete/rename the referenced test → the doc-gate fails; **M5b** strip the
-   ticket example's assertions from that test → the parser suite fails. Two independent rejection
-   causes, one per side of the reference.
+   mutation holds:
+   - **M5a** delete or rename the referenced test → the **doc-gate** fails.
+   - **M5b** *(polarity corrected in round 4)* mutate the **parser** (`mcp/review-synthesizer/capture.py`)
+     so it accepts the non-compliant payload → the **named test** fails.
+   - **M5c** *(round 4)* delete or falsify the invariant's **prose** in §5, leaving the cross-reference
+     string intact → the doc-gate must fail.
+
+   > **Round 4 caught M5b pointing the wrong way.** It previously said "strip the ticket example's
+   > assertions from that test → the parser suite fails". Stripping assertions makes a test pass
+   > **vacuously** — the suite goes green, not red. To prove the test is load-bearing you must mutate
+   > the *production parser* and watch the test reject it. Both reviewers flagged this, and it is the
+   > same polarity error round 3 corrected in §6's verification wording — the second instance.
+   >
+   > **M5c exists because round 3's pair gated only the reference, never the rule.** gemini: delete the
+   > invariant's prose but keep the cross-reference and both M5a and M5b still pass, leaving the
+   > document's actual rule text ungated.
 
 The document binds to the code through a name that CI resolves, and neither half can be weakened
 without the other failing.
@@ -339,7 +368,7 @@ and the `BLOCKED — …` result prefix (`AGENT_CONTRACTS.md:505-513`).
 |---|---|
 | JSON findings array · `Status:` line · detail trailer · final fenced JSON block | **§5 Code Review Pipeline** (`AGENT_CONTRACTS.md:247`), which already defines the specialist JSON/status flow |
 | `VERDICT:` line | **§2 Plan → Implement Contract** (`AGENT_CONTRACTS.md:71`) |
-| `BLOCKED — …` result prefix | **No SHARED owner in `AGENT_CONTRACTS.md`** — it occurs there only at `:501`, `:509`, `:513`, all inside §13. *(Round 3 correction: real contracts DO exist, in agent bodies — `agents/graph-api-debugger.md:20-25` and `agents/jira-manager.md:249-260`. "No owner exists" was wrong.)* A shared handoff contract must be created and the protection assigned to it **before** implementation — §8 Q7 |
+| `BLOCKED — …` result prefix | **NEW SECTION `## 14. Blocked Subagent Handoff Contract`** — decided in round 4; both reviewers converged. No shared owner existed — it occurs there only at `:501`, `:509`, `:513`, all inside §13. *(Round 3 correction: real contracts DO exist, in agent bodies — `agents/graph-api-debugger.md:20-25` and `agents/jira-manager.md:249-260`. "No owner exists" was wrong.)* A shared handoff contract must be created and the protection assigned to it **before** implementation — §8 Q7 |
 
 **Round 2's finding: the relocation had no preservation proof.** Asserting only that §13 *stops*
 enumerating the six would pass if a protection were relocated **and then deleted**, and M8 reverts only
@@ -443,16 +472,24 @@ satisfied by a suite that never rejects a mutant.
 
 **New open question for round 3:**
 
-7. **Where does `BLOCKED — …` get its SHARED contract?** Round 3 corrected the framing: it is not
-   ownerless — `agents/graph-api-debugger.md:20-25` and `agents/jira-manager.md:249-260` both define it —
-   but `AGENT_CONTRACTS.md` has no *shared* section for it, so M13's sixth assertion has no destination.
-   Options: a new shared subagent/user-confirmation handoff section; fold it into §2's implement
-   handoff; or leave it in §13, which would forfeit the "§13 names no machine payloads" property.
-   **This must be decided in the gate** — M13 cannot be completed without it.
+7. ~~Where does `BLOCKED — …` get its shared contract?~~ **ANSWERED in round 4 — a NEW section.** Both
+   reviewers converged on the same destination and the same reasoning: §2 is specifically the
+   Plan → Implement contract (`AGENT_CONTRACTS.md:71-175`), while the real uses cover diagnostic
+   confirmation (`agents/graph-api-debugger.md:20-25`) and Jira-tool failure
+   (`agents/jira-manager.md:249-260`) — a subagent pausing to hand control back for external action.
+   Leaving it in §13 would forfeit the whole point of the ticket.
+
+   **Create `## 14. Blocked Subagent Handoff Contract`**, after §13 and before Cross-references, owning:
+   the exact leading prefix `BLOCKED — <reason>`; diagnosis, attempted work, required user action and
+   remaining work; and the invoking session's obligation to surface the result and gate affected work.
+   M13's sixth assertion and its deletion mutant target §14.
 
 ## 9. Notes
 
-- Every claim here was executed or read from the file at HEAD `adda52d`; the intervening commits touched only CHANGELOG/README/plugin.json, so no cited line moved. Doing so corrected **four of
+- Every claim here was executed or read from the file at HEAD `adda52d`. *(Round 4 correction: the
+  intervening commits did **not** touch "only CHANGELOG/README/plugin.json" — the range also contains
+  four planning-document changes. The conclusion still holds: **none of the cited source files
+  changed**.)* Doing so corrected **four of
   the ticket's own figures**: `swift-reviewer` Step 5 at **`:439`** not `~:140`; `implement` Phase 6 at
   **`:342`** not `~:333`; **11** §13 tests not 14; **9** skills referencing the contracts not 8. The
   ticket's *reasoning* held up in every case — only its numbers drifted.
@@ -546,7 +583,7 @@ its owner" has no destination for it. §8 Q7 puts the choice to round 3 rather t
 
 **gemini `REQUEST_CHANGES` (3) · codex `REQUEST_CHANGES` (4).** Frozen at `1485c54d…`, sha256
 `1e4cbe36…`; both re-verified the digest. Transcripts: `/tmp/rev/2605r3-agy.txt` (2,898 B, `TREE=clean`)
-and `/tmp/rev/2605r3-codex.txt` (277,093 B, 51 ticket-key occurrences).
+and `/tmp/rev/2605r3-codex.txt` (277,093 B — **67** ticket-key occurrences; §12 first said 51, corrected in round 4).
 
 | # | finding | verified | fix |
 |---|---|---|---|
@@ -559,3 +596,26 @@ codex's M1–M13 audit found M1–M4, M6–M11 sound, M12 not executable until t
 structurally sound but blocked on the `BLOCKED — …` destination. It also confirmed that deleting
 `out ⊇ VALID_AGENTS` **loses no protection**: the exact `in` identities include `swift-reviewer`, so
 adding it to the tuple makes the intersection non-empty and M9 fails without any containment assertion.
+
+## 13. Round-4 gate outcome
+
+**gemini `REQUEST_CHANGES` (5) · codex `REQUEST_CHANGES` (4).** Frozen at `51642a49…`, sha256
+`325dc5ed…`. Transcripts: `/tmp/rev/2605r4-agy.txt` (3,860 B, `TREE=clean`) and
+`/tmp/rev/2605r4-codex.txt` (305,541 B).
+
+> **gemini's first attempt at this round FAILED and was re-run.** It returned 262 bytes —
+> `Error: timeout waiting for response` — after starting a background mutation harness and blowing
+> `agy`'s 18-minute print timeout. It also wrote `scripts/tests/update.py` and `test_m9.py`, **into the
+> disposable checkout**, so `TREE=clean` held: `isolated-agy-review.sh` did exactly what COREDEV-2607
+> built it for. The prompt was amended with an explicit execution budget (read, do not implement, no
+> background jobs) and the re-run succeeded. A 262-byte transcript is a failed run, not a verdict.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the "closed" schema was not closed** — independent column allowlists permit false Cartesian products. gemini: `\| brainstorm-summary \| implement \| in \|` passes everything while asserting the wrong producer | **confirmed** | the schema validates an exact set of approved **triples**; **M12c** added for the re-pairing shape |
+| 2 | **both** | **M5b's polarity was backwards** — "strip the test's assertions → the parser suite fails" is wrong; stripping assertions makes it pass **vacuously** | **confirmed** | M5b now mutates the **production parser** and expects the named test to fail. Second instance of this polarity error in two rounds |
+| 3 | gemini | **M5a/M5b never gate the invariant's prose** — delete the rule text, keep the cross-reference, both pass | **confirmed** | **M5c** added |
+| 4 | **both** | `BLOCKED — …` needs a **new shared section**, not §2 and not §13 | **confirmed**, with identical reasoning from each | **`## 14. Blocked Subagent Handoff Contract`**, scope specified; M13's sixth assertion targets it |
+| 5 | codex | §12 recorded **51** ticket-key occurrences; the transcript has **67** | **confirmed** | corrected |
+| 6 | codex | §9's "intervening commits touched only CHANGELOG/README/plugin.json" is **false** — four planning-doc changes | **confirmed** | corrected; the conclusion (no cited source file changed) holds |
+| 7 | gemini | M1/M2/M3 are framed as candidate mutants but mutate the **test suite** | noted — a framing issue, not a defect in the proofs themselves | recorded; §6's polarity wording already says the clean candidate must reject each mutant |

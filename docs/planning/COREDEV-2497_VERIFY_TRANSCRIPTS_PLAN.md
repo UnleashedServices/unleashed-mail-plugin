@@ -1,16 +1,15 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **round 7 gated** (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×3**). Round
-7 defeated F1/F2/F3 with an implementation that **branches on production's configuration**, so the
-fixtures only ever exercised the correct branch. **F4** (an unlinked fd) and **F5** (self-consistency
-under a concurrent writer, at production configuration) close it — see §14. Rounds 4-6 are in §11-§13.
-Awaiting round 8.
+**Status:** Planning — **round 8 gated** (**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×5**), and
+the **maintainer has decided §8 Q8: NARROW THE GUARANTEE.** Both reviewers independently reached the same
+answer. F5/F5b are **removed from the gating suite**; F1–F4 stay; §3 now states plainly what this plan
+does **not** prove. See §15. Rounds 4-7 are in §11-§14. Awaiting round 9.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
 **Sequencing:** `COREDEV-2619` should land **first** — see §7.
-**Measured against:** HEAD `1485c54` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-30 (round 7, post-gate revision)
+**Measured against:** HEAD `51642a4` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
+**Last Updated:** 2026-07-30 (round 8, post-gate revision — scope narrowed)
 
 ---
 
@@ -58,7 +57,7 @@ binding). The gap is that **`verify` never re-checks the transcript files** — 
 `cmd_verify` (`scripts/review-verdict.py:555`) re-derives the plan identity and digest (`:736-748`) and
 calls `_quorum_problem` at **`:728`** — the function is defined at **`:74`**, and its checks span
 `:84-147`: reviewer **count/shape** (`:84`), duplicate and stray **names** (`:86`, `:95`), **status
-membership** (`:99`), the empty-file hash (`:121`) and digest **syntax** (`:144`). It **never resolves
+membership** (`:99-100`), the empty-file hash (`:121-122`) and digest **syntax** (`:144`). It **never resolves
 `transcriptPath`** — the only filesystem calls in `cmd_verify`'s body touch the plan and the artifact
 (`:557`, `:562`, `:564`, `:567`, `:747`) — so:
 
@@ -84,6 +83,28 @@ nobody later reads this as making the gate unforgeable.
 **A measured floor on that ceiling:** a **17-byte** file (`VERDICT: APPROVE\n`) is non-empty, has a real
 digest, and satisfies every check this plan adds — measured on two real files under `/tmp/rev/`. So the
 forger's remaining work is *17 bytes per reviewer*, not zero.
+
+### 3.1 — What this plan does NOT prove (maintainer decision, round 8)
+
+**This ticket is a consistency and provenance hardening. It is not a security boundary, and it does not
+prove that the implementation reads each transcript in a single forward pass.**
+
+Eight rounds established that the single-pass property is observable only in three ways, and that each
+is unavailable here:
+
+| route | why it fails |
+|---|---|
+| **instrumentation** (patch `os.open`/`lseek`/`io`) | routable around — a file-object `seek` never reaches `os.lseek`, `io.FileIO` is an immutable C type, a cached alias bypasses the wrapper *and* false-rejects correct code. Rounds 5-6, executed |
+| **a non-production fixture** (pipe, non-zero offset) | an implementation can branch on production's shape and take the correct path only when tested. Round 7, executed |
+| **a race at production configuration** (F5) | defeated outright by a *stable multi-pass* reader that retries until two reads agree; and its trial statistics are neither stationary nor independent, so no finite trial count bounds the false-pass rate. Round 8, codex |
+
+**So the guarantee is narrowed rather than faked.** `verify` will resolve and re-digest every transcript,
+per reviewer entry, fail closed with distinct causes, and reject every defect F1–F4 catch. It will **not**
+detect an implementation that reads a transcript twice. Given §3's ceiling that is an acceptable trade:
+the attacker who could exploit a two-pass race already has the strictly easier 17-byte forgery above.
+
+**The CHANGELOG must say this** (§7 step 6). A reader who sees only the ticket title will otherwise assume
+a boundary that does not exist.
 
 ## 4. Findings, fixes, and proofs
 
@@ -252,7 +273,7 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 | A legitimate large or non-UTF-8 transcript is rejected — the fix worse than the defect | **High** | C5's two halves must **PASS**; I6 is the mutant that reintroduces the cap |
 | The digest check is silently gutted while repairing §4.5(a) | **High** | §4.5 names the trap and the correct repair; C2c must FAIL for any C-case green to mean anything |
 | Tightening breaks the non-approving recovery path | Medium | §4.2 + C8, and **C11** for the case-sensitivity variant |
-| A validate-then-reopen implementation ships green | **High** | **ARCH-1 + ARCH-2's typed cause + F4/F5/F5b.** Rounds 4-6 defeated four observer-based mechanisms and round 7 defeated the first three fixtures by branching on production's configuration — see §6.0. F5 is the only fixture that presents production's exact shape |
+| A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 reject every defect found in rounds 4-7 *except* a two-pass reader. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one |
 | Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 now names **all five** tests — `:200`, `:218`, `:757`, `:773`, `:811` — not just the two symlink ones |
 | The whole change is inert because tests only cover `write` | **High** | Every §4.1 test must mutate the transcript on disk **between** `write` and `verify` — see §6's trap |
 | **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants close the *class*. The residual behavioural cases (C11–C14) cover only what lives outside the fd-only helper |
@@ -439,46 +460,53 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
     > previous three all presented configurations production never sees.
 
   - **F4 — an UNLINKED fd.** Open the transcript, then unlink the path, then call the helper. The inode
-    stays readable through the descriptor but **has no resolvable name**, so every path-recovery reopen
-    fails by construction rather than by detection. Measured: a correct one-pass helper returns the exact
-    digest and count (49,004 bytes) on an unlinked fd.
+    stays readable through the descriptor. Measured: a correct one-pass helper returns the exact digest
+    and count (49,004 bytes) on an unlinked fd.
 
-  - **F5 — SELF-CONSISTENCY at PRODUCTION configuration.** This is the one fixture that presents exactly
-    what production presents — a **regular fd at offset 0** — so an implementation cannot branch away
-    from it. It does not observe anything; it asserts a property of the *result*:
+    > **Round 8 correction — F4 is weaker than round 7 claimed, and the claim was wrong on Linux.**
+    > Round 7 said path recovery fails "by construction". On Linux an unlinked inode is still reopenable
+    > through **`/proc/self/fd/N`**, so F4 invalidates only the recovered *original pathname*, not every
+    > descriptor-derived reopen. It still closes the `F_GETPATH`/`readlink`-then-`open(name)` shape,
+    > which is the plausible one; it does not close a deliberate `/proc/self/fd` reopen. Stated, not
+    > papered over.
 
-    > **The returned `(digest, count)` pair must describe ONE state of the file.**
+  - **F5 / F5b — REMOVED FROM THE GATING SUITE in round 8. Recorded here as an option NOT taken.**
 
-    Run the helper repeatedly while a writer alternates the file between two states of **different
-    lengths**. A one-pass reader always returns a pair that is self-consistent for some snapshot. A
-    two-pass reader can take the count from state A and the digest from state B — and the length
-    difference makes that observable. Measured over 300 trials:
+    F5 presented production's exact shape (a regular fd at offset 0) and asserted that the returned
+    `(digest, count)` must describe **one** state of a file being alternated between two states of
+    different lengths. It worked, and the measurements are kept because they cost real effort:
 
     | implementation | inconsistent `(digest, count)` pairs |
     |---|---|
-    | one forward pass (correct) | **0 / 300** |
+    | one forward pass (correct) | **0 / 300**, and **0 / 1500** on a longer run |
     | round 7's branching two-pass | **22 / 300** — detected |
 
-    > **Stated honestly: F5 is a detector, not a proof.** It is probabilistic, so it needs enough trials
-    > and two states whose lengths differ; a two-pass implementation could pass an unlucky run. The trial
-    > count must be chosen so a false pass is rarer than the flakiness budget, and the *correct* side
-    > must be shown at 0 inconsistencies so the test is not merely noisy. This is the same register as
-    > F3's ceiling: state the strength, do not overclaim it.
+    **Both reviewers argued F5 would false-fail a correct reader because of torn reads. Both were
+    wrong**, and the record should say so precisely: over 1,500 trials a correct reader produced **590
+    torn reads and 0 false failures**, because the assertion fires only when a **known** state's digest
+    arrives with a mismatched count — a torn read's digest matches neither state and is skipped.
 
-  - **F5b — the same assertion at the CALLER level.** Round 7's second High: F1–F5 invoke only the helper
-    and assert success, so a **correct helper behind a caller that reopens on digest mismatch and
-    retries** passes all of them. C2c reports "changed" on a static file and C9a never activates the
-    retry, because the original descriptor still hashes to the recorded digest. Under a real replacement
-    race the retry can see recorded bytes and **approve**. So run `verify` end-to-end under the same
-    concurrent writer and assert its verdict is self-consistent — and state the no-retry/no-fallback
-    prohibition as a contract (§4.1 step 5), because the typed cause removes the motive for failure
-    *classification* but not for *retry*.
+    **It is removed for two better reasons:**
 
-  - **F3 — size, with its ceiling stated.** Stream a payload larger than any plausible cap and assert
-    success. **This cannot prove the absence of a cap** — codex is right that finite samples never do.
-    So the plan states the bound instead of pretending: *"no cap is demonstrated up to N bytes"*, with N
-    the largest size tested. Row 8 is closed **to that bound and no further**, in the same register as
-    §3's honesty about forgery.
+    1. **It is defeated outright**, not probabilistically. codex's *stable multi-pass* reader —
+       `while True: seek0; a = read_all(); seek0; b = read_all(); if a == b: return sha256(b), len(a)` —
+       always returns a self-consistent pair while reading repeatedly. A single `os.pread` of the whole
+       file into memory does the same, and additionally violates "no cap".
+    2. **No trial count bounds it.** The 22/300 rate is not stationary or independent — it depends on
+       scheduling, machine load and CI runner behaviour — so the binomial arithmetic that would justify
+       a trial count does not apply. A gate whose sensitivity varies with load is the eighth inert gate
+       in a campaign that has already shipped or nearly shipped seven.
+
+    **F5b is removed with it**, and for an additional reason of its own: it had **no distinguishing
+    oracle**. With recorded digest A, a correct caller may read A and approve; a *retrying* caller may
+    read B, retry until it sees A, and approve — both outcomes are "self-consistent", so the assertion
+    cannot tell them apart.
+
+    > **What replaces F5b for the caller-side retry class (I18).** codex's deterministic construction,
+    > adopted: force the helper to return a **mismatching** digest while the recorded path contains
+    > **matching** bytes, then assert the caller fails **without** a second helper call or path read.
+    > That is mutation evidence, not a universal proof — and §3.1 already says the plan does not claim
+    > one.
 
 **Why fixtures and not more instrumentation:** the surviving implementations are behaviourally
 indistinguishable from the correct one *on the inputs the plan previously chose*. They are trivially
@@ -492,11 +520,11 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 
 | # | the wrong implementation | property it violates | closed by |
 |---|---|---|---|
-| 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | ARCH-1 + ARCH-3 |
+| 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | ARCH-1 + F2 |
 | 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | ARCH-3 |
-| 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **F5b** — round 7: the helper-level fixtures cannot see a caller-side red branch |
-| 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | **F5b** + the explicit no-fallback contract |
-| 5 | failure-path re-classification through `io.open` | re-open on the red branch | the **typed cause** removes the motive; **F5b** covers the rest |
+| 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **I18's deterministic red-branch test** (F5b removed in round 8 — it had no distinguishing oracle) |
+| 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
+| 5 | failure-path re-classification through `io.open` | re-open on the red branch | the **typed cause** removes the motive; I18 covers the rest |
 | 6 | `os.path.exists` + `os.path.getsize` for the missing/empty diagnosis | second resolution; contradicts Q3 | ARCH-1 + ARCH-3 + C12 |
 | 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | ARCH-1 + ARCH-3 + C12 |
 | 8 | the cap **raised**, not removed (1 MiB / 64 MiB "DoS guard") | I6's defect above C5a's single measured point | **F3, TO ITS STATED BOUND ONLY.** Round 6: no finite set of sizes proves the absence of an arbitrary higher cap, and a delegated `_digest_impl(fd)` holds the cap in a callee. The plan states the bound rather than claiming closure |
@@ -575,9 +603,13 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
 - **I16** *(round 5, retargeted in round 7)* a second pass over the same descriptor — by `lseek`, by
   `os.pread`, by a callee, or behind a branch on `offset == 0` → **F5 must fail** (self-consistency at
   production configuration). *(I16 previously named ARCH-3's syscall accounting, which round 6 deleted.)*
-- **I17** *(round 7)* recover the path from the descriptor and reopen by name → **F4 must fail**.
-- **I18** *(round 7)* a caller that retries on digest mismatch, or falls back on a short read →
-  **F5b must fail**.
+- **I17** *(round 7)* recover the path from the descriptor and reopen **by name** → **F4 must fail**.
+  *(Round 8: a deliberate `/proc/self/fd/N` reopen on Linux is NOT caught — see F4's correction. I17
+  covers the plausible shape, not every descriptor-derived reopen.)*
+- **I18** *(round 7, retargeted in round 8)* a caller that retries on digest mismatch, or falls back on
+  a short read → **the deterministic red-branch test must fail**: force the helper to return a
+  mismatching digest while the recorded path holds matching bytes, and assert the caller fails without a
+  second helper call or path read. *(F5b was removed — no distinguishing oracle.)*
 
 **Input cases the suite must carry:**
 
@@ -662,21 +694,23 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    **ARCH-1, ARCH-2 and ARCH-3 are acceptance conditions of this step**, not follow-up work: the step is
    not done until `_digest_transcript_fd(fd: int) -> tuple[str, int]` exists with exactly that signature,
    `_open_regular_fd` returns a typed cause from the five-value vocabulary, and the helper passes
-   **F1** (pipe — ESPIPE on any seek/pread), **F2** (non-zero offset), **F3** (size, to a stated bound),
-   **F4** (unlinked fd — path recovery unusable) and **F5** (self-consistency at *production*
-   configuration, the only fixture a branch cannot dodge), with **F5b** asserting the same at the caller.
+   **F1** (pipe — ESPIPE on any seek/pread), **F2** (non-zero offset), **F3** (size, to a stated bound)
+   and **F4** (unlinked fd — closes reopen-by-recovered-*name*). **§3.1's narrowed guarantee applies:**
+   a two-pass reader is **not** rejected, and the CHANGELOG must say so.
    **Step 2 also gives `run()` a bounded timeout** (`test_review_verdict.py:13`) — without it the FIFO
    regression tests hang instead of failing.
 4. §4.5's **one** test repair — (a) — using the executable repair stated there. *(Round 4: this step
    said "two"; (b) moved to `COREDEV-2618` in round 3.)*
-5. All **fourteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16** — all
+5. All **sixteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16, I17,
+   I18** — all
    **twelve** cases — **C1, C2 (a/b/c), C3, C4 (a/b), C5 (a/b), C8, C9 (a/b), C10, C11, C12, C13, C14** —
    all **three invariants — ARCH-1 (signature), ARCH-2 (unchanged string + typed cause + the caller-side
-   assertions) and ARCH-3's fixtures F1, F2, F3, F4, F5 and F5b** — and mutants **I17** and **I18**. Enumerated, never as a range: the rescope deleted
+   assertions) and ARCH-3's fixtures F1, F2, F3 and F4** (F5/F5b removed in round 8 — §6.0). Enumerated, never as a range: the rescope deleted
    I7/I8 and C6/C7 with §4.3, round 3 caught stale ranges naming four identifiers the plan no longer
    defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case; C5's halves
    shown **PASSING** at both sizes; and **each of §6.0's twelve defeating implementations shown rejected**
-   — that table is the acceptance suite for this step, not commentary.
+   — that table is the acceptance suite for this step, not commentary, **except rows whose closure §6.0
+   now records as accepted-not-closed**.
 6. Version bump + CHANGELOG — **consistency/provenance hardening**, explicitly NOT proof that a reviewer
    read the plan. State §3's ceiling and the 17-byte floor.
 7. `COREDEV-2618` afterwards, on the seam this plan creates.
@@ -711,11 +745,10 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
 
 **New open question for round 8:**
 
-8. **Is F5's probabilistic strength acceptable, and at what trial count?** It is the only fixture that
-   presents production's configuration, but it is a detector: 22/300 for the two-pass branch, 0/300 for
-   the correct one. What false-pass rate is tolerable, and does a race-based test belong in a suite that
-   must not be flaky? The alternative is accepting that single-pass reading is **not** provable at
-   production configuration on a static file — which would mean narrowing the guarantee instead.
+8. ~~Is F5's probabilistic strength acceptable?~~ **ANSWERED in round 8 — NO. The guarantee is
+   narrowed.** Both reviewers reached this independently; codex: *"no finite trial count is acceptable
+   for a required non-flaky gate."* The maintainer confirmed. F5/F5b are out of the gating suite and
+   §3.1 states what the plan does not prove. See §15.
 3. ~~`st_size` vs streamed bytes?~~ **ANSWERED in round 3 — count bytes actually streamed.** Use the
    `fstat` for the `S_ISREG` check, but base the *empty* diagnosis on what was read: a shrink/grow race is
    precisely when the two disagree, and the streamed count is the truthful one. (gemini argued for
@@ -989,3 +1022,56 @@ is right; do not revive source-name assertions). Both are struck through. §8 Q8
 question this plan now faces: **F5 is a detector, not a proof** — is a probabilistic race test acceptable
 in this suite, or is the honest conclusion that single-pass reading is not provable at production
 configuration on a static file, and the guarantee should be narrowed instead?
+
+## 15. Round-8 gate outcome — and the maintainer's decision on scope
+
+**gemini `REQUEST_CHANGES` (4) · codex `REQUEST_CHANGES` (5).** Frozen at `51642a49…`, sha256
+`bec432b9…`; codex re-verified HEAD, digest and a clean worktree at the end. Transcripts:
+`/tmp/rev/2497r8-agy.txt` (3,495 B, `TREE=clean`) and `/tmp/rev/2497r8-codex.txt` (353,343 B).
+
+### §8 Q8 is answered, and the answer decides the ticket
+
+Both reviewers reached it independently. codex, verbatim: *"no finite trial count is acceptable for a
+required non-gating gate… Narrow the guarantee in §3 and retain F5, if desired, only as a non-gating
+stress probe."* gemini: *"the honest conclusion must be that single-pass streaming is not provable at
+production configuration."* **The maintainer confirmed: narrow.** §3.1 is the result.
+
+### Why F5 really died — the record, kept accurate
+
+Both reviewers argued F5 would **false-fail** a correct reader through torn reads. **Both were wrong**,
+and this is worth recording so nobody "repairs" a test that was not broken: over **1,500** trials a
+correct one-pass reader produced **590 torn reads and 0 false failures**, because the assertion fires
+only when a *known* state's digest arrives with a mismatched count. Torn reads match neither state and
+are skipped.
+
+F5 was removed for two better reasons, both codex's:
+
+1. **It is defeated outright** by a *stable multi-pass* reader that retries until two consecutive reads
+   agree — always self-consistent, always multi-pass. A whole-file `os.pread` does the same and also
+   breaks "no cap".
+2. **No trial count bounds it**: the 22/300 rate is neither stationary nor independent, so the binomial
+   argument that would justify a trial count does not apply. A gate whose sensitivity tracks CI load is
+   the eighth inert gate in a campaign that has shipped or nearly shipped seven.
+
+### Findings
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | Q8: F5 cannot be a required non-flaky gate | **confirmed** — and defeated outright by the stable multi-pass reader | **§3.1**: guarantee narrowed; F5/F5b removed from gating, recorded as an option not taken |
+| 2 | codex | **F4 was overclaimed** — on Linux an unlinked inode is still reopenable via `/proc/self/fd/N`, so F4 invalidates only the recovered *name* | **confirmed** (property of `/proc`; not reproducible on this darwin host) | F4's claim corrected in place; I17 scoped to the plausible shape |
+| 3 | codex | **F5b had no distinguishing oracle** — a retrying caller that eventually reads the recorded state is also "self-consistent" | **confirmed** | replaced by a **deterministic red-branch test** for I18 |
+| 4 | codex | round 7 not propagated: the status line, risk register, §6.0 and §7 all still claimed closure | **confirmed** | all narrowed to match §3.1 |
+| 5 | **both** | §7 said "**fourteen** mutants" while I17/I18 existed — the list silently omitted them | **confirmed** | now **sixteen**, enumerated |
+| 6 | codex | `:99` and `:121` are single-line anchors for two-line expressions | **confirmed** | `:99-100`, `:121-122` |
+
+### The pattern this round makes undeniable
+
+Five rounds in a row, the reviewers have found **operative** stale text — a status line, a risk row, a
+§7 step still instructing a design rejected two sections earlier. Propagating a decision through a long
+plan is empirically as error-prone as making it. §7 step 5 has now been wrong about its own count in
+three consecutive rounds.
+
+**Recommended for the next plan of this size:** a mechanical cross-check — every §7 step and every risk
+row must cite the section it implements, and a validator asserts each cited section still says what the
+row claims. That is the same "assert the property, not a proxy" move this plan spent eight rounds
+learning, applied to the plan document itself.
