@@ -242,11 +242,11 @@ hook_redact_pii() {
         -e 's#/Users/[^/[:space:]"]+#/Users/[redacted]#g' \
         -e 's#/home/[^/[:space:]"]+#/home/[redacted]#g' \
         -e ':t' -e 's#(^|[^A-Za-z0-9_])~[A-Za-z_][A-Za-z0-9._-]*/#\1~[redacted]/#' -e 'tt' \
-        -e 's#[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[A-Za-z0-9._-]{20,}#[redacted-token]#g' \
+        -e 's#[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+([A-Za-z0-9._-]|\xc4\xb0|\xc4\xb1|\xc5\xbf|\xe2\x84\xaa){20,}#[redacted-token]#g' \
         -e 's#eyJ[A-Za-z0-9._-]{10,}#[redacted-jwt]#g' \
         -e 's#(^|[^A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
         -e 's#(^|[^A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
-        -e 's#[Aa][Pp][Ii][[:space:]_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*[A-Za-z0-9._-]+#[redacted-key]#g' \
+        -e 's#[Aa][Pp][Ii][[:space:]_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*([A-Za-z0-9._-]|\xc4\xb0|\xc4\xb1|\xc5\xbf|\xe2\x84\xaa)+#[redacted-key]#g' \
         2>/dev/null
 }
 

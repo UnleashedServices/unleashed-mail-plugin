@@ -241,3 +241,49 @@ class EquivalenceModel(unittest.TestCase):
             )
         finally:
             C.redact_pii = original
+
+
+class COREDEV2609_ValueClassFolds(unittest.TestCase):
+    """The api-key/bearer PAYLOAD carries the four fold codepoints; the ANCHOR does not.
+
+    §3 forbids widening, because widening is how the `sk-`/`~` corruption classes were introduced.
+    But those rules were UNANCHORED — a bare prefix could land mid-word. `_APIKEY`/`_BEARER` are
+    anchored by a literal, so extending the PAYLOAD class cannot make correct text match: the
+    `api key:` / `bearer ` anchor still has to be present. Widening the ANCHOR would be the same
+    shape of change that caused the original corruption, so it is deliberately not done.
+    """
+
+    LONGS, DOTLESS, KELVIN = chr(0x017F), chr(0x0131), chr(0x212A)
+
+    def test_the_worst_shape_is_closed(self):
+        """Without the fold codepoints in the payload class the match STOPS at the first one and
+        emits `[redacted-key]` immediately followed by LIVE SECRET MATERIAL — which passes any
+        assertion of the form `'[redacted-key]' in output`."""
+        v = f"api key: SECRET{self.LONGS}MORE"
+        out = C.redact_pii(v)
+        self.assertEqual("[redacted-key]", out)
+        self.assertNotIn("MORE", out, "secret tail survived the placeholder")
+
+    def test_bearer_payload_too(self):
+        v = "bearer " + "a" * 19 + self.LONGS
+        self.assertEqual("[redacted-token]", C.redact_pii(v))
+
+    def test_fold_chars_mid_payload(self):
+        v = f"api key: A{self.KELVIN}B{self.DOTLESS}CDEFGH"
+        self.assertEqual("[redacted-key]", C.redact_pii(v))
+
+    def test_the_anchor_is_NOT_widened(self):
+        """ACCEPTED RESIDUAL, pinned. Changing these is a scope decision, not a bug fix: it widens
+        the ANCHOR, and the residual is an evasion vector (someone must deliberately spell the
+        literal with a fold-equivalent) rather than accidental leakage."""
+        for v in (f"ap{self.DOTLESS}_key: SECRETVALUE", f"api{self.KELVIN}ey=SECRETVALUE"):
+            with self.subTest(v=v):
+                self.assertEqual(v, C.redact_pii(v))
+
+    def test_correct_text_is_untouched_by_the_widening(self):
+        """The whole safety argument: the anchor must still be present, so ordinary prose containing
+        `api`, `key` or a lone fold character cannot match."""
+        for v in ("the api keyboard is nice", "apiary keeper",
+                  f"a {self.LONGS} standalone char", "bearer short"):
+            with self.subTest(v=v):
+                self.assertEqual(v, C.redact_pii(v))

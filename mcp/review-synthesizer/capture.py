@@ -78,7 +78,10 @@ _TILDE = re.compile(r"(?<![A-Za-z0-9_])~[A-Za-z_][A-Za-z0-9._-]*(?=/)")
 # `[redacted-key]` immediately followed by live secret material. Both were shell-side leaks.
 # Spelled as explicit ASCII classes so the two implementations agree. Residual shared miss is
 # COREDEV-2609.
-_BEARER = re.compile(r"[Bb][Ee][Aa][Rr][Ee][Rr][ \t\n\r\v\f]+[A-Za-z0-9._-]{20,}")
+# The VALUE class carries the four codepoints `re.IGNORECASE` used to admit silently
+# (U+0130, U+0131, U+017F, U+212A) — see _SECRET_VALUE below for why that is safe here.
+_SECRET_VALUE = "[A-Za-z0-9._\\-\u0130\u0131\u017f\u212a]"
+_BEARER = re.compile(r"[Bb][Ee][Aa][Rr][Ee][Rr][ \t\n\r\v\f]+" + _SECRET_VALUE + "{20,}")
 _JWT = re.compile(r"eyJ[A-Za-z0-9._-]{10,}")
 # TWO sequential passes, sk- then pk_, mirroring the shell's two `-e` fragments. A single combined
 # alternation is NOT equivalent: it matches greedily from the leading prefix, so
@@ -88,8 +91,25 @@ _JWT = re.compile(r"eyJ[A-Za-z0-9._-]{10,}")
 _SECRET_SK = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}")
 _SECRET_PK = re.compile(r"(?<![A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}")
 _APIKEY = re.compile(
-    r"[Aa][Pp][Ii][ \t\n\r\v\f_-]?[Kk][Ee][Yy][ \t\n\r\v\f]*[:=][ \t\n\r\v\f]*[A-Za-z0-9._-]+"
+    r"[Aa][Pp][Ii][ \t\n\r\v\f_-]?[Kk][Ee][Yy][ \t\n\r\v\f]*[:=][ \t\n\r\v\f]*"
+    + _SECRET_VALUE + "+"
 )
+# WHY WIDENING THE VALUE CLASS IS SAFE, AND WIDENING THE ANCHOR IS NOT (COREDEV-2609).
+# §3 forbids widening because widening is how the `sk-` and `~` corruption classes were introduced.
+# But those rules were UNANCHORED — a bare prefix could land mid-word. `_APIKEY`/`_BEARER` are
+# anchored by a literal, so extending what counts as the PAYLOAD cannot make correct text match: the
+# `api key:` / `bearer ` anchor still has to be present. Verified — `the api keyboard is nice`,
+# `apiary keeper` and a standalone U+017F are all untouched.
+#
+# It closes the worst shape found in the whole sweep: without these codepoints the match STOPS at the
+# first one, emitting `[redacted-key]` immediately followed by LIVE SECRET MATERIAL
+# (`api key: SECRET<U+017F>MORE` -> `[redacted-key]ſMORE`). That passes any assertion of the form
+# `'[redacted-key]' in output`.
+#
+# The ANCHOR is deliberately NOT widened. `ap<U+0131>_key:` and `api<U+212A>ey=` stay unredacted on
+# both sides — pinned by tests. Widening the anchor is the same shape of change that caused the
+# original corruption, and the residual is an EVASION vector (someone must deliberately spell the
+# literal with a fold-equivalent), not accidental leakage of a real secret's tail.
 # Canonicalisation, applied BEFORE any rule (COREDEV-2597 §8). Mirrors the shell's leading
 # `tr '\n\r\t' '   '` plus the 23 codepoints Python's `\s` accepts and POSIX `[[:space:]]` under
 # LC_ALL=C does not. Not a widening: no pattern changes, only the input domain.

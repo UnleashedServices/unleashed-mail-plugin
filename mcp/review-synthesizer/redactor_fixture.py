@@ -116,8 +116,21 @@ def _rows():
     add("api Key: " + SECRET, note="RC-D ASCII case — both redact")
     add(f"ap{chr(0x0131)}_key: SECRETVALUE", note="RC-D dotless i — Python must NOT fold it")
     add(f"api{chr(0x212A)}ey=SECRETVALUE", note="RC-D Kelvin sign — Python must NOT fold it")
-    add(f"api key: SECRET{chr(0x017F)}MORE", note="RC-E value class — SHARED MISS, see COREDEV-2609")
-    add("bearer " + "a" * 19 + chr(0x017F), note="RC-E value class, bearer side")
+    add(f"api key: SECRET{chr(0x017F)}MORE",
+        note="RC-E — CLOSED by COREDEV-2609: the value class carries the 4 fold codepoints, so the "
+             "match no longer stops early and leave live secret material after the placeholder")
+    add("bearer " + "a" * 19 + chr(0x017F), note="RC-E value class, bearer side — closed")
+    add(f"api key: A{chr(0x212A)}B{chr(0x0131)}CDEFGH", note="RC-E — fold chars mid-payload")
+    # The ANCHOR is deliberately NOT widened (COREDEV-2609). These stay unredacted on BOTH sides;
+    # widening the literal is the same shape of change that caused the original corruption, and the
+    # residual is an EVASION vector rather than accidental leakage of a real secret's tail.
+    add(f"ap{chr(0x0131)}_key: SECRETVALUE",
+        note="ACCEPTED RESIDUAL — anchor fold, unredacted by design")
+    add(f"api{chr(0x212A)}ey=SECRETVALUE",
+        note="ACCEPTED RESIDUAL — anchor fold, unredacted by design")
+    add("the api keyboard is nice", note="NEGATIVE CONTROL — anchored rule, no `:=`, must survive")
+    add("apiary keeper", note="NEGATIVE CONTROL — must survive")
+    add(f"a {chr(0x017F)} standalone char", note="NEGATIVE CONTROL — fold char alone, must survive")
     add("bKarer " + TOKEN20, note="NEGATIVE CONTROL — b/e/a/r have no non-ASCII fold; both preserve")
 
     # --- RC-H  fold arity --------------------------------------------------------------------
