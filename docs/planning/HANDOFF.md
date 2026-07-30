@@ -1,7 +1,7 @@
 # Session handoff — unleashed-mail plugin, Opus-5 campaign
 
-**Written:** 2026-07-30 · **Branch:** `claude/plugin-opus5-review-xs81o0` · **HEAD:** see `git log -1` (was `48d60c2` at writing; round-3 fixes committed after) ·
-**Version:** `2.6.4` · **Tree:** clean · **2 commits ahead of `origin/main`**, both pushed.
+**Written:** 2026-07-30 · **Branch:** `claude/plugin-opus5-review-xs81o0` · **HEAD:** `0a93fd0` ·
+**Version:** `2.6.4` · **Tree:** clean · **4 commits ahead of `origin/main`**, all pushed.
 
 Paste the **Prompt** section below into a new session. Everything after it is reference.
 
@@ -11,7 +11,7 @@ Paste the **Prompt** section below into a new session. Everything after it is re
 
 > Continue the unleashed-mail plugin campaign. Work in the existing worktree
 > `/Users/nick/Developer/Mail/unleashed-mail-plugin/.claude/worktrees/opus5-review` (branch
-> `claude/plugin-opus5-review-xs81o0`, HEAD `48d60c2`, v2.6.4) — **do not** flip the main checkout's
+> `claude/plugin-opus5-review-xs81o0`, v2.6.4 — take HEAD from `git log -1`) — **do not** flip the main checkout's
 > branch and do not create a new worktree.
 >
 > Read `docs/planning/HANDOFF.md` first, then `~/.claude/projects/.../memory/opus5-campaign-state.md`
@@ -87,11 +87,16 @@ A+C hybrid (`journal.jsonl` + `live-state.json`), paused · **2497 is split thre
 ## The two hardest-won lessons
 
 **1. Verify which file you are measuring.** Round 2 of the 2497 plan reported its headline number from
-`/tmp/codex-out.txt`, which by then held a **LumaWake** plan review — 638 matches for `lumawake`, zero for
+`/tmp/codex-out.txt`, which by then held a **LumaWake** plan review — 628 matches for `lumawake`, zero for
 `COREDEV-2497` — because another project's gate round overwrote the shared fixed path. The real transcript
 is `/tmp/rev/2497r1-codex.txt` at **512,723 bytes**. I then "corrected" 512,723 → 769,988, inverting the
 truth, and **both reviewers assessed the plan without catching it.** Grep evidence for the ticket key
 before building an argument on it. This is COREDEV-2619's justification, produced by accident.
+
+**1b. And the same mistake recurs one level down.** The "638 matches" figure above was itself wrong — it is
+**628**. I took it from a subagent's report and repeated it *in the section about having repeated an
+unverified measurement*, and codex caught it in round 3. Re-measure numbers you did not personally run,
+including ones your own agents hand you.
 
 **2. A green test suite says nothing about whether the host runs the code.** `bash scripts/test-hooks.sh`
 passed 304 tests throughout the ~2 weeks the plugin's hooks were **entirely inert** in this repo, because
