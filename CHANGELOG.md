@@ -13,6 +13,198 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.4] — 2026-07-30
+
+Two fixes that landed after the 2.6.3 bump and were previously unrecorded. Both were found by using
+the plan-review gate on itself rather than by a planned audit.
+
+### Fixed
+
+- **The gemini reviewer could write to the tree it was reviewing, and did** (`COREDEV-2607`). On
+  2026-07-29 a plan review *implemented* the plan instead of reviewing it: 6 shipped scripts modified,
+  5 files created, including a stray `marketplace.json` at the repo root. It emitted no `VERDICT:` line
+  so the gate failed closed — the fortunate failure mode — but the edits persisted and were reverted by
+  hand. The concurrent `codex` review recorded that it had re-anchored its citations against committed
+  HEAD; nothing in the gate design *required* that.
+  New `scripts/review/isolated-agy-review.sh` points the reviewer at a **disposable detached checkout**
+  of the reviewed commit and asserts the real working tree is unchanged afterwards — a tree mutation
+  **fails the round** rather than being cleaned up silently, which is `AGENT_CONTRACTS.md` §2 step 0b
+  applied to the reviewer instead of the author. Four flags were tested and rejected as non-solutions
+  (`agy` alone, `--mode plan`, `--sandbox`, `--sandbox --mode plan` — all four created the file and
+  exited 0); the header records them so they are not re-tried. Isolation, not constraint, because `agy`
+  has no read-only mode — the asymmetry with `codex`, which the gate already runs `-s read-only`.
+- **Secret redaction let four Unicode fold codepoints into an ASCII value class** (`COREDEV-2609`),
+  the residual the 2.6.2 entry recorded as still open. U+0130, U+0131, U+017F and U+212A now ride in the
+  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately *not*
+  widened: widening an unanchored prefix is what corrupted ordinary prose in the first place, whereas
+  widening an *anchored* rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
+  `sed` engines.
+
+### Changed
+
+- The 2.6.2 entry's closing line "Residual shared miss: COREDEV-2609" is superseded by the fix above.
+  Left in place rather than edited — a changelog records what was true at the time.
+
+## [2.6.3] — 2026-07-30
+
+CI & workflow hardening — plan `docs/planning/CI_WORKFLOW_HARDENING_PLAN.md`, batching
+COREDEV-2598 + COREDEV-2600 + COREDEV-2603, five review rounds. Implemented ahead of a final
+dual-gate APPROVE at the maintainer's explicit direction; recorded as a workflow exception, not a
+passed gate.
+
+### Fixed
+
+- **The PreCompact hook leaked to stderr** (COREDEV-2600). Its inline round scanner was missing two
+  guards the shared `context_highest_round` has, so a `round-<20-digit>` directory — producible
+  through shipped code via `UNLEASHED_REVIEW_ROUND` — printed `integer expression expected`,
+  violating the stderr-clean fail-open invariant. It also recorded `"09"` where the shared helper
+  returns `"9"`. Both asserted, including the JSON **type**: the field is a string, and a test that
+  accepted either would miss a serialisation change.
+- **`marker_mtime` returned its failure sentinel on FreeBSD** (COREDEV-2600). It branched on
+  `uname == Darwin`, assuming only Darwin has BSD `stat`. A `0` there is not benign:
+  `stop-quality-marker-gate.sh` computes `AGE=999999` from it and **skips the gate entirely**, so a
+  platform quirk silently disabled a quality gate. `scripts/test-hooks.sh` carried its own diverged
+  copy of the same shape — the harness that would have proved the fix was itself carrying the defect.
+- **A genuine plan approval could not survive the mandated worktree move** (COREDEV-2603). Approval
+  was bound to `os.path.realpath(plan)` — one developer's disk layout.
+
+### Changed
+
+- Plan identity in the verdict artifact is **repo-relative** when the plan is in a git repo, absolute
+  otherwise, recorded as `planPathKind` and enforced on verify. `schemaVersion` 2 → 3, so the existing
+  hard comparison rejects stale artifacts; deliberately no compatibility branch, because a v2 artifact
+  without the field is the one shape where verify would compare a relative string against an absolute
+  one and pass by accident. This does **not** make the artifact portable — `.verdicts/` is git-ignored
+  by design, so CI and a second developer still cannot verify, and the docs now say so.
+- The plugin-data base path is single-sourced in `scripts/lib/paths.sh`. Every caller keeps the inline
+  expansion as a fallback: these libs are sourced standalone, and aborting on a missing `paths.sh`
+  would convert three independent fail-open paths into one shared point of failure.
+
+### Added
+
+- **`load-check` CI job** + `scripts/ci-load-check.sh` (COREDEV-2598). Installs the checkout's own
+  bytes via a scratch marketplace, proves byte identity with a per-run sentinel, drives the MCP server
+  from its **own installed declaration**, and asserts the hook-manifest shape. Four mutants, each
+  mapped to the assertion it fails; the mapping records one assertion that is *not* provable and is
+  labelled defence-in-depth rather than claimed.
+- Drift guards (`scripts/tests/test_shell_primitive_drift.py`): no `uname == Darwin` mtime branch
+  anywhere under `scripts/`, the base expansion identical across all three libs with its `${HOME:-}`
+  guard, no single-dash `${CLAUDE_PLUGIN_DATA-…}` default, and CI pin hygiene (no action pinned to two
+  SHAs, no mutable `@vN` tags, all `CLAUDE_CODE_VERSION` pins agreeing).
+- The worktree-before-plan ordering, documented on all five operator entry points with a doc gate, plus
+  the plan-freeze rule: a review cannot approve a plan edited mid-round.
+
+## [2.6.2] — 2026-07-29
+
+Redactor defects (COREDEV-2597) — plan `docs/planning/COREDEV-2597_REDACTOR_DEFECTS_PLAN.md`, five
+review rounds. Implemented ahead of a final dual-gate APPROVE at the maintainer's explicit direction;
+recorded as a workflow exception, not a passed gate.
+
+### Fixed
+
+- `hook_redact_pii` corrupted ordinary prose. The `sk-` rule had no leading boundary and fired
+  mid-word (`task-oriented` → `ta[redacted-secret]`), and the `~` rule matched any `~`-prefixed token,
+  deleting the quantitative detail engineering rationale is made of (`~500ms`, `~40 percent`,
+  `~40/60 split`) plus Swift's `~Copyable`/`~Escapable`.
+- **Five leak classes**, each reproduced before being fixed: `api<U+00A0>key: <secret>` and
+  `bearer<U+00A0><token>` (Python's `\s` accepts 23 codepoints POSIX `[[:space:]]` under `LC_ALL=C`
+  does not); `api key:\n<value>` (`sed` is line-oriented and the newline fold ran *after* the rules);
+  the compound `/Users/nick<U+00A0>api key: <secret>` (the shell over-consumed and ate the `api`
+  anchor, so the rule never fired); `user@2x.png.example.com` — a **routable address** preserved
+  entirely because the retina-exemption lookahead's `\b` was satisfied by the following dot; and
+  `~Copyable-alice`, which **leaked a real username** for the same reason.
+- `tr` ran outside `LC_ALL=C`, so a single invalid UTF-8 byte aborted it — truncating the message and
+  leaking `tr: Illegal byte sequence` to stderr, against the repo's stderr-clean invariant.
+  `permission-denied-log.sh` and `stop-failure-log.sh` already did this correctly.
+
+### Changed
+
+- The `sk-`/`pk_` boundary is **asymmetric**: underscore is a boundary before `sk-` (an identifier
+  cannot contain `-`, so `OPENAI_KEY_sk-proj-…` redacts) and is not before `pk_` (the SQL/GRDB
+  primary-key convention, so `orders_pk_customer_id_idx` survives). Keeps both properties rather than
+  trading one for the other.
+- The `~` rule requires a home-*path* shape (`[A-Za-z_]` + `/`), matching the definition
+  `schema.py` already shipped. **Accepted residual:** a bare `~alice` with no path is no longer
+  redacted — it is regex-indistinguishable from `~ten`/`~Copyable`, and both are pinned by tests so a
+  future widening trips a gate.
+- Whitespace is canonicalised on **both** sides *before* any rule runs. Not a widening: no pattern
+  changes, only the input domain.
+- `re.IGNORECASE` removed from Python's `_APIKEY`/`_BEARER` — it did *Unicode* case-folding, matching
+  U+0130/U+0131/U+212A in the literals and admitting four codepoints into an ASCII value class, which
+  emitted `[redacted-key]` immediately *before* live secret material. Residual shared miss: COREDEV-2609.
+- Python's secret rule uses two sequential passes, not one combined alternation, which matched
+  greedily from the leading prefix and disagreed with the shell.
+
+### Added
+
+- `mcp/review-synthesizer/redactor_fixture.py` — the single canonical parity vector list, with
+  *generators* for the unbounded classes, since three root causes cannot be closed by any list.
+- `mcp/review-synthesizer/redactor_model.py` — the mechanical closure: over a seeded corpus the only
+  divergence must be the one documented exemption, `UNEXPLAINED == 0`. 40,000 inputs clean.
+- `redactor-equivalence` CI job on **`ubuntu-latest` and `macos-latest`**. Both, deliberately: the
+  `tr` root cause inverts between GNU and BSD, so a single-platform run is half a result — and the
+  half that passes is the half that hides it.
+- 26 parity tests with ten named mutation proofs, each rejecting a plausible wrong implementation
+  rather than a `git revert`.
+
+## [2.6.1] — 2026-07-29
+
+Agent output style (COREDEV-2602) — plan `docs/planning/AGENT_OUTPUT_STYLE_PLAN.md`, approved through
+the dual gate (gemini APPROVE + codex APPROVE_WITH_NOTES) after eleven rounds.
+
+### Added
+- `AGENT_CONTRACTS.md` **§13 Agent Output Style** — ten rules adapted from `ayghri/i-have-adhd` (MIT,
+  pinned at `07684c4a`). Two adopted, seven adapted, one restated positively. Adapted rather than
+  migrated: four upstream rules would have damaged machine-consumed output.
+- The **payload-region invariant** — between the `Status:` line and the final fenced JSON block, nothing
+  but detail fields and blank lines. Not a style preference: it is
+  `capture.py::extract_status`'s behaviour, and violating it yields `None` → no sidecar →
+  `UNATTRIBUTED` → a re-dispatch or `NEEDS DISCUSSION`.
+- A precedence clause naming all six machine contracts the style rules must yield to, and 14 doc-gate
+  tests (per-rule **row-scoped**, per-contract **section-scoped**), each mutation-proved.
+
+### Notes
+- Enforcement is documentary. `COREDEV-2604` covers the mechanical guard (report the cause, route it,
+  feed it to the retry); `COREDEV-2599` covers measuring whether agents actually comply.
+
+## [2.6.0] — 2026-07-29
+
+Opus 5 alignment (COREDEV-2583) — plan `docs/planning/OPUS5_ALIGNMENT_PLAN.md`, approved through the
+dual plan-review gate (gemini APPROVE + codex APPROVE, digest-bound) after five rounds.
+
+### Added
+- `effort: xhigh` on all 21 agents and all 21 skills, with a hard CI assertion on both axes and on the
+  §11 policy sentence. Nothing set `effort` before, so every asset ran at the session's level.
+- A `warnings` channel in `validate-plugin-assembly.py`: prints, never affects the exit code. Used to
+  report `permissionMode`/`mcpServers`/`hooks`, which Claude Code ignores for plugin sub-agents.
+- `KNOWN_SKILL_KEYS` + `check_skill_fields` — skills had no frontmatter key validation at all. Derived
+  from the pinned 2.1.220 schema; `disallowedTools` is accepted (it is the runtime's canonical alias),
+  `allowedTools` is rejected (it is genuinely inert).
+- AGENT_CONTRACTS §5 now declares the subagent spawn-depth dependency and the ≥ 2.1.219 floor.
+
+### Changed
+- **Model tiering is three tiers**, set by consequence of being wrong rather than cost:
+  `security-reviewer`, `prompt-review`, `concurrency-reviewer` → `opus` (3); orchestrator and
+  implementation/diagnostic engineers → `inherit` (11); first-pass reviewers, personas and fixed-scope
+  managers → `sonnet` (7). §11's rationale is rewritten; the old one argued from cost.
+- `MODEL_ALIASES` is the pinned runtime's table verbatim, so `opus[1m]`/`sonnet[1m]`/`fable[1m]`, `best`
+  and `opusplan` validate. `haiku[1m]`, `best[1m]`, `opusplan[1m]`, `inherit[1m]` and `default` are
+  rejected — they are not in the table. The model-id regex is untouched, so COREDEV-2503 F10 holds.
+- The difflib tool-name typo guard is advisory (a warning) rather than a hard failure: the allowlist is
+  inherently incomplete, so a false reject blocked real tools while a missed typo merely fails at runtime.
+- CI pins Claude Code 2.1.220 (was 2.1.209, eleven releases below the Opus 5 floor).
+
+### Fixed
+- `TaskOutput` and `EnterPlanMode` were **false-rejected** as typos of `BashOutput`/`ExitPlanMode`.
+- `MultiEdit` is removed from `KNOWN_TOOLS` **and** hard-rejected — dropping it alone is a no-op because
+  unknown tools are accepted, which had left `agents/jira-manager.md`'s deny-list entry a silent no-op.
+  That entry is removed. Stale-tool messages are now per-tool; the shared one asserted "the dispatcher is
+  `Agent`, not `MultiEdit`", which is nonsense.
+- Four documentation defects, each now gated by a mutation-proved test: README's false "all five review
+  agents now run on `opus`"; CLAUDE.md's incomplete alias list and missing effort guidance; the
+  alias-versus-version-pin conflation in CLAUDE.md and AGENT_CONTRACTS; and a superseded
+  `claude-sonnet-4-6` id in `agents/ai-engineer.md`.
+
 ## [2.5.3] — 2026-07-20
 
 Correctness-audit remediation (COREDEV-2525) — 49 findings from `docs/audits/PLUGIN_AUDIT_2026-07-19.md`

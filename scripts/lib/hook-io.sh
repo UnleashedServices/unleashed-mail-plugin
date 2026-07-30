@@ -213,27 +213,41 @@ if isinstance(d, dict):
 }
 
 # Redact PII from a free-text string before it is persisted to a log/snapshot/capture.
-# Collapses: emails; home-dir usernames (/Users/<n>, /home/<n>, ~<n>) so a
+# Collapses: emails; home-dir usernames (/Users/<n>, /home/<n>, ~<n>/) so a
 # `/Users/<name>/…` path or `-archivePath` cannot leak the user; full dot-segmented
-# JWT/Bearer tokens (not just the first segment); sk-/pk_ secrets; api keys. Then
-# folds newlines/tabs to spaces. BSD/GNU-portable `sed -E` (POSIX classes, no `\s`),
-# `LC_ALL=C`. The Python `redact_pii` in mcp/review-synthesizer/capture.py mirrors
-# these patterns, with TWO deliberate Python-only exemptions (MIN-13): its _EMAIL skips `@Nx` retina-asset
-# filenames and its _TILDE skips Swift `~Copyable`/`~Escapable`. Those use regex lookahead, which POSIX ERE
-# cannot express — and this shell redactor processes hook advisory text that never carries a finding's
-# `file`/`evidence` literal, so it needs neither exemption. Every other pattern here is byte-identical.
+# JWT/Bearer tokens (not just the first segment); sk-/pk_ secrets; api keys.
+# BSD/GNU-portable `sed -E` (POSIX classes, no `\s`), `LC_ALL=C`. The Python `redact_pii`
+# in mcp/review-synthesizer/capture.py mirrors these patterns; after COREDEV-2597 there is
+# EXACTLY ONE remaining divergence — the POSIX-ERE lookahead gap (MIN-13) where Python's _EMAIL
+# skips `@Nx` retina-asset filenames. Everything else is byte-identical, and that equivalence is
+# GATED: mcp/review-synthesizer/redactor_fixture.py is the single canonical vector list and
+# tests/test_redactor_parity.py drives BOTH implementations from it.
+# (_TILDE used to carry a second exemption for Swift `~Copyable`/`~Escapable`. It became dead code
+# once the tilde rule required a following `/`, and deleting it closed a leak. Do not restore it.)
 # The caller caps length and json_escapes. $1 = string.
+#
+# WHITESPACE CANONICALISATION RUNS FIRST, AND THAT ORDER IS LOAD-BEARING (COREDEV-2597 §8).
+# `sed` is line-oriented and POSIX `[[:space:]]` under LC_ALL=C is ASCII-only, while Python's
+# `\s` crosses newlines and accepts 23 further Unicode codepoints. Folding those to plain spaces
+# BEFORE any rule runs closes three leak classes at once — `api\nkey: <secret>`,
+# `api<U+00A0>key: <secret>`, and the compound form where `/Users/…` over-consumes the `api`
+# anchor so rule 8 never fires. It is not a widening: no pattern changes, only the input domain.
+# Move the fold after the rules and those secrets survive into the log.
 hook_redact_pii() {
-    printf '%s' "$1" | LC_ALL=C sed -E \
+    printf '%s' "$1" \
+        | LC_ALL=C tr '\n\r\t' '   ' 2>/dev/null \
+        | LC_ALL=C sed -E \
+        -e 's#(\x1c|\x1d|\x1e|\x1f|\xc2\x85|\xc2\xa0|\xe1\x9a\x80|\xe2\x80\x80|\xe2\x80\x81|\xe2\x80\x82|\xe2\x80\x83|\xe2\x80\x84|\xe2\x80\x85|\xe2\x80\x86|\xe2\x80\x87|\xe2\x80\x88|\xe2\x80\x89|\xe2\x80\x8a|\xe2\x80\xa8|\xe2\x80\xa9|\xe2\x80\xaf|\xe2\x81\x9f|\xe3\x80\x80)# #g' \
         -e 's#[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}#[redacted-email]#g' \
         -e 's#/Users/[^/[:space:]"]+#/Users/[redacted]#g' \
         -e 's#/home/[^/[:space:]"]+#/home/[redacted]#g' \
-        -e 's#~[A-Za-z0-9._-]+#~[redacted]#g' \
-        -e 's#[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[A-Za-z0-9._-]{20,}#[redacted-token]#g' \
+        -e ':t' -e 's#(^|[^A-Za-z0-9_])~[A-Za-z_][A-Za-z0-9._-]*/#\1~[redacted]/#' -e 'tt' \
+        -e 's#[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+([A-Za-z0-9._-]|\xc4\xb0|\xc4\xb1|\xc5\xbf|\xe2\x84\xaa){20,}#[redacted-token]#g' \
         -e 's#eyJ[A-Za-z0-9._-]{10,}#[redacted-jwt]#g' \
-        -e 's#(sk-|pk_)[A-Za-z0-9._-]{8,}#[redacted-secret]#g' \
-        -e 's#[Aa][Pp][Ii][[:space:]_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*[A-Za-z0-9._-]+#[redacted-key]#g' \
-        2>/dev/null | tr '\n\r\t' '   '
+        -e 's#(^|[^A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
+        -e 's#(^|[^A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}#\1[redacted-secret]#g' \
+        -e 's#[Aa][Pp][Ii][[:space:]_-]?[Kk][Ee][Yy][[:space:]]*[:=][[:space:]]*([A-Za-z0-9._-]|\xc4\xb0|\xc4\xb1|\xc5\xbf|\xe2\x84\xaa)+#[redacted-key]#g' \
+        2>/dev/null
 }
 
 # SessionStart: inject a one-line, non-blocking resume hint as additionalContext.

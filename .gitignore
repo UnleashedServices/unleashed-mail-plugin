@@ -11,10 +11,13 @@ firebase-debug.log
 # (COREDEV-2486, audit critic.1: same accidental-commit class as the firebase-debug.log incident).
 .claude/settings.local.json
 
-# Transient review prompt files (per-invocation, not source of truth)
-.agy-prompt.md
+# Transient review prompt files (per-invocation, not source of truth).
+# GLOBS, not exact names: a multi-round gate writes `.agy-prompt-<ticket>r<n>.md`, and the
+# exact-name entries below matched none of those — so `git add -A` committed 16 of them into a
+# release commit (COREDEV-2597). Keep the trailing `*` on both.
+.agy-prompt*.md
+.codex-prompt*.md
 .gate-*-prompt.md
-.codex-prompt.md
 
 # Python bytecode (MCP review-synthesizer is stdlib Python)
 __pycache__/

@@ -47,3 +47,21 @@ description = "GCP project id — an identifier, not a credential"
 regexes = [
   '''emailwithai-476119''',
 ]
+
+# The redactor plans (COREDEV-2597, and COREDEV-2585 which it was split from) must quote the exact
+# token shapes the `sk-`/`pk_` rule matches — that IS the specification, and the positive controls are
+# what stop a narrowed pattern from silently disabling redaction (2597 §3's corollary). The fixtures
+# are deliberately the sequential alphabet, never a real credential.
+#
+# Pinned to the fixture SHAPE, not to a path. A `paths` allowlist for `docs/planning/*_PLAN.md` would
+# exempt every future secret pasted into any plan — the same permanent-blind-spot mistake the
+# firebase-debug.log entry above documents. A real credential in these files is still caught, because
+# a real one is not `abcdefg…`.
+[[allowlists]]
+description = "Documented fake secret fixtures in the redactor plans (sequential-alphabet, never real)"
+regexes = [
+  '''(sk-|pk_)(proj-|live_)?abcdefg[A-Za-z0-9]*''',
+  # `orders_pk_customer_id_idx` — the SQL identifier 2597 §4.1 records as an accepted cost of
+  # treating underscore as a boundary. A primary-key index name, not a credential.
+  '''pk_customer_id_idx''',
+]

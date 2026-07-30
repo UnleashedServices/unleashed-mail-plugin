@@ -45,22 +45,96 @@ KNOWN_AGENT_KEYS = {
     "maxTurns", "skills", "mcpServers", "hooks", "memory", "background",
     "effort", "isolation", "color", "initialPrompt",
 }
-MODEL_ALIASES = {"sonnet", "opus", "haiku", "fable", "inherit"}
+# §4.4 (COREDEV-2583): transcribed VERBATIM from Claude Code 2.1.220's alias table (`h1e`),
+# plus `inherit` — a sub-agent-only value the runtime handles separately and which is NOT in
+# that table. Re-check this set on every CLI pin bump (.github/workflows/plugin-ci.yml).
+#   h1e = ["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]","opusplan"]
+# Note there is NO `default`, and only sonnet/opus/fable take the `[1m]` long-context suffix.
+# The bracketed forms are LITERAL set members, never synthesised by stripping a suffix — a
+# "strip then re-validate the base" rule would over-accept haiku[1m]/best[1m]/opusplan[1m]/
+# inherit[1m], none of which the runtime recognises. The model-id regex below is unchanged, so
+# COREDEV-2503 F10 anchoring is untouched: a supported bracketed alias short-circuits on exact
+# membership, and an unsupported one falls through and is rejected because the regex character
+# class contains no `[`/`]`.
+MODEL_ALIASES = {
+    "sonnet", "opus", "haiku", "fable", "best", "opusplan",
+    "sonnet[1m]", "opus[1m]", "fable[1m]",
+    "inherit",
+}
 # Built-in tool names an agent may list. The MCP namespace is install-defined and NOT
 # enumerable, so `mcp__*` entries are always accepted; an unknown non-mcp entry is accepted
 # too (it may be a newer tool), but a CLOSE typo of a known tool is flagged — a misspelled
 # tool name silently disables that tool (mirrors validate-hooks.py's difflib guard).
 KNOWN_TOOLS = {
-    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "BashOutput",
+    "Read", "Write", "Edit", "NotebookEdit", "Bash", "BashOutput",
     "Glob", "Grep", "Agent", "WebFetch", "WebSearch", "TodoWrite",
-    "Skill", "SlashCommand", "ExitPlanMode", "KillShell", "AskUserQuestion",
+    "Skill", "SlashCommand", "EnterPlanMode", "ExitPlanMode", "KillShell", "AskUserQuestion",
+    # §4.5 (COREDEV-2583): current built-ins that were previously accepted only as "unknown",
+    # two of which the difflib guard actively FALSE-REJECTED (`TaskOutput` as a typo of
+    # `BashOutput`, `EnterPlanMode` of `ExitPlanMode`).
+    "TaskOutput", "TaskStop", "ToolSearch", "Monitor", "SendMessage", "Artifact",
+    "EnterWorktree", "ExitWorktree", "PowerShell", "Workflow", "ScheduleWakeup",
+    "CronCreate", "CronList", "CronDelete",
 }
 
 # B4 (COREDEV-2503): stale/invalid tool names to HARD-reject. Merely dropping `Task` from KNOWN_TOOLS is a
 # no-op — an unknown tool is accepted unless `difflib` finds a close match, and `Task` has none. The
 # sub-agent dispatcher is `Agent`, never `Task` (AGENT_CONTRACTS §9; validate-hooks.py agrees).
-STALE_TOOLS = {"Task"}
+# §4.5 (COREDEV-2583) adds `MultiEdit`: it is no longer a real tool, and merely DROPPING it from
+# KNOWN_TOOLS is a no-op for the same reason `Task` was — an unknown entry is accepted, and
+# difflib finds no close match. Without the hard reject, the live deny-list entry at
+# agents/jira-manager.md:15 would stay a silent no-op line.
+STALE_TOOLS = {"Task", "MultiEdit"}
+# Why each name is rejected — a shared message would be FALSE for one of them ("the dispatcher
+# is `Agent`, not `MultiEdit`" is nonsense). Keyed lowercase to match the case-insensitive check.
+_STALE_TOOL_REASONS = {
+    "task": "the sub-agent dispatcher is `Agent`, not `Task` (AGENT_CONTRACTS §9)",
+    "multiedit": "`MultiEdit` was removed from Claude Code; use `Edit` (COREDEV-2583 §4.5)",
+}
 _STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}   # case-insensitive membership (gemini review #53)
+
+
+# §4.6 (COREDEV-2583): DERIVED from Claude Code 2.1.220's skill/command frontmatter schema,
+# not hand-written. The schema runs from `name` to `improved_by`; the agent schema begins after
+# it (its own `name` is described "Agent identifier"). Re-derive on every CLI pin bump.
+#
+# `disallowedTools` IS legal here — the runtime declares it verbatim as "Canonical (normalized)
+# alias of `disallowed-tools`". An earlier draft of this ticket asserted the opposite and would
+# have REJECTED A LEGAL FIELD. `allowedTools` is the genuinely inert camelCase form: a
+# delimiter-anchored search of the same schema finds no such key at all.
+KNOWN_SKILL_KEYS = {
+    "name", "description", "model",
+    "allowed-tools", "disallowed-tools", "disallowedTools",
+    "argument-hint", "arguments",
+    "disable-model-invocation", "user-invocable",
+    "effort", "shell", "version", "when_to_use", "paths",
+    "agent", "context", "background", "hooks", "fallback",
+    "created_by", "improved_by",
+    # accepted in the wild and harmless; not worth false-rejecting over
+    "license", "metadata",
+}
+
+
+def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
+                       warnings: list[str]) -> None:
+    """Skill/command frontmatter validation (§4.6).
+
+    Deliberately NOT symmetric with `check_agent_fields`: an unknown key here is a WARNING,
+    not a problem. `KNOWN_SKILL_KEYS` is derived from one pinned CLI and the surface moves, so
+    a hard reject would block a legitimate new key in CI — the same trade §4.5 settled for
+    `KNOWN_TOOLS`. Only the one key proven inert gets a hard error.
+    """
+    for key in fm:
+        if key in KNOWN_SKILL_KEYS:
+            continue
+        if key == "allowedTools":
+            problems.append(
+                f"{rel}: `allowedTools` is not a skill key and is silently IGNORED — the "
+                f"kebab form `allowed-tools` is the real one. (Note `disallowedTools` IS a "
+                f"legal alias of `disallowed-tools`; only the 'allowed' side is inert.)")
+            continue
+        warnings.append(f"{rel}: unknown skill frontmatter key `{key}` (advisory — the skill "
+                        f"schema moves between CLI releases; verify against the pinned version)")
 
 
 def skill_preload_list(fm: dict[str, str]) -> list[str]:
@@ -77,10 +151,16 @@ def skill_preload_list(fm: dict[str, str]) -> list[str]:
     return out
 
 
-def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> None:
+def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
+                       warnings: list[str]) -> None:
     """Agent-only frontmatter validation: unknown keys, model alias, tool-name typos.
 
     Skills/commands are intentionally exempt — `allowed-tools` is a real key for them.
+
+    `problems` FAIL the build under --strict; `warnings` never affect the exit code
+    (COREDEV-2583 §4.7). The split exists because two checks here are advisory by design:
+    keys Claude Code ignores for plugin sub-agents, and difflib's typo guard over an
+    inherently incomplete tool allowlist.
     """
     for key in fm:
         if key in KNOWN_AGENT_KEYS:
@@ -91,6 +171,18 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
                     "`tools`/`disallowedTools`. As written the restriction is silently "
                     "ignored and the agent inherits ALL tools.")
         problems.append(f"{rel}: unknown agent frontmatter key `{key}`{hint}")
+
+    # §4.7: these ARE legal sub-agent keys, but Claude Code IGNORES all three for PLUGIN
+    # sub-agents (security). Nothing is broken today — no agent uses them — but they are
+    # exactly what someone reaches for when building an autonomous mode, and the failure is
+    # silent. Advisory, not a problem: the key itself is valid.
+    for key in ("permissionMode", "mcpServers", "hooks"):
+        if key in fm:
+            warnings.append(
+                f"{rel}: `{key}` is IGNORED for plugin sub-agents (Claude Code security "
+                f"exemption) — it will silently have no effect. For permissions use a "
+                f"PermissionRequest hook in hooks/hooks.json; for MCP scope use "
+                f"`disallowedTools`.")
 
     model = fm.get("model", "")
     # A concrete model id (e.g. `claude-opus-4-8`) is allowed; a bare unknown alias is not. F10
@@ -113,12 +205,19 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str]) -> No
                 continue
             if entry.lower() in _STALE_TOOLS_LOWER:  # B4: hard-reject a known-stale name (difflib wouldn't
                 # flag it). Case-INSENSITIVE so `task`/`TASK` can't slip past the exact-`Task` check (gemini #53).
-                problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — the "
-                                f"sub-agent dispatcher is `Agent`, not `{entry}` (AGENT_CONTRACTS §9)")
+                reason = _STALE_TOOL_REASONS.get(entry.lower(), "it is not a valid tool name")
+                problems.append(f"{rel}: `{field}` entry `{entry}` is a stale/invalid tool name — {reason}")
                 continue
+            # §4.5: ADVISORY, not a hard failure. `KNOWN_TOOLS` is inherently incomplete — the
+            # built-in surface moves — so a near-miss is as likely to be a NEW tool as a typo. The
+            # guard was false-rejecting real tools (`TaskOutput` as a typo of `BashOutput`,
+            # `EnterPlanMode` of `ExitPlanMode`). A missed typo merely passes as unknown and fails
+            # at runtime; a false reject blocks a legitimate tool in CI. Hard rejection is reserved
+            # for the explicit `STALE_TOOLS` set above.
             near = difflib.get_close_matches(entry, KNOWN_TOOLS, n=1, cutoff=0.7)
             if near:
-                problems.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of `{near[0]}`")
+                warnings.append(f"{rel}: `{field}` entry `{entry}` looks like a typo of "
+                                f"`{near[0]}` (advisory — if `{entry}` is a real tool, ignore)")
 
 
 def parse_frontmatter(text: str) -> dict[str, str] | None:
@@ -246,6 +345,39 @@ def check_agent_registry(root: Path, agent_names: set[str], problems: list[str])
 # equals each agent's frontmatter `model:` (default `inherit`), and that the two sets are the same agents.
 _TIER_ROW = re.compile(r"^\|[^|]*\|\s*`([a-z]+)`[^|]*\|\s*([^|]+?)\s*\|\s*$")
 _AGENT_TOKEN = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: list[str]) -> None:
+    """§4.3 (COREDEV-2583) — assert the effort floor on BOTH axes and in the policy text.
+
+    Sibling of `check_model_tiering`, and deliberately a HARD assertion rather than a warning: a
+    silently under-powered gate is exactly the defect §4.1 exists to close, and it is invisible
+    at runtime. With `effort` load-bearing, an asset that silently loses its pin — or a new asset
+    landing without one — must fail CI, not merely be noted.
+
+    Mutation proof: drop the pin from any single agent or skill, or delete the §11 effort-policy
+    sentence, and strict validation fails naming the file.
+    """
+    for rel, effort in sorted(asset_efforts.items()):
+        if effort != "xhigh":
+            got = f"`effort: {effort}`" if effort else "no `effort:` key"
+            problems.append(
+                f"{rel}: {got} — every agent and skill must pin `effort: xhigh` "
+                f"(AGENT_CONTRACTS §11 effort policy; COREDEV-2583 §4.1)")
+
+    contracts = root / "AGENT_CONTRACTS.md"
+    if not contracts.is_file():
+        return                      # check_model_tiering already reports the missing file
+    try:
+        content = contracts.read_text(encoding="utf-8-sig")
+    except OSError:
+        return
+    # The policy sentence must SAY xhigh — otherwise the docs and the assets could drift apart
+    # while both halves individually look fine, which is the §3 failure this ticket exists to end.
+    if "every agent and every skill pins `effort: xhigh`" not in content:
+        problems.append(
+            "AGENT_CONTRACTS.md §11: the effort policy line is missing or does not state "
+            "`xhigh` — expected the sentence \"every agent and every skill pins `effort: xhigh`\"")
 
 
 def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list[str]) -> None:
@@ -391,7 +523,9 @@ def main() -> int:
 
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent.parent
     problems: list[str] = []
+    warnings: list[str] = []            # never affect the exit code (COREDEV-2583 §4.7)
     agent_models: dict[str, str] = {}   # stem -> effective model (default "inherit"); fed to §11 tier check
+    asset_efforts: dict[str, str] = {}  # rel path -> declared effort (""=absent); fed to the §4.3 check
 
     def check_frontmatter(path: Path, require_name: bool, is_agent: bool = False) -> None:
         rel = path.relative_to(root)
@@ -411,8 +545,11 @@ def main() -> int:
                 problems.append(f"{rel}: frontmatter missing non-empty `name`")
             elif not KEBAB.match(fm["name"]):
                 problems.append(f"{rel}: `name: {fm['name']}` is not kebab-case")
+        asset_efforts[str(rel)] = fm.get("effort", "").strip()   # §4.3
+        if not is_agent:
+            check_skill_fields(rel, fm, problems, warnings)   # §4.6
         if is_agent:
-            check_agent_fields(rel, fm, problems)
+            check_agent_fields(rel, fm, problems, warnings)
             # The frontmatter `name` is the identifier Claude Code registers; if it diverges from the
             # filename stem, the registry set-equality check (keyed on stems) would enforce the wrong
             # identifier. Require them equal.
@@ -448,6 +585,11 @@ def main() -> int:
         check_frontmatter(p, require_name=False)
         if not KEBAB.match(p.stem):
             problems.append(f"{p.relative_to(root)}: command filename stem `{p.stem}` is not kebab-case")
+
+    # §4.3 MUST run after EVERY asset has been walked — agents, skills and commands all feed
+    # `asset_efforts`. Called any earlier it silently checks only the agents walked so far, which
+    # is how the first cut of this check passed while a skill's pin was missing.
+    check_effort_policy(root, asset_efforts, problems)
 
     # JSON manifests must parse. plugin.json + marketplace.json are required;
     # .mcp.json + hooks/hooks.json are optional — validated only when present (the
@@ -495,8 +637,12 @@ def main() -> int:
 
     summary = (f"{len(agents)} agents, {len(skills)} skills, {len(commands)} commands, "
                f"{parsed}/{total_manifests} manifests")
+    for warning in warnings:
+        print(f"  ⚠️  {warning}")
+
     if not problems:
-        print(f"✅ OK — plugin assembly ({summary})")
+        suffix = f" — {len(warnings)} warning(s)" if warnings else ""
+        print(f"✅ OK — plugin assembly ({summary}){suffix}")
         return 0
 
     print(f"plugin-assembly: {len(problems)} problem(s) [{summary}]:")

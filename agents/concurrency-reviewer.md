@@ -8,7 +8,8 @@ description: >
   modifying async/await code, actor definitions, Task/TaskGroup usage, Combine
   publishers, ValueObservation callbacks, DispatchQueue usage, token refresh logic,
   WKWebView calls from background threads, or any code crossing isolation boundaries.
-model: sonnet
+effort: xhigh
+model: opus
 tools: Read, Bash, Grep, Glob
 disallowedTools: Write, Edit
 ---

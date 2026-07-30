@@ -7,6 +7,7 @@ description: >
   and AIAgentPipeline orchestration. Invoke when working on AI features,
   adding new AI tools, creating prompts, building AI providers, modifying
   safety checks, or any code touching the AI agent system.
+effort: xhigh
 model: inherit
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
@@ -75,7 +76,7 @@ final class AnthropicProvider: BaseAIProvider, AIProviderProtocol, @unchecked Se
     private let session: URLSession
     private let endpoint: URL
     let supportedFeatures: Set<AIProviderFeature> = [.streaming, .toolCalling, .visionInput, .systemMessages]
-    let defaultModel = "claude-sonnet-4-6"
+    let defaultModel = "claude-sonnet-5"
 
     init(apiKey: String, endpoint: URL, session: URLSession = NetworkService.shared.session) {
         self.apiKey = apiKey

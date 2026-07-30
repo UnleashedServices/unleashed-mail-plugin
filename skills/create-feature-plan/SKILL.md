@@ -1,6 +1,7 @@
 ---
 name: create-feature-plan
 description: Scaffold a new FEATURE_NAME_PLAN.md under docs/planning/ using the project template.
+effort: xhigh
 ---
 
 # Create Feature Plan
@@ -50,6 +51,18 @@ How this will be tested; link to test files when complete.
 ## Notes
 Open questions, alternatives considered, lessons learned.
 ~~~
+
+## Before scaffolding
+
+0. **Confirm you are inside the dedicated `.claude/worktrees/<name>` worktree for this ticket.** If you
+   are not, create it and scaffold the plan there. Everything that follows — the digest snapshot, both
+   reviews, the synthesis and the implementation — must happen in that SAME directory. The
+   Combined-verdict artifact is per-directory session state under `docs/planning/.verdicts/`; it is
+   git-ignored twice over and does **not** follow a later `git worktree add`, so scaffolding here and
+   implementing elsewhere fails the gate on a genuine approval (`AGENT_CONTRACTS.md` §2 step 00).
+   `create-feature-plan` makes no path assumptions and `implement`'s containment guard anchors to
+   `realpath(".")`, so running the whole sequence inside the feature worktree works today with no
+   additional flags.
 
 ## After scaffolding
 

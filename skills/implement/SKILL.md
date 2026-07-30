@@ -1,6 +1,7 @@
 ---
 name: implement
 description: Implement a feature using specialized coding agents (db, logic, UI) with TDD and modern standards
+effort: xhigh
 argument-hint: [feature name or docs/planning/PLAN.md path]
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
 disable-model-invocation: true
@@ -162,9 +163,15 @@ fi
   AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
 - **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
-  - *no artifact* → the gate never ran (or ran in another checkout); ask the user to run
-    `/gemini-review` + `/codex-review` → `/unleashed-mail:review-synthesis` to convergence. If the gate
-    never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
+  - *no artifact* → the gate never ran, **or it ran in a DIFFERENT checkout/worktree**. The artifact
+    lives under `<plan-dir>/.verdicts/` and is **not carried by git** — it is ignored at the repo root
+    and self-ignored by a `*` `.gitignore` the tool writes inside that directory, so a fresh
+    `git worktree add` or `git clone` contains only the plan. If you gated elsewhere, either re-run the
+    gate in THIS worktree or copy `docs/planning/.verdicts/` across from the checkout that gated. To
+    avoid this entirely, create the worktree BEFORE the plan (`AGENT_CONTRACTS.md` §2 step 00).
+    Otherwise ask the user to run `/gemini-review` + `/codex-review` →
+    `/unleashed-mail:review-synthesis` to convergence. If the gate never ran **because a reviewer CLI
+    was unavailable**, see **Unavailable reviewer** below.
   - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason
     names a reviewer as `MISSING`, that reviewer produced **no usable verdict** (it never ran, *or* its
     transcript was empty/unparseable) — see **Unavailable reviewer** below. Read the
@@ -172,7 +179,10 @@ fi
     `verify` says so explicitly (`TWO SEPARATE problems: …`). Resolving either alone will not pass.
   - *plan has CHANGED since approval (digest mismatch)* → the plan was edited after approval
     (**approve-then-edit is blocked**); re-run the gate on the current plan.
-  - *written for a different plan* → the artifact isn't this plan's; run the gate on `$PLAN`.
+  - *written for a different plan* → the artifact isn't this plan's; run the gate on `$PLAN`. This also
+    appears when a `.verdicts/` directory was **copied between checkouts** and the recorded plan
+    identity no longer matches this one — byte-identical plan content does not help, because the
+    identity is compared as well as the digest. Re-run the gate here.
 
 **Unavailable reviewer.** There is **no scripted waiver** (COREDEV-2493), and `verify` can never report on
 CLI availability — it only ever inspects the artifact — so an unavailable reviewer reaches you as **one of

@@ -81,9 +81,21 @@ Use `/unleashed-mail:create-feature-plan` to scaffold (a bare `/create-feature-p
 
 Before any implementation begins:
 
+00. **Create the feature worktree FIRST**, and do everything below inside it — plan creation, snapshot,
+    both reviews, synthesis and implementation. The Combined-verdict artifact is per-directory session
+    state under `<plan-dir>/.verdicts/`; it is git-ignored at the repo root **and** self-ignored by a
+    `*` `.gitignore` that `review-verdict.py::_ensure_secure_dir` writes inside the directory on
+    purpose. It therefore does **not** follow a later `git worktree add`, and a fresh clone or worktree
+    contains only the plan. Gating in one checkout and implementing in another fails the gate on a
+    genuine approval — hit on COREDEV-2583 with byte-identical plan content and a five-round approval.
+    CI and a second developer cannot verify an approval at all, by design; do not expect them to.
 0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
    --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
    fails closed without it. Re-run it on any plan revision.
+0b. **Freeze the plan for the duration of a review round.** No edits between dispatching a review and
+    recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
+    digest-bound review cannot approve a moving target"* — and the round is void. This applies to the
+    author exactly as §2's read-only expectation applies to the reviewer.
 1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
 2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
@@ -245,6 +257,20 @@ log as they go. `jira-manager` mirrors plan state to Jira ticket status.
 5. `swift-reviewer` owns the **verify gate**: it opens each `blockersToVerify` `file:line`, confirms the blocker against the code, and only then decides the final verdict (unconfirmed blockers → NEEDS DISCUSSION, not REQUEST CHANGES). A sub-reviewer that returned **BLOCKED** is the explicit form of a did-not-run uncertainty → a Needs-Confirmation item → **NEEDS DISCUSSION** (**not** a `verification` blocker, which is confirmed-by-construction and gates REQUEST CHANGES); a **PARTIAL** reviewer's findings are kept for its completed scope plus a non-gating `verification` warning naming the files it did not reach. If the tool is unavailable it applies the documented rules in `mcp/review-synthesizer/README.md` manually
 6. `jira-manager` logs verdict to Jira
 
+**Runtime dependency — subagent spawn depth (COREDEV-2583 §4.9).** The panel is a two-level dispatch:
+`swift-reviewer` sits at depth 1 and the five reviewers at depth 2. Claude Code's default spawn depth
+has moved three times — 5 (fixed) up to 2.1.216, **1** in 2.1.217–2.1.218, and 3 from 2.1.219 (tunable
+via `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). **At the limit Claude Code withholds the `Agent` tool**, so
+the panel cannot spawn. This plugin therefore requires **Claude Code ≥ 2.1.219**, which the CI pin
+(`.github/workflows/plugin-ci.yml`) tracks.
+
+It fails **closed**, not silently: with no reviewer reports held, `scripts/review/reviewer-roster.sh`
+classifies all five as `UNATTRIBUTED` and exits 3 (mutation-proved by
+`scripts/tests/test_reviewer_roster.py::test_empty_stdin_classifies_everyone_and_fails_closed`). No
+additional detection is warranted — and specifically **not** a "zero captures ⇒ NEEDS DISCUSSION" rule:
+zero captures does **not** imply the panel did not run, because five readable in-session handoffs are
+intentionally sufficient even when the capture hooks fail (`test_all_five_held_is_zero_cost`).
+
 ### Base branch detection
 
 `swift-reviewer` must detect the correct base — feature PRs target the matching `1.0X.0000` version
@@ -357,22 +383,40 @@ Agent `model:` is set by role so future model generations are a one-line policy 
 fleet-wide edit:
 
 Agent names below are listed in full (no `/` shorthand) so this table stays machine-checkable:
-`validate-plugin-assembly.py` parses these two rows and asserts every agent's frontmatter `model:`
+`validate-plugin-assembly.py` parses these rows and asserts every agent's frontmatter `model:`
 (defaulting to `inherit` when the key is omitted) equals its tier here, and that every `agents/*.md`
 appears in exactly one row — so this policy can no longer silently drift from the shipped frontmatter.
 
 | Tier | `model:` | Agents |
 |------|----------|--------|
+| Deep-review specialists | `opus` | security-reviewer, prompt-review, concurrency-reviewer |
 | Orchestrator + implementation/diagnostic engineers | `inherit` (follows the session model) | swift-reviewer, ai-engineer, ci-engineer, code-simplifier, db-engineer, graph-api-debugger, logic-engineer, modern-standards-planner, tester, ui-engineer, xcode-build-fixer |
-| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, concurrency-reviewer, docs-engineer, enterprise-stakeholder, jira-manager, prompt-review, release-manager, security-reviewer, smb-entrepreneur, ux-perf-reviewer |
+| First-pass reviewers, planning personas, + fixed-scope managers | `sonnet` | accessibility-auditor, docs-engineer, enterprise-stakeholder, jira-manager, release-manager, smb-entrepreneur, ux-perf-reviewer |
 
-Rationale: the orchestrator and implementation/diagnostic engineers inherit so they match whatever the
-user is running (and scale up on demanding work); first-pass reviewers and personas pin `sonnet` for
-cost-efficient, consistent breadth. `docs-engineer`, `jira-manager`, and `release-manager` also pin
-`sonnet` — their work is bounded-scope bookkeeping (doc edits, the CFR label state machine, release/ticket
-hygiene) where sonnet is capable and a costlier session model is wasted; a maintainer who wants any of the
-three to scale with the session can flip its frontmatter to `model: inherit` and move it to the first row
-in the same edit (the validator keeps the two in sync). Prefer `inherit`/`sonnet` over hard-pinning `opus`.
+Rationale (rewritten for COREDEV-2583; the previous version argued from **cost**, which is no longer a
+constraint the maintainer accepts): the tier is now set by **consequence of being wrong**.
+
+- **`opus` — deep-review specialists.** `security-reviewer` (credentials, OAuth, injection, CI),
+  `prompt-review` (AI prompt/call-site safety, injection, PII-in-logs) and `concurrency-reviewer` — the
+  declared **correctness owner**, which absorbs the logic and error-handling findings the other reviewers
+  explicitly punt. A miss by any of these ships a defect the rest of the pipeline is not looking for.
+- **`inherit` — orchestrator + implementation/diagnostic engineers.** They match whatever the user is
+  running and scale up on demanding work.
+- **`sonnet` — first-pass reviewers, planning personas, fixed-scope managers.** Breadth and
+  bounded-scope bookkeeping (doc edits, the CFR label state machine, release/ticket hygiene), where a
+  finding that is missed is caught by the deep-review tier or is low-consequence.
+
+A maintainer who wants any agent to scale with the session flips its frontmatter and moves it between
+rows **in the same edit** — the validator keeps the two in sync and fails otherwise.
+
+**Effort policy: every agent and every skill pins `effort: xhigh`. There is no effort tiering.** The
+floor is unconditional, so tier selection is a *capability* decision only. Note frontmatter `effort` is
+an override in both directions — it pulls a `low` session up and a `max` session down — and
+`CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor cannot be guaranteed from inside the plugin.
+
+Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
+updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
+replaces ("prefer `inherit`/`sonnet` over hard-pinning `opus`") conflated the two.
 
 ---
 
@@ -415,6 +459,58 @@ labeled; the metric is only as good as the labeling discipline.
 Do NOT apply `change-failure` to: pre-existing bugs, feature requests, or any issue whose root cause is not
 attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) and `release-manager`
 (Change-failure attribution) for the operational detail.
+
+---
+
+## 13. Agent Output Style
+
+Rules adapted from [`ayghri/i-have-adhd`](https://github.com/ayghri/i-have-adhd) (MIT), pinned at commit
+`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — this plugin's output is mostly
+consumed by *software*, so four of the ten upstream rules carry carve-outs and one is restated. See
+`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence.
+
+**Scope:** human-facing prose written by agents, and by workflow skills while producing reader-facing
+output. It does **not** govern skill-body documentation (that is injected context, not output).
+
+### The payload-region invariant
+
+> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
+> **Within it, nothing but detail fields and blank lines.**
+
+Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
+payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
+agent emits goes **before** `Status:`.
+
+This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
+behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
+a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent.
+
+### The rules
+
+| # | Rule | Disposition |
+|---|------|-------------|
+| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. The lead goes before `Status:`, per the payload-region invariant. |
+| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only, and only before `Status:`, per the payload-region invariant. Machine trailer fields and JSON values keep their mandated single-line/schema shape. |
+| 3 | End with one concrete next action | **Adapted** — the next action goes before `Status:`, per the payload-region invariant; not merely before the fence. |
+| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array. |
+| 5 | Restate state every turn | **Adapted** — restate state in prose; never before a mandated result prefix, and never inside the payload region, per the payload-region invariant. |
+| 6 | Give specific time estimates | **Adapted** — estimates address whoever runs the steps; these agents advise, they rarely execute. |
+| 7 | Make completed work visible | **Adopted** — state what now works, concretely. |
+| 8 | Matter-of-fact tone for errors | **Adopted** — state cause and fix. No "Uh oh." |
+| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings. Prose only. |
+| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; per the payload-region invariant the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
+
+### Precedence — the contract wins
+
+These rules govern **prose written for a human reader**. Where a rule conflicts with a machine-readable
+contract — the completeness of a JSON findings array, the `Status:` line that precedes it, the Output
+Contract detail trailer that follows it (`Blocker Description`, `What Was Attempted`, `Completed`,
+`Remaining`, `Confidence`), the `VERDICT:` line that must end a review transcript, the final fenced JSON
+block, or a `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and
+position of a machine-consumed payload are never traded for brevity. In particular `Remaining:` is
+**safety information, never a list to shorten**.
+
+`Status:`, the trailer, and `BLOCKED — …` are payload, not preamble.
 
 ---
 

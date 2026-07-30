@@ -32,8 +32,15 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
 - If `tools:` is set, it is a strict allowlist: **MCP tools not listed are blocked**. To keep MCP access
   under install-defined server prefixes (Atlassian, Context7), **omit `tools:`** and scope with
   `disallowedTools:` (see jira-manager, modern-standards-planner).
-- `model:` ∈ `inherit`(default) | `sonnet` | `opus` | `haiku` | `fable` | a model id. Prefer `inherit`/`sonnet`
-  over hard-pinning `opus`.
+- `model:` ∈ the runtime alias table — `sonnet` | `opus` | `haiku` | `fable` | `best` | `opusplan` |
+  the long-context forms `sonnet[1m]` / `opus[1m]` / `fable[1m]` — plus `inherit` (default) or a full
+  model id. There is **no** `default` alias, and only sonnet/opus/fable take `[1m]`.
+  `opus` is an **alias** that tracks the current Opus generation; `claude-opus-5` is a hard version
+  pin. Prefer the alias. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
+  conflated the two and is superseded by AGENT_CONTRACTS §11's consequence-based tiering.)
+- **`effort:` is mandatory** — every agent and every skill pins `effort: xhigh`; CI enforces it.
+  Frontmatter effort is an override in BOTH directions (it pulls a `max` session down), and
+  `CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor is not enforceable from inside the plugin.
 - `skills:` (YAML list) preloads a skill's **SKILL.md body** (not its `references/`) at startup.
 - **`memory:` (`user`/`project`/`local`) auto-enables Read/Write/Edit** — **never add it to a read-only agent**
   (it silently re-grants write access; this bit swift-reviewer once).
@@ -72,6 +79,12 @@ Linux-friendly plugin repo — no Xcode).
   (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.
+  **Create the feature worktree FIRST**, then create the plan, snapshot, review, synthesize and
+  implement **all inside that same worktree**. The Combined-verdict artifact is per-directory session
+  state under `docs/planning/.verdicts/` — it is git-ignored twice over and does **not** follow a later
+  `git worktree add`, so gating in one checkout and implementing in another fails the gate on a genuine
+  approval (hit on COREDEV-2583 with byte-identical plan content). Two mandatory conventions in this
+  file used to contradict each other on exactly this point; this ordering is the resolution.
 - **Jira hygiene:** every change references a `COREDEV-XXXX` ticket (create one if none); update it with notes
   through implementation, not just at the end; associate with the parent Epic.
 - **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,

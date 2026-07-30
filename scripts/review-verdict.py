@@ -27,7 +27,7 @@ import re
 import stat
 import sys
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
 # SHA-256 of zero bytes. `agy` writes EXACTLY 0 bytes from a non-TTY when a review fails, so this digest
 # is the signature of a FAILED review, never a review. The parse-time size check only guards the WRITE
@@ -304,6 +304,50 @@ def _ensure_secure_dir(d: str) -> None:
             pass
 
 
+def _repo_root(path: str) -> str | None:
+    """Nearest ancestor of `path` containing a `.git` entry, or None.
+
+    `.git` must be accepted as a FILE as well as a directory: in a `git worktree` it is a file
+    containing `gitdir: …`. A directory-only check resolves a nested worktree to the PARENT checkout,
+    which would make every worktree share one identity — the exact confusion this change exists to
+    remove. Verified: this worktree's `.git` is a file.
+    """
+    d = os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _plan_identity(path: str) -> tuple[str, str]:
+    """(identity, kind) — the plan's identity for the artifact binding.
+
+    Repo-relative when the plan is inside a git repo, absolute otherwise. Repo-relative is what lets a
+    genuine approval survive the worktree move `CLAUDE.md` mandates: the artifact records
+    `docs/planning/X_PLAN.md`, not a path on one developer's disk. It still distinguishes two plans
+    that share a basename in different directories, which is the property PR #41 added and must not
+    regress.
+
+    The escape guard is DEFENCE-IN-DEPTH and is deliberately NOT claimed as mutation-proved: given
+    `_repo_root` returns an ANCESTOR of the resolved path, `relpath` cannot produce a `..`, and when no
+    root is found the function returns absolute before reaching the guard. Removing the guard is
+    therefore unobservable today (executed both ways: byte-identical). It stays because a future
+    `_repo_root` that returned a non-ancestor would make it load-bearing, and because emitting a
+    `../`-prefixed identity would be far worse than the cost of two comparisons.
+    """
+    real = os.path.realpath(path)
+    root = _repo_root(real)
+    if root is None:
+        return real, "absolute"
+    rel = os.path.relpath(real, os.path.realpath(root))
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
+        return real, "absolute"
+    return rel.replace(os.sep, "/"), "repo-relative"
+
+
 def _parse_reviewer(spec: str) -> dict:
     """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?, transcriptPath?, captureId?}."""
     if "=" not in spec:
@@ -464,14 +508,20 @@ def cmd_write(args: argparse.Namespace) -> int:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
     artifact = {
         "schemaVersion": SCHEMA_VERSION,
-        # REALPATH, not a CWD-relative relpath: the binding must distinguish two plans that share a
-        # basename in different directories (`docs/planning/a/SAME_PLAN.md` vs `.../b/SAME_PLAN.md`).
-        # relpath is CWD-dependent, which is why verify previously fell back to comparing basenames —
-        # and that let an artifact copied between two same-named plans with identical bytes verify the
-        # wrong one (full review, #41). realpath is absolute+canonical, so it is CWD-independent AND
-        # directory-distinguishing. The artifact is git-ignored session state, so embedding an absolute
-        # path is fine; a repo move simply invalidates it (re-run the gate), which is correct.
-        "planPath": os.path.realpath(plan),
+        # REPO-RELATIVE when the plan is inside a git repo, absolute otherwise (COREDEV-2603).
+        # It was `os.path.realpath`, which bound the approval to one developer's disk layout: the
+        # worktree move `CLAUDE.md` MANDATES then failed the gate on a genuine five-round approval
+        # with byte-identical plan content (COREDEV-2583). Repo-relative still distinguishes two
+        # plans that share a basename in different directories — the property PR #41 added — because
+        # `docs/planning/a/SAME_PLAN.md` != `docs/planning/b/SAME_PLAN.md`.
+        # This does NOT make the artifact portable: `.verdicts/` is git-ignored at the repo root and
+        # self-ignored by `_ensure_secure_dir`, so CI and a second developer still cannot verify.
+        # That is by design (PR #39) and out of scope here.
+        "planPath": _plan_identity(plan)[0],
+        # Which form the line above chose. Without it, verify could compare a relative string against
+        # an absolute one and pass or fail by ACCIDENT — the one shape a compatibility branch would
+        # have to allow, which is why SCHEMA_VERSION went 2 -> 3 instead.
+        "planPathKind": _plan_identity(plan)[1],
         "planSha256": plan_sha,   # the SAME bytes the reviewed-digest check validated above (no re-read)
         "verdict": verdict,
         "reviewers": reviewers,
@@ -683,9 +733,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
     # not the basename: two plans that share a basename in different dirs (with identical bytes, so the
     # digest also matches) would otherwise be interchangeable, and an artifact copied between them
     # verified the wrong one (full review, #41; reproduced). realpath is CWD-independent.
-    if os.path.realpath(plan) != str(art.get("planPath", "")):
+    identity, kind = _plan_identity(plan)
+    recorded_kind = art.get("planPathKind")
+    if recorded_kind not in ("repo-relative", "absolute"):
+        return _fail(f"artifact has a missing or unknown planPathKind ({recorded_kind!r}) — "
+                     "re-run the gate (schemaVersion 3 requires it)")
+    if recorded_kind != kind:
+        return _fail(f"artifact records a {recorded_kind} plan identity but this plan resolves as "
+                     f"{kind} — re-run the gate here rather than comparing across forms")
+    if identity != str(art.get("planPath", "")):
         return _fail(f"artifact was written for a different plan ({art.get('planPath')!r}), "
-                     f"not {os.path.realpath(plan)}")
+                     f"not {identity}")
     current = _sha256_bytes(plan)
     if current != art.get("planSha256"):
         return _fail("plan has CHANGED since approval (digest mismatch) — re-run the gate on the "

@@ -8,11 +8,12 @@ description: >
   starting work on any feature or bug fix, when completing a milestone, after
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
+effort: xhigh
 model: sonnet
 # Blocks the file-editing tools + subagent dispatch, and (MIN-5) the github MCP write surface — it drives
 # GitHub via the `gh` CLI (Bash), never mcp__github. Bash is deliberately retained (`gh pr view`), so this
 # agent is NOT fully non-mutating; it mutates Jira via the Atlassian MCP by design.
-disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github
+disallowedTools: Write, Edit, NotebookEdit, Agent, mcp__github
 ---
 
 > **MCP prefix portability:** Atlassian MCP tools may be exposed under three different

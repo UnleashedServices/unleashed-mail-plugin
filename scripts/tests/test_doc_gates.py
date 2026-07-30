@@ -220,3 +220,316 @@ class B7_CFRProtocolConsistency(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class COREDEV2583_DocDefects(unittest.TestCase):
+    """§4.10 — all FOUR verified documentation defects, each independently mutation-proved.
+
+    Round 1 of this plan's gate promised assertions for only two of the four, which contradicted
+    its own §3 ("CI must be able to tell") and §6's blanket mutation requirement.
+    """
+
+    # (a) README claimed "All five review agents now run on `opus`" — false then (all five pinned
+    #     `sonnet`) and still false after §4.2 (3 of 5), which is worse because it reads plausible.
+    def test_a_readme_does_not_claim_all_five_reviewers_are_opus(self):
+        readme = _read("README.md")
+        self.assertNotIn("All five review agents now run on `opus`", readme)
+        self.assertNotRegex(readme, r"all five review agents.{0,20}`opus`",
+                            "README must not re-assert the uniform-opus claim in any casing")
+
+    def test_a_readme_states_the_actual_tiering(self):
+        readme = _read("README.md")
+        for agent in ("security-reviewer", "prompt-review", "concurrency-reviewer"):
+            self.assertIn(agent, readme, f"README must name {agent} as an `opus` reviewer")
+
+    # (b) the alias list must be complete against the pinned runtime table.
+    def test_b_claude_md_alias_list_is_complete(self):
+        claude_md = _read("CLAUDE.md")
+        for alias in ("`best`", "`opusplan`", "`sonnet[1m]`", "`opus[1m]`", "`fable[1m]`"):
+            self.assertIn(alias, claude_md, f"CLAUDE.md model alias list omits {alias}")
+
+    def test_b_claude_md_denies_the_nonexistent_default_alias(self):
+        # `default` is NOT in the runtime table; an earlier draft of this plan proposed adding it.
+        self.assertIn("no** `default` alias", _read("CLAUDE.md"))
+
+    def test_b_claude_md_documents_the_mandatory_effort_pin(self):
+        claude_md = _read("CLAUDE.md")
+        self.assertIn("`effort: xhigh`", claude_md)
+        self.assertIn("CLAUDE_CODE_EFFORT_LEVEL", claude_md,
+                      "the honest limit (the env var outranks frontmatter) must be stated")
+
+    # (c) alias vs version pin — the old guidance argued against something the alias does not do.
+    def test_c_alias_versus_version_pin_is_distinguished(self):
+        for rel in ("CLAUDE.md", "AGENT_CONTRACTS.md"):
+            with self.subTest(rel=rel):
+                text = _read(rel)
+                self.assertNotIn("Prefer `inherit`/`sonnet` over hard-pinning `opus`", text,
+                                 f"{rel} still carries the superseded alias/pin conflation")
+                self.assertIn("alias", text)
+
+    # (d) no agent body may teach from a superseded model id.
+    def test_d_no_agent_body_cites_a_superseded_model_id(self):
+        stale = re.compile(r"claude-(?:sonnet|opus|haiku)-4-\d")
+        offenders = []
+        agents_dir = os.path.join(_ROOT, "agents")
+        for name in sorted(os.listdir(agents_dir)):
+            if not name.endswith(".md"):
+                continue
+            for m in stale.finditer(_read(os.path.join("agents", name))):
+                offenders.append(f"{name}: {m.group(0)}")
+        self.assertEqual(offenders, [],
+                         "agent bodies must not teach from a superseded model id")
+
+
+class COREDEV2602_AgentOutputStyle(unittest.TestCase):
+    """§13 Agent Output Style — per-rule assertions are ROW-scoped; per-contract are SECTION-scoped.
+
+    The two are NOT interchangeable. A section-scoped per-rule assertion false-passes, because a
+    rule's marker phrase also occurs in the precedence clause and elsewhere in §13 — that was the
+    round-7 defect. Row scoping is what makes a deleted disposition detectable.
+    """
+
+    # --- extraction helpers: read the artifact, never restate expectations ------------------
+    def _section13(self):
+        text = _read("AGENT_CONTRACTS.md")
+        start = text.index("## 13. Agent Output Style")
+        end = text.index("## Cross-references", start)
+        return text[start:end]
+
+    def _rows(self):
+        """rule number -> its single disposition row.
+
+        §13's table is `| # | Rule | Disposition |` — three columns, four pipes. Derive the shape
+        from the header rather than hardcoding a count, so a future column cannot silently make
+        every row invisible and turn this whole class into a no-op.
+        """
+        lines = self._section13().split("\n")
+        header = next(l for l in lines if l.startswith("| # |"))
+        ncols = header.count("|")
+        rows = {}
+        for line in lines:
+            m = re.match(r"^\| (\d+) \|", line)
+            if m and line.count("|") == ncols:
+                self.assertNotIn(int(m.group(1)), rows,
+                                 f"rule {m.group(1)} has more than one disposition row")
+                rows[int(m.group(1))] = line
+        return rows
+
+    # --- the section exists and is complete -------------------------------------------------
+    def test_section_13_exists_before_cross_references(self):
+        text = _read("AGENT_CONTRACTS.md")
+        self.assertIn("## 13. Agent Output Style", text)
+        self.assertLess(text.index("## 13. Agent Output Style"),
+                        text.index("## Cross-references"))
+
+    def test_exactly_ten_dispositions_one_row_each(self):
+        self.assertEqual(sorted(self._rows()), list(range(1, 11)))
+
+    def test_every_rule_declares_an_explicit_disposition(self):
+        # A blanked or flipped Disposition cell must fail — asserting titles + markers alone
+        # would not catch it (round-8 finding).
+        expected = {1: "Adapted", 2: "Adapted", 3: "Adapted", 4: "Adapted", 5: "Adapted",
+                    6: "Adapted", 7: "Adopted", 8: "Adopted", 9: "Restated positively",
+                    10: "Adapted"}
+        rows = self._rows()
+        for n, disposition in expected.items():
+            with self.subTest(rule=n):
+                self.assertIn(f"**{disposition}**", rows[n],
+                              f"rule {n} must declare `{disposition}` explicitly")
+
+    # --- per-rule markers: ROW-scoped ---------------------------------------------------------
+    def test_each_adapted_rule_carries_its_marker_in_its_own_row(self):
+        markers = {
+            1: "never reorder a mandated payload",
+            2: "keep their mandated single-line/schema shape",
+            3: "per the payload-region invariant",
+            4: "defer an in-scope finding out of the current array",
+            5: "never before a mandated result prefix",
+            6: "whoever runs the steps",
+            9: "cap, split, omit, or defer",
+            10: "payload, not preamble",
+        }
+        rows = self._rows()
+        for n, marker in markers.items():
+            with self.subTest(rule=n):
+                self.assertIn(marker, rows[n],
+                              f"rule {n}'s marker must be literal IN ITS OWN ROW (row-scoped)")
+
+    def test_parser_touching_rules_reference_the_invariant_by_name(self):
+        rows = self._rows()
+        # The approved plan requires 1, 2, 3, 5 AND 10 to reference it by name.
+        for n in (1, 2, 3, 5, 10):
+            with self.subTest(rule=n):
+                self.assertIn("payload-region invariant", rows[n])
+
+    # --- the invariant: SECTION-scoped --------------------------------------------------------
+    def test_payload_region_invariant_is_present_on_one_physical_line(self):
+        # One physical line by construction: a Markdown line break inside the marker made exact
+        # matching fail against a CORRECT document in round 10.
+        marker = "Within it, nothing but detail fields and blank lines."
+        lines = [l for l in self._section13().split("\n") if marker in l]
+        self.assertTrue(lines, "the invariant marker must appear literally on a single line")
+
+    def test_invariant_covers_non_prose_payloads_too(self):
+        # It breaks on ANY non-detail content, not only prose — a stray VERDICT: included.
+        self.assertIn("VERDICT:", self._section13())
+
+    # --- the precedence clause: SECTION-scoped, all six contracts ------------------------------
+    def test_precedence_clause_names_all_six_contracts(self):
+        section = self._section13()
+        for contract in ("JSON findings array", "`Status:`", "Remaining", "`VERDICT:`",
+                         "final fenced JSON block", "BLOCKED"):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, section)
+
+    def test_precedence_clause_states_the_contract_wins(self):
+        self.assertIn("the contract wins and the rule yields", self._section13())
+
+    def test_remaining_is_marked_safety_information(self):
+        self.assertIn("never a list to shorten", self._section13())
+
+    # --- attribution -------------------------------------------------------------------------
+    def test_attribution_names_the_source_licence_and_pinned_commit(self):
+        section = self._section13()
+        self.assertIn("i-have-adhd", section)
+        self.assertIn("MIT", section)
+        self.assertIn("07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba", section,
+                      "pin the upstream commit so the adaptation stays auditable")
+
+
+class COREDEV2603_WorktreeOrdering(unittest.TestCase):
+    """The worktree-BEFORE-plan ordering must stay documented (COREDEV-2603 item C1).
+
+    Two mandatory `CLAUDE.md` conventions used to contradict each other: work in a dedicated
+    `.claude/worktrees/<name>` worktree, AND pass `implement`'s verify step. The Combined-verdict
+    artifact is per-directory session state that git never carries, so gating in one checkout and
+    implementing in another failed the gate on a genuine five-round approval (COREDEV-2583, with
+    byte-identical plan content).
+
+    Before C1 the resolution existed NOWHERE an operator would look: `grep -rn worktree skills/
+    AGENT_CONTRACTS.md` returned ZERO hits, and the convention appeared only at `CLAUDE.md:91`.
+    These assertions exist because a docs-only fix is exactly the kind that gets silently reverted.
+    """
+
+    FILES = {
+        "CLAUDE.md": None,
+        "AGENT_CONTRACTS.md": None,
+        "skills/create-feature-plan/SKILL.md": None,
+        "skills/implement/SKILL.md": None,
+        "skills/review-synthesis/SKILL.md": None,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        for rel in cls.FILES:
+            with open(os.path.join(_ROOT, rel), encoding="utf-8") as fh:
+                cls.FILES[rel] = fh.read()
+
+    def test_every_surface_mentions_the_worktree_constraint(self):
+        """All five, because an operator can enter the flow at any one of them."""
+        for rel, src in self.FILES.items():
+            with self.subTest(file=rel):
+                self.assertIn("worktree", src,
+                              f"{rel} must carry the worktree ordering — it is an entry point")
+
+    def test_contracts_carries_it_as_a_numbered_clause(self):
+        """§2's ordered gate steps are what implementation agents follow; prose elsewhere is not
+        a substitute for a step in that list."""
+        src = self.FILES["AGENT_CONTRACTS.md"]
+        self.assertIn("00.", src, "§2 needs a step 00 preceding the digest snapshot")
+        i = src.index("00.")
+        clause = src[i:i + 1400]
+        self.assertIn("worktree", clause)
+        self.assertIn(".verdicts", clause)
+
+    def test_the_reason_is_stated_not_just_the_rule(self):
+        """A bare 'create the worktree first' gets optimised away by the next reader. The WHY —
+        that the artifact is git-ignored and does not follow a later `git worktree add` — is what
+        makes it stick."""
+        for rel in ("AGENT_CONTRACTS.md", "skills/implement/SKILL.md",
+                    "skills/review-synthesis/SKILL.md"):
+            with self.subTest(file=rel):
+                src = self.FILES[rel]
+                self.assertIn(".verdicts", src)
+                self.assertTrue(
+                    "git-ignored" in src or "not carried by git" in src or "does not travel" in src,
+                    f"{rel} must say WHY the artifact does not move, not just that it must not be moved",
+                )
+
+    def test_the_plan_freeze_rule_is_recorded(self):
+        """A reviewer refused a round because the target changed mid-review. The rule now applies to
+        the author too, and it belongs in the ordered gate steps."""
+        src = self.FILES["AGENT_CONTRACTS.md"]
+        self.assertIn("moving target", src,
+                      "record that a review cannot approve a plan edited mid-round")
+
+    def test_no_surface_promises_CI_can_verify(self):
+        """CI and a second developer cannot verify an approval — the artifact is doubly git-ignored
+        BY DESIGN. Round 1 of the CI plan claimed repo-relative paths would fix that; they do not,
+        and a doc that implies otherwise sends someone chasing an impossible bug."""
+        for rel in ("AGENT_CONTRACTS.md", "skills/review-synthesis/SKILL.md"):
+            with self.subTest(file=rel):
+                self.assertNotIn("CI can verify", self.FILES[rel])
+
+
+class COREDEV2607_ReviewerIsolation(unittest.TestCase):
+    """The gemini reviewer must not be pointed at the working tree (COREDEV-2607).
+
+    `agy` is not read-only and no flag makes it so. A plan review implemented the plan instead of
+    reviewing it — 6 shipped scripts modified, 5 files created — and the skill at the time documented
+    `agy --add-dir "$(pwd)"` as THE recipe with no warning at all.
+    """
+
+    SKILL = os.path.join(_ROOT, "skills", "gemini-review", "SKILL.md")
+    WRAPPER = os.path.join(_ROOT, "scripts", "review", "isolated-agy-review.sh")
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.SKILL, encoding="utf-8") as fh:
+            cls.skill = fh.read()
+
+    def test_the_isolation_wrapper_ships(self):
+        self.assertTrue(os.path.exists(self.WRAPPER), "isolated-agy-review.sh must ship")
+        self.assertTrue(os.access(self.WRAPPER, os.X_OK), "wrapper must be executable")
+
+    def test_the_skill_recommends_the_wrapper(self):
+        self.assertIn("isolated-agy-review.sh", self.skill)
+
+    def test_the_skill_warns_that_agy_can_write(self):
+        self.assertIn("NOT READ-ONLY", self.skill,
+                      "the skill must lead with the fact that agy can write to the tree")
+
+    def test_the_tested_ineffective_flags_are_recorded(self):
+        """So nobody 'fixes' this by adding --mode plan. All four were tested; all four wrote."""
+        for flag in ("--mode plan", "--sandbox"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, self.skill)
+
+    def test_every_raw_agy_invocation_is_warned_or_superseded(self):
+        """A raw `agy --add-dir "$(pwd)"` may appear only where the surrounding text flags the risk."""
+        lines = self.skill.split("\n")
+        for i, line in enumerate(lines):
+            if 'agy --add-dir "$(pwd)"' not in line:
+                continue
+            window = "\n".join(lines[max(0, i - 12):i])
+            with self.subTest(line=i + 1):
+                self.assertTrue(
+                    any(k in window for k in ("SUPERSEDED", "can write", "NOT READ-ONLY",
+                                              "isolated wrapper", "COREDEV-2607")),
+                    f"unwarned raw agy invocation at line {i + 1} — it points at the working tree",
+                )
+
+    def test_the_wrapper_asserts_the_tree_is_unchanged(self):
+        with open(self.WRAPPER, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("git status --porcelain", src, "must fingerprint the tree")
+        self.assertIn("exit 3", src, "a tree mutation must VOID the round with a distinct exit code")
+        self.assertIn("worktree add --detach", src, "must review a disposable detached checkout")
+
+    def test_the_wrapper_guards_against_a_truncated_prompt(self):
+        """A guard-only prompt wasted two review rounds; the reviewer's reply read like a wording
+        problem rather than the read-after-truncate bug it was."""
+        with open(self.WRAPPER, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("1000", src, "must refuse to launch on a truncated prompt")
+        self.assertIn("read back empty", src, "must assert the prompt body was read before writing")

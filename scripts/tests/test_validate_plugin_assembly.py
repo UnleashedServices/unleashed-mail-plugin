@@ -14,8 +14,8 @@ _spec.loader.exec_module(vpa)
 
 class ModelRegexAnchorTest(unittest.TestCase):
     def _problems(self, model):
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), {"model": model}, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), {"model": model}, p, w)
         return p
 
     def test_valid_model_ids_pass(self):
@@ -31,8 +31,8 @@ class ModelRegexAnchorTest(unittest.TestCase):
 
 class StaleToolRejectTest(unittest.TestCase):
     def _problems(self, tools):
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), {"tools": tools}, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), {"tools": tools}, p, w)
         return p
 
     def test_task_is_hard_rejected(self):
@@ -53,8 +53,8 @@ class StaleToolRejectTest(unittest.TestCase):
         self.assertNotIn(",", fm["description"])
         # tools block list is unaffected (still comma-joined + Task caught)
         md2 = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task\n---\nb\n"
-        fm2 = vpa.parse_frontmatter(md2); p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm2, p)
+        fm2 = vpa.parse_frontmatter(md2); p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm2, p, w)
         self.assertTrue(any("stale" in x for x in p))
 
     def test_stale_task_case_insensitive(self):
@@ -79,8 +79,8 @@ class StaleToolRejectTest(unittest.TestCase):
         # past line 1 escaped. It must now accumulate ALL items.
         md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task\n  - Grep\n---\nbody\n"
         fm = vpa.parse_frontmatter(md)
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p, w)
         self.assertTrue(any("stale" in x or "Agent" in x for x in p),
                         f"`Task` in a multi-line block list must be rejected: {p} (tools={fm.get('tools')!r})")
 
@@ -88,16 +88,16 @@ class StaleToolRejectTest(unittest.TestCase):
         # codex/gemini #53: a YAML inline comment on a block-list item must be stripped before the check
         md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Task # legacy\n---\nbody\n"
         fm = vpa.parse_frontmatter(md)
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p, w)
         self.assertTrue(any("stale" in x or "Agent" in x for x in p),
                         f"`Task # legacy` must be rejected: {p} (tools={fm.get('tools')!r})")
 
     def test_multiline_block_list_clean_passes(self):
         md = "---\nname: x\ndescription: y\nmodel: inherit\ntools:\n  - Read\n  - Agent\n---\nbody\n"
         fm = vpa.parse_frontmatter(md)
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p, w)
         self.assertEqual(p, [], f"a clean multi-line block list must pass: {p}")
 
 
@@ -109,15 +109,15 @@ class Column0BlockListTest(unittest.TestCase):
         fm = vpa.parse_frontmatter(md)
         self.assertIn("Read", fm.get("tools", ""))
         self.assertIn("Task", fm.get("tools", ""))
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p, w)
         self.assertTrue(any("stale" in x for x in p), f"stale Task in a column-0 list must be caught: {p}")
 
     def test_column0_clean_block_list_passes(self):
         md = "---\nname: x\ndescription: y\ntools:\n- Read\n- Agent\n---\nbody\n"
         fm = vpa.parse_frontmatter(md)
-        p: list[str] = []
-        vpa.check_agent_fields(Path("agents/x.md"), fm, p)
+        p: list[str] = []; w: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), fm, p, w)
         self.assertEqual(p, [], f"a clean column-0 block list must pass: {p}")
 
 
@@ -139,12 +139,12 @@ class ModelTieringTest(unittest.TestCase):
         for ap in sorted((self.ROOT / "agents").glob("*.md")):
             fm = vpa.parse_frontmatter(ap.read_text(encoding="utf-8-sig")) or {}
             models[ap.stem] = fm.get("model", "").strip() or "inherit"
-        p: list[str] = []
+        p: list[str] = []; w: list[str] = []
         vpa.check_model_tiering(self.ROOT, models, p)
         self.assertEqual(p, [], f"§11 must equal the shipped frontmatter: {p}")
 
     def test_mismatched_model_is_flagged(self):
-        p: list[str] = []
+        p: list[str] = []; w: list[str] = []
         vpa.check_model_tiering(self.ROOT, {"jira-manager": "opus"}, p)
         self.assertTrue(any("jira-manager" in x and "opus" in x for x in p), p)
 
@@ -154,13 +154,13 @@ class ReviewerRosterTest(unittest.TestCase):
 
     def test_real_repo_roster_agrees(self):
         agents = {p.stem for p in (self.ROOT / "agents").glob("*.md")}
-        p: list[str] = []
+        p: list[str] = []; w: list[str] = []
         vpa.check_reviewer_roster(self.ROOT, agents, p)
         self.assertEqual(p, [], f"the six roster copies must agree and all exist as agents: {p}")
 
     def test_missing_reviewer_agent_is_flagged(self):
         # If agents/<name>.md is gone but the roster still lists it, that must be flagged.
-        p: list[str] = []
+        p: list[str] = []; w: list[str] = []
         vpa.check_reviewer_roster(self.ROOT, {"security-reviewer"}, p)
         self.assertTrue(any("does not exist" in x for x in p), p)
 
@@ -169,10 +169,189 @@ class McpServerPathTest(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[2]
 
     def test_real_repo_mcp_paths_resolve(self):
-        p: list[str] = []
+        p: list[str] = []; w: list[str] = []
         vpa.check_mcp_server_paths(self.ROOT, p)
         self.assertEqual(p, [], f".mcp.json server targets must resolve on disk: {p}")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class COREDEV2583_ModelAliasTable(unittest.TestCase):
+    """§4.4 — MODEL_ALIASES is the pinned runtime's table verbatim, not a synthesised one.
+
+    Mutation proof: revert MODEL_ALIASES to the old five-alias set and the accept cases fail;
+    replace exact membership with 'strip [1m] then re-validate' and the over-accept cases fail.
+    """
+
+    def _problems(self, model):
+        p, w = [], []
+        vpa.check_agent_fields(Path("agents/x.md"), {"model": model}, p, w)
+        return p
+
+    def test_supported_aliases_and_ids_accepted(self):
+        for model in ("sonnet", "opus", "haiku", "fable", "best", "opusplan", "inherit",
+                      "sonnet[1m]", "opus[1m]", "fable[1m]", "claude-opus-5", "claude-sonnet-4-5"):
+            with self.subTest(model=model):
+                self.assertEqual(self._problems(model), [], f"{model} should be accepted")
+
+    def test_unsupported_alias_suffix_combinations_rejected(self):
+        # The runtime table has ONLY sonnet/opus/fable with [1m]. A strip-then-revalidate rule
+        # would wrongly accept every one of these.
+        for model in ("haiku[1m]", "best[1m]", "opusplan[1m]", "inherit[1m]"):
+            with self.subTest(model=model):
+                self.assertTrue(self._problems(model), f"{model} is not in the runtime table")
+
+    def test_default_is_not_an_alias(self):
+        # An earlier draft of COREDEV-2583 proposed adding `default`; it is absent from `h1e`.
+        self.assertTrue(self._problems("default"))
+
+    def test_f10_injection_negatives_still_rejected(self):
+        for model in ("claude-opus-5 rm -rf", "claude-opus-5; evil", "claude-opus-5\nmalicious",
+                      "opus[1m;evil]", "opus[1m\nmalicious]", "opus[rm-rf]",
+                      "opus[1m][1m]", "opus[1m]x", "opus[1m", "opus[]"):
+            with self.subTest(model=model):
+                self.assertTrue(self._problems(model), f"{model!r} must stay rejected (F10)")
+
+
+class COREDEV2583_ToolSets(unittest.TestCase):
+    """§4.5 — refreshed KNOWN_TOOLS; MultiEdit hard-rejected; typo guard demoted to advisory."""
+
+    def _run(self, tools):
+        p, w = [], []
+        vpa.check_agent_fields(Path("agents/x.md"), {"tools": tools}, p, w)
+        return p, w
+
+    def test_previously_false_rejected_tools_are_clean(self):
+        # Both were rejected as difflib near-misses (TaskOutput~BashOutput, EnterPlanMode~ExitPlanMode).
+        for tool in ("TaskOutput", "EnterPlanMode", "ToolSearch", "Monitor", "Workflow"):
+            with self.subTest(tool=tool):
+                p, w = self._run(tool)
+                self.assertEqual(p, [], f"{tool} is a real tool and must not be a problem")
+                self.assertEqual(w, [], f"{tool} is known and must not even warn")
+
+    def test_multiedit_is_hard_rejected_not_merely_unknown(self):
+        # Dropping it from KNOWN_TOOLS alone is a no-op: unknown tools are accepted.
+        p, w = self._run("MultiEdit")
+        self.assertTrue(p, "MultiEdit must be a hard problem, not an accepted unknown")
+        self.assertIn("Edit", p[0])
+
+    def test_stale_tool_reasons_are_tool_specific(self):
+        # A shared message would be false for one of them.
+        p_task, _ = self._run("Task")
+        p_multi, _ = self._run("MultiEdit")
+        self.assertIn("dispatcher is `Agent`", p_task[0])
+        self.assertNotIn("dispatcher is `Agent`", p_multi[0])
+
+    def test_typo_guard_is_advisory_not_blocking(self):
+        p, w = self._run("Raed")            # near-miss of Read
+        self.assertEqual(p, [], "a near-miss must not fail the build (§4.5)")
+        self.assertTrue(w, "a near-miss must still be surfaced as a warning")
+
+
+class COREDEV2583_SkillKeys(unittest.TestCase):
+    """§4.6 — skill frontmatter validation, derived from the pinned runtime schema."""
+
+    def _run(self, fm):
+        p, w = [], []
+        vpa.check_skill_fields(Path("skills/x/SKILL.md"), fm, p, w)
+        return p, w
+
+    def test_disallowedTools_is_a_LEGAL_alias(self):
+        # THE round-1 regression guard: an earlier draft would have rejected this legal field.
+        # Assert NEITHER a problem NOR a warning: if the key were merely dropped from
+        # KNOWN_SKILL_KEYS it would fall through to the advisory branch, and a problems-only
+        # assertion would still pass — i.e. the mutation test would not fail.
+        p, w = self._run({"name": "x", "description": "y", "disallowedTools": "AskUserQuestion"})
+        self.assertEqual(p, [], "`disallowedTools` is the runtime's canonical alias — must pass")
+        self.assertEqual(w, [], "`disallowedTools` is KNOWN — it must not even warn")
+
+    def test_allowedTools_is_a_targeted_error(self):
+        p, w = self._run({"name": "x", "description": "y", "allowedTools": "Read"})
+        self.assertTrue(p)
+        self.assertIn("allowed-tools", p[0], "the error must name the kebab form")
+
+    def test_every_derived_key_validates_clean(self):
+        p, w = self._run({k: "v" for k in vpa.KNOWN_SKILL_KEYS})
+        self.assertEqual(p, [])
+        self.assertEqual(w, [])
+
+    def test_unknown_key_warns_but_does_not_fail(self):
+        # The schema moves between releases; a hard reject would block a legitimate new key.
+        p, w = self._run({"name": "x", "description": "y", "some-future-key": "v"})
+        self.assertEqual(p, [])
+        self.assertTrue(w)
+
+
+class COREDEV2583_WarningsChannel(unittest.TestCase):
+    """§4.7 — keys Claude Code ignores for plugin sub-agents warn, and never fail strict."""
+
+    def test_plugin_ignored_keys_warn(self):
+        for key in ("permissionMode", "mcpServers", "hooks"):
+            with self.subTest(key=key):
+                p, w = [], []
+                vpa.check_agent_fields(Path("agents/x.md"),
+                                       {"name": "x", "description": "y", key: "v"}, p, w)
+                self.assertEqual(p, [], f"`{key}` is a legal key — must not be a problem")
+                self.assertTrue(w, f"`{key}` must warn: it is silently ignored for plugin sub-agents")
+                self.assertIn("IGNORED", w[0])
+
+
+class COREDEV2583_EffortPolicy(unittest.TestCase):
+    """§4.3 — the effort floor is asserted on BOTH axes and in the §11 policy text.
+
+    The first cut of `check_effort_policy` was called before the skills loop had run, so it
+    silently checked only agents and a missing SKILL pin passed. These cases pin both axes.
+    """
+
+    def _problems(self, efforts, policy_line=True):
+        p = []
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            body = ("## 11. Model Tiering Policy\n\n"
+                    + ("**Effort policy: every agent and every skill pins `effort: xhigh`.**\n"
+                       if policy_line else "**Effort policy: pick something sensible.**\n"))
+            (root / "AGENT_CONTRACTS.md").write_text(body, encoding="utf-8")
+            vpa.check_effort_policy(root, efforts, p)
+        return p
+
+    def test_all_pinned_is_clean(self):
+        self.assertEqual(
+            self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": "xhigh"}), [])
+
+    def test_missing_agent_pin_fails(self):
+        p = self._problems({"agents/a.md": "", "skills/s/SKILL.md": "xhigh"})
+        self.assertTrue(p)
+        self.assertIn("agents/a.md", p[0])
+
+    def test_missing_SKILL_pin_fails(self):
+        # The regression guard for the ordering bug: a skill must be checked too.
+        p = self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": ""})
+        self.assertTrue(p, "a skill missing its pin must fail — not only agents")
+        self.assertIn("skills/s/SKILL.md", p[0])
+
+    def test_downgraded_effort_fails(self):
+        for level in ("high", "medium", "low", "max"):
+            with self.subTest(level=level):
+                p = self._problems({"agents/a.md": level})
+                self.assertTrue(p, f"`effort: {level}` is not the mandated floor")
+
+    def test_policy_sentence_must_state_xhigh(self):
+        p = self._problems({"agents/a.md": "xhigh"}, policy_line=False)
+        self.assertTrue(p)
+        self.assertIn("effort policy line", p[0])
+
+
+class COREDEV2583_EffortPolicyWiring(unittest.TestCase):
+    """The check must run AFTER every asset walk, or it is inert for skills (ordering bug)."""
+
+    def test_effort_check_is_called_after_the_skills_loop(self):
+        src = Path(_MOD_PATH).read_text(encoding="utf-8")
+        call = src.index("check_effort_policy(root, asset_efforts, problems)",
+                         src.index("def main("))
+        skills_loop = src.index("for p in skills:", src.index("def main("))
+        self.assertGreater(call, skills_loop,
+                           "check_effort_policy must run after the skills loop populates "
+                           "asset_efforts — otherwise a missing SKILL pin passes silently")

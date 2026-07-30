@@ -1,6 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
+effort: xhigh
 allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)
 ---
 
@@ -103,6 +104,13 @@ Map each reviewer's raw verdict to one canonical token:
 ```
 
 ## Persist the verdict (bind it to the plan)
+
+> **The artifact is written beside the plan in the CURRENT checkout, and it does not travel.**
+> `<plan-dir>/.verdicts/` is git-ignored at the repo root and self-ignored by a `*` `.gitignore`
+> that `_ensure_secure_dir` writes inside it on purpose, so it is never committed and a fresh
+> clone or `git worktree add` will not have it. Synthesize in the same worktree you intend to
+> implement in (`AGENT_CONTRACTS.md` §2 step 00). CI and a second developer cannot verify an
+> approval at all — that is by design, not a gap to work around.
 
 After emitting the block, **persist the Combined verdict as a plan-digest-bound artifact** so
 `implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit).

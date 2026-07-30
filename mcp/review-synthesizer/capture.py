@@ -38,28 +38,91 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import schema  # noqa: E402  (sibling module; path inserted above)
 
 # --- PII redaction (mirrors scripts/lib/hook-io.sh `hook_redact_pii`) ---------------------
-# Two DELIBERATE, tested divergences from the shell redactor live in _EMAIL and _TILDE below (MIN-13).
-# They exist because this module redacts validated finding `file`/`evidence` fields — where retina-asset
-# filenames and Swift suppressed-conformance syntax legitimately appear — whereas hook-io.sh redacts hook
-# advisory text that never carries those literals. The exemptions use regex lookahead, which POSIX ERE
-# (`sed -E`) cannot express, so they are Python-only by necessity, not drift. Every other pattern matches
-# hook-io.sh byte-for-byte.
+# EXACTLY ONE deliberate divergence from the shell redactor remains, in _EMAIL below (MIN-13).
+# It exists because this module redacts validated finding `file`/`evidence` fields — where retina-asset
+# filenames legitimately appear — whereas hook-io.sh redacts hook advisory text that never carries those
+# literals. It uses regex lookahead, which POSIX ERE (`sed -E`) cannot express, so it is Python-only by
+# necessity, not drift. Every other pattern matches hook-io.sh byte-for-byte, and that equivalence is
+# GATED by tests/test_redactor_parity.py driving both implementations from redactor_fixture.py.
+#
+# COREDEV-2597 removed the SECOND divergence that used to live here: _TILDE's
+# `~Copyable`/`~Escapable` lookahead became dead code once the tilde rule required a following `/`,
+# and deleting it also closed a leak (`~Copyable-alice` kept a real username, because `-` is outside
+# Unicode `\w` so the lookahead's `\b` was satisfied). Do not reintroduce it.
+#
 # _EMAIL: the `@(?!…)` lookahead skips `@Nx` retina-asset filenames (`AppIcon@2x.png`, `Icon@3x.jpg`) so a
 # captured `file`/`evidence` value keeps its real path — those are NOT emails, and redacting them to
 # `[redacted-email]` destroys the path and breaks the capture ratchet for image-budget findings. A real
 # address like `user@2xmail.com` still redacts (its domain is not `<digits>x.<image-ext>`).
+# The guard terminates with `(?![A-Za-z0-9.-])`, NOT `\b`: with `\b` a following dot satisfied it, so
+# `user@2x.png.example.com` — a routable address — was preserved entirely (COREDEV-2597 §4.4 F2).
 _EMAIL = re.compile(
-    r"[A-Za-z0-9._%+-]+@(?![0-9]+x\.(?i:png|jpe?g|gif|pdf|webp|heic|tiff?)\b)[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"[A-Za-z0-9._%+-]+@(?![0-9]+x\.(?i:png|jpe?g|gif|pdf|webp|heic|tiff?)(?![A-Za-z0-9.-]))[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
-_USERS = re.compile(r"/Users/[^/\s\"]+")
-_HOME = re.compile(r"/home/[^/\s\"]+")
-# _TILDE: the `(?!…)` lookahead exempts Swift's `~Copyable`/`~Escapable` suppressed-conformance syntax so
-# evidence text keeps the real type name; a genuine `~alice/Library/…` home reference still redacts.
-_TILDE = re.compile(r"~(?!(?:Copyable|Escapable)\b)[A-Za-z0-9._-]+")
-_BEARER = re.compile(r"bearer\s+[A-Za-z0-9._-]{20,}", re.IGNORECASE)
+# These negated classes deliberately spell out ASCII whitespace instead of using Python's Unicode
+# `\s` (COREDEV-2597 RC-B): the shell's `[[:space:]]` under LC_ALL=C is ASCII-only, and a
+# Unicode-aware negated class here made the two sides disagree in BOTH directions — Python leaked
+# `/Users/<U+00A0>nick`, while the shell over-consumed and ate the `api` anchor of a following secret.
+_USERS = re.compile(r"/Users/[^/ \t\n\r\v\f\"]+")
+_HOME = re.compile(r"/home/[^/ \t\n\r\v\f\"]+")
+# _TILDE: redact `~` only in home-PATH position — a non-empty username starting `[A-Za-z_]` followed
+# by `/`. This is the definition `schema.py` already ships ("only a home-dir REFERENCE: tilde + `/`").
+# It makes the old `(?!(?:Copyable|Escapable)\b)` lookahead DEAD CODE — `~Copyable` has no following
+# slash — so it is deleted, which also removes the leak where `~Copyable-alice` kept a real username
+# (`-` is outside Unicode `\w`, so the lookahead's `\b` was satisfied). Accepted residual: a bare
+# `~alice` with no path is no longer redacted; it is regex-indistinguishable from `~ten`/`~Copyable`.
+_TILDE = re.compile(r"(?<![A-Za-z0-9_])~[A-Za-z_][A-Za-z0-9._-]*(?=/)")
+# NO re.IGNORECASE on _BEARER/_APIKEY (COREDEV-2597 RC-D/RC-E). The flag does UNICODE case-folding,
+# which silently (a) matched U+0130/U+0131 for `i` and U+212A for `k` in _APIKEY's literals, and
+# (b) admitted {U+0130, U+0131, U+017F, U+212A} into the ASCII value class — emitting
+# `[redacted-key]` immediately followed by live secret material. Both were shell-side leaks.
+# Spelled as explicit ASCII classes so the two implementations agree. Residual shared miss is
+# COREDEV-2609.
+# The VALUE class carries the four codepoints `re.IGNORECASE` used to admit silently
+# (U+0130, U+0131, U+017F, U+212A) — see _SECRET_VALUE below for why that is safe here.
+_SECRET_VALUE = "[A-Za-z0-9._\\-\u0130\u0131\u017f\u212a]"
+_BEARER = re.compile(r"[Bb][Ee][Aa][Rr][Ee][Rr][ \t\n\r\v\f]+" + _SECRET_VALUE + "{20,}")
 _JWT = re.compile(r"eyJ[A-Za-z0-9._-]{10,}")
-_SECRET = re.compile(r"(?:sk-|pk_)[A-Za-z0-9._-]{8,}")
-_APIKEY = re.compile(r"api[\s_-]?key\s*[:=]\s*[A-Za-z0-9._-]+", re.IGNORECASE)
+# TWO sequential passes, sk- then pk_, mirroring the shell's two `-e` fragments. A single combined
+# alternation is NOT equivalent: it matches greedily from the leading prefix, so
+# `pk_abcdefgh-sk-ijklmnop` yields one replacement in Python and two in the shell.
+# Underscore is a boundary before `sk-` (identifiers cannot contain `-`, so `foo_sk-…` is never an
+# identifier) but NOT before `pk_` (which is the SQL/GRDB primary-key convention).
+_SECRET_SK = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9._-]{8,}")
+_SECRET_PK = re.compile(r"(?<![A-Za-z0-9_])pk_[A-Za-z0-9._-]{8,}")
+_APIKEY = re.compile(
+    r"[Aa][Pp][Ii][ \t\n\r\v\f_-]?[Kk][Ee][Yy][ \t\n\r\v\f]*[:=][ \t\n\r\v\f]*"
+    + _SECRET_VALUE + "+"
+)
+# WHY WIDENING THE VALUE CLASS IS SAFE, AND WIDENING THE ANCHOR IS NOT (COREDEV-2609).
+# §3 forbids widening because widening is how the `sk-` and `~` corruption classes were introduced.
+# But those rules were UNANCHORED — a bare prefix could land mid-word. `_APIKEY`/`_BEARER` are
+# anchored by a literal, so extending what counts as the PAYLOAD cannot make correct text match: the
+# `api key:` / `bearer ` anchor still has to be present. Verified — `the api keyboard is nice`,
+# `apiary keeper` and a standalone U+017F are all untouched.
+#
+# It closes the worst shape found in the whole sweep: without these codepoints the match STOPS at the
+# first one, emitting `[redacted-key]` immediately followed by LIVE SECRET MATERIAL
+# (`api key: SECRET<U+017F>MORE` -> `[redacted-key]ſMORE`). That passes any assertion of the form
+# `'[redacted-key]' in output`.
+#
+# The ANCHOR is deliberately NOT widened. `ap<U+0131>_key:` and `api<U+212A>ey=` stay unredacted on
+# both sides — pinned by tests. Widening the anchor is the same shape of change that caused the
+# original corruption, and the residual is an EVASION vector (someone must deliberately spell the
+# literal with a fold-equivalent), not accidental leakage of a real secret's tail.
+# Canonicalisation, applied BEFORE any rule (COREDEV-2597 §8). Mirrors the shell's leading
+# `tr '\n\r\t' '   '` plus the 23 codepoints Python's `\s` accepts and POSIX `[[:space:]]` under
+# LC_ALL=C does not. Not a widening: no pattern changes, only the input domain.
+#
+# Written as \u escapes ON PURPOSE. Pasting these as source literals is a known trap: characters
+# like U+212A and U+0131 can silently normalise to ASCII in an editor or toolchain, so a fixture
+# under-tests without ever failing. Build non-ASCII vectors with chr()/\u, never by pasting.
+#
+# Negative controls: U+200B ZWSP, U+FEFF BOM and U+180E are NOT Unicode White_Space and must pass
+# through untouched — the parity fixture asserts this.
+_UNICODE_WS = re.compile(
+    "[\u001c-\u001f\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]"
+)
 
 EVIDENCE_CAP = 500
 FILE_CAP = 300
@@ -75,17 +138,27 @@ VALID_AGENTS = (
 
 def redact_pii(s: object) -> str:
     """Redact emails, home-dir usernames, JWT/Bearer tokens, secrets, and api keys from a
-    free-text string, then fold newlines/tabs to spaces. Mirrors the shell redactor."""
+    free-text string. Mirrors `scripts/lib/hook-io.sh::hook_redact_pii` byte-for-byte except for
+    the single `_EMAIL` `@Nx` lookahead exemption, which POSIX ERE cannot express.
+
+    Canonicalisation runs FIRST and the order is load-bearing — see `_UNICODE_WS` and
+    COREDEV-2597 §8. `redactor_model.py` gates the shell/Python equivalence in CI.
+    """
     text = s if isinstance(s, str) else str(s)
+    # Canonicalise whitespace BEFORE any rule: \n\r\t (1:1, matching `tr`, so no run-collapse)
+    # then the 23 Unicode spaces POSIX [[:space:]] under LC_ALL=C rejects.
+    text = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    text = _UNICODE_WS.sub(" ", text)
     text = _EMAIL.sub("[redacted-email]", text)
     text = _USERS.sub("/Users/[redacted]", text)
     text = _HOME.sub("/home/[redacted]", text)
     text = _TILDE.sub("~[redacted]", text)
     text = _BEARER.sub("[redacted-token]", text)
     text = _JWT.sub("[redacted-jwt]", text)
-    text = _SECRET.sub("[redacted-secret]", text)
-    text = _APIKEY.sub("[redacted-key]", text)
-    return re.sub(r"[\r\n\t]+", " ", text)
+    # sk- BEFORE pk_, matching the shell fragment order. Not interchangeable — see _SECRET_SK.
+    text = _SECRET_SK.sub("[redacted-secret]", text)
+    text = _SECRET_PK.sub("[redacted-secret]", text)
+    return _APIKEY.sub("[redacted-key]", text)
 
 
 def cap(s: object, n: int = EVIDENCE_CAP) -> str:

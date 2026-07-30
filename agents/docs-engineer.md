@@ -8,6 +8,7 @@ description: >
   project documentation, updating architecture diagrams, or revising roadmaps.
   Invoke automatically when adding new features, changing APIs, modifying
   architecture, or when docs become outdated.
+effort: xhigh
 model: sonnet
 skills:
   - create-feature-plan
