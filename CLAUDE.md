@@ -79,6 +79,12 @@ Linux-friendly plugin repo — no Xcode).
   (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.
+  **Create the feature worktree FIRST**, then create the plan, snapshot, review, synthesize and
+  implement **all inside that same worktree**. The Combined-verdict artifact is per-directory session
+  state under `docs/planning/.verdicts/` — it is git-ignored twice over and does **not** follow a later
+  `git worktree add`, so gating in one checkout and implementing in another fails the gate on a genuine
+  approval (hit on COREDEV-2583 with byte-identical plan content). Two mandatory conventions in this
+  file used to contradict each other on exactly this point; this ordering is the resolution.
 - **Jira hygiene:** every change references a `COREDEV-XXXX` ticket (create one if none); update it with notes
   through implementation, not just at the end; associate with the parent Epic.
 - **Context7 (mandatory)** for any library/framework/API/CLI lookup (Swift, SwiftUI, GRDB, MSAL, Gmail/Graph,

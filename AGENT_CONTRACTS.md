@@ -81,9 +81,21 @@ Use `/unleashed-mail:create-feature-plan` to scaffold (a bare `/create-feature-p
 
 Before any implementation begins:
 
+00. **Create the feature worktree FIRST**, and do everything below inside it — plan creation, snapshot,
+    both reviews, synthesis and implementation. The Combined-verdict artifact is per-directory session
+    state under `<plan-dir>/.verdicts/`; it is git-ignored at the repo root **and** self-ignored by a
+    `*` `.gitignore` that `review-verdict.py::_ensure_secure_dir` writes inside the directory on
+    purpose. It therefore does **not** follow a later `git worktree add`, and a fresh clone or worktree
+    contains only the plan. Gating in one checkout and implementing in another fails the gate on a
+    genuine approval — hit on COREDEV-2583 with byte-identical plan content and a five-round approval.
+    CI and a second developer cannot verify an approval at all, by design; do not expect them to.
 0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
    --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
    fails closed without it. Re-run it on any plan revision.
+0b. **Freeze the plan for the duration of a review round.** No edits between dispatching a review and
+    recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
+    digest-bound review cannot approve a moving target"* — and the round is void. This applies to the
+    author exactly as §2's read-only expectation applies to the reviewer.
 1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
 2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts

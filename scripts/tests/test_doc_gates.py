@@ -395,3 +395,78 @@ class COREDEV2602_AgentOutputStyle(unittest.TestCase):
         self.assertIn("MIT", section)
         self.assertIn("07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba", section,
                       "pin the upstream commit so the adaptation stays auditable")
+
+
+class COREDEV2603_WorktreeOrdering(unittest.TestCase):
+    """The worktree-BEFORE-plan ordering must stay documented (COREDEV-2603 item C1).
+
+    Two mandatory `CLAUDE.md` conventions used to contradict each other: work in a dedicated
+    `.claude/worktrees/<name>` worktree, AND pass `implement`'s verify step. The Combined-verdict
+    artifact is per-directory session state that git never carries, so gating in one checkout and
+    implementing in another failed the gate on a genuine five-round approval (COREDEV-2583, with
+    byte-identical plan content).
+
+    Before C1 the resolution existed NOWHERE an operator would look: `grep -rn worktree skills/
+    AGENT_CONTRACTS.md` returned ZERO hits, and the convention appeared only at `CLAUDE.md:91`.
+    These assertions exist because a docs-only fix is exactly the kind that gets silently reverted.
+    """
+
+    FILES = {
+        "CLAUDE.md": None,
+        "AGENT_CONTRACTS.md": None,
+        "skills/create-feature-plan/SKILL.md": None,
+        "skills/implement/SKILL.md": None,
+        "skills/review-synthesis/SKILL.md": None,
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        for rel in cls.FILES:
+            with open(os.path.join(_ROOT, rel), encoding="utf-8") as fh:
+                cls.FILES[rel] = fh.read()
+
+    def test_every_surface_mentions_the_worktree_constraint(self):
+        """All five, because an operator can enter the flow at any one of them."""
+        for rel, src in self.FILES.items():
+            with self.subTest(file=rel):
+                self.assertIn("worktree", src,
+                              f"{rel} must carry the worktree ordering — it is an entry point")
+
+    def test_contracts_carries_it_as_a_numbered_clause(self):
+        """§2's ordered gate steps are what implementation agents follow; prose elsewhere is not
+        a substitute for a step in that list."""
+        src = self.FILES["AGENT_CONTRACTS.md"]
+        self.assertIn("00.", src, "§2 needs a step 00 preceding the digest snapshot")
+        i = src.index("00.")
+        clause = src[i:i + 1400]
+        self.assertIn("worktree", clause)
+        self.assertIn(".verdicts", clause)
+
+    def test_the_reason_is_stated_not_just_the_rule(self):
+        """A bare 'create the worktree first' gets optimised away by the next reader. The WHY —
+        that the artifact is git-ignored and does not follow a later `git worktree add` — is what
+        makes it stick."""
+        for rel in ("AGENT_CONTRACTS.md", "skills/implement/SKILL.md",
+                    "skills/review-synthesis/SKILL.md"):
+            with self.subTest(file=rel):
+                src = self.FILES[rel]
+                self.assertIn(".verdicts", src)
+                self.assertTrue(
+                    "git-ignored" in src or "not carried by git" in src or "does not travel" in src,
+                    f"{rel} must say WHY the artifact does not move, not just that it must not be moved",
+                )
+
+    def test_the_plan_freeze_rule_is_recorded(self):
+        """A reviewer refused a round because the target changed mid-review. The rule now applies to
+        the author too, and it belongs in the ordered gate steps."""
+        src = self.FILES["AGENT_CONTRACTS.md"]
+        self.assertIn("moving target", src,
+                      "record that a review cannot approve a plan edited mid-round")
+
+    def test_no_surface_promises_CI_can_verify(self):
+        """CI and a second developer cannot verify an approval — the artifact is doubly git-ignored
+        BY DESIGN. Round 1 of the CI plan claimed repo-relative paths would fix that; they do not,
+        and a doc that implies otherwise sends someone chasing an impossible bug."""
+        for rel in ("AGENT_CONTRACTS.md", "skills/review-synthesis/SKILL.md"):
+            with self.subTest(file=rel):
+                self.assertNotIn("CI can verify", self.FILES[rel])
