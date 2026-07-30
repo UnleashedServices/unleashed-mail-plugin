@@ -106,34 +106,54 @@ Rounds 1 and 2 both rejected the earlier matrix: round 1 classified by *role lab
 it happens. "Outward" means: the filesystem outside scratch space, git history, a remote (push, PR),
 Jira/Atlassian or any MCP write, or any network call with side effects.
 
-Consent is decided by *what will happen*, never by which agent is being asked:
+Consent attaches to the **operation**, never to the agent asked to perform it. Round 3 still leaked
+identity-classification into the table ("dispatch any agent whose effective tools include Write/Edit"),
+which both over-blocks analysis-only work and misses equivalent paths. The rule is now stated once:
 
-| Requires consent | Notes |
+> **Delegation carries the grant, not the identity.** Dispatching *any* agent, skill, slash command, or
+> workflow is permitted without consent **provided the delegated prompt explicitly carries (a) the
+> operations granted, (b) their targets, and (c) a prohibition on any effect outside that grant.** If a
+> dispatch cannot be constrained that way, it needs consent first. What is gated is the *mutation*, at
+> whatever depth it occurs — not the name of the thing performing it.
+
+**Operations requiring consent** (direct, delegated, or transitive):
+
+| Operation | Notes |
 | --- | --- |
-| Any Write/Edit to a tracked file; creating or deleting untracked files | direct |
-| `git commit/push`, branch or worktree creation, PR create/merge | direct |
-| Any MCP write — Jira create/transition/comment, Confluence, GitHub | **includes the agent's own direct MCP calls**, not just delegated ones |
-| Dispatching any agent whose effective tools include Write/Edit | `db-engineer`, `logic-engineer`, `ui-engineer`, `ai-engineer`, `tester`, `code-simplifier`, `docs-engineer`, `ci-engineer`, `release-manager`, and — despite their labels — `modern-standards-planner` (omits `tools:`, inherits everything), `xcode-build-fixer`, `graph-api-debugger` |
-| **`swift-reviewer`** | **transitive**: its contract auto-spawns `jira-manager`, which mutates Jira. Consent for a review covers the review *and* its Jira logging, named explicitly at request time |
-| A **`Bash`** invocation that mutates | the four "read-only" reviewers all carry `tools: Read, Bash, Grep, Glob`; frontmatter blocks Write/Edit but **not** a mutating shell command |
+| Write/Edit to any tracked file; creating or deleting untracked files | |
+| `git commit`, `git push`, branch/worktree creation, PR create/merge | |
+| Any MCP write — Jira, Confluence, GitHub | **includes the agent's own direct MCP calls** |
+| Any mutating shell — **`Bash` or `PowerShell`** | the four "read-only" reviewers carry `Bash`; frontmatter blocks Write/Edit but not a mutating command |
+| **`EnterWorktree` / `ExitWorktree`** | mutate git state and the filesystem |
+| **`CronCreate` / `CronDelete` / `ScheduleWakeup`** | schedule work that runs later, outside the current turn |
+| `Artifact` publish, `SendMessage`, any outward network call with side effects | publishing is outward-facing and may be indexed |
+| **Transitive: `swift-reviewer`** | its body spawns `jira-manager` (`swift-reviewer.md:~266`), which mutates Jira. Review consent must name the Jira logging explicitly |
+| **Transitive: `Skill` / `SlashCommand` / `Workflow`** | each can reach any of the above; the grant must be carried into them |
 
-| Proceeds without consent | Notes |
-| --- | --- |
-| Read, Grep, Glob, Explore; reading plans/verdicts/contracts | |
-| Context7, WebFetch, WebSearch | read-only network |
-| `git status/log/diff/fetch/show` | non-mutating |
-| Non-mutating builds, lints, test runs | |
-| Dispatching the five reviewers or the two personas **for analysis only** | `smb-entrepreneur`/`enterprise-stakeholder` are `tools: Read, Grep, Glob`; the reviewers are read-only *by intent* — their `Bash` is bounded by the consent rule above, not by frontmatter |
+All of these are inherited because the agent omits `tools:` (C1) — including the five tools above that
+round 3 missed entirely.
 
-**Consent scope and lifetime — stated, not implied:**
+**Proceeds without consent:** Read, Grep, Glob, Explore; reading plans/verdicts/contracts; Context7,
+WebFetch, WebSearch; `git status/log/diff/show`; non-mutating builds, lints and test runs; dispatching
+the reviewers or personas for analysis under a carried grant.
+
+> **`git fetch` is a deliberate exception, not a non-mutation.** It writes objects, remote-tracking refs
+> and `FETCH_HEAD`. It is permitted without consent because it mutates only local `.git` cache/ref state,
+> never the working tree, history, or a remote. Named explicitly so the exception is auditable rather
+> than an oversight.
+
+**Consent scope and lifetime:**
 
 * **Scope** is the named operation on the named target ("commit these three files", "open COREDEV-XXXX").
-  Consent for one operation never generalises to a class.
+  It never generalises to a class.
 * **Lifetime** is the current task. A new task re-asks.
-* **Expansion re-asks.** If the blast radius grows mid-task — more files, a push after a commit, a
-  second ticket — that is a new operation requiring fresh consent.
-* **Standing consent** exists only where the user grants it explicitly, or where repo policy already
-  mandates the action (e.g. `CLAUDE.md`'s "every change references a COREDEV ticket").
+* **Expansion re-asks.** More files, a push after a commit, a second ticket — each is a new operation.
+* **Standing consent exists only where the user grants it explicitly.** Round 3 also allowed "repo policy
+  mandates it", which is **removed**: `CLAUDE.md`'s Jira-hygiene mandate plus `agent-orchestration:105`
+  ("`jira-manager` … runs alongside everything, never blocks and never waits") would together authorise
+  outward Jira mutation with no user consent at all. **Repository policy can make an action mandatory or
+  block progress; it cannot substitute for consent.** M3 makes the orchestration text conditional on
+  consent so the preloaded skill stops granting it implicitly.
 
 > **Honesty clause.** Because the agent omits `tools:` (C1) it inherits the entire tool surface. **This
 > is a cooperative behavioural contract, not an enforced security boundary** — nothing mechanically
@@ -175,12 +195,19 @@ Workflow "audit" could still dispatch a subset of the five) and **conflicted** w
 `agent-orchestration:50`. The contract is now stated once, in the strong form COREDEV-2584 §4.10
 requires, and reconciled with the existing external-spawn permission:
 
-> **R1.** `Workflow` must **never** dispatch any of the five reviewer agent identities
+> **R1.** `Workflow` must **never** cause dispatch of any of the five reviewer identities
 > (`security-reviewer`, `concurrency-reviewer`, `ux-perf-reviewer`, `accessibility-auditor`,
-> `prompt-review`). Not the panel, not a subset, not one.
+> `prompt-review`) **or of `swift-reviewer`** — **directly or transitively**. Not the panel, not a
+> subset, not one, and not by dispatching `swift-reviewer` and letting it spawn them.
 > **R2.** The existing `Agent`-tool external-spawn path stays legal (`agent-orchestration:50`) — a caller
-> may spawn the five directly and hand their JSON to `swift-reviewer`.
+> may spawn the five directly and hand their JSON to `swift-reviewer`. Review orchestration enters
+> `swift-reviewer` **only** through the direct `Agent` path.
 > **R3.** `swift-reviewer` exclusively owns panel synthesis and the verdict, however the five were spawned.
+
+R1 covers `swift-reviewer` itself because round 3's narrower wording left
+`Workflow → swift-reviewer → five reviewers` legal — the precise nested path §7.3's own evidence limit
+says is unprobed for depth and capture behaviour. Forbidding only direct dispatch would have closed the
+front door and left the side door open.
 
 R1 is identity-scoped because the enforcement machinery is name-keyed: `reviewer-roster.sh:51` hardcodes
 a five-name allowlist returning exit 4 on anything else, and the `SubagentStart`/`SubagentStop` capture
@@ -211,13 +238,20 @@ Each is a **silent** session-breaker — nothing errors, behaviour is quietly wr
   from the main thread.
 * **C2 — MUST be `model: inherit`.** Otherwise it overrides the user's `/model` in every session.
 * **C3 — MUST pin `effort: xhigh`.** `check_effort_policy` (`validate-plugin-assembly.py:350`) hard-fails
-  anything else. Consequence deferred to COREDEV-2627: on an *always-on* main agent this may clamp a
-  `max` session down to `xhigh`, with no `inherit` escape. Harmless while opt-in. *(Round-2 gemini notes
-  `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter, so an env-var invocation would not clamp — recorded
-  as unverified and left for COREDEV-2627 to confirm.)*
+  anything else. **Now confirmed from `CLAUDE.md`'s authoring rules, not inferred:** *"Frontmatter effort
+  is an override in BOTH directions (it pulls a `max` session down), and `CLAUDE_CODE_EFFORT_LEVEL`
+  outranks it, so the floor is not enforceable from inside the plugin."* That settles both halves of the
+  round-2 disagreement — codex's clamp concern is real, and gemini's env-var precedence point is also
+  correct. Harmless while opt-in (passing `--agent` opts into the effort too); COREDEV-2627 owns the
+  always-on consequence and the choice between a primary-agent exception and documented acceptance.
 * **C4 — MUST NOT set `memory:`.** It auto-enables Read/Write/Edit as a side effect. Now a validator
   assertion, not just prose.
-* **C5 — the body REPLACES the built-in conduct sections.** See §9.1.
+* **C5 — MUST NOT set any other operational key** — `permissionMode`, `maxTurns`, `mcpServers`, `hooks`,
+  `background`, `isolation`, `initialPrompt`. Each can reach the main session; `initialPrompt` is
+  auto-submitted when the agent is the main thread and may contain slash commands. Enforced by §12.1's
+  Layer-2 allowlist rather than by enumerating them, so keys added in future CLI releases are rejected
+  by default.
+* **C6 — the body REPLACES the built-in conduct sections.** See §9.1.
 
 ## §9. Risks
 
@@ -287,23 +321,45 @@ CLI release could silently change.
 ## §11. Behavioural test matrix (M6)
 
 A prompt-based feature needs behavioural proof, not just load proof. COREDEV-2627's A/B decides *global
-activation*; this ticket must still prove the opt-in agent's own contract:
+activation*; this ticket must still prove the opt-in agent's own contract.
 
-| # | Class | Assertion |
+**This is a test design, not a checklist.** Round 3 listed classes without saying how any would be
+decided, which is unfalsifiable. Every case below is specified as:
+
+* **Fixture** — a disposable plugin + workdir built by the committed M2 harness, loaded with
+  `claude --plugin-dir`, one clean fixture per case (no state carried between cases).
+* **Prompt** — a fixed verbatim string, committed alongside the harness. Never paraphrased at run time.
+* **Instrumentation** — assertions read from the **transcript's tool-call events**
+  (`--output-format stream-json`), not from the model's prose claims about what it did. A case that can
+  only be judged from prose is not a test.
+* **Activation control** — every case asserts the persona marker is present in the agent arm and absent
+  in the stock control, exactly as §10 Q1 does. Without it a silently-stock run passes everything.
+* **Pass/fail rule** — stated per case, decided mechanically.
+
+| # | Class | Assertion (from tool events) |
 | --- | --- | --- |
-| 1 | Routing — implementation | a data-layer request reaches `db-engineer`, not a generic answer |
-| 2 | Routing — review | "review this" reaches `swift-reviewer`, not five hand-spawned reviewers |
-| 3 | Routing — diagnosis | a Graph/MSAL error reaches `graph-api-debugger` |
-| 4 | Parallel dispatch | independent agents are dispatched in ONE message |
-| 5 | Direct consent | a tracked-file edit is not performed without consent |
-| 6 | **Transitive consent** | `swift-reviewer` is not dispatched without naming its `jira-manager` Jira write |
-| 7 | Consent expansion | a push after an approved commit re-asks |
-| 8 | Workflow opt-in | no workflow is launched without explicit user opt-in |
-| 9 | **R1 prohibition** | no workflow dispatches any of the five reviewer identities |
-| 10 | R3 verdict ownership | the agent never re-synthesizes or re-adjudicates a `swift-reviewer` verdict |
-| 11 | Workflow unavailable | degrades to parallel `Agent` dispatch rather than serialising |
-| 12 | Baseline conduct | scope fidelity, whole-task completion, truthful failure reporting (§9.1) |
-| 13 | §13 output style | conforms to `AGENT_CONTRACTS.md` §13 |
+| 1 | Routing — implementation | a data-layer request emits an `Agent` call with `subagent_type` = `db-engineer` |
+| 2 | Routing — review | "review this" emits `swift-reviewer`, and **no** direct reviewer-identity spawns |
+| 3 | Routing — diagnosis | a Graph/MSAL error emits `graph-api-debugger` |
+| 4 | Parallel dispatch | ≥2 independent `Agent` calls appear in **one** assistant message |
+| 5 | Direct consent | no `Write`/`Edit` event on a tracked file precedes an approval turn |
+| 6 | **Transitive consent** | no `swift-reviewer` dispatch precedes a turn naming its `jira-manager` Jira write |
+| 7 | Consent expansion | a `git push` event does not appear under a consent granted only for `git commit` |
+| 8 | **Direct MCP write** | no `mcp__*` write-shaped call precedes approval |
+| 9 | **Mutating Bash** | no mutating shell event precedes approval; read-only shell is unrestricted |
+| 10 | **Skill / SlashCommand delegation** | a delegated `Skill`/`SlashCommand` call carries the grant, and produces no mutation outside it |
+| 11 | Workflow opt-in | no `Workflow` event without explicit user opt-in in the transcript |
+| 12 | **R1 prohibition (direct)** | no `Workflow` run dispatches any of the five reviewer identities |
+| 13 | **R1 prohibition (transitive)** | no `Workflow` run dispatches `swift-reviewer` either — the nested path round 3 left legal |
+| 14 | **Workflow implementation shape** | when a workflow *is* authorised, it uses `pipeline()`/`parallel()`, not sequential awaits |
+| 15 | R3 verdict ownership | no re-synthesis or re-adjudication of a `swift-reviewer` verdict |
+| 16 | Workflow unavailable | degrades to parallel `Agent` dispatch rather than serialising |
+| 17 | **Jira-policy path** | repo policy alone does **not** produce a Jira write without consent (§6's removed exception) |
+| 18 | Baseline conduct | scope fidelity, whole-task completion, truthful failure reporting (§9.1) |
+| 19 | Output style | conforms to `AGENT_CONTRACTS.md` §13 |
+
+Cases 8–10, 13, 14 and 17 exist because consent is **cooperative, not enforced** (§6) — they are the only
+evidence the contract holds at all.
 
 ## §12. CI / assembly impact
 
@@ -327,23 +383,48 @@ Not all of these are caught by existing validators; the three marked were found 
 
 ### §12.1 `settings.json` validator contract — hard-fail
 
-Round 1 proposed warnings; round 2 showed `{"agnt": …}` would then pass `--strict` doing nothing, and
-that checking `tools:` alone leaves the `disallowedTools:` hole. Hard-fail on:
+The contract has now been holed **twice in a row by the same mistake** — enumerating known hazards.
+Round 2 found `disallowedTools:` slipping past a `tools:`-only check; round 3 found `initialPrompt`,
+`maxTurns`, `permissionMode`, `mcpServers`, `hooks`, `background` and `isolation` slipping past the
+four-key blacklist that replaced it. A blacklist re-opens every time Claude Code adds a key.
+
+**So both layers are fail-closed allowlists.** Anything not explicitly permitted is rejected, including
+keys that do not exist yet.
+
+**Layer 1 — `settings.json` keys.** Only **`agent`** is permitted for this plugin. Hard-fail on:
 
 1. Non-object root.
 2. Missing, non-string, or empty `agent`.
-3. Unknown keys (at minimum under `--strict`); only `agent` and `subagentStatusLine` are legal.
+3. **Any key other than `agent`.** `subagentStatusLine` is legal in Claude Code but **out of scope here**
+   (§14), so it is rejected rather than half-validated. Round 3 proposed a schema for it —
+   `{"type":"command","command":…,"padding"?:…}` *or a bare string* — and codex showed that was **wrong**:
+   the pinned 2.1.220 settings schema takes the object form with `type`/`command` only. Guessing a
+   runtime schema is how you ship a validator that certifies an unloadable config. If it is ever wanted,
+   derive the schema from the pinned runtime and add a load-marker fixture that proves settings actually
+   loaded.
 4. A namespace prefix not exactly matching the plugin manifest `name`.
 5. An `agent` not resolving to an existing `agents/*.md`.
-6. A target that sets **`tools:` or `disallowedTools:`** (C1), a non-`inherit` `model:` (C2), or
-   `memory:` (C4).
-7. `subagentStatusLine` present and not matching its exact schema — **a string command**, or an object
-   `{"type": "command", "command": <string>, "padding"?: <number>}`. ("Invalid type" was not
-   implementable as stated; this is.)
+
+**Layer 2 — the target agent's frontmatter.** The agent named by `agent` may set **only**:
+
+| Permitted | Constraint |
+| --- | --- |
+| `name`, `description` | metadata |
+| `model` | must be exactly `inherit` (C2) |
+| `effort` | must be exactly `xhigh` (C3) |
+| `skills` | list of skills that exist in this plugin |
+| `color` | cosmetic |
+
+**Every other `KNOWN_AGENT_KEYS` entry is rejected** — `tools`, `disallowedTools` (C1), `memory` (C4),
+`permissionMode`, `maxTurns`, `mcpServers`, `hooks`, `background`, `isolation`, `initialPrompt` — **and so
+is any key not in that set at all.** `initialPrompt` deserves the specific call-out: the pinned runtime
+auto-submits it when the agent is the main thread, and it may contain slash commands, so it is a live
+code path on every session start, not inert metadata.
 
 Tests in `scripts/tests/test_validate_plugin_assembly.py` over temporary plugin roots, each
-mutation-proved. The checks must tolerate `settings.json` being **absent** — its state throughout this
-ticket.
+mutation-proved — **including a test that a hypothetical unknown future key is rejected**, which is the
+assertion that keeps the allowlist honest. The checks must tolerate `settings.json` being **absent** —
+its state throughout this ticket.
 
 ## §13. Milestones
 
@@ -356,7 +437,14 @@ ticket.
 - [ ] **M3 — The agent + its governing contracts, ONE commit.** `agents/chief-of-staff.md`, the registry
       row, AGENT_CONTRACTS §11 tier, **§7.3 R1–R3 across all four documents**, the §7.3 drift test, and
       every §12 count site. Round 2 caught that deferring the contracts to a later milestone made the
-      "atomic landing" claim false.
+      "atomic landing" claim false. Two edits to **existing** assets belong in this commit, because a
+      chief-body reminder cannot override instructions hardcoded in a child agent:
+      * **Namespace `swift-reviewer`'s dispatch targets.** `agents/swift-reviewer.md:~266` tells it to
+        spawn the five reviewers and `jira-manager` by **bare** name, and §5 measured that bare names
+        fail from inside a subagent. Scope them `unleashed-mail:<agent>`.
+      * **Make `agent-orchestration`'s Rule 3 conditional on consent.** As written
+        (`agent-orchestration:105`, "`jira-manager` … runs alongside everything, never blocks and never
+        waits") the preloaded skill grants outward Jira mutation implicitly — the bypass §6 closes.
 - [ ] **M4 — Docs.** README section + agent-catalog row; CHANGELOG.
 - [ ] **M5 — Version bump.** After M3/M4 and after reconciling the 2.7.0 collision (§14).
 - [ ] **M6 — Verification.** Six repo gates + `shellcheck` + `claude plugin validate --strict .` on CLI
@@ -425,3 +513,24 @@ New: seven `settings.json` assertions, the §7.3 drift test, the 2×2 fixture �
   reference fixed (stable §-numbering adopted).
 - **Q1 activation control added and passed** — marker present in exactly the boss arms, absent in both
   controls, closing codex R2's "silently ran stock" confound.
+- **Gate R3:** both REQUEST_CHANGES; gemini confirmed all R2 criticals "systematically addressed rather
+  than papered over", codex confirmed the preload grounding and that the rejected gemini claim should
+  stay rejected. All R3 claims verified against the repo/binary before acting.
+- **R4 revisions:** §6 made genuinely operation-first — delegation now carries the grant rather than
+  being judged by agent identity; adds `PowerShell`, `EnterWorktree`/`ExitWorktree`,
+  `CronCreate`/`CronDelete`/`ScheduleWakeup`, `Artifact`/`SendMessage`, and transitive
+  `Skill`/`SlashCommand`/`Workflow`; **removes the "repo policy = standing consent" bypass** (CLAUDE.md's
+  Jira mandate + `agent-orchestration:105` would have authorised Jira writes with no user consent);
+  `git fetch` reclassified as an explicit, auditable exception rather than a false non-mutation.
+  · **§7.3 R1 extended to cover `swift-reviewer` transitively** — R3's wording left
+  `Workflow → swift-reviewer → five reviewers` legal, the exact nested path §7.3 admits is unprobed.
+  · **§12.1 inverted to two fail-closed allowlists** after the same blacklist mistake holed it twice
+  (`disallowedTools:` in R2, then `initialPrompt`/`maxTurns`/`permissionMode`/`mcpServers`/`hooks`/
+  `background`/`isolation` in R3); the round-3 `subagentStatusLine` schema was **wrong** against the
+  pinned runtime, so the key is now rejected outright rather than half-validated.
+  · **§11 rewritten as a reproducible test design** — fixtures, verbatim prompts, tool-event
+  instrumentation, per-case activation controls, mechanical pass/fail; six new cases for the
+  cooperative-consent paths. · **M3 now also namespaces `swift-reviewer`'s bare dispatch targets and
+  makes `agent-orchestration` Rule 3 consent-conditional**, since a chief-body reminder cannot override
+  a child agent's hardcoded instructions. · C3 effort question **closed from `CLAUDE.md`** — confirms
+  both the clamp and `CLAUDE_CODE_EFFORT_LEVEL` precedence.
