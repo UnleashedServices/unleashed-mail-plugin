@@ -470,3 +470,66 @@ class COREDEV2603_WorktreeOrdering(unittest.TestCase):
         for rel in ("AGENT_CONTRACTS.md", "skills/review-synthesis/SKILL.md"):
             with self.subTest(file=rel):
                 self.assertNotIn("CI can verify", self.FILES[rel])
+
+
+class COREDEV2607_ReviewerIsolation(unittest.TestCase):
+    """The gemini reviewer must not be pointed at the working tree (COREDEV-2607).
+
+    `agy` is not read-only and no flag makes it so. A plan review implemented the plan instead of
+    reviewing it — 6 shipped scripts modified, 5 files created — and the skill at the time documented
+    `agy --add-dir "$(pwd)"` as THE recipe with no warning at all.
+    """
+
+    SKILL = os.path.join(_ROOT, "skills", "gemini-review", "SKILL.md")
+    WRAPPER = os.path.join(_ROOT, "scripts", "review", "isolated-agy-review.sh")
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.SKILL, encoding="utf-8") as fh:
+            cls.skill = fh.read()
+
+    def test_the_isolation_wrapper_ships(self):
+        self.assertTrue(os.path.exists(self.WRAPPER), "isolated-agy-review.sh must ship")
+        self.assertTrue(os.access(self.WRAPPER, os.X_OK), "wrapper must be executable")
+
+    def test_the_skill_recommends_the_wrapper(self):
+        self.assertIn("isolated-agy-review.sh", self.skill)
+
+    def test_the_skill_warns_that_agy_can_write(self):
+        self.assertIn("NOT READ-ONLY", self.skill,
+                      "the skill must lead with the fact that agy can write to the tree")
+
+    def test_the_tested_ineffective_flags_are_recorded(self):
+        """So nobody 'fixes' this by adding --mode plan. All four were tested; all four wrote."""
+        for flag in ("--mode plan", "--sandbox"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, self.skill)
+
+    def test_every_raw_agy_invocation_is_warned_or_superseded(self):
+        """A raw `agy --add-dir "$(pwd)"` may appear only where the surrounding text flags the risk."""
+        lines = self.skill.split("\n")
+        for i, line in enumerate(lines):
+            if 'agy --add-dir "$(pwd)"' not in line:
+                continue
+            window = "\n".join(lines[max(0, i - 12):i])
+            with self.subTest(line=i + 1):
+                self.assertTrue(
+                    any(k in window for k in ("SUPERSEDED", "can write", "NOT READ-ONLY",
+                                              "isolated wrapper", "COREDEV-2607")),
+                    f"unwarned raw agy invocation at line {i + 1} — it points at the working tree",
+                )
+
+    def test_the_wrapper_asserts_the_tree_is_unchanged(self):
+        with open(self.WRAPPER, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("git status --porcelain", src, "must fingerprint the tree")
+        self.assertIn("exit 3", src, "a tree mutation must VOID the round with a distinct exit code")
+        self.assertIn("worktree add --detach", src, "must review a disposable detached checkout")
+
+    def test_the_wrapper_guards_against_a_truncated_prompt(self):
+        """A guard-only prompt wasted two review rounds; the reviewer's reply read like a wording
+        problem rather than the read-after-truncate bug it was."""
+        with open(self.WRAPPER, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("1000", src, "must refuse to launch on a truncated prompt")
+        self.assertIn("read back empty", src, "must assert the prompt body was read before writing")

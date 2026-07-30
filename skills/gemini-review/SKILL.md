@@ -5,7 +5,7 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
 # what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
 effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
 ---
 
 # Antigravity (`agy`) Review
@@ -33,22 +33,52 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 **The only proven recipe for non-TTY contexts** (Claude's Bash tool, CI scripts, automation): run `agy` inside a pseudo-terminal via the committed, command-agnostic wrapper [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs the command under a controlling PTY via `pty.fork()` so the text-drip renders, ANSI-strips the output, writes it to `<out-path>`, and propagates the child's exit code. The **same wrapper** captures `codex exec` for [`codex-review`](../codex-review/SKILL.md) — one PTY wrapper, both review CLIs.
 
-Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. For agy:
+> ## ⚠️ `agy` IS NOT READ-ONLY — NEVER POINT IT AT THE WORKING TREE
+>
+> On 2026-07-29 a plan review **implemented the plan instead of reviewing it**: 6 shipped scripts
+> modified, 5 files created, including a stray `marketplace.json` at the repo root (COREDEV-2607). It
+> emitted no `VERDICT:` line so the gate failed closed — the *fortunate* failure mode — but the edits
+> persisted. The concurrent `codex` review only stayed trustworthy because it independently
+> re-anchored its citations to committed `HEAD`; nothing in the gate required that.
+>
+> **These flags were TESTED and none of them prevents writes. Do not re-try them:**
+>
+> | invocation | wrote the file? |
+> |---|---|
+> | `agy` (no flags) | **yes** |
+> | `agy --mode plan` | **yes** |
+> | `agy --sandbox` | **yes** |
+> | `agy --sandbox --mode plan` | **yes** |
+>
+> All four exited 0. `--mode` is "agent execution mode (accept-edits, plan)" and `--sandbox` is
+> "terminal restrictions"; neither restricts file writes in print mode. This is the asymmetry with
+> [`codex-review`](../codex-review/SKILL.md), which already runs `-s read-only`. **Isolate instead of
+> constraining** — that is what the wrapper below does.
+
+Interface: `isolated-agy-review.sh <prompt-file> <out-path> [timeout]`. The prompt path is **relative
+to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable copy.
 
 ```bash
-# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
-# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
-# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
-# `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (agy absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
-# previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
-# maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-rm -f /tmp/agy-out.txt /tmp/agy-out.txt.captureid
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
-# Output in /tmp/agy-out.txt; the wrapper's exit code matches agy's.
+# Creates a disposable DETACHED worktree at the reviewed commit, rewrites the prompt's absolute paths
+# to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
+# working tree is byte-identical before/after. A tree mutation exits 3 and VOIDS the round rather than
+# being cleaned up silently.
+#
+# It also pre-cleans the transcript (an ABSENT file maps to MISSING -> the gate fails closed; a STALE
+# one would be read as this round's verdict) and extracts the verdict with an ANCHORED grep — a loose
+# `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
+    .agy-prompt.md /tmp/agy-out.txt 1500
+# -> EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
+# Exit 3 = the reviewer mutated the tree. Exit 1 = setup/prompt failure (e.g. a truncated prompt,
+# which the wrapper refuses to launch on rather than burning 20 minutes).
 ```
+
+**Timeouts are unchanged and still load-bearing.** `--print-timeout 18m` is passed by the wrapper
+because `agy`'s own default is 5m and a real plan review blows past it; the pty wrapper's timeout
+(default 1500s) is deliberately ABOVE that, because a lower wrapper cap SIGTERMs `agy` before its
+own print-timeout can fire, giving a masked exit 124 instead of `agy`'s diagnosable
+`Error: timeout waiting for response`.
 
 Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
@@ -101,19 +131,24 @@ EOF
 # expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
 # previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
 # maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-rm -f /tmp/agy-out.txt /tmp/agy-out.txt.captureid
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/agy-out.txt -- \
-    agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
-# Output is written to /tmp/agy-out.txt; the wrapper's exit code matches agy's.
+# SUPERSEDED — this raw form points agy at the WORKING TREE, which it can write to (COREDEV-2607).
+# Use scripts/review/isolated-agy-review.sh instead; it wraps exactly this pipeline, but against a
+# disposable detached checkout, and asserts the real tree is unchanged afterwards.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" .agy-prompt.md /tmp/agy-out.txt 1500
 ```
 
 ### From an interactive terminal (no wrapper needed)
 
 The drip animation renders to a real TTY directly. Read the output in your terminal; do NOT pipe to a file (the drip cannot capture through a pipe — that's the whole reason the PTY wrapper exists for non-TTY contexts).
 
+> **Even here, `agy` can write to the workspace** (COREDEV-2607). Interactively that is at least
+> *visible* — you are watching it — but for anything gate-bearing prefer the isolated wrapper, and
+> check `git status` afterwards either way.
+
 ```bash
 # Plan review — agy -p with workspace flag in same invocation.
 # Run from the project root so "$(pwd)" resolves to the workspace.
+# NOTE: this points agy at the real tree. For a gate round use the isolated wrapper above.
 agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
 
 # For record-keeping: use the PTY wrapper above instead of `> file`.
