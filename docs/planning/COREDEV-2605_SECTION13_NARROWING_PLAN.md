@@ -1,6 +1,9 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 4 gated** (**gemini REQUEST_CHANGES ×5 / codex REQUEST_CHANGES ×4**). The
+**Status:** Planning — **round 5 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Adding §14
+**breaks `_section13()`**, which ends at `## Cross-references` and would swallow it; M5's ticket example
+has **two independent rejection causes** that mask each other; and M1/M3 are gate-adequacy comparisons,
+not candidate mutants. See §14. Previously — round 4 gated (**gemini REQUEST_CHANGES ×5 / codex REQUEST_CHANGES ×4**). The
 schema now validates approved **triples**, not independent column allowlists; **M5b's polarity was
 backwards** and is corrected; and `BLOCKED — …` gets a **new shared section §14**. See §13. Previously —
 round 3 gated (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×4**). The
@@ -10,7 +13,7 @@ reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contra
 See §12. Rounds 1-2 are in §10-§11. Awaiting round 4.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-30 (round 4, post-gate revision)
+**Last Updated:** 2026-07-30 (round 5, post-gate revision)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -197,6 +200,9 @@ each of the four is named, individually, so removing one is not masked by the ot
 > **finite allowlist**, and **any unknown key is a hard failure**. Prose descriptions are not row
 > content; they may sit outside the table.
 >
+> - **all nine approved triples are required** — the four `in` rows and the five `out` rows — not only
+>   the `in` set. Round 5: M2 is "not guaranteed" until the full triple set is mandatory, because a
+>   deleted `out` row is otherwise invisible.
 > - the **in** set equals exactly the four named `surface_id`s, by **canonical producer identity**;
 > - that set is **disjoint** from `capture.VALID_AGENTS`;
 > - the table is **EXCLUSIVE and NORMATIVE**: it is the *only* scope statement, every row is one of
@@ -271,6 +277,12 @@ contains none, passing vacuously.
 
 **So parser truth lives in one place — the test suite — and the document points at it:**
 
+0. **Split the ticket example into ISOLATED bad cases first — round 5's finding.** The §1 example
+   carries **two independent rejection causes**: the multiline `Remaining:` block *and* the trailing
+   `Next:` line. `extract_status` walks up from the JSON fence over blank + detail-field lines and stops
+   at either (`mcp/review-synthesizer/capture.py:399`). So a parser mutant that starts accepting a
+   numbered `Remaining:` leaves the named regression **green**, because `Next:` still aborts the parse.
+   Add one isolated fixture per cause, and **one M5b mutant per cause**.
 1. Add the **exact ticket regression** to `TestExtractStatus`
    (`mcp/review-synthesizer/tests/test_capture.py:459` is the class heading): the §1 non-compliant
    multiline `Remaining:` block must yield `None`, and the compliant single-line form the full dict.
@@ -284,8 +296,11 @@ contains none, passing vacuously.
    - **M5a** delete or rename the referenced test → the **doc-gate** fails.
    - **M5b** *(polarity corrected in round 4)* mutate the **parser** (`mcp/review-synthesizer/capture.py`)
      so it accepts the non-compliant payload → the **named test** fails.
-   - **M5c** *(round 4)* delete or falsify the invariant's **prose** in §5, leaving the cross-reference
-     string intact → the doc-gate must fail.
+   - **M5c** *(round 4; made exact in round 5)* delete or falsify the invariant's **prose** in §5,
+     leaving the cross-reference string intact → the doc-gate must fail. **The oracle must be exact:**
+     compare the **complete verbatim invariant block**, or an explicitly enumerated set of clauses.
+     "Falsify the prose" left the test's own design as a semantic judgement, which is how an inert
+     gate gets written.
 
    > **Round 4 caught M5b pointing the wrong way.** It previously said "strip the ticket example's
    > assertions from that test → the parser suite fails". Stripping assertions makes a test pass
@@ -381,7 +396,18 @@ mutations.
 `test_precedence_clause_names_all_six_contracts` is **replaced**, not deleted: assert the short pointer
 is present, that §13 no longer enumerates the six, **and** that all six survive at their destinations.
 
-**Fix.** Rewrite in place, preserving the existing helpers (`_section13`, `_rows`) — `_rows` derives its
+**The `_section13()` boundary must move BEFORE §14 is added — round 5's High finding.** The helper
+extracts from `## 13. Agent Output Style` to **`## Cross-references`**
+(`scripts/tests/test_doc_gates.py:293-296`, read and confirmed). Inserting §14 between them puts the
+whole of §14 *inside* `_section13()`, with three consequences: a test asserting §13 no longer enumerates
+`BLOCKED — …` would still find the prefix; **M13's sixth assertion would not prove the prefix is in §14**;
+and section-scoped tests could false-pass against content moved into the wrong section.
+
+**So:** end `_section13()` at `## 14.`, add a separately bounded **`_section14()`**, and point M13's
+sixth assertion and its deletion mutant at `_section14()`.
+
+**Fix.** Rewrite in place, preserving the existing helpers (`_section13`, `_rows`) — with the boundary
+change above — `_rows` derives its
 column count from the header specifically so a future column cannot make every row invisible and turn
 the class into a no-op (`scripts/tests/test_doc_gates.py:305-308`). Reuse it; do not re-implement it.
 
@@ -421,8 +447,19 @@ Baselines measured at `adda52d`: `test-hooks.sh` **304**, synthesizer **222**, s
 `21/21/0/1`, hook events **10**. Floors, not equalities — re-derive at implementation time and print
 `pwd` + `git rev-parse HEAD` beside any measurement.
 
-Mutation proofs **M1–M13** above. **Polarity, corrected in round 2:** the clean post-fix implementation
-must **PASS**, and then **each mutant must FAIL**. Round 1's wording ("each must be shown failing before
+**Two kinds of proof, separated in round 5 — they were conflated and the instructions were not
+executable.** Round 4 noted this as framing; round 5 showed §6 and §7 step 6 still instruct "every mutant
+must fail", which cannot be satisfied by M1 or M3.
+
+- **Candidate mutants** (M2, M4–M13): mutate the *document or the parser*; the clean gate must **reject**
+  each one.
+- **Gate-adequacy comparisons** (M1, M3): these deliberately *weaken the gate* and show it stops
+  catching something. They are run as a **differential** — e.g. M1 runs the same `VALID_AGENTS` mutation
+  against **both** the live-import gate and a hardcoded weak gate, and asserts the live gate fails while
+  the weak gate passes. Stating them as "mutants that must fail" is a category error.
+
+**Polarity, corrected in round 2:** the clean post-fix implementation must **PASS**, and then **each
+candidate mutant must FAIL**. Round 1's wording ("each must be shown failing before
 the fix and passing after") describes a regression test, not a mutation proof, and would have been
 satisfied by a suite that never rejects a mutant.
 
@@ -442,7 +479,8 @@ satisfied by a suite that never rejects a mutant.
 5. Rewrite the 11 tests; add the disjointness gate, the `_scope_rows` schema gate, and the
    **cross-reference** M5 gate. Add the exact ticket regression to `test_capture.py` — it does not exist
    there yet.
-6. Run **M1–M13** with the corrected polarity: clean candidate passes, then every mutant fails.
+6. Run **M2 and M4–M13** as candidate mutants (clean gate rejects each), and **M1/M3** as
+   differential gate-adequacy comparisons — see §6's two-kinds note.
 7. Version bump + CHANGELOG. State that this is a **scope narrowing, not a relaxation** — the
    reviewers' machine contracts are unchanged and still mandatory.
 
@@ -619,3 +657,20 @@ adding it to the tuple makes the intersection non-empty and M9 fails without any
 | 5 | codex | §12 recorded **51** ticket-key occurrences; the transcript has **67** | **confirmed** | corrected |
 | 6 | codex | §9's "intervening commits touched only CHANGELOG/README/plugin.json" is **false** — four planning-doc changes | **confirmed** | corrected; the conclusion (no cited source file changed) holds |
 | 7 | gemini | M1/M2/M3 are framed as candidate mutants but mutate the **test suite** | noted — a framing issue, not a defect in the proofs themselves | recorded; §6's polarity wording already says the clean candidate must reject each mutant |
+
+## 14. Round-5 gate outcome
+
+**gemini `REQUEST_CHANGES` · codex `REQUEST_CHANGES`.** Frozen at `9548299a…`, sha256 `325dc5ed…`.
+Transcripts: `/tmp/rev/2605r5-agy.txt` (2,865 B, `TREE=clean`) and `/tmp/rev/2605r5-codex.txt`
+(208,894 B, 89 ticket-key hits).
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **Adding §14 breaks `_section13()`** — it extracts to `## Cross-references`, so §14 would sit inside it; M13's sixth assertion would not prove the prefix is in §14 | **confirmed** — `test_doc_gates.py:293-296` read | `_section13()` ends at `## 14.`; a bounded `_section14()` is added and M13's sixth assertion targets it |
+| 2 | codex | **M5's ticket example has two independent rejection causes** — multiline `Remaining:` *and* a trailing `Next:` — so a parser mutant accepting one leaves the test green on the other | **confirmed** — `capture.py:399` walks up over blank + detail lines and stops at either | isolated fixtures per cause, one M5b mutant per cause |
+| 3 | codex | **M5c's oracle was a semantic judgement** — "falsify the prose" | **confirmed** | compare the **verbatim** invariant block or an enumerated clause set |
+| 4 | codex | **M1/M3 are gate-adequacy comparisons, not candidate mutants**, yet §6 and §7 say "every mutant must fail" | **confirmed** | §6 now separates the two kinds; §7 step 6 runs them differently |
+| 5 | codex | **M2 is not guaranteed until all nine triples are required** — a deleted `out` row is otherwise invisible | **confirmed** | the schema mandates the full nine-triple set |
+
+§14's semantic scope was judged **correct and sufficient**; the defect was purely the extraction
+boundary. M6–M11 are closed, M3–M4 closed, and every cited repository location verified.

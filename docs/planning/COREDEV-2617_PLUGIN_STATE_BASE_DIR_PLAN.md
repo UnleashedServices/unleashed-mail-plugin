@@ -1,6 +1,9 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 3 gated** (**gemini REQUEST_CHANGES ×1 / codex REQUEST_CHANGES ×5**).
+**Status:** Planning — **round 4 gated** — **codex `APPROVE_WITH_NOTES` (no High/Medium)**, gemini
+`REQUEST_CHANGES` on §7's consumer table, which was missing the **destructive** sites
+(`mktemp`/`mv -f` on root-derived paths) and the pre-commit **pass** cases. Both now closed; the locked
+decisions are closed out. See §13. Previously — round 3 gated (**gemini REQUEST_CHANGES ×1 / codex REQUEST_CHANGES ×5**).
 Both confirm **D′** and no escape hatch, but "refuse at the call site" is **unsafe in Bash** — an empty
 substitution still composes a root path. §4.2 and §7 now specify per-consumer control flow. See §12.
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
@@ -8,8 +11,8 @@ reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
 root; the consumer enumeration is now in the implementation order. Round 1 is in §10. Awaiting round 3.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-30 (round 3, post-gate revision)
-**Measured against:** HEAD `1485c54` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
+**Last Updated:** 2026-07-30 (round 4, post-gate revision)
+**Measured against:** HEAD `9548299` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
 
@@ -275,8 +278,7 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
 
 ## 7. Implementation order
 
-1. Settle §8 Q1 (**D′ or the A+D hybrid**) — **in the gate**, not during implementation. Round 1
-   established that no *original* option satisfied N2.
+1. **D′ is settled** (rounds 2-3, both reviewers; §8 Q1). Do **not** re-open it during implementation.
 2. Make the fallback observable (§4.1) and add N1.
 3. Implement the chosen resolution; add N2 with the **unset** case.
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
@@ -290,8 +292,18 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    | `swift-lint-check.sh` (`:424`) | skip persistence; **still emit** the model-visible block |
    | `swift-build-verify.sh` (`:63`) | skip the log; **still emit** the advisory |
    | `reviewer-roster.sh` (`:33`, `:53`, `:256`) | deliberately **fail-closed** — classify reviewers `UNATTRIBUTED` and exit **3**, never fail open |
-   | `stop-quality-marker-gate.sh` (`:131-132`) | test before composing; it builds its log path directly |
+   | `stop-quality-marker-gate.sh` — **`:66`, `:74`, `:75`, `:117`, `:120`, `:123`, `:131-132`** | **the destructive ones.** `:66` composes `SENTINEL="$(marker_dir)/…"`; `:120` runs `mktemp "$(marker_dir)/.stopgate.XXXXXX"`; `:123` runs `mv -f "$_STMP" "$SENTINEL"`. On an unresolved base these **create and move files under `/.state/`**. Round 3 guarded only `:131-132`. Guard the whole script at entry |
+   | `pre-commit-checks.sh` — **`:47` and `:72` too** | round 3 listed only the **fail** cases (`:44`, `:69`); the **pass** cases were unguarded, so a *successful* run wrote to a root path |
+   | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:424` is reached |
+   | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
+   | `agents/swift-reviewer.md:247` | composes a root path; round 3 noted this but gave it no control-flow requirement |
+   | `scripts/test-hooks.sh` — **`:624`, `:796`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run |
    | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
+
+   > **Guard at script entry, not per call site.** Round 4 showed a per-line table is the wrong shape:
+   > round 3's version named six of the fourteen sites and missed every destructive one. Each consumer
+   > should resolve the base **once**, at entry, and take its documented no-persistence path if
+   > unresolved — so a newly added `marker_write` cannot silently reintroduce the defect.
 
    Remaining sites to guard:
    - logs: `build-failure-log.sh`, `stop-failure-log.sh`, `permission-denied-log.sh`
@@ -324,11 +336,14 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    marker, log **and** context paths, a non-persistent stderr diagnostic, and refusal at the call site
    rather than an empty base. See §4.1's N1 and §4.2.
 
-**New open question for round 3:**
+6. ~~Does D′ need an escape hatch?~~ **ANSWERED in round 3 — NO.** Both reviewers: document
+   `CLAUDE_PLUGIN_DATA` as required for manual persistence. codex noted an
+   `UNLEASHED_ALLOW_LEGACY_BASE=1` opt-in would deliberately recreate the ambiguous second store; gemini
+   noted a manual run then fails open and skips marker writes, which is how the git hooks already behave
+   outside Claude Code.
 
-6. **Does D′ need an escape hatch?** With D′, a developer running a hook script by hand gets no
-   persistence at all. Should `CLAUDE_PLUGIN_DATA` simply be documented as required for manual runs, or
-   should there be an explicit opt-in (e.g. `UNLEASHED_ALLOW_LEGACY_BASE=1`) for local debugging?
+**No open questions remain.** Round 4 returned `APPROVE_WITH_NOTES` from codex with no High or Medium
+findings; gemini's High was §7's incomplete consumer table, now closed.
 
 ## 9. Notes
 
@@ -427,3 +442,35 @@ would deliberately recreate the ambiguous second store.
 sentinel counts `0 / 1`; both plugin variables unset in an ordinary shell; one active registry id. The
 active base's newest write advanced again (now `13:36:55`) — the expected moving measurement, recorded
 rather than quietly refreshed.
+
+## 13. Round-4 gate outcome
+
+**codex `APPROVE_WITH_NOTES` (no High or Medium) · gemini `REQUEST_CHANGES` (High).** Frozen at
+`9548299a…`, sha256 `e07fe1ec…`. Transcripts: `/tmp/rev/2617r4-agy.txt` (3,767 B, `TREE=clean`) and
+`/tmp/rev/2617r4-codex.txt` (417,546 B, 66 ticket-key hits).
+
+**This is the campaign's first approving verdict**, and the split is instructive: codex judged D′ safely
+implementable across the consumer set it had enumerated, while gemini went back to the scripts and found
+the enumeration itself incomplete — including every destructive site.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | gemini | **§7's consumer table missed the destructive sites.** `stop-quality-marker-gate.sh:66` composes the sentinel path, `:120` runs `mktemp "$(marker_dir)/…"`, `:123` runs `mv -f` — all creating or moving files under `/.state/` on an unresolved base. Round 3 guarded only `:131-132` | **confirmed** — all six lines printed | the whole script is guarded at entry; the table lists them |
+| 2 | gemini | **the pre-commit PASS cases were unguarded** — round 3 listed `:44`/`:69` (fail) and omitted `:47`/`:72` (pass), so a *successful* run wrote to a root path | **confirmed** — printed | both added |
+| 3 | gemini | `swift-lint-check.sh:67` (early syntax-error exit), `reviewer-roster.sh:53` (composes `/reviews/…` for a root **read**), `swift-reviewer.md:247` (no control-flow requirement) | **confirmed** | all three added |
+| 4 | gemini | **`test-hooks.sh:624`/`:796` call `context_snapshot_path`** — so the very tests that verify D′ could compose root paths, since N1/N2 must run with the variable unset | **confirmed** | guarded before the fixtures run |
+| 5 | codex | editorial: §7 still said to re-settle D′, §8 Q6 still read as open, the header still said "Awaiting round 3" | **confirmed** | all closed out without reopening either decision |
+
+**The structural lesson, applied:** a **per-line** guard table is the wrong shape — round 3's version
+named six of fourteen sites and missed every destructive one. Each consumer now resolves the base **once
+at entry** and takes its no-persistence path if unresolved, so a newly added `marker_write` cannot
+silently reintroduce the defect.
+
+One accuracy note on the evidence: gemini labelled `:117` as `rm -f "$SENTINEL"`; that line is actually
+the symlink/type check. The substance — root-path operations across that block — holds; the label does
+not. The same "reproduces the defect, mislabels the location" pattern this campaign has recorded
+throughout.
+
+codex reproduced the evidence again: HEAD, digest, `76/21/1`, sentinel `0/1`, the divergent
+`e6f1f0ab`/`a39790f5` markers, one active registry id, both variables unset. It found **no independent
+production-Python resolver**, confirming the capture hook computes the base in shell and passes it in.
