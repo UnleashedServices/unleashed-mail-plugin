@@ -4,7 +4,7 @@
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
 **Last Updated:** 2026-07-30
-**Measured against:** HEAD `73b6801`, worktree `.claude/worktrees/opus5-review`, plugin `2.6.3`
+**Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree `.claude/worktrees/opus5-review`, plugin `2.6.3`
 
 ---
 
@@ -210,7 +210,7 @@ python3 -m unittest discover -s scripts/tests
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 ```
 
-Baselines measured at `73b6801`: `test-hooks.sh` **304**, synthesizer **222**, scripts **312**, counts
+Baselines measured at `adda52d`: `test-hooks.sh` **304**, synthesizer **222**, scripts **312**, counts
 `21/21/0/1`, hook events **10**. Floors, not equalities — re-derive at implementation time and print
 `pwd` + `git rev-parse HEAD` beside any measurement.
 
@@ -246,7 +246,7 @@ Mutation proofs **M1–M8** above; each must be shown failing before the fix and
 
 ## 9. Notes
 
-- Every claim here was executed or read from the file at HEAD `73b6801`. Doing so corrected **four of
+- Every claim here was executed or read from the file at HEAD `adda52d`; the intervening commits touched only CHANGELOG/README/plugin.json, so no cited line moved. Doing so corrected **four of
   the ticket's own figures**: `swift-reviewer` Step 5 at **`:439`** not `~:140`; `implement` Phase 6 at
   **`:342`** not `~:333`; **11** §13 tests not 14; **9** skills referencing the contracts not 8. The
   ticket's *reasoning* held up in every case — only its numbers drifted.
