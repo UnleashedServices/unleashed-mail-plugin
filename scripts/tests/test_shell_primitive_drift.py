@@ -159,3 +159,51 @@ class BasePathExpansion(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class WorkflowPinDrift(unittest.TestCase):
+    """CI pins must not drift between jobs (COREDEV-2598).
+
+    Both defects below were real, in the first draft of the load-check job:
+      * a FABRICATED `actions/setup-node` commit SHA. A pin that does not exist fails at run time,
+        and a pin that exists but differs from the repo's other jobs silently tests a different
+        toolchain. AGENT_CONTRACTS §6 requires SHA pins; nothing checked they AGREE.
+      * `${{ env.CLAUDE_CODE_VERSION }}` referenced from a second job, where it expands to EMPTY —
+        the other job scopes it to a single STEP. `npm install -g pkg@` installs `latest`, so the
+        load check would silently run on a DIFFERENT CLI than the schema validation it exists to
+        complement.
+    """
+
+    WORKFLOW = os.path.join(REPO, ".github", "workflows", "plugin-ci.yml")
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.WORKFLOW, encoding="utf-8") as fh:
+            cls.src = fh.read()
+
+    def test_every_action_pin_of_the_same_action_uses_the_same_sha(self):
+        pins = {}
+        for m in re.finditer(r"uses:\s*([\w.-]+/[\w.-]+)@([0-9a-f]{40})", self.src):
+            pins.setdefault(m.group(1), set()).add(m.group(2))
+        drifted = {a: sorted(s) for a, s in pins.items() if len(s) > 1}
+        self.assertEqual({}, drifted, f"the same action pinned to different SHAs: {drifted}")
+
+    def test_no_action_is_pinned_to_a_mutable_tag(self):
+        """AGENT_CONTRACTS §6: SHA pins, never @vN."""
+        tagged = re.findall(r"uses:\s*([\w.-]+/[\w.-]+@v[\d.]+)\s*$", self.src, re.M)
+        self.assertEqual([], tagged, f"mutable tag pins found: {tagged}")
+
+    def test_all_claude_code_version_pins_agree(self):
+        versions = set(re.findall(r"CLAUDE_CODE_VERSION:\s*([0-9.]+)", self.src))
+        self.assertEqual(
+            1, len(versions),
+            f"CLAUDE_CODE_VERSION differs across jobs: {sorted(versions)} — the load check must run "
+            "on the SAME CLI as the schema validation",
+        )
+
+    def test_no_job_installs_an_unpinned_claude_cli(self):
+        """`npm install -g @anthropic-ai/claude-code@` with an empty expansion installs `latest`."""
+        self.assertNotIn("claude-code@${{ env.", self.src,
+                         "cross-job env reference — CLAUDE_CODE_VERSION is step-scoped and expands empty")
+        bare = re.findall(r"claude-code@\s*$", self.src, re.M)
+        self.assertEqual([], bare, "unpinned claude-code install")

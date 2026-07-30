@@ -196,6 +196,34 @@ jobs:
           test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
           echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
 
+  load-check:
+    # COREDEV-2598 — prove the plugin LOADS, not merely that it validates. `claude plugin validate
+    # --strict .` is schema validation and cannot see load-layer breakage. The whole recipe, the
+    # reasons it deviates from the upstream it adopts, and the executed mutant->assertion mapping
+    # live in the script's header — deliberately, so they are next to the code they justify.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node (for the pinned Claude Code CLI)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Install the PINNED Claude Code CLI
+        env:
+          # MUST match the `validate` job's pin — a load check on a different CLI than the one that
+          # validates proves less than it appears to. That job scopes CLAUDE_CODE_VERSION to a single
+          # STEP, so `${{ env.CLAUDE_CODE_VERSION }}` is EMPTY here; the value is repeated instead and
+          # `scripts/tests/test_shell_primitive_drift.py` asserts the two pins agree.
+          CLAUDE_CODE_VERSION: 2.1.220
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+      - name: Load check (scratch marketplace, per-run sentinel, MCP handshake)
+        run: bash scripts/ci-load-check.sh
+
   redactor-equivalence:
     # COREDEV-2597 §4.5 — the MECHANICAL closure of the shell/Python redactor equivalence.
     #
