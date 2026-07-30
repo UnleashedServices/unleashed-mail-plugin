@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.2
+# UnleashedMail — Claude Code Plugin v2.6.3
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,26 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.6.3
+
+- **CI now proves the plugin LOADS, not just that it validates (COREDEV-2598).** A new
+  `load-check` job installs the checkout's **own bytes** into a scratch config and asserts the plugin
+  reaches an enabled state, that the bundled MCP server completes an `initialize`/`tools/list`
+  handshake **driven from its own installed `.mcp.json` declaration**, and that the hook manifest is
+  loadable. Reproduced first: the obvious recipe git-clones `main` and reports success — a green check
+  over the wrong bytes — so byte identity is proved by a per-run sentinel rather than a version number.
+- **Two live shell-primitive bugs fixed (COREDEV-2600).** The PreCompact hook leaked
+  `integer expression expected` to stderr on an oversized round directory, breaking the fail-open
+  invariant; and `marker_mtime` branched on `uname == Darwin`, so on FreeBSD it returned its failure
+  sentinel and the stop-quality gate **skipped entirely**. Both reproduced before fixing. The
+  plugin-data base path is now single-sourced in `scripts/lib/paths.sh`, with every caller keeping an
+  inline fallback so a missing file can never abort a hook.
+- **A plan approval now survives the worktree move the docs mandate (COREDEV-2603).** The verdict
+  artifact bound approval to an absolute path, so gating in one worktree and implementing in another
+  failed the gate on a genuine approval with byte-identical plan content. Identity is now
+  repo-relative (`schemaVersion` 3), and the required ordering — create the worktree **first** — is
+  documented on all five surfaces an operator can enter through.
 
 ### v2.6.2
 

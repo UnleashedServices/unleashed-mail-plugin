@@ -13,6 +13,55 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.3] — 2026-07-30
+
+CI & workflow hardening — plan `docs/planning/CI_WORKFLOW_HARDENING_PLAN.md`, batching
+COREDEV-2598 + COREDEV-2600 + COREDEV-2603, five review rounds. Implemented ahead of a final
+dual-gate APPROVE at the maintainer's explicit direction; recorded as a workflow exception, not a
+passed gate.
+
+### Fixed
+
+- **The PreCompact hook leaked to stderr** (COREDEV-2600). Its inline round scanner was missing two
+  guards the shared `context_highest_round` has, so a `round-<20-digit>` directory — producible
+  through shipped code via `UNLEASHED_REVIEW_ROUND` — printed `integer expression expected`,
+  violating the stderr-clean fail-open invariant. It also recorded `"09"` where the shared helper
+  returns `"9"`. Both asserted, including the JSON **type**: the field is a string, and a test that
+  accepted either would miss a serialisation change.
+- **`marker_mtime` returned its failure sentinel on FreeBSD** (COREDEV-2600). It branched on
+  `uname == Darwin`, assuming only Darwin has BSD `stat`. A `0` there is not benign:
+  `stop-quality-marker-gate.sh` computes `AGE=999999` from it and **skips the gate entirely**, so a
+  platform quirk silently disabled a quality gate. `scripts/test-hooks.sh` carried its own diverged
+  copy of the same shape — the harness that would have proved the fix was itself carrying the defect.
+- **A genuine plan approval could not survive the mandated worktree move** (COREDEV-2603). Approval
+  was bound to `os.path.realpath(plan)` — one developer's disk layout.
+
+### Changed
+
+- Plan identity in the verdict artifact is **repo-relative** when the plan is in a git repo, absolute
+  otherwise, recorded as `planPathKind` and enforced on verify. `schemaVersion` 2 → 3, so the existing
+  hard comparison rejects stale artifacts; deliberately no compatibility branch, because a v2 artifact
+  without the field is the one shape where verify would compare a relative string against an absolute
+  one and pass by accident. This does **not** make the artifact portable — `.verdicts/` is git-ignored
+  by design, so CI and a second developer still cannot verify, and the docs now say so.
+- The plugin-data base path is single-sourced in `scripts/lib/paths.sh`. Every caller keeps the inline
+  expansion as a fallback: these libs are sourced standalone, and aborting on a missing `paths.sh`
+  would convert three independent fail-open paths into one shared point of failure.
+
+### Added
+
+- **`load-check` CI job** + `scripts/ci-load-check.sh` (COREDEV-2598). Installs the checkout's own
+  bytes via a scratch marketplace, proves byte identity with a per-run sentinel, drives the MCP server
+  from its **own installed declaration**, and asserts the hook-manifest shape. Four mutants, each
+  mapped to the assertion it fails; the mapping records one assertion that is *not* provable and is
+  labelled defence-in-depth rather than claimed.
+- Drift guards (`scripts/tests/test_shell_primitive_drift.py`): no `uname == Darwin` mtime branch
+  anywhere under `scripts/`, the base expansion identical across all three libs with its `${HOME:-}`
+  guard, no single-dash `${CLAUDE_PLUGIN_DATA-…}` default, and CI pin hygiene (no action pinned to two
+  SHAs, no mutable `@vN` tags, all `CLAUDE_CODE_VERSION` pins agreeing).
+- The worktree-before-plan ordering, documented on all five operator entry points with a doc gate, plus
+  the plan-freeze rule: a review cannot approve a plan edited mid-round.
+
 ## [2.6.2] — 2026-07-29
 
 Redactor defects (COREDEV-2597) — plan `docs/planning/COREDEV-2597_REDACTOR_DEFECTS_PLAN.md`, five
