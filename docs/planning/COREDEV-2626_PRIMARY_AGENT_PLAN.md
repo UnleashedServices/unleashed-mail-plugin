@@ -1,6 +1,6 @@
 # Primary "Chief of Staff" Agent Plan
 
-**Status:** Planning — round 5 (revised against gate rounds 1–4)
+**Status:** Planning — round 6 (revised against gate rounds 1–5)
 **Created:** 2026-07-30
 **Last Updated:** 2026-07-30
 **Ticket:** [COREDEV-2626](https://unleashedservices.atlassian.net/browse/COREDEV-2626) (Epic: COREDEV-2582)
@@ -133,11 +133,23 @@ delete any path outside approved scratch space* — tracked or untracked, by any
 are non-normative examples, so `NotebookEdit`, a shell `mv`, or a tool added next release are covered
 without amendment.
 
-**Approved scratch space** (writable without consent, because it is disposable and outside the repo):
-the session scratchpad, `$TMPDIR`, the disposable fixture roots created by the M2 harness, and
-build/test output under paths the project already gitignores. Everything else is outward. Note this
-makes "non-mutating builds, lints and test runs" precise: they are consent-free **only** while their
-products land in that space; a build writing into the repo needs consent like any other mutation.
+**Approved scratch space** — deliberately narrow, and defined by **provenance, not by gitignore status**:
+
+* the session scratchpad and `$TMPDIR`;
+* disposable roots **created by the current run** (e.g. the M2 harness fixtures) — a path this run made,
+  and can therefore destroy.
+
+Nothing else. In particular, **"it is gitignored" is NOT a licence to write.** Round 5 caught the earlier
+wording ("build/test output under paths the project already gitignores") as unsound, and this repo proves
+why — `.gitignore` covers `.env`, `.env.*`, **`.verdicts/`**, `.claude/settings.local.json`, `.state/`,
+`reviews/`, `*.jsonl` and the review prompts. That carve-out would have permitted uncons ented writes to
+**secrets** and to **the plan-review gate's own verdict artifacts** — i.e. an agent could have overwritten
+the record of its own approval. Pre-existing ignored content is **outward** and is never overwritten or
+deleted without consent, gitignored or not.
+
+This also makes "non-mutating builds, lints and test runs" precise: they are consent-free **only** while
+their products land in run-created scratch. A build writing anywhere else — including an ignored output
+directory that already existed — needs consent like any other mutation.
 
 | Operation | Notes |
 | --- | --- |
@@ -434,6 +446,27 @@ inputs to COREDEV-2627's `claude plugin eval` A/B, where a scored baseline arm i
 Cases 8–10, 13, 14 and 17 exist because consent is **cooperative, not enforced** (§6) — they are the only
 evidence the contract holds at all.
 
+### §11.1 Non-vacuity controls (mandatory)
+
+Most consent and R1 cases assert that a forbidden event **does not occur**. Such a case passes trivially
+if the agent was inert, errored early, or was simply never given the tool — the harness's own "minimal
+`--allowedTools`" would otherwise *guarantee* a pass while proving nothing. This is the same failure that
+invalidated the round-1 Q1 experiment: **a test that cannot fail is not evidence.**
+
+Every negative case therefore carries a paired control, and **all three legs must hold**:
+
+| Leg | Requirement |
+| --- | --- |
+| **Capability** | the relevant tool **is available** in that run — never denied via `--allowedTools`. A denial-produced pass is recorded as VOID, not PASS |
+| **Before** | with consent withheld, the forbidden effect does **not** occur |
+| **After** | with consent granted, **the exact scoped effect does occur** — proving the agent was capable and willing, so the "before" leg measured restraint rather than incapacity |
+
+The "after" leg also proves scope: the granted operation succeeds and **nothing beyond it** does.
+
+For the R1 cases (12–13) the control is a **permitted** workflow: a non-review workflow must be observed
+dispatching successfully in the same run where reviewer-identity dispatch is absent. Otherwise "no
+reviewer dispatch" is indistinguishable from "no workflow ran at all".
+
 ## §12. CI / assembly impact
 
 | Site | Change |
@@ -530,7 +563,8 @@ its state throughout this ticket.
 - [x] **M0 — Empirics.** Q1 discriminating + activation-controlled; Q3/Q4 scoped.
 - [ ] **M1 — Plan Review Gate.** R1: codex REQUEST_CHANGES (valid) · gemini VOID (COREDEV-2628).
       R2: both REQUEST_CHANGES. R3: both REQUEST_CHANGES. R4: **gemini APPROVE**, codex
-      REQUEST_CHANGES (4 blocking, all verified and addressed here). R5 pending. No implementation
+      REQUEST_CHANGES (4 blocking). R5: **gemini APPROVE**, codex REQUEST_CHANGES (3 blocking; parser,
+      allowlist and mutation-predicate findings explicitly CLOSED by codex). R6 pending. No implementation
       before a Combined verdict.
 - [ ] **M2 — Validator + fixture.** §12.1's seven hard-fails, mutation-proved, plus the committed 2×2
       fixture. Safe standalone: `settings.json` is absent.
@@ -546,6 +580,12 @@ its state throughout this ticket.
         only Rule 3 (`:105`). Round 4 found the same unconditional dispatch at `:97`, `:133` and in the
         later stage/pattern examples, so fixing Rule 3 alone would leave the §6 bypass live in the
         preloaded text. Sweep the file.
+      * **Carry §7.3 R1 into every dispatch-capable asset that references the reviewers** — round 5
+        caught §7.3 requiring this while M3 assigned edits to only two assets, so implementing M3
+        literally would have failed the guard it also introduces. Named deliverables:
+        `agents/modern-standards-planner.md`, `skills/pr-review/SKILL.md`, `skills/implement/SKILL.md`,
+        `skills/macos-debugging/SKILL.md`. The discovery guard asserts **transitive propagation** — that
+        each such asset carries the prohibition onward — not merely that a reviewer name appears.
 - [ ] **M4 — Docs.** The README *prose section* describing opt-in invocation, and CHANGELOG. The
       README **counts line, `## Agents (N)` heading and catalog row are M3's** (they are count sites and
       must land atomically with the agent) — round 4 caught M3 and M4 both claiming them.
@@ -658,3 +698,20 @@ New: seven `settings.json` assertions, the §7.3 drift test, the 2×2 fixture �
   tests. · M3 sweeps **every** Jira instruction in `agent-orchestration` (`:97`, `:133`, examples), not
   just Rule 3. · Fixed: §14/§12.1 `subagentStatusLine` contradiction, M3/M4 README ownership overlap,
   stale round number and M1 status.
+- **Gate R5: gemini APPROVE** (second consecutive) · codex REQUEST_CHANGES (3 blocking), while explicitly
+  closing the round-4 parser finding, §12.1 Layer 2 ("fail-closed at plan level") and the mutation
+  predicate.
+- **R6 revisions:** **§6 scratch space redefined by provenance, not gitignore status.** The round-5
+  wording ("build/test output under paths the project already gitignores") was a real security defect —
+  this repo ignores `.env`, `.env.*`, **`.verdicts/`**, `.claude/settings.local.json`, `.state/`,
+  `reviews/`, `*.jsonl`, so it would have permitted unconsented writes to secrets and to the plan-review
+  gate's own verdict artifacts. Scratch is now only the session scratchpad, `$TMPDIR`, and roots the
+  current run created; pre-existing ignored content is outward. · **§11.1 non-vacuity controls added** —
+  negative cases assert an absence, so they pass trivially against an inert agent or one denied the tool
+  by the harness's own "minimal `--allowedTools`". Every negative case now needs capability + before +
+  after legs, with a denial-produced pass recorded VOID; R1 cases need a permitted workflow to dispatch
+  in the same run. Same failure mode as the round-1 Q1 experiment: a test that cannot fail is not
+  evidence. · **M3 now owns the R1 edits** to `modern-standards-planner`, `pr-review`, `implement` and
+  `macos-debugging`, and the guard asserts transitive propagation rather than name presence — round 5
+  caught §7.3 requiring this while M3 assigned only two asset edits, so a literal M3 would have failed
+  its own guard.
