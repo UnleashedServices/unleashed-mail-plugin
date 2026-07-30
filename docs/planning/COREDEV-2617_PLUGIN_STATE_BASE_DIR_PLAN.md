@@ -1,11 +1,12 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 1 gated** (**gemini APPROVE_WITH_NOTES / codex REQUEST_CHANGES ×6**).
-Codex corrected three claims this draft got wrong and showed **no listed option satisfied N2** — §4.2 is
-rewritten and §4.3 is retracted. See §10. Awaiting round 2.
+**Status:** Planning — **round 2 gated** (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
+reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
+see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
+root; the consumer enumeration is now in the implementation order. Round 1 is in §10. Awaiting round 3.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-30 (round 1, post-gate revision)
-**Measured against:** HEAD `5a532b1` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
+**Last Updated:** 2026-07-30 (round 2, post-gate revision)
+**Measured against:** HEAD `1485c54` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
 
@@ -50,10 +51,10 @@ Measured on this machine, 2026-07-30:
 | `~/.claude/unleashed-mail/` (the fallback) | **21** | 2026-07-17 15:58 |
 | `~/.claude/plugins/data/unleashed-mail-inline/` | **1** | 2026-07-17 16:08 |
 
-**Three**, not two — the same plugin has two install ids on one machine, so any scheme that derives the id
-must disambiguate them. *(Round 1: the draft attributed `-inline` to a project-scoped install; that
-origin is **not established** by the cited memory and is withdrawn. Its existence is the evidence; its
-provenance is not needed and is not claimed.)*
+**Three bases**, from two data-directory names plus the legacy fallback. *(Rounds 1-2: the draft
+attributed `-inline` to a project-scoped install — **withdrawn**, its provenance is unknown. And the live
+registry holds exactly **one active** id, so "two install ids" overstates it: `-inline` is residue, not a
+second active install. Its existence still matters for §4.2's ambiguity argument.)*
 
 **The finding that makes this High.** The marker filename encodes a `repo_hash`, so the same repository
 must have exactly one marker. `quality-marker-lint-df57b844116d.json` exists in **two** bases with
@@ -118,8 +119,15 @@ diagnostic to the plugin's own log, and a field in the marker/log record naming 
 > other one that it exists. The enum makes a found record self-describing; it does not make a missing
 > one discoverable. Cross-store diagnostics are still needed.
 
-**Proof — N1:** unset `CLAUDE_PLUGIN_DATA`, run a marker write, and assert the record names its base.
-A build that writes the same bytes in both modes fails.
+**Proof — N1 (rewritten in round 2, because it contradicted D′).** N1 previously required an *unset*
+invocation to **write a marker** naming its resolution — but D′ requires that same invocation to persist
+**nothing**, and a "diagnostic to the plugin's own log" is itself forbidden persistence. The two could
+not both hold. Restated:
+
+- **Set:** the write lands **only** in the supplied host base, carrying `base_resolution=host-env`.
+- **Unset or empty:** **no reads and no writes anywhere** — no legacy path, no root-derived path — the
+  hook exits **fail-open**, and the diagnostic is **bounded and non-persistent** (stderr, not the log).
+- Exercise **marker, log and context** paths, not a single marker write.
 
 ### 4.2 — The base must be derivable without the env var (High) — **the decision this plan needs**
 
@@ -157,11 +165,21 @@ that an **unset variable yields no persistent read or write at all**, plus an ob
 one explicit bridge. Then N2 becomes satisfiable and is restated:
 
 > **N2 (revised):** with the variable **set**, a write lands in the host base. With it **unset**, the
-> write lands **nowhere** and is diagnosed. If the maintainer requires both invocations to persist,
-> then D is insufficient and the **A+D hybrid** is required — derive from the registry on the fallback
-> path, with the precedence rules above.
+> write lands **nowhere** and is diagnosed on stderr.
 
-§8 Q1 puts the D′-versus-hybrid choice to round 2.
+**DECIDED IN ROUND 2 — D′, over gemini's dissent.** gemini argued for the A+D hybrid because D′ would
+stop `scripts/pre-commit-checks.sh` writing markers. codex's counter is decisive and is adopted: those
+git-hook writes are **already documented as unreachable no-ops** (`scripts/pre-commit-checks.sh:14`), so
+suppressing them removes nothing that works, while the hybrid imports registry/`CLAUDE_CONFIG_DIR`/
+cache-root/`--plugin-dir` ambiguity in exchange for a contract that is not currently functioning.
+`CLAUDE_PLUGIN_DATA` stays the only authoritative identity.
+
+> **An empty base is NOT a safe "nowhere" — round 2 caught this.** With the present composition it
+> redirects writes to **filesystem root**: `marker_dir` → `/.state` (`scripts/lib/marker.sh:33`),
+> `log_dir` → `/logs` (`scripts/lib/log.sh:31`), context → `/.state` or `/reviews/…`
+> (`scripts/lib/context.sh:39`). The Stop gate also builds and writes its own log directly
+> (`scripts/stop-quality-marker-gate.sh:131`). D′ must therefore **refuse at the call site**, not return
+> an empty string.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -236,18 +254,25 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
 2. Make the fallback observable (§4.1) and add N1.
 3. Implement the chosen resolution; add N2 with the **unset** case.
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
-5. Quarantine the 21 orphans **after** step 3, with inventory and checksums; decide the `-inline`
-   residue in the same step; add N4.
-6. Version bump + CHANGELOG, stating plainly that state written before this fix may live in a second
+5. **Enumerate and guard every consumer** before quarantine — round 2 found §9 claims they are
+   enumerated while §7 never acts on them:
+   - markers: `swift-lint-check.sh`, `pre-commit-checks.sh`, `stop-quality-marker-gate.sh`
+   - logs: `swift-build-verify.sh`, `build-failure-log.sh`, `stop-failure-log.sh`,
+     `permission-denied-log.sh`, plus the Stop gate's direct log (`:131`)
+   - context: PreCompact, SessionStart, both capture hooks, `reviewer-roster.sh`, both agent Bash blocks
+   - docs/tests: README, `.gitignore`, pre-commit comments, the resolver matrix, hook/roster fixtures
+6. Quarantine the 21 orphans with inventory and checksums, and quarantine the one `-inline` file
+   **separately** with its own inventory — its provenance is unknown, so it must not be merged with the
+   rest. Add N4.
+7. Version bump + CHANGELOG, stating plainly that state written before this fix may live in a second
    directory and how to find it.
 
 ## 8. Open questions for the reviewers
 
-1. **D′ or the A+D hybrid (§4.2)?** D′ means an unset variable persists **nothing** and is diagnosed;
-   the hybrid derives from the registry on the fallback path. D′ is simpler and fails safe; the hybrid
-   keeps non-hook invocations working. Which does the maintainer want? If the hybrid, §4.2's precedence
-   rules for `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PLUGIN_CACHE_DIR`, `--plugin-dir`, missing/corrupt
-   registries and multiple active ids must all be specified before implementation.
+1. ~~D′ or the A+D hybrid?~~ **ANSWERED in round 2 — D′.** The reviewers split; codex's argument is
+   adopted (see §4.2). The maintainer may still overrule: D′ makes non-hook invocations
+   **non-persistent**, which is a visible behaviour change even though the writes it suppresses are
+   already unreachable.
 2. ~~Is `CLAUDE_PLUGIN_DATA` unset outside hooks/MCP on every surface?~~ **ANSWERED in round 1 — yes.**
    Plain shell: both unset. An `allowed-tools` Bash grant does **not** export them; hooks and MCP/LSP
    subprocesses do receive them. CI has no global value — `test-hooks.sh:33` and
@@ -259,11 +284,15 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
 
 **New open question for round 2:**
 
-5. **Is N2 (revised) the right acceptance test?** It now says: set → writes to the host base; unset →
-   writes **nowhere**, with a diagnostic. That deliberately makes non-hook invocations non-persistent
-   rather than merely noisy. If the maintainer wants the git pre-commit path to keep writing markers,
-   D′ is wrong and only the hybrid will do — see `scripts/pre-commit-checks.sh:14`, which already admits
-   it writes unreachable markers by default.
+5. ~~Is N2 (revised) right?~~ **ANSWERED in round 2 — direction yes, coverage no.** It now also requires
+   marker, log **and** context paths, a non-persistent stderr diagnostic, and refusal at the call site
+   rather than an empty base. See §4.1's N1 and §4.2.
+
+**New open question for round 3:**
+
+6. **Does D′ need an escape hatch?** With D′, a developer running a hook script by hand gets no
+   persistence at all. Should `CLAUDE_PLUGIN_DATA` simply be documented as required for manual runs, or
+   should there be an explicit opt-in (e.g. `UNLEASHED_ALLOW_LEGACY_BASE=1`) for local debugging?
 
 ## 9. Notes
 
@@ -307,3 +336,30 @@ codex added the inventory-and-checksums requirement.
 
 **Round 1 also answered §8 Q2, Q3 and Q4 outright**, leaving the resolution choice (Q1) and the revised
 N2 (Q5) for round 2.
+
+## 11. Round-2 gate outcome
+
+**gemini `REQUEST_CHANGES` (2) · codex `REQUEST_CHANGES` (3).** Frozen at `1485c54d…`, sha256
+`d984c782…`. Transcripts: `/tmp/rev/2617r2-agy.txt` (1,725 B, `TREE=clean`) and
+`/tmp/rev/2617r2-codex.txt` (248,242 B).
+
+**The reviewers split on the central decision, and this is the resolution.** gemini chose the **A+D
+hybrid**, reasoning that D′ would break `scripts/pre-commit-checks.sh`, a git hook that runs outside
+Claude Code and relies on the fallback. codex chose **D′**, and its counter is decisive: those writes are
+**already documented as unreachable no-ops** at `pre-commit-checks.sh:14`, so suppressing them removes
+nothing that functions — while the hybrid imports registry, `CLAUDE_CONFIG_DIR`, cache-root and
+`--plugin-dir` ambiguity to preserve a contract that does not currently work. **D′ is adopted**, and §8
+Q1 records that the maintainer may overrule, since D′ is a visible behaviour change.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **N1 contradicted D′** — N1 required an unset invocation to write a marker, D′ requires it to persist nothing, and the "diagnostic to the plugin's own log" is itself forbidden persistence | **confirmed** | N1 rewritten: stderr diagnostic, no persistence, and marker/log/context all exercised |
+| 2 | codex | **an empty base is not "nowhere"** — it redirects to filesystem root (`/.state`, `/logs`, `/reviews/…`), and the Stop gate writes its own log directly | **confirmed** — `marker.sh:33`, `log.sh:31`, `context.sh:39`, `stop-quality-marker-gate.sh:131` | D′ must **refuse at the call site**, never return an empty string |
+| 3 | codex | the consumer enumeration was claimed in §9 but **never acted on** in §7 | **confirmed** | §7 gains an explicit enumerate-and-guard step listing every marker, log, context and doc/test consumer |
+| 4 | codex | retracted claims still active — "two install ids", "three libraries re-derive independently", the `-inline` provenance, and the deferred `-inline` disposition | **confirmed** | all corrected; the `-inline` file is quarantined **separately**, with its own inventory |
+| 5 | codex | **N3 is a real mutation** — verified by execution, with the caveat that the sentinel must be injected *after* `paths.sh` is marked loaded | **confirmed** | noted in §4.3 |
+
+**Evidence re-reproduced:** counts `76 / 21 / 1`; both marker bodies matching `e6f1f0ab` and `a39790f5`;
+legacy sentinel `0 / 1`. One measurement moved — the active base's newest write is now later than the
+recorded `12:10`, because this very session keeps writing to it. That does not weaken the divergent
+marker, and it is recorded rather than quietly refreshed.
