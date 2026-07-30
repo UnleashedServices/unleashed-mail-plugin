@@ -13,6 +13,38 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.4] — 2026-07-30
+
+Two fixes that landed after the 2.6.3 bump and were previously unrecorded. Both were found by using
+the plan-review gate on itself rather than by a planned audit.
+
+### Fixed
+
+- **The gemini reviewer could write to the tree it was reviewing, and did** (`COREDEV-2607`). On
+  2026-07-29 a plan review *implemented* the plan instead of reviewing it: 6 shipped scripts modified,
+  5 files created, including a stray `marketplace.json` at the repo root. It emitted no `VERDICT:` line
+  so the gate failed closed — the fortunate failure mode — but the edits persisted and were reverted by
+  hand. The concurrent `codex` review recorded that it had re-anchored its citations against committed
+  HEAD; nothing in the gate design *required* that.
+  New `scripts/review/isolated-agy-review.sh` points the reviewer at a **disposable detached checkout**
+  of the reviewed commit and asserts the real working tree is unchanged afterwards — a tree mutation
+  **fails the round** rather than being cleaned up silently, which is `AGENT_CONTRACTS.md` §2 step 0b
+  applied to the reviewer instead of the author. Four flags were tested and rejected as non-solutions
+  (`agy` alone, `--mode plan`, `--sandbox`, `--sandbox --mode plan` — all four created the file and
+  exited 0); the header records them so they are not re-tried. Isolation, not constraint, because `agy`
+  has no read-only mode — the asymmetry with `codex`, which the gate already runs `-s read-only`.
+- **Secret redaction let four Unicode fold codepoints into an ASCII value class** (`COREDEV-2609`),
+  the residual the 2.6.2 entry recorded as still open. U+0130, U+0131, U+017F and U+212A now ride in the
+  secret **payload** class in both the shell and Python redactors. The **anchor** is deliberately *not*
+  widened: widening an unanchored prefix is what corrupted ordinary prose in the first place, whereas
+  widening an *anchored* rule's payload cannot. Held by the `redactor_model.py` equivalence gate on both
+  `sed` engines.
+
+### Changed
+
+- The 2.6.2 entry's closing line "Residual shared miss: COREDEV-2609" is superseded by the fix above.
+  Left in place rather than edited — a changelog records what was true at the time.
+
 ## [2.6.3] — 2026-07-30
 
 CI & workflow hardening — plan `docs/planning/CI_WORKFLOW_HARDENING_PLAN.md`, batching
