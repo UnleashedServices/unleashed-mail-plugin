@@ -1018,3 +1018,170 @@ class WriteTextNofollowTest(unittest.TestCase):
             self.assertFalse(os.path.exists(target), "must not write through the symlink")
         finally:
             import shutil; shutil.rmtree(d, ignore_errors=True)
+
+
+class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
+    """Repo-relative plan identity (COREDEV-2603 item C2).
+
+    THE EXISTING SUITE CANNOT COVER THIS, AND THAT IS THE POINT. `ReviewVerdictTest` roots its
+    fixture in `tempfile.mkdtemp()`, which is not a git repo — so every one of its 70 tests
+    exercises only the ABSOLUTE fallback branch. An implementer who added the repo-relative code and
+    watched the suite stay green would have tested nothing about the new path. Verified: the same
+    plan yields `absolute` under mkdtemp and `repo-relative` under a real `git init`.
+
+    So every case below is rooted in a REAL git repo.
+    """
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp()
+        self.repo = os.path.join(self.base, "repo")
+        self.plandir = os.path.join(self.repo, "docs", "planning")
+        os.makedirs(self.plandir)
+        subprocess.run(["git", "init", "-q", self.repo], check=True,
+                       capture_output=True, text=True)
+        self.plan = os.path.join(self.plandir, "FEATURE_NAME_PLAN.md")
+        with open(self.plan, "w", encoding="utf-8") as fh:
+            fh.write("# Plan\nDo the thing.\n")
+        self.tx = os.path.join(self.base, "t1.txt")
+        self.tx2 = os.path.join(self.base, "t2.txt")
+        for f, body in ((self.tx, "gemini said things\n"), (self.tx2, "codex said other things\n")):
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write(body)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.base, ignore_errors=True)
+
+    def _gate(self, plan=None):
+        plan = plan or self.plan
+        run("snapshot", "--plan", plan)
+        return run("write", "--plan", plan, "--verdict", "APPROVE",
+                   "--reviewer", f"gemini=APPROVE:{self.tx}",
+                   "--reviewer", f"codex=APPROVE:{self.tx2}")
+
+    def _artifact(self, plan=None):
+        plan = plan or self.plan
+        path = os.path.join(os.path.dirname(plan), ".verdicts",
+                            os.path.basename(plan) + ".verdict.json")
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh), path
+
+    # --- assertion 6: planPathKind is present, correct, and enforced -------------------------
+    def test_identity_is_repo_relative_and_kind_records_it(self):
+        self.assertEqual(0, self._gate().returncode)
+        art, _ = self._artifact()
+        self.assertEqual("docs/planning/FEATURE_NAME_PLAN.md", art["planPath"])
+        self.assertEqual("repo-relative", art["planPathKind"])
+        self.assertEqual(3, art["schemaVersion"], "a new required field needs a schema bump")
+
+    def test_verify_rejects_a_missing_planPathKind(self):
+        """A field nothing checks is a comment. Rounds 3-4 required it and asserted it nowhere."""
+        self.assertEqual(0, self._gate().returncode)
+        art, path = self._artifact()
+        del art["planPathKind"]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(art, fh)
+        r = run("verify", "--plan", self.plan)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("planPathKind", r.stdout + r.stderr)
+
+    def test_verify_rejects_an_unknown_planPathKind(self):
+        self.assertEqual(0, self._gate().returncode)
+        art, path = self._artifact()
+        art["planPathKind"] = "sort-of-relative"
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(art, fh)
+        self.assertNotEqual(0, run("verify", "--plan", self.plan).returncode)
+
+    def test_verify_rejects_a_kind_inconsistent_with_this_plan(self):
+        """The shape a compatibility branch would have had to allow: comparing a relative string
+        against an absolute one, passing or failing by accident. Hence schemaVersion 2 -> 3."""
+        self.assertEqual(0, self._gate().returncode)
+        art, path = self._artifact()
+        art["planPathKind"] = "absolute"          # plan still resolves repo-relative
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(art, fh)
+        r = run("verify", "--plan", self.plan)
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("absolute", r.stdout + r.stderr)
+
+    # --- assertion 3: the regression this item exists to fix ---------------------------------
+    def test_an_approval_survives_a_real_worktree_move(self):
+        """THE POINT OF THE TICKET. Gating in one worktree and implementing in another failed the
+        gate on a genuine five-round approval with byte-identical plan content (COREDEV-2583).
+        No test covered it before this one."""
+        subprocess.run(["git", "-C", self.repo, "add", "-A"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.repo, "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qm", "plan"], check=True, capture_output=True)
+        self.assertEqual(0, self._gate().returncode)
+        wt = os.path.join(self.base, "wt")
+        subprocess.run(["git", "-C", self.repo, "worktree", "add", "-q", "--detach", wt],
+                       check=True, capture_output=True)
+        # carry the artifact across, exactly as an operator would
+        import shutil
+        shutil.copytree(os.path.join(self.plandir, ".verdicts"),
+                        os.path.join(wt, "docs", "planning", ".verdicts"))
+        moved = os.path.join(wt, "docs", "planning", "FEATURE_NAME_PLAN.md")
+        r = run("verify", "--plan", moved)
+        self.assertEqual(0, r.returncode,
+                         f"a genuine approval must survive the mandated worktree move:\n{r.stdout}{r.stderr}")
+
+    def test_git_dir_as_a_FILE_is_accepted(self):
+        """A worktree's `.git` is a FILE, not a directory. A dir-only check resolves a nested
+        worktree to the PARENT checkout, making every worktree share one identity."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rv", SCRIPT)
+        rv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rv)
+        fake = os.path.join(self.base, "wtlike")
+        os.makedirs(os.path.join(fake, "docs", "planning"))
+        with open(os.path.join(fake, ".git"), "w", encoding="utf-8") as fh:
+            fh.write("gitdir: /elsewhere/.git/worktrees/x\n")
+        p = os.path.join(fake, "docs", "planning", "X_PLAN.md")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        self.assertEqual(("docs/planning/X_PLAN.md", "repo-relative"), rv._plan_identity(p))
+
+    # --- the property PR #41 added, which must NOT regress ----------------------------------
+    def test_same_basename_in_a_different_dir_still_cannot_reuse_the_artifact(self):
+        """Repo-relative must still distinguish `docs/planning/a/X` from `docs/planning/b/X`."""
+        import shutil
+        a = os.path.join(self.plandir, "a"); b = os.path.join(self.plandir, "b")
+        os.makedirs(a); os.makedirs(b)
+        pa = os.path.join(a, "SAME_PLAN.md"); pb = os.path.join(b, "SAME_PLAN.md")
+        for p in (pa, pb):
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("identical bytes\n")
+        self.assertEqual(0, self._gate(pa).returncode)
+        shutil.copytree(os.path.join(a, ".verdicts"), os.path.join(b, ".verdicts"))
+        self.assertNotEqual(0, run("verify", "--plan", pb).returncode,
+                            "an artifact copied between same-basename plans must NOT verify")
+
+    # --- assertions 4 and 5: the absolute fallback -------------------------------------------
+    def test_a_plan_outside_every_git_repo_records_absolute(self):
+        outside = os.path.join(self.base, "outside")
+        os.makedirs(outside)
+        p = os.path.join(outside, "OUT_PLAN.md")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        self.assertEqual(0, self._gate(p).returncode)
+        art, _ = self._artifact(p)
+        self.assertEqual("absolute", art["planPathKind"])
+        self.assertTrue(os.path.isabs(art["planPath"]))
+        self.assertEqual(0, run("verify", "--plan", p).returncode, "the fallback must round-trip")
+
+    def test_no_recorded_identity_ever_begins_with_dotdot(self):
+        """Defence-in-depth, and labelled as such: given `_repo_root` returns an ANCESTOR, `relpath`
+        cannot escape, so removing the guard is unobservable (executed both ways). Asserted on the
+        stored string anyway, because emitting a `../` identity would be far worse than two
+        comparisons."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rv", SCRIPT)
+        rv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rv)
+        for p in (self.plan, os.path.join(self.base, "OUT_PLAN.md")):
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("x")
+            ident, _kind = rv._plan_identity(p)
+            with self.subTest(plan=p):
+                self.assertFalse(ident.startswith(".."), f"identity escaped the root: {ident!r}")
