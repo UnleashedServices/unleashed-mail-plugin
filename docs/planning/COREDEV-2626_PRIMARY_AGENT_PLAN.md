@@ -1,30 +1,28 @@
 # Primary "Chief of Staff" Agent Plan
 
-**Status:** Planning — round 2 (revised against codex round-1 REQUEST_CHANGES)
+**Status:** Planning — round 3 (revised against gate rounds 1 and 2)
 **Created:** 2026-07-30
 **Last Updated:** 2026-07-30
 **Ticket:** [COREDEV-2626](https://unleashedservices.atlassian.net/browse/COREDEV-2626) (Epic: COREDEV-2582)
-**Split-out sibling:** [COREDEV-2627](https://unleashedservices.atlassian.net/browse/COREDEV-2627) — global activation, gated on evals
+**Split-out sibling:** [COREDEV-2627](https://unleashedservices.atlassian.net/browse/COREDEV-2627) — global activation, eval-gated
+**Gate defect found en route:** [COREDEV-2628](https://unleashedservices.atlassian.net/browse/COREDEV-2628)
 **Branch:** `feat/COREDEV-2626-primary-boss-agent` · worktree `.claude/worktrees/boss-agent`
 **Base:** `origin/main` @ `ff83f02` (plugin v2.6.4, counts 21/21/0/1)
 
-## Overview
+## §1. Overview
 
-The plugin ships 21 agents, 21 skills, a 5-reviewer panel, a deterministic synthesizer MCP server, and
-a mandatory plan-review gate. All of it works. The problem is **activation**: the main thread sees only
-a one-line `description` per asset, so the user must explicitly say "run the security reviewer", "use
-Context7", "open a ticket". Every strong capability here is opt-in per prompt.
+The plugin ships 21 agents, 21 skills, a 5-reviewer panel, a deterministic synthesizer MCP server, and a
+mandatory plan-review gate. All of it works. The problem is **activation**: the main thread sees only a
+one-line `description` per asset, so the user must explicitly ask for the security reviewer, for
+Context7, for a ticket. Every strong capability here is opt-in per prompt.
 
-This plan adds a **22nd agent, `chief-of-staff`**, designed to be run as the main conversation thread so
-the routing table is resident rather than latent.
+This plan adds a **22nd agent, `chief-of-staff`**, designed to run as the main conversation thread so the
+routing topology is resident rather than latent.
 
-> **Scope changed in round 2.** This ticket ships the agent **opt-in only**. The plugin-root
-> `settings.json` that activates it globally moved to **COREDEV-2627**, gated on a passing
-> boss-vs-stock eval. Rationale in §3.
+**This ticket ships it opt-in only.** The plugin-root `settings.json` that activates it globally is
+COREDEV-2627, gated on a passing boss-vs-stock eval.
 
-## Approach
-
-### 1. The mechanism — verified against the installed binary
+## §2. The mechanism — verified against the installed binary
 
 A `settings.json` at the **plugin root** (sibling of `.claude-plugin/`, *not* inside it) with
 `{"agent": "<name>"}` runs the main thread as that agent. Ground truth from
@@ -37,32 +35,22 @@ A `settings.json` at the **plugin root** (sibling of `.claude-plugin/`, *not* in
 | `Name of an agent (built-in or custom) to use for the main thread. Applies the agent's system prompt, tool restrictions, and model.` | the `agent` key and exactly what it applies |
 
 Supported keys are **only** `agent` and `subagentStatusLine`; it takes priority over `plugin.json`; and
-both `--agent` and project `.claude/settings.json` override it.
+both `--agent` and project `.claude/settings.json` override it. **This ticket does not create that file.**
 
-**This ticket does not create that file.** It is recorded here because it is the mechanism the agent is
-designed for, and COREDEV-2627 will add it.
+## §3. Decisions
 
-### 2. Opt-in usage (what this ticket delivers)
+| # | Decision | Value |
+| --- | --- | --- |
+| D1 | Rollout | **Opt-in here; global activation is COREDEV-2627, eval-gated.** Round-1 codex: a hand-written body "cannot reliably reproduce undisclosed or evolving harness behavior", and M0 confirmed the built-in conduct sections are not surfaced under a main-thread agent. Activating globally before measuring ships a default-behavior change on assertion. |
+| D2 | Autonomy | **Assertive on reads, consent for outward mutation** — specified by *operation and transitive effect* in §6, not by agent identity. |
+| D3 | Personality | **Chief of staff** — narrates the plan, names which agent owns what and why, status at stage boundaries. Must **conform to `AGENT_CONTRACTS.md` §13** (Agent Output Style), which has already landed. |
 
-```bash
-claude --agent unleashed-mail:chief-of-staff      # per session
-```
-or `"agent": "unleashed-mail:chief-of-staff"` in a project `.claude/settings.json`.
+Opt-in usage: `claude --agent unleashed-mail:chief-of-staff`, or `"agent"` in a project
+`.claude/settings.json`.
 
-Bare-name resolution is confirmed working for the plugin's own `settings.json` (M0 Q5); the scoped form
-above is the documented CLI-flag form for disambiguating across plugins.
+## §4. The agent
 
-### 3. Decisions
-
-| # | Decision | Value | Notes |
-| --- | --- | --- | --- |
-| D1 | Rollout | **Opt-in now; global activation split to COREDEV-2627** | *Revised in round 2.* Codex: a hand-written body "cannot reliably reproduce undisclosed or evolving harness behavior", and M0 confirmed the built-in conduct sections are not surfaced under a main-thread agent. Activating globally before measuring is shipping a default-behavior change on assertion, not evidence. Splitting keeps the always-on goal but makes a passing A/B its trigger. |
-| D2 | Autonomy | **Assertive on reads, confirm on writes** | Boundary rewritten in §5 — round 1 classified agents by *role label* instead of *effective capability*, which was wrong. |
-| D3 | Personality | **Chief of staff** | Narrates the plan before executing, names which agent owns what and why, status at stage boundaries. Must conform to `AGENT_CONTRACTS.md` §13 (Agent Output Style), which **has already landed** — see Notes. |
-
-### 4. The agent
-
-`agents/chief-of-staff.md`. Frontmatter, every field load-bearing:
+`agents/chief-of-staff.md`:
 
 ```yaml
 ---
@@ -70,272 +58,334 @@ name: chief-of-staff
 description: >
   Main-thread orchestrator persona for UnleashedMail development. Routes user intent to the
   plugin's specialist agents and skills. Intended to be run AS the main thread
-  (`claude --agent unleashed-mail:chief-of-staff`) — it is NOT a delegation target and must not
-  be spawned as a subagent by another agent.
-effort: xhigh          # mandatory — check_effort_policy hard-fails any other value (see C3)
-model: inherit         # MUST NOT pin — see C2
+  (`claude --agent unleashed-mail:chief-of-staff`) — NOT a delegation target; do not spawn it
+  as a subagent.
+effort: xhigh          # mandatory — check_effort_policy hard-fails anything else (C3)
+model: inherit         # MUST NOT pin (C2)
 skills:
-  - agent-orchestration   # preload the CANONICAL registry rather than copying it (see §6)
-# NO `tools:` key      # MUST NOT set — see C1
+  - agent-orchestration   # preloads the canonical registry (§5)
+# NO `tools:` and NO `disallowedTools:` — both restrict the whole session (C1)
 ---
 ```
 
-### 5. The confirmation boundary (D2) — corrected
+## §5. Routing — preload the canonical registry
 
-Round 1 listed "planners and diagnostics" as read-only. **That was wrong**, and codex caught it:
+Copying a dispatch table into the body would create a **second semantic registry** with no equality
+check, free to drift from `skills/agent-orchestration/SKILL.md` (which *is* CI-enforced set-equal to
+`agents/*.md`). Instead `skills: [agent-orchestration]` preloads it.
 
-* `modern-standards-planner` **omits `tools:`**, so it inherits Write, Edit, Bash, Agent and MCP.
-* `xcode-build-fixer` and `graph-api-debugger` carry Write/Edit and may apply mechanical fixes.
-* `jira-manager` mutates Jira by design.
+**Verified mechanism** (round-2 gemini claimed `skills:` is only an allowlist; that is wrong, and both
+the official docs and `CLAUDE.md:44` say otherwise):
 
-Classification is therefore by **effective capability**, never by role label:
+> "The `skills` field allows you to preload specific skills into a subagent's context at startup,
+> **injecting their full content**." — code.claude.com/docs/en/sub-agents
 
-| Acts freely | Confirms first |
+The body carries only what the skill does not: intent-recognition triggers, the consent model (§6), the
+Workflow contract (§7), and baseline conduct (§9.1). If a routing table is ever inlined, it requires a
+drift guard in `validate-plugin-assembly.py`.
+
+**Two corrections the preload forces (round-2 findings):**
+
+* **Namespacing.** `agent-orchestration` hardcodes **bare** agent names (`db-engineer`, …). M0 measured
+  that bare names resolve from the **main thread** (depth 0) but fail from **inside a subagent**
+  (`Agent type '<name>' not found. Available agents: … p4:leaf …`). The body must instruct: bare names are
+  fine for the agent's own dispatches; any name handed to a subagent for onward spawning must be scoped
+  `unleashed-mail:<agent>`. *(Caveat: measured on a `--plugin-dir` load. The capture-hook matcher
+  `(unleashed-mail:)?(…)` accepts both forms, implying installed plugins may resolve bare names at depth
+  too; the instruction is written to be correct under both.)*
+* **Panel-spawn text.** `agent-orchestration:50` explicitly permits an external caller to "run the five
+  reviewers yourself and hand their JSON to swift-reviewer", and line 122 recommends it for "a full
+  review". Preloading that text imports a permission that must be reconciled with §7 — see §7.3.
+
+## §6. D2 — consent by operation and transitive effect
+
+Rounds 1 and 2 both rejected the earlier matrix: round 1 classified by *role label*, round 2 by
+*immediately-selected agent*. Neither captures the side-effect chain. The model is now **operation-first**.
+
+**Rule.** Any **outward mutation** — direct or delegated, at any depth — requires scoped consent before
+it happens. "Outward" means: the filesystem outside scratch space, git history, a remote (push, PR),
+Jira/Atlassian or any MCP write, or any network call with side effects.
+
+Consent is decided by *what will happen*, never by which agent is being asked:
+
+| Requires consent | Notes |
 | --- | --- |
-| Read, Grep, Glob, Explore | Any agent whose effective tool set includes Write/Edit/Bash-mutating |
-| Context7, WebFetch, WebSearch | `db-engineer`, `logic-engineer`, `ui-engineer`, `ai-engineer`, `tester`, `code-simplifier`, `docs-engineer`, `ci-engineer`, `release-manager` |
-| `git status/log/diff/fetch/show` | `modern-standards-planner`, `xcode-build-fixer`, `graph-api-debugger` (write-capable despite planner/diagnostic labels) |
-| Read-only reviewers: `security-reviewer`, `concurrency-reviewer`, `ux-perf-reviewer`, `accessibility-auditor`, `prompt-review` | `jira-manager` (mutates Jira) |
-| Personas: `smb-entrepreneur`, `enterprise-stakeholder` (`tools: Read, Grep, Glob`) | `git commit/push`, branch/worktree creation, PR create/merge |
-| Reading plans, verdicts, contracts | Writing plan docs; editing any tracked file |
+| Any Write/Edit to a tracked file; creating or deleting untracked files | direct |
+| `git commit/push`, branch or worktree creation, PR create/merge | direct |
+| Any MCP write — Jira create/transition/comment, Confluence, GitHub | **includes the agent's own direct MCP calls**, not just delegated ones |
+| Dispatching any agent whose effective tools include Write/Edit | `db-engineer`, `logic-engineer`, `ui-engineer`, `ai-engineer`, `tester`, `code-simplifier`, `docs-engineer`, `ci-engineer`, `release-manager`, and — despite their labels — `modern-standards-planner` (omits `tools:`, inherits everything), `xcode-build-fixer`, `graph-api-debugger` |
+| **`swift-reviewer`** | **transitive**: its contract auto-spawns `jira-manager`, which mutates Jira. Consent for a review covers the review *and* its Jira logging, named explicitly at request time |
+| A **`Bash`** invocation that mutates | the four "read-only" reviewers all carry `tools: Read, Bash, Grep, Glob`; frontmatter blocks Write/Edit but **not** a mutating shell command |
 
-> **This is a behavioral convention, not an enforced security boundary.** Because the agent omits
-> `tools:` (C1), it inherits the entire tool surface; nothing mechanically prevents a write. The plan
-> states this plainly rather than implying enforcement. Consent scope, lifetime, and re-confirmation on
-> scope expansion are specified in the agent body; COREDEV-2627 owns precedence against COREDEV-2584's
-> future armed autonomous mode.
+| Proceeds without consent | Notes |
+| --- | --- |
+| Read, Grep, Glob, Explore; reading plans/verdicts/contracts | |
+| Context7, WebFetch, WebSearch | read-only network |
+| `git status/log/diff/fetch/show` | non-mutating |
+| Non-mutating builds, lints, test runs | |
+| Dispatching the five reviewers or the two personas **for analysis only** | `smb-entrepreneur`/`enterprise-stakeholder` are `tools: Read, Grep, Glob`; the reviewers are read-only *by intent* — their `Bash` is bounded by the consent rule above, not by frontmatter |
 
-### 6. Routing — preload, do not duplicate
+**Consent scope and lifetime — stated, not implied:**
 
-Round 1 proposed copying a dispatch table into the agent body. That creates a **second semantic
-registry** with no equality check, free to drift from `skills/agent-orchestration/SKILL.md` (which *is*
-CI-enforced set-equal to `agents/*.md`).
+* **Scope** is the named operation on the named target ("commit these three files", "open COREDEV-XXXX").
+  Consent for one operation never generalises to a class.
+* **Lifetime** is the current task. A new task re-asks.
+* **Expansion re-asks.** If the blast radius grows mid-task — more files, a push after a commit, a
+  second ticket — that is a new operation requiring fresh consent.
+* **Standing consent** exists only where the user grants it explicitly, or where repo policy already
+  mandates the action (e.g. `CLAUDE.md`'s "every change references a COREDEV ticket").
 
-Instead: `skills: [agent-orchestration]` preloads the canonical SKILL.md body at startup. The agent body
-carries only what the skill does not — intent-recognition triggers, the confirmation boundary, and
-baseline conduct (§8). If any routing table is ever inlined, it requires a drift guard in
-`validate-plugin-assembly.py`.
+> **Honesty clause.** Because the agent omits `tools:` (C1) it inherits the entire tool surface. **This
+> is a cooperative behavioural contract, not an enforced security boundary** — nothing mechanically
+> prevents a write. Enforcement, if ever wanted, is a `PermissionRequest` hook, which is COREDEV-2584's
+> subject. §11 specifies the behavioural tests that stand in for enforcement.
 
-### 7. Concurrency and the `Workflow` tool
+## §7. Workflow access and concurrency
 
-**Requirement (user, 2026-07-30): the agent must have `Workflow` access, and multi-agent work must run
-concurrently rather than one at a time.**
+**Requirement (user, 2026-07-30):** the agent must have `Workflow` access, and multi-agent work must run
+concurrently rather than one at a time. The user retains the opt-in lever and is content to select
+Workflow themselves.
 
-**Access is automatic.** Because the agent omits `tools:` (C1) it inherits the session's entire tool
-surface, `Workflow` included — nothing needs to be listed. (Worth noting the inverse is a CI hole:
-COREDEV-2584 §4.10 finding 1 proves that *adding* `, Workflow` to an agent's `tools:` passes
-`validate-plugin-assembly.py --strict` with no warning, because the difflib guard finds no near match and
-unknown non-MCP entries are accepted. Not this ticket's to fix, but it is why access must be reasoned
-about rather than assumed from the frontmatter.)
+### §7.1 Access
 
-**Concurrency is mandated at three levels**, and the agent body states each as a default, not an option:
+Automatic — omitting `tools:` (C1) inherits the whole surface, `Workflow` included. *(Round 2 corrected
+an error here: an explicit `Workflow` grant passes CI because `Workflow` **is listed in `KNOWN_TOOLS`**
+at `validate-plugin-assembly.py:76`, not because unknown entries are accepted. The earlier claim was
+inherited from COREDEV-2584 §4.10, written before COREDEV-2583 §4.5 added it.)*
 
-| Level | Mechanism | Cap |
+### §7.2 Concurrency — mandated at three levels
+
+| Level | Mechanism | Bound |
 | --- | --- | --- |
 | Independent `Agent` dispatches | all in **one message**, never sequential awaits | session subagent budget |
-| Within a workflow | `pipeline()` by default; `parallel()` only when a stage genuinely needs every prior result | `min(16, cpu_cores - 2)` — **10 on this machine** (12 cores) |
-| Multiple workflows | `Workflow` returns immediately with a task id, so independent workflows are fired together and awaited via notification | shared agent counter / token budget |
+| Within a workflow | `pipeline()` by default; `parallel()` only when a stage genuinely needs every prior result | `max(1, min(16, available_cores - 2))`, further limited by platform/session |
+| Across workflows | `Workflow` returns immediately with a task id, so independent workflows are fired together and awaited by notification | shared agent counter / token budget |
 
-The failure this guards against is a barrier that isn't needed: `parallel()` blocks on the slowest item
-in every stage, so a 5-item fan-out where the slowest takes 3× the fastest wastes two-thirds of the fast
-agents' wall-clock. `pipeline()` lets item A reach stage 3 while item B is still in stage 1.
+The cap is expressed as a **runtime-clamped formula**, never a literal — `min(16, cores - 2)` goes to
+zero or negative on small machines, and a development host's core count is not a plugin-wide invariant.
 
-**Boundary — `Workflow` must NOT orchestrate the review panel.** This is where the requirement meets a
-documented High-severity gap. COREDEV-2584 §4.10 verified four collisions if a second orchestrator
-dispatches reviewers:
+The waste this prevents: `parallel()` is a barrier on the slowest item *in every stage*, so a 5-item
+fan-out whose slowest item takes 3× the fastest idles two-thirds of the fast agents. `pipeline()` lets
+item A reach stage 3 while item B is still in stage 1.
 
-1. CI does not notice a `Workflow` grant (above).
-2. `scripts/review/reviewer-roster.sh:51` hardcodes a five-name allowlist — an unknown name yields
-   `ROSTER-INPUT-INVALID` and **exit 4**, which `swift-reviewer` treats as uncertainty, never a pass.
-3. `SubagentStart`/`SubagentStop` capture hooks match a hardcoded five-name regex
-   (`hooks/hooks.json:121,133`); a Workflow-dispatched agent outside those five produces **no capture and
-   no signal**.
-4. The "at most ONE spawn per reviewer per review" bound is prose in the orchestrator's working memory
-   with no on-disk ledger — two concurrent orchestrators are two ledgers, so the bound cannot hold.
+### §7.3 The reviewer-identity prohibition (one contract, four documents)
 
-So the split the agent body enforces:
+Round 2: the earlier "Workflow for breadth, swift-reviewer for the panel" was **too semantic** (a
+Workflow "audit" could still dispatch a subset of the five) and **conflicted** with the preloaded
+`agent-orchestration:50`. The contract is now stated once, in the strong form COREDEV-2584 §4.10
+requires, and reconciled with the existing external-spawn permission:
 
-* **`Workflow` is for breadth** — audits, sweeps, migrations, multi-file research, adversarial
-  completeness passes. Fan out freely and concurrently.
-* **`swift-reviewer` remains the sole orchestrator of the review panel.** The agent dispatches *to* it
-  and never reproduces the panel through a workflow. This is the §9.2 invariant, and COREDEV-2584 owns
-  writing it into AGENT_CONTRACTS.
+> **R1.** `Workflow` must **never** dispatch any of the five reviewer agent identities
+> (`security-reviewer`, `concurrency-reviewer`, `ux-perf-reviewer`, `accessibility-auditor`,
+> `prompt-review`). Not the panel, not a subset, not one.
+> **R2.** The existing `Agent`-tool external-spawn path stays legal (`agent-orchestration:50`) — a caller
+> may spawn the five directly and hand their JSON to `swift-reviewer`.
+> **R3.** `swift-reviewer` exclusively owns panel synthesis and the verdict, however the five were spawned.
 
-**Honest limit on the M0 evidence.** The depth results in *M0 empirics* below were measured on the
-**`Agent`-tool** dispatch path. COREDEV-2584 records that Workflow-dispatched agents do **not** count against the session subagent
-budget, which means they are a different accounting path — so Q1's "no depth cost" result **does not
-automatically extend to `Workflow`**. Stated rather than assumed, given round 1 over-claimed twice. If
-the agent is ever expected to nest workflows under a gated pipeline, that path needs its own
-discriminating probe.
+R1 is identity-scoped because the enforcement machinery is name-keyed: `reviewer-roster.sh:51` hardcodes
+a five-name allowlist returning exit 4 on anything else, and the `SubagentStart`/`SubagentStop` capture
+hooks match a hardcoded five-name regex (`hooks/hooks.json:121,133`) — a Workflow-dispatched reviewer
+produces **no capture and no signal**. R2 preserves today's documented behaviour rather than silently
+revoking it. R3 keeps the one-verdict invariant.
 
-**One constraint the user should know about.** The `Workflow` tool's own contract requires *explicit*
-user opt-in per invocation ("ultracode" in the prompt, an ultracode session, or the user asking for a
-workflow in their own words). The agent therefore **cannot self-authorize** a workflow, which is in
-tension with the "stop directing me" goal. What it can do without opt-in: dispatch every independent
-`Agent` call in parallel (the common case), and *propose* a workflow with a rough cost when one would
-genuinely help. Standing opt-in comes from the user enabling ultracode.
+**Alignment is a single-milestone obligation.** R1–R3 must land in the **same commit** across all four
+places that speak to it: the `chief-of-staff` body, `skills/agent-orchestration/SKILL.md`,
+`agents/swift-reviewer.md`, and `AGENT_CONTRACTS.md`. **This ticket owns that work** — round 2 caught the
+plan contradicting itself by assigning it to COREDEV-2584 in one place and M4 in another. COREDEV-2584
+remains free to generalise the rule later. A **static drift test** asserts the four texts stay aligned;
+runtime enforcement is **cooperative**, and the plan says so plainly.
 
-## Hard constraints
+**Evidence limit.** §10's depth results were measured on the **`Agent`-tool** path. COREDEV-2584 records
+that Workflow-dispatched agents do not count against the session subagent budget — a different
+accounting path — so Q1's result **does not extend to `Workflow`**. If workflows are ever nested under a
+gated pipeline, that path needs its own discriminating probe.
 
-Each is a **silent** session-breaker — nothing errors, behavior is just quietly wrong.
+## §8. Hard constraints
 
-* **C1 — MUST omit `tools:`.** On a main-thread agent a `tools:` allowlist restricts the *entire user
-  session*, stripping every MCP server (Atlassian, Context7, review-synthesizer). Only `jira-manager`
-  and `modern-standards-planner` omit it today; this becomes the third.
-* **C2 — MUST be `model: inherit`.** `model:` applies to the main thread and would override the user's
-  `/model` in every session.
-* **C3 — MUST pin `effort: xhigh`.** `check_effort_policy` (`validate-plugin-assembly.py:350`)
-  hard-fails any agent or skill that is not `xhigh`, so this is not optional. **Consequence deferred to
-  COREDEV-2627:** on an always-on main agent this may clamp a user's `max` session down to `xhigh`, with
-  no `inherit` escape as C2 has. Harmless while opt-in — passing `--agent` opts into its effort too.
-* **C4 — MUST NOT set `memory:`.** It auto-enables Read/Write/Edit as a side effect. **Now a validator
-  assertion**, not just prose (round 1 listed it as a constraint but never checked it).
+Each is a **silent** session-breaker — nothing errors, behaviour is quietly wrong.
+
+* **C1 — MUST omit both `tools:` and `disallowedTools:`.** On a main-thread agent *either* key restricts
+  the **entire user session**. Round 2 caught that the earlier contract checked only `tools:`, so
+  `modern-standards-planner` (`model: inherit`, no `tools:`, no `memory:`, but
+  `disallowedTools: mcp__github`) would have passed every check while silently stripping an MCP server
+  from the main thread.
+* **C2 — MUST be `model: inherit`.** Otherwise it overrides the user's `/model` in every session.
+* **C3 — MUST pin `effort: xhigh`.** `check_effort_policy` (`validate-plugin-assembly.py:350`) hard-fails
+  anything else. Consequence deferred to COREDEV-2627: on an *always-on* main agent this may clamp a
+  `max` session down to `xhigh`, with no `inherit` escape. Harmless while opt-in. *(Round-2 gemini notes
+  `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter, so an env-var invocation would not clamp — recorded
+  as unverified and left for COREDEV-2627 to confirm.)*
+* **C4 — MUST NOT set `memory:`.** It auto-enables Read/Write/Edit as a side effect. Now a validator
+  assertion, not just prose.
 * **C5 — the body REPLACES the built-in conduct sections.** See §9.1.
 
-## CI / assembly impact
+## §9. Risks
 
-| Site | Change |
-| --- | --- |
-| `README.md:5` bold counts line | `21 agents` → `22 agents` |
-| `.claude-plugin/plugin.json` description | "21 specialized agents" → 22 |
-| `.claude-plugin/marketplace.json` description | same string, second copy |
-| `CLAUDE.md:17` | the `agents/ 21 subagents` box |
-| `skills/agent-orchestration/SKILL.md` "## Agent Registry" | **required** — set-equality enforced (`validate-plugin-assembly.py:308`) |
-| `AGENT_CONTRACTS.md` §11 | model/effort tier row for the new agent |
-| `AGENT_CONTRACTS.md` (new §) | boss boundary vs. `swift-reviewer` and vs. Workflow (§9.2) |
-| `scripts/validate-plugin-assembly.py` | new `settings.json` contract (below) |
-| `CHANGELOG.md` + `plugin.json` | version bump — see Notes on the 2.7.0 collision |
+### §9.1 The body replaces built-in conduct — measured, claim scoped
 
-**All of the above land in ONE commit with the agent** (see Milestones) — round 1 deferred the registry
-row and counts to a later milestone, which would have left the trunk red in between.
+Under a main-thread agent the `Harness` and `Delivering work` sections were **not surfaced**; the stock
+control reported both (§10 Q3).
 
-### New validator coverage — hard-fail, not warn
-
-`validate-plugin-assembly.py` has no `settings.json` awareness. Round 1 proposed warning on unknown
-keys; codex correctly noted that `{"agnt": "chief-of-staff"}` would then pass `--strict` while doing
-nothing — the exact silent failure this is meant to prevent. The contract **hard-fails** on:
-
-1. A non-object root.
-2. Missing, non-string, or empty `agent`.
-3. Unknown keys (at minimum under `--strict`).
-4. A namespace prefix that does not exactly match the plugin manifest `name`.
-5. An `agent` that does not resolve to an existing `agents/*.md`.
-6. A target that sets `tools:` (C1), a non-`inherit` `model:` (C2), or `memory:` (C4).
-7. An invalid `subagentStatusLine` type, if present.
-
-Tests in `scripts/tests/test_validate_plugin_assembly.py` using temporary plugin roots, each
-mutation-proved. Note the file must tolerate `settings.json` being **absent** — that is the state
-throughout this ticket, since activation ships in COREDEV-2627.
-
-## Risks
-
-### 9.1 The body replaces built-in conduct — measured, claim narrowed
-
-Under a main-thread agent, the `Harness` and `Delivering work` sections were **not surfaced**, while the
-stock control reported both (M0 Q3).
-
-**Claim scope, per codex.** The evidence supports *"these two named conduct sections were not
-surfaced"* — **not** a wholesale "all built-in instructions are replaced". The probe used post-hoc
-discriminator selection and model self-report, both weak instruments. The plan no longer asserts the
-stronger claim. What must be restated in the body is derived from the two confirmed sections plus
-first-principles conduct:
+**Claim scope.** The evidence supports *"these two named sections were not surfaced"* — **not** a
+wholesale "all built-in instructions are replaced". The probe used post-hoc discriminator selection and
+model self-report, both weak. What the body must restate:
 
 * **Delivering work** — act on the actual request; don't silently narrow, widen, or transform scope;
-  finish the whole task; report completion only when genuinely done; state what was left out and why.
-* **Harness** — prefer dedicated file/search tools over shell equivalents; parallel independent tool
-  calls; `file_path:line_number` references; treat a denied permission as a signal to adjust, not retry.
+  finish the whole task; report completion only when genuinely done; say what was left out and why.
+* **Harness** — prefer dedicated file/search tools over shell; parallel independent tool calls;
+  `file_path:line_number` references; a denied permission is a signal to adjust, not retry.
 * **Faithful reporting** — failing tests reported with output; skipped steps named.
-* **Confirmation discipline** for hard-to-reverse and outward-facing actions (the substrate D2 rests on).
+* **Confirmation discipline** for hard-to-reverse and outward-facing actions (§6's substrate).
 
-**Mitigation is now structural, not just textual:** global activation cannot ship until a boss-vs-stock
-A/B passes (COREDEV-2627). Opt-in exposure is bounded to sessions the user explicitly opts into.
+Structural mitigation: global activation cannot ship until a boss-vs-stock A/B passes (COREDEV-2627).
+Opt-in exposure is bounded to sessions the user explicitly enters.
 
-### 9.2 Two orchestrators
+### §9.2 Orchestrator boundary
+Covered by §7.3 R1–R3.
 
-`agent-orchestration` states "exactly one orchestrator, one verdict" — `swift-reviewer` owns the review
-pipeline and its synthesis. `chief-of-staff` **dispatches to** it and must never re-synthesize or
-re-adjudicate its findings. COREDEV-2584 §8 raises the same collision for ultracode's Workflow
-orchestration. Both boundaries go in AGENT_CONTRACTS.
+### §9.3 The agent is also spawnable
+Every `agents/*.md` is delegatable, so `chief-of-staff` appears in the subagent list. Mitigated **by
+wording only** — no frontmatter key makes an agent non-delegatable.
 
-### 9.3 The agent is also spawnable
+## §10. M0 empirics
 
-Every `agents/*.md` is delegatable, so `chief-of-staff` appears in the subagent list and could be spawned
-recursively. Mitigated **by wording only** — the `description` states it is a main-thread persona, not a
-delegation target. There is no frontmatter key that makes an agent non-delegatable.
+### Q1 — spawn-depth cost: **NO**. Discriminating, with an activation control.
 
-### 9.4 Namespacing
+Round 1's experiment was **not discriminating**: default depth is 3 (`AGENT_CONTRACTS.md:260`), so
+`main → mid → leaf` succeeds under *both* hypotheses. Round 2 asked for an activation control, since a
+boss arm that silently ran stock would produce identical rows. Both are now closed:
 
-M0 found that from **inside a subagent**, plugin agent types resolve namespaced (`plugin:agent`); bare
-names fail with `Agent type '<name>' not found`. Any agent name the body or the orchestration skill
-tells a subagent to spawn must use the scoped form, or every delegation fails at depth ≥ 1.
+| Cell | pin | boss | depth result | activation marker |
+| --- | --- | --- | --- | --- |
+| A | 2 | off | `MID_SAW=LEAF_OK` | 0 |
+| B | 2 | **on** | `MID_SAW=LEAF_OK` | **1** |
+| C | 1 | off | `MID_NO_AGENT_TOOL` | 0 |
+| D | 1 | **on** | `MID_NO_AGENT_TOOL` | **1** |
 
-## M0 empirics — evidence
+The marker appears in **exactly** the boss arms and never in control, so the boss arm was genuinely
+active. The pin demonstrably bites at 1 (the `Agent` tool is withheld, as `AGENT_CONTRACTS.md:262`
+documents). Depth behaviour is identical across arms at both pins. **A main-thread agent consumes no
+spawn-depth level.** Both round-2 reviewers independently agreed the design is discriminating.
 
-### Q1 — spawn-depth cost: **NO** (re-proved with a discriminating design)
-
-Round 1's experiment was **not discriminating** and its conclusion was unsupported. Claude Code's
-default depth is **3** (`AGENT_CONTRACTS.md:260`), so `main → mid → leaf` succeeds under *both*
-hypotheses — no-cost reaches depth 2, costs-a-level reaches depth 3, and both fit. Codex caught this.
-
-Re-run pinning `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, with a negative control proving the pin bites:
-
-| Pin | Control (no boss) | Boss active |
-| --- | --- | --- |
-| **2** | `MID_SAW=LEAF_OK` | `MID_SAW=LEAF_OK` |
-| **1** | `MID_NO_AGENT_TOOL` | `MID_NO_AGENT_TOOL` |
-
-Identical in both arms at both limits; at 1 the `Agent` tool is withheld exactly as `AGENT_CONTRACTS.md:262`
-documents. **A main-thread agent consumes no spawn-depth level.**
-
-Panel width separately verified at the real shape — `boss(main) → panel-lead → 5 concurrent reviewers`
-returned `PANEL=REV1_OK,REV2_OK,REV3_OK,REV4_OK,REV5_OK`. Relevant because
-`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` and `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` are budgets separate
-from depth.
+Panel width separately verified at the real shape: `boss(main) → panel-lead → 5 concurrent reviewers`
+returned `PANEL=REV1_OK,…,REV5_OK`. Relevant because `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` and
+`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` are budgets separate from depth.
 
 ### Q2–Q5
 
 | # | Question | Answer | Evidence |
 | --- | --- | --- | --- |
 | Q2 | Project `CLAUDE.md` still loads? | **YES** | Boss answered `ZARQUON-7734`, present only in the workdir CLAUDE.md |
-| Q3 | Built-in conduct sections surfaced? | **NO** (narrowed — see §9.1) | Control: `Harness` YES, `Delivering work` YES. Boss: NO to both |
-| Q4 | Plugin hooks fire? | **A `SessionStart` hook fired** | `HOOK_FIRED` marker written. **Narrowed:** one hook on one event does not prove the whole hook/gate apparatus is unaffected — M6 runs `test-hooks.sh` for that |
-| Q5 | Bare vs scoped `agent` value | **Bare works** in plugin `settings.json` | `{ "agent": "probe-boss" }` activated the persona |
+| Q3 | Built-in conduct sections surfaced? | **NO** (scoped — §9.1) | Control: `Harness` YES, `Delivering work` YES. Boss: NO to both |
+| Q4 | Plugin hooks fire? | **A `SessionStart` hook fired** | `HOOK_FIRED` marker written. **Scoped:** one hook on one event; `test-hooks.sh` in M6 is the real check |
+| Q5 | Bare vs scoped `agent` value | **Bare works** | `{ "agent": "boss4" }` activated the persona |
 
-**Reproducible fixture is a deliverable.** Round 1 deleted its probes, which codex flagged. M2 commits
-the probe plugin + runner under `scripts/tests/` (or wires it into COREDEV-2598) so Q1/Q3 are regression
-guards — both are answers a future CLI release could silently change.
+**Fixture is an M2 deliverable.** The probe reproduces the whole 2×2 including the activation assertion,
+and success is read from the marker + depth result, not model self-report. Q1 and Q3 are answers a future
+CLI release could silently change.
 
-## Milestones
+## §11. Behavioural test matrix (M6)
 
-- [x] **M0 — Empirics.** Q1 re-proved discriminatingly; Q3/Q4 claims narrowed.
-- [ ] **M1 — Plan Review Gate.** Round 1: codex REQUEST_CHANGES (valid, incorporated); gemini **VOID** —
-      the isolated wrapper reviews `HEAD` and the plan was untracked, so it reviewed nothing. Round 2
-      runs both arms against the committed, re-snapshotted plan.
-- [ ] **M2 — Validator + fixture first.** The `settings.json` contract (7 hard-fails), mutation-proved,
-      plus the committed depth/persona probe fixture. Lands before the agent so the wiring is guarded
-      the moment it exists — and is safe standalone because `settings.json` is absent.
-- [ ] **M3 — The agent, landed atomically.** `agents/chief-of-staff.md` **together with** its Agent
-      Registry row, AGENT_CONTRACTS §11 tier entry, and all four count/description sites, in ONE commit.
-      Splitting these leaves the trunk red.
-- [ ] **M4 — Contracts + docs.** AGENT_CONTRACTS §9.2 boundaries + §13 output-style conformance; README
-      section documenting opt-in invocation; CHANGELOG.
-- [ ] **M5 — Version bump.** After M3/M4, and after reconciling the 2.7.0 collision (Notes).
+A prompt-based feature needs behavioural proof, not just load proof. COREDEV-2627's A/B decides *global
+activation*; this ticket must still prove the opt-in agent's own contract:
+
+| # | Class | Assertion |
+| --- | --- | --- |
+| 1 | Routing — implementation | a data-layer request reaches `db-engineer`, not a generic answer |
+| 2 | Routing — review | "review this" reaches `swift-reviewer`, not five hand-spawned reviewers |
+| 3 | Routing — diagnosis | a Graph/MSAL error reaches `graph-api-debugger` |
+| 4 | Parallel dispatch | independent agents are dispatched in ONE message |
+| 5 | Direct consent | a tracked-file edit is not performed without consent |
+| 6 | **Transitive consent** | `swift-reviewer` is not dispatched without naming its `jira-manager` Jira write |
+| 7 | Consent expansion | a push after an approved commit re-asks |
+| 8 | Workflow opt-in | no workflow is launched without explicit user opt-in |
+| 9 | **R1 prohibition** | no workflow dispatches any of the five reviewer identities |
+| 10 | R3 verdict ownership | the agent never re-synthesizes or re-adjudicates a `swift-reviewer` verdict |
+| 11 | Workflow unavailable | degrades to parallel `Agent` dispatch rather than serialising |
+| 12 | Baseline conduct | scope fidelity, whole-task completion, truthful failure reporting (§9.1) |
+| 13 | §13 output style | conforms to `AGENT_CONTRACTS.md` §13 |
+
+## §12. CI / assembly impact
+
+| Site | Change |
+| --- | --- |
+| `README.md:5` bold counts line | `21 agents` → `22 agents` |
+| **`README.md:306`** | `## Agents (21)` → `(22)` — **missed until round 2** |
+| **`README.md` agent catalog** | add a `chief-of-staff` row; the count alone is not enough |
+| `.claude-plugin/plugin.json` description | "21 specialized agents" → 22 |
+| `.claude-plugin/marketplace.json` description | same string, second copy |
+| `CLAUDE.md:17` | the `agents/ 21 subagents` box |
+| **`CLAUDE.md:62`** | the `(21/21/0/1)` literal — **missed until round 2** |
+| **`skills/agent-orchestration/SKILL.md:76`** | "all **21** agents" sentence — **missed until round 2** |
+| `skills/agent-orchestration/SKILL.md` registry | new row (set-equality enforced, `validate-plugin-assembly.py:308`) |
+| `agents/swift-reviewer.md` · `AGENT_CONTRACTS.md` | §7.3 R1–R3, same commit |
+| `AGENT_CONTRACTS.md` §11 | model/effort tier row |
+| `scripts/validate-plugin-assembly.py` | §12.1 contract |
+| `CHANGELOG.md` + `plugin.json` | version — see §14 |
+
+Not all of these are caught by existing validators; the three marked were found only by reviewer reading.
+
+### §12.1 `settings.json` validator contract — hard-fail
+
+Round 1 proposed warnings; round 2 showed `{"agnt": …}` would then pass `--strict` doing nothing, and
+that checking `tools:` alone leaves the `disallowedTools:` hole. Hard-fail on:
+
+1. Non-object root.
+2. Missing, non-string, or empty `agent`.
+3. Unknown keys (at minimum under `--strict`); only `agent` and `subagentStatusLine` are legal.
+4. A namespace prefix not exactly matching the plugin manifest `name`.
+5. An `agent` not resolving to an existing `agents/*.md`.
+6. A target that sets **`tools:` or `disallowedTools:`** (C1), a non-`inherit` `model:` (C2), or
+   `memory:` (C4).
+7. `subagentStatusLine` present and not matching its exact schema — **a string command**, or an object
+   `{"type": "command", "command": <string>, "padding"?: <number>}`. ("Invalid type" was not
+   implementable as stated; this is.)
+
+Tests in `scripts/tests/test_validate_plugin_assembly.py` over temporary plugin roots, each
+mutation-proved. The checks must tolerate `settings.json` being **absent** — its state throughout this
+ticket.
+
+## §13. Milestones
+
+- [x] **M0 — Empirics.** Q1 discriminating + activation-controlled; Q3/Q4 scoped.
+- [ ] **M1 — Plan Review Gate.** R1: codex REQUEST_CHANGES (valid) · gemini VOID (COREDEV-2628).
+      R2: both REQUEST_CHANGES, all findings adjudicated. R3 in progress. No implementation before a
+      Combined verdict.
+- [ ] **M2 — Validator + fixture.** §12.1's seven hard-fails, mutation-proved, plus the committed 2×2
+      fixture. Safe standalone: `settings.json` is absent.
+- [ ] **M3 — The agent + its governing contracts, ONE commit.** `agents/chief-of-staff.md`, the registry
+      row, AGENT_CONTRACTS §11 tier, **§7.3 R1–R3 across all four documents**, the §7.3 drift test, and
+      every §12 count site. Round 2 caught that deferring the contracts to a later milestone made the
+      "atomic landing" claim false.
+- [ ] **M4 — Docs.** README section + agent-catalog row; CHANGELOG.
+- [ ] **M5 — Version bump.** After M3/M4 and after reconciling the 2.7.0 collision (§14).
 - [ ] **M6 — Verification.** Six repo gates + `shellcheck` + `claude plugin validate --strict .` on CLI
-      2.1.220, `bash scripts/test-hooks.sh` (the real Q4 check), and a scratch-installed session via
-      `claude --plugin-dir` proving the agent loads and routes. Runs **after** the version bump.
-- [ ] **M7 — Hand off to COREDEV-2627** for eval-gated global activation.
+      2.1.220 + `bash scripts/test-hooks.sh` (the real Q4 check) + the **§11 behavioural matrix** via
+      `claude --plugin-dir`. Runs **after** the version bump.
+- [ ] **M7 — Hand off to COREDEV-2627.**
 
-## Scope guards
+## §14. Scope guards and coordination
 
-* **Does not** create the plugin-root `settings.json` — that is COREDEV-2627.
-* **Does not** implement COREDEV-2584's autonomous/no-prompt mode. Plugin `settings.json` supports only
-  `agent` and `subagentStatusLine` and cannot grant permissions; 2584's `PermissionRequest` design stands.
-* **Does not** modify `hooks/hooks.json`.
-* **Does not** alter the review pipeline, the synthesizer, or any reviewer agent.
-* Skills/commands/MCP counts stay `21/0/1`; only the agent count moves (21 → 22).
-* `subagentStatusLine` is out of scope.
+* **Does not** create the plugin-root `settings.json` (COREDEV-2627).
+* **Does not** implement COREDEV-2584's autonomous mode. Plugin `settings.json` supports only `agent` and
+  `subagentStatusLine` and cannot grant permissions; 2584's `PermissionRequest` design stands.
+* **Does not** modify `hooks/hooks.json`; **does not** alter the reviewers or the synthesizer.
+* Skills/commands/MCP counts stay `21/0/1`; only agents move 21 → 22.
+* `subagentStatusLine` out of scope beyond validating it if present.
+* **Version collision.** COREDEV-2584 claims `2.7.0` (`AUTONOMOUS_END_TO_END_PLAN.md:13`) and moves counts
+  to `21/22/0/1`; this ticket moves them to `22/21/0/1`. Both cannot claim the same version or edit the
+  count sites unreconciled. Resolve with `release-manager` before M5. 2584 is paused at a
+  request-changes gate.
+* **COREDEV-2602 has landed** (`AGENT_CONTRACTS.md:465 §13`) — D3 conforms to it rather than re-inventing.
+* **COREDEV-2598** — `claude --plugin-dir` already provides scratch-install; extending it with this
+  ticket's fixture is an explicit M2 deliverable.
+* **COREDEV-2599** — `claude plugin eval` exists with an automatic no-plugin baseline arm; it is a
+  **prerequisite of COREDEV-2627**.
+* **COREDEV-2628** — the gate defect found here: `isolated-agy-review.sh` builds its tree from `HEAD`, so
+  an untracked plan is silently absent and the round returns a clean-looking verdict on an unread
+  artifact.
 
-## Testing
+## §15. Testing
 
 | Gate | Command |
 | --- | --- |
@@ -346,55 +396,32 @@ guards — both are answers a future CLI release could silently change.
 | MCP suite | `python3 -m unittest discover -s mcp/review-synthesizer/tests` |
 | Scripts suite | `python3 -m unittest discover -s scripts/tests` |
 | Shell | `shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit` |
-| Load | `claude plugin validate --strict .` + `claude --plugin-dir` scratch session |
+| Load + behaviour | `claude plugin validate --strict .` · `claude --plugin-dir` for the §11 matrix |
 
-New tests: the seven `settings.json` assertions, each mutation-proved, plus the committed probe fixture.
+New: seven `settings.json` assertions, the §7.3 drift test, the 2×2 fixture — each mutation-proved.
 
-## Notes
-
-* **Sibling reconciliation (all verified at `ff83f02`):**
-  * **COREDEV-2602 has already landed** — `AGENT_CONTRACTS.md:465 ## 13. Agent Output Style`. Round 1's
-    "consider landing 2602 first" was stale. D3's voice must **conform to §13**, not re-invent it.
-  * **COREDEV-2584 already claims `2.7.0`** (`AUTONOMOUS_END_TO_END_PLAN.md:13`) and moves counts to
-    `21/22/0/1`; this ticket moves them to `22/21/0/1`. **Both cannot claim 2.7.0 or edit the count sites
-    unreconciled.** Resolve with `release-manager` before M5. 2584 is currently paused at a
-    request-changes gate.
-  * **COREDEV-2598** — `claude --plugin-dir` already provides the scratch-install mechanism. Extending it
-    with this ticket's fixture is an explicit M2 deliverable, not an optional "worth folding in".
-  * **COREDEV-2599** — `claude plugin eval` exists natively with an automatic no-plugin baseline arm. It
-    is a **prerequisite of COREDEV-2627**, not a note.
-* **Gate defect found while running M1 (needs its own ticket):**
-  `scripts/review/isolated-agy-review.sh` builds its disposable tree from `git rev-parse HEAD`, so an
-  **untracked** review target is silently absent. Round 1 returned `EXIT=0 BYTES=3698 TREE=clean
-  VERDICT=REQUEST_CHANGES` — a healthy-looking round on an artifact the reviewer never read. Had it said
-  APPROVE the gate would have passed on nothing. It should fail closed when the target is missing from
-  the disposable checkout.
-* Local `main` was **62 commits stale** (v2.5.2 vs. origin v2.6.4) at session start; all findings are
-  against `origin/main` @ `ff83f02`.
-* Deliberately **not** using a `SessionStart`/`UserPromptSubmit` hook to inject a persona — the native
-  `agent` key is supported, versioned, and user-overridable; a hook-injected persona is none of those.
-
-## Progress Log
+## §16. Progress Log
 
 ### 2026-07-30
-- Verified the main-thread-agent mechanism against installed CLI 2.1.220 (binary strings + docs).
-- Re-verified plugin state at `origin/main`; confirmed frontmatter conventions and that
-  `validate-plugin-assembly.py` has no `settings.json` coverage.
-- Created COREDEV-2626; worktree + branch established; M0 round 1 run.
-- **Gate round 1:** codex **REQUEST_CHANGES** (valid, 386KB, line-cited) · gemini **VOID** (wrapper
-  reviewed `HEAD`, plan untracked).
-- **Codex critical #1 was correct: round 1's Q1 experiment could not falsify its own hypothesis.**
-  Re-ran with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` pinned plus a negative control; conclusion survives
-  on evidence that could have refuted it. Also re-verified panel width at five concurrent reviewers.
-- Verified three further codex claims independently — depth default 3, §13 already landed, 2584's 2.7.0
-  claim. All correct.
-- **Round-2 revisions:** D1 split to COREDEV-2627 (opt-in here, eval-gated activation there) · §5
-  confirmation matrix reclassified by effective capability · validator moved from warn to seven
-  hard-fails incl. C4 · routing preloaded via `skills:` instead of duplicated · milestones re-ordered to
-  land the agent atomically · Q3/Q4 claims narrowed · fixture retention made a deliverable.
-- **Added §7 (Workflow + concurrency)** on user requirement: `Workflow` access is automatic via the
-  omitted `tools:`; concurrency mandated at all three levels (parallel `Agent` dispatch in one message ·
-  `pipeline()` over `parallel()` inside a workflow · concurrent workflow invocations). Bounded by the
-  COREDEV-2584 §4.10 collisions — `Workflow` is for breadth, `swift-reviewer` stays the sole panel
-  orchestrator. Recorded that Q1's depth result does **not** extend to the Workflow dispatch path.
-- **Next:** commit + re-snapshot, then gate round 2 on both arms.
+- Mechanism verified against CLI 2.1.220; plugin state re-verified at `origin/main` (local `main` was
+  **62 commits stale**).
+- COREDEV-2626 created; worktree + branch; M0 round 1.
+- **Gate R1:** codex REQUEST_CHANGES (valid) · gemini **VOID** — wrapper reviewed `HEAD`, plan untracked
+  → filed **COREDEV-2628**.
+- Codex R1 critical #1 correct: R1's Q1 experiment could not falsify its own hypothesis. Re-ran with the
+  depth pin + negative control; conclusion survived.
+- R2 revisions: D1 split to **COREDEV-2627** · matrix reclassified · validator warn→hard-fail · routing
+  preloaded · milestones reordered · Q3/Q4 scoped · **§7 Workflow + concurrency** added.
+- Committed `715c742`, re-snapshotted, verified `git show HEAD:<plan>` resolves.
+- **Gate R2:** both REQUEST_CHANGES, both valid. Every claim verified against the repo before acting.
+  Gemini's sole *critical* (`skills:` doesn't preload) **rejected** — contradicted by official docs and
+  `CLAUDE.md:44`. Its other two findings accepted.
+- **R3 revisions:** §6 rebuilt as operation/transitive-effect consent (covers `swift-reviewer →
+  jira-manager`, reviewer `Bash`, direct MCP writes, consent scope/lifetime/expansion) · **§7.3 R1–R3**
+  single reviewer-identity contract aligned across four documents in one milestone + drift test ·
+  §12.1(6) closes the **`disallowedTools:` hole** (`modern-standards-planner` would have passed) ·
+  §12.1(7) exact `subagentStatusLine` schema · three missed count sites + catalog row · §11 behavioural
+  matrix · portable concurrency formula · §7.1 `KNOWN_TOOLS` correction · §5 namespacing · dangling §8
+  reference fixed (stable §-numbering adopted).
+- **Q1 activation control added and passed** — marker present in exactly the boss arms, absent in both
+  controls, closing codex R2's "silently ran stock" confound.
