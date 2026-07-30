@@ -1,14 +1,15 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — round 4 gated (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×6**, plus an
-adversarial sweep that defeated the §6 proof set with **12 distinct implementations, all executed**). §6 is
-restructured in response — see §11. Awaiting round 5.
+**Status:** Planning — **round 5 gated** (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×5**). Both
+reviewers defeated round 4's `ARCH-1`, in both directions; it is replaced by three invariants whose
+assertions are a signature fact, a syscall count and a unit-tested return value — see §12. Round 4 and its
+12-implementation sweep are in §11. Awaiting round 6.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
 **Sequencing:** `COREDEV-2619` should land **first** — see §7.
-**Measured against:** HEAD `7447d79` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-30 (round 4, post-gate revision)
+**Measured against:** HEAD `49dfbd2` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
+**Last Updated:** 2026-07-30 (round 5, post-gate revision)
 
 ---
 
@@ -231,6 +232,14 @@ cover just one of the three properties §4.1 promises to preserve:
 All five must stay green. The last three are the ones that actually exercise the cap, the non-blocking
 regular-file check and the decode — precisely the properties a hand-rolled replacement would drop.
 
+> **Round 5: `:773` does not safely pin `O_NONBLOCK`, and this must be fixed as part of step 2.** The
+> shared subprocess helper `run()` (`scripts/tests/test_review_verdict.py:13-15`) passes **no timeout**,
+> and the string `timeout` appears **zero** times in the whole module (measured). So a build that drops
+> `O_NONBLOCK` **blocks inside `os.open`** before any assertion runs: the test hangs instead of failing.
+> That is the same "a hang is not an assertion" defect this plan states for C4b — present in the existing
+> test the plan is relying on. **Give `run()` a bounded timeout** and assert the FIFO cases on their
+> message, not merely on exit status.
+
 ## 5. Risk register
 
 | Risk | Likelihood | Mitigation |
@@ -288,25 +297,58 @@ each control mutant is caught by exactly the case §6 claims: I1 only by C2c, I2
 I3 only by C8, I4 only by C3, I6 only by C5a, I9 only by C9a, I11 only by C10. Round 3's C9a seam-assert
 is real and load-bearing. The set is not wrong; it is **incomplete in a way more cases cannot fix.**
 
-#### The two structural invariants — these are acceptance conditions, not preferences
+#### The three invariants — acceptance conditions, not preferences
 
-- **ARCH-1 — the sealed digest helper.** `_digest_transcript_fd(fd: int) -> tuple[str, int]` takes the
-  descriptor and nothing else. A test inspects the shipped source (AST or
-  `inspect.signature` + `inspect.getsource`) and asserts: its parameter list is exactly `(fd,)`; its body
-  contains **no** reference to `open`, `io`, `pathlib`, `os.path`, `os.stat`, `os.lstat`, `os.open`,
-  `os.replace` or any name bound to the transcript path; and it contains **no** comparison against a size
-  constant. **This single assertion kills the re-open class, the second-resolution class and the
-  raised-cap class at once** — they become unwriteable rather than undetectable.
-- **ARCH-2 — the caller resolves the path exactly once.** The function that resolves a reviewer's
-  `transcriptPath` calls the seam once per entry and passes only the resulting fd onward. A test asserts
-  that between reading `transcriptPath` from the artifact and returning a verdict for that entry, the
-  recorded string reaches **no** filesystem call other than the single `_open_regular_fd`. Assert it
-  structurally (as ARCH-1) **and** behaviourally by counting seam calls per entry, so neither a source
-  refactor nor a runtime trick alone can satisfy it.
+> **Round 5 rewrote these.** The round-4 version of ARCH-1 asserted a **forbidden-name list** over the
+> helper's source, and both reviewers defeated it — in both directions. Executed:
+>
+> - `os.lseek(fd, 0, SEEK_SET)` to make two passes over the same descriptor **passes** the name list,
+>   and is a *real* defect: measured, the count came from pass 1 (100,000) while the digest came from
+>   pass 2, which saw different bytes after an in-place write. `os.dup` is likewise absent from the list.
+> - A **callee escape** passes: `_digest_transcript_fd(fd)` delegates to `_internal_hash(fd)`, and the
+>   shallow body inspection never sees the forbidden call. codex extended this — the recorded path can be
+>   smuggled through a **module global or class attribute** and re-opened in the callee via a cached
+>   `io.open`, and a **delegated cap** (`_digest_impl(fd)`) defeats row 8's claimed closure the same way.
+> - `__code__.co_names` does **not** rescue it: it does not inspect callees, and closure state lives in
+>   `co_freevars`.
+> - And it is **too strong**: a *correct* one-pass reader built on `io.FileIO(fd, closefd=False)` is
+>   **rejected** by a list that bans `io` — a false GATE FAILED, §5's first and highest risk. Executed.
+>
+> A forbidden-name list is a **proxy for the property, not the property** — the same defect C9a had, one
+> level up. So the name list is deleted. What replaces it asserts the property directly.
 
-**Why structural and not behavioural:** the sweep's surviving implementations are all *behaviourally
-indistinguishable* from the correct one on every input the plan enumerates. They differ only in shape.
-A shape defect is cheapest to assert on the shape.
+- **ARCH-1 — the sealed signature.** `_digest_transcript_fd(fd: int) -> tuple[str, int]`. A test asserts
+  by `inspect.signature` that the parameter list is **exactly `(fd,)`** — no path, no opener, no
+  default-bound callable, no `*args`/`**kwargs`, no keyword-only fallback. This is a **signature fact**,
+  not a name match, so aliasing, callees and closures cannot evade it, and it cannot false-positive.
+  It seals the *path* out of the helper. It does **not**, on its own, constrain what the helper does with
+  the fd — ARCH-3 does that.
+- **ARCH-2 — the caller resolves the recorded string exactly once, unchanged.** The function that reads
+  a reviewer's `transcriptPath` passes that **exact string** to `_open_regular_fd`, once per entry, and
+  passes only the resulting fd onward. Assert both halves: the seam is called once per entry, **and** the
+  argument it receives is byte-identical to the artifact's recorded value. Round 5 found the caller-only
+  escape this closes: `p = entry["transcriptPath"].strip(); _open_regular_fd(p)` makes exactly one seam
+  call and no other filesystem call, yet violates §4.1 step 6.
+- **ARCH-3 — the fd is used exactly once, forward, and the contract is unit-tested.** Two halves, and
+  **neither is source inspection**:
+  - **Runtime syscall accounting.** Wrap `os.open`, `os.lseek`, `os.dup`, `os.dup2`, `os.fdopen`,
+    `builtins.open`, `io.open` and `io.FileIO` for one `verify` run and assert, per transcript: exactly
+    **one** `os.open` of that path carrying `O_NOFOLLOW|O_NONBLOCK`, **zero** further opens of it by any
+    route, **zero** `lseek` on the resulting fd, and **zero** `dup`. Because this patches the **syscall**
+    rather than a **name**, it is immune to aliasing, to callees, to closures and to module-global
+    smuggling — every escape rounds 4 and 5 found. It is also what makes banning `io` unnecessary:
+    `io.FileIO(fd)` is permitted, a second *open* is not.
+  - **Direct contract tests on the helper.** Call `_digest_transcript_fd` with a real fd on fixtures of
+    **zero, one chunk, and many chunks**, and assert the **exact digest and the exact byte count** each
+    time. Round 5's mutant — hash every chunk but `return len(last_chunk)` — has the exact sealed
+    signature, touches no forbidden name, and passes every behavioural case, because its count is still
+    zero exactly when no bytes stream. Only a direct assertion on the returned count kills it. Executed:
+    digest correct, count 3,392 against a true 200,000.
+
+**Why not more behavioural cases:** the surviving implementations are *behaviourally indistinguishable*
+from the correct one on every artifact-level input the plan enumerates. They differ in how the descriptor
+is used — so the assertion has to be at the syscall boundary and on the helper's own return value, which
+is where the difference actually exists.
 
 #### The 12 defeating implementations, and what closes each
 
@@ -315,15 +357,15 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 
 | # | the wrong implementation | property it violates | closed by |
 |---|---|---|---|
-| 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | ARCH-1 |
-| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | ARCH-1/2 |
-| 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | ARCH-1/2 |
-| 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | ARCH-1/2 |
-| 5 | failure-path re-classification through `io.open` | re-open on the red branch | ARCH-1 |
-| 6 | `os.path.exists` + `os.path.getsize` for the missing/empty diagnosis | second resolution; contradicts Q3 | ARCH-1 + C12 |
-| 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | ARCH-1 + C12 |
-| 8 | the cap **raised**, not removed (1 MiB / 64 MiB "DoS guard") | I6's defect above C5a's single measured point | ARCH-1 + **C5a at two sizes** |
-| 9 | no byte count at all — "empty" inferred from the digest constant | Q3's streamed count absent | C12 |
+| 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | ARCH-1 + ARCH-3 |
+| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | ARCH-3 |
+| 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | ARCH-3 |
+| 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | ARCH-3 |
+| 5 | failure-path re-classification through `io.open` | re-open on the red branch | ARCH-3 |
+| 6 | `os.path.exists` + `os.path.getsize` for the missing/empty diagnosis | second resolution; contradicts Q3 | ARCH-1 + ARCH-3 + C12 |
+| 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | ARCH-1 + ARCH-3 + C12 |
+| 8 | the cap **raised**, not removed (1 MiB / 64 MiB "DoS guard") | I6's defect above C5a's single measured point | **C5a at two sizes** (round 5: ARCH-1 does *not* close this — a delegated `_digest_impl(fd)` holds the cap in the callee) |
+| 9 | no byte count at all — "empty" inferred from the digest constant | Q3's streamed count absent | **C12 as rewritten** — the old behavioural C12 could not separate this, since `sha256(b"")` *is* `_EMPTY_SHA256` |
 | 10 | digests compared as 12-hex **prefixes** (reusing the display variables) | a 48-bit check, not 256-bit | **C13** |
 | 11 | the comparison hoisted **out** of the per-entry loop (loop-variable reuse) | only the last entry's content is checked | **C13** |
 | 12 | `except (OSError, ValueError, TypeError): continue` — a recorded path that *raises* silently skips the entry | fail-open; reachable with a NUL byte in `transcriptPath` | **C14** |
@@ -344,10 +386,15 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   `.strip().upper()` (`:99-100`), so such an artifact passes quorum; a §4.2 skip written as
   `if r.get("status") not in APPROVING: continue` silently exempts it. Normalise identically or the
   skip becomes the bypass.
-- **C12** the streamed-count contract: a transcript that is **non-empty on disk but streams zero bytes**,
-  and one whose `st_size` and streamed count disagree, must be diagnosed from the **streamed** count.
-  Paired mutant **I12**: diagnose emptiness from `st_size`, from `os.path.getsize`, or from the digest
-  constant → C12 must fail.
+- **C12** the streamed-count contract. **Round 5 rewrote this case: as first written it was
+  tautological.** `sha256(b"")` **is** `_EMPTY_SHA256` (`review-verdict.py:36`) — verified by execution —
+  so "empty diagnosed from the streamed count" and "empty diagnosed from the digest constant" return the
+  *same answer on every fixture*, and no artifact-level case can separate them. C12 is therefore
+  **ARCH-3's direct helper test**, not a behavioural case: call the helper on zero-, one- and
+  many-chunk fixtures and assert the **exact returned count** alongside the exact digest.
+  Paired mutant **I12**: return `st_size`, `os.path.getsize`, or `len(last_chunk)` as the count, or
+  infer emptiness from the digest constant → C12 must fail on the **count assertion**. Additionally
+  assert that the *caller* bases its empty diagnosis on the value the helper returned.
 - **C13** per-entry, full-width comparison: mutate **only reviewer 0's** transcript and separately **only
   reviewer 1's**, and additionally record a digest that shares its first 12 hex characters with the real
   one. All three must FAIL. Paired mutant **I13**: compare truncated digests, or compare once outside the
@@ -385,6 +432,14 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
 - **I13** *(round 4)* compare truncated digests (the 12-hex display form), or perform the comparison once
   outside the per-entry loop → C13 must fail.
 - **I14** *(round 4)* swallow non-`OSError` exceptions and skip the entry → C14 must fail.
+- **I15** *(round 5)* keep `_read_regular_file`'s **UTF-8 decode** in the new helper
+  (`review-verdict.py:224` is the current form) instead of streaming raw bytes → **C5b must fail**. C5b
+  was required to PASS but had no mutant, so nothing proved it could ever fail; a decoding helper is the
+  plausible wrong implementation it exists to kill.
+- **I16** *(round 5)* `os.lseek`/`os.dup` a second pass over the same descriptor, or delegate the
+  forbidden work to a callee, or smuggle the recorded path through a module global → **ARCH-3's syscall
+  accounting must fail**. Both round-5 reviewers found this class; a source-level name list does not
+  catch it.
 
 **Input cases the suite must carry:**
 
@@ -466,16 +521,19 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    `:757`, `:773`, `:811`, covering `O_NOFOLLOW`, the cap, `O_NONBLOCK`/`S_ISREG` and the decode epilogue.
 3. §4.1 + §4.2 together — resolve, re-digest, per-reviewer, approving artifacts only, streamed-count
    emptiness, distinct messages per cause. §4.2 is the same code path, not a later step.
-   **ARCH-1 and ARCH-2 are acceptance conditions of this step**, not follow-up work: the step is not
-   done until `_digest_transcript_fd(fd: int) -> tuple[str, int]` exists with exactly that signature and
-   the two invariant tests pass.
+   **ARCH-1, ARCH-2 and ARCH-3 are acceptance conditions of this step**, not follow-up work: the step is
+   not done until `_digest_transcript_fd(fd: int) -> tuple[str, int]` exists with exactly that signature,
+   the syscall accounting shows one hardened open and zero `lseek`/`dup`/re-open per transcript, and the
+   helper's exact digest **and count** are asserted on zero-, one- and many-chunk fixtures.
+   **Step 2 also gives `run()` a bounded timeout** (`test_review_verdict.py:13`) — without it the FIFO
+   regression tests hang instead of failing.
 4. §4.5's **one** test repair — (a) — using the executable repair stated there. *(Round 4: this step
    said "two"; (b) moved to `COREDEV-2618` in round 3.)*
-5. All **twelve** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14** — all **twelve**
-   cases — **C1, C2 (a/b/c), C3, C4 (a/b), C5 (a/b), C8, C9 (a/b), C10, C11, C12, C13, C14** — and both
-   **structural invariants, ARCH-1 and ARCH-2**. Enumerated, never as a range: the rescope deleted
+5. All **fourteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16** — all
+   **twelve** cases — **C1, C2 (a/b/c), C3, C4 (a/b), C5 (a/b), C8, C9 (a/b), C10, C11, C12, C13, C14** —
+   and all **three invariants, ARCH-1, ARCH-2 and ARCH-3**. Enumerated, never as a range: the rescope deleted
    I7/I8 and C6/C7 with §4.3, round 3 caught stale ranges naming four identifiers the plan no longer
-   defines, and round 4 added six identifiers. Each mutant shown caught by its named case; C5's halves
+   defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case; C5's halves
    shown **PASSING** at both sizes; and **each of §6.0's twelve defeating implementations shown rejected**
    — that table is the acceptance suite for this step, not commentary.
 6. Version bump + CHANGELOG — **consistency/provenance hardening**, explicitly NOT proof that a reviewer
@@ -508,8 +566,8 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    precisely when the two disagree, and the streamed count is the truthful one. (gemini argued for
    `st_size` on early-exit grounds; codex's reasoning is stronger and is adopted.)
 4. ~~`captureId` advisory-compare?~~ **ANSWERED in round 3 — explicitly DEFERRED to `COREDEV-2618`**, and
-   removed from this plan's scope. Both reviewers agreed. `pty-capture.py:322-327` writes the sidecar
-   best-effort, so it cannot support a failing check, and adding warn-only behaviour here would
+   removed from this plan's scope. Both reviewers agreed. `pty-capture.py:328` writes the sidecar inside a
+   best-effort `try` opened at `:327`, so it cannot support a failing check, and adding warn-only behaviour here would
    reintroduce exactly the phantom scope round 2 created by declaring it "adopted" with no step and no
    case.
 
@@ -615,3 +673,45 @@ unexecutable test repair, and the incomplete sidecar inventory are all codex-onl
 Consistent with the standing rule: **on mechanism-level specifics, prefer codex** — and treat a gemini
 "verified" on a `file:line` as unchecked. Both reviewers answered §8 Q1 and Q2 identically and correctly,
 and both are now struck through.
+
+## 12. Round-5 gate outcome
+
+**gemini `REQUEST_CHANGES` (2 findings) · codex `REQUEST_CHANGES` (5 findings).** Frozen at
+`49dfbd2f26b8d1ddb943ffb71d77324ec674343c`, plan sha256
+`3b7f738d1d5679dda5072ae28fd950620bc09e89da10af5f92d61f10ac97124f`; both reviewers re-verified the digest
+and codex re-checked it at the end of its run. Transcripts: `/tmp/rev/2497r5-agy.txt` (3,232 B) and
+`/tmp/rev/2497r5-codex.txt` (816,404 B, 225 occurrences of the ticket key). codex built its own harness
+re-creating C5a/C5b/C8/C9a/C9b rather than reasoning from the text. Every finding triaged by execution.
+
+**The round converged.** Round 4 produced 9 findings plus 12 defeating implementations; round 5 produced
+7 findings and no new defeating *class* — both reviewers attacked the same object, ARCH-1, and agreed on
+why. That is the first round-over-round narrowing this plan has had.
+
+### Findings
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | both | **ARCH-1's forbidden-name list is defeated in both directions.** `os.lseek`/`os.dup` two-pass and a callee escape pass it; codex added module-global path smuggling and a delegated cap. And a **correct** `io.FileIO(fd, closefd=False)` reader is **rejected** by it | **confirmed by execution** — two-pass passes ARCH-1 *and* is a real defect (count from pass 1 = 100,000, digest from pass 2 after an in-place write); callee escape passes; `io.FileIO` reader fails on `io` | name list **deleted**. ARCH-1 keeps only the signature assertion (a signature fact cannot be aliased or false-positive); **ARCH-3** adds syscall accounting + direct helper contract tests |
+| 2 | codex | **the digest/count contract is unproved** — hash every chunk but `return len(last_chunk)` has the exact signature, no forbidden name, and passes every case because the count is still zero exactly when no bytes stream | **confirmed by execution** — digest correct, count 3,392 vs a true 200,000 | ARCH-3's direct helper tests assert the **exact count** on zero/one/many-chunk fixtures |
+| 3 | codex | **C12 is tautological** — `sha256(b"")` *is* `_EMPTY_SHA256`, so "empty from streamed count" and "empty from digest constant" are indistinguishable on any artifact-level fixture | **confirmed by execution** — the two constants are byte-identical | C12 rewritten as ARCH-3's helper contract test, not a behavioural case |
+| 4 | codex | **the sidecar FIFO test cannot pin `O_NONBLOCK`** — `run()` (`test_review_verdict.py:13-15`) passes no timeout and `timeout` occurs **0** times in the module, so dropping `O_NONBLOCK` hangs rather than fails | **confirmed** — measured | step 2 gives `run()` a bounded timeout; FIFO cases assert on message |
+| 5 | codex | **C5b had no mutant** — it was required to PASS with nothing proving it could fail | **confirmed** — the mutant list had no decode variant | **I15** added: keep the UTF-8 decode → C5b must fail |
+| 6 | codex | **caller-only escape** — `p = entry["transcriptPath"].strip(); _open_regular_fd(p)` makes one seam call and no other filesystem call, yet violates §4.1 step 6 | **confirmed** by reading | ARCH-2 now asserts the seam receives the recorded string **byte-identical** |
+| 7 | codex | `pty-capture.py:322-327` "writes the sidecar" — `:327` only opens the `try`; the write is at `:328` | **confirmed** — printed | citation corrected |
+
+### The methodological point, because it is the one that keeps recurring
+
+ARCH-1 failed for **exactly the reason C9a failed**: it asserted a *proxy* for the property (a list of
+names that must not appear) instead of the property itself. Round 3 learned this about monkeypatch
+fixtures; round 5 learned it again one level up, about source inspection.
+
+The replacement avoids the trap because each assertion is the property:
+
+- a **signature** is a fact about the function, not a pattern in its text — it cannot be aliased,
+  delegated to a callee, or matched inside a comment;
+- **syscall accounting** patches the boundary the property is actually about, so aliasing, callees,
+  closures and module globals are all irrelevant to it;
+- a **return-value assertion** on real fixtures needs no inspection at all.
+
+None of the three can produce a false GATE FAILED against a correct implementation — the failure mode
+§5 rates highest and the one the name list actually exhibited.
