@@ -1,6 +1,6 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 11 gated** (**gemini `REQUEST_CHANGES` 3 High + 2 Medium · codex `REQUEST_CHANGES` 2 High + 1 Medium**). **Both arms independently constructed a wrong gate that passes every mutant the plan had** — so the **anchor column is no longer equality-checked** (triples are; anchors are resolution-checked), and **M12f** (swap two anchors → pins check (iii) to the table) and **M12g** (non-heading anchor → pins check (ii)) are added. M3's **exactly one** classifier is now mandated by step 5 itself; **M4** was pinned to the Scope paragraph the narrowing deletes; step 6 now orders M5's **isolated** regressions; and intra-document references are **by name, never by line**. See §20. Previously — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 12 gated** (**both arms `REQUEST_CHANGES`; codex 3 High + 1 Medium**). Two more wrong gates, both narrower than round 11's: **all four anchor mutants targeted `verdict-report`**, so a gate resolving only that row passed every one of them — mutants are now **parameterised across all nine rows**; and **four `out` surfaces shared the generic `## Output Format` fingerprint**, so a security↔concurrency swap was accepted — fingerprints are now **unique per surface** (verified) with **M12h** proving it. Step 2's residual anchor-equality wording is scoped to the triple, and §4.5 must name both pinned test maps. See §21. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` 3 High + 2 Medium · codex `REQUEST_CHANGES` 2 High + 1 Medium**). **Both arms independently constructed a wrong gate that passes every mutant the plan had** — so the **anchor column is no longer equality-checked** (triples are; anchors are resolution-checked), and **M12f** (swap two anchors → pins check (iii) to the table) and **M12g** (non-heading anchor → pins check (ii)) are added. M3's **exactly one** classifier is now mandated by step 5 itself; **M4** was pinned to the Scope paragraph the narrowing deletes; step 6 now orders M5's **isolated** regressions; and intra-document references are **by name, never by line**. See §20. Previously — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 2 High + 1 Medium**). Both reviewers again found the **same High**, and it is the same
 *class* as round 6's: **round 7's `anchor` column reached §4.2 and never reached §7 step 2**, which still
 mandated a three-column table — so **M12d had no column to mutate**. Step 2 now ships the four-column
@@ -34,7 +34,7 @@ reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contra
 See §12. Rounds 1-2 are in §10-§11; rounds 3-6 are in §12-§15.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-31 (round 11, post-gate revision — anchors resolution-checked; M12f/M12g pin checks (ii) and (iii))
+**Last Updated:** 2026-07-31 (round 12, post-gate revision — unique fingerprints; mutants parameterised across all nine rows)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -618,9 +618,15 @@ satisfied by a suite that never rejects a mutant.
    *error*, not a controlled result. Neither sequencing is safe, so this is **one step, not two** —
    round 6 replaces "move the helper split ahead of §14" with atomicity.
 2. Rewrite §13's Scope as a **parseable FOUR-column table** — `surface_id | producer_id | scope |
-   anchor` — whose content is exactly these **nine approved rows**, every field drawn from a finite
-   allowlist, any unknown key a hard failure, and any `(surface_id, producer_id, scope)` triple outside
-   this set a hard failure:
+   anchor` — whose **triples** are exactly the nine approved ones. **The finite allowlist and the
+   exact-set equality gate apply to `surface_id`, `producer_id` and `scope` ONLY — never to `anchor`.**
+   Any unknown key is a hard failure and any `(surface_id, producer_id, scope)` triple outside the
+   approved set is a hard failure. The **`anchor`** column is constrained solely by its **syntax**
+   (`path:line`) and by the per-row **resolution** rules below — never by equality, never by an
+   allowlist. *(Round 15, codex: this step said "content is exactly these nine rows" and "every field
+   drawn from a finite allowlist", which read across the anchor column and **re-created the round-11
+   wrong gate** — full-row equality rejects M12d/f/g and a fixed-locus fingerprint search rejects M12e,
+   so the resolution logic is never exercised. Those words contradicted the note four lines below them.)*
 
    > **What is equality-checked, and what is not — round 14, and the M12 series depends on it.**
    > The gate asserts **exact set equality on the nine `(surface_id, producer_id, scope)` TRIPLES**, as
@@ -646,7 +652,13 @@ satisfied by a suite that never rejects a mutant.
    | `accessibility-findings` | `accessibility-auditor` | `out` | `agents/accessibility-auditor.md:210` |
    | `prompt-safety-findings` | `prompt-review` | `out` | `agents/prompt-review.md:96` |
 
-   **TEST-ONLY metadata — the expected fingerprints. These live in the GATE, never in `AGENT_CONTRACTS.md`:**
+   **TEST-ONLY metadata — the expected fingerprints. These live in the GATE, never in `AGENT_CONTRACTS.md`.**
+   **Every fingerprint must be UNIQUE to its surface — round 15.** *(codex: four of the five `out` rows
+   carried the generic `## Output Format`, so **swapping `security-findings` and `concurrency-findings`
+   preserves every triple, leaves both anchors valid headings, and leaves both sections containing that
+   same fingerprint — the gate accepts the wrong binding.** A fingerprint shared by four surfaces cannot
+   discriminate between them, which is the column's entire job. The unique headings below were opened and
+   verified at the frozen commit.)*
 
    | `surface_id` | fingerprint the anchored section must contain |
    |---|---|
@@ -654,10 +666,10 @@ satisfied by a suite that never rejects a mutant.
    | `brainstorm-summary` | `## Step 8: Summary for Approval` |
    | `implement-wrapup` | `## Phase 6: Wrap Up` |
    | `pr-review-report` | `## Step 4: Compile the Final Report` |
-   | `security-findings` | `## Output Format` |
-   | `concurrency-findings` | `## Output Format` |
-   | `ux-perf-findings` | `## Output Format` |
-   | `accessibility-findings` | `## Output Format` |
+   | `security-findings` | `## Security Review` *(`agents/security-reviewer.md:206`)* |
+   | `concurrency-findings` | `## Correctness & Concurrency Review` *(`agents/concurrency-reviewer.md:267`)* |
+   | `ux-perf-findings` | `## Performance & UX Review` *(`agents/ux-perf-reviewer.md:202`)* |
+   | `accessibility-findings` | `## Accessibility Audit` *(`agents/accessibility-auditor.md:213`)* |
    | `prompt-safety-findings` | `## Structured Findings (orchestrator handoff)` |
 
    > **Round 9 split these two tables, and the split is the fix.** Round 8 mandated "a **FOUR**-column
@@ -717,6 +729,18 @@ satisfied by a suite that never rejects a mutant.
    >   mutant that proves check (ii) reads the anchor from the table rather than asserting
    >   `is_heading(590)` unconditionally.
    >
+   > - **M12h** *(round 15)* the **same-generic-fingerprint swap**: swap the `security-findings` and
+   >   `concurrency-findings` anchors. Under round 14's shared `## Output Format` fingerprint this
+   >   **passed**; under the unique fingerprints above it must **fail**. This is what proves the
+   >   fingerprints discriminate *surfaces* rather than merely existing.
+   >
+   > **EVERY anchor mutant above is run against ALL NINE rows, not only `verdict-report` — round 15.**
+   > *(codex: a gate that validates just that one row — `assert parsed_triples == EXPECTED_TRIPLES`, then
+   > resolve `verdict-report` — passes the clean document **and all four** of M12d/e/f/g, because every
+   > one of them targets `verdict-report`; the other eight anchors are never inspected. Pinning "the gate
+   > reads the table" for one row does not pin the **per-row iteration** step 2 requires. Each mutant is
+   > therefore parameterised across the nine rows, and every parameterisation must fail.)*
+   >
    > *(Round 14: gemini and codex each constructed a **wrong gate that passes every earlier mutant**.
    > gemini's hard-codes check (ii) and does (iii) properly — both M12d and M12e die on (iii), so the
    > hard-coding is never exposed. codex's asserts `rows == EXPECTED_ROWS` then searches each fingerprint
@@ -747,8 +771,11 @@ satisfied by a suite that never rejects a mutant.
    `{**Adapted**, **Adopted**, **Restated positively**}`** — exactly one, not at least one: a second
    token anywhere in the cell breaks M3's clean-document baseline. This is a gated property, not a
    formatting habit. **Also replace `test_doc_gates.py`'s hard-coded per-rule classifier map
-   (`:328-338`)** with the membership assertion; §4.5's at-risk-test list must name it, which it
-   currently does not. *(Round 9: step 5 previously said only that the
+   (`:328-338`)** with the membership assertion, **and the adjacent per-rule marker map (`:341`)**, whose
+   phrases are the parser-specific wording §4.4 permits this step to remove. **§4.5 must name both tests
+   explicitly** — it currently claims only two tests are directly at risk and neither of these is among
+   them. *(Round 15, codex: relying on step 6's generic "rewrite the 11 tests" is exactly how a pinned
+   test survives a narrowing; §4.5 is the list an implementer actually checks.)* *(Round 9: step 5 previously said only that the
    dispositions "stay explicit", which permits rewriting their prose freely — and M3's round-8 marker was
    a prose phrase inside four of those very cells. Pinning the vocabulary is what makes a row-scoped
    marker durable across the simplification this step orders.)*
@@ -1145,3 +1172,24 @@ round's central result and it is worth more than any single finding.
 
 **Findings 3 and 2 are the same defect M3 has now had four times: a proof pinned to a value this plan
 itself changes.** The sweep §7 asked for caught M4; the rest of M1-M13 came back clean.
+
+## 21. Round-12 gate outcome
+
+**gemini `REQUEST_CHANGES` · codex `REQUEST_CHANGES` (3 High, 1 Medium).** Frozen at `53e9947`, sha256
+`1f4e602bff6fbe1ef1f1e47bbddf32f964ed02f3285734de1641ad1749a16ed7` — codex verified it. Transcripts:
+`~/.claude/review-transcripts/2605r12-agy.txt` (2,981 B) and `…/2605r12-codex.txt` (279,588 B).
+
+**Round 11 asked "can you still build a wrong gate?" Round 12 built two more.** Both are narrower than
+the last, which is the shape of convergence — but neither was hypothetical.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **a verdict-only gate passes the clean document and ALL FOUR of M12d/e/f/g** — every one of them targets `verdict-report`, so a gate that asserts triple equality and then resolves only that row never inspects the other eight anchors | **confirmed** — the mutants pinned "reads the table" for one row, never the **per-row iteration** step 2 requires | **every anchor mutant is parameterised across all nine rows**, and each parameterisation must fail |
+| 2 | codex | **the fingerprints did not discriminate surfaces.** Four of the five `out` rows carried the generic `## Output Format`, so swapping `security-findings` ↔ `concurrency-findings` preserves every triple, leaves both anchors valid headings, and leaves both sections containing that same fingerprint — **the gate accepts the wrong binding** | **confirmed by grep** — all four files have exactly one `## Output Format` | **unique fingerprints**, opened and verified: `## Security Review` (`:206`), `## Correctness & Concurrency Review` (`:267`), `## Performance & UX Review` (`:202`), `## Accessibility Audit` (`:213`). **M12h** added: the same-generic-fingerprint swap, which passed under round 14's fingerprints and must now fail |
+| 3 | codex | **step 2 still carried anchor-equality language** — "content is exactly these nine rows", "every field drawn from a finite allowlist" — contradicting the resolution note four lines below and **re-creating the round-11 wrong gate** | **confirmed** | the allowlist and exact-set gate are now explicitly scoped to `(surface_id, producer_id, scope)`; the anchor is constrained by syntax and per-row resolution only |
+| 4 | codex | *(Medium)* **§4.5 names neither pinned test** — the classifier map (`test_doc_gates.py:328-338`) nor the adjacent per-rule marker map (`:341`), whose phrases §4.4 permits step 5 to remove | **confirmed** — §4.5 claims only two tests are at risk | §4.5 must name both; step 5 says so explicitly |
+
+**Findings 1 and 2 are the same defect at different depths: a proof that appears to test a mechanism
+while a cheaper property satisfies it.** Round 11's version was structural (anchors equality-checked);
+round 12's are that the mutants all touch one row, and that four surfaces share one fingerprint. Each
+time the fix has been to make the *proof* discriminate, not to add another assertion.
