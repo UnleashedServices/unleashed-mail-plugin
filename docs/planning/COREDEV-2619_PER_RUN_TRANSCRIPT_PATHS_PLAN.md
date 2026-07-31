@@ -1,12 +1,12 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 1 gated (codex `REQUEST_CHANGES` ×3 High + ×2 Medium; the gemini arm
-degenerated and produced no verdict).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
+**Status:** Planning — **round 3 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
+arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
-**Measured against:** HEAD `78e28f2` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 1, post-gate revision)
+**Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
+**Last Updated:** 2026-07-31 (round 3, post-gate revision)
 
 ---
 
@@ -115,8 +115,11 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   `/Users/nick/.claude/plugins/data/unleashed-mail-npranson-unleashed-mail-plugin`. Claude Code protects
   `.claude` except `.claude/worktrees`, so writes there prompt in default mode and are **denied** in
   `dontAsk`; "created on first reference" establishes provisioning, not write permission from a skill's
-  Bash recipe. **XDG state is durable (not purged like `/tmp`), per-user, and outside every protected
-  tree.**
+  Bash recipe. **`$HOME/.local/state` is confirmed absent from Claude Code's protected-path list** (round 3), so the
+  **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
+  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, and outside
+  every protected root — otherwise it falls back to `$HOME/.local/state` and says so.** The unqualified
+  "outside every protected tree" claim of round 2 was too strong.
 - **`<repo-hash>`** — reuse `context.sh`'s existing repo-hash slug, so two checkouts cannot collide.
   Everything else in the plugin is already namespaced this way.
 - **`<runid>`** — the atomically allocated component. `O_EXCL` is what makes concurrency safe; refusal
@@ -134,18 +137,33 @@ of the path independently, which is the drift this design exists to remove.
 input contract** — it reads two fixed names. The allocated path is therefore threaded explicitly:
 `--reviewer gemini=<STATUS>:<allocated-path>`, and the skill takes the two paths as inputs.
 
+**Proof — M5 (new, round 3): the INTEGRATION mutation M1 cannot give.** A correct allocator whose
+callers ignore its stdout and derive a fixed basename **passes M1**. So M5 drives both real paths — the
+codex recipe and `isolated-agy-review.sh` — and asserts the **emitted** allocation is the capture
+target, the synthesis input, **and** the artifact's `transcriptPath`. Mutate a caller to re-derive the
+name: M5 must fail.
+
+**The handoff must be specified before it can be tested**, and round 3 found three gaps: where each
+skill obtains ticket/round; how the **codex** recipe reaches the Bash-only `context_repo_hash` when its
+grant contains no shell-helper invocation; and how the allocated path is emitted beyond the allocating
+invocation. **§8 Q2 carries these** — they are design, not detail.
+
 **Proof — M1, rewritten in round 2 because the first version proved nothing.** Two random basenames are
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
 could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
 (seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
 return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700`.
 Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
+**Plus, round 3:** `ticket`/`round`/`reviewer` become **filename components**, so a rejection grammar is
+required — a separator or `..` would otherwise escape the intended parent. And
+`makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
+a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
+writing into it. Leaf creation is `0600`; retry is bounded.
 
 ### 4.2 — The `allowed-tools` grants are ALREADY broken (High — round 1, codex)
 
-Round 1 established something worse than the first draft claimed. `allowed-tools` documents substitution
-for **`${CLAUDE_SKILL_DIR}` and `${CLAUDE_PROJECT_DIR}` only** — not `${HOME}`, not
-`${CLAUDE_PLUGIN_ROOT}`, not `${CLAUDE_PLUGIN_DATA}`.
+Round 1 established something worse than the first draft claimed. `${HOME}` and `${CLAUDE_PLUGIN_DATA}` are **not** substituted in `allowed-tools`; `${CLAUDE_PLUGIN_ROOT}`
+**is** (fixed in Claude Code 2.1.0; this plugin pins 2.1.220).
 
 **ROUND 2 REVERSED THIS — the grants are NOT inert, and the round-1 finding was wrong.**
 `${CLAUDE_PLUGIN_ROOT}` substitution in plugin `allowed-tools` was **fixed in Claude Code 2.1.0**, and
@@ -157,12 +175,20 @@ have rejected a supported placeholder and forced the removal of working grants.*
 having checked the changelog against the pinned version the second time. A reviewer's finding is a
 claim — including when the reviewer is the reliable arm, and including when I have already acted on it.)*
 
-**What remains true** is only that the `rm -f` grants name a literal `/tmp` path that this ticket moves:
+**What remains true** is only that the `rm -f` grants name a literal `/tmp` path this ticket removes.
+**`${CLAUDE_PLUGIN_ROOT}` grants are CORRECT and stay** — the validator idea from round 1 is withdrawn
+entirely, not narrowed. *(Round 3: the reversal reached §4.2's opening and **three other sites still
+asserted the opposite** — the "does not expand" line below, M2's validator, and §7 step 6's CHANGELOG
+instruction. Applying a correction in one place and leaving its consequences standing is the exact
+defect this campaign has hit in every plan; here I did it to a **reversal of a finding I had already
+acted on**.)*
 
-| skill | grant | status |
+| skill | grant | disposition |
 |---|---|---|
-| `skills/codex-review/SKILL.md:7` | `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)`, `Bash(rm -f /tmp/codex-out.txt*)` | the `${CLAUDE_PLUGIN_ROOT}` prefix **does not expand** |
-| `skills/gemini-review/SKILL.md:8` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`, `Bash(rm -f /tmp/agy-out.txt*)` | same |
+| `skills/codex-review/SKILL.md:7` | `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)` | **KEEP — expands correctly** (2.1.0+) |
+| `skills/codex-review/SKILL.md:7` | `Bash(rm -f /tmp/codex-out.txt*)` | **DELETE** — allocation removes the need to pre-clean |
+| `skills/gemini-review/SKILL.md:8` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` | **KEEP — expands correctly** |
+| `skills/gemini-review/SKILL.md:8` | `Bash(rm -f /tmp/agy-out.txt*)` | **DELETE** |
 
 That is a **pre-existing defect this ticket surfaces**, not one it introduces — and it means the fix
 cannot be "move the literal", because the literal was never doing what it appeared to do.
@@ -178,11 +204,11 @@ cannot be "move the literal", because the literal was never doing what it appear
   "wrapper never starts" case the audit reconstructs is covered by allocation itself, not by cleaning.
   A pre-clean only ever existed to compensate for a *shared* name.
 
-**Proof — M2 (new, replaces the old M3/M4):** a **runtime** check, not a string check. Assert that the
-gate completes with **no `/tmp/` literal and no unsupported substitution in any `allowed-tools` line**,
-and that a validator rejects any `allowed-tools` value containing a `${…}` outside
-`{CLAUDE_SKILL_DIR, CLAUDE_PROJECT_DIR}`. The old M3/M4 proved only string consistency and would have
-passed while the workflow stalled.
+**Proof — M2, rewritten twice.** A **runtime** check under a pinned **`dontAsk`** permission mode
+(round 3: the round-2 form never named a mode, so a direct-shell check could pass while the shipped
+workflow was denied): dispatch a real skill invocation and assert the capture lands. Assert also that no
+`/tmp/` literal survives in any `allowed-tools` line. **No substitution validator** — round 1's would
+have rejected `${CLAUDE_PLUGIN_ROOT}`, which is supported and correct.
 
 ### 4.3 — The site inventory, measured properly this time (Medium — round 1, codex)
 
@@ -258,9 +284,11 @@ closed.
   permits an approving write *without* a snapshot sidecar (`scripts/review-verdict.py:469-493`,
   `skills/review-synthesis/SKILL.md:143-147`), while the proposed check compares only against the
   sidecar's mtime — so M4 could pass for the sidecar case while an implementation skips freshness
-  entirely whenever the explicit digest is supplied. **Resolution required before implementation:**
-  either require a launch-time sidecar even with an explicit digest, or bind a launch timestamp into the
-  artifact itself. **§8 Q4 carries it.**
+  entirely whenever the explicit digest is supplied. **Resolved in round 3, by codex:** a **per-allocation LAUNCH RECORD**, created with `O_EXCL` *before*
+  dispatch and bound to the returned run ID, is the anchor — compared by `st_mtime_ns` on **both** digest
+  paths. The snapshot sidecar is a poor anchor independently of this, because under concurrency a later
+  snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
+  not a launch anchor at all.**
 
 **Proof — M4:** record a transcript whose mtime predates the launch anchor; the gate must fail. Run it
 **on both paths** — sidecar and explicit-digest.
@@ -304,10 +332,11 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    `review-synthesis` — including a ticket/round **input contract** for synthesis.
 4. **Delete the two `rm -f` grants** and add the `allowed-tools` substitution validator. Add M2.
 5. **Add the mtime freshness check** to `review-verdict.py`. Add M4.
-6. Version bump + CHANGELOG — state the **ceiling** (§3) and that the `${CLAUDE_PLUGIN_ROOT}` grants
-   were already inert.
+6. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+   grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
+   2.1.220 in round 3.
 
-## 8. Open questions for round 2
+## 8. Open questions for round 4
 
 1. **Is `${XDG_STATE_HOME:-$HOME/.local/state}` writable from a skill's Bash recipe in every permission
    mode, including `dontAsk`?** This is the **third** directory this plan has proposed — `~/.claude/`

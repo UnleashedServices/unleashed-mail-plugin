@@ -34,7 +34,7 @@ set -uo pipefail
 [ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <out-path> [timeout]" >&2; exit 1; }
 PROMPT_REL="$1"
 OUT="$2"
-TIMEOUT="${3:-1500}"
+TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
 cd "$REPO" || exit 1
@@ -88,7 +88,7 @@ BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 # fails closed.
 rm -f "$OUT" "$OUT.captureid"
 ( cd "$TREE" && python3 "$TREE/scripts/pty-capture.py" --timeout "$TIMEOUT" "$OUT" -- \
-    agy --add-dir "$TREE" --print-timeout 18m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
+    agy --add-dir "$TREE" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
 RC=$?
 
 # --- after: the assertion that would have caught COREDEV-2607 --------------------------------
