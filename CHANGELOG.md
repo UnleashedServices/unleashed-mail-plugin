@@ -13,6 +13,59 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.6] — 2026-07-31
+
+### Changed
+
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan gated over 19
+  review rounds). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers'
+  machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
+
+  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as *"out of
+  scope"* and the five reviewers as *"in scope"* would have passed every gate the section had while
+  asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id |
+  scope | anchor` — that is the *only* scope statement, exclusive and normative: exactly nine approved
+  triples, every field from a finite allowlist, any unknown key or catch-all row a hard failure.
+
+  Each row carries a repository **anchor** (`path:line`), because binding a token to a token still left
+  every `surface_id` free to be *defined* elsewhere: `verdict-report` could be redefined as the JSON
+  passed to the synthesizer tool and every check would still pass while §13 was silently redirected off
+  the client-facing report. The anchor's **path is pinned** to a canonical map; only its **line** is
+  resolution-driven, and the gate walks up from the surface's fingerprint to its nearest enclosing real
+  heading, fence-aware.
+
+- **The payload-region invariant moved verbatim to §5 (Code Review Pipeline)**, where the contract it
+  protects lives, together with the precedence rule and the six machine contracts it enumerates. §13
+  keeps a one-sentence pointer.
+
+### Added
+
+- **§14 Blocked Subagent Handoff Contract** — the `BLOCKED — <reason>` prefix now has its own section
+  rather than living inside a style section. It is used for diagnostic confirmation and Jira-tool
+  failure: a subagent pausing to hand control back for external action.
+- Gates in `scripts/tests/test_doc_gates.py`: a **fail-closed** `_scope_rows` parser (the previous
+  `_rows` matched numbered rule rows only and, given a scope table, silently returned the rules), an
+  `in`-set/`VALID_AGENTS` **disjointness** gate read from `capture.py` rather than restated, and the
+  anchor-resolution gate.
+- `mcp/review-synthesizer/tests/test_capture.py`: **isolated** payload-region regressions, one per
+  independent rejection cause plus a positive control. `extract_status` stops on *either* prose or
+  fenced content, so a single combined fixture passes against a parser that handles only one.
+
+### Verification
+
+Each rule is asserted to carry **exactly one** classifier from `{Adapted, Adopted, Restated
+positively}` — membership, not a fixed token per rule, because §4.4 expressly permits the narrowing to
+change any of them. Proved by mutation against the live gate: repointing an anchor to a non-nearest
+heading, to a file's sole H1, or off its canonical path all **fail**; re-pairing a producer fails;
+stripping a classifier fails; removing a rule row fails; adding `swift-reviewer` to `VALID_AGENTS`
+fails. The two **positive** cases pass: changing a rule's classifier within the vocabulary, and adding
+an unrelated captured specialist to `VALID_AGENTS`.
+
+> The disjointness choice is load-bearing and was caught by that second positive case. The gate first
+> asserted the `out` set **equals** `VALID_AGENTS`; the plan had explicitly rejected equality because it
+> couples §13 to every future captured specialist. The positive mutant failed, and the gate was
+> corrected to disjointness.
+
 ## [2.6.5] — 2026-07-31
 
 ### Fixed

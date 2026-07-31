@@ -290,6 +290,27 @@ null-delimited (`-print0` / `-0`) or quoted paths.
 - Tests green (`xcodebuild test`)
 - All sub-reviewer JSON findings collected, run through the `synthesize_review` MCP tool (or the documented fallback rules), and every gating blocker confirmed via the verify gate before REQUEST CHANGES
 
+### The payload-region invariant
+
+> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
+> **Within it, nothing but detail fields and blank lines.**
+
+Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
+payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
+agent emits goes **before** `Status:`.
+
+This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
+behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
+a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent. The regression
+that owns this evidence is `mcp/review-synthesizer/tests/test_capture.py`.
+
+Where a rule of §13 would conflict with a machine-readable contract — the completeness of a JSON
+findings array, the `Status:` line that precedes it, the Output Contract detail trailer that follows it
+(`Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence`), the `VERDICT:`
+line that must end a review transcript, the final fenced JSON block, or a `BLOCKED — …` result prefix —
+**the contract wins and the rule yields.** Completeness and position of a machine-consumed payload are
+never traded for brevity. In particular `Remaining:` is **safety information, never a list to shorten**.
+
 ## 6. CI / GitHub Actions Pinning
 
 **Owners:** `ci-engineer`, `release-manager`, `security-reviewer`
@@ -465,52 +486,75 @@ attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) an
 ## 13. Agent Output Style
 
 Rules adapted from [`ayghri/i-have-adhd`](https://github.com/ayghri/i-have-adhd) (MIT), pinned at commit
-`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — this plugin's output is mostly
-consumed by *software*, so four of the ten upstream rules carry carve-outs and one is restated. See
-`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence.
+`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — see
+`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence, and
+`docs/planning/COREDEV-2605_SECTION13_NARROWING_PLAN.md` for this narrowing.
 
-**Scope:** human-facing prose written by agents, and by workflow skills while producing reader-facing
-output. It does **not** govern skill-body documentation (that is injected context, not output).
+### Scope
 
-### The payload-region invariant
+This is a **narrowing, not a relaxation.** The five capture-roster reviewers are *out* of scope here
+because their output is machine-consumed and governed by their own contracts — those contracts are
+unchanged and still mandatory.
 
-> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
-> **Within it, nothing but detail fields and blank lines.**
+| `surface_id` | `producer_id` | `scope` | `anchor` |
+|---|---|---|---|
+| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:596` |
+| `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:143` |
+| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:342` |
+| `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:133` |
+| `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:203` |
+| `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:264` |
+| `ux-perf-findings` | `ux-perf-reviewer` | `out` | `agents/ux-perf-reviewer.md:199` |
+| `accessibility-findings` | `accessibility-auditor` | `out` | `agents/accessibility-auditor.md:210` |
+| `prompt-safety-findings` | `prompt-review` | `out` | `agents/prompt-review.md:96` |
 
-Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
-payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
-agent emits goes **before** `Status:`.
+This table is the **only** scope statement and it is **exclusive and normative**. Every row is exactly
+one of `in`/`out`; rows are duplicate-free; every `surface_id`, `producer_id` and `scope` is drawn from a
+finite allowlist, and any unknown key, catch-all, alias or semantically overlapping row is a **failure**,
+not a skip. The four `in` `producer_id`s are an exact positive allowlist and are **disjoint** from
+`capture.VALID_AGENTS`; each `out` `producer_id` is one of that roster. The binding is disjointness, not
+equality — a future captured specialist is already out of scope by virtue of the positive allowlist and
+must not force churn here. Prose descriptions are not row content; the `anchor` identifies
+the surface in the repository and is validated by resolution, not by prose.
 
-This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
-behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
-a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent.
+It does **not** govern skill-body documentation (that is injected context, not output).
 
 ### The rules
 
 | # | Rule | Disposition |
 |---|------|-------------|
-| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. The lead goes before `Status:`, per the payload-region invariant. |
-| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only, and only before `Status:`, per the payload-region invariant. Machine trailer fields and JSON values keep their mandated single-line/schema shape. |
-| 3 | End with one concrete next action | **Adapted** — the next action goes before `Status:`, per the payload-region invariant; not merely before the fence. |
-| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array. |
-| 5 | Restate state every turn | **Adapted** — restate state in prose; never before a mandated result prefix, and never inside the payload region, per the payload-region invariant. |
+| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. |
+| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only. |
+| 3 | End with one concrete next action | **Adapted** — end the prose with the next action. |
+| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array, and never drop a row from `swift-reviewer`'s **All Issues (Consolidated)** table. |
+| 5 | Restate state every turn | **Adapted** — restate state in prose, never before a mandated result prefix. |
 | 6 | Give specific time estimates | **Adapted** — estimates address whoever runs the steps; these agents advise, they rarely execute. |
 | 7 | Make completed work visible | **Adopted** — state what now works, concretely. |
 | 8 | Matter-of-fact tone for errors | **Adopted** — state cause and fix. No "Uh oh." |
-| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings. Prose only. |
-| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; per the payload-region invariant the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
+| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit or defer a machine-consumed finding, and never shorten the **All Issues (Consolidated)** table. Prose only. |
+| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
 
-### Precedence — the contract wins
+Each disposition carries **exactly one** classifier from `{Adapted, Adopted, Restated positively}`.
 
-These rules govern **prose written for a human reader**. Where a rule conflicts with a machine-readable
-contract — the completeness of a JSON findings array, the `Status:` line that precedes it, the Output
-Contract detail trailer that follows it (`Blocker Description`, `What Was Attempted`, `Completed`,
-`Remaining`, `Confidence`), the `VERDICT:` line that must end a review transcript, the final fenced JSON
-block, or a `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and
-position of a machine-consumed payload are never traded for brevity. In particular `Remaining:` is
-**safety information, never a list to shorten**.
+### Precedence
 
-`Status:`, the trailer, and `BLOCKED — …` are payload, not preamble.
+Surfaces outside the four-item `in` allowlist above remain governed by their existing contracts, which
+take precedence over every rule in this section — see §5 for the payload-region invariant and §14 for the
+blocked-handoff prefix.
+
+---
+
+## 14. Blocked Subagent Handoff Contract
+
+A subagent that cannot proceed hands control back with a **`BLOCKED — <reason>`** prefix as the first
+line of its reply. This is **payload, not preamble**: §13 rule 10's carve-out exists so it is never moved
+below `Status:` or deleted as an opener.
+
+The handoff states, in this order: the **diagnosis**, what was **attempted**, the **user action
+required**, and what remains. It is used for diagnostic confirmation
+(`agents/graph-api-debugger.md`) and for Jira-tool failure (`agents/jira-manager.md`) — a subagent
+pausing to hand control back for external action, which is why it belongs here and not in §2's
+Plan → Implement contract.
 
 ---
 

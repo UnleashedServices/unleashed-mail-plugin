@@ -13,6 +13,19 @@ def _read(rel):
         return fh.read()
 
 
+def _valid_agents():
+    """Read capture.VALID_AGENTS from the source of truth — never restate it here.
+
+    Hardcoding the five names makes the disjointness gate INERT: the dangerous change is
+    `swift-reviewer` joining the tuple while still named `in` in §13, and a hardcoded copy cannot
+    see that happen.
+    """
+    src = _read("mcp/review-synthesizer/capture.py")
+    m = re.search(r"VALID_AGENTS\s*=\s*\(([^)]*)\)", src, re.S)
+    assert m, "VALID_AGENTS tuple not found in capture.py"
+    return tuple(re.findall(r'"([a-z-]+)"', m.group(1)))
+
+
 class F6_Step4FailClosed(unittest.TestCase):
     def test_step4_uses_bare_root_token_and_propagates_exit(self):
         # COREDEV-2504: Step-4 must reference the plugin script via the BARE ${CLAUDE_PLUGIN_ROOT} token
@@ -281,121 +294,233 @@ class COREDEV2583_DocDefects(unittest.TestCase):
                          "agent bodies must not teach from a superseded model id")
 
 
-class COREDEV2602_AgentOutputStyle(unittest.TestCase):
-    """§13 Agent Output Style — per-rule assertions are ROW-scoped; per-contract are SECTION-scoped.
+class COREDEV2605_Section13Narrowing(unittest.TestCase):
+    """§13 Agent Output Style, narrowed to client-facing surfaces (COREDEV-2605).
 
-    The two are NOT interchangeable. A section-scoped per-rule assertion false-passes, because a
-    rule's marker phrase also occurs in the precedence clause and elsewhere in §13 — that was the
-    round-7 defect. Row scoping is what makes a deleted disposition detectable.
+    §13 now carries a four-column SCOPE TABLE that binds each surface to its producer and to a
+    repository ANCHOR. The anchor's PATH is pinned by equality to a canonical map; only its LINE is
+    resolution-driven. That split is deliberate: pinning the whole anchor would make the resolution
+    logic untestable, and pinning nothing lets a decoy file satisfy every check while the surface is
+    silently redirected off its canonical producer.
     """
 
+    #: (surface_id, producer_id, scope, canonical path, fingerprint the anchored section must contain).
+    #: The fingerprints are TEST-ONLY metadata — they never ship inside AGENT_CONTRACTS.md — and each
+    #: is UNIQUE to its surface, because four `out` rows once shared a generic `## Output Format` and a
+    #: security<->concurrency swap was therefore accepted by the gate.
+    SURFACES = (
+        ("verdict-report", "swift-reviewer", "in", "agents/swift-reviewer.md", "### Verdict:"),
+        ("brainstorm-summary", "brainstorm", "in", "skills/brainstorm/SKILL.md", "## Step 8: Summary for Approval"),
+        ("implement-wrapup", "implement", "in", "skills/implement/SKILL.md", "## Phase 6: Wrap Up"),
+        ("pr-review-report", "pr-review", "in", "skills/pr-review/SKILL.md", "## Step 4: Compile the Final Report"),
+        ("security-findings", "security-reviewer", "out", "agents/security-reviewer.md", "## Security Review"),
+        ("concurrency-findings", "concurrency-reviewer", "out", "agents/concurrency-reviewer.md", "## Correctness & Concurrency Review"),
+        ("ux-perf-findings", "ux-perf-reviewer", "out", "agents/ux-perf-reviewer.md", "## Performance & UX Review"),
+        ("accessibility-findings", "accessibility-auditor", "out", "agents/accessibility-auditor.md", "## Accessibility Audit"),
+        ("prompt-safety-findings", "prompt-review", "out", "agents/prompt-review.md", "## Structured Findings (orchestrator handoff)"),
+    )
+
+    CLASSIFIERS = ("**Adapted**", "**Adopted**", "**Restated positively**")
+
     # --- extraction helpers: read the artifact, never restate expectations ------------------
+
+    def _doc(self):
+        return _read("AGENT_CONTRACTS.md")
+
     def _section13(self):
-        text = _read("AGENT_CONTRACTS.md")
-        start = text.index("## 13. Agent Output Style")
-        end = text.index("## Cross-references", start)
-        return text[start:end]
+        t = self._doc()
+        start = t.index("## 13. Agent Output Style")
+        return t[start:t.index("## 14.", start)]
 
-    def _rows(self):
-        """rule number -> its single disposition row.
+    def _section14(self):
+        t = self._doc()
+        start = t.index("## 14. Blocked Subagent Handoff Contract")
+        return t[start:t.index("## Cross-references", start)]
 
-        §13's table is `| # | Rule | Disposition |` — three columns, four pipes. Derive the shape
-        from the header rather than hardcoding a count, so a future column cannot silently make
-        every row invisible and turn this whole class into a no-op.
+    @staticmethod
+    def _fence_state(lines):
+        """Yield (line, inside_fence) with CommonMark-ish fence tracking.
+
+        A delimiter is a LINE whose first non-whitespace run is >= 3 backticks or tildes, indented at
+        most three spaces; a closer must use the same character. Inline triple-backticks in prose are
+        NOT delimiters — `agents/swift-reviewer.md` contains several, well before its real fence, and a
+        substring-based scanner inverts the state and rejects the clean document.
         """
-        lines = self._section13().split("\n")
-        header = next(l for l in lines if l.startswith("| # |"))
-        ncols = header.count("|")
-        rows = {}
-        for line in lines:
-            m = re.match(r"^\| (\d+) \|", line)
-            if m and line.count("|") == ncols:
-                self.assertNotIn(int(m.group(1)), rows,
-                                 f"rule {m.group(1)} has more than one disposition row")
-                rows[int(m.group(1))] = line
+        fence = None
+        for ln in lines:
+            stripped = ln.lstrip(" ")
+            indent = len(ln) - len(stripped)
+            m = re.match(r"^(`{3,}|~{3,})", stripped) if indent <= 3 else None
+            if m:
+                ch = m.group(1)[0]
+                if fence is None:
+                    fence = ch
+                    yield ln, True          # the opener itself is inside
+                    continue
+                if ch == fence:
+                    fence = None
+                    yield ln, True
+                    continue
+            yield ln, fence is not None
+
+    def _scope_rows(self):
+        """FAIL-CLOSED parser for the four-column scope table.
+
+        Raises on a malformed or unrecognised row rather than skipping it — `_rows` below matches
+        numbered rule rows only and, given a scope table, silently returned the rules instead.
+        """
+        rows = []
+        seen_header = False
+        for line, inside in self._fence_state(self._section13().split("\n")):
+            s = line.strip()
+            if inside:
+                continue
+            if not s.startswith("|"):
+                if seen_header and rows:
+                    break          # the scope table ended; the rules table is NOT ours to parse
+                continue
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not seen_header:
+                if cells[:1] == ["`surface_id`"]:
+                    seen_header = True
+                continue
+            if set("".join(cells)) <= set("-: "):
+                continue
+            if len(cells) != 4:
+                raise ValueError(f"scope row must have exactly 4 cells, got {len(cells)}: {s}")
+            sid, pid, scope, anchor = (c.strip("`") for c in cells)
+            if scope not in ("in", "out"):
+                raise ValueError(f"scope must be in/out, got {scope!r}")
+            if ":" not in anchor:
+                raise ValueError(f"anchor must be path:line, got {anchor!r}")
+            rows.append((sid, pid, scope, anchor))
+        if not rows:
+            raise ValueError("no scope rows parsed — the table is missing or malformed")
         return rows
 
-    # --- the section exists and is complete -------------------------------------------------
-    def test_section_13_exists_before_cross_references(self):
-        text = _read("AGENT_CONTRACTS.md")
-        self.assertIn("## 13. Agent Output Style", text)
-        self.assertLess(text.index("## 13. Agent Output Style"),
-                        text.index("## Cross-references"))
+    def _rows(self):
+        """rule number -> its single disposition row."""
+        out = {}
+        for line in self._section13().split("\n"):
+            m = re.match(r"^\|\s*(\d+)\s*\|", line)
+            if m:
+                out[int(m.group(1))] = line
+        return out
+
+    # --- the scope table --------------------------------------------------------------------
+
+    def test_scope_table_is_the_exact_nine_triples(self):
+        got = {(s, p, sc) for s, p, sc, _ in self._scope_rows()}
+        want = {(s, p, sc) for s, p, sc, _, _ in self.SURFACES}
+        self.assertEqual(want, got, "the scope table must carry exactly the nine approved triples")
+
+    def test_scope_rows_are_duplicate_free(self):
+        ids = [s for s, _, _, _ in self._scope_rows()]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate surface_id in the scope table")
+
+    def test_in_set_is_exact_and_DISJOINT_from_valid_agents(self):
+        """Positive allowlist + empty intersection — NOT equality with the tuple (§4.1, round 1).
+
+        Equality was considered and rejected: it couples §13 to every future captured specialist, so
+        adding a harmless one would force prose churn even though the positive `in` allowlist already
+        puts it out of scope. Disjointness catches the change that actually matters — `swift-reviewer`
+        joining VALID_AGENTS while still named `in` — without that coupling.
+
+        This distinction is not academic: the first version of this gate asserted equality, and the
+        M1p positive case (add an unrelated captured specialist; the gate must still PASS) failed.
+        """
+        rows = self._scope_rows()
+        ins = {p for _, p, sc, _ in rows if sc == "in"}
+        outs = {p for _, p, sc, _ in rows if sc == "out"}
+        valid = set(_valid_agents())
+        self.assertEqual({"swift-reviewer", "brainstorm", "implement", "pr-review"}, ins,
+                         "the `in` set is an exact positive allowlist of four surfaces")
+        self.assertEqual(set(), ins & valid,
+                         "an `in` producer is also a captured reviewer — the dangerous change")
+        self.assertLessEqual(outs, valid,
+                            "every `out` producer must be a real captured reviewer")
+
+    def test_anchor_paths_are_pinned_to_their_canonical_producer(self):
+        """Step 0. Without this a decoy file carrying one heading and one fingerprint passes every
+        other check while the surface is redirected off its canonical producer."""
+        canonical = {s: path for s, _, _, path, _ in self.SURFACES}
+        for sid, _, _, anchor in self._scope_rows():
+            with self.subTest(surface=sid):
+                self.assertEqual(canonical[sid], anchor.rsplit(":", 1)[0])
+
+    def test_anchor_resolves_to_the_nearest_enclosing_real_heading_of_its_fingerprint(self):
+        """Steps 1-5, in order, for every row.
+
+        The anchor must BE the nearest enclosing real heading of the fingerprint — not merely some
+        heading whose section happens to contain it. A file's sole H1 encloses everything to EOF and
+        would otherwise pass.
+        """
+        fp = {s: f for s, _, _, _, f in self.SURFACES}
+        for sid, _, _, anchor in self._scope_rows():
+            with self.subTest(surface=sid):
+                path, line = anchor.rsplit(":", 1)
+                lines = _read(path).split("\n")
+                marked = list(self._fence_state(lines))
+                idx = int(line) - 1
+                self.assertTrue(marked[idx][0].startswith("#"), f"{anchor} is not a heading")
+                self.assertFalse(marked[idx][1], f"{anchor} is inside a fence")
+                # step 3: content search of the CURRENT file, exactly one occurrence
+                hits = [i for i, (ln, _) in enumerate(marked) if fp[sid] in ln]
+                self.assertEqual(1, len(hits), f"{fp[sid]!r} must occur exactly once in {path}")
+                # step 4: walk UP from the fingerprint to the first real heading
+                nearest = None
+                for i in range(hits[0], -1, -1):
+                    ln, inside = marked[i]
+                    if ln.startswith("#") and not inside:
+                        nearest = i
+                        break
+                self.assertEqual(idx, nearest,
+                                 f"{anchor} is not the nearest enclosing real heading of {fp[sid]!r}")
+
+    # --- the rules --------------------------------------------------------------------------
 
     def test_exactly_ten_dispositions_one_row_each(self):
-        self.assertEqual(sorted(self._rows()), list(range(1, 11)))
+        self.assertEqual(list(range(1, 11)), sorted(self._rows()))
 
-    def test_every_rule_declares_an_explicit_disposition(self):
-        # A blanked or flipped Disposition cell must fail — asserting titles + markers alone
-        # would not catch it (round-8 finding).
-        expected = {1: "Adapted", 2: "Adapted", 3: "Adapted", 4: "Adapted", 5: "Adapted",
-                    6: "Adapted", 7: "Adopted", 8: "Adopted", 9: "Restated positively",
-                    10: "Adapted"}
-        rows = self._rows()
-        for n, disposition in expected.items():
+    def test_each_rule_carries_exactly_one_classifier(self):
+        """M3's differential depends on this: membership, never a fixed token per rule.
+
+        Pinning rule N to a particular classifier breaks the moment the narrowing legitimately changes
+        it — which §4.4 expressly permits for rules 1, 2, 3 and 5.
+        """
+        for n, row in self._rows().items():
             with self.subTest(rule=n):
-                self.assertIn(f"**{disposition}**", rows[n],
-                              f"rule {n} must declare `{disposition}` explicitly")
+                found = [c for c in self.CLASSIFIERS if c in row]
+                self.assertEqual(1, len(found), f"rule {n} must carry exactly one classifier, got {found}")
 
-    # --- per-rule markers: ROW-scoped ---------------------------------------------------------
-    def test_each_adapted_rule_carries_its_marker_in_its_own_row(self):
-        markers = {
-            1: "never reorder a mandated payload",
-            2: "keep their mandated single-line/schema shape",
-            3: "per the payload-region invariant",
-            4: "defer an in-scope finding out of the current array",
-            5: "never before a mandated result prefix",
-            6: "whoever runs the steps",
-            9: "cap, split, omit, or defer",
-            10: "payload, not preamble",
-        }
+    def test_rules_4_and_9_still_protect_the_consolidated_table(self):
+        """The narrowing removes the PARSER justification, not the CONTRACT one (codex, round 1)."""
         rows = self._rows()
-        for n, marker in markers.items():
+        for n in (4, 9):
             with self.subTest(rule=n):
-                self.assertIn(marker, rows[n],
-                              f"rule {n}'s marker must be literal IN ITS OWN ROW (row-scoped)")
+                self.assertIn("All Issues (Consolidated)", rows[n])
 
-    def test_parser_touching_rules_reference_the_invariant_by_name(self):
-        rows = self._rows()
-        # The approved plan requires 1, 2, 3, 5 AND 10 to reference it by name.
-        for n in (1, 2, 3, 5, 10):
-            with self.subTest(rule=n):
-                self.assertIn("payload-region invariant", rows[n])
+    # --- relocation -------------------------------------------------------------------------
 
-    # --- the invariant: SECTION-scoped --------------------------------------------------------
-    def test_payload_region_invariant_is_present_on_one_physical_line(self):
-        # One physical line by construction: a Markdown line break inside the marker made exact
-        # matching fail against a CORRECT document in round 10.
-        marker = "Within it, nothing but detail fields and blank lines."
-        lines = [l for l in self._section13().split("\n") if marker in l]
-        self.assertTrue(lines, "the invariant marker must appear literally on a single line")
+    def test_payload_region_invariant_moved_to_section_5_verbatim(self):
+        t = self._doc()
+        s5 = t[t.index("## 5. Code Review Pipeline"):t.index("## 6. CI / GitHub Actions Pinning")]
+        self.assertIn("The payload region is the span from the `Status:` line to the final fenced JSON block.", s5)
+        self.assertIn("Within it, nothing but detail fields and blank lines.", s5)
+        self.assertNotIn("The payload region is the span", self._section13(),
+                         "the invariant must MOVE, not be copied")
 
-    def test_invariant_covers_non_prose_payloads_too(self):
-        # It breaks on ANY non-detail content, not only prose — a stray VERDICT: included.
-        self.assertIn("VERDICT:", self._section13())
+    def test_section_14_exists_and_owns_the_blocked_prefix(self):
+        s14 = self._section14()
+        self.assertIn("BLOCKED — <reason>", s14)
+        self.assertNotIn("BLOCKED — <reason>", self._section13())
 
-    # --- the precedence clause: SECTION-scoped, all six contracts ------------------------------
-    def test_precedence_clause_names_all_six_contracts(self):
-        section = self._section13()
-        for contract in ("JSON findings array", "`Status:`", "Remaining", "`VERDICT:`",
-                         "final fenced JSON block", "BLOCKED"):
-            with self.subTest(contract=contract):
-                self.assertIn(contract, section)
-
-    def test_precedence_clause_states_the_contract_wins(self):
-        self.assertIn("the contract wins and the rule yields", self._section13())
-
-    def test_remaining_is_marked_safety_information(self):
-        self.assertIn("never a list to shorten", self._section13())
-
-    # --- attribution -------------------------------------------------------------------------
-    def test_attribution_names_the_source_licence_and_pinned_commit(self):
-        section = self._section13()
-        self.assertIn("i-have-adhd", section)
-        self.assertIn("MIT", section)
-        self.assertIn("07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba", section,
-                      "pin the upstream commit so the adaptation stays auditable")
-
+    def test_section_13_keeps_only_a_precedence_pointer(self):
+        s13 = self._section13()
+        self.assertIn("§5", s13)
+        self.assertIn("§14", s13)
+        self.assertNotIn("Blocker Description", s13,
+                         "the six-contract enumeration belongs to §5, not §13")
 
 class COREDEV2603_WorktreeOrdering(unittest.TestCase):
     """The worktree-BEFORE-plan ordering must stay documented (COREDEV-2603 item C1).
