@@ -77,6 +77,9 @@ over-claimed on three counts, each corrected:
 - A deterministic `<ticket>r<round>` name **is still predictable**, so "removing predictability" was
   never what this buys.
 
+**And the freshness check (§4.5) is accidental-staleness detection, not operator provenance** — `cp` or
+`touch` defeats an mtime comparison. *(Round 2.)*
+
 **What it does buy, security-wise:** a correctly-owned `0700` parent and an **atomically allocated**
 name, which together close the squat/pre-seed window on a multi-user host. Detecting a *changed*
 transcript is `COREDEV-2497`; cross-checking the verdict token inside it is `COREDEV-2618`.
@@ -103,24 +106,40 @@ fails three ways:
 path on stdout** so the caller propagates it rather than re-deriving it:
 
 ```
-${CLAUDE_PLUGIN_DATA}/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt
+${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt
 ```
 
-- **`${CLAUDE_PLUGIN_DATA}`** — substituted in skill content, created on first reference, and *not*
-  protected. Replaces `~/.claude/`.
+- **Outside `.claude` entirely — round 2, and this is the SECOND directory this plan has got wrong.**
+  Round 1 chose `~/.claude/review-transcripts/`; round 2's "fix" chose `${CLAUDE_PLUGIN_DATA}`, which
+  **resolves to `~/.claude/plugins/data/{id}`** — *the same protected tree*. Verified on this machine:
+  `/Users/nick/.claude/plugins/data/unleashed-mail-npranson-unleashed-mail-plugin`. Claude Code protects
+  `.claude` except `.claude/worktrees`, so writes there prompt in default mode and are **denied** in
+  `dontAsk`; "created on first reference" establishes provisioning, not write permission from a skill's
+  Bash recipe. **XDG state is durable (not purged like `/tmp`), per-user, and outside every protected
+  tree.**
 - **`<repo-hash>`** — reuse `context.sh`'s existing repo-hash slug, so two checkouts cannot collide.
   Everything else in the plugin is already namespaced this way.
 - **`<runid>`** — the atomically allocated component. `O_EXCL` is what makes concurrency safe; refusal
   is **not** the right behaviour, because two legitimate concurrent captures must be able to coexist.
 - **Ticket/round stay in the name** for human legibility, not for uniqueness.
 
+**The allocator takes the metadata — round 2.** `--allocate <dir>` alone cannot own a
+`<ticket>r<round>-<reviewer>-<runid>` name it is never told the parts of. Interface:
+`--allocate --ticket <T> --round <R> --reviewer <name>`, and **the repo hash comes from one shared
+helper**: `context.sh`'s slug is Bash and the allocator is Python, so it is exposed once
+(`context_repo_hash`, called by the wrapper) rather than reimplemented — otherwise callers rebuild parts
+of the path independently, which is the drift this design exists to remove.
+
 **The path must reach synthesis.** `skills/review-synthesis/SKILL.md` currently has **no ticket/round
 input contract** — it reads two fixed names. The allocated path is therefore threaded explicitly:
 `--reviewer gemini=<STATUS>:<allocated-path>`, and the skill takes the two paths as inputs.
 
-**Proof — M1 (new):** two concurrent `--allocate` calls in the same directory must yield **two distinct
-paths, both created**, and neither truncated. Must FAIL against a scheme that derives the name from
-ticket/round.
+**Proof — M1, rewritten in round 2 because the first version proved nothing.** Two random basenames are
+distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
+could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
+(seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
+return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700`.
+Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
 
 ### 4.2 — The `allowed-tools` grants are ALREADY broken (High — round 1, codex)
 
@@ -128,7 +147,17 @@ Round 1 established something worse than the first draft claimed. `allowed-tools
 for **`${CLAUDE_SKILL_DIR}` and `${CLAUDE_PROJECT_DIR}` only** — not `${HOME}`, not
 `${CLAUDE_PLUGIN_ROOT}`, not `${CLAUDE_PLUGIN_DATA}`.
 
-**So the two shipped grants are already unsupported substitutions, today:**
+**ROUND 2 REVERSED THIS — the grants are NOT inert, and the round-1 finding was wrong.**
+`${CLAUDE_PLUGIN_ROOT}` substitution in plugin `allowed-tools` was **fixed in Claude Code 2.1.0**, and
+this plugin pins **2.1.220** (verified: `claude --version` → `2.1.220`). So the shipped grants *do*
+expand, the round-1 "pre-existing defect" does not exist, and the validator proposed in round 1 **would
+have rejected a supported placeholder and forced the removal of working grants.**
+
+*(Recorded rather than quietly dropped: codex found this defect in round 1 and refuted it in round 2,
+having checked the changelog against the pinned version the second time. A reviewer's finding is a
+claim — including when the reviewer is the reliable arm, and including when I have already acted on it.)*
+
+**What remains true** is only that the `rm -f` grants name a literal `/tmp` path that this ticket moves:
 
 | skill | grant | status |
 |---|---|---|
@@ -142,10 +171,12 @@ cannot be "move the literal", because the literal was never doing what it appear
 
 - **Allocation replaces cleaning.** With `O_EXCL` allocation there is nothing to pre-clean — a fresh
   path cannot hold a stale transcript. The `rm -f` grants are **deleted**, not rewritten.
-- **The outer pre-clean stays where it must.** Moving it into `pty-capture.py` cannot cover
-  "the wrapper never starts", which is exactly the case `isolated-agy-review.sh:86-91` exists for and
-  exactly the audit's reconstructed bypass. That outer `rm -f` targets a path the harness itself just
-  allocated, so it needs no literal-path grant.
+- **The outer pre-clean is DELETED, not relocated — round 2.** Round 1 kept it, and codex showed that
+  the retained `rm -f` **removes the very file `--allocate` just created with `O_EXCL`**, before
+  `pty-capture.py` opens it: the atomic handoff does not survive its own caller. It is also unnecessary.
+  **An allocated empty file already fails closed** — synthesis treats empty as `MISSING` — so the
+  "wrapper never starts" case the audit reconstructs is covered by allocation itself, not by cleaning.
+  A pre-clean only ever existed to compensate for a *shared* name.
 
 **Proof — M2 (new, replaces the old M3/M4):** a **runtime** check, not a string check. Assert that the
 gate completes with **no `/tmp/` literal and no unsupported substitution in any `allowed-tools` line**,
@@ -163,7 +194,7 @@ passed while the workflow stalled.
 | `skills/gemini-review/SKILL.md` | 5 | 5 | 0 | its `:24` is `/tmp/agy-ping.txt`, a **different** path, and is NOT among these 5 |
 | `skills/codex-review/SKILL.md` | 5 | 5 | 0 | includes the `rm -f` grant, which is **deleted** not rewritten (§4.2) |
 | `docs/audits/PLUGIN_AUDIT_2026-07-19.md` | 4 | 0 | 4 | MAJ-10 — the audit finding that named this defect |
-| `scripts/pty-capture.py` | 3 | 2 | 1 | `:317` names the path its `O_NOFOLLOW` defends |
+| `scripts/pty-capture.py` | 3 | 3 | 0 | `:315-320` is **live implementation commentary** ("the recipes use predictable /tmp paths"), not a historical quote — leaving it after the recipes move would ship false current-state documentation *(round 2)* |
 | `skills/brainstorm/SKILL.md` | 2 | 2 | 0 | `--reviewer` examples |
 | `README.md` | 1 | 1 | 0 | feature blurb |
 | `scripts/review-verdict.py` | 1 | 0 | 1 | `:129`, quotes the duplicate-transcript defect |
@@ -172,14 +203,20 @@ passed while the workflow stalled.
 | `docs/planning/OCTO_ADOPTION_PLAN.md` | 1 | 0 | 1 | historical |
 | `docs/planning/HANDOFF.md` | 1 | 0 | 1 | historical |
 | `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md` | 1 | 0 | 1 | historical |
-| **TOTAL** | **31** | **20** | **11** | 13 files |
+| **TOTAL** | **31** | **21** | **10** | 13 files |
 
-**Totals: 31 lines, 13 files — 20 rewrites, 11 quote-keeps.**
+**Totals: 31 lines, 13 files — 21 rewrites, 10 quote-keeps.**
 
 **`/tmp/agy-ping.txt` is a separate decision.** It is the preflight ping, not an evidence artifact; it is
 also a fixed shared path. **Out of scope here, recorded so it is a decision and not an oversight.**
 
-> *(This table has now been wrong **three times**, and the third is the sharpest: with the line counts
+> *(This table has now been wrong **four times**. Round 2 found `pty-capture.py:315-320` misclassified
+> as a historical quote when it is **live commentary describing the current recipes** — retaining it
+> after the move would ship documentation that contradicts the code. Split: **21/10**. The risk register
+> independently said "12 quote-keeps" while the table said 11, so two figures in one document disagreed
+> and neither matched the rows. **The lesson has stopped being about arithmetic: a hand-maintained
+> inventory in prose cannot be kept true across edits, which is why M3 pins it and why the split is now
+> per-file.** Earlier history: the third version was the sharpest — with the line counts
 > finally correct at 31/13, the rewrite/quote-keep split still read "19 rewrites, 12 quote-keeps" while
 > the rows summed to **20/11**. Draft 1 said 23/7 from a partial grep; the "correction" still said 23/7
 > because it **counted `/tmp/agy-ping.txt`** — a different path — and omitted `README.md`,
@@ -213,8 +250,20 @@ the gate launch*. The audit's second suggestion covers that gap: **`review-verdi
 transcript mtime ≥ the snapshot sidecar's mtime**, so a transcript older than the gate launch fails
 closed.
 
-**Adopted as in scope**, because without it a determined operator can still hand the gate an old file by
-path. **Proof — M4 (new):** record a transcript whose mtime predates the snapshot; the gate must fail.
+**Adopted as in scope, with two round-2 corrections.**
+
+- **It is accidental-staleness detection, not operator provenance.** A determined operator can `cp` or
+  `touch` an old transcript. The first draft claimed the stronger property; §3's ceiling now covers this.
+- **The explicit `--reviewed-sha256` path has no freshness anchor at all.** That path deliberately
+  permits an approving write *without* a snapshot sidecar (`scripts/review-verdict.py:469-493`,
+  `skills/review-synthesis/SKILL.md:143-147`), while the proposed check compares only against the
+  sidecar's mtime — so M4 could pass for the sidecar case while an implementation skips freshness
+  entirely whenever the explicit digest is supplied. **Resolution required before implementation:**
+  either require a launch-time sidecar even with an explicit digest, or bind a launch timestamp into the
+  artifact itself. **§8 Q4 carries it.**
+
+**Proof — M4:** record a transcript whose mtime predates the launch anchor; the gate must fail. Run it
+**on both paths** — sidecar and explicit-digest.
 
 ## 5. Risk register
 
@@ -222,7 +271,7 @@ path. **Proof — M4 (new):** record a transcript whose mtime predates the snaps
 |---|---|---|
 | The chosen directory is protected or unwritable in some permission mode | **High** | §4.1 moved off `.claude`; M2 is a **runtime** check, not a string check |
 | The `allowed-tools` grants are "fixed" by rewriting a literal that never expanded | **High** | §4.2 — the grants are **deleted**, and a validator rejects unsupported `${…}` |
-| A historical quote is rewritten and the record of a real finding is corrupted | **High** | §4.3's 12 quote-keeps, pinned by M3 |
+| A historical quote is rewritten and the record of a real finding is corrupted | **High** | §4.3's **10** quote-keeps, pinned by M3 *(round 2: this cell said 12 while the table said 11 — the two were never reconciled, and both were wrong)* |
 | Allocation is added but callers still derive the name | **High** | `--allocate` **prints** the path; M1 fails a derived name |
 | Per-run paths are read as making the gate tamper-proof | Medium | §3's ceiling, in the CHANGELOG |
 | Transcripts accumulate without bound | Low | out of scope, stated |
@@ -260,12 +309,18 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
 
 ## 8. Open questions for round 2
 
-1. **Is `${CLAUDE_PLUGIN_DATA}` genuinely written-to-able from a skill recipe** in every permission
-   mode, including `dontAsk`? §4.1 rests on it, and round 1 showed the first draft's directory choice
-   was wrong for exactly this reason.
+1. **Is `${XDG_STATE_HOME:-$HOME/.local/state}` writable from a skill's Bash recipe in every permission
+   mode, including `dontAsk`?** This is the **third** directory this plan has proposed — `~/.claude/`
+   (protected), `${CLAUDE_PLUGIN_DATA}` (resolves *into* `~/.claude/plugins/data/`, equally protected),
+   now XDG state. **Confirm it against the actual protected-path list rather than by reasoning**, and
+   say so explicitly if it is also wrong.
 2. **Does deleting the `rm -f` grants leave any path where a pre-clean is still required?**
    `isolated-agy-review.sh` pre-cleans a path it allocated — is that sufficient for the
    "wrapper never starts" case the audit reconstructs?
 3. **Should `/tmp/agy-ping.txt` be in scope** after all? §4.3 rules it out as a non-evidence artifact.
-4. **Is the mtime check (§4.5) sound**, or does a legitimate re-capture ever produce an mtime older
-   than the snapshot?
+4. **How should freshness be anchored on the explicit `--reviewed-sha256` path**, which permits an
+   approving write with no snapshot sidecar? Require a launch-time sidecar anyway, or bind a launch
+   timestamp into the artifact? §4.5 cannot be implemented until this is chosen.
+5. **Does deleting the outer pre-clean actually cover "the wrapper never starts"?** §4.2 argues an
+   allocated *empty* file fails closed because synthesis maps empty → `MISSING`. Verify that against
+   `review-synthesis` and `review-verdict.py` rather than by assertion.
