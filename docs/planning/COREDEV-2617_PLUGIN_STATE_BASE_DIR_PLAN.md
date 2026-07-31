@@ -1,6 +1,6 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 13: codex `APPROVE` (0 findings, its first outright approve) · gemini `REQUEST_CHANGES` (2 High) — not a pass.** codex traced the whole plan clean. gemini found two **specification gaps** a mechanism trace cannot surface: the **bridge helper D′ requires was never specified** (now `scripts/lib/agent-env-bridge.sh`, with N5's allowlist gaining it and losing the two fence copies), and **§4.1's enum listed the state space of the REJECTED options** (`derived-registry`/`legacy-fallback` are unreachable under D′; it is now `host-env`/`unresolved`). See §22. Previously — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 14 gated (both arms `REQUEST_CHANGES`): the bridge helper I specified in round 13 COULD NOT WORK.** gemini: unbraced `$CLAUDE_PLUGIN_ROOT` is **unset** in a Bash-tool shell, so the `source` line would have crashed the fence. codex, deeper: **`${CLAUDE_PLUGIN_DATA}` inside a sourced `.sh` is not agent content**, gets no substitution, and the helper would export **empty** — re-creating this ticket's own defect. The fence now **passes the value in** (`source "${CLAUDE_PLUGIN_ROOT}/…/agent-env-bridge.sh" "${CLAUDE_PLUGIN_DATA}"`, both exact tokens in agent content), the helper takes `$1` and finds `paths.sh` via `${BASH_SOURCE[0]%/*}`, and **N5 retains the fence sites**. See §23. Previously — **round 13: codex `APPROVE` (0 findings, its first outright approve) · gemini `REQUEST_CHANGES` (2 High) — not a pass.** codex traced the whole plan clean. gemini found two **specification gaps** a mechanism trace cannot surface: the **bridge helper D′ requires was never specified** (now `scripts/lib/agent-env-bridge.sh`, with N5's allowlist gaining it and losing the two fence copies), and **§4.1's enum listed the state space of the REJECTED options** (`derived-registry`/`legacy-fallback` are unreachable under D′; it is now `host-env`/`unresolved`). See §22. Previously — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -30,9 +30,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-13 are in §10-§22.
+root; the consumer enumeration is now in the implementation order. Rounds 1-14 are in §10-§23.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-31 (round 13, post-gate revision — bridge helper specified; enum matched to D′)
+**Last Updated:** 2026-07-31 (round 14, post-gate revision — bridge corrected to the fence-injected form)
 **Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -340,13 +340,36 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    discussion simultaneously deferred it to "a future extraction". An implementer had to invent it or
    leave D′ incomplete.)*
 
-   **Specified:** `scripts/lib/agent-env-bridge.sh`, sourced (not copy-pasted) by every agent fence that
-   needs the variable in a Bash-tool shell. It contains exactly the export the fences carry today —
-   `export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"` — plus the source-time resolution and its single
-   diagnostic, so the bridge and the libraries share one code path and one enum. `agents/swift-reviewer.md`
-   `:176` and `:244` become `source "$CLAUDE_PLUGIN_ROOT/scripts/lib/agent-env-bridge.sh"`. **N5's
-   allowlist gains this file and loses those two fence lines**, which is the point: one site instead of
-   two copies, and the copy-paste this ticket exists to kill cannot recur silently.
+   **Specified — and round 14 corrected the round-13 form, which could not work.** The fence must
+   **pass the substituted value in**; it cannot delegate the substitution to a sourced file.
+
+   ```bash
+   source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" "${CLAUDE_PLUGIN_DATA}"
+   ```
+
+   Both placeholders are the **exact braced tokens**, which is the only form Claude Code substitutes, and
+   both are in **agent content**, which is the only place it substitutes them
+   (`scripts/tests/test_doc_gates.py:39-47`; `agents/swift-reviewer.md:168-176` documents the same rule
+   for the current inline bridge). `agent-env-bridge.sh` takes the data value as **`$1`**, exports it,
+   then performs the shared source-time resolution.
+
+   *(Round 14, BOTH arms. gemini: the round-13 form used **unbraced** `$CLAUDE_PLUGIN_ROOT`, and §1 of
+   this plan says that variable is **unset** in an ordinary Bash-tool shell — so it would have expanded
+   to `source "/scripts/lib/agent-env-bridge.sh"` and crashed the fence. codex went further and found the
+   deeper error: even spelled correctly, **`${CLAUDE_PLUGIN_DATA}` inside a sourced `.sh` file is not
+   agent content**, so it receives no substitution and the helper would export an empty value — leaving
+   the roster and capture readers unresolved, which is the exact defect this ticket exists to fix. The
+   round-13 design would have replaced a working inline bridge with a broken indirect one.)*
+
+   **Consequently N5's allowlist RETAINS the two fence sites** — they are the substitution injection
+   points and cannot move — **and gains the helper.** *(Round 13 claimed the fences could be removed;
+   they cannot. The duplication that goes away is the resolution logic, not the injection.)*
+
+   **How the helper shares one code path with the libraries:** it locates `paths.sh` relative to
+   **itself** — `. "${BASH_SOURCE[0]%/*}/paths.sh"` — never via `CLAUDE_PLUGIN_ROOT`, which is unset in
+   the shells it runs in. *(gemini, round 14: "share one code path" was stated without a mechanism, so an
+   implementer had to choose between duplicating `paths.sh` — contradicting the claim — and inventing
+   `BASH_SOURCE` resolution the plan never mentions.)*
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
 5. **Enumerate and guard every consumer** before quarantine, each with its **required control flow** —
    round 2 found §9 claiming they were enumerated while §7 never acted on them, and round 3 established
@@ -361,7 +384,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    | `stop-quality-marker-gate.sh` — **`:66`, `:74`, `:75`, `:117`, `:120`, `:123`, `:131-132`** | **the destructive ones.** `:66` composes `SENTINEL="$(marker_dir)/…"`; `:120` runs `mktemp "$(marker_dir)/.stopgate.XXXXXX"`; `:123` runs `mv -f "$_STMP" "$SENTINEL"`. On an unresolved base these **create and move files under `/.state/`**. Round 3 guarded only `:131-132`. Guard the whole script at entry |
    | `pre-commit-checks.sh` — **`:47` and `:72` too** | round 3 listed only the **fail** cases (`:44`, `:69`); the **pass** cases were unguarded, so a *successful* run wrote to a root path |
    | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
-   | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
+   | *(historical — round 3 record, not control flow; the operative row is `reviewer-roster.sh` above)* | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
    | `agents/swift-reviewer.md:247-249` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
    | `build-failure-log.sh` (`:40`) · `stop-failure-log.sh` (`:36`) · `permission-denied-log.sh` (`:40`) | **round 12 — these three had no control flow at all.** Each calls `log_append` exactly once as its terminal action. On an unresolved base `log_append` is a **no-op returning 0** (§7's writing-primitive rule), so the hook's own behaviour is unchanged: it still exits 0 and still emits whatever the hook contract requires. **No per-script guard is needed or wanted** — adding one would duplicate the primitive's contract. Stated explicitly because "the primitive handles it" is a decision, not an omission |
    | `capture-reviewer-round-start.sh` (`:46`) | calls `context_review_round_bind`, whose unresolved contract is **print nothing, return 0**. The call site already discards stdout and forces success (`>/dev/null 2>&1 \|\| true`), so the hook is unaffected. **Fail-open**: a missing round binding degrades to inference, which is the documented fallback |
@@ -1143,3 +1166,29 @@ explicit skip because it passes the composed root into Python.
 gemini found two *specification* gaps — an unspecified helper and an enum describing rejected options —
 that a mechanism trace would not surface, because both are omissions rather than errors. Neither arm alone
 would have reached this state.
+
+## 23. Round-14 gate outcome
+
+**Both arms `REQUEST_CHANGES` — gemini 2 High + 1 Low, codex 1 High.** Frozen at `4e6162f`, sha256
+`f852d3eb5c5d1f4212f55f46ad38299815532c60d1b313b0510143ba76a81464`. Transcripts:
+`~/.claude/review-transcripts/2617r14-agy.txt` (1,873 B) and `…/2617r14-codex.txt` (300,578 B).
+
+**codex's round-13 `APPROVE` did not survive contact with the fix it approved around.** Round 13's only
+substantive change was the bridge helper I specified in response to gemini — and both arms now show that
+specification could not work. This is the clearest case yet of the campaign's standing rule: *a fix is a
+claim until it is executed or argued from the semantics.*
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the specified bridge cannot work.** gemini: the round-13 form used **unbraced** `$CLAUDE_PLUGIN_ROOT`, which §1 of this plan says is **unset** in an ordinary Bash-tool shell — it would expand to `source "/scripts/lib/agent-env-bridge.sh"` and crash the fence. codex found the deeper error: even spelled correctly, **`${CLAUDE_PLUGIN_DATA}` inside a sourced `.sh` file is not agent content**, so it receives no substitution and the helper exports an **empty** value — leaving the roster and capture readers unresolved, i.e. re-creating the exact defect this ticket exists to fix | **confirmed** — `scripts/tests/test_doc_gates.py:39-47` documents that only the exact `${CLAUDE_PLUGIN_ROOT}` token is substituted, and `agents/swift-reviewer.md:168-176` documents that substitution happens **in agent content** | the fence **passes the substituted value in**: `source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" "${CLAUDE_PLUGIN_DATA}"` — both exact braced tokens, both in agent content — and the helper takes it as `$1`. **N5's allowlist RETAINS the two fence sites** (they are the injection points and cannot move) and gains the helper; round 13's claim that the fences could be deleted is withdrawn |
+| 2 | gemini | **"the bridge and the libraries share one code path" had no mechanism.** An implementer had to choose between duplicating `paths.sh` — contradicting the claim — and inventing `BASH_SOURCE` resolution the plan never mentions | **confirmed** | specified: the helper locates `paths.sh` relative to **itself**, `. "${BASH_SOURCE[0]%/*}/paths.sh"`, never via `CLAUDE_PLUGIN_ROOT`, which is unset in the shells it runs in |
+| 3 | gemini | *(Low)* §22 claimed the duplicate `reviewer-roster.sh:53` rows were "marked as historical"; they were not | **confirmed** — I wrote the claim and not the marking | marked |
+
+**What round 13 got right and round 14 does not disturb:** the consumer table's coverage, the log-hook
+contract, both capture-hook controls, `capture.py`'s transitive coverage, and the enum correction to D′'s
+actual state space. The defect was confined to the one mechanism introduced *in* round 13.
+
+**And the lesson lands on me twice over.** gemini raised the bridge gap in round 13; I specified a bridge
+without executing it against the substitution rules **this plan's own §1 documents**, and codex approved
+the round that contained it. A specification written in response to a finding deserves the same scrutiny
+as the finding — arguably more, because no reviewer has seen it yet.
