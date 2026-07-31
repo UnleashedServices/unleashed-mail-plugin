@@ -1,6 +1,13 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **round 9 gated** (**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×3**), and
+**Status:** Planning — **round 10 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**), and the
+High was again unanimous: **round 9's narrowing was still not fully propagated** — §6.0 **row 9** (and,
+per codex, **row 5**) still credited closure to mechanisms that never reach a caller. Both rows are now
+`ACCEPTED-NOT-CLOSED`; **I12 is split a/b** exactly as I16 was, because its caller half had no live
+mechanism; C9's "THE PROOF" bullet is **qualified to the helper** rather than claiming end-to-end
+closure; and I18's short-read arrangement now returns **`(D, 0)`** instead of a positive count that
+inverted §4.1's own contract. See §17. Previously — round 9 gated
+(**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×3**), and
 the finding was unanimous: **round 8's narrowing was not propagated**. Six rows are now marked
 **accepted-not-closed**, **F3 is restored** to ARCH-3's body (it had been dropped while §7 still mandated
 it), and every remaining F5/F5b reference is removed from operative text. See §16. Previously — round 8
@@ -615,8 +622,21 @@ must be caught — the §6.0 sweep records I9 as caught by C9a:
   adopted answer. The check is on the **streamed byte count** — see §4.1 step 4 and I12.)*
 - **I11** compare the digests as **sets/multisets** rather than per reviewer entry → C10 must
   fail. A plausible order-insensitive one-liner that permits the two reviewers' transcripts to be swapped.
-- **I12** *(round 4)* diagnose emptiness from `st_size`, `os.path.getsize`, or the digest constant instead
-  of the streamed count → C12 must fail.
+- **I12** *(round 4; split in round 10)* emptiness diagnosed from `st_size`, `os.path.getsize`, or the
+  digest constant instead of the streamed count. **Split, because the two halves have different status —
+  the same defect round 10 found in I16 and in §6.0 row 9:**
+  - **I12a — the HELPER returns a derived count**: `st_size`, `os.path.getsize`, or `len(last_chunk)` in
+    place of the true streamed count. **C12 must fail** on it — C12 calls the helper directly on zero-,
+    one- and many-chunk fixtures and asserts the **exact returned count** (`:570-576`). **Required
+    rejection.**
+  - **I12b — the CALLER ignores the helper's count** and re-derives emptiness from `st_size`,
+    `os.path.getsize`, or the digest constant. **C12 does not reach this**: it is explicitly ARCH-3's
+    direct helper test and asserts nothing about how a caller consumes the returned count. **No fixture
+    in this plan exercises a caller**, so per **§3.1 this residue is accepted, not closed** — it is the
+    caller half of §6.0 row 9, and marking it here keeps the mutant list consistent with that row.
+  *(Round 10 fix: I12 previously read "diagnose emptiness … → C12 must fail" as a single mutant. That
+  named a **caller** behaviour and attributed it to a **helper-only** case, so §7's rule that every
+  non-accepted mutant is caught by its named mechanism could not hold for it.)*
 - **I13** *(round 4)* compare truncated digests (the 12-hex display form), or perform the comparison once
   outside the per-entry loop → C13 must fail.
 - **I14** *(round 4)* swallow non-`OSError` exceptions and skip the entry → C14 must fail.
@@ -718,12 +738,17 @@ must be caught — the §6.0 sweep records I9 as caught by C9a:
     **and** passes C9b (`pathlib` routes through a cached `io.open`, so neither `os.open` nor
     `builtins.open` records it). Both gate reviewers found the same class independently, and the sweep
     found ten more. **C9 is retained as a regression guard, not as the proof.**
-  - **THE PROOF IS ARCH-1 + ARCH-2 + ARCH-3 (§6.0), and they are MANDATORY.** The checker takes **only the raw
-    fd** — never a path, never an opener, never a default-bound callable. Re-opening becomes
-    *structurally unavailable* rather than merely detected. This is a **signature constraint asserted by
-    a test**, not a prose preference; §4.1 step 3 states the exact signature and §7 step 5 makes it an
-    acceptance condition. Round 3 wrote this as "prefer it" and round 4 was defeated through the gap that
-    left.
+  - **THE PROOF FOR THE HELPER IS ARCH-1 + ARCH-2 + ARCH-3 (§6.0), and they are MANDATORY.** The checker
+    takes **only the raw fd** — never a path, never an opener, never a default-bound callable. Re-opening
+    becomes *structurally unavailable* **inside `_digest_transcript_fd`** rather than merely detected.
+    This is a **signature constraint asserted by a test**, not a prose preference; §4.1 step 3 states the
+    exact signature and §7 step 5 makes it an acceptance condition. Round 3 wrote this as "prefer it" and
+    round 4 was defeated through the gap that left.
+    *(Round 10 correction: this bullet previously read "THE PROOF IS …" without qualification, which
+    overclaimed against **§3.1**. The seal binds the **helper's signature**; it says nothing about a
+    **caller** that re-opens the path before or after calling the helper. Per §3.1 and §6.0's
+    `ACCEPTED-NOT-CLOSED` rows, the class is sealed **at the helper, not closed end-to-end** — no fixture
+    in this plan exercises a caller.)*
   - **Non-vacuity:** C9a must be stated beside C2c. A green C9a that came from a dead digest check proves
     nothing.
 - **C10** *(new)* swap the two reviewers' `transcriptPath` values in a legitimately written artifact,
@@ -755,13 +780,14 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    regression tests hang instead of failing.
 4. §4.5's **one** test repair — (a) — using the executable repair stated there. *(Round 4: this step
    said "two"; (b) moved to `COREDEV-2618` in round 3.)*
-5. All **sixteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16 (a/b), I17,
-   I18** (I16 counts once, split into halves in round 10 as C2 and C5 already are) — all
+5. All **sixteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12 (a/b), I13, I14, I15,
+   I16 (a/b), I17, I18** (I12 and I16 each count once, split into halves in round 10 as C2 and C5
+   already are) — all
    **twelve** cases — **C1, C2 (a/b/c), C3, C4 (a/b), C5 (a/b), C8, C9 (a/b), C10, C11, C12, C13, C14** —
    all **three invariants — ARCH-1 (signature), ARCH-2 (unchanged string + typed cause + the caller-side
    assertions) and ARCH-3's fixtures F1, F2, F3 and F4** (F5/F5b removed in round 8 — §6.0). Enumerated, never as a range: the rescope deleted
    I7/I8 and C6/C7 with §4.3, round 3 caught stale ranges naming four identifiers the plan no longer
-   defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case **except I16's production-conditional residue (§3.1)**; C5's halves
+   defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case **except the two caller-side residues §3.1 accepts — I16b's production-conditional second pass and I12b's caller-side count re-derivation**; C5's halves
    shown **PASSING** at both sizes; and **each of §6.0's twelve defeating implementations shown rejected**
    — that table is the acceptance suite for this step, not commentary, **except rows whose closure §6.0
    now records as accepted-not-closed**.
@@ -1185,3 +1211,39 @@ That settles the recommendation §15 floated: for a plan of this size, the propa
 **mechanical**, not editorial. Every §7 step and every §6.0 row must cite the section that authorises it,
 and a validator must assert the cited section still says what the row claims. Prose review does not catch
 this class — nine rounds of evidence now say so.
+
+## 17. Round-10 gate outcome
+
+**gemini `REQUEST_CHANGES` (1 High, 1 Medium, 3 explicit passes) · codex `REQUEST_CHANGES` (3 High,
+1 Low).** Frozen at `093df689…`, sha256 `f29777b1…` — **both reviewers independently recomputed the
+digest and both matched**, the first round in this ticket where provenance was verified on both arms.
+Transcripts: `~/.claude/review-transcripts/2497r10-agy.txt` (2,389 B) and `…/2497r10-codex.txt`
+(360,626 B).
+
+**The High was unanimous for the second consecutive round, and it was the same class both times:**
+round 9 fixed *some* of the rows the narrowing touched and the summary claimed *all* of them.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the narrowing is still not fully propagated** — §6.0 **row 9** still credited caller-side closure to "an ARCH-2 assertion"; codex additionally caught **row 5** still crediting I18 for arbitrary failure-path re-classification | **confirmed** — the round-9 summary claimed six rows; only four carried the marker | rows 5 and 9 marked `ACCEPTED-NOT-CLOSED`, each naming why no fixture reaches it |
+| 2 | gemini | the "what changed" summary was **garbled about row 9** — "the residues of 9" conflated the §6.0 row with mutants I9/I16 | **confirmed** — a direct consequence of finding 1 | summary rewritten to name exactly the rows it marks |
+| 3 | codex | **I12 has no live mechanism** — C12 is ARCH-3's *direct helper test* and asserts nothing about a caller, yet I12 named a **caller** behaviour ("diagnose emptiness from `st_size`…") and pointed at C12 | **confirmed** — C12's own text (`:570-576`) restricts it to the helper's returned digest/count | **I12 split a/b**, mirroring I16: **I12a** (helper returns a derived count) is a required rejection by C12; **I12b** (caller re-derives emptiness) is `ACCEPTED-NOT-CLOSED` per §3.1 |
+| 4 | codex | **I18's short-read arrangement could reject a correct implementation** — it returned a matching digest with a merely "smaller" positive count and demanded failure, but §4.1 makes any positive count non-empty, so a correct caller **approves** | **confirmed** — the oracle contradicted the contract it was testing | the stub now returns **`(D, 0)`** against a promised `st_size` of 100, with the retry arrangement's one-helper-call / zero-path-read assertions |
+| 5 | codex | **C9's "THE PROOF" bullet overclaims against §3.1** — "re-opening becomes structurally unavailable" is stated without qualification, while §3.1 accepts caller-side residues as not closed | **confirmed** | qualified to *inside `_digest_transcript_fd`*, with the helper/end-to-end distinction stated in place |
+| 6 | codex | the status header still read **"Awaiting round 9"** although §16 records round 9 as complete | **confirmed** | header rewritten for round 10; the cross-reference line now reads §11–§17 |
+
+**Both reviewers passed the citation record outright.** gemini opened every `file:line` and reported
+them all correct; codex reported "no incorrect current source citation after opening every cited
+anchor". After nine rounds in which citation errors were the most repeated defect in this campaign,
+round 10 is the first with a clean sweep on both arms — the one part of this plan that is now stable.
+
+**Also confirmed sound by both, and not changed:** F1–F4 are defined and mandated consistently between
+ARCH-3 and §7; the sixteen mutants and twelve cases are all present and enumerated rather than ranged;
+and I18's *retry* arrangement is fully specified.
+
+**The recurring lesson, restated because round 10 repeated it exactly.** §16 concluded that propagation
+must be checked **mechanically**. Round 10 is that conclusion's own counterexample: the fix for round 9's
+propagation finding was itself incompletely propagated, and it was caught by review rather than by a
+validator. Findings 1, 3 and 5 are all the same shape — **a claim of closure that outruns what a fixture
+actually reaches**. Until §7's mechanical propagation check exists, assume every "all N rows now say X"
+sentence in this plan is unverified.
