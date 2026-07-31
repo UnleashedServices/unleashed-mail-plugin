@@ -1,6 +1,6 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -30,9 +30,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-9 are in §10-§18.
+root; the consumer enumeration is now in the implementation order. Rounds 1-10 are in §10-§19.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-31 (round 9, post-gate revision — N5's guarantee narrowed; oracle re-based on envelope returns)
+**Last Updated:** 2026-07-31 (round 10, post-gate revision — snapshot consumers added; CHANGELOG carries the N5 limit)
 **Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -340,6 +340,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
    | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
    | `agents/swift-reviewer.md:247-249` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
+   | `precompact-snapshot.sh` (`:61`) · `sessionstart-restore.sh` (`:30`) | **round 10 — both were entirely absent from this table.** Each composes `SNAP="$(context_snapshot_path)"` and writes/reads the snapshot inline. On an unresolved base: **skip the snapshot write and the restore**, and leave every other behaviour (the hook's own output, its exit code) untouched |
    | `scripts/test-hooks.sh` — **`:624`, `:796`**, and **`:446`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run. *(Round 7 adds `:446` — `[ -s "$CLAUDE_PLUGIN_DATA/logs/stop-gate.log" ]` composes from the raw variable directly, not through a resolver, so it is a third site of a different kind and the one that proves N5's old predicate was blind.)* |
    | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
 
@@ -392,8 +393,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >    **`/logs`**; with the sentinel it yields `/dev/null/unresolved-plugin-base/logs`. Every
    >    destructive verb — `mkdir`, `mktemp`, redirect — fails `ENOTDIR`, and the `[ -f ]` guard that
    >    fail-open code already uses returns false, so readers take their existing absent-file path.
-   > 2. **Writing primitives become no-ops** — `marker_write`, `log_append`, the `context_snapshot*`
-   >    writers, **`context_review_round_bind`** (`context.sh:263-291`) and
+   > 2. **Writing primitives become no-ops** — `marker_write`, `log_append`, **`context_review_round_bind`** (`context.sh:263-291`) and
    >    **`context_review_round_clear`** (`context.sh:342-345`) return success **without** writing, so D′
    >    persists nothing and no consumer's primary behaviour changes. Readers return an empty result set.
    >
@@ -415,6 +415,17 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >    reader half `context_review_round_lookup` (`:298`) already returns. `context_review_round_clear`
    >    is a bare `rm -f` (`:342-345`) — a no-op under the sentinel by construction, but it is a **state
    >    mutator**, so N1/N2 must assert that explicitly instead of inheriting it from `ENOTDIR`.
+   >
+   >    **There are no `context_snapshot*` WRITERS — round 10, and this rule named them for three rounds.**
+   >    `context.sh` contains exactly one `context_snapshot*` function, `context_snapshot_path` (`:55`),
+   >    and it is a **path builder**, not a writer. The snapshot writes happen **inline in the consumer
+   >    scripts** — `precompact-snapshot.sh:61` and `sessionstart-restore.sh:30`, each composing from
+   >    `$(context_snapshot_path)`. So `context_snapshot_path` belongs to the **path-returning envelope**
+   >    (where it already is), and the *writes* are consumer control flow governed by §7 step 5's table —
+   >    **which never listed those two scripts.** Both are added there. *(This is the third time this plan
+   >    has named a non-existent or mis-typed primitive in the operative rule: `marker_commit` the reader
+   >    in rounds 5-7, then the two round-binding mutators, now these. Every entry in an envelope must be
+   >    opened and read before it is written down.)*
    >
    >    **`_context_round_sweep` (`context.sh:205`) is a mutator too — round 8, and it was missed twice.**
    >    It ends in `rm -f "$f"` (`:216`), deleting expired binding files. Round 7 added the two
@@ -662,7 +673,11 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    **separately** with its own inventory — its provenance is unknown, so it must not be merged with the
    rest. Add N4.
 7. Version bump + CHANGELOG, stating plainly that state written before this fix may live in a second
-   directory and how to find it.
+   directory and how to find it — **and that N5 is lexical hardening, NOT a boundary** (§7's narrowed
+   claim: it proves the identifier is expanded only at enumerated sites, and proves nothing about a
+   primitive that acquires the base some other way). *(Round 10, codex: the narrowing said the
+   CHANGELOG must carry it and this checklist did not, so the one operative step that reaches a
+   reader would have shipped the old, broader impression.)*
 
 ## 8. Open questions for the reviewers
 
@@ -957,3 +972,35 @@ response is to narrow what is claimed rather than to attempt a fifth mechanism**
 rather than argued.** Three rounds of N5 revisions each assumed the previous predicate was *nearly* right
 and widened it. Running one four-line bypass showed the whole approach has a ceiling: **path provenance
 is not statically decidable in Bash.** Narrowing follows from that fact, not from fatigue.
+
+## 19. Round-10 gate outcome
+
+**codex `APPROVE_WITH_NOTES` (1 Low) · gemini — FAILED REVIEW, no verdict.** Frozen at `1cd04b2`, sha256
+`c8e5d8b49517fe92bc10a77dc1f24a2e31b68b7dcf98676f3d8428e2e2b6072d`. Transcripts:
+`~/.claude/review-transcripts/2617r10-codex.txt` (443,943 B) and `…/2617r10-agy.txt` (1,956 B).
+
+**THE NARROWING HELD, AND THIS ROUND IS NOT A PASS.** codex returned the first non-`REQUEST_CHANGES`
+verdict this ticket has had since round 4, with a single Low. But **the gemini arm emitted no `VERDICT:`
+line** — it wrote its critique to `CRITIQUE-2617.md` inside the disposable checkout and summarised to
+stdout instead. Per AGENT_CONTRACTS §2 a missing transcript verdict is **never** APPROVE, so the round
+fails closed and gemini must be re-run. *(The isolation harness worked exactly as designed: the file went
+into the throwaway worktree and the real tree was untouched — `TREE=clean`.)*
+
+**What codex confirmed, having traced it:**
+- N5's narrowed claim is **accurate and still useful** — the round-9 decision holds.
+- **Every production persistent-state read traces back to an envelope return**; no counterexample to
+  "bounding the outputs bounds the internals".
+- The combined reader/mutator envelope **is exhaustive**, and mixed primitives such as `log_append` are
+  covered by the unresolved no-op contract.
+- The `_UNLEASHED_BASE_OK` protocol yields **zero diagnostics when resolved and exactly one when
+  unresolved**, independent of library source order and of `paths.sh` presence.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | *(Low)* **§7 step 7's CHANGELOG checklist omits the N5 limitation** that the narrowing requires be documented | **confirmed** — the narrowing says the CHANGELOG must carry it; the one operative step that reaches a reader did not | step 7 now requires stating that **N5 is lexical hardening, not a boundary** |
+| 2 | gemini *(failed arm — findings triaged anyway)* | **there are no `context_snapshot*` WRITERS.** `context.sh` has exactly one such function, `context_snapshot_path` (`:55`), a **path builder**. The writes happen inline in the consumers | **confirmed** — `precompact-snapshot.sh:61` and `sessionstart-restore.sh:30` each compose from `$(context_snapshot_path)` and write inline | the phrase is struck from the writing-primitive rule. **Third time this plan has named a non-existent or mis-typed primitive there** — `marker_commit` the reader, then the round-binding mutators, now these |
+| 3 | gemini *(failed arm)* | **`precompact-snapshot.sh` and `sessionstart-restore.sh` are absent from §7 step 5's consumer table** — zero occurrences in the whole plan | **confirmed by grep** | both added, with their unresolved-base control flow: skip the snapshot write and the restore, change nothing else |
+| 4 | gemini *(failed arm)* | "`_UNLEASHED_BASE_OK` is hallucinated — the fallbacks emit no diagnostic" | **REJECTED** — the flag is a **mandated design**, not a claim about current code, and §4.1's observability requirement is precisely the change being specified. codex traced the same protocol and found it sound. *(Same error class as round 9's finding 5: reading a requirement as a description.)* | none |
+
+**A failed arm is not a free round.** Findings 2 and 3 are real and are applied, but the verdict is not
+recoverable from a summary — the next round re-runs both arms at the new digest.

@@ -1,6 +1,6 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 11 gated** (**gemini `REQUEST_CHANGES` 3 High + 2 Medium · codex `REQUEST_CHANGES` 2 High + 1 Medium**). **Both arms independently constructed a wrong gate that passes every mutant the plan had** — so the **anchor column is no longer equality-checked** (triples are; anchors are resolution-checked), and **M12f** (swap two anchors → pins check (iii) to the table) and **M12g** (non-heading anchor → pins check (ii)) are added. M3's **exactly one** classifier is now mandated by step 5 itself; **M4** was pinned to the Scope paragraph the narrowing deletes; step 6 now orders M5's **isolated** regressions; and intra-document references are **by name, never by line**. See §20. Previously — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 2 High + 1 Medium**). Both reviewers again found the **same High**, and it is the same
 *class* as round 6's: **round 7's `anchor` column reached §4.2 and never reached §7 step 2**, which still
 mandated a three-column table — so **M12d had no column to mutate**. Step 2 now ships the four-column
@@ -34,7 +34,7 @@ reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contra
 See §12. Rounds 1-2 are in §10-§11; rounds 3-6 are in §12-§15.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-31 (round 10, post-gate revision — M3 is a membership test; M12d proves fingerprint/table coupling)
+**Last Updated:** 2026-07-31 (round 11, post-gate revision — anchors resolution-checked; M12f/M12g pin checks (ii) and (iii))
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -192,7 +192,13 @@ from the module at test time:
   at `scripts/tests/test_doc_gates.py:287-290`).
   **Marker:** *any* classifier from the closed vocabulary — a **membership** test, never a fixed token.
   **Row-scoped (strong) assertion:** `rows[N]` contains **exactly one** of `{**Adapted**, **Adopted**,
-  **Restated positively**}`, for every N in 1..10. **Section-scoped (weak) assertion:** the section
+  **Restated positively**}`, for every N in 1..10 — and **§7 step 5 mandates exactly that**, so the
+  assertion and the document requirement are the same sentence. *(Round 14, both arms: step 5 previously
+  required only "an explicit classifier from" the vocabulary, which a disposition like `**Adopted** —
+  formerly **Adapted** for the removed parser carve-out` satisfies while carrying **two** tokens and
+  failing the strong assertion **on the clean document**. Requiring exactly one in the operative step is
+  what makes the differential's baseline hold; asserting it in the test alone would have re-created the
+  same defect a third time.)* **Section-scoped (weak) assertion:** the section
   contains at least one of them. **Mutation:** delete rule **3**'s disposition cell.
   **Why it discriminates:** after the deletion `rows[3]` carries **no** classifier, so the strong
   assertion **fails**; the other nine rows still carry theirs, so the weak assertion **passes**. On the
@@ -240,8 +246,13 @@ a search offset instead of from the file. Every citation in the shipped §13 tex
 `VALID_AGENTS` reviewers out of scope, with the reason (they emit structured JSON; style guidance was
 always a poor fit).
 
-**Proof.** **M4** — delete one in-scope surface from the Scope paragraph; the doc-gate must fail. Assert
-each of the four is named, individually, so removing one is not masked by the other three.
+**Proof.** **M4** — delete one in-scope surface's **row from the scope table**; the doc-gate must fail.
+Assert each of the four `in` rows is present individually, so removing one is not masked by the other
+three. *(Round 14, from gemini: M4 read "delete one in-scope surface from the **Scope paragraph**" — but
+§4.2 and §7 step 2 **replace that paragraph entirely** with the parseable four-column table, so the
+mutant targeted text the narrowing deletes and was unimplementable. Same class as M3's three markers:
+**a proof pinned to a value this plan itself changes.** The sweep §7 asked for found this one; M1, M2,
+M5, M9-M13 were re-checked and are stated against the table or the parser, not against prose.)*
 
 > **Round 1: M1/M2/M4 do not prove scope POLARITY, and this is a High finding codex constructed and
 > executed.** All three are **presence-only** assertions — they check that a name appears in the
@@ -288,9 +299,13 @@ each of the four is named, individually, so removing one is not masked by the ot
 > > `anchor`, holding a `path:line` (or an exact heading) that identifies the surface in the repo, and
 > > the gate asserts each anchor **resolves** and matches a per-surface expected fingerprint. A prose
 > > definition elsewhere is then not authoritative and cannot redirect the ID.
-> > **M12d (round 7):** leave all nine triples byte-identical and change **one surface's anchor** to a
-> > different real surface — `verdict-report` → `agents/swift-reviewer.md:538` — and the gate must
-> > **fail**. Without M12d nothing in this plan discriminates a correct binding from this counterexample.
+> > **M12d (round 7; retargeted round 13):** leave all nine triples byte-identical and change one
+> > surface's **anchor** to `agents/swift-reviewer.md:439` — a real heading whose section carries no
+> > `### Verdict:` — and the gate must **fail on the fingerprint check**. *(It targeted `:538` until
+> > round 13; `:538` is a blockquote, so the heading check killed it before the fingerprint was ever
+> > consulted. **Round 14 note:** round 13 retargeted it in §7 step 2 and left this design-section copy
+> > pointing at `:538` — §9's defect class, running in the opposite direction for once. The operative
+> > definitions of the whole M12d/e/f/g series live in §7 step 2.)*
 > > **M12e (round 9):** leave the table **entirely untouched** and instead rename or delete the
 > > fingerprint `### Verdict:` at `agents/swift-reviewer.md:660`; the gate must **fail**.
 > > *(M12d alone proves only that the **anchor** is load-bearing. `:538` is a blockquoted instruction
@@ -569,10 +584,16 @@ must fail", which cannot be satisfied by M1 or M3.
   gate rejects. Listing it as a candidate mutant made §6 and §7 step 7 unsatisfiable for M2 for exactly
   the reason round 5 identified for M1/M3.
 
-  **M2's operative definition is §4.1's (`:154`), reproduced here because §7 step 7 routes the
+  **M2's operative definition is the one in §4.1's proof list — cited BY NAME, not by line: see the
+  `- **M2**` bullet under §4.1's "Proof" heading. Reproduced here because §7 step 7 routes the
   implementer through this section** — weak predicate **`the parsed table has exactly nine rows`**,
   mutation **re-pair one row's `producer_id` with another allowlisted `producer_id`**. M3's marker and
-  mutation are likewise fixed at `:161`.
+  mutation are likewise fixed in §4.1's `- **M3**` bullet.
+  *(Round 14, from gemini: these pointers read `:154` and `:161`, which by then resolved to M2's preamble
+  and **M1's** definition — the implementer this paragraph exists to route was being sent to unrelated
+  text. Every round shifts these lines, so **intra-document references are now by section and identifier
+  name, never by line number.** The mechanical citation checker validates `path:line` citations into the
+  repo; it cannot see a plan-internal `:NNN` drift, which is why this survived six rounds.)*
   *(Round 8: this paragraph still defined M2 as the round-5 "the section contains the word *excluded*"
   check — the very predicate round 7 superseded at `:154` for never passing on the clean document.
   Because step 7 sends implementation here, **the superseded predicate is the one that would have
@@ -600,6 +621,16 @@ satisfied by a suite that never rejects a mutant.
    anchor` — whose content is exactly these **nine approved rows**, every field drawn from a finite
    allowlist, any unknown key a hard failure, and any `(surface_id, producer_id, scope)` triple outside
    this set a hard failure:
+
+   > **What is equality-checked, and what is not — round 14, and the M12 series depends on it.**
+   > The gate asserts **exact set equality on the nine `(surface_id, producer_id, scope)` TRIPLES**, as
+   > §4.2 has said since round 4. The **`anchor` column is NOT equality-checked**: it is validated by
+   > *resolution* — checks (i) path exists, (ii) the line is a heading, (iii) that heading's section
+   > contains the surface's recorded fingerprint. *(codex, round 14: if anchors were equality-checked
+   > too, a wrong gate could assert `rows == EXPECTED_ROWS` and then look for each fingerprint at a
+   > **hard-coded** locus. Every anchor mutant would die on row equality, every fingerprint mutant on the
+   > hard-coded search, the clean document would pass — and check (iii) would never once read the table.
+   > Equality on the anchor column makes the whole anchor mechanism untestable.)*
 
    **THE LITERAL §13 TABLE — exactly four columns, exactly these nine rows. Copy this, nothing else:**
 
@@ -671,9 +702,27 @@ satisfied by a suite that never rejects a mutant.
    >   untested. Round 9 moved this mutant off `:538` for the anchor's sake and left the same line in
    >   place for the fingerprint's. `:439` is the round-7 counterexample locus, which makes it the most
    >   meaningful target available.)*
-   > - **M12e** *(new)* leaves the table **entirely untouched** — anchor still `:590` — and instead
-   >   changes the artifact: rename or delete `### Verdict:` at `agents/swift-reviewer.md:660`. The gate
-   >   must fail on check (iii). This is the only mutant that proves the **fingerprint** is load-bearing.
+   > - **M12e** leaves the table **entirely untouched** — anchor still `:590` — and instead changes the
+   >   artifact: rename or delete `### Verdict:` at `agents/swift-reviewer.md:660`. The gate must fail on
+   >   check (iii). This proves the fingerprint is **consulted at all**.
+   > - **M12f** *(round 14)* **SWAPS two rows' anchors** — `verdict-report` ↔ `security-findings`, so
+   >   `verdict-report` points at `agents/security-reviewer.md:203` and vice versa. Both remain valid
+   >   headings, so checks (i) and (ii) pass; `verdict-report`'s fingerprint `### Verdict:` is absent from
+   >   security-reviewer's Output Format section, so the gate must fail on **(iii)**. A gate that
+   >   hard-codes each surface's locus does **not** notice a swap, so this is the mutant that proves
+   >   check (iii) **reads the anchor from the table**.
+   > - **M12g** *(round 14)* points one anchor at a **non-heading** line — `agents/swift-reviewer.md:591`,
+   >   blank, immediately under `## Output Format`, whose *enclosing* section still contains the
+   >   fingerprint. Check (iii) would therefore pass; the gate must fail on **(ii)**. This is the only
+   >   mutant that proves check (ii) reads the anchor from the table rather than asserting
+   >   `is_heading(590)` unconditionally.
+   >
+   > *(Round 14: gemini and codex each constructed a **wrong gate that passes every earlier mutant**.
+   > gemini's hard-codes check (ii) and does (iii) properly — both M12d and M12e die on (iii), so the
+   > hard-coding is never exposed. codex's asserts `rows == EXPECTED_ROWS` then searches each fingerprint
+   > at a fixed locus — M12d dies on row equality, M12e on the fixed search. **Two mutants cannot pin
+   > three checks**, and equality on the anchor column masked the difference. M12f and M12g close it, and
+   > the anchor is now resolution-checked rather than equality-checked.)*
    >
    > *(Round 9, from codex: M12d alone proves nothing about the fingerprint. `agents/swift-reviewer.md:538`
    > is `> Call \`mcp__…synthesize_review\` with` — a **blockquoted instruction line, not a heading** — so
@@ -694,15 +743,22 @@ satisfied by a suite that never rejects a mutant.
    pointer. §14 — the destination for `BLOCKED — …` — already exists from step 1.
 5. Simplify the carve-outs §4.4 proved out-of-scope; all ten dispositions stay explicit, and rules 4/9
    keep protecting the consolidated issue table on contract grounds.
-   **Each of the ten dispositions must retain an explicit classifier from the closed vocabulary
-   `{**Adapted**, **Adopted**, **Restated positively**}`** — this is a gated property, not a formatting
-   habit: **M3's differential depends on it** (`:180`). *(Round 9: step 5 previously said only that the
+   **Each of the ten dispositions must retain EXACTLY ONE classifier from the closed vocabulary
+   `{**Adapted**, **Adopted**, **Restated positively**}`** — exactly one, not at least one: a second
+   token anywhere in the cell breaks M3's clean-document baseline. This is a gated property, not a
+   formatting habit. **Also replace `test_doc_gates.py`'s hard-coded per-rule classifier map
+   (`:328-338`)** with the membership assertion; §4.5's at-risk-test list must name it, which it
+   currently does not. *(Round 9: step 5 previously said only that the
    dispositions "stay explicit", which permits rewriting their prose freely — and M3's round-8 marker was
    a prose phrase inside four of those very cells. Pinning the vocabulary is what makes a row-scoped
    marker durable across the simplification this step orders.)*
 6. Rewrite the 11 tests; add the disjointness gate, the `_scope_rows` schema gate, and the
-   **cross-reference** M5 gate. Add the exact ticket regression to `test_capture.py` — it does not exist
-   there yet.
+   **cross-reference** M5 gate. Add to `test_capture.py` **the isolated regressions §4 requires — one
+   fixture per independent rejection cause, plus both M5b parser mutants — not only the combined "exact
+   ticket" case.** *(Round 14, codex: `extract_status` stops on **either** kind of intervening content
+   (`mcp/review-synthesizer/capture.py:399-403`), so a single combined fixture passes while masking a
+   parser that handles only one cause — the documented false-pass §4 exists to prevent. Ordering only the
+   combined case here re-creates it, since step 6 is what an implementer follows.)*
 7. Run **M4–M13** as candidate mutants (clean gate rejects each), and **M1/M2/M3** as differential
    gate-adequacy comparisons — see §6's two-kinds note.
 8. Version bump + CHANGELOG. State that this is a **scope narrowing, not a relaxation** — the
@@ -1068,3 +1124,24 @@ appears to exercise a check while a different assertion kills it first.
 **codex confirmed the rest sound and unchanged:** the two table destinations are explicit, M2 now
 preserves four parseable cells and isolates the triple-pairing assertion, and M12d/M12e separately
 exercise the anchor and fingerprint checks.
+
+## 20. Round-11 gate outcome
+
+**gemini `REQUEST_CHANGES` (3 High, 2 Medium) · codex `REQUEST_CHANGES` (2 High, 1 Medium).** Frozen at
+`1cd04b2`, sha256 `70b20df2bfe2c3734e31af8c0078f7c3ab3c09081d09ba7564fe87a00019fca4`. Transcripts:
+`~/.claude/review-transcripts/2605r11-agy.txt` (2,732 B) and `…/2605r11-codex.txt` (310,143 B).
+
+**Both arms independently built a WRONG GATE that passes every mutant this plan had.** That is the
+round's central result and it is worth more than any single finding.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **M12d and M12e cannot pin three checks.** gemini's counterexample hard-codes check (ii) and implements (iii) from the table — both mutants die on (iii), so the hard-coding is never exposed. codex's asserts `rows == EXPECTED_ROWS` then searches each fingerprint at a **fixed locus** — M12d dies on row equality, M12e on the fixed search, clean passes, and **check (iii) never reads the table** | **confirmed by construction** — two mutants cannot pin three checks, and equality on the anchor column masked the difference | **the anchor column is no longer equality-checked** — triples are, anchors are *resolution*-checked. **M12f** swaps two rows' anchors (a hard-coded gate cannot notice a swap → pins (iii) to the table); **M12g** points an anchor at a non-heading whose enclosing section still holds the fingerprint (→ pins (ii)) |
+| 2 | **both** | **M3's "exactly one" was never propagated to step 5**, which required only "an explicit classifier from" the vocabulary. A disposition like `**Adopted** — formerly **Adapted** …` satisfies step 5, carries two tokens, and fails the strong assertion **on the clean document** | **confirmed** — the assertion and the document requirement had drifted apart in the same round they were introduced | step 5 now mandates **exactly one**, in the same words as the assertion. codex additionally: `test_doc_gates.py`'s hard-coded per-rule classifier map (`:328-338`) must be replaced, and §4.5's at-risk-test list must name it |
+| 3 | gemini | **M4 is pinned to a value the narrowing deletes** — "delete one in-scope surface from the **Scope paragraph**", but §4.2 and step 2 replace that paragraph with the table | **confirmed** | M4 retargeted to deleting an `in` **row from the table**. M1/M2/M5/M9-M13 re-swept: all are stated against the table or the parser |
+| 4 | codex | *(Medium)* **step 6 orders only M5's combined regression**, but `extract_status` stops on **either** kind of intervening content (`capture.py:399-403`), so one combined fixture masks a parser handling only one cause | **confirmed** — §4 requires isolated fixtures and both M5b mutants; step 6 is what an implementer follows | step 6 now orders the isolated regressions and both mutants |
+| 5 | gemini | *(Medium)* **§4.2's M12d still targets `:538`** while step 2 targets `:439` | **confirmed** — §9's defect class, inverted: fixed in the OPERATIVE section, left stale in the DESIGN one | §4.2 synced, with the operative definitions pointed at step 2 |
+| 6 | gemini | *(Medium)* **intra-document line refs are stale** — §6 sends the implementer to `:161` for M3 (that is M1) and `:154` for M2 | **confirmed** — every round shifts these | **intra-document references are now by section and identifier name, never by line.** The mechanical checker validates repo citations and is blind to plan-internal drift, which is how this survived six rounds |
+
+**Findings 3 and 2 are the same defect M3 has now had four times: a proof pinned to a value this plan
+itself changes.** The sweep §7 asked for caught M4; the rest of M1-M13 came back clean.
