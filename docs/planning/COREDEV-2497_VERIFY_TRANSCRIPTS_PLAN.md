@@ -1,6 +1,6 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
+**Status:** Planning — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
 1 High, 2 Medium, 1 Low**). Round 11 **inverts** the round-9/10 defect: instead of a closure claim that
 outran the fixtures, the `ACCEPTED-NOT-CLOSED` set **outlived the fixture that closed it**. **I18 is a
 caller-level test** (added round 7) and its two-limbed oracle — *caller fails* **and** *zero path reads* —
@@ -23,13 +23,13 @@ it), and every remaining F5/F5b reference is removed from operative text. See §
 gated (**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×5**), and
 the **maintainer has decided §8 Q8: NARROW THE GUARANTEE.** Both reviewers independently reached the same
 answer. F5/F5b are **removed from the gating suite**; F1–F4 stay; §3 now states plainly what this plan
-does **not** prove. See §15. Rounds 4-11 are in §11-§18.
+does **not** prove. See §15. Rounds 4-12 are in §11-§19.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
 **Sequencing:** `COREDEV-2619` should land **first** — see §7.
 **Measured against:** HEAD `b2496a8` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 11, post-gate revision — residue set re-derived against I18)
+**Last Updated:** 2026-07-31 (round 12, post-gate revision — row 5 split against C15)
 
 ---
 
@@ -297,10 +297,10 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 | A legitimate large or non-UTF-8 transcript is rejected — the fix worse than the defect | **High** | C5's two halves must **PASS**; I6 is the mutant that reintroduces the cap |
 | The digest check is silently gutted while repairing §4.5(a) | **High** | §4.5 names the trap and the correct repair; C2c must FAIL for any C-case green to mean anything |
 | Tightening breaks the non-approving recovery path | Medium | §4.2 + C8, and **C11** for the case-sensitivity variant |
-| A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 + **I18** reject every defect found in rounds 4-7 **except (a)** a two-pass reader and **(b)** three residues §6.0 records as `ACCEPTED-NOT-CLOSED` — rows **2**, **5** and **6b**. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one. *(Round 11: this row previously listed **six** residues — rows 1, 2, 5, 6, 7 and row 9's caller half — on the stated ground that **"no fixture exercises a caller."** That ground was false from round 7 onward: **I18 is a caller-level fixture**, and its two-limbed oracle closes rows 1, 6a, 7 and row 9's caller half. The residue set was never re-derived after the fixture that shrank it was added, so the plan under-claimed its own coverage for four rounds — the mirror image of the over-claiming this section exists to prevent, and equally a defect.)* |
+| A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 + **I18** reject every defect found in rounds 4-7 **except (a)** a two-pass reader and **(b)** three residues §6.0 records as `ACCEPTED-NOT-CLOSED` — rows **2**, **5b** and **6b**. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one. *(Round 11: this row previously listed **six** residues — rows 1, 2, 5, 6, 7 and row 9's caller half — on the stated ground that **"no fixture exercises a caller."** That ground was false from round 7 onward: **I18 is a caller-level fixture**, and its two-limbed oracle closes rows 1, 6a, 7 and row 9's caller half. The residue set was never re-derived after the fixture that shrank it was added, so the plan under-claimed its own coverage for four rounds — the mirror image of the over-claiming this section exists to prevent, and equally a defect.)* |
 | Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 now names **all five** tests — `:200`, `:218`, `:757`, `:773`, `:811` — not just the two symlink ones |
 | The whole change is inert because tests only cover `write` | **High** | Every §4.1 test must mutate the transcript on disk **between** `write` and `verify` — see §6's trap |
-| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants seal the helper. §3.1 accepts the caller-side residue; **three** §6.0 rows are marked accepted-not-closed — 2, 5 and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half)* |
+| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants seal the helper. §3.1 accepts the caller-side residue; **three** §6.0 rows are marked accepted-not-closed — 2, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
 
 ## 6. Verification
 
@@ -340,7 +340,7 @@ The reason is a property of the technique, and it generalises:
 Adding a case per escape is the move that produced rounds 2, 3 and 4. **So the class is addressed
 structurally instead** — sealed at the helper, not closed end-to-end: per §3.1 the structural seal binds
 `_digest_transcript_fd`, and the caller-side residues it cannot reach stay `ACCEPTED-NOT-CLOSED`.
-**As of round 11 those are rows 2, 5 and 6b** — three, not six. Rows 1, 6a, 7 and row 9's caller half are
+**As of round 12 those are rows 2, 5b and 6b** — three, and a different three. Rows 1, 6a, 7 and row 9's caller half are
 closed by **I18**, the caller-level fixture round 7 added and whose reach nothing re-derived until round
 11. The behavioural cases are kept only for what genuinely lives outside the sealed helper.
 
@@ -548,11 +548,14 @@ indistinguishable from the correct one *on the inputs the plan previously chose*
 distinguishable on inputs chosen to expose them. The fix was never a better observer — it was a better
 input.
 
-#### The 13 defeating implementations, and what closes each
+#### The 14 defeating implementations, and what closes each
 
 *(Twelve until round 11, when row 6 split into **6a** (empty diagnosis — closed) and **6b** (missing
 diagnosis — accepted): its two halves had different status, the same defect round 10 found in I12, I16
-and row 9. Three rows now remain accepted-not-closed: **2, 5, 6b**.)*
+and row 9. **Round 12 split row 5 the same way** — C15, added in round 11, closes its permission limb
+(5a) while the other failure limbs (5b) stay accepted. Three rows remain accepted-not-closed: **2, 5b,
+6b**. Twice now a newly-added case has closed part of a residue classified before that case existed;
+**re-derive the residue set whenever a proof is added.**)*
 
 Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4a/b, C5a/b, C8, C9a
 (with round 3's non-vacuity assertions), C9b and C10, and that a correct baseline passes.
@@ -563,7 +566,8 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 | 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — the digest is still correct, so no fixture observes the extra probe |
 | 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **I18's deterministic red-branch test** (F5b removed in round 8 — it had no distinguishing oracle) |
 | 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
-| 5 | failure-path re-classification through `io.open` | re-open on the red branch | the **typed cause** removes the motive; the residue is **ACCEPTED-NOT-CLOSED** (§3.1) — *round 10: this row previously credited I18, but neither I18 arrangement enters a failure-path re-classification branch, so no fixture reaches it* |
+| 5a | failure-path re-classification through `io.open`, on a **permission** failure | re-open on the red branch | **CLOSED by C15** *(round 12; was ACCEPTED-NOT-CLOSED)* — C15 stubs `os.open` to raise `EACCES`/`EPERM`, and an `io.open` retry **bypasses that stub** and reads the real file. The correct helper returns cause `DENIED`; this implementation re-classifies off the successful second open and returns something else, so C15's exact-cause assertion fails. The mutant is **I19**'s sibling: C15 discriminates them |
+| 5b | failure-path re-classification through `io.open`, on **any other** failure limb (missing, symlink, not-regular) | re-open on the red branch | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** (§3.1) — C15 creates only the permission branch, and neither I18 arrangement enters a failure-path re-classification at all. *(Round 12 split this row; round 10 had corrected it away from I18 for the same reason.)* |
 | 6a | `os.path.getsize` for the **empty** diagnosis | second resolution; contradicts Q3 | **CLOSED by I18's short-read arrangement** *(round 11)* — against a stubbed `(D, 0)` it reads `getsize` = **100**, calls the file non-empty and **approves** where the correct caller fails; the `getsize` call is itself a path read |
 | 6b | `os.path.exists` for the **missing** diagnosis | second resolution; contradicts Q3 | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** — both I18 arrangements place a **real** file on disk, so no fixture takes a missing-resolution branch. *(Round 11 split this row: its two halves have different status, which is the same defect round 10 found in I12, I16 and row 9.)* |
 | 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | **CLOSED by I18's short-read arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — mechanically identical to row 6a: `getsize` returns 100 where the streamed count is 0, so this caller approves where the correct one fails |
@@ -629,6 +633,11 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   passes for the wrong reason in a container — the same class as the round-6 canary that could not be
   planted. Paired mutant **I19**: map `EACCES`/`EPERM` to `MISSING` (or fold them into the bare
   `except OSError` prologue) → **C15 must fail**.
+  **C15 also closes §6.0 row 5a** *(round 12)*: an implementation that re-classifies the failure path
+  through `io.open` **bypasses the `os.open` stub**, reads the real file, and reports a cause other than
+  `DENIED` — so C15's exact-cause assertion rejects it. That was not noticed when C15 was added in round
+  11, which is the second time a new case silently closed a pre-existing residue. **Whenever a case or
+  fixture is added to this plan, re-derive §6.0's classifications against it before shipping.**
 - **C5a is measured at two sizes**, not one: 512,723 bytes **and** a file larger than any plausible
   "generous" cap (≥ 2 MiB). One measured point pins one threshold; row 8 lives above it.
 
@@ -875,7 +884,7 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    accepts — I16b's production-conditional second pass** *(round 11: I12b was the second exception and is
    now closed by I18's short-read arrangement)*; C5's halves
    shown **PASSING** at both sizes; and **each of §6.0's defeating implementations shown rejected**
-   — that table is the acceptance suite for this step, not commentary, **except rows 2, 5 and 6b, whose
+   — that table is the acceptance suite for this step, not commentary, **except rows 2, 5b and 6b, whose
    closure §6.0 records as accepted-not-closed** *(round 11: was "rows whose closure … accepted-not-closed"
    without naming them, which let §5 and §6 carry different residue sets for four rounds — name them)*.
 6. Version bump + CHANGELOG — **consistency/provenance hardening**, explicitly NOT proof that a reviewer
@@ -1372,3 +1381,29 @@ that refuted the claim was already in the plan**, seven hundred lines below it.
 **No citation defects on either arm, for the second consecutive round.** Both reviewers recomputed the
 frozen digest and matched. Every `file:line` in the round-11 edits above was re-opened and verified at
 `b2496a8` before being written.
+
+## 19. Round-12 gate outcome
+
+**gemini `APPROVE` (0 findings) · codex `REQUEST_CHANGES` (1 High).** Frozen at `8012bf6`, sha256
+`11ebce720d70e99a374d31a13e64e8e3bc8d201f9f031d74aa6ef2ef589648de` — both arms verified it. Transcripts:
+`~/.claude/review-transcripts/2497r12-agy.txt` (2,937 B) and `…/2497r12-codex.txt` (290,542 B).
+
+**This is the round that shows why one APPROVE is not a pass.** gemini approved with zero findings and
+walked through the round-11 re-classification case by case, confirming rows 1, 6a, 7, 9-caller and I12b
+as genuinely closed by I18 and rows 2, 5, 6b as correctly excluded. codex agreed with **all** of that —
+and then found the thing both of us had missed: **C15, added in round 11, closes part of row 5.**
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **C15 reaches row 5's permission limb, so the three-residue set is textually consistent but substantively wrong.** C15 stubs `os.open` to raise `EACCES`/`EPERM`; a row-5 implementation that re-classifies through `io.open` **bypasses the stub**, opens the real file, and reports a cause other than `DENIED`, so C15's exact-cause assertion rejects it | **confirmed by derivation** — the stub intercepts `os.open` only, and `io.open` on the same path succeeds in the fixture. Row 5's *other* limbs (missing / symlink / not-regular) are untouched by C15 and by both I18 arrangements | row 5 **split**: **5a** (permission limb) CLOSED by C15; **5b** (other limbs) stays accepted. Residues remain three but are now **2, 5b, 6b**. §5, §6.0's preamble and count, §7 step 5 and the header all updated |
+
+**The same defect twice in two rounds, and I introduced the second one myself.** Round 11's finding was
+that I18 — added in round 7 — closed residues classified before it existed. The fix for that round *added
+a new case*, C15, and did not re-derive the residue set against it. **A proof added is a classification
+invalidated:** §6.0's rows must be re-derived every time a case, fixture or mutant enters the plan. That
+instruction now sits beside C15 itself, not only in a round record.
+
+**gemini's approval was substantively useful even though it was wrong to approve.** Its per-row derivation
+of the I18 re-classification is the independent confirmation that round 11's largest edit was correct —
+which is exactly what that round's prompt asked for, given the two arms had disagreed. An APPROVE that
+shows its work is worth more than one that does not, and still is not a pass.

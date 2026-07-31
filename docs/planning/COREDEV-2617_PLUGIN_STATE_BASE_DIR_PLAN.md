@@ -1,6 +1,6 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -30,9 +30,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-7 are in §10-§16.
+root; the consumer enumeration is now in the implementation order. Rounds 1-8 are in §10-§17.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-31 (round 7, post-gate revision)
+**Last Updated:** 2026-07-31 (round 8, post-gate revision — spy re-based on composed paths; N5 inverted to an allowlist)
 **Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -416,6 +416,13 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >    is a bare `rm -f` (`:342-345`) — a no-op under the sentinel by construction, but it is a **state
    >    mutator**, so N1/N2 must assert that explicitly instead of inheriting it from `ENOTDIR`.
    >
+   >    **`_context_round_sweep` (`context.sh:205`) is a mutator too — round 8, and it was missed twice.**
+   >    It ends in `rm -f "$f"` (`:216`), deleting expired binding files. Round 7 added the two
+   >    `context_review_round_*` functions on exactly the principle that a mutator must be asserted
+   >    explicitly rather than inherit safety from `ENOTDIR` — and then left the third one, in the same
+   >    file, unlisted. It is also a **reader** (see the coverage list below), which is presumably why it
+   >    fell between the two lists. Same contract: under an unresolved base it does nothing and returns 0.
+   >
    > **The envelope must be EXHAUSTIVE, and round 5's list was not.** It named `marker_commit`, which only
    > *delegates*, while omitting real public composers. The contract binds **every** function that returns
    > or builds a state path:
@@ -450,12 +457,25 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    > `test_reviewer_roster.py` 1, `marker.sh` 1. **A name-only scan would therefore fail on ~36
    > legitimate sites** — which is why the predicate is not "the identifier appears".
    >
-   > - **Predicate — path COMPOSITION from the raw variable, not mention of it.** N5 fails a line when an
-   >   expansion of `CLAUDE_PLUGIN_DATA` (any form: `$X`, `${X}`, `${X:-…}`, `${X:?}`, `${X-…}`) is
-   >   **concatenated with a path suffix** — matched as an expansion immediately followed by `/`, or
-   >   assigned into a variable whose name ends `_DIR`/`_PATH`/`_BASE`/`_FILE`/`LOG` — anywhere outside
-   >   the allowlist. Merely naming the variable (a comment, an `export X="${X}"` bridge, a `[ -n "$X" ]`
-   >   test) is not a defect and must not fail: the defect is composing a state path around the resolver.
+   > - **Predicate — an ALLOWLIST of exact sites, not a pattern over spellings. Round 8.** N5 fails on
+   >   **every expansion of `CLAUDE_PLUGIN_DATA` that is not at an enumerated allowlisted site.** Full
+   >   stop. No suffix list, no "followed by `/`" test, no attempt to recognise the shapes of composition.
+   >
+   >   *(Round 8 rejected the round-7 predicate, which failed a line only when the expansion was
+   >   immediately followed by `/` **or** assigned into a name ending `_DIR`/`_PATH`/`_BASE`/`_FILE`/`LOG`.
+   >   Both reviewers broke it in one line. gemini: `d="$CLAUDE_PLUGIN_DATA"` then `mkdir -p "$d/logs"` —
+   >   an unlisted variable name. codex: `printf '%s/%s' "${CLAUDE_PLUGIN_DATA-}" "m-$1.json"` — a
+   >   split expression that composes a root path when unresolved and matches neither branch, with no
+   >   `${!…}` or `eval` to trip the fail-closed arm. **This is the third round in which N5 has been a
+   >   pattern that enumerates the bypasses it knows about.** A blacklist of shapes cannot bound an open
+   >   set of shapes; the enumerated-allowlist form can, because the question becomes "is this line one of
+   >   the N sites we approved" rather than "does this line look dangerous". Inverting a defeated
+   >   blacklist into an allowlist is a move this campaign has already had to make once.)*
+   >
+   >   Merely **naming** the variable is still not a defect — but that permission now comes from being on
+   >   the allowlist, not from a pattern judging intent. Comments, the `export X="${X}"` MAJ-6 bridge and
+   >   `[ -n "$X" ]` tests are allowlisted **as specific lines**, so a later edit that appends a suffix to
+   >   one of them fails N5 until the allowlist is deliberately updated.
    > - **The four resolver definitions are the allowlist's core**, and the plan's "four accessors" is
    >   correct as a count: `paths.sh:35` (canonical) plus the three **deliberate inline fallbacks** at
    >   `marker.sh:29`, `log.sh:27` and `context.sh:36`. Those three are load-bearing by design, not drift
@@ -478,13 +498,23 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >   statically, so N5 fails on any `${!` or `eval` in the scan set that is not itself allowlisted,
    >   rather than pretending to analyse it.
    >
-   > **N5's own mutant (round 7).** Add to `scripts/lib/marker.sh` a
-   > `marker_write_v2() { printf '%s' "$2" > "$CLAUDE_PLUGIN_DATA/m-$1.json"; }` — deliberately the
-   > **unbraced** spelling. N5 must **fail** on that tree and pass once the body is rewritten onto
-   > `marker_path`. The mutant must use a spelling the round-6 predicate missed; a `${CLAUDE_PLUGIN_DATA`
-   > mutant would have been caught by the old wording too and would prove only that the test runs.
-   > *(A test that cannot distinguish the two trees is not evidence — this campaign has already shipped
-   > one gate with that shape.)*
+   > **N5's mutants — THREE, and round 8 replaced the original set because it proved nothing.**
+   > Each is added to `scripts/lib/marker.sh`; N5 must **fail** on each tree, and pass once the body is
+   > rewritten onto `marker_path`:
+   >
+   > | # | mutant | the form it represents |
+   > |---|---|---|
+   > | **N5a** | `marker_write_v2() { printf '%s' "$2" > "$CLAUDE_PLUGIN_DATA/m-$1.json"; }` | unbraced, expansion immediately followed by `/` |
+   > | **N5b** | `marker_path_v2() { printf '%s/%s' "${CLAUDE_PLUGIN_DATA-}" "m-$1.json"; }` | **split expression** — composes across a `printf` format with no `/` adjacency; yields `/m-lint.json` when unresolved (codex, round 8) |
+   > | **N5c** | `marker_dir_v2() { local d="$CLAUDE_PLUGIN_DATA"; mkdir -p "$d/logs"; }` | **indirection through an unremarkable variable name** (gemini, round 8) |
+   >
+   > *(Round 8: the round-7 mutant set was **N5a alone** — and N5a is precisely the form the round-7
+   > predicate already recognised, so it could only ever fail-then-pass. It demonstrated that the test
+   > executes, not that it protects. The plan had already written down the rule it was breaking two lines
+   > below: *a test that cannot distinguish the two trees is not evidence.* **N5b and N5c are the forms
+   > that actually defeated the predicate** — each found by a different reviewer, neither using `${!…}`
+   > or `eval` — and a mutant set that omits them is not a proof. Under the allowlist predicate all three
+   > fail for one reason: the expansion is not at an approved site. One rule, not three patches.)*
    >
    > **The cache is EAGER and process-stable — round 6 Medium.** "Resolve once into a cached value" is
    > not implementable as written: the libraries source `paths.sh` lazily *from inside* the base
@@ -527,25 +557,54 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    > `open`, so it can be unchanged **after** a genuine read — a false pass. (c) It is a global
    > side-channel: any unrelated process touching the file forges a failure.
    >
-   > **The oracle is an instrumented read spy, and it is MANDATORY — not one option among several.**
-   > N1/N2 wrap the reading surface and assert a **count of zero**, which is a positive measurement of a
-   > thing that must not happen rather than an inference from an absent file:
+   > **Round 8 — the command-shim read spy is NOT IMPLEMENTABLE IN BASH, and is rejected.** Both
+   > reviewers reached this independently, and the reason is a language fact, not an oversight:
    >
-   > - Each of the six cells runs under a shim that intercepts the verbs these libraries actually use on
-   >   a state path — `[ -f ]` / `[ -d ]` / `[ -e ]`, the `read … < "$path"` redirect, `stat`, `grep`,
-   >   `jq` and `python3` — recording every call with its argument. Assertion: **zero** calls whose
-   >   argument lies under the state base.
-   > - Coverage is **enumerated per public reader**, not sampled. `marker_field` (`:151`, hence
-   >   `marker_status` `:178` and `marker_commit` `:179`), `marker_mtime` (`:182`),
-   >   `context_latest_round_dir` (`:134`), `context_highest_round` (`:168`),
-   >   `context_review_round_lookup` (`:298`), `_context_file_mtime` (`:195`) and
-   >   `_context_round_advance` (`:236`). A reader missing from that list is missing from the proof.
-   > - **The spy's own adequacy is proved by mutation, like everything else here:** with the guard
-   >   removed, the recorded count must be **non-zero**. A spy that reports zero on both trees measures
-   >   nothing and would certify the defect as fixed.
+   > - **A redirect is not a command.** `read -r line < "$path"` (`marker.sh:159`) is performed by the
+   >   **shell**, which opens the file *before* invoking `read`. A wrapped `read` receives the bound
+   >   variable name and **never the pathname**; and if the open fails, the wrapper is never called at
+   >   all. There is no shim position from which the redirect is observable.
+   > - **Pathname expansion is not a command either.** `for d in "$base"/round-*/` (`context.sh:141`
+   >   and `:172`) and `for f in "$dir"/review-round-*.json` (`context.sh:212`) make the shell
+   >   `opendir`/`readdir` the state directory *before* any interceptable `[ -d ]` runs. Worse, that
+   >   later `[ -d ]` would make the guard-removed adequacy count non-zero **while the glob access
+   >   stayed invisible** — the spy would appear adequate on a mutation it cannot actually see.
+   > - The verb list was also incomplete: `cat` (`stop-quality-marker-gate.sh:93`,
+   >   `agents/swift-reviewer.md:252`), `[ -L ]` and `[ -r ]` were all missing.
    >
-   > Assert also that (a) nothing is created under `/`, (b) nothing is created anywhere outside the cell's
-   > own temp dir, and (c) every composed path begins with `/dev/null/unresolved-plugin-base`.
+   > This is the round-7 lesson repeating one layer down. The canary was rejected for being physically
+   > impossible; its replacement was **mechanically** impossible, and it was adopted from a reviewer
+   > without being executed. *Applying "execute, don't assert" to the fix as well as to the design is now
+   > a standing requirement of this plan.*
+   >
+   > **THE ORACLE ASSERTS ON THE COMPOSED PATH, NOT ON THE SYSCALL.** Every read in these libraries is
+   > preceded by a composition — `path="$(marker_path "$kind")"`, `base="$(context_reviews_dir)"` — and
+   > *that* value is observable from the shell without intercepting anything. N1/N2 therefore:
+   >
+   > 1. **Capture every composed path** each public reader produces in the cell, and assert **every one
+   >    begins with `/dev/null/unresolved-plugin-base`**. A path that does not is the defect, whether or
+   >    not a read follows it.
+   > 2. **Rely on the sentinel's already-executed physics for the rest.** Under an `ENOTDIR` parent every
+   >    verb in the list above — redirect, glob, `cat`, `stat`, `[ -f ]`, `[ -d ]`, `[ -L ]`, `[ -r ]` —
+   >    fails or yields empty *by construction*. Once the composed path is proven to be under the
+   >    sentinel, "no real read occurred" follows from §7's executed transcript rather than from an
+   >    observer that cannot see redirects or globs.
+   > 3. **Assert the negative directly where it is cheap:** nothing exists under `/` afterwards
+   >    (`/logs`, `/reviews`, `/.state`, `/quality-marker-*.json`, `/stop-last-blocked-*`), and nothing
+   >    is created outside the cell's own temp dir.
+   >
+   > **Coverage is enumerated per public reader, not sampled** — `marker_field` (`:151`, hence
+   > `marker_status` `:178` and `marker_commit` `:179`), `marker_mtime` (`:182`),
+   > `context_latest_round_dir` (`:134`), `context_highest_round` (`:168`),
+   > `context_review_round_lookup` (`:298`), `_context_file_mtime` (`:195`),
+   > `_context_round_advance` (`:236`) and **`_context_round_sweep` (`:205`)**, which round 7 missed:
+   > it `[ -d ]`s its dir (`:207`), globs it (`:212`), `[ -f ]`s each hit (`:213`) — **and deletes**
+   > (`:216`, below). A reader missing from that list is missing from the proof.
+   >
+   > **Adequacy is still proved by mutation, and now it CAN be:** with the guard removed the composed
+   > path becomes a root path (`/logs`, `/reviews/<hash>`), so the assertion in (1) fails on the mutated
+   > tree and passes on the fixed one — for **every** reader, including the two whose reads a shim could
+   > never observe. That is the property the shim version could not deliver.
    >
    > Each consumer still resolves the base **once**, at entry, and takes its documented no-persistence path if
    > unresolved — so a newly added `marker_write` cannot silently reintroduce the defect.
@@ -799,3 +858,32 @@ only a delegator, wrote that finding into the prose four paragraphs below the ru
 `marker_commit` standing in the operative list. The commit message for `b2496a8` even says
 "it named marker_commit (a delegator)". The correction was known, recorded, and not applied where it
 governs. **Grep every operative restatement before declaring a design change propagated.**
+
+## 17. Round-8 gate outcome
+
+**gemini `REQUEST_CHANGES` (5 High, 1 Medium) · codex `REQUEST_CHANGES` (2 High).** Frozen at `8012bf6`,
+sha256 `d157ceb109d3c6f72ea693cc5fa6be7cd2e86b97413ffdd4b3a5dc1f16676e68` — codex verified it and
+confirmed the worktree unchanged. Transcripts: `~/.claude/review-transcripts/2617r8-agy.txt` (2,609 B)
+and `…/2617r8-codex.txt` (297,242 B).
+
+**Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically
+impossible.** Both reviewers, independently, showed the command-shim read spy cannot work in Bash. The
+pattern is now explicit and costly: **round 6's fix was unexecutable, round 7's fix was unexecutable, and
+both were adopted from a reviewer without being executed.** The plan applied "execute, don't assert" to
+the sentinel — which is why the sentinel has survived three rounds — and not to the proofs built on it.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the read spy cannot observe the reads that matter.** A redirect is performed by the *shell*: `read -r line < "$path"` (`marker.sh:159`) opens the file before `read` runs, and a wrapped `read` never receives the pathname — nor is it called at all if the open fails. Pathname expansion is likewise not a command: `for d in "$base"/round-*/` (`context.sh:141`, `:172`) and `for f in "$dir"/review-round-*.json` (`context.sh:212`) `opendir` the state directory before any interceptable test. codex adds that the *later* `[ -d ]` would make the guard-removed adequacy count non-zero **while the glob stayed invisible** — the spy would look adequate against a mutation it cannot see. The verb list also omitted `cat` (`stop-quality-marker-gate.sh:93`, `agents/swift-reviewer.md:252`), `[ -L ]` and `[ -r ]` | **confirmed** — all six cited sites read as described; the redirect and glob semantics are language facts | **the oracle now asserts on the COMPOSED PATH, not the syscall.** Every read is preceded by a composition whose value is observable from the shell; N1/N2 assert every composed path begins with the sentinel, and lean on §7's already-executed `ENOTDIR` transcript for the rest. Adequacy is provable this way for **every** reader, including the two a shim could never watch |
+| 2 | **both** | **N5's predicate is still a blacklist of shapes.** gemini: `d="$CLAUDE_PLUGIN_DATA"` then `mkdir -p "$d/logs"` — an unlisted variable name. codex: `printf '%s/%s' "${CLAUDE_PLUGIN_DATA-}" "m-$1.json"` — a split expression that yields `/m-lint.json` unresolved, with no `${!…}` or `eval` to trip the fail-closed arm. codex further notes **the round-7 mutant used the one form the predicate already caught**, so it could not demonstrate protection | **confirmed** — both bypasses are one line each, and neither is exotic | predicate **inverted to an enumerated allowlist**: every expansion outside an approved site fails, with no shape-matching at all. Mutants **N5a/N5b/N5c** now cover the immediate-`/`, split-expression and indirect-variable forms |
+| 3 | gemini | **`_context_round_sweep` (`context.sh:205`) is missing from BOTH lists** — it `[ -d ]`s, globs and `[ -f ]`s (reader), **and** `rm -f`s (`:216`, mutator) | **confirmed** — round 7 added the two `context_review_round_*` functions on exactly this principle and left the third one, in the same file, unlisted | added to the reader coverage list and to the writing-primitive rule, with the same explicit no-op contract |
+| 4 | gemini | *(Medium, answering the directed question)* `context_review_round_bind`'s "print nothing, return 0" is safe **because** its sole production consumer discards stdout | **confirmed independently by codex** — `capture-reviewer-round-start.sh:46` ends `>/dev/null 2>&1 \|\| true` | no change; the contract is recorded as verified rather than assumed |
+
+**codex additionally confirmed the envelope is otherwise complete** — the `context_*` catch-all covers
+`context_state_dir`, `context_snapshot_path` and `context_round_binding_path`, and all public mutators are
+now represented.
+
+**The standing rule this round adds:** *a fix proposed by a reviewer is a claim, not a verified mechanism.*
+Three consecutive rounds have adopted a remedy that could not be built. Before a proof mechanism enters
+this plan it must be executed, or its impossibility must be argued from the language semantics — the way
+the sentinel itself was settled in round 6.
