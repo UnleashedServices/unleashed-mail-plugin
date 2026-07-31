@@ -1,6 +1,6 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **round 16 gated** (**both arms `REQUEST_CHANGES`**). Round 15's reopening of row 2 **held**, and both arms then found the plan still **over-reads ARCH-1** everywhere else: a parameter-list check bounds the *interface*, never the *body*, and §6.0 row 2 is the plan's own counterexample (path smuggled through module state keyed by the fd). Every operative ARCH-1 claim is narrowed. **codex supplied a full branch-reachability re-derivation of all sixteen rows — the first end-to-end check of this table — and it confirms residues 2, 5b, 6b.** New method rule: **reachability and discrimination are separate requirements** (row 6b reached its branch and still could not be told apart). See §23. Previously — **round 15 gated — A CORRECTION REVERSED.** Round 14 closed §6.0 row 2 on a codex finding; round 15 **reopens** it, with **codex reversing itself** and gemini reaching the same place independently. I18 never reaches the **success branch** a post-hash probe runs on, *and* ARCH-1 inspects only the parameter list — so the path can be smuggled through module state and the probe can live **inside** the helper I18 stubs away. Residues are back to **three (2, 5b, 6b)**. The method lesson: **a re-derivation must establish BRANCH REACHABILITY, not just fixture level.** See §22. Previously — **round 14 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**). **Row 2 is closed too**: ARCH-1 makes the helper **fd-only**, so its `Path.open()` probe cannot be inside the helper — it is caller-side, and I18's zero-path-reads limb rejects it. Residues are now **5b and 6b** — two. **Four consecutive rounds, four residue corrections, none of which needed a new proof** — only a re-reading of proofs already present (I18 r7, C15 r11, C4a/C4b r4, ARCH-1 r5). See §21. Previously — **round 13 gated** (**both arms `REQUEST_CHANGES`, same High**). **Row 5b was over-broad**: C4a closes its symlink limb (differing target bytes → digest mismatch, not the exact `SYMLINK` message) and C4b closes its not-regular limb (`io.open` lacks `O_NONBLOCK` → blocks → the timeout fires). Row 5 is now split **four** ways — 5a permission (C15), **5b missing (the only genuinely unreachable limb)**, 5c symlink (C4a), 5d not-regular (C4b); count 14 → 16. **C4a and C4b are not new — they date from round 4, and row 5 had simply never been checked against them.** The standing rule is therefore *re-derive every residue against the WHOLE proof set*. See §20. Previously — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
+**Status:** Planning — **round 17 gated** (**both arms, one finding**). Round 16's narrowing note was placed **immediately below a sentence making the exact claim it narrows** — "re-opening becomes structurally unavailable inside `_digest_transcript_fd`". Five operative sites now narrowed: the invariants constrain the **interface**, not the body; **ARCH-2** establishes one seam call with an unchanged argument, **not** one resolution; ARCH-3's "module globals are irrelevant" is qualified to the fixtures' own verdicts. **Both arms independently re-derived the residue set with reachability AND discrimination and confirmed 2, 5b, 6b**, plus the counts (16 rows / 17 mutants / 13 cases). *A claim that a propagation is complete is not a propagation.* See §24. Previously — **round 16 gated** (**both arms `REQUEST_CHANGES`**). Round 15's reopening of row 2 **held**, and both arms then found the plan still **over-reads ARCH-1** everywhere else: a parameter-list check bounds the *interface*, never the *body*, and §6.0 row 2 is the plan's own counterexample (path smuggled through module state keyed by the fd). Every operative ARCH-1 claim is narrowed. **codex supplied a full branch-reachability re-derivation of all sixteen rows — the first end-to-end check of this table — and it confirms residues 2, 5b, 6b.** New method rule: **reachability and discrimination are separate requirements** (row 6b reached its branch and still could not be told apart). See §23. Previously — **round 15 gated — A CORRECTION REVERSED.** Round 14 closed §6.0 row 2 on a codex finding; round 15 **reopens** it, with **codex reversing itself** and gemini reaching the same place independently. I18 never reaches the **success branch** a post-hash probe runs on, *and* ARCH-1 inspects only the parameter list — so the path can be smuggled through module state and the probe can live **inside** the helper I18 stubs away. Residues are back to **three (2, 5b, 6b)**. The method lesson: **a re-derivation must establish BRANCH REACHABILITY, not just fixture level.** See §22. Previously — **round 14 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**). **Row 2 is closed too**: ARCH-1 makes the helper **fd-only**, so its `Path.open()` probe cannot be inside the helper — it is caller-side, and I18's zero-path-reads limb rejects it. Residues are now **5b and 6b** — two. **Four consecutive rounds, four residue corrections, none of which needed a new proof** — only a re-reading of proofs already present (I18 r7, C15 r11, C4a/C4b r4, ARCH-1 r5). See §21. Previously — **round 13 gated** (**both arms `REQUEST_CHANGES`, same High**). **Row 5b was over-broad**: C4a closes its symlink limb (differing target bytes → digest mismatch, not the exact `SYMLINK` message) and C4b closes its not-regular limb (`io.open` lacks `O_NONBLOCK` → blocks → the timeout fires). Row 5 is now split **four** ways — 5a permission (C15), **5b missing (the only genuinely unreachable limb)**, 5c symlink (C4a), 5d not-regular (C4b); count 14 → 16. **C4a and C4b are not new — they date from round 4, and row 5 had simply never been checked against them.** The standing rule is therefore *re-derive every residue against the WHOLE proof set*. See §20. Previously — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
 1 High, 2 Medium, 1 Low**). Round 11 **inverts** the round-9/10 defect: instead of a closure claim that
 outran the fixtures, the `ACCEPTED-NOT-CLOSED` set **outlived the fixture that closed it**. **I18 is a
 caller-level test** (added round 7) and its two-limbed oracle — *caller fails* **and** *zero path reads* —
@@ -23,13 +23,13 @@ it), and every remaining F5/F5b reference is removed from operative text. See §
 gated (**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×5**), and
 the **maintainer has decided §8 Q8: NARROW THE GUARANTEE.** Both reviewers independently reached the same
 answer. F5/F5b are **removed from the gating suite**; F1–F4 stay; §3 now states plainly what this plan
-does **not** prove. See §15. Rounds 4-16 are in §11-§23.
+does **not** prove. See §15. Rounds 4-17 are in §11-§24.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
 **Sequencing:** `COREDEV-2619` should land **first** — see §7.
 **Measured against:** HEAD `b2496a8` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 16, post-gate revision — ARCH-1 narrowed to the parameter list)
+**Last Updated:** 2026-07-31 (round 17, post-gate revision — all five invariant overclaim sites narrowed)
 
 ---
 
@@ -300,7 +300,7 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 | A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 + **I18** reject every defect found in rounds 4-7 **except (a)** a two-pass reader and **(b)** three residues §6.0 records as `ACCEPTED-NOT-CLOSED` — rows **2**, **5b** and **6b**. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one. *(Round 11: this row previously listed **six** residues — rows 1, 2, 5, 6, 7 and row 9's caller half — on the stated ground that **"no fixture exercises a caller."** That ground was false from round 7 onward: **I18 is a caller-level fixture**, and its two-limbed oracle closes rows 1, 6a, 7 and row 9's caller half. The residue set was never re-derived after the fixture that shrank it was added, so the plan under-claimed its own coverage for four rounds — the mirror image of the over-claiming this section exists to prevent, and equally a defect.)* |
 | Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 now names **all five** tests — `:200`, `:218`, `:757`, `:773`, `:811` — not just the two symlink ones |
 | The whole change is inert because tests only cover `write` | **High** | Every §4.1 test must mutate the transcript on disk **between** `write` and `verify` — see §6's trap |
-| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants seal the helper. §3.1 accepts the caller-side residue; **three** §6.0 rows are marked accepted-not-closed — **2**, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
+| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants **constrain the helper's INTERFACE** — they do not seal its body *(round 17)*. §3.1 accepts the caller-side residue; **three** §6.0 rows are marked accepted-not-closed — **2**, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
 
 ## 6. Verification
 
@@ -338,8 +338,12 @@ The reason is a property of the technique, and it generalises:
 > never takes (retry-on-mismatch, short-read fallback, failure-path re-classification).
 
 Adding a case per escape is the move that produced rounds 2, 3 and 4. **So the class is addressed
-structurally instead** — sealed at the helper, not closed end-to-end: per §3.1 the structural seal binds
-`_digest_transcript_fd`, and the caller-side residues it cannot reach stay `ACCEPTED-NOT-CLOSED`.
+structurally instead** — **constrained at the helper's interface**, not closed end-to-end: per §3.1 the
+invariants bind `_digest_transcript_fd`'s **signature and seam**, not its body, and the residues they
+cannot reach stay `ACCEPTED-NOT-CLOSED`. *(Round 17: this said "sealed at the helper" and "the structural
+seal binds `_digest_transcript_fd`". A signature check binds what the function **accepts**; row 2's
+module-state route shows the body can still resolve a path. "Seal" is the word that carried the
+overclaim through five rounds.)*
 **As of round 15 those are rows 2, 5b and 6b** — three. *(Round 14 closed row 2; **round 15 reopened it** — see the table.)* Rows 1, 6a, 7 and row 9's caller half are
 closed by **I18**, the caller-level fixture round 7 added and whose reach nothing re-derived until round
 11. The behavioural cases are kept only for what genuinely lives outside the sealed helper.
@@ -411,7 +415,15 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
 
   The rest of ARCH-2 is unchanged: The function that reads
   a reviewer's `transcriptPath` passes that **exact string** to `_open_regular_fd`, once per entry, and
-  passes only the resulting fd onward. Assert both halves: the seam is called once per entry, **and** the
+  passes only the resulting fd onward.
+  **What ARCH-2 establishes, exactly — round 17.** Its assertions prove **one seam call per entry with an
+  unchanged argument**. They do **not** prove that only one *resolution* occurs: an implementation may
+  resolve the path again by a route that never reaches the seam — `os.path.exists`, `getsize`, a second
+  `io.open` — which is exactly what §6.0 rows **2**, **5b** and **6b** record as unclosed. *(codex, round
+  17: ARCH-2 was described as proving exactly one resolution, so §5, §6.0, §7 and the header disagreed
+  about what the invariant delivers. It removes the **motive** for a second resolution by supplying every
+  distinct message from the first; removing a motive is not preventing an act.)*
+  Assert both halves: the seam is called once per entry, **and** the
   argument it receives is byte-identical to the artifact's recorded value. Round 5 found the caller-only
   escape this closes: `p = entry["transcriptPath"].strip(); _open_regular_fd(p)` makes exactly one seam
   call and no other filesystem call, yet violates §4.1 step 6.
@@ -435,7 +447,12 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
 > produces false failures. So ARCH-3 no longer observes anything. It chooses **fixtures whose shape makes
 > a wrong access pattern fail or return wrong values on its own** — and asserts only the helper's return
 > value or the exception it raises. Aliasing, callees, closures, module globals, C-level calls, `ctypes`
-> and subprocesses are then all *irrelevant*, because nothing is being watched.
+> and subprocesses are then all irrelevant **to the fixtures' own verdicts**, because nothing is being
+> watched. *(Round 17: this read "irrelevant" unqualified, which scans as a claim that those routes cannot
+> defeat the plan at all. They cannot defeat **ARCH-3's fixtures** — F1's pipe and F2's non-zero offset
+> return wrong values for a rewinding reader however it is spelled — but module state is exactly how §6.0
+> row 2's accepted implementation reaches a path. The fixtures are robust; that does not make the plan
+> complete.)*
 
   **Four fixtures — F1, F2, F3 and F4** — each passed to `_digest_transcript_fd` directly. A correct
   one-forward-pass helper
@@ -838,8 +855,12 @@ exception" is now true, for a different reason than the original wording gave.)*
     `builtins.open` records it). Both gate reviewers found the same class independently, and the sweep
     found ten more. **C9 is retained as a regression guard, not as the proof.**
   - **THE PROOF FOR THE HELPER IS ARCH-1 + ARCH-2 + ARCH-3 (§6.0), and they are MANDATORY.** The checker
-    takes **only the raw fd** — never a path, never an opener, never a default-bound callable. Re-opening
-    becomes *structurally unavailable* **inside `_digest_transcript_fd`** rather than merely detected.
+    takes **only the raw fd** — never a path, never an opener, never a default-bound callable. That
+    removes the *parameter-borne* routes to a path; it does **not** make re-opening unavailable inside the
+    body, which can still reach module state, a class attribute or a closure. *(Round 17, both arms: this
+    read "Re-opening becomes structurally unavailable **inside `_digest_transcript_fd`**" — the exact
+    claim round 16 disproved, sitting in the sentence immediately **above** round 16's own note saying
+    every such claim had been narrowed. Adding the correction next to the error is not narrowing it.)*
     This is a **signature constraint asserted by a test**, not a prose preference; §4.1 step 3 states the
     exact signature and §7 step 5 makes it an acceptance condition.
     **ARCH-1 PROVES ONE FACT AND NO MORE: the helper's parameter list is exactly `(fd,)`. Round 16.**
@@ -1531,3 +1552,34 @@ the independent verification the last five rounds were missing.
 reachability*. Row 6b shows the other half: **reaching the branch is not sufficient either — the oracle
 must be able to tell the two implementations apart once there.** Reachability and discrimination are
 separate requirements, and this table has now been wrong for want of each.
+
+## 24. Round-17 gate outcome
+
+**gemini `REQUEST_CHANGES` (1 High) · codex `REQUEST_CHANGES` (1 High).** Frozen at `dacd56b`, sha256
+`235633e714322a9986a0df2667205cbdb7aa2d37a92dec225d0737ba4a5af59f`. Transcripts:
+`~/.claude/review-transcripts/2497r17-agy.txt` (1,821 B) and `…/2497r17-codex.txt` (297,399 B).
+
+**One finding, from both arms, and it is round 16's fix being incomplete in the most embarrassing way
+available: the narrowing note sits immediately BELOW a sentence making the exact claim it narrows.**
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the invariant language is still overclaimed in operative text.** gemini: `:841-842` still says "Re-opening becomes *structurally unavailable* **inside `_digest_transcript_fd`**" — the precise claim round 16 disproved — in the sentence *immediately preceding* round 16's note saying every such claim was narrowed. codex adds four more sites (`:303`, `:340-345`, `:372-377`, `:433-443`) and a second invariant: **ARCH-2** is described as proving exactly one *resolution*, when its assertions establish only **one seam call with an unchanged argument** — rows 2, 5b and 6b are the unobserved additional-resolution branches | **confirmed at every site** | all five narrowed. "Seal" is struck: the invariants constrain the **interface**, not the body. ARCH-2 now states what it establishes and what it does not — it removes the *motive* for a second resolution, which is not preventing the act. ARCH-3's "aliasing, callees, module globals are all irrelevant" is qualified to *irrelevant to the fixtures' own verdicts* |
+
+**Both arms independently confirmed the residue set is now correct**, each by full re-derivation with
+**both** reachability and discrimination:
+
+- **row 2** — caller form unreached (I18 forces an early failure, so the success-branch probe never runs);
+  in-helper form unreached by F1-F4 (they supply descriptors with no map entry) and undiscriminated by
+  C9a (which replaces the file with a regular one, so the probe simply succeeds).
+- **row 5b** — reached by C1/C2a/C3, but `io.open` raises `ENOENT` and yields the same `MISSING` result.
+- **row 6b** — reached, but `os.path.exists` returns `False`, giving the same `MISSING` diagnosis.
+
+gemini additionally verified the counts end to end: **16 rows, 17 mutants, 13 cases**, with §5, §6.0, §7
+step 5 and the header all naming the same three residues.
+
+**The lesson, which is about how I applied round 16 rather than about the plan.** I added a note asserting
+"every operative ARCH-1 claim is narrowed to the parameter-list fact" and did not narrow them — the note
+was adjacent to one of the sentences it contradicted. **A claim that a propagation is complete is not a
+propagation.** The mechanical check §7 needs must verify the *sites*, not the existence of a note about
+them; four of the five sites here were found by grep in seconds once the reviewers named the pattern.

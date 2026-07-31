@@ -1,6 +1,6 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 13: codex `APPROVE` (0 findings, its first outright approve) · gemini `REQUEST_CHANGES` (2 High) — not a pass.** codex traced the whole plan clean. gemini found two **specification gaps** a mechanism trace cannot surface: the **bridge helper D′ requires was never specified** (now `scripts/lib/agent-env-bridge.sh`, with N5's allowlist gaining it and losing the two fence copies), and **§4.1's enum listed the state space of the REJECTED options** (`derived-registry`/`legacy-fallback` are unreachable under D′; it is now `host-env`/`unresolved`). See §22. Previously — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -30,9 +30,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-12 are in §10-§21.
+root; the consumer enumeration is now in the implementation order. Rounds 1-13 are in §10-§22.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-31 (round 12, post-gate revision — five consumers tabled after the reproduction flip)
+**Last Updated:** 2026-07-31 (round 13, post-gate revision — bridge helper specified; enum matched to D′)
 **Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -144,8 +144,18 @@ diagnostic to the plugin's own log, and a field in the marker/log record naming 
 >
 > **Round 1: do NOT record the base directory itself.** Marker and log records are explicitly PII-free
 > (`scripts/lib/marker.sh:7`, `scripts/lib/log.sh:7`; `context.sh` hashes the repo root for the same
-> reason). An absolute base path contains the username and home directory. Record an **enum** —
-> `host-env` / `derived-registry` / `legacy-fallback` — never the path. Extra marker fields are
+> reason). An absolute base path contains the username and home directory. Record an **enum** — never the
+> path.
+>
+> **Round 13 — the enum's vocabulary is `host-env` / `unresolved`, and ONLY those.** *(gemini: this
+> listed `host-env` / `derived-registry` / `legacy-fallback`, which were the states of the **rejected**
+> options A and B. Under the adopted **D′** the base resolves **only** when `CLAUDE_PLUGIN_DATA` is set,
+> so `derived-registry` and `legacy-fallback` are unreachable — and an implementer told to write an enum
+> for them could reasonably conclude the rejected options are still live. The enum must describe D′'s
+> actual state space: resolved from the host environment, or unresolved.)* The `unresolved` value is
+> written **only** where a record is written at all — which under D′ is nowhere, so in practice the enum
+> is always `host-env` in a persisted record and `unresolved` exists solely for the source-time
+> diagnostic. Extra marker fields are Extra marker fields are
 > parser-safe (the reader selects named keys, `marker.sh:150`).
 >
 > And note the limit: a diagnostic written *into the wrong store* cannot tell a reader looking in the
@@ -324,6 +334,19 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 1. **D′ is settled** (rounds 2-3, both reviewers; §8 Q1). Do **not** re-open it during implementation.
 2. Make the fallback observable (§4.1) and add N1.
 3. Implement the chosen resolution; add N2 with the **unset** case.
+   **Including the ONE explicit bridge D′ requires — round 13.** *(gemini: §4.2's option D and D′'s
+   restatement both require "one documented bridge helper instead of per-agent copy-paste", and this step
+   said only "implement the chosen resolution" — the bridge was never specified anywhere, while §7's N5
+   discussion simultaneously deferred it to "a future extraction". An implementer had to invent it or
+   leave D′ incomplete.)*
+
+   **Specified:** `scripts/lib/agent-env-bridge.sh`, sourced (not copy-pasted) by every agent fence that
+   needs the variable in a Bash-tool shell. It contains exactly the export the fences carry today —
+   `export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"` — plus the source-time resolution and its single
+   diagnostic, so the bridge and the libraries share one code path and one enum. `agents/swift-reviewer.md`
+   `:176` and `:244` become `source "$CLAUDE_PLUGIN_ROOT/scripts/lib/agent-env-bridge.sh"`. **N5's
+   allowlist gains this file and loses those two fence lines**, which is the point: one site instead of
+   two copies, and the copy-paste this ticket exists to kill cannot recur silently.
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
 5. **Enumerate and guard every consumer** before quarantine, each with its **required control flow** —
    round 2 found §9 claiming they were enumerated while §7 never acted on them, and round 3 established
@@ -1092,3 +1115,31 @@ can leave dangling objects. Worth knowing; `git gc` collects them.
 **The gemini arm's two earlier no-verdict failures were a prompt-shape problem, and it is fixed.** Rounds
 10 and 11 produced ~1 KB summaries claiming to have printed a critique. Round 12's prompt demanded the
 verdict line **first**, forbade meta-narration, and both round-12 runs emitted clean, anchored verdicts.
+
+## 22. Round-13 gate outcome
+
+**codex `APPROVE` (0 findings — no High, Medium or Low) · gemini `REQUEST_CHANGES` (2 High, 1 Low).**
+Frozen at `dacd56b`, sha256 `98796d90a53c7c710cf794d90563d9a731963b92df9f52bd50c11cedec8f5471`.
+Transcripts: `~/.claude/review-transcripts/2617r13-codex.txt` (347,390 B) and `…/2617r13-agy.txt`
+(2,333 B).
+
+**codex's first outright APPROVE on this ticket**, confirming by trace: the consumer table is complete
+across marker/log/context/roster/agent-fence/capture/snapshot/test-harness paths; `capture.py` composes
+only beneath the root supplied by `capture-reviewer-verdict.sh:45`, so the hook's explicit skip covers it
+transitively; the three log-hook rows are correct because `log_append`'s unresolved contract returns
+success **before** reaching its `log_dir` composition; and the two capture-hook controls are right — the
+round-start call already discards output and forces success, while the verdict hook genuinely needs its
+explicit skip because it passes the composed root into Python.
+
+**gemini agreed on every directed check and then found two things codex did not.**
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | gemini | **the bridge helper D′ requires is never specified.** §4.2's option D demands "one documented bridge helper instead of per-agent copy-paste" and D′ restates it as "one explicit bridge", but no path, name or content appears anywhere — while §7's N5 discussion simultaneously defers it to "a future extraction". Step 3 says only "implement the chosen resolution" | **confirmed by grep** — every "bridge" hit is either the option statement, the restatement, or the MAJ-6 fence lines it is meant to replace | **specified**: `scripts/lib/agent-env-bridge.sh`, carrying the export plus the shared source-time resolution and its single diagnostic. `swift-reviewer.md:176`/`:244` become a `source` line; **N5's allowlist gains the file and loses the two fence copies** — one site instead of two, so the copy-paste this ticket exists to kill cannot recur silently |
+| 2 | gemini | **§4.1's enum contradicts D′.** It mandates recording `host-env` / `derived-registry` / `legacy-fallback`, but under D′ the base resolves **only** when the variable is set, so the latter two are unreachable — an implementer told to write them could conclude the rejected options A/B are still live | **confirmed** — those are the state spaces of the *rejected* options | the vocabulary is now `host-env` / `unresolved`, D′'s actual state space |
+| 3 | gemini | *(Low)* `reviewer-roster.sh:53` appears three times in the consumer table; two rows restate the defect rather than giving control flow | **confirmed** | noted; the duplicate rows are historical round-3/5 records and are marked as such rather than deleted, since they carry why the site was missed |
+
+**The two arms have now inverted their usual roles on this ticket.** codex traced mechanisms and approved;
+gemini found two *specification* gaps — an unspecified helper and an enum describing rejected options —
+that a mechanism trace would not surface, because both are omissions rather than errors. Neither arm alone
+would have reached this state.
