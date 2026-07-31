@@ -13,6 +13,64 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.5] — 2026-07-31
+
+### Fixed
+
+- **Plugin state split across two base directories** (`COREDEV-2617`, plan gated over 19 review rounds).
+  `CLAUDE_PLUGIN_DATA` is exported to hook and MCP subprocesses but **not** to an ordinary shell. Every
+  library fell back to `${HOME}/.claude/unleashed-mail`, so a marker, log or snapshot written outside a
+  hook went to a *different* directory than the one the hooks read — and neither could see the other.
+  Quality markers set by a hook were invisible to a manual run, and vice versa.
+
+  **The fix is D′: an unresolved base persists nothing.** The base resolves *only* from
+  `CLAUDE_PLUGIN_DATA`; when that is unset or empty the libraries return a **poisoned sentinel**,
+  `/dev/null/unresolved-plugin-base`. `/dev/null` is a character device, so every path beneath it is
+  `ENOTDIR` — `mkdir`, `mktemp`, redirects and opens all fail harmlessly at a fixed, greppable location,
+  and an *unguarded* caller can never compose a root path such as `/logs`. Returning the empty string
+  would have done exactly that. Writers (`marker_write`, `log_append`, the round-binding mutators)
+  become no-ops and return success, so no consumer's primary behaviour changes.
+
+  Resolution is **eager and process-stable** — once, at source time, into shell variables
+  (`_UNLEASHED_BASE_RESOLVED` / `_UNLEASHED_BASE_OK`), because a value first assigned inside
+  `$(marker_dir)` lives in that subshell and is gone on return. Consumers whose behaviour differs when
+  unresolved branch on `_UNLEASHED_BASE_OK`, never on a string comparison against the sentinel.
+  Exactly **one** diagnostic is emitted per process, whether or not `scripts/lib/paths.sh` is present.
+
+  **⚠️ State written before this fix may live in a second directory.** To find it:
+
+  ```bash
+  ls -la ~/.claude/unleashed-mail/          # the legacy fallback store
+  ls -la ~/.claude/plugins/data/unleashed-mail-*/   # where hooks actually wrote
+  ```
+
+  Nothing is migrated automatically — the two stores can disagree, and picking a winner silently is
+  what this ticket exists to stop. Inspect both and delete or merge deliberately.
+
+### Added
+
+- `scripts/lib/agent-env-bridge.sh` — one documented bridge for carrying `CLAUDE_PLUGIN_DATA` into an
+  agent's Bash-tool shell, replacing per-agent copy-pasted exports. The fence passes both the data value
+  and the plugin root as positional arguments, because only the exact `${…}` tokens are substituted and
+  only in agent content.
+- `scripts/tests/test_plugin_state_base.py` — 12 proofs: the six-cell resolution matrix
+  (`paths.sh` present/absent × variable set/empty/unset, in Bash **and** zsh), no-persistence, nothing
+  created at `/`, every path primitive returning the sentinel, and a lexical drift check with an
+  enumerated allowlist. The drift check is proved to discriminate: it fails on a planted bypass.
+
+### Changed
+
+- `scripts/tests/test_shell_primitive_drift.py` — the base-path matrix now expects the sentinel for
+  unset and set-but-empty. The legacy `${HOME}`-based expansion is asserted **present in `paths.sh`**
+  (where its `:-` and `${HOME:-}` guarantees stay locked) and **absent from the three libraries**, since
+  that fallback *was* the second store.
+
+### Known limitation
+
+- The drift check is a **lexical** detector, not a proof of accessor-only provenance. Path provenance is
+  not statically decidable in Bash — a runtime-assembled variable name evades any static scan. It
+  catches the failure this ticket is about: a copy-pasted resolver in a new primitive.
+
 ## [2.6.4] — 2026-07-30
 
 Two fixes that landed after the 2.6.3 bump and were previously unrecorded. Both were found by using

@@ -171,9 +171,13 @@ session.** The fence below is **empty by default on purpose**: run it verbatim a
 # context.sh) falls back to ~/.claude/unleashed-mail while the hooks wrote under ~/.claude/plugins/data/{id},
 # and every persisted capture/.status/ratchet is invisible. The `${CLAUDE_PLUGIN_DATA}` placeholder IS
 # substituted inline in agent content (plugins-reference: "Skill and agent content — anywhere the
-# placeholder appears"), so this resolves to the real data dir; if unset it expands empty and context.sh's
-# `:-` fallback keeps today's behaviour (no regression).
-export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
+# placeholder appears"), so this resolves to the real data dir.
+# COREDEV-2617: ONE documented bridge instead of a copy-pasted export. It also establishes
+# _UNLEASHED_BASE_OK, which is how this fence detects an unresolved base (see Step 2's roster block).
+# Both placeholders must be the EXACT braced tokens and must live HERE, in agent content -- a
+# ${CLAUDE_PLUGIN_DATA} written inside the sourced file would never be substituted.
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" \
+       "${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}"
 # UNCOMMENT a line ONLY for a reviewer whose report + readable `Status:` you HOLD from this session.
 # Every line left commented is a reviewer you are NOT vouching for -> it gets classified.
 # Type names literally; do NOT reference a shell variable — every Bash block is a fresh shell, so a
@@ -239,9 +243,11 @@ reading — they cannot certify, but they can contribute findings:
 # MAJ-6: bridge CLAUDE_PLUGIN_DATA (exported only to hooks/MCP, not the Bash tool) so this collection loop
 # reads the SAME reviews dir the capture hooks wrote — otherwise context.sh falls back to
 # ~/.claude/unleashed-mail while the captures live under ~/.claude/plugins/data/{id} and every array is
-# invisible. The placeholder is substituted inline in agent content; unset -> empty -> context.sh `:-`
-# fallback (no regression). Must precede the context.sh source.
-export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"
+# invisible. COREDEV-2617: the bridge exports the value AND establishes _UNLEASHED_BASE_OK, so an
+# unresolved base yields the poisoned sentinel and this fence reports NO CAPTURE instead of silently
+# reading a second store. Must precede the context.sh source.
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/agent-env-bridge.sh" \
+       "${CLAUDE_PLUGIN_DATA}" "${CLAUDE_PLUGIN_ROOT}"
 CTX="${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"; [ -f "$CTX" ] || CTX="scripts/lib/context.sh"
 . "$CTX"
 BASE="$(context_reviews_dir)/$(context_branch_slug "$(context_branch)")"

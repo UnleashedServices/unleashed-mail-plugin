@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.4
+# UnleashedMail — Claude Code Plugin v2.6.5
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,17 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.6.5
+
+- **Plugin state no longer splits across two directories** (`COREDEV-2617`) — `CLAUDE_PLUGIN_DATA` is
+  exported to hooks and MCP subprocesses but **not** to an ordinary shell, so anything written outside a
+  hook landed in a *second* store (`~/.claude/unleashed-mail`) that the hooks' store never saw. An
+  unresolved base now **persists nothing**: path primitives return a poisoned, non-root sentinel
+  (`/dev/null/unresolved-plugin-base` — every path beneath a character device is `ENOTDIR`, so an
+  unguarded caller fails harmlessly instead of composing `/logs`), writers become no-ops, and one
+  diagnostic per process says so. **State written before this fix may still live in the second
+  directory** — see the CHANGELOG for how to find it.
 
 ### v2.6.4
 
