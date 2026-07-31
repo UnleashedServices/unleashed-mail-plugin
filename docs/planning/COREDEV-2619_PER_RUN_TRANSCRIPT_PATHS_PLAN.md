@@ -1,12 +1,12 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 3 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
+**Status:** Planning — **round 4 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
 arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 3, post-gate revision)
+**Last Updated:** 2026-07-31 (round 4, post-gate revision)
 
 ---
 
@@ -146,7 +146,18 @@ name: M5 must fail.
 **The handoff must be specified before it can be tested**, and round 3 found three gaps: where each
 skill obtains ticket/round; how the **codex** recipe reaches the Bash-only `context_repo_hash` when its
 grant contains no shell-helper invocation; and how the allocated path is emitted beyond the allocating
-invocation. **§8 Q2 carries these** — they are design, not detail.
+invocation. **Answered here rather than deferred — round 4, both arms.** *(Round 3 deferred them to "§8 Q2", and
+Q2 is about pre-cleaning: the gaps were in no open question at all, so they were simply lost.)*
+
+- **Ticket and round** are **required inputs** to both review skills, passed by the wrapper, not
+  inferred. A skill that cannot determine them fails closed rather than guessing.
+- **The codex recipe reaches `context_repo_hash` through a shared Bash wrapper**, not directly: the
+  recipe invokes Python (`skills/codex-review/SKILL.md:48`) while the helper is Bash-only
+  (`scripts/lib/context.sh:79`). One wrapper sources `context.sh`, allocates, and prints — and **that
+  wrapper is what the codex skill is granted**, so no recipe re-implements the hash.
+- **The allocated path is emitted on stdout behind a stable marker** the wrapper captures verbatim and
+  threads into the capture target, the synthesis input and the artifact's `transcriptPath`. A marker
+  rather than bare stdout, so a diagnostic line cannot be mistaken for the path.
 
 **Proof — M1, rewritten in round 2 because the first version proved nothing.** Two random basenames are
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
@@ -190,8 +201,8 @@ acted on**.)*
 | `skills/gemini-review/SKILL.md:8` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` | **KEEP — expands correctly** |
 | `skills/gemini-review/SKILL.md:8` | `Bash(rm -f /tmp/agy-out.txt*)` | **DELETE** |
 
-That is a **pre-existing defect this ticket surfaces**, not one it introduces — and it means the fix
-cannot be "move the literal", because the literal was never doing what it appeared to do.
+*(Round 1 called this a pre-existing defect. **It is not** — see the reversal above. The `rm -f` grants
+are removed because allocation makes pre-cleaning unnecessary, not because they were broken.)*
 
 **Fix.** The pre-clean stops being a *grant* problem:
 
@@ -206,9 +217,13 @@ cannot be "move the literal", because the literal was never doing what it appear
 
 **Proof — M2, rewritten twice.** A **runtime** check under a pinned **`dontAsk`** permission mode
 (round 3: the round-2 form never named a mode, so a direct-shell check could pass while the shipped
-workflow was denied): dispatch a real skill invocation and assert the capture lands. Assert also that no
-`/tmp/` literal survives in any `allowed-tools` line. **No substitution validator** — round 1's would
-have rejected `${CLAUDE_PLUGIN_ROOT}`, which is supported and correct.
+workflow was denied): dispatch a real skill invocation and assert the capture lands. **And exercise the XDG
+validation itself** *(round 4, codex: an implementation that blindly trusts a set `XDG_STATE_HOME`
+passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
+`.claude`** — including a canonical/symlink alias — and **unwritable**, and require the fallback **plus
+its diagnostic** in each. Assert also that no `/tmp/` literal survives in any `allowed-tools` line.
+**No substitution validator** — round 1's would have rejected `${CLAUDE_PLUGIN_ROOT}`, which is
+supported and correct.
 
 ### 4.3 — The site inventory, measured properly this time (Medium — round 1, codex)
 
@@ -290,17 +305,21 @@ closed.
   snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
   not a launch anchor at all.**
 
-**Proof — M4:** record a transcript whose mtime predates the launch anchor; the gate must fail. Run it
-**on both paths** — sidecar and explicit-digest.
+**Proof — M4, both polarities.** *Negative:* a transcript whose mtime predates its launch record is
+rejected. *Positive (round 4, codex):* a transcript captured **after** an already-existing record is
+**accepted**, and the record is asserted to have existed **before dispatch** and not been replaced.
+Without the positive case, M4 passes against the explicitly rejected implementation that creates its
+"launch" record while writing the artifact — an older transcript still predates that late record. Run
+both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
 
 ## 5. Risk register
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | The chosen directory is protected or unwritable in some permission mode | **High** | §4.1 moved off `.claude`; M2 is a **runtime** check, not a string check |
-| The `allowed-tools` grants are "fixed" by rewriting a literal that never expanded | **High** | §4.2 — the grants are **deleted**, and a validator rejects unsupported `${…}` |
+| The withdrawn substitution validator is re-introduced and rejects the supported `${CLAUDE_PLUGIN_ROOT}` | **High** | §4.2 — the validator is withdrawn in §4.2, M2, §5 and §7 step 4; the `rm -f` grants are deleted, the `${CLAUDE_PLUGIN_ROOT}` grants **kept** |
 | A historical quote is rewritten and the record of a real finding is corrupted | **High** | §4.3's **10** quote-keeps, pinned by M3 *(round 2: this cell said 12 while the table said 11 — the two were never reconciled, and both were wrong)* |
-| Allocation is added but callers still derive the name | **High** | `--allocate` **prints** the path; M1 fails a derived name |
+| Allocation is added but callers still derive the name | **High** | `--allocate` **prints** the path behind a stable marker; **M5** (integration, both real paths) fails a derived name — **M1 cannot**, since it exercises only the allocator |
 | Per-run paths are read as making the gate tamper-proof | Medium | §3's ceiling, in the CHANGELOG |
 | Transcripts accumulate without bound | Low | out of scope, stated |
 
@@ -319,7 +338,7 @@ shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh 
 Baselines at `78e28f2`: `test-hooks.sh` **304**, synthesizer **227**, scripts **324**, counts
 `21/21/0/1`, hook events **10**. Floors, not equalities.
 
-**Mutation proofs M1–M4, each shown failing before the fix and passing after.** *(Round 1: the original
+**Mutation proofs M1–M5, each shown failing before the fix and passing after.** *(Round 1: the original
 M1-M6 could not meet that bar — M2 and M6 already passed, M3/M4 tested strings rather than runtime
 behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuilt.)*
 
@@ -330,13 +349,20 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    Add M1.
 3. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
    `review-synthesis` — including a ticket/round **input contract** for synthesis.
-4. **Delete the two `rm -f` grants** and add the `allowed-tools` substitution validator. Add M2.
-5. **Add the mtime freshness check** to `review-verdict.py`. Add M4.
-6. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+4. **Delete the two `rm -f` grants.** **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
+5. **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
+   **emitted** allocation becomes the capture target, the synthesis input and the artifact's
+   `transcriptPath`; mutate a caller to re-derive the name and it must fail.
+6. **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
+   **before dispatch**, bound to the run ID, looked up per transcript, and **fails closed when absent**.
+   Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
+   Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
+   record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
+7. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
-## 8. Open questions for round 4
+## 8. Open questions for round 5
 
 1. **Is `${XDG_STATE_HOME:-$HOME/.local/state}` writable from a skill's Bash recipe in every permission
    mode, including `dontAsk`?** This is the **third** directory this plan has proposed — `~/.claude/`
@@ -347,9 +373,11 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    `isolated-agy-review.sh` pre-cleans a path it allocated — is that sufficient for the
    "wrapper never starts" case the audit reconstructs?
 3. **Should `/tmp/agy-ping.txt` be in scope** after all? §4.3 rules it out as a non-evidence artifact.
-4. **How should freshness be anchored on the explicit `--reviewed-sha256` path**, which permits an
-   approving write with no snapshot sidecar? Require a launch-time sidecar anyway, or bind a launch
-   timestamp into the artifact? §4.5 cannot be implemented until this is chosen.
+4. ~~How should freshness be anchored on the explicit `--reviewed-sha256` path?~~ **ANSWERED in round 3
+   and now operative in §4.5 and §7 step 5:** a per-allocation **launch record**, `O_EXCL` before
+   dispatch, bound to the run ID, compared by `st_mtime_ns`, keyed per transcript and therefore
+   independent of the digest path. *(Round 4: this question still said "cannot be implemented until this
+   is chosen" three rounds after it was chosen.)*
 5. **Does deleting the outer pre-clean actually cover "the wrapper never starts"?** §4.2 argues an
    allocated *empty* file fails closed because synthesis maps empty → `MISSING`. Verify that against
    `review-synthesis` and `review-verdict.py` rather than by assertion.
