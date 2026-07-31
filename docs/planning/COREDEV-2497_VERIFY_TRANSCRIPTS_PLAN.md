@@ -7,7 +7,7 @@ it), and every remaining F5/F5b reference is removed from operative text. See §
 gated (**gemini REQUEST_CHANGES ×4 / codex REQUEST_CHANGES ×5**), and
 the **maintainer has decided §8 Q8: NARROW THE GUARANTEE.** Both reviewers independently reached the same
 answer. F5/F5b are **removed from the gating suite**; F1–F4 stay; §3 now states plainly what this plan
-does **not** prove. See §15. Rounds 4-7 are in §11-§14. Awaiting round 9.
+does **not** prove. See §15. Rounds 4-10 are in §11-§17.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
@@ -59,9 +59,13 @@ binding). The gap is that **`verify` never re-checks the transcript files** — 
 ## 2. The defect, stated exactly
 
 `cmd_verify` (`scripts/review-verdict.py:555`) re-derives the plan identity and digest (`:736-748`) and
-calls `_quorum_problem` at **`:728`** — the function is defined at **`:74`**, and its checks span
-`:84-147`: reviewer **count/shape** (`:84`), duplicate and stray **names** (`:86`, `:95`), **status
-membership** (`:99-100`), the empty-file hash (`:121-122`) and digest **syntax** (`:144`). It **never resolves
+calls `_quorum_problem` at **`:728`** — the function is defined at **`:74`** and runs to **`:200`** (the
+next top-level `def` is `_sha256_bytes` at `:202`). Its checks span
+`:84-199`: reviewer **count/shape** (`:84`), duplicate and stray **names** (`:86`, `:95`), **status
+membership** (`:99-100`), the empty-file hash (`:121-122`), digest **syntax** (`:144`), and — through the
+nested `_provenance` helper (`:155`) — that each reviewer carries a **distinct** `transcriptPath`,
+`captureId` and `transcriptSha256` (`:174-199`). Every one of those provenance checks reads the artifact's
+own fields; **none of them opens a transcript.** It **never resolves
 `transcriptPath`** — the only filesystem calls in `cmd_verify`'s body touch the plan and the artifact
 (`:557`, `:562`, `:564`, `:567`, `:747`) — so:
 
@@ -277,7 +281,7 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 | A legitimate large or non-UTF-8 transcript is rejected — the fix worse than the defect | **High** | C5's two halves must **PASS**; I6 is the mutant that reintroduces the cap |
 | The digest check is silently gutted while repairing §4.5(a) | **High** | §4.5 names the trap and the correct repair; C2c must FAIL for any C-case green to mean anything |
 | Tightening breaks the non-approving recovery path | Medium | §4.2 + C8, and **C11** for the case-sensitivity variant |
-| A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 reject every defect found in rounds 4-7 *except* a two-pass reader. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one |
+| A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 reject every defect found in rounds 4-7 **except (a)** a two-pass reader and **(b)** the caller-side residues §6.0 records as `ACCEPTED-NOT-CLOSED` (rows 1, 2, 5, 6, 7 and row 9's caller half) — those are not two-pass readers; they are defects the fixtures cannot reach because **no fixture exercises a caller**. Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one |
 | Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 now names **all five** tests — `:200`, `:218`, `:757`, `:773`, `:811` — not just the two symlink ones |
 | The whole change is inert because tests only cover `write` | **High** | Every §4.1 test must mutate the transcript on disk **between** `write` and `verify` — see §6's trap |
 | **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants seal the helper. §3.1 accepts the caller-side residue; six §6.0 rows are marked accepted-not-closed |
@@ -317,8 +321,10 @@ The reason is a property of the technique, and it generalises:
 > cached `io.open`), reads that precede the seam, and re-opens hidden on a branch that a green-path test
 > never takes (retry-on-mismatch, short-read fallback, failure-path re-classification).
 
-Adding a case per escape is the move that produced rounds 2, 3 and 4. **So the class is closed
-structurally instead**, and the behavioural cases are kept only for what genuinely lives outside the
+Adding a case per escape is the move that produced rounds 2, 3 and 4. **So the class is addressed
+structurally instead** — sealed at the helper, not closed end-to-end: per §3.1 the structural seal binds
+`_digest_transcript_fd`, and the residues that live in a **caller** (rows 1, 2, 5, 6, 7 and row 9's caller
+half) stay `ACCEPTED-NOT-CLOSED`. The behavioural cases are kept only for what genuinely lives outside the
 sealed helper.
 
 **Fairly stated, the existing set does work for what it targets.** The sweep confirmed by execution that
@@ -416,7 +422,7 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
 
   **Four fixtures — F1, F2, F3 and F4** — each passed to `_digest_transcript_fd` directly. A correct
   one-forward-pass helper
-  satisfies both naturally; every wrong shape found across rounds 4–6 fails at least one. **All results
+  satisfies all four naturally; every wrong shape found across rounds 4–6 fails at least one. **All results
   below are executed.**
 
   - **F1 — a NON-SEEKABLE fd (a pipe).** Write a known payload, close the write end, pass the read end.
@@ -536,11 +542,11 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 | 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — the digest is still correct, so no fixture observes the extra probe |
 | 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **I18's deterministic red-branch test** (F5b removed in round 8 — it had no distinguishing oracle) |
 | 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
-| 5 | failure-path re-classification through `io.open` | re-open on the red branch | the **typed cause** removes the motive; I18 covers the rest |
+| 5 | failure-path re-classification through `io.open` | re-open on the red branch | the **typed cause** removes the motive; the residue is **ACCEPTED-NOT-CLOSED** (§3.1) — *round 10: this row previously credited I18, but neither I18 arrangement enters a failure-path re-classification branch, so no fixture reaches it* |
 | 6 | `os.path.exists` + `os.path.getsize` for the missing/empty diagnosis | second resolution; contradicts Q3 | the **typed cause** removes the motive; the residue is **ACCEPTED-NOT-CLOSED** |
 | 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | the **typed cause** removes the motive; the residue is **ACCEPTED-NOT-CLOSED** |
 | 8 | the cap **raised**, not removed (1 MiB / 64 MiB "DoS guard") | I6's defect above C5a's single measured point | **F3, TO ITS STATED BOUND ONLY.** Round 6: no finite set of sizes proves the absence of an arbitrary higher cap, and a delegated `_digest_impl(fd)` holds the cap in a callee. The plan states the bound rather than claiming closure |
-| 9 | no byte count at all — "empty" inferred from the digest constant | Q3's streamed count absent | **C12 partially** — it proves the *helper* returns a true count; that the **caller uses it** is an ARCH-2 assertion, not a fixture result |
+| 9 | no byte count at all — "empty" inferred from the digest constant | Q3's streamed count absent | **C12 for the helper; ACCEPTED-NOT-CLOSED for the caller** (§3.1) — C12 proves the *helper* returns a true count; that the **caller uses it** is an ARCH-2 assertion, not a fixture result, and no fixture reaches a caller |
 | 10 | digests compared as 12-hex **prefixes** (reusing the display variables) | a 48-bit check, not 256-bit | **C13** |
 | 11 | the comparison hoisted **out** of the per-entry loop (loop-variable reuse) | only the last entry's content is checked | **C13** |
 | 12 | `except (OSError, ValueError, TypeError): continue` — a recorded path that *raises* silently skips the entry | fail-open; reachable with a NUL byte in `transcriptPath` | **C14** |
@@ -581,7 +587,10 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
 - **C5a is measured at two sizes**, not one: 512,723 bytes **and** a file larger than any plausible
   "generous" cap (≥ 2 MiB). One measured point pins one threshold; row 8 lives above it.
 
-**Implementation mutants — each must be caught by its named case:**
+**Implementation mutants — each must be caught by its named case**, with **one** stated exception: **I16**,
+whose *production-conditional / stable-multipass* residue §3.1 accepts as not closed (its unconditional
+`lseek`/`pread` forms **are** rejected, by F1 and F2). Every other mutant in this list, **I9 included**,
+must be caught — the §6.0 sweep records I9 as caught by C9a:
 
 - **I1** `os.path.exists` instead of re-digesting → C2c must fail.
 - **I2** re-digest only the first reviewer → C2a on reviewer 2 must fail.
@@ -593,10 +602,12 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   follows links).
 - **I6** reuse `_read_regular_file`, or keep its cap inside `_open_regular_fd` → C5a must still **PASS**;
   a mutant that rejects it must be caught.
-- **I9** *(the sweep's headline; ACCEPTED-NOT-CLOSED in round 9)* validate with `_open_regular_fd`,
-  **close the fd, then reopen the path** for hashing. C9a catches the variant whose reopened bytes feed
-  the digest; it does **not** catch a path-first read, and §3.1 accepts that class. Listed as a known,
-  deliberate gap — not as a case an implementer must make fail.
+- **I9** *(the sweep's headline)* validate with `_open_regular_fd`, **close the fd, then reopen the path**
+  for hashing. **C9a must fail on this mutant** — the §6.0 sweep records I9 as caught by C9a, and the
+  reopened bytes feed the digest. It is a required rejection, not an accepted gap.
+  *(Round 10 correction: round 9 marked I9 `ACCEPTED-NOT-CLOSED`, which contradicted this plan's own
+  sweep. The accepted residue is not I9 as defined here — it is §6.0 **row 1's** path-**first** read,
+  where the trusted bytes never come from the validated fd at all. Different mutant, different row.)*
 - **I10** delete the non-empty check, or emit **one shared message** for all three causes → C2b must fail
   on the **exact** message. Without distinct messages this mutant is unobservable, because
   `_quorum_problem` already rejects the empty-file hash (`_EMPTY_SHA256`, `:36`).
@@ -613,25 +624,43 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   (`review-verdict.py:224` is the current form) instead of streaming raw bytes → **C5b must fail**. C5b
   was required to PASS but had no mutant, so nothing proved it could ever fail; a decoding helper is the
   plausible wrong implementation it exists to kill.
-- **I16** *(round 5; retargeted round 7; ACCEPTED-NOT-CLOSED in round 9)* a second pass over the same
-  descriptor — by `lseek`, by `os.pread`, by a callee, or behind a branch on `offset == 0`. **No fixture
-  in this plan rejects it.** F5 would have, and F5 was removed in round 8 as unboundable and itself
-  defeatable. Per **§3.1 this mutant is accepted, not closed** — it is listed so an implementer knows the
-  gap is deliberate rather than overlooked. *(I16 has now named two deleted mechanisms in two rounds:
-  ARCH-3's accounting, then F5.)*
+- **I16** *(round 5; retargeted round 7; split in round 10)* a second pass over the same descriptor.
+  **Split, because the two halves have different status:**
+  - **I16a — unconditional second pass** by `lseek(0)` or `os.pread(…, 0)` before hashing. **F1 and F2
+    must reject it**: F1 is a pipe-backed fd (unseekable — `lseek` raises `ESPIPE`) and F2 is an fd
+    already advanced past byte 0, so a rewinding implementation returns the wrong digest. **Required
+    rejection.**
+  - **I16b — production-conditional or stable-multipass**: the second pass hides behind a branch that a
+    fixture never takes (e.g. `if not sys.stdin.isatty()`), or reads the same bytes twice in a way that
+    yields an identical digest. **No fixture in this plan rejects it.** F5 would have, and F5 was removed
+    in round 8 as unboundable and itself defeatable. Per **§3.1 this residue is accepted, not closed.**
+
+  *(Round 10 correction: round 9 marked all of I16 accepted-not-closed, which understated F1/F2 — they
+  do reject the unconditional forms. I16 has now named two deleted mechanisms in two rounds: ARCH-3's
+  accounting, then F5.)*
 - **I17** *(round 7)* recover the path from the descriptor and reopen **by name** → **F4 must fail**.
   *(Round 8: a deliberate `/proc/self/fd/N` reopen on Linux is NOT caught — see F4's correction. I17
   covers the plausible shape, not every descriptor-derived reopen.)*
 - **I18** *(round 7; retargeted round 8; fully specified round 9)* a caller that retries on digest
   mismatch, **or** falls back on a short read. Two arrangements, because one construction cannot trigger
   both branches:
-  - **retry:** stub the helper to return a **mismatching digest** with a correct count while the recorded
-    path holds **matching** bytes. Assert the caller fails, and that it makes **exactly one** helper call
-    and **zero** path reads. A retrying caller makes a second call and approves.
-  - **short-read fallback:** stub the helper to return a correct digest with a **count smaller than the
-    recorded transcript's size**, so a size-comparing caller believes the read was short. Assert the
-    caller fails rather than re-reading. Without specifying the returned count and the promised size,
-    the branch is never entered and the test is vacuous — round 9's finding.
+  - **retry:** the transcript on disk is 100 bytes with digest `D`. Stub `_digest_transcript_fd` with a
+    **two-element** side-effect list: first call returns `("0"*64, 100)` — a **mismatching** digest with a
+    correct count — and the second returns `(D, 100)`. The artifact records `D`. Assert the caller
+    **fails**, that it made **exactly one** helper call, and **zero** path reads. A retrying caller
+    consumes the second element and approves, so the two results are what makes the mutant observable —
+    with a single-element list the retrying caller would raise `StopIteration` and the test would pass
+    for the wrong reason.
+  - **short-read fallback:** the transcript on disk is 100 bytes with digest `D`, and the artifact
+    records `D`. Stub the helper to return **`(D, 0)`** — the digest **matches**, but the streamed count
+    is **0** against a promised `st_size` of **100**. Per §4.1 step 4 the streamed count is the sole basis
+    for the "empty" diagnosis, so the correct caller **fails with the typed empty cause** and performs
+    **zero** path reads. A caller with a short-read fallback instead re-opens the path, recovers 100
+    bytes, and approves — assert on the **path read**, which is the only difference between them.
+
+    *(Round 10 fix: the previous wording returned a matching digest with a merely "smaller" positive
+    count and asserted the correct caller fails. That inverts §4.1 — a positive count with a matching
+    digest **should** approve, so the oracle contradicted the contract it was testing.)*
 
   *(F5b was removed in round 8: a retrying caller that eventually reads the recorded state is also
   "self-consistent", so it had no distinguishing oracle.)*
@@ -726,13 +755,13 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    regression tests hang instead of failing.
 4. §4.5's **one** test repair — (a) — using the executable repair stated there. *(Round 4: this step
    said "two"; (b) moved to `COREDEV-2618` in round 3.)*
-5. All **sixteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16, I17,
-   I18** — all
+5. All **sixteen** mutants — **I1, I2, I3, I4, I5, I6, I9, I10, I11, I12, I13, I14, I15, I16 (a/b), I17,
+   I18** (I16 counts once, split into halves in round 10 as C2 and C5 already are) — all
    **twelve** cases — **C1, C2 (a/b/c), C3, C4 (a/b), C5 (a/b), C8, C9 (a/b), C10, C11, C12, C13, C14** —
    all **three invariants — ARCH-1 (signature), ARCH-2 (unchanged string + typed cause + the caller-side
    assertions) and ARCH-3's fixtures F1, F2, F3 and F4** (F5/F5b removed in round 8 — §6.0). Enumerated, never as a range: the rescope deleted
    I7/I8 and C6/C7 with §4.3, round 3 caught stale ranges naming four identifiers the plan no longer
-   defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case; C5's halves
+   defines, round 4 added six identifiers, and round 5 added three (I15, I16, ARCH-3). Each mutant shown caught by its named case **except I16's production-conditional residue (§3.1)**; C5's halves
    shown **PASSING** at both sizes; and **each of §6.0's twelve defeating implementations shown rejected**
    — that table is the acceptance suite for this step, not commentary, **except rows whose closure §6.0
    now records as accepted-not-closed**.
@@ -811,6 +840,14 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
   behaviour; the absence of transcript resolution in `cmd_verify`; `_read_regular_file` against the real
   512,723-byte transcript and its complete two-caller list; both affected tests read in full; and the
   17-byte satisfying-file measured on real corpus files.
+
+> **Transcript-path notice (2026-07-30).** Every `/tmp/rev/…` path cited in the round histories below
+> **no longer exists**: the machine's root volume filled, and macOS purged `/private/tmp`, destroying all
+> 105 captured transcripts of this campaign in one event. The byte counts and hit counts recorded here
+> were taken from those transcripts while they existed and are left as the historical record — but they
+> are **no longer independently reopenable**, and a reviewer should treat them as claims, not evidence.
+> Codex's own rollout logs under `~/.codex/sessions/` survived and were used to recover the affected
+> round's findings. Captures from this round forward go to `~/.claude/review-transcripts/`.
 
 ## 10. Round-3 gate outcome
 

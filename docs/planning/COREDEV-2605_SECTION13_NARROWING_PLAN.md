@@ -1,6 +1,12 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 5 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Adding §14
+**Status:** Planning — **round 6 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Both
+reviewers found the **same High**: the two-column `surface → scope` instruction still contradicted the
+three-column triple schema. Also — the §13/§14 split and §14's creation are **one indivisible step**
+(either ordering breaks: a lagging helper swallows §14, a leading one raises `ValueError` on M8's
+`v2.6.1` revert, which is a suite *error*, not a rejection); **M2** moved to gate-adequacy; the round-5
+digest was the round-4 value copied forward. See §15. Previously — round 5 gated
+(**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**): adding §14
 **breaks `_section13()`**, which ends at `## Cross-references` and would swallow it; M5's ticket example
 has **two independent rejection causes** that mask each other; and M1/M3 are gate-adequacy comparisons,
 not candidate mutants. See §14. Previously — round 4 gated (**gemini REQUEST_CHANGES ×5 / codex REQUEST_CHANGES ×4**). The
@@ -10,10 +16,10 @@ round 3 gated (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×4**). The
 scope table gains a **closed lexical schema** (free text cannot reject paraphrase); M5's
 "exists and is collected" is strengthened because collection permits a no-op; and `BLOCKED — …` is
 reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contracts in two agent bodies.
-See §12. Rounds 1-2 are in §10-§11. Awaiting round 4.
+See §12. Rounds 1-2 are in §10-§11; rounds 3-6 are in §12-§15.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-30 (round 5, post-gate revision)
+**Last Updated:** 2026-07-30 (round 6, post-gate revision)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -178,8 +184,10 @@ each of the four is named, individually, so removing one is not masked by the ot
 > inverse of the plan's intent. No mutation in the M-list flips polarity or moves a name into unrelated
 > explanatory prose.
 >
-> **Fix — a parseable scope table, not a prose paragraph.** §13's Scope becomes a two-column table
-> (surface → `in`/`out`), and the gate asserts on the parsed table rather than on substring presence:
+> **Fix — a parseable scope table, not a prose paragraph.** §13's Scope becomes a **three-column** table
+> (`surface_id | producer_id | scope`) — see the exact schema below, which supersedes the two-column
+> sketch this paragraph originally carried — and the gate asserts on the parsed table rather than on
+> substring presence:
 >
 > **CLOSED LEXICAL SCHEMA — round 3 made it concrete; round 4 made it CLOSED.**
 >
@@ -421,7 +429,7 @@ M8 noticing, which is why M9/M10/M11 exist.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| The doc-gate goes inert (this campaign's most repeated failure — **seven** instances, M5 being the newest) | **High** | Every proof M1–M13 is a mutant the clean candidate **rejects**. M1/M9 bind to the imported tuple; **M5 is the cross-reference form** (M5a/M5b), because round 2 proved a document-carried fixture validates fixture-against-oracle rather than the invariant |
+| The doc-gate goes inert (this campaign's most repeated failure — **seven** instances, M5 being the newest) | **High** | **M4–M13** are candidate mutants the clean gate **rejects**; **M1/M2/M3** are differential gate-adequacy comparisons (§6) — the two are not interchangeable, and this row must not restate them as one kind. M1/M9 bind to the imported tuple; **M5 is the cross-reference form** (M5a/M5b/**M5c**), because round 2 proved a document-carried fixture validates fixture-against-oracle rather than the invariant |
 | Presence-only assertions pass a scope statement of the **opposite** polarity | **High** | §4.2's exclusive normative table + M10/M11/M12, all executed counterexamples |
 | A relocated protection is quietly deleted at its destination | **High** | M13 — one mutation-tested assertion per protection. M8 reverts only §13 and cannot see this |
 | Prose around the scope table redefines `in`/`out` | Medium | **Accepted residual** — §4.2 states it. A structural gate cannot assert semantics; the table is made normative and exclusive to narrow the surface |
@@ -451,12 +459,19 @@ Baselines measured at `adda52d`: `test-hooks.sh` **304**, synthesizer **222**, s
 executable.** Round 4 noted this as framing; round 5 showed §6 and §7 step 6 still instruct "every mutant
 must fail", which cannot be satisfied by M1 or M3.
 
-- **Candidate mutants** (M2, M4–M13): mutate the *document or the parser*; the clean gate must **reject**
+- **Candidate mutants** (M4–M13): mutate the *document or the parser*; the clean gate must **reject**
   each one.
-- **Gate-adequacy comparisons** (M1, M3): these deliberately *weaken the gate* and show it stops
+- **Gate-adequacy comparisons** (M1, **M2**, M3): these deliberately *weaken the gate* and show it stops
   catching something. They are run as a **differential** — e.g. M1 runs the same `VALID_AGENTS` mutation
   against **both** the live-import gate and a hardcoded weak gate, and asserts the live gate fails while
   the weak gate passes. Stating them as "mutants that must fail" is a category error.
+
+  **Round 6 moved M2 into this group.** M2 (`:144`) replaces the assertion with "the section contains
+  the word *excluded*" and then checks that deleting a name must still fail — it mutates the **test**,
+  not the document or the parser, and is structurally identical to M1 and M3. Under the weakened
+  assertion a deleted name does **not** fail, which is the whole point: it is a differential showing the
+  weak form is inert, not a mutant the clean gate rejects. Listing it as a candidate mutant made §6 and
+  §7 step 7 unsatisfiable for M2 for exactly the reason round 5 identified for M1/M3.
 
 **Polarity, corrected in round 2:** the clean post-fix implementation must **PASS**, and then **each
 candidate mutant must FAIL**. Round 1's wording ("each must be shown failing before
@@ -465,23 +480,48 @@ satisfied by a suite that never rejects a mutant.
 
 ## 7. Implementation order
 
-1. Rewrite §13's Scope as a **parseable two-column table** (surface → `in`/`out`) — the four in-scope
-   surfaces, the five `VALID_AGENTS` reviewers marked out with the reason, and what is deliberately
-   lost. §4.4's determination is already settled in this plan; do **not** re-open it, and do not edit
-   the plan during implementation (that invalidates the reviewed digest).
-2. **Move** the payload-region invariant verbatim to `## 5. Code Review Pipeline`
+1. **Split the §13/§14 boundary and create §14 as ONE indivisible change.** Change `_section13()` to end
+   at `## 14.`, add a bounded `_section14()` (`## 14.` → `## Cross-references`), **and** create
+   `## 14. Blocked Subagent Handoff Contract` in the same step. Round 5 established that the helper must
+   not lag §14's insertion (§4.5, `:399`) — otherwise §14 sits inside `_section13()` and M13's sixth
+   assertion proves nothing. **The converse is equally fatal:** ending `_section13()` at `## 14.` while
+   §14 does not yet exist makes `text.index("## 14.", start)` raise `ValueError`, which is a suite
+   *error*, not a controlled result. Neither sequencing is safe, so this is **one step, not two** —
+   round 6 replaces "move the helper split ahead of §14" with atomicity.
+2. Rewrite §13's Scope as a **parseable three-column table** — `surface_id | producer_id | scope` —
+   whose content is exactly these **nine approved triples**, every field drawn from a finite allowlist,
+   any unknown key a hard failure, and any triple outside this set a hard failure:
+
+   | `surface_id` | `producer_id` | `scope` |
+   |---|---|---|
+   | `verdict-report` | `swift-reviewer` | `in` |
+   | `brainstorm-summary` | `brainstorm` | `in` |
+   | `implement-wrapup` | `implement` | `in` |
+   | `pr-review-report` | `pr-review` | `in` |
+   | `security-findings` | `security-reviewer` | `out` |
+   | `concurrency-findings` | `concurrency-reviewer` | `out` |
+   | `ux-perf-findings` | `ux-perf-reviewer` | `out` |
+   | `accessibility-findings` | `accessibility-auditor` | `out` |
+   | `prompt-safety-findings` | `prompt-review` | `out` |
+
+   The five `out` rows' **reason** (they emit structured JSON; style guidance was always a poor fit) and
+   the note on what is deliberately lost are prose **outside** the table — prose is not row content.
+   The four `in` `producer_id`s are disjoint from `capture.VALID_AGENTS`, which is exactly the five
+   `out` `producer_id`s. §4.4's determination is already settled in this plan; do **not** re-open it,
+   and do not edit the plan during implementation (that invalidates the reviewed digest).
+3. **Move** the payload-region invariant verbatim to `## 5. Code Review Pipeline`
    (`AGENT_CONTRACTS.md:247`), **naming the `test_capture.py` regression that owns its evidence** — no
    fixture block in the contract; round 2 rejected that design. §13 keeps no copy.
-3. Move the precedence clause's six protections to their owning sections; §13 keeps a one-sentence
-   pointer.
-4. Simplify the carve-outs §4.4 proved out-of-scope; all ten dispositions stay explicit, and rules 4/9
+4. Move the precedence clause's six protections to their owning sections; §13 keeps a one-sentence
+   pointer. §14 — the destination for `BLOCKED — …` — already exists from step 1.
+5. Simplify the carve-outs §4.4 proved out-of-scope; all ten dispositions stay explicit, and rules 4/9
    keep protecting the consolidated issue table on contract grounds.
-5. Rewrite the 11 tests; add the disjointness gate, the `_scope_rows` schema gate, and the
+6. Rewrite the 11 tests; add the disjointness gate, the `_scope_rows` schema gate, and the
    **cross-reference** M5 gate. Add the exact ticket regression to `test_capture.py` — it does not exist
    there yet.
-6. Run **M2 and M4–M13** as candidate mutants (clean gate rejects each), and **M1/M3** as
-   differential gate-adequacy comparisons — see §6's two-kinds note.
-7. Version bump + CHANGELOG. State that this is a **scope narrowing, not a relaxation** — the
+7. Run **M4–M13** as candidate mutants (clean gate rejects each), and **M1/M2/M3** as differential
+   gate-adequacy comparisons — see §6's two-kinds note.
+8. Version bump + CHANGELOG. State that this is a **scope narrowing, not a relaxation** — the
    reviewers' machine contracts are unchanged and still mandatory.
 
 ## 8. Open questions for the reviewers
@@ -537,6 +577,14 @@ satisfied by a suite that never rejects a mutant.
 - `capture.py`'s `VALID_AGENTS` contains **`prompt-review`**, not `swift-reviewer` — so "the five
   reviewers" is security/concurrency/ux-perf/accessibility/**prompt-review**. Any prose naming the five
   must use that list, not the four specialists plus the orchestrator.
+
+> **Transcript-path notice (2026-07-30).** Every `/tmp/rev/…` path cited in the round histories below
+> **no longer exists**: the machine's root volume filled, and macOS purged `/private/tmp`, destroying all
+> 105 captured transcripts of this campaign in one event. The byte counts and hit counts recorded here
+> were taken from those transcripts while they existed and are left as the historical record — but they
+> are **no longer independently reopenable**, and a reviewer should treat them as claims, not evidence.
+> Codex's own rollout logs under `~/.codex/sessions/` survived and were used to recover the affected
+> round's findings. Captures from this round forward go to `~/.claude/review-transcripts/`.
 
 ## 10. Round-1 gate outcome
 
@@ -660,7 +708,9 @@ adding it to the tuple makes the intersection non-empty and M9 fails without any
 
 ## 14. Round-5 gate outcome
 
-**gemini `REQUEST_CHANGES` · codex `REQUEST_CHANGES`.** Frozen at `9548299a…`, sha256 `325dc5ed…`.
+**gemini `REQUEST_CHANGES` · codex `REQUEST_CHANGES`.** Frozen at `9548299a…`, sha256 `d9723cb8…`.
+*(Round 6 correction: this line recorded `325dc5ed…`, which is the digest of the **round-4** freeze
+`51642a49` — the previous round's value copied forward. Same defect as `COREDEV-2617` §13; see §15.)*
 Transcripts: `/tmp/rev/2605r5-agy.txt` (2,865 B, `TREE=clean`) and `/tmp/rev/2605r5-codex.txt`
 (208,894 B, 89 ticket-key hits).
 
@@ -674,3 +724,47 @@ Transcripts: `/tmp/rev/2605r5-agy.txt` (2,865 B, `TREE=clean`) and `/tmp/rev/260
 
 §14's semantic scope was judged **correct and sufficient**; the defect was purely the extraction
 boundary. M6–M11 are closed, M3–M4 closed, and every cited repository location verified.
+
+## 15. Round-6 gate outcome
+
+**gemini `REQUEST_CHANGES` (3 High, 1 Medium) · codex `REQUEST_CHANGES` (1 High, 4 Medium).**
+Frozen at `093df68f…`, sha256 `d4672051…`. Transcripts:
+`~/.claude/review-transcripts/2605r6-agy.txt` (3,021 B) and `…/2605r6-codex.txt`
+(212,342 B, 71 ticket-key hits). Both transcripts are complete and reached an explicit verdict line;
+neither round-6 arm needs re-running.
+
+**Transcripts moved off `/tmp`.** Rounds 1–5 cite `/tmp/rev/…`, which macOS purged under disk
+pressure — those transcripts are gone and their sizes here are the only surviving record. Round 6
+onward captures to `~/.claude/review-transcripts/`.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the two-column instruction still contradicts the three-column triple schema** — `:181`'s sketch and §7 step 1 both said `surface → in/out` | **confirmed** — both reviewers cite the *same two sites* independently; a nine-row two-column table can pass while producer identity is misstated, and M12c cannot observe the association without `producer_id` | §7 step 1 (now step 2) carries the **exact nine `(surface_id, producer_id, scope)` triples**; `:181`'s sketch is marked superseded rather than deleted, since it is round-3 history |
+| 2 | gemini | **M2 is a gate-adequacy comparison, not a candidate mutant** — `:144` weakens the assertion to "contains the word *excluded*" | **confirmed** — M2 mutates the **test**, not the document or parser, and is structurally identical to M1/M3; as a "mutant that must fail" it is unsatisfiable | moved into the M1/**M2**/M3 differential group in §6; §7's mutation step now reads M4–M13 vs M1/M2/M3 |
+| 3 | codex | the risk register restates **every proof M1–M13** as a mutant the clean candidate rejects, contradicting §6's own taxonomy | **confirmed** | row rewritten to name both kinds and to forbid restating them as one |
+| 4 | codex | the same row names only **M5a/M5b**, dropping **M5c** — reopening round 4's prose-gating gap | **confirmed** | **M5c** restored to the row |
+| 5 | codex | **§7's order contradicts its own prerequisite** — §14 is created at step 3 but the helper split is at step 5, while `:399` requires the split first | **confirmed** | **resolved by atomicity, not by reordering** — see below |
+| 6 | codex | the round-5 record's digest `325dc5ed…` is the **round-4** value copied forward | **confirmed independently** — the blob at `9548299a` hashes to `d9723cb8a3e397f81f4654fd42bac564c79f3c0e6ceb0449cc9c82c4bef473d5` | corrected in §14 with the error noted in place |
+| 7 | gemini | `test_section_13_exists_before_cross_references` (`test_doc_gates.py:319`) will no longer test what its name says once the boundary moves to `## 14.` | **confirmed** — the test exists at that line | renamed and re-pointed as part of §7's test-rewrite step |
+
+**Finding 5 is fixed differently from how codex proposed it.** codex asked to *move the helper split
+ahead of §14 creation*. That ordering is also broken: with §14 absent, `_section13()`'s new
+`text.index("## 14.", start)` raises `ValueError`, and a suite **error** is not a controlled result.
+Both orderings fail, in opposite directions, so §7 step 1 makes the boundary change and §14's creation
+**one indivisible step**. This is a deliberate divergence from the reviewer's literal instruction and is
+flagged here for round 7 rather than applied silently.
+
+**One gemini High is REJECTED, with reasons.** gemini's H2 claimed the `_section13()` split "breaks the
+test suite on M8 reversion" with a `ValueError`, because `## 14.` is absent from the `v2.6.1` text. It
+does not: **M8 reverts only §13** (`:389`, `:414`, `:426`), not the whole document. §14 is a *separate*
+section created after §13 (`:520`) and is untouched by M8, so `## 14.` is still present and
+`text.index` still resolves. codex, reviewing the same design, judged the §13/§14 helper split sound.
+gemini's instinct nonetheless located a **real** hazard at the wrong point in time — the identical
+`ValueError` is reachable during *implementation* if the split lands before §14 exists, which is
+precisely what finding 5's atomicity requirement now forecloses. The claim is recorded as rejected on
+its stated grounds and credited for the hazard it surfaced.
+
+**Consistent with this campaign's pattern:** codex was the more reliable arm on mechanical claims
+(the digest error, the ordering contradiction), while gemini's one confirmed original finding (M2's
+classification) was a taxonomy judgement. Concordance on finding 1 — the same High, from the same two
+sites, reached independently — is the strongest signal in this round.

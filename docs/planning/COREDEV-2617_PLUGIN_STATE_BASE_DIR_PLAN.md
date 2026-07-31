@@ -1,6 +1,12 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 4 gated** — **codex `APPROVE_WITH_NOTES` (no High/Medium)**, gemini
+**Status:** Planning — **round 5 gated** (**gemini `APPROVE` / codex `REQUEST_CHANGES`**). **"Guard at
+script entry" does not hold D′**: the state libraries are *sourced* and have no entry, so `marker_*`,
+`log_*` and `context_*` still compose root paths for any caller — §7 now guards inside each **public
+primitive** off a single validated cached base, and N1/N2 must call those primitives directly. The
+`swift-reviewer.md` fence finally gets its control flow, and §13's round-4 digest was the round-3 value
+copied forward. **Round 4's approving codex verdict did not reproduce on identical bytes — see §13's
+retraction.** Previously — round 4 gated: **codex `APPROVE_WITH_NOTES` (no High/Medium)**, gemini
 `REQUEST_CHANGES` on §7's consumer table, which was missing the **destructive** sites
 (`mktemp`/`mv -f` on root-derived paths) and the pre-commit **pass** cases. Both now closed; the locked
 decisions are closed out. See §13. Previously — round 3 gated (**gemini REQUEST_CHANGES ×1 / codex REQUEST_CHANGES ×5**).
@@ -9,9 +15,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Round 1 is in §10. Awaiting round 3.
+root; the consumer enumeration is now in the implementation order. Rounds 1-5 are in §10-§14.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-30 (round 4, post-gate revision)
+**Last Updated:** 2026-07-30 (round 5, post-gate revision)
 **Measured against:** HEAD `9548299` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -288,21 +294,38 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
 
    | consumer | on an unresolved base |
    |---|---|
-   | `pre-commit-checks.sh` (`:44`, `:69`) | skip the marker write; **must not** bypass its final `EXIT_CODE` (`:185`) |
-   | `swift-lint-check.sh` (`:424`) | skip persistence; **still emit** the model-visible block |
-   | `swift-build-verify.sh` (`:63`) | skip the log; **still emit** the advisory |
+   | `pre-commit-checks.sh` (`:44`, `:69`) | skip the marker write; **must not** bypass its final `EXIT_CODE` (`:192`) |
+   | `swift-lint-check.sh` (`:425`) | skip persistence; **still emit** the model-visible block |
+   | `swift-build-verify.sh` (`:65-66`) | skip the log; **still emit** the advisory |
    | `reviewer-roster.sh` (`:33`, `:53`, `:256`) | deliberately **fail-closed** — classify reviewers `UNATTRIBUTED` and exit **3**, never fail open |
    | `stop-quality-marker-gate.sh` — **`:66`, `:74`, `:75`, `:117`, `:120`, `:123`, `:131-132`** | **the destructive ones.** `:66` composes `SENTINEL="$(marker_dir)/…"`; `:120` runs `mktemp "$(marker_dir)/.stopgate.XXXXXX"`; `:123` runs `mv -f "$_STMP" "$SENTINEL"`. On an unresolved base these **create and move files under `/.state/`**. Round 3 guarded only `:131-132`. Guard the whole script at entry |
    | `pre-commit-checks.sh` — **`:47` and `:72` too** | round 3 listed only the **fail** cases (`:44`, `:69`); the **pass** cases were unguarded, so a *successful* run wrote to a root path |
-   | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:424` is reached |
+   | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
    | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
-   | `agents/swift-reviewer.md:247` | composes a root path; round 3 noted this but gave it no control-flow requirement |
+   | `agents/swift-reviewer.md:247-249` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
    | `scripts/test-hooks.sh` — **`:624`, `:796`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run |
    | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
 
-   > **Guard at script entry, not per call site.** Round 4 showed a per-line table is the wrong shape:
-   > round 3's version named six of the fourteen sites and missed every destructive one. Each consumer
-   > should resolve the base **once**, at entry, and take its documented no-persistence path if
+   > **Round 5 supersedes "guard at script entry" — entry alone cannot hold D′.** Round 4 was right that
+   > a per-line table is the wrong shape (round 3's named six of fourteen sites and missed every
+   > destructive one), but "at entry" does not reach the code that actually composes the paths. The state
+   > libraries are **sourced standalone** (`scripts/lib/paths.sh:12-16`) and **have no script entry**;
+   > their public primitives compose before writing — `marker.sh:33-34,117-127`, `log.sh:31-32,42-58`,
+   > `context.sh:39,54-55,190-191,267-286`. An entry check in one script does nothing for a *different*
+   > script that sources the library later, and nothing for a `marker_write` added next month.
+   > Entry-only early exits are also **wrong** for `pre-commit-checks.sh`, `swift-lint-check.sh`,
+   > `swift-build-verify.sh` and `reviewer-roster.sh`, whose primary behaviour must continue.
+   >
+   > **The durable mechanism is a guard inside each public state primitive.** `paths.sh` resolves the
+   > base **once** into a validated cached value; every primitive that composes a path
+   > (`marker_dir`, `marker_write`, `marker_commit`, `log_append`, `context_*`) returns its
+   > **no-persistence result** when that cached base is unresolved or empty, and composes nothing. The
+   > guarantee then holds for **any** caller, including ones not yet written — which is what makes the
+   > consumer table an inventory of *behaviour to preserve* rather than the enforcement mechanism.
+   > **N1 and N2 must therefore call `marker_*`, `log_*` and `context_*` directly**, with the variable
+   > both **unset** and set **empty**, not only through the named scripts.
+   >
+   > Each consumer still resolves the base **once**, at entry, and takes its documented no-persistence path if
    > unresolved — so a newly added `marker_write` cannot silently reintroduce the defect.
 
    Remaining sites to guard:
@@ -358,6 +381,14 @@ findings; gemini's High was §7's incomplete consumer table, now closed.
 - The `-inline` base directory is residue of **unknown provenance** — evidence for §4.2's ambiguity
   argument, not a separate defect. *(Round 3: this bullet previously asserted a project-scoped origin,
   contradicting the withdrawal in §2. §11 claimed all retractions were applied; this one was not.)*
+
+> **Transcript-path notice (2026-07-30).** Every `/tmp/rev/…` path cited in the round histories below
+> **no longer exists**: the machine's root volume filled, and macOS purged `/private/tmp`, destroying all
+> 105 captured transcripts of this campaign in one event. The byte counts and hit counts recorded here
+> were taken from those transcripts while they existed and are left as the historical record — but they
+> are **no longer independently reopenable**, and a reviewer should treat them as claims, not evidence.
+> Codex's own rollout logs under `~/.codex/sessions/` survived and were used to recover the affected
+> round's findings. Captures from this round forward go to `~/.claude/review-transcripts/`.
 
 ## 10. Round-1 gate outcome
 
@@ -446,10 +477,17 @@ rather than quietly refreshed.
 ## 13. Round-4 gate outcome
 
 **codex `APPROVE_WITH_NOTES` (no High or Medium) · gemini `REQUEST_CHANGES` (High).** Frozen at
-`9548299a…`, sha256 `e07fe1ec…`. Transcripts: `/tmp/rev/2617r4-agy.txt` (3,767 B, `TREE=clean`) and
+`9548299a…`, sha256 `19fc4e43…`. *(Round 5 correction: this line recorded `e07fe1ec…`, the digest of the **round-3** freeze `51642a49` — the previous round's value copied forward. Identical defect in `COREDEV-2605` §14; both found in round 5/6.)* Transcripts: `/tmp/rev/2617r4-agy.txt` (3,767 B, `TREE=clean`) and
 `/tmp/rev/2617r4-codex.txt` (417,546 B, 66 ticket-key hits).
 
-**This is the campaign's first approving verdict**, and the split is instructive: codex judged D′ safely
+> **Round 5 retraction — this verdict does not reproduce.** Re-running the *identical* round-4 codex
+> prompt against the *same* frozen bytes returned **`REQUEST_CHANGES`**, and found a real design defect
+> (entry-guards cannot reach the sourced state libraries — §7). The transcripts of both runs are
+> byte-verified against the same digest, so this is reviewer non-determinism, not a changed plan.
+> **Treat the line below as a sampled verdict, not as evidence the plan was sound at round 4.** The gate
+> now requires an approving pair that **reproduces** across two consecutive rounds at the same digest.
+
+**This was recorded as the campaign's first approving verdict**, and the split is instructive: codex judged D′ safely
 implementable across the consumer set it had enumerated, while gemini went back to the scripts and found
 the enumeration itself incomplete — including every destructive site.
 
