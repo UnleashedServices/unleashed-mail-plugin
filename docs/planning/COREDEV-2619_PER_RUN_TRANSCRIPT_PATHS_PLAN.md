@@ -346,6 +346,11 @@ rejected. *Positive (round 4, codex):* a transcript captured **after** an alread
 Without the positive case, M4 passes against the explicitly rejected implementation that creates its
 "launch" record while writing the artifact — an older transcript still predates that late record. Run
 both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
+**Plus the ABSENT-RECORD mutation (round 8 reproduction, codex):** delete the `.launch` entirely — the
+gate must **fail**. Without it, every listed M4 case *requires a record to exist*, so an implementation
+that validates only when `.launch` is present passes them all while violating §7's explicit
+absent-record rejection. **codex wrote that §7 requirement itself in round 7 and then approved a proof
+set that never tested it** — which is precisely why the reproduction run exists.
 **Plus the MISMATCHED-RECORD mutation (round 7, gemini):** write a `.launch` whose payload is a
 syntactically valid but *different* run ID from the one in the transcript's filename — the gate must
 **fail**. Also cover **empty** and **malformed** payloads. *(§4.5's prose announced "M4 gains a
@@ -385,28 +390,40 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
 ## 7. Implementation order
 
 1. **Inventory and classify all 31 sites** and commit the classification — M3 asserts it.
-2. **Add `pty-capture.py --allocate`**: validate the base (§4.1), create the `0700` parent, allocate the
-   leaf with `O_CREAT|O_EXCL` in a bounded retry loop, **create the `<path>.launch` record `O_EXCL` in
-   the SAME call, containing the run ID**, then print the path behind the stable marker. Add M1.
+2. **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
+   `reviewer` component that is not `[A-Za-z0-9._-]+`** — a separator or `..` would otherwise escape the
+   intended parent; create the `0700` parent and **fail closed if it already exists with a different
+   mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate the leaf
+   with `O_CREAT|O_EXCL` in a bounded retry loop; **create the `<path>.launch` record `O_EXCL` in the
+   SAME call, containing the run ID**; then print the path behind the stable marker. Add M1.
+   *(Round 8 reproduction, gemini: this step omitted the grammar and the mis-moded-parent rule, both
+   mandated by §4.1 and both required by M1 — so an implementer working from §7 alone would build an
+   allocator vulnerable to path escape and M1 would fail on it.)*
    *(Round 6, gemini: this step omitted the launch record entirely, so an implementer following §7 would
    build the allocator without it and step 6's freshness check would fail closed forever.)*
-3. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
+3. **Create the shared Bash wrapper** — `scripts/review/allocate-transcript.sh`. It sources
+   `context.sh` for `context_repo_hash`, calls `pty-capture.py --allocate …` with that hash, and echoes
+   the marker line. **This is the entry point the codex skill is granted** (§4.2's added
+   `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`), because the codex recipe runs Python and the
+   hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
+   said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
+4. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
    `review-synthesis` — including a ticket/round **input contract** for synthesis.
-4. **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
+5. **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
    and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
    leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
-5. **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
+6. **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
-6. **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
+7. **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
    **before dispatch**, bound to the run ID, looked up per transcript, and **fails closed when the record is absent, empty, malformed, or its run ID
    does not equal the one in the transcript's filename** *(round 7, gemini: this step said only "when
    absent", dropping the ID equality that makes the record an anchor rather than a touch-file)*.
    Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
    Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
    record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
-7. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+8. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
