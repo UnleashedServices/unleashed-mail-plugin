@@ -1,176 +1,231 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **not yet gated.** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
-first: once `verify` re-digests every transcript, a clobbered transcript stops being a confusing
-measurement and becomes a **hard gate failure**.
-**Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced twice on this
-machine, once destructively.
-**Measured against:** HEAD `51f6050` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (initial draft, pre-gate)
+**Status:** Planning — **round 1 gated (codex `REQUEST_CHANGES` ×3 High + ×2 Medium; the gemini arm
+degenerated and produced no verdict).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
+first.
+**Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
+2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
+**Measured against:** HEAD `78e28f2` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
+**Last Updated:** 2026-07-31 (round 1, post-gate revision)
 
 ---
 
-## 1. The defect, reproduced
+## 0. Prior art — this was already found, and the plan must not pretend otherwise
 
-The shipped review recipes write every transcript to a **fixed, shared, world-readable path** —
-`/tmp/agy-out.txt` and `/tmp/codex-out.txt`. Every review of every plan, in every project, on this
-machine, writes to those two names.
+**`docs/audits/PLUGIN_AUDIT_2026-07-19.md` MAJ-10 identified this defect twelve days before this plan
+was written**, with a sharper framing than the first draft had, and with a suggested fix this plan now
+adopts. Round 1's first draft cited neither. The audit's material finding:
 
-**Reproduced, twice, both times on this campaign:**
+> *"The entire Plan Review Gate evidence chain runs through fixed, shared, never-pre-cleaned /tmp paths
+> … so a stale transcript from a previous round, a different plan, or a concurrent session satisfies the
+> dual-review gate as if it were this round's review."*
 
-1. **Cross-project clobber (COREDEV-2497 round 2).** A round-1 codex transcript was measured at
-   769,988 bytes from `/tmp/codex-out.txt`. By the time it was read, that file held **a different
-   project's plan review** — 628 occurrences of `lumawake`, **zero** of `COREDEV-2497`. Another
-   project's gate round had overwritten the shared path between the run and the read. The headline
-   measurement of a gate round was taken from the wrong file, and the error was then "corrected" in the
-   wrong direction before anyone noticed.
-2. **Destructive loss under disk pressure.** With all transcripts under `/tmp`, macOS purged
-   `/private/tmp` when the root volume filled and destroyed **105 captured transcripts** of this
-   campaign between two tool calls. Two rounds' findings were lost unread.
+**That is the defect: a GATE BYPASS, not a measurement error.** §1 is rewritten around it.
 
-**A third hazard is documented in the code but not in the recipes.** `scripts/pty-capture.py:314-320`
-notes that "the recipes use predictable `/tmp` paths, so a pre-created symlink or a 0644 file is a local
-hazard" — another user can pre-seed `/tmp/agy-out.txt` as a symlink and redirect a capture that may quote
-message bodies or tokens. The wrapper already defends itself with `O_NOFOLLOW` + mode `0600`; the
-**predictability** it is defending against is what this ticket removes.
+## 1. The defect — a stale transcript satisfies the gate
 
-## 2. Why now — 2497 turns a confusion into a failure
+Every review of every plan, in every project, on this machine writes to two fixed names:
+`/tmp/agy-out.txt` and `/tmp/codex-out.txt`, plus their `.captureid` sidecars.
 
-Today a clobbered transcript produces a *wrong measurement*: a human reads the wrong bytes and may not
-notice. After `COREDEV-2497` §4.1 lands, `verify` **re-digests every transcript recorded in an approving
-artifact**. A transcript overwritten between capture and verification then fails its digest check, and
-the gate fails closed — correctly, but with a diagnosis ("digest mismatch") that points at the reviewer
-rather than at the collision that actually caused it.
+**The bypass, as the audit reconstructs it.** The documented flow is 2-6 review rounds per plan, each
+overwriting the same two files. Revise the plan, re-snapshot, dispatch the reviews — and one CLI
+invocation fails to *start* (auth expired, a Bash-tool-level kill before `pty-capture`'s finally-write,
+a `command -v agy` short-circuit). **The previous round's non-empty transcript survives.**
+`skills/review-synthesis/SKILL.md` maps only *missing, empty or unparseable* to `MISSING` — **stale is
+none of those** — so the old `APPROVE` prose is read as this round's verdict, and
+`review-verdict.py write --reviewer gemini=APPROVE:/tmp/agy-out.txt` passes every provenance check:
+non-empty, real 64-hex digest, path and captureId distinct from codex's. **All of those checks are
+intra-artifact.** The digest binding covers plan bytes, never transcript freshness.
 
-**So the ordering is not stylistic.** 2619 removes the collision while it is still merely confusing.
-Landing 2497 first converts a latent measurement bug into an intermittent, misattributed gate failure.
+**Two independent reproductions on this campaign:**
+
+1. **Cross-project clobber.** A round-1 codex transcript measured at 769,988 bytes from
+   `/tmp/codex-out.txt` held **another project's** plan review by the time it was read — 628 `lumawake`
+   hits, **zero** `COREDEV-2497`. Another project's gate round had overwritten the shared path.
+2. **Destructive loss.** macOS purged `/private/tmp` under disk pressure and destroyed **105**
+   transcripts between two tool calls; two rounds' findings were lost unread.
+
+**Everything else in this plugin is repo-hash namespaced** via `scripts/lib/context.sh`; these paths
+are not.
+
+## 2. Why now — 2497 changes the failure mode, and 2617 changed the options
+
+Today a stale transcript passes the gate silently. After `COREDEV-2497` §4.1 lands, `verify` re-digests
+every transcript in an approving artifact, so a *clobbered* transcript fails closed — correctly, but
+diagnosed as "digest mismatch", pointing at the reviewer rather than the collision. **2619 removes the
+collision while it is still fixable in one place.**
+
+**`COREDEV-2617` (v2.6.5) also changed the design space**, which the first draft got wrong: it assumed
+`${CLAUDE_PLUGIN_DATA}` was unusable because the variable is unset outside a hook. That conflates two
+mechanisms — the **environment variable** is not exported to a Bash tool, but the **`${CLAUDE_PLUGIN_DATA}`
+placeholder is substituted anywhere in plugin skill content and the directory is created on first
+reference** (plugins reference; confirmed by codex round 1). So the plugin data dir *is* available to a
+skill recipe.
 
 ## 3. Guiding principle, and the ceiling
 
-**Principle: a capture's path must be unique to the run that produced it.** Not unique per plan, per
-ticket or per day — per *run*, because the reproduced defect is two runs sharing one name.
+**Principle: a capture's path must be unique to the RUN that produced it** — not to the ticket, not to
+the round. Round 1's design was per ticket/round and failed on its own terms: a sequential retry of the
+same round overwrites its predecessor, which is the defect.
 
-**Ceiling — what this ticket does NOT do.** It does not make a transcript tamper-proof, and it is not a
-security boundary. Anyone who can write the transcript directory can write a transcript; `2497` is what
-detects a *changed* transcript, and `2618` is what cross-checks the verdict token inside it. This ticket
-removes an **accidental** collision, and with it the predictability that makes the symlink hazard cheap.
+**Ceiling — narrowed after round 1.** This ticket removes an **accidental collision** and makes a stale
+capture impossible to mistake for a fresh one. It is **not** a security boundary, and the first draft
+over-claimed on three counts, each corrected:
+
+- Captures are **not world-readable** — `pty-capture.py` forces mode `0600`.
+- A pre-created leaf symlink is **refused** by `O_NOFOLLOW`, not followed.
+- A deterministic `<ticket>r<round>` name **is still predictable**, so "removing predictability" was
+  never what this buys.
+
+**What it does buy, security-wise:** a correctly-owned `0700` parent and an **atomically allocated**
+name, which together close the squat/pre-seed window on a multi-user host. Detecting a *changed*
+transcript is `COREDEV-2497`; cross-checking the verdict token inside it is `COREDEV-2618`.
 
 ## 4. Findings and fixes
 
-### 4.1 — The path scheme (High)
+### 4.1 — The path scheme: per-RUN, atomically allocated (High — round 1, codex)
 
-**Fix.** Captures go to a per-run path under a durable, private directory:
+**Round 1 rejected the round-1 scheme.** `~/.claude/review-transcripts/<ticket>r<round>-<reviewer>.txt`
+fails three ways:
+
+- **`.claude` is a PROTECTED path.** Writes there **prompt in default mode and are denied in
+  `dontAsk`**, and ordinary allow rules do not pre-approve them. The drift checks M3/M4 could pass while
+  the real workflow stalls.
+- **Per ticket/round is not per run.** A sequential retry overwrites; concurrent runs need a lock the
+  plan never specified. **M1 (refuse) and M2 (same name re-runs cleanly) encoded contradictory
+  semantics.**
+- **Reservation is defeated by the existing callers.** `pty-capture.py` truncates its target, and
+  `scripts/review/isolated-agy-review.sh:89` **deletes the target before launch** — so any scheme that
+  reserves *the target itself* is undone by the caller.
+
+**Fix — allocate, do not name.** `pty-capture.py` gains a `--allocate <dir>` mode: it creates the parent
+`0700`, then allocates a fresh path with `O_CREAT|O_EXCL` in a retry loop, and **prints the allocated
+path on stdout** so the caller propagates it rather than re-deriving it:
 
 ```
-~/.claude/review-transcripts/<ticket>r<round>-<reviewer>.txt
+${CLAUDE_PLUGIN_DATA}/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt
 ```
 
-with `<out>.captureid` beside it, exactly as today.
+- **`${CLAUDE_PLUGIN_DATA}`** — substituted in skill content, created on first reference, and *not*
+  protected. Replaces `~/.claude/`.
+- **`<repo-hash>`** — reuse `context.sh`'s existing repo-hash slug, so two checkouts cannot collide.
+  Everything else in the plugin is already namespaced this way.
+- **`<runid>`** — the atomically allocated component. `O_EXCL` is what makes concurrency safe; refusal
+  is **not** the right behaviour, because two legitimate concurrent captures must be able to coexist.
+- **Ticket/round stay in the name** for human legibility, not for uniqueness.
 
-Three properties, each load-bearing:
+**The path must reach synthesis.** `skills/review-synthesis/SKILL.md` currently has **no ticket/round
+input contract** — it reads two fixed names. The allocated path is therefore threaded explicitly:
+`--reviewer gemini=<STATUS>:<allocated-path>`, and the skill takes the two paths as inputs.
 
-- **Durable, not `/tmp`.** `/tmp` is purged under disk pressure — that is finding 1's second
-  reproduction, and it destroyed 105 transcripts. `~/.claude/` is not swept by the OS.
-- **Named for the round.** `2497r11b-codex.txt` cannot be clobbered by `2605r8-codex.txt`, and a human
-  reading a finding three rounds later can still open the exact file it came from.
-- **Private.** `pty-capture.py` already forces `0600`; the directory is created `0700`.
+**Proof — M1 (new):** two concurrent `--allocate` calls in the same directory must yield **two distinct
+paths, both created**, and neither truncated. Must FAIL against a scheme that derives the name from
+ticket/round.
 
-**This is already the campaign's operational practice** — every transcript since the `/tmp` purge has
-been captured this way. The defect is that **the shipped skills still document `/tmp`**: the plugin
-teaches a recipe its own maintainers abandoned after losing two rounds of findings to it. A consumer
-following `skills/gemini-review/SKILL.md` today gets the clobber and the purge.
+### 4.2 — The `allowed-tools` grants are ALREADY broken (High — round 1, codex)
 
-**Proof — M1:** point two concurrent captures at the same ticket/round and assert the second is refused
-rather than silently overwriting. **M2:** capture, then re-run the *same* command, and assert the
-`.captureid` changes — proving the second run is a new capture and not a stale read.
+Round 1 established something worse than the first draft claimed. `allowed-tools` documents substitution
+for **`${CLAUDE_SKILL_DIR}` and `${CLAUDE_PROJECT_DIR}` only** — not `${HOME}`, not
+`${CLAUDE_PLUGIN_ROOT}`, not `${CLAUDE_PLUGIN_DATA}`.
 
-### 4.2 — The `allowed-tools` grants break SILENTLY (High)
+**So the two shipped grants are already unsupported substitutions, today:**
 
-Two skills carry a **literal-prefix** permission grant:
+| skill | grant | status |
+|---|---|---|
+| `skills/codex-review/SKILL.md:7` | `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)`, `Bash(rm -f /tmp/codex-out.txt*)` | the `${CLAUDE_PLUGIN_ROOT}` prefix **does not expand** |
+| `skills/gemini-review/SKILL.md:8` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`, `Bash(rm -f /tmp/agy-out.txt*)` | same |
 
-| skill | grant |
-|---|---|
-| `skills/codex-review/SKILL.md:7` | `Bash(rm -f /tmp/codex-out.txt*)` |
-| `skills/gemini-review/SKILL.md:8` | `Bash(rm -f /tmp/agy-out.txt*)` |
+That is a **pre-existing defect this ticket surfaces**, not one it introduces — and it means the fix
+cannot be "move the literal", because the literal was never doing what it appeared to do.
 
-`allowed-tools` is a **pre-approval grant matched by literal prefix**. Change the path and the grant no
-longer matches — the cleanup is no longer pre-approved, so mid-gate the run either prompts or is denied,
-**depending on the consumer's permission mode**. Nothing fails loudly; a gate round stalls or silently
-skips its pre-clean, and a *stale previous transcript* is then read as this round's verdict. That is the
-exact failure mode `isolated-agy-review.sh:88-89` pre-cleans against ("a stale previous-round transcript
-would be read as THIS round's verdict").
+**Fix.** The pre-clean stops being a *grant* problem:
 
-**Fix.** The grants move to the new prefix in the *same commit* as the paths:
-`Bash(rm -f ${HOME}/.claude/review-transcripts/*)`. If placeholder expansion is not available in
-`allowed-tools`, the pre-clean moves **into `pty-capture.py`** (which already pre-cleans `out_path` and
-`out_path.captureid`) and the grant is dropped entirely — one mechanism, no literal path in a permission
-string.
+- **Allocation replaces cleaning.** With `O_EXCL` allocation there is nothing to pre-clean — a fresh
+  path cannot hold a stale transcript. The `rm -f` grants are **deleted**, not rewritten.
+- **The outer pre-clean stays where it must.** Moving it into `pty-capture.py` cannot cover
+  "the wrapper never starts", which is exactly the case `isolated-agy-review.sh:86-91` exists for and
+  exactly the audit's reconstructed bypass. That outer `rm -f` targets a path the harness itself just
+  allocated, so it needs no literal-path grant.
 
-> **This is the item a naive migration misses.** Every other site is a path in prose or a command;
-> these two are *permission* strings, and a mismatch there is invisible until a consumer hits it in a
-> mode this repo's own CI never runs.
+**Proof — M2 (new, replaces the old M3/M4):** a **runtime** check, not a string check. Assert that the
+gate completes with **no `/tmp/` literal and no unsupported substitution in any `allowed-tools` line**,
+and that a validator rejects any `allowed-tools` value containing a `${…}` outside
+`{CLAUDE_SKILL_DIR, CLAUDE_PROJECT_DIR}`. The old M3/M4 proved only string consistency and would have
+passed while the workflow stalled.
 
-**Proof — M3:** rewrite the paths and **leave the grants** — assert the drift check flags the mismatch.
-**M4:** rewrite both and assert no literal `/tmp/` path remains in any `allowed-tools` line.
+### 4.3 — The site inventory, measured properly this time (Medium — round 1, codex)
 
-### 4.3 — The measured site inventory (Medium)
+**31 matched lines across 13 files**, at `78e28f2`, counting only the two output literals.
 
-**23 sites across 7 files**, measured at `51f6050` — not the "20 sites / 6 files" carried in the campaign
-notes, which was an estimate:
+| file | lines | rewrite | quote-keep | note |
+|---|---|---|---|---|
+| `skills/review-synthesis/SKILL.md` | 5 | 5 | 0 | needs a ticket/round input contract (§4.1) |
+| `skills/gemini-review/SKILL.md` | 5 | 5 | 0 | its `:24` is `/tmp/agy-ping.txt`, a **different** path, and is NOT among these 5 |
+| `skills/codex-review/SKILL.md` | 5 | 5 | 0 | includes the `rm -f` grant, which is **deleted** not rewritten (§4.2) |
+| `docs/audits/PLUGIN_AUDIT_2026-07-19.md` | 4 | 0 | 4 | MAJ-10 — the audit finding that named this defect |
+| `scripts/pty-capture.py` | 3 | 2 | 1 | `:317` names the path its `O_NOFOLLOW` defends |
+| `skills/brainstorm/SKILL.md` | 2 | 2 | 0 | `--reviewer` examples |
+| `README.md` | 1 | 1 | 0 | feature blurb |
+| `scripts/review-verdict.py` | 1 | 0 | 1 | `:129`, quotes the duplicate-transcript defect |
+| `scripts/tests/test_review_verdict.py` | 1 | 0 | 1 | `:146`, same |
+| `CHANGELOG.md` | 1 | 0 | 1 | a shipped release note |
+| `docs/planning/OCTO_ADOPTION_PLAN.md` | 1 | 0 | 1 | historical |
+| `docs/planning/HANDOFF.md` | 1 | 0 | 1 | historical |
+| `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md` | 1 | 0 | 1 | historical |
+| **TOTAL** | **31** | **20** | **11** | 13 files |
 
-| file | sites | lines | classification |
-|---|---|---|---|
-| `skills/gemini-review/SKILL.md` | 6 | `:8` `:24` `:71` `:137` `:197` `:199` | 1 **grant** (`:8`), 5 rewrite |
-| `skills/codex-review/SKILL.md` | 5 | `:7` `:48` `:49` `:51` `:181` | 1 **grant** (`:7`), 4 rewrite |
-| `skills/review-synthesis/SKILL.md` | 5 | `:23` `:24` `:38` `:137` `:138` | 5 rewrite |
-| `skills/brainstorm/SKILL.md` | 2 | `:194` `:195` | 2 rewrite |
-| `scripts/pty-capture.py` | 3 | `:27` `:31` `:317` | 2 rewrite (docstring examples), 1 **quote-keep** (`:317`, the symlink-hazard comment names the predictable path it defends against) |
-| `scripts/review-verdict.py` | 1 | `:129` | 1 **quote-keep** |
-| `scripts/tests/test_review_verdict.py` | 1 | `:146` | 1 **quote-keep** |
+**Totals: 31 lines, 13 files — 20 rewrites, 11 quote-keeps.**
 
-**Totals: 23 sites, 7 files — 2 grants, 18 rewrites, 3 quote-keeps.**
+**`/tmp/agy-ping.txt` is a separate decision.** It is the preflight ping, not an evidence artifact; it is
+also a fixed shared path. **Out of scope here, recorded so it is a decision and not an oversight.**
 
-**Not every site is a rewrite.** `review-verdict.py:129` and `test_review_verdict.py:146` *quote the
-historical defect* — `gemini=APPROVE:/tmp/agy-out.txt` recorded for **both** reviewers, the copy-paste
-slip that once produced a GATE OK backed by one review. `pty-capture.py:317` names the predictable path
-its `O_NOFOLLOW` defence exists for. Rewriting any of the three would corrupt the record of a real
-finding or the rationale for live code. **Each site is classified before it is touched** — `rewrite`,
-`quote-keep`, or `grant` — and the inventory is part of the change.
+> *(This table has now been wrong **three times**, and the third is the sharpest: with the line counts
+> finally correct at 31/13, the rewrite/quote-keep split still read "19 rewrites, 12 quote-keeps" while
+> the rows summed to **20/11**. Draft 1 said 23/7 from a partial grep; the "correction" still said 23/7
+> because it **counted `/tmp/agy-ping.txt`** — a different path — and omitted `README.md`,
+> `CHANGELOG.md`, the audit and three planning docs. **Every version was internally consistent**, which
+> is exactly how a wrong inventory survives review. The per-file split above is now stated so the totals
+> can be summed mechanically rather than asserted, and M3 checks them.*
+>
+> *(Original note:)* *This table has now been wrong twice. Draft 1 said 23/7 from a partial grep; the "correction" still
+> said 23/7 because it **counted `/tmp/agy-ping.txt` toward the output-literal total** — a different
+> path — and omitted `README.md`, `CHANGELOG.md`, the audit and three planning docs. Both times the
+> total was internally consistent, which is how a wrong inventory survives. The figures above are
+> `git ls-files | xargs grep -n` over the two literals only.)*
 
-> *(The first draft of this table was wrong in three rows — it asserted 5/4/3 where the measured values
-> are 6/5/1, having been written from an earlier partial grep. The totals happened to agree at 23, which
-> is exactly how a wrong breakdown survives review. Every figure above is now `grep -n` output.)*
+**Proof — M3 (was M5):** a drift check asserting no output literal survives outside the enumerated
+`quote-keep` set, and that the set is exactly the one above.
 
-**Proof — M5:** a drift check asserts that no `/tmp/agy-out` or `/tmp/codex-out` literal survives
-**outside** the sites classified `quote-keep`, and that the `quote-keep` set is exactly the enumerated
-one. A new literal added anywhere else fails it.
+### 4.4 — Two existing defences must keep working (Medium)
 
-### 4.4 — What already defends against a collision, and must keep working (Medium)
+- **`review-verdict.py`'s distinct-evidence check** — recording the same transcript for both reviewers
+  once produced a **GATE OK in which one review backed both approvals**.
+- **`.captureid`** — a per-run random ID, already written fresh on every capture.
 
-Two mechanisms exist and this change must not weaken either:
+**Round 1 correction: neither of these is a pre-fix failure.** `test_review_verdict.py:143-155` already
+covers the first, and `pty-capture.py:322-328` already writes a fresh ID every run. They are **regression
+tests**, and this plan no longer describes them as proofs that fail before the fix.
 
-- **`review-verdict.py`'s distinct-evidence check.** Recording the *same* transcript for both reviewers
-  (`gemini=APPROVE:/tmp/agy-out.txt` + `codex=APPROVE:/tmp/agy-out.txt` — one copy-paste slip in the
-  documented two-file flow) once produced a **GATE OK in which one review backed both approvals**. Every
-  prior check passed because they compared *labels*.
-- **`.captureid`.** A per-run random ID written beside the transcript, used as content-independent proof
-  that two reviewers were two separate wrapper runs.
+### 4.5 — Freshness, which paths alone do not give (Medium — from the audit)
 
-Per-run paths make the copy-paste slip *harder*, not impossible — the operator still types both paths.
-**Neither check may be relaxed on the grounds that paths are now distinct.**
+Per-run paths stop a stale transcript being *reused*; they do not prove the transcript is *newer than
+the gate launch*. The audit's second suggestion covers that gap: **`review-verdict.py` records and checks
+transcript mtime ≥ the snapshot sidecar's mtime**, so a transcript older than the gate launch fails
+closed.
 
-**Proof — M6:** record the same per-run transcript for both reviewers and assert the distinct-evidence
-check still fails the gate.
+**Adopted as in scope**, because without it a determined operator can still hand the gate an old file by
+path. **Proof — M4 (new):** record a transcript whose mtime predates the snapshot; the gate must fail.
 
 ## 5. Risk register
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| The `allowed-tools` grants are missed, and consumers stall mid-gate | **High** | §4.2 + M3/M4; the grants move in the same commit as the paths |
-| A historical quote is "fixed" and the record of a real defect is corrupted | **High** | §4.3's per-site classification; M5 pins the `quote-keep` set |
+| The chosen directory is protected or unwritable in some permission mode | **High** | §4.1 moved off `.claude`; M2 is a **runtime** check, not a string check |
+| The `allowed-tools` grants are "fixed" by rewriting a literal that never expanded | **High** | §4.2 — the grants are **deleted**, and a validator rejects unsupported `${…}` |
+| A historical quote is rewritten and the record of a real finding is corrupted | **High** | §4.3's 12 quote-keeps, pinned by M3 |
+| Allocation is added but callers still derive the name | **High** | `--allocate` **prints** the path; M1 fails a derived name |
 | Per-run paths are read as making the gate tamper-proof | Medium | §3's ceiling, in the CHANGELOG |
-| The directory is created world-readable | Medium | `0700` dir + `pty-capture.py`'s existing `0600` files; assert both |
-| Transcripts accumulate without bound | Low | out of scope, stated: this ticket does not add retention. A follow-up may |
+| Transcripts accumulate without bound | Low | out of scope, stated |
 
 ## 6. Verification
 
@@ -184,34 +239,33 @@ python3 -m unittest discover -s scripts/tests
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
 ```
 
-Baselines at `51f6050`: `test-hooks.sh` **304**, synthesizer **227**, scripts **324**, counts
+Baselines at `78e28f2`: `test-hooks.sh` **304**, synthesizer **227**, scripts **324**, counts
 `21/21/0/1`, hook events **10**. Floors, not equalities.
 
-Mutation proofs **M1–M6**, each shown failing before the fix and passing after.
+**Mutation proofs M1–M4, each shown failing before the fix and passing after.** *(Round 1: the original
+M1-M6 could not meet that bar — M2 and M6 already passed, M3/M4 tested strings rather than runtime
+behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuilt.)*
 
 ## 7. Implementation order
 
-1. **Inventory and classify all 23 sites** (`rewrite` / `quote-keep` / `grant`) and commit the
-   classification — M5 asserts it, so it is an artifact, not a note.
-2. **Move the path scheme** into `pty-capture.py`'s documented recipes and the four skills, and create
-   the directory `0700`. Add M1/M2.
-3. **Move the two `allowed-tools` grants in the SAME commit**, or delete them by moving the pre-clean
-   into the wrapper. Add M3/M4.
-4. Add the drift check (M5) so a future `/tmp/agy-out.txt` cannot reappear unclassified.
-5. Assert §4.4's two existing defences still fail their defects (M6).
-6. Version bump + CHANGELOG — state the **ceiling** (§3): per-run paths remove an accidental collision;
-   they do not make a transcript tamper-proof, and `COREDEV-2497` is what detects a changed one.
+1. **Inventory and classify all 31 sites** and commit the classification — M3 asserts it.
+2. **Add `pty-capture.py --allocate`**: `0700` parent, `O_CREAT|O_EXCL` retry loop, print the path.
+   Add M1.
+3. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
+   `review-synthesis` — including a ticket/round **input contract** for synthesis.
+4. **Delete the two `rm -f` grants** and add the `allowed-tools` substitution validator. Add M2.
+5. **Add the mtime freshness check** to `review-verdict.py`. Add M4.
+6. Version bump + CHANGELOG — state the **ceiling** (§3) and that the `${CLAUDE_PLUGIN_ROOT}` grants
+   were already inert.
 
-## 8. Open questions for the reviewers
+## 8. Open questions for round 2
 
-1. **Does `allowed-tools` expand `${HOME}` or `${CLAUDE_PLUGIN_ROOT}`?** If not, §4.2's fallback (move
-   the pre-clean into `pty-capture.py`, drop the grant) is the only correct option and should be the
-   primary. **This is the question most likely to change the design.**
-2. **Is `~/.claude/review-transcripts/` the right home**, or should transcripts live under the plugin
-   data dir now that `COREDEV-2617` has made that resolve-or-refuse? The data dir is unresolved outside
-   a hook — which is exactly when reviews run — so this plan assumes `~/.claude/`. Confirm.
-3. **Should the round be in the filename or a directory?** `2497r11b-codex.txt` vs
-   `2497/r11b/codex.txt`. The flat form is what the campaign has used for 100+ transcripts; the nested
-   form sorts better at scale.
-4. **Is any of the 23 sites misclassified** — in particular, are the two "historical quote" sites really
-   quotes, or are they live examples a consumer would copy?
+1. **Is `${CLAUDE_PLUGIN_DATA}` genuinely written-to-able from a skill recipe** in every permission
+   mode, including `dontAsk`? §4.1 rests on it, and round 1 showed the first draft's directory choice
+   was wrong for exactly this reason.
+2. **Does deleting the `rm -f` grants leave any path where a pre-clean is still required?**
+   `isolated-agy-review.sh` pre-cleans a path it allocated — is that sufficient for the
+   "wrapper never starts" case the audit reconstructs?
+3. **Should `/tmp/agy-ping.txt` be in scope** after all? §4.3 rules it out as a non-evidence artifact.
+4. **Is the mtime check (§4.5) sound**, or does a legitimate re-capture ever produce an mtime older
+   than the snapshot?
