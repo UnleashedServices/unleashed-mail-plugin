@@ -1,12 +1,12 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 6 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
+**Status:** Planning — **round 7 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
 arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 6, post-gate revision)
+**Last Updated:** 2026-07-31 (round 7, post-gate revision)
 
 ---
 
@@ -105,8 +105,8 @@ fails three ways:
   `scripts/review/isolated-agy-review.sh:89` **deletes the target before launch** — so any scheme that
   reserves *the target itself* is undone by the caller.
 
-**Fix — allocate, do not name.** `pty-capture.py` gains an allocate mode — **one command shape, used everywhere**:
-`pty-capture.py --allocate --base <dir> --ticket <T> --round <R> --reviewer <name>` *(round 6, codex: `:104` declared `--allocate <dir>` while §4.1's interface paragraph omitted `<dir>` entirely, so the wrapper and the Python parser could implement different contracts)*. It creates the parent
+**Fix — allocate, do not name.** `pty-capture.py` gains an allocate mode — **one command shape, used everywhere** — and it carries `--repo-hash`, because §4.1 forbids the Python allocator from reimplementing the Bash-only `context_repo_hash` *(round 7, gemini: the round-6 shape omitted it, so the allocator could not build the path it is specified to build)*:
+`pty-capture.py --allocate --base <dir> --repo-hash <H> --ticket <T> --round <R> --reviewer <name>` *(round 6, codex: `:104` declared `--allocate <dir>` while §4.1's interface paragraph omitted `<dir>` entirely, so the wrapper and the Python parser could implement different contracts)*. It creates the parent
 `0700`, then allocates a fresh path with `O_CREAT|O_EXCL` in a retry loop, and **prints the allocated
 path on stdout** so the caller propagates it rather than re-deriving it:
 
@@ -124,9 +124,10 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
   point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside every
   protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
-  by the same rules**, and says so. *(Round 6, gemini: the round-5 wording validated `XDG_STATE_HOME`
-  and then fell back **unconditionally**, so on a distro whose default umask leaves `$HOME` group-
-  writable the fallback silently reinstated the risk the check existed for.)* **The multi-user claim is NARROWED, not defended by an ancestry check — round 6.** *(codex: trusted
+  by the same rules**, and says so. *(Round 6: the round-5 wording validated `XDG_STATE_HOME` and then fell back
+  **unconditionally**, so the fallback was never checked at all. Round 7 removes the group-writable
+  rationale that came with it — the narrowed rules deliberately do **not** reject a group-writable
+  `$HOME`, because §3 no longer claims squat resistance.)* **The multi-user claim is NARROWED, not defended by an ancestry check — round 6.** *(codex: trusted
   ancestry is "neither sufficient nor implementable as written" — checking only the canonical base
   accepts a user-owned `0700` directory beneath an attacker-writable parent, while requiring user
   ownership of **every** ancestor rejects ordinary root-owned ones. A correct rule needs an explicit
@@ -165,7 +166,7 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 - **Ticket and round** are **required inputs** to both review skills, passed by the wrapper, not
   inferred. A skill that cannot determine them fails closed rather than guessing.
 - **The codex recipe reaches `context_repo_hash` through a shared Bash wrapper**, not directly: the
-  recipe invokes Python (`skills/codex-review/SKILL.md:48`) while the helper is Bash-only
+  recipe invokes Python (`skills/codex-review/SKILL.md:49`; `:48` is the pre-clean §7 step 4 deletes) while the helper is Bash-only
   (`scripts/lib/context.sh:79`). One wrapper sources `context.sh`, allocates, and prints — and **that
   wrapper is what the codex skill is granted**, so no recipe re-implements the hash.
 - **The allocated path is emitted on stdout behind a stable marker** the wrapper captures verbatim and
@@ -345,6 +346,11 @@ rejected. *Positive (round 4, codex):* a transcript captured **after** an alread
 Without the positive case, M4 passes against the explicitly rejected implementation that creates its
 "launch" record while writing the artifact — an older transcript still predates that late record. Run
 both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
+**Plus the MISMATCHED-RECORD mutation (round 7, gemini):** write a `.launch` whose payload is a
+syntactically valid but *different* run ID from the one in the transcript's filename — the gate must
+**fail**. Also cover **empty** and **malformed** payloads. *(§4.5's prose announced "M4 gains a
+mismatched-record mutation" and the Proof defined only the timing cases, so an implementation that never
+read the payload passed. The arms disagreed here — codex reported the mutation present; it was not.)*
 
 ## 5. Risk register
 
@@ -394,7 +400,9 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
 6. **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
-   **before dispatch**, bound to the run ID, looked up per transcript, and **fails closed when absent**.
+   **before dispatch**, bound to the run ID, looked up per transcript, and **fails closed when the record is absent, empty, malformed, or its run ID
+   does not equal the one in the transcript's filename** *(round 7, gemini: this step said only "when
+   absent", dropping the ID equality that makes the record an anchor rather than a touch-file)*.
    Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
    Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
    record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
@@ -402,7 +410,7 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
-## 8. Open questions for round 7
+## 8. Open questions — NONE REMAIN
 
 *(Round 5, both arms: this section had become the plan's main source of contradictions — it reopened
 four decisions that are settled operatively elsewhere. **A question that the plan has answered is not an
@@ -422,10 +430,14 @@ resolutions cited.)*
 
 **Genuinely open:**
 
-1. **Is trusted-ownership validation of the XDG base sufficient and portable?** §4.1 now requires the
-   canonical base — or its nearest existing ancestor — to be owned by the user and not group/world
-   writable. codex round 5: an absolute, writable, **attacker-owned** `0777` base passes the earlier
-   absolute/protected/unwritable checks, and an attacker controlling that ancestor can rename or replace
-   the subtree however private the leaf is.
-2. **Does anything else in the repo read the two fixed literals at runtime** rather than documenting
-   them? The inventory classifies by *site*; a runtime reader would need threading, not rewriting.
+- ~~Q1 — is trusted-ownership validation of the XDG base sufficient and portable?~~ **SETTLED by the
+  round-6 narrowing (§3):** the ancestry check is **withdrawn with the claim it defended**. A shared host
+  where an attacker controls an ancestor is out of scope. *(Round 7, both arms: this question still
+  asserted that "§4.1 now requires the canonical base to be owned by the user and not group/world
+  writable" — which round 6 removed — so the allocator had two incompatible base-validation contracts.)*
+- ~~Q2 — does anything read the two fixed literals at runtime?~~ **SETTLED, §4.3:** the inventory is
+  exhaustive and classified per site, and M3 pins it *(round 7, codex)*.
+
+**No open questions remain.** Every question this section has posed is answered in §3, §4.1, §4.2, §4.3
+or §4.5, and each is struck above with its resolution cited rather than deleted — because a question
+silently removed is indistinguishable from one nobody answered.
