@@ -1,6 +1,6 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 2 High + 1 Medium**). Both reviewers again found the **same High**, and it is the same
 *class* as round 6's: **round 7's `anchor` column reached §4.2 and never reached §7 step 2**, which still
 mandated a three-column table — so **M12d had no column to mutate**. Step 2 now ships the four-column
@@ -34,7 +34,7 @@ reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contra
 See §12. Rounds 1-2 are in §10-§11; rounds 3-6 are in §12-§15.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-31 (round 9, post-gate revision — shipped table separated from test metadata; M3 marker mandated)
+**Last Updated:** 2026-07-31 (round 10, post-gate revision — M3 is a membership test; M12d proves fingerprint/table coupling)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -190,15 +190,23 @@ from the module at test time:
 - **M3** *(differential made executable in round 8)* section-scoped rather than row-scoped per-rule
   assertions → a deleted disposition must still be detectable (COREDEV-2602's round-7 defect, documented
   at `scripts/tests/test_doc_gates.py:287-290`).
-  **Marker:** the disposition classifier **`**Adapted**`**. **Mutation:** delete rule **3**'s disposition
-  cell. **Why it discriminates:** `**Adapted**` is the classifier on rules **1, 2, 3, 4, 5, 6 and 10** —
-  **seven** occurrences, counted in the shipped `AGENT_CONTRACTS.md` §13 (the other three are
-  `**Adopted**` ×2 and `**Restated positively**` ×1) — so deleting rule 3's cell leaves **six** inside the
-  section. The section-scoped `assertIn(marker, section)` therefore **passes** while the row-scoped
-  `assertIn(marker, rows[3])` **fails**.
-  **The marker is guaranteed to survive because §7 step 5 pins the classifier vocabulary** — every one of
-  the ten dispositions keeps an explicit classifier drawn from `{**Adapted**, **Adopted**, **Restated
-  positively**}. That is a *mandated* property of the narrowed document, not incidental wording.
+  **Marker:** *any* classifier from the closed vocabulary — a **membership** test, never a fixed token.
+  **Row-scoped (strong) assertion:** `rows[N]` contains **exactly one** of `{**Adapted**, **Adopted**,
+  **Restated positively**}`, for every N in 1..10. **Section-scoped (weak) assertion:** the section
+  contains at least one of them. **Mutation:** delete rule **3**'s disposition cell.
+  **Why it discriminates:** after the deletion `rows[3]` carries **no** classifier, so the strong
+  assertion **fails**; the other nine rows still carry theirs, so the weak assertion **passes**. On the
+  clean document both pass — whatever classifier each rule ends up with.
+  **The proof is guaranteed because §7 step 5 pins the classifier vocabulary** — every one of the ten
+  dispositions keeps exactly one explicit classifier drawn from `{**Adapted**, **Adopted**, **Restated
+  positively**}. M3 asserts *that mandated property*, never a particular value of it.
+  *(Round 13, from BOTH arms: round 12 hardcoded `**Adapted**` for rule 3. But §4.4 (`:414`) expressly
+  permits simplifying rule 3's carve-out, and that carve-out is the **only reason** its disposition is
+  currently *Adapted* (`AGENT_CONTRACTS.md:494`) — so a compliant narrowed row could legitimately read
+  `**Adopted** — end with one concrete next action.`, satisfying the pinned vocabulary while making the
+  strong assertion fail **on the clean document, before any mutation**. That is the third marker M3 has
+  had, and the first two failed identically: **the differential was pinned to a value this plan permits
+  the narrowing to change.** Membership is invariant under every rewrite step 5 allows.)*
   *(Round 9, from codex: the round-8 marker was the prose phrase `per the payload-region invariant`,
   present today in rules 1, 2, 3, 5 and 10. Round 8 argued it survives because §7 step 5 keeps "all ten
   dispositions explicit" — but **explicit is not the same as unchanged**. §4.4 (`:390`) expressly permits
@@ -652,9 +660,17 @@ satisfied by a suite that never rejects a mutant.
    > elsewhere is then not authoritative and cannot redirect the ID.
    >
    > **Two mutants, because one cannot prove both checks — round 9.**
-   > - **M12d** leaves all nine triples byte-identical and repoints one anchor to a different real
-   >   surface: `verdict-report` → `agents/swift-reviewer.md:538`. The gate must fail. This proves the
-   >   **anchor** is load-bearing.
+   > - **M12d** leaves all nine triples byte-identical and repoints one anchor to
+   >   **`agents/swift-reviewer.md:439`** — `### Step 5: Synthesize Unified Review`, a **real heading**
+   >   whose section (`:439`-`:589`) contains **no** `### Verdict:` (verified at the frozen commit). It
+   >   therefore passes checks (i) and (ii) and must fail on **(iii)**, proving the fingerprint check
+   >   **reads the anchor from the table**.
+   >   *(Round 13, from gemini: M12d previously targeted `:538`, a blockquote. Check (ii) rejects a
+   >   non-heading before (iii) is consulted — so a gate that read the table for (ii) but **hard-coded
+   >   `:590`** for (iii) would pass M12d *and* M12e, leaving the fingerprint's coupling to the table
+   >   untested. Round 9 moved this mutant off `:538` for the anchor's sake and left the same line in
+   >   place for the fingerprint's. `:439` is the round-7 counterexample locus, which makes it the most
+   >   meaningful target available.)*
    > - **M12e** *(new)* leaves the table **entirely untouched** — anchor still `:590` — and instead
    >   changes the artifact: rename or delete `### Verdict:` at `agents/swift-reviewer.md:660`. The gate
    >   must fail on check (iii). This is the only mutant that proves the **fingerprint** is load-bearing.
@@ -1031,3 +1047,24 @@ currently holds.**
 **Confirmed sound and unchanged:** all nine anchors resolve at the frozen commit and their fingerprints
 occur where claimed; `verdict-report` correctly anchors at `:590` with the tool input at `:538` and
 `### Verdict:` at `:660`; and M2's re-pairing mutation is the right shape for a fail-closed parser.
+
+## 19. Round-10 gate outcome
+
+**gemini `REQUEST_CHANGES` (2 High) · codex `REQUEST_CHANGES` (1 High).** Frozen at `740f561`, sha256
+`7b1de0adfc6971e35975735a1c6116ab16292cfac166e60cb6cb435b9d00b716`. Transcripts:
+`~/.claude/review-transcripts/2605r10-agy.txt` (1,896 B) and `…/2605r10-codex.txt` (183,164 B).
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **M3's marker is still not durable.** Round 12 hardcoded `**Adapted**` for rule 3 — but §4.4 (`:414`) expressly permits simplifying rule 3's carve-out, and that carve-out is the **only reason** its disposition is currently *Adapted* (`AGENT_CONTRACTS.md:494`). A compliant narrowed row could legitimately read `**Adopted** — end with one concrete next action.`, satisfying step 5's pinned vocabulary while making the **strong** assertion fail on the **clean** document, before any mutation | **confirmed** — pinning the vocabulary constrains the *set*, not which member each row uses | M3 becomes a **membership** test: strong = `rows[N]` contains **exactly one** of the three classifiers, for every N; weak = the section contains at least one. Deleting rule 3's cell fails the strong and passes the weak, **whatever classifier each rule ends up with** |
+| 2 | gemini | **M12d still does not prove the fingerprint reads the anchor FROM THE TABLE.** It targets `:538`, a blockquote, so check (ii) "anchor line is a heading" rejects it before check (iii) runs. A gate that read the table for (ii) but **hard-coded `:590`** for (iii) would pass M12d *and* M12e | **confirmed** — round 9 moved this mutant off `:538` for the anchor's sake and left the same line in place for the fingerprint's | M12d retargeted to **`agents/swift-reviewer.md:439`** — a real heading whose section `:439`-`:589` contains **no** `### Verdict:` (verified). It passes (i) and (ii) and must fail on (iii) |
+
+**Three markers, three failures of the same kind.** `per the payload-region invariant` (round 8) and
+`**Adapted**` (round 12) were both pinned to *values this plan permits the narrowing to change*; the
+membership test is invariant under every rewrite §7 step 5 allows. **When a proof depends on a property,
+assert the property — not an instance of it.** Finding 2 is the same shape one level down: a mutant that
+appears to exercise a check while a different assertion kills it first.
+
+**codex confirmed the rest sound and unchanged:** the two table destinations are explicit, M2 now
+preserves four parseable cells and isolates the triple-pairing assertion, and M12d/M12e separately
+exercise the anchor and fingerprint checks.

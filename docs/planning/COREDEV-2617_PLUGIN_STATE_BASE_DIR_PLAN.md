@@ -1,6 +1,6 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -30,9 +30,9 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-8 are in §10-§17.
+root; the consumer enumeration is now in the implementation order. Rounds 1-9 are in §10-§18.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-31 (round 8, post-gate revision — spy re-based on composed paths; N5 inverted to an allowlist)
+**Last Updated:** 2026-07-31 (round 9, post-gate revision — N5's guarantee narrowed; oracle re-based on envelope returns)
 **Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
@@ -457,6 +457,34 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    > `test_reviewer_roster.py` 1, `marker.sh` 1. **A name-only scan would therefore fail on ~36
    > legitimate sites** — which is why the predicate is not "the identifier appears".
    >
+   > **ROUND 9 — WHAT N5 CAN AND CANNOT PROVE. Read this before trusting it.**
+   >
+   > codex **executed** a bypass that contains no lexical `CLAUDE_PLUGIN_DATA` expansion at all:
+   >
+   > ```bash
+   > n=CLAUDE_PLUGIN_ ; n="${n}DATA" ; d="$(printenv "$n")"
+   > printf '%s/%s' "$d" "m-$1.json"      # -> /m-lint.json when unset
+   > ```
+   >
+   > It reads the environment through a **runtime-assembled name**, so no static scan over shell syntax
+   > can see it. A hard-coded `"${HOME:-}/.claude/unleashed-mail"` fallback evades N5 equally, without
+   > touching the variable at all. gemini found the same class independently (`printenv`, `env | grep`).
+   >
+   > **So N5's guarantee is narrowed, not patched a fourth time.** N5 is a **lexical drift detector**:
+   > it proves that *within the scanned tree, at review time,* the identifier `CLAUDE_PLUGIN_DATA` is
+   > expanded only at enumerated sites. That is worth having — it is exactly how a copy-paste of the
+   > resolver into a new primitive gets caught, which is the failure this ticket is about. It is **not**
+   > a proof of accessor-only provenance, and this plan no longer claims one. A primitive determined to
+   > acquire the base by other means is outside N5, outside N1/N2's envelope, and therefore outside D′.
+   >
+   > **What actually holds D′ for code that exists** is the enumerated envelope plus the sentinel, both
+   > of which are mechanically checked. What holds it for code not yet written is N5's drift detection
+   > plus review — a *hardening*, not a boundary. **Stated plainly here so no reader infers a guarantee
+   > that is not there** — the same move §3.1 of COREDEV-2497 made after five defeated mechanisms, and
+   > for the same reason: four rounds have now shown this property is not statically decidable in Bash.
+   >
+   > *(The CHANGELOG must carry this distinction — see §7 step 7.)*
+   >
    > - **Predicate — an ALLOWLIST of exact sites, not a pattern over spellings. Round 8.** N5 fails on
    >   **every expansion of `CLAUDE_PLUGIN_DATA` that is not at an enumerated allowlisted site.** Full
    >   stop. No suffix list, no "followed by `/`" test, no attempt to recognise the shapes of composition.
@@ -531,6 +559,13 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >   sentinel — so a caller cannot fake resolution by exporting the sentinel text.
    > - **Diagnostic cardinality**: **exactly one** unresolved diagnostic per process, emitted at source
    >   time (§4.1's observability requirement), not one per primitive call.
+   >   **This must hold in the absent-`paths.sh` mode too — round 9, gemini.** With `paths.sh` missing,
+   >   `marker.sh`, `log.sh` and `context.sh` each take their own inline fallback, so sourcing two or
+   >   three of them in one process would emit two or three diagnostics and break the cardinality this
+   >   plan mandates. **The guard is the shared flag, not the file:** each lib emits the diagnostic only
+   >   when `_UNLEASHED_BASE_OK` is still **unset**, and sets it in the same step. The flag lives in the
+   >   sourcing shell and is therefore shared whether or not `paths.sh` was found — so the cardinality
+   >   is a property of the resolution protocol, not of the optional file.
    >
    > **N1/N2 must source in a FRESH SHELL per cell.** The existing harness exports the variable *before*
    > sourcing the libraries (`scripts/test-hooks.sh:33`); with an eager cache, mutating the environment
@@ -577,13 +612,23 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    > without being executed. *Applying "execute, don't assert" to the fix as well as to the design is now
    > a standing requirement of this plan.*
    >
-   > **THE ORACLE ASSERTS ON THE COMPOSED PATH, NOT ON THE SYSCALL.** Every read in these libraries is
-   > preceded by a composition — `path="$(marker_path "$kind")"`, `base="$(context_reviews_dir)"` — and
-   > *that* value is observable from the shell without intercepting anything. N1/N2 therefore:
+   > **THE ORACLE ASSERTS ON THE ENVELOPE'S RETURN VALUES, NOT ON THE SYSCALL AND NOT ON READERS'
+   > LOCALS.** *(Round 9 correction: round 8 said "the composed path", which gemini correctly read as
+   > the `local path=…` **inside** a reader — and those are invisible to a calling harness.
+   > `_context_round_advance` (`context.sh:236`) is the sharpest case: it never assigns a path at all,
+   > composing `"$base/round-$highest/$agent.json"` inline as a `python3` argv (`:255`).)*
    >
-   > 1. **Capture every composed path** each public reader produces in the cell, and assert **every one
-   >    begins with `/dev/null/unresolved-plugin-base`**. A path that does not is the defect, whether or
-   >    not a read follows it.
+   > Every path-returning primitive in the §7 envelope **prints its result to stdout** — that is how they
+   > are invoked, `$(marker_dir)`, `$(context_reviews_dir)` — so their return values are **directly
+   > capturable** by a harness with no interception whatsoever. And every internal composition, including
+   > `_context_round_advance`'s inline argv, is built **from one of those return values**: its `base`
+   > parameter is supplied by the caller from `context_reviews_dir`. So asserting on the envelope's
+   > outputs bounds the readers' internals **by construction**, which is the property a shim could not
+   > deliver and a local-variable oracle could not observe. N1/N2 therefore:
+   >
+   > 1. **Capture the return value of every path-returning primitive in the §7 envelope table** and
+   >    assert **each begins with `/dev/null/unresolved-plugin-base`**. These are stdout values, not
+   >    locals. A return that does not is the defect, whether or not a read follows it.
    > 2. **Rely on the sentinel's already-executed physics for the rest.** Under an `ENOTDIR` parent every
    >    verb in the list above — redirect, glob, `cat`, `stat`, `[ -f ]`, `[ -d ]`, `[ -L ]`, `[ -r ]` —
    >    fails or yields empty *by construction*. Once the composed path is proven to be under the
@@ -887,3 +932,28 @@ now represented.
 Three consecutive rounds have adopted a remedy that could not be built. Before a proof mechanism enters
 this plan it must be executed, or its impossibility must be argued from the language semantics — the way
 the sentinel itself was settled in round 6.
+
+## 18. Round-9 gate outcome
+
+**gemini `REQUEST_CHANGES` (5 High) · codex `REQUEST_CHANGES` (1 High).** Frozen at `740f561`, sha256
+`eb7edfd5db0d0843b09f643547de2f0531729f6509c6ca41d5b6b43ecbee7710`. Transcripts:
+`~/.claude/review-transcripts/2617r9-agy.txt` (2,303 B) and `…/2617r9-codex.txt` (327,189 B).
+
+**This is the fourth consecutive round in which a proof mechanism failed, and that is now the finding.**
+Round 6's canary was physically impossible; round 7's command shim was mechanically impossible; round 8's
+composed-path oracle named the wrong observable; and N5 has been defeated in rounds 7, 8 and 9. **The
+response is to narrow what is claimed rather than to attempt a fifth mechanism** — the move COREDEV-2497
+§3.1 made after five defeated mechanisms, and for the same reason.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **N5 cannot enforce accessor-only provenance, demonstrated by execution.** `n=CLAUDE_PLUGIN_; n="${n}DATA"; d="$(printenv "$n")"` composes a state path with **no lexical `CLAUDE_PLUGIN_DATA` expansion anywhere** — codex ran it: `/tmp/host-base/m-lint.json` when set, `/m-lint.json` when unset. A hard-coded `${HOME:-}/.claude/unleashed-mail` fallback evades N5 without touching the variable at all | **confirmed — executed by the reviewer, not argued.** gemini found the same class independently (`printenv`, `env \| grep`) | **N5's guarantee is NARROWED.** It is a **lexical drift detector** — proof that the identifier is expanded only at enumerated sites, which is exactly how a copy-pasted resolver gets caught — and explicitly **not** a proof of accessor-only provenance. What holds D′ for existing code is the envelope + sentinel; for future code it is drift detection + review, a hardening rather than a boundary. The CHANGELOG must say so |
+| 2 | gemini | **the composed-path oracle named an unobservable value.** Round 8 said "composed path", which reads as the `local path=…` **inside** a reader — invisible to a calling harness. `_context_round_advance` (`:236`) never assigns a path at all: it composes inline as a `python3` argv (`:255`) | **confirmed** — both cited sites read exactly as described | the oracle asserts on the **envelope's return values**, which every path-returning primitive **prints to stdout** and a harness captures with no interception. Internal compositions — including that inline argv — are built *from* those return values, so bounding the outputs bounds the internals **by construction** |
+| 3 | gemini | **the "exactly one diagnostic per process" requirement breaks in absent-`paths.sh` mode** — each lib takes its own inline fallback, so sourcing two or three emits two or three diagnostics | **confirmed** — the three inline fallbacks are independent by design (`paths.sh:11-20`) | the guard is the **shared `_UNLEASHED_BASE_OK` flag**, not the file: each lib emits only while the flag is unset and sets it in the same step, so cardinality is a property of the protocol rather than of the optional file |
+| 4 | gemini | `log_append` is missing from the writing-primitive rule | **REJECTED — it is already there.** `log_append` is named in that rule at `:395`, added in round 7 alongside the `context_review_round_*` mutators. *(gemini also mis-cited it as `log.sh:33`; it is `log.sh:39`.)* | none |
+| 5 | gemini | `context_review_round_bind` "violates its stated contract" because `:290` prints unconditionally | **REJECTED, with reasons.** That is not a claim about current behaviour — it is the **change this plan mandates**. `:290` printing unconditionally after a failed `mv` is precisely the defect round 7 recorded and required fixing; reading the requirement as a description inverts it | none |
+
+**codex's finding 1 is the most valuable single result of this ticket so far, because it was executed
+rather than argued.** Three rounds of N5 revisions each assumed the previous predicate was *nearly* right
+and widened it. Running one four-line bypass showed the whole approach has a ceiling: **path provenance
+is not statically decidable in Bash.** Narrowing follows from that fact, not from fatigue.
