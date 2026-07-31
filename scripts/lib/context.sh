@@ -20,21 +20,49 @@
 # so a PreCompact snapshot or reviewer capture in repo A can never be restored into / mixed with
 # repo B, even when two checkouts share a branch/ticket slug (codex PR review). The repo-root path
 # is hashed only — never written/emitted (the hash is PII-free; see _context_hash).
-context_base() {
-    # Delegate to the single source (scripts/lib/paths.sh, COREDEV-2600 item 1), but FALL BACK to
-    # the literal expansion if it cannot be located — never abort. This lib is sourced standalone
-    # (see paths.sh's header), so aborting here would turn three independent fail-open paths into
-    # one shared point of failure. `:-` not `-`, and keep the `${HOME:-}` guard, in BOTH forms.
-    if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-        _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
-        # shellcheck source=scripts/lib/paths.sh
-        [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
-    fi
-    if command -v unleashed_plugin_base >/dev/null 2>&1; then
-        unleashed_plugin_base
+# ── COREDEV-2617 / D': resolve the plugin-data base ONCE, EAGERLY, at source time ────────────────
+# Prefer the single source (scripts/lib/paths.sh). If it cannot be located this lib establishes the
+# SAME protocol itself rather than aborting — these libs are sourced standalone (see paths.sh's
+# header), so aborting would turn three independent fail-open paths into one shared point of failure.
+#
+# The duplication below is deliberate and bounded: it is the D' protocol, not the legacy expansion.
+# An unresolved base yields the POISONED SENTINEL (non-empty, non-root, ENOTDIR beneath it), never
+# the empty string — an empty base composes a ROOT path at the call site.
+#
+# The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
+# or three libs sourced in one shell would otherwise each emit one.
+if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+    _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+    # shellcheck source=scripts/lib/paths.sh
+    [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
+fi
+if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+    if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+        _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+        _UNLEASHED_BASE_OK=1
     else
-        printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
+        _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
+        _UNLEASHED_BASE_OK=0
+        if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+            _UNLEASHED_BASE_DIAGNOSED=1
+            printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+        fi
     fi
+fi
+# The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
+# undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
+# fail-open -> fail-closed inversion is exactly what COREDEV-2617's round-18 reproduction caught in
+# the agent fence; it must not be re-introduced one layer down.
+if ! command -v unleashed_base_ok >/dev/null 2>&1; then
+    unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
+fi
+
+
+context_base() {
+    # COREDEV-2617 / D': the base was resolved ONCE, at source time, by the block above. Just print
+    # it. Never re-resolve here — this function is invoked as $(...), so anything assigned inside it
+    # lives in a subshell and is gone on return (the round-6 "cache" defect).
+    printf '%s' "$_UNLEASHED_BASE_RESOLVED"
 }
 context_state_dir()   { printf '%s/.state' "$(context_base)"; }
 
@@ -203,6 +231,7 @@ _context_file_mtime() {
 # bindings). Pure hygiene — correctness never depends on it (lookup rejects stale; consume deletes the
 # live one). zsh-NOMATCH-safe; fail-open. $1 = state dir, $2 = now (epoch).
 _context_round_sweep() {
+    unleashed_base_ok || return 0        # D' (COREDEV-2617): unresolved base persists nothing.
     local dir="${1:-}" now="${2:-0}" ttl f mt
     [ -n "$dir" ] && [ -d "$dir" ] || return 0
     ttl="$(context_round_ttl)"
@@ -261,6 +290,10 @@ sys.stdout.write("1" if capture.is_final_capture(sys.argv[1]) else "0")
 # (tmp + mv). Sweeps expired bindings first. Prints the round. Fail-open.
 # $1 = agent_type, $2 = agent_id, $3 = session_id (optional).
 context_review_round_bind() {
+    # D' (COREDEV-2617): print NOTHING and return 0. The trailing `printf '%s' "$round"` below
+    # executes even when the write has already failed, so merely skipping the write would still
+    # hand a consumer a round number that was never stored.
+    unleashed_base_ok || return 0
     local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now path dir
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
     slug="$(context_branch_slug "$(context_branch)")"
@@ -340,6 +373,7 @@ sys.stdout.write(str(r))
 # Consume-once: delete a subagent's binding after its SubagentStop has read it (so a later duplicate
 # stop, or an unrelated reader, never re-reads it). Fail-open. $1 = agent_id.
 context_review_round_clear() {
+    unleashed_base_ok || return 0        # D' (COREDEV-2617): unresolved base persists nothing.
     [ -n "${1:-}" ] || return 0
     rm -f "$(context_round_binding_path "$1")" 2>/dev/null || true
 }

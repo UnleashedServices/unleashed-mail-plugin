@@ -63,6 +63,11 @@ SESSION_KEY="$(hook_str session_id)"
 # wedge (the loop-guard cannot be durably recorded, so blocking would re-fire on every later Stop).
 if [ -n "$SESSION_KEY" ]; then
     SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
+    # COREDEV-2617 / D': the destructive site. :66 composes a path, :120 mktemps under it and
+    # :123 mv -f's into it. With an unresolved base the sentinel makes each fail ENOTDIR, but
+    # the gate must not depend on that — skip the sentinel machinery outright and let the gate
+    # fall through to its normal non-blocking result.
+    unleashed_base_ok || SENTINEL=""
     SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
 else
     SENTINEL=""

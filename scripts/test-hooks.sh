@@ -785,15 +785,24 @@ PCREPO="$(cd "$_DIR/.." && pwd)"
 mkdir -p "$PCR"
 # Everything in ONE subshell that ECHOES its result — no temp-file round-trip, which silently
 # produced an empty read when this test was first written.
+#
+# COREDEV-2617: this MUST be a FRESH SHELL that sets CLAUDE_PLUGIN_DATA *before* sourcing context.sh.
+# Resolution is now eager and process-stable, so exporting the variable in a subshell of a shell that
+# already sourced the lib does NOT change the resolved base — `context_reviews_dir` would compose
+# under the harness's own base while the hook subprocess wrote under $PCR, and the assertion would
+# read the wrong snapshot. The plan calls this out explicitly (N1/N2 source a fresh shell per cell).
 PCOUT="$(
-  export CLAUDE_PLUGIN_DATA="$PCR"
-  _slug="$(context_branch_slug "$(context_branch)")"
-  _rd="$(context_reviews_dir)/$_slug"
-  mkdir -p "$_rd/round-3" "$_rd/round-09" "$_rd/round-99999999999999999999"
-  printf '{"session_id":"t","transcript_path":"/dev/null","cwd":"%s","hook_event_name":"PreCompact","trigger":"auto"}' "$PCREPO" \
-    | CLAUDE_PLUGIN_ROOT="$PCREPO" bash "$PRECOMPACT" 2>"$PCR/err"
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); r=d["round"]; print(type(r).__name__ + ":" + str(r))' \
-    "$(context_snapshot_path)" 2>/dev/null
+  export CLAUDE_PLUGIN_DATA="$PCR" CLAUDE_PLUGIN_ROOT="$PCREPO"
+  bash -c '
+    . "$1/lib/context.sh"
+    _slug="$(context_branch_slug "$(context_branch)")"
+    _rd="$(context_reviews_dir)/$_slug"
+    mkdir -p "$_rd/round-3" "$_rd/round-09" "$_rd/round-99999999999999999999"
+    printf "{\"session_id\":\"t\",\"transcript_path\":\"/dev/null\",\"cwd\":\"%s\",\"hook_event_name\":\"PreCompact\",\"trigger\":\"auto\"}" "$3" \
+      | bash "$2" 2>"$4/err"
+    python3 -c "import json,sys; d=json.load(open(sys.argv[1])); r=d[\"round\"]; print(type(r).__name__ + \":\" + str(r))" \
+      "$(context_snapshot_path)" 2>/dev/null
+  ' _ "$_DIR" "$PRECOMPACT" "$PCREPO" "$PCR"
 )"
 PCERR="$(cat "$PCR/err" 2>/dev/null)"
 if [ -z "$PCERR" ]; then ok; else fail "precompact round scan leaked stderr: $PCERR"; fi

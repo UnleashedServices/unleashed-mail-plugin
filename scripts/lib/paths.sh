@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Single source of the plugin-data base path (COREDEV-2600 item 1).
+# Single source of the plugin-data base path (COREDEV-2600 item 1; D′ resolution COREDEV-2617).
 #
 # WHY THIS FILE EXISTS
 # The same expansion was copied into marker.sh, log.sh and context.sh with no cross-reference. The
@@ -19,19 +19,77 @@
 # it replaces, for a defect that has never fired. So every caller keeps the literal expansion as a
 # fallback, and this file is an optimisation of maintenance, not a load-bearing dependency.
 #
-# THE EXPANSION ITSELF — two details are load-bearing:
+# ── COREDEV-2617: D′ — AN UNRESOLVED BASE PERSISTS NOTHING ────────────────────────────────────────
+# CLAUDE_PLUGIN_DATA is exported to hooks and MCP subprocesses but NOT to an ordinary shell, so state
+# written outside a hook landed in a SECOND directory and the two never saw each other. D′: when the
+# variable is unset the base does not resolve, and nothing is read or written — no silent second store.
+#
+# THE SENTINEL, and why it is not the empty string.
+# A path-returning primitive that returns "" still composes a ROOT path at the call site:
+# "$(marker_dir)/x" becomes "/x". So an unresolved base returns a POISONED, non-empty, non-root value:
+#   /dev/null/unresolved-plugin-base
+# /dev/null is a character device, so EVERY path beneath it is ENOTDIR — mkdir, mktemp, redirect and
+# open all fail harmlessly and loudly at a fixed, greppable location, `[ -f ]` is false, and an
+# UNGUARDED caller can never touch `/`. Verified by execution (plan §7).
+#
+# THE PROTOCOL — three shared variables, set once, in the SOURCING shell:
+#   _UNLEASHED_BASE_RESOLVED  the base to use (real path, or the sentinel)
+#   _UNLEASHED_BASE_OK        1 = resolved, 0 = sentinel in force. Primitives branch on THIS,
+#                             never on a string comparison against the sentinel — otherwise a caller
+#                             could fake resolution by exporting the sentinel text.
+#   _UNLEASHED_BASE_DIAGNOSED  guards the ONE diagnostic per process.
+# EAGER: resolution runs at source time, in the sourcing shell — not on first use. A value first
+# assigned inside `$(marker_dir)` lives in that subshell and is gone on return, so a lazily-built
+# "cache" silently re-resolves on every call.
+# The cardinality guard is the FLAG, not this file: each lib's inline fallback emits the diagnostic
+# only while _UNLEASHED_BASE_OK is unset, so exactly one is emitted whether or not paths.sh was found.
+#
+# THE LEGACY EXPANSION is retained as `unleashed_plugin_legacy_base` for the drift matrix only. It is
+# NOT the resolver any more:
 #   * `:-` NOT `-`. The single-dash form treats an explicitly-EMPTY CLAUDE_PLUGIN_DATA as "set" and
-#     returns empty, which relocates every marker, log and snapshot to a relative path. It passes a
-#     three-environment matrix identically to the correct form and fails only on the set-but-empty
-#     case, which is why scripts/tests/test_shell_primitive_drift.py tests four environments.
-#   * `${HOME:-}` inner guard, so a missing HOME under `set -u` never aborts a hook. With both unset
-#     the path becomes "/.claude/unleashed-mail" and the later mkdir simply fails open.
+#     returns empty, which relocated every marker, log and snapshot to a relative path.
+#   * `${HOME:-}` inner guard, so a missing HOME under `set -u` never aborts a hook.
+
+# The poisoned sentinel. Literal, fixed and greppable — tests assert on this exact string.
+_UNLEASHED_BASE_SENTINEL='/dev/null/unresolved-plugin-base'
 
 # Idempotent: these libs are frequently sourced more than once in a single shell.
 if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
     _UNLEASHED_PATHS_SH_LOADED=1
 
-    unleashed_plugin_base() {
+    # The pre-2617 expansion. Kept ONLY so the drift matrix can assert the legacy behaviour it
+    # documents; no primitive calls it.
+    unleashed_plugin_legacy_base() {
         printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
     }
+
+    # Eager, source-time resolution. Sets the three protocol variables exactly once per process.
+    unleashed_resolve_base() {
+        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0        # already resolved in this shell
+        if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+            _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+            _UNLEASHED_BASE_OK=1
+        else
+            _UNLEASHED_BASE_RESOLVED="$_UNLEASHED_BASE_SENTINEL"
+            _UNLEASHED_BASE_OK=0
+            if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+                _UNLEASHED_BASE_DIAGNOSED=1
+                printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+            fi
+        fi
+        return 0
+    }
+
+    # The resolver every primitive calls. Returns the sentinel when unresolved — never empty.
+    unleashed_plugin_base() {
+        unleashed_resolve_base
+        printf '%s' "$_UNLEASHED_BASE_RESOLVED"
+    }
+
+    # True when the base resolved. The ONLY sanctioned way for a consumer to test the state.
+    unleashed_base_ok() {
+        [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]
+    }
+
+    unleashed_resolve_base        # EAGER — at source time, in the sourcing shell.
 fi

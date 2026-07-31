@@ -48,6 +48,9 @@ PLAN="${PLAN:0:200}"   # bash substring (char-aware, no cut subprocess / BSD `cu
 # context.sh is already sourced above, so this adds no dependency. The field stays a JSON STRING
 # (see the printf below): this normalises the VALUE, not the type.
 ROUND="unknown"
+# COREDEV-2617 / D': skip the snapshot write; emit nothing and exit 0. PreCompact is advisory, so
+# a missing snapshot degrades to "no restore" rather than failing the compaction.
+unleashed_base_ok || exit 0
 _rev="$(context_reviews_dir)/$SLUG"
 if [ -d "$_rev" ]; then
     _max="$(context_highest_round "$_rev")"
