@@ -1,6 +1,17 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 6 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Both
+**Status:** Planning — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+`REQUEST_CHANGES` 2 High + 1 Medium**). Both reviewers again found the **same High**, and it is the same
+*class* as round 6's: **round 7's `anchor` column reached §4.2 and never reached §7 step 2**, which still
+mandated a three-column table — so **M12d had no column to mutate**. Step 2 now ships the four-column
+table with the **exact nine anchors and fingerprints**, `verdict-report` anchored at
+`agents/swift-reviewer.md:590` (not the broad `:439`, which also contains the tool input at `:538`).
+**M2's differential is fixed on the mutated side too** — round 7 fixed the clean document and broke the
+mutant, because a deleted `out` name makes the fail-closed parser raise; the mutation is now a
+`producer_id` **re-pairing**, which keeps nine parseable rows. **M3 gets a concrete marker** — `per the
+payload-region invariant`, present in five rule rows. Rounds 7 and 8 are in §16 and §17; **§16 was
+reconstructed in round 8 from the transcripts, having never been written.** Previously — round 6 gated
+(**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Both
 reviewers found the **same High**: the two-column `surface → scope` instruction still contradicted the
 three-column triple schema. Also — the §13/§14 split and §14's creation are **one indivisible step**
 (either ordering breaks: a lagging helper swallows §14; a leading one raises `ValueError` **during
@@ -23,7 +34,7 @@ reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contra
 See §12. Rounds 1-2 are in §10-§11; rounds 3-6 are in §12-§15.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-07-30 (round 6, post-gate revision)
+**Last Updated:** 2026-07-31 (round 8, post-gate revision — `anchor` propagated to §7; M2/M3 made executable)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -151,15 +162,35 @@ from the module at test time:
 **Proof — and it must reject a plausible wrong implementation.**
 - **M1** hardcode the five names in the test instead of importing `VALID_AGENTS` → mutate the tuple
   (add `swift-reviewer`) and the gate must still fail. A hardcoded list passes and is inert.
-- **M2** *(gate-adequacy; weak predicate corrected in round 7)* replace the row-level assertions with a
-  **weak predicate the clean §13 is GUARANTEED to satisfy** — `the parsed table has exactly nine rows` —
-  then delete one `out` **name**: the strong gate fails, the weak one still passes. *(Round 7: the
-  earlier form asserted the section contains the literal word "excluded", which step 2 never requires the
-  clean §13 to contain — a compliant "The five `out` rows emit structured JSON" makes the **weak** side
-  fail before any deletion, so the comparison never produced the required pass. A gate-adequacy mutant is
-  only meaningful when its weak side passes on the clean document.)*
-- **M3** section-scoped rather than row-scoped per-rule assertions → a deleted disposition must still be
-  detectable (this is COREDEV-2602's round-7 defect, documented at `scripts/tests/test_doc_gates.py:287-290`).
+- **M2** *(gate-adequacy; weak predicate corrected in round 7, mutation corrected in round 8)* replace the
+  row-level assertions with a **weak predicate the clean §13 is GUARANTEED to satisfy** — `the parsed
+  table has exactly nine rows` — and mutate by **re-pairing one row's `producer_id` with another
+  allowlisted `producer_id`**: `| security-findings | concurrency-reviewer | out |`. The strong
+  triple-set gate **fails**, the weak row-count gate **passes**, and on the clean document both pass —
+  a complete differential with a valid baseline on both documents.
+  **This is M12c's mutation run as a differential**, exactly as M1 reuses M9's `VALID_AGENTS` mutation:
+  the mutation is shared, the two proofs are not — M12c asserts the clean gate rejects it, M2 asserts the
+  weakened gate does not.
+  *(Round 8: round 7 fixed the clean-document half and broke the mutated half. Its mutation deleted an
+  `out` **name**, which produces a row the fail-closed `_scope_rows` parser must **raise** on by design
+  (`:252`) — so the weak side **failed on the mutated document** and the differential still had no valid
+  baseline. Under a fail-closed parser the only usable mutation is one that keeps all nine rows
+  **parseable and allowlisted**, which re-pairing does and deletion cannot. Round 7's own rule — a
+  gate-adequacy mutant is meaningful only when its weak side passes — applies to **both** documents.)*
+- **M3** *(differential made executable in round 8)* section-scoped rather than row-scoped per-rule
+  assertions → a deleted disposition must still be detectable (COREDEV-2602's round-7 defect, documented
+  at `scripts/tests/test_doc_gates.py:287-290`).
+  **Marker:** `per the payload-region invariant`. **Mutation:** delete rule **3**'s disposition cell.
+  **Why it discriminates:** that phrase occurs in the dispositions of rules **1, 2, 3, 5 and 10** —
+  five rows, counted in the shipped `AGENT_CONTRACTS.md` §13 — so after rule 3's cell is deleted **four**
+  occurrences remain inside the section. The section-scoped `assertIn(marker, section)` therefore
+  **passes** while the row-scoped `assertIn(marker, rows[3])` **fails**.
+  *(Round 8: the historical false-pass M3 cites depended on the marker also appearing in the
+  **precedence clause** — and §7 step 4 moves that clause out of §13 (`:409`). Citing only the historical
+  case left M3 with no marker guaranteed to survive **this** plan's narrowing: had the deleted row held
+  the marker's only instance, **both** gates would fail and the comparison would prove no adequacy
+  difference at all. The five rule rows sit inside §13's ten dispositions, which §7 step 5 keeps
+  explicit, so this marker survives by construction rather than by luck.)*
 - **M9** *(round 1)* add `swift-reviewer` to `VALID_AGENTS` **without** editing §13 → the disjointness
   assertion must fail. This is the exact future change §4.1 exists to catch, and it is the one M1 only
   half-covers.
@@ -500,12 +531,23 @@ must fail", which cannot be satisfied by M1 or M3.
   against **both** the live-import gate and a hardcoded weak gate, and asserts the live gate fails while
   the weak gate passes. Stating them as "mutants that must fail" is a category error.
 
-  **Round 6 moved M2 into this group.** M2 (`:144`) replaces the assertion with "the section contains
-  the word *excluded*" and then checks that deleting a name must still fail — it mutates the **test**,
-  not the document or the parser, and is structurally identical to M1 and M3. Under the weakened
-  assertion a deleted name does **not** fail, which is the whole point: it is a differential showing the
-  weak form is inert, not a mutant the clean gate rejects. Listing it as a candidate mutant made §6 and
-  §7 step 7 unsatisfiable for M2 for exactly the reason round 5 identified for M1/M3.
+  **Round 6 moved M2 into this group.** M2 mutates the **test**, not the document or the parser, and is
+  structurally identical to M1 and M3. Under a weakened assertion the mutated document does **not** fail,
+  which is the whole point: it is a differential showing the weak form is inert, not a mutant the clean
+  gate rejects. Listing it as a candidate mutant made §6 and §7 step 7 unsatisfiable for M2 for exactly
+  the reason round 5 identified for M1/M3.
+
+  **M2's operative definition is §4.1's (`:154`), reproduced here because §7 step 7 routes the
+  implementer through this section** — weak predicate **`the parsed table has exactly nine rows`**,
+  mutation **re-pair one row's `producer_id` with another allowlisted `producer_id`**. M3's marker and
+  mutation are likewise fixed at `:161`.
+  *(Round 8: this paragraph still defined M2 as the round-5 "the section contains the word *excluded*"
+  check — the very predicate round 7 superseded at `:154` for never passing on the clean document.
+  Because step 7 sends implementation here, **the superseded predicate is the one that would have
+  shipped**. That is the third time in this plan a decision was fixed in a design section and left
+  standing in the operative one — two-column→three-column in round 6, the `anchor` column in round 8, and
+  this. The class is recorded in §9; the standing instruction is to grep every operative restatement
+  before declaring a design change propagated.)*
 
 **Polarity, corrected in round 2:** the clean post-fix implementation must **PASS**, and then **each
 candidate mutant must FAIL**. Round 1's wording ("each must be shown failing before
@@ -522,21 +564,47 @@ satisfied by a suite that never rejects a mutant.
    §14 does not yet exist makes `text.index("## 14.", start)` raise `ValueError`, which is a suite
    *error*, not a controlled result. Neither sequencing is safe, so this is **one step, not two** —
    round 6 replaces "move the helper split ahead of §14" with atomicity.
-2. Rewrite §13's Scope as a **parseable three-column table** — `surface_id | producer_id | scope` —
-   whose content is exactly these **nine approved triples**, every field drawn from a finite allowlist,
-   any unknown key a hard failure, and any triple outside this set a hard failure:
+2. Rewrite §13's Scope as a **parseable FOUR-column table** — `surface_id | producer_id | scope |
+   anchor` — whose content is exactly these **nine approved rows**, every field drawn from a finite
+   allowlist, any unknown key a hard failure, and any `(surface_id, producer_id, scope)` triple outside
+   this set a hard failure:
 
-   | `surface_id` | `producer_id` | `scope` |
-   |---|---|---|
-   | `verdict-report` | `swift-reviewer` | `in` |
-   | `brainstorm-summary` | `brainstorm` | `in` |
-   | `implement-wrapup` | `implement` | `in` |
-   | `pr-review-report` | `pr-review` | `in` |
-   | `security-findings` | `security-reviewer` | `out` |
-   | `concurrency-findings` | `concurrency-reviewer` | `out` |
-   | `ux-perf-findings` | `ux-perf-reviewer` | `out` |
-   | `accessibility-findings` | `accessibility-auditor` | `out` |
-   | `prompt-safety-findings` | `prompt-review` | `out` |
+   | `surface_id` | `producer_id` | `scope` | `anchor` | fingerprint the anchored section MUST contain |
+   |---|---|---|---|---|
+   | `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:590` | `### Verdict:` |
+   | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:143` | `## Step 8: Summary for Approval` |
+   | `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:342` | `## Phase 6: Wrap Up` |
+   | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:133` | `## Step 4: Compile the Final Report` |
+   | `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:203` | `## Output Format` |
+   | `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:264` | `## Output Format` |
+   | `ux-perf-findings` | `ux-perf-reviewer` | `out` | `agents/ux-perf-reviewer.md:199` | `## Output Format` |
+   | `accessibility-findings` | `accessibility-auditor` | `out` | `agents/accessibility-auditor.md:210` | `## Output Format` |
+   | `prompt-safety-findings` | `prompt-review` | `out` | `agents/prompt-review.md:96` | `## Structured Findings (orchestrator handoff)` |
+
+   > **Round 8 — the `anchor` column had not reached this step, so M12d was unimplementable.** §4.2's
+   > round-7 fix added the fourth column and defined **M12d** to mutate it, but this step still mandated a
+   > "three-column table" and shipped a nine-row three-column body. An implementer following §7 literally
+   > would never create the anchor column, and M12d would have nothing to mutate — while §4.2 claimed the
+   > redirect was closed. Both reviewers found this independently and both named the same two sites.
+   >
+   > **The anchors above are the "exact nine" codex asked for, opened and verified at `b2496a8`** — not a
+   > formula for deriving them. Two of them are the point of the whole column:
+   > - `verdict-report`'s anchor is **`agents/swift-reviewer.md:590`** (`## Output Format`), **not the
+   >   `:439` Step-5 heading** §4.2 cites as the surface's locus. `:439` opens a section that contains
+   >   *both* the synthesizer **tool input** (`:538`) and the client-facing **report format** (`:590`), so
+   >   an anchor at `:439` would still admit codex's counterexample — define `verdict-report` as the JSON
+   >   object passed to the tool and every check passes. Anchoring at `:590`, with the fingerprint
+   >   `### Verdict:` (`:660`, inside that section and absent from the tool-input region), makes the
+   >   redirect fail the gate. **A broad anchor is not an anchor.**
+   > - `prompt-safety-findings` anchors at `## Structured Findings (orchestrator handoff)`, not an
+   >   `## Output Format` heading, because `prompt-review` has none — evidence that these are read off the
+   >   repository rather than pattern-filled.
+   >
+   > **The gate asserts, per row:** the anchor path exists; the anchor line is a **heading**; and the
+   > section that heading opens **contains the recorded fingerprint**. A prose definition elsewhere is
+   > then not authoritative and cannot redirect the ID. **M12d** leaves all nine triples byte-identical
+   > and repoints one anchor to a different real surface (`verdict-report` → `agents/swift-reviewer.md:538`);
+   > the gate must fail.
 
    The five `out` rows' **reason** (they emit structured JSON; style guidance was always a poor fit) and
    the note on what is deliberately lost are prose **outside** the table — prose is not row content.
@@ -611,6 +679,24 @@ satisfied by a suite that never rejects a mutant.
 - `capture.py`'s `VALID_AGENTS` contains **`prompt-review`**, not `swift-reviewer` — so "the five
   reviewers" is security/concurrency/ux-perf/accessibility/**prompt-review**. Any prose naming the five
   must use that list, not the four specialists plus the orchestrator.
+
+> **The dominant defect class in this plan: a decision fixed in the DESIGN section and left standing in
+> the OPERATIVE one.** Three instances, each caught a round or more after the "fix":
+>
+> | round | decided in §4 | still wrong in | consequence had it shipped |
+> |---|---|---|---|
+> | 6 | scope table becomes **three**-column (`surface_id \| producer_id \| scope`) | §7 step 1's two-column instruction | M12c has no `producer_id` to mutate |
+> | 8 | scope table gains a fourth **`anchor`** column + M12d | §7 step 2's three-column table and nine-row body | **M12d unimplementable** — the column it mutates never exists |
+> | 8 | M2's weak predicate becomes "exactly nine rows" | §6's `excluded` definition, which step 7 routes through | the **superseded** predicate is the one that ships |
+>
+> Each was found by an adversarial reviewer, not by the edit that made the decision. The pattern is
+> structural, not careless: §4 is where the argument is won, §6/§7 are where an implementer actually
+> reads, and editing the first feels like finishing.
+>
+> **Standing counter-measure — after changing any design decision, grep for every operative restatement
+> of it before declaring it propagated.** For a table-shaped decision that means every occurrence of the
+> column count, every shipped instance of the table, and every step that tells an implementer to build
+> it. The check is mechanical and cheap; three rounds were spent not doing it.
 
 > **Transcript-path notice (2026-07-30).** Every `/tmp/rev/…` path cited in the round histories below
 > **no longer exists**: the machine's root volume filled, and macOS purged `/private/tmp`, destroying all
@@ -804,3 +890,51 @@ its stated grounds and credited for the hazard it surfaced.
 (the digest error, the ordering contradiction), while gemini's one confirmed original finding (M2's
 classification) was a taxonomy judgement. Concordance on finding 1 — the same High, from the same two
 sites, reached independently — is the strongest signal in this round.
+
+## 16. Round-7 gate outcome
+
+> **Recorded retroactively in round 8.** Round 7's findings were applied in `b2496a8`, but that commit
+> added **no round-7 section** — the fixes landed while the record did not, so the plan cited "Round 7:"
+> corrections inline with nothing defining what round 7 was. Reconstructed here from the two surviving
+> transcripts, not from memory. *(The audit trail is part of the artifact: a fix whose provenance is
+> unrecorded is indistinguishable from an unreviewed edit — which is the defect COREDEV-2497 exists to
+> close.)*
+
+**gemini `REQUEST_CHANGES` (1 High, 0 Medium) · codex `REQUEST_CHANGES` (1 High, 3 Medium, 2 Low).**
+Frozen at `57ff072`, sha256 `b79f0d45b5b7236801c5516b296c84933181d18bf74bd0ef4f2cc73b20b0c6ea` —
+codex's transcript verifies that exact digest. Transcripts:
+`~/.claude/review-transcripts/2605r7-agy.txt` (2,993 B) and `…/2605r7-codex.txt` (258,079 B, 66 ticket-key
+hits). *(The agy transcript types the ticket key **zero** times and is nonetheless genuine — it opens and
+verifies six `file:line` citations by content. Provenance greps must use markers that actually appear.)*
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **the nine triples bind tokens to tokens, never a token to a SURFACE** — prose definitions may sit outside the table (`:208`), leaving every `surface_id` ungrounded. Counterexample: define `verdict-report` as the JSON object passed to the synthesizer (`agents/swift-reviewer.md:538`) and keep the approved row untouched — allowlists, uniqueness, polarity, disjointness and M4/M10–M12 all still pass while §13 is redirected onto **tool input** | **confirmed** — the counterexample is constructed against the real file and every check does pass | §4.2 gains a fourth **`anchor`** column and **M12d**. *(Round 8: this fix reached §4.2 and **not** §7 step 2 — see §17 finding 1)* |
+| 2 | codex | **M2's differential does not discriminate** — the clean §13 is not required to contain the literal `excluded`, so the **weak** side fails before any deletion and never produces the required pass | **confirmed** | weak predicate changed to `the parsed table has exactly nine rows`. *(Round 8: this fixed the clean half and broke the mutated half — see §17 finding 2)* |
+| 3 | codex | **round-6's atomicity decision was not propagated** — `:407` still said the boundary "must move BEFORE" §14 while `:483` requires an indivisible change | **confirmed** | `:407` marked superseded by the atomic step |
+| 4 | codex | the **header** (`:5`) says a leading boundary change raises during M8's revert, contradicting the correct rejection at `:757` | **confirmed** — with M8 replacing only §13, `## 14.` remains and `_section13()` resolves; the error exists only in the pre-§14 implementation state | header corrected |
+| 5 | codex | the round-6 frozen **commit** is mistyped `093df68f…`, which resolves to nothing | **confirmed** — `git rev-parse --verify` returns "Needed a single revision"; the digest `d4672051…` belongs to `093df6892386e4c69c17d5f82532a2333a2e92d3` | corrected in §15 with the error noted in place |
+| 6 | codex | the taxonomy says every M4–M13 candidate mutates only the document or parser, but **M5a** deletes or renames a **test** (`:304`) | **confirmed** — M5a is still properly a candidate (it removes required evidence **without weakening the gate**); the category definition used artifact type as the discriminator | §6's discriminator restated as *what the mutation does to the contract* |
+| 7 | gemini | `_section13()` raises `ValueError` on a **full-file** reversion to a state with no `## 14.` — the atomic step fixes the implementation window but not the helper's robustness | **rejected on its stated grounds, credited for the hazard** — M8 reverts only §13, so `## 14.` survives; this is the same claim gemini made in round 6, re-raised against the same design after codex judged it sound. Recorded rather than re-litigated | none — the atomic step already forecloses the reachable form of the hazard |
+
+**Both arms flipped nothing on re-read, and the one gemini High was a repeat of a round-6 claim already
+rejected with reasons.** Round 7's signal came almost entirely from codex; concordance was absent, which
+is itself the weaker evidence state and is why round 8 was run rather than treated as converging.
+
+## 17. Round-8 gate outcome
+
+**gemini `REQUEST_CHANGES` (1 High, 1 Medium) · codex `REQUEST_CHANGES` (2 High, 1 Medium).**
+Frozen at `b2496a8`, sha256 `61d8d4e15a9d76814dab807000bedb87dc39ed14d70db6dac13def68b9691d04` — both
+transcripts verify that digest. Transcripts: `~/.claude/review-transcripts/2605r8-agy.txt` (2,746 B) and
+`…/2605r8-codex.txt` (181,541 B, 91 ticket-key hits).
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the `anchor` column never reached §7 step 2, so M12d is unimplementable** — §4.2 adds the fourth column and M12d mutates it, while step 2 still mandated a "three-column table" and shipped a nine-row three-column body. Following §7 literally, the implementer never creates the column M12d must mutate. codex adds that the plan supplied **no exact anchors or fingerprints** anywhere, and that §4.2's `:439` locus is broad enough to contain both the tool input (`:538`) and the report format (`:590`) — so even an anchor column pointed at `:439` would still admit the round-7 counterexample | **confirmed** — the same High from the same two sites, reached independently by both arms; step 2's table was read and is three-column | step 2 now mandates a **four-column** table and ships the **exact nine anchors + fingerprints**, opened and verified at `b2496a8`. `verdict-report` anchors at **`:590`** with fingerprint `### Verdict:`, not at `:439` — a broad anchor is not an anchor |
+| 2 | **both** | **M2's differential still has no valid baseline** — gemini: the round-7 weak predicate ("exactly nine rows") now fails on the **mutated** document, because deleting an `out` name yields a row the fail-closed `_scope_rows` parser must **raise** on (`:252`). codex: §6 (`:503`) *also* still defined M2 by the superseded `excluded` predicate, and **step 7 routes implementation through §6**, so the superseded form is the one that would ship | **confirmed on both halves** — round 7 fixed the clean-document side and broke the mutated side; and §6's definition was never updated | mutation changed to **re-pairing a `producer_id`** (M12c's shape), which keeps all nine rows parseable and allowlisted — the only shape that can pass a weak gate under a fail-closed parser. §6 no longer restates a superseded predicate and now points at §4.1 as operative |
+| 3 | codex | **M3 has no executable differential for the narrowed document** — the historical false-pass it cites depended on the marker also appearing in the **precedence clause**, which §7 step 4 moves out of §13 (`:409`). No surviving marker is named, so if the deleted row held the marker's only instance **both** gates fail and no adequacy difference is proved | **confirmed** — `test_doc_gates.py:287-290` documents exactly that dependency, and the plan does move the clause | M3 now names marker **`per the payload-region invariant`** and mutation **delete rule 3's disposition cell**: the phrase occurs in rules **1, 2, 3, 5 and 10** (five rows, counted in the shipped §13), so four survive the deletion — section-scoped passes, row-scoped fails |
+
+**Concordance on findings 1 and 2 is the round's strongest signal** — two independent arms, the same two
+defects, and in finding 1 the same pair of sites. Both are instances of the same class: **a design
+decision fixed in §4 and left unpropagated to the operative §6/§7 restatement.** Round 6 had it with
+two-column→three-column; round 8 has it twice. §9 records the class and the standing counter-measure.

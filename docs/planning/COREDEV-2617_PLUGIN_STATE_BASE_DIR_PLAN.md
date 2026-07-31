@@ -1,6 +1,15 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 6 gated** (**gemini `REQUEST_CHANGES` ×2**). Round 5's per-primitive guard
+**Status:** Planning — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+`REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
+The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
+`ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
+**spelling** check the tree already bypasses at `scripts/test-hooks.sh:446`. §7 now uses a mandatory
+**instrumented read spy** (call count zero, adequacy proved by a non-zero count with the guard removed)
+and an N5 predicate built on **path composition**, not on one expansion form. The envelope also called a
+**reader** (`marker_commit`) a writer and omitted `context_review_round_bind`, which prints a round even
+when its write fails. See §16. Previously — round 6 gated (**gemini `REQUEST_CHANGES` ×2 · codex
+`REQUEST_CHANGES` 2 High, 1 Medium, 1 Low**). Round 5's per-primitive guard
 was the **round-3 defect one layer down**: in Bash a primitive that "returns nothing" returns the **empty
 string**, and the caller's own concatenation still composes a root path (`/logs`, `/reviews/<hash>`,
 `mktemp /.stopgate.XXXXXX`). §7 now returns a **poisoned non-root sentinel**
@@ -21,10 +30,10 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-6 are in §10-§15.
+root; the consumer enumeration is now in the implementation order. Rounds 1-7 are in §10-§16.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
-**Last Updated:** 2026-07-30 (round 5, post-gate revision)
-**Measured against:** HEAD `9548299` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
+**Last Updated:** 2026-07-31 (round 7, post-gate revision)
+**Measured against:** HEAD `b2496a8` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
 
 ---
 
@@ -306,7 +315,9 @@ Baselines at `5a532b1`: `test-hooks.sh` **304**, synthesizer **222**, scripts **
 `21/21/0/1`, hook events **10**. Floors, not equalities — re-derive and print `pwd` +
 `git rev-parse HEAD` beside any measurement.
 
-Mutation proofs **N1–N4**, each shown failing before the fix and passing after.
+Mutation proofs **N1–N5**, each shown failing before the fix and passing after. *(Round 7: this list
+said N1–N4, so N5 — the one purely structural check in the set, with no behavioural counterpart —
+carried no adversarial mutant and could have shipped unproven. Its mutant is specified in §7 step 5.)*
 
 ## 7. Implementation order
 
@@ -329,7 +340,7 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
    | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
    | `agents/swift-reviewer.md:247-249` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
-   | `scripts/test-hooks.sh` — **`:624`, `:796`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run |
+   | `scripts/test-hooks.sh` — **`:624`, `:796`**, and **`:446`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run. *(Round 7 adds `:446` — `[ -s "$CLAUDE_PLUGIN_DATA/logs/stop-gate.log" ]` composes from the raw variable directly, not through a resolver, so it is a third site of a different kind and the one that proves N5's old predicate was blind.)* |
    | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
 
    > **Round 5 supersedes "guard at script entry" — entry alone cannot hold D′.** Round 4 was right that
@@ -381,9 +392,29 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    >    **`/logs`**; with the sentinel it yields `/dev/null/unresolved-plugin-base/logs`. Every
    >    destructive verb — `mkdir`, `mktemp`, redirect — fails `ENOTDIR`, and the `[ -f ]` guard that
    >    fail-open code already uses returns false, so readers take their existing absent-file path.
-   > 2. **Writing primitives become no-ops** — `marker_write`, `marker_commit`, `log_append` and the
-   >    `context_snapshot*` writers return success **without** writing, so D′ persists nothing and no
-   >    consumer's primary behaviour changes. Readers return an empty result set.
+   > 2. **Writing primitives become no-ops** — `marker_write`, `log_append`, the `context_snapshot*`
+   >    writers, **`context_review_round_bind`** (`context.sh:263-291`) and
+   >    **`context_review_round_clear`** (`context.sh:342-345`) return success **without** writing, so D′
+   >    persists nothing and no consumer's primary behaviour changes. Readers return an empty result set.
+   >
+   >    **Round 7 — `marker_commit` is a READER and is struck from this list.** Round 6 said so in prose
+   >    four paragraphs below and then left it standing in the operative rule; this is the same
+   >    design-section-not-operative-section defect the plan has now hit three times.
+   >    `marker_commit` (`marker.sh:179`) is `marker_field "$1" commit` — the line directly under
+   >    `marker_status`, and `marker_field` (`:151`) only reads. It takes the **reader** contract (empty
+   >    result), not the no-op-write contract. Calling a reader a writer is what let the two genuine
+   >    round-binding mutators above go unlisted for two rounds.
+   >
+   >    **`context_review_round_bind` needs a stated contract, not just "skip the write".** It writes the
+   >    binding *and prints the round on the way out*: `printf '%s' "$round"` (`context.sh:290`) executes
+   >    unconditionally, **after** the `mv` arm has already failed. Under the sentinel `mkdir -p` and the
+   >    redirect both fail `ENOTDIR`, the `rm -f` cleanup arm runs — and the function still prints a
+   >    round number that was never stored, so a consumer binds to a round no reader can ever confirm.
+   >    That is a fresh instance of the round-6 lesson (a value that survives a failed write is as bad as
+   >    the write): its unresolved contract is **print nothing, return 0**, matching the empty result its
+   >    reader half `context_review_round_lookup` (`:298`) already returns. `context_review_round_clear`
+   >    is a bare `rm -f` (`:342-345`) — a no-op under the sentinel by construction, but it is a **state
+   >    mutator**, so N1/N2 must assert that explicitly instead of inheriting it from `ENOTDIR`.
    >
    > **The envelope must be EXHAUSTIVE, and round 5's list was not.** It named `marker_commit`, which only
    > *delegates*, while omitting real public composers. The contract binds **every** function that returns
@@ -403,11 +434,57 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    > is what actually holds D′.
    >
    > **A new primitive can still bypass the accessor and read `CLAUDE_PLUGIN_DATA` directly**, so the
-   > contract needs an enforcement test, not just prose. **N5 (new): a structural check** —
-   > `scripts/tests/` asserts that the literal expansion `${CLAUDE_PLUGIN_DATA` appears **only** inside
-   > the four accessor definitions named above, and that no other line in `scripts/**` or `hooks/**`
-   > composes a path from it. A new `marker_write` that resolves the variable itself fails N5 at review
-   > time rather than shipping a root write.
+   > contract needs an enforcement test, not just prose. **N5: a structural check.**
+   >
+   > **Round 7 — N5 as round 6 wrote it was a SPELLING check, and is rejected.** Asserting on the literal
+   > `${CLAUDE_PLUGIN_DATA` catches one of the forms Bash accepts. `$CLAUDE_PLUGIN_DATA/x`,
+   > `"${CLAUDE_PLUGIN_DATA}"`, `${CLAUDE_PLUGIN_DATA:?}`, `${CLAUDE_PLUGIN_DATA:-…}` and `${!ref}` all
+   > evade it. This is not hypothetical: **`scripts/test-hooks.sh:446` already ships the unbraced form**
+   > (`[ -s "$CLAUDE_PLUGIN_DATA/logs/stop-gate.log" ]`), so the tree contains a live instance of the very
+   > bypass the check claimed to prevent, and the check would have passed over it.
+   >
+   > **Measured at `b2496a8`, so the test is written against a known tree, not a guess:** the identifier
+   > occurs **45** times across `scripts/**`, `hooks/**`, `agents/**`, `skills/**` and `.githooks/**` —
+   > `test-hooks.sh` 19, `test_shell_primitive_drift.py` 9, `agents/swift-reviewer.md` 5,
+   > `pre-commit-checks.sh` 2 (comments), `paths.sh` 2, `log.sh` 2, `context.sh` 2,
+   > `test_reviewer_roster.py` 1, `marker.sh` 1. **A name-only scan would therefore fail on ~36
+   > legitimate sites** — which is why the predicate is not "the identifier appears".
+   >
+   > - **Predicate — path COMPOSITION from the raw variable, not mention of it.** N5 fails a line when an
+   >   expansion of `CLAUDE_PLUGIN_DATA` (any form: `$X`, `${X}`, `${X:-…}`, `${X:?}`, `${X-…}`) is
+   >   **concatenated with a path suffix** — matched as an expansion immediately followed by `/`, or
+   >   assigned into a variable whose name ends `_DIR`/`_PATH`/`_BASE`/`_FILE`/`LOG` — anywhere outside
+   >   the allowlist. Merely naming the variable (a comment, an `export X="${X}"` bridge, a `[ -n "$X" ]`
+   >   test) is not a defect and must not fail: the defect is composing a state path around the resolver.
+   > - **The four resolver definitions are the allowlist's core**, and the plan's "four accessors" is
+   >   correct as a count: `paths.sh:35` (canonical) plus the three **deliberate inline fallbacks** at
+   >   `marker.sh:29`, `log.sh:27` and `context.sh:36`. Those three are load-bearing by design, not drift
+   >   — `paths.sh:11-20` explains that these libs are sourced standalone and that making them abort would
+   >   convert three fail-open paths into one shared point of failure. N5 must pin them, **not** delete
+   >   them.
+   > - **Scan set includes the executable fences in `agents/**` and `skills/**`.** An agent body that
+   >   tells the model to compose the path is the same defect shipped as prose, and
+   >   `agents/swift-reviewer.md:247-249` is already on §7's guard list for exactly that. The MAJ-6 bridge
+   >   at `swift-reviewer.md:176` and `:244` (`export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"`)
+   >   **propagates** the variable and composes nothing — allowlisted by the predicate above, and named
+   >   explicitly so a future edit that appends a suffix to it fails.
+   > - **Test fixtures are allowlisted by (file, reason), enumerated in the test source** — never by a
+   >   `tests/` glob, which would let a future library file under a test path bypass the contract.
+   >   `test-hooks.sh` **sets** the variable to a temp root (`:33`) and composes under **that**, which is
+   >   the isolation mechanism itself; `test_shell_primitive_drift.py` gates the expansion **form** and
+   >   must contain the literal; `test_reviewer_roster.py:41` sets it. Adding a site is then a visible
+   >   diff, not a silently-widened pattern.
+   > - **Indirection fails closed.** `${!…}` and `eval` over a name assembled at runtime cannot be decided
+   >   statically, so N5 fails on any `${!` or `eval` in the scan set that is not itself allowlisted,
+   >   rather than pretending to analyse it.
+   >
+   > **N5's own mutant (round 7).** Add to `scripts/lib/marker.sh` a
+   > `marker_write_v2() { printf '%s' "$2" > "$CLAUDE_PLUGIN_DATA/m-$1.json"; }` — deliberately the
+   > **unbraced** spelling. N5 must **fail** on that tree and pass once the body is rewritten onto
+   > `marker_path`. The mutant must use a spelling the round-6 predicate missed; a `${CLAUDE_PLUGIN_DATA`
+   > mutant would have been caught by the old wording too and would prove only that the test runs.
+   > *(A test that cannot distinguish the two trees is not evidence — this campaign has already shipped
+   > one gate with that shape.)*
    >
    > **The cache is EAGER and process-stable — round 6 Medium.** "Resolve once into a cached value" is
    > not implementable as written: the libraries source `paths.sh` lazily *from inside* the base
@@ -431,12 +508,44 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    > sets the environment, *then* sources — anything else tests the harness's ordering, not the contract.
    >
    > **Proving "no reads" needs a positive signal, not an absence.** An unwritten root file makes an
-   > illicit read observationally identical to a correctly skipped one. N1/N2 must therefore **plant a
-   > canary** at each path the unguarded code would have composed (e.g. a readable file at the sentinel
-   > location and, where permissions allow in a sandboxed root, at the root path) and assert the canary
-   > was **never opened** — via a spy on the read, or by asserting the canary's `atime`/access marker is
-   > unchanged. Assert also that (a) nothing is created under `/`, (b) nothing is created anywhere, and
-   > (c) every composed path begins with `/dev/null/unresolved-plugin-base`.
+   > illicit read observationally identical to a correctly skipped one.
+   >
+   > **Round 7 — the round-6 canary is PHYSICALLY IMPOSSIBLE and is rejected.** It required planting "a
+   > readable file at the sentinel location", but the sentinel is `/dev/null/unresolved-plugin-base` and
+   > **nothing can be created beneath a character device**. The `ENOTDIR` property that makes the sentinel
+   > safe is the *same* property that makes the canary unplantable — the two requirements are mutually
+   > exclusive, and §7's own executed evidence above (`mkdir`, `mktemp` and the redirect all fail
+   > `Not a directory`) is the proof that they are. The round-6 wording made the impossibility the
+   > load-bearing half of its own oracle. The fallback half is no better: planting at the **root** path is
+   > conditional on being able to write to `/`, so on any machine where it is refused the oracle silently
+   > degrades to asserting nothing.
+   >
+   > **`atime` is not an oracle here either — three independent reasons.** (a) It does not observe the
+   > reads that actually occur: the state libraries probe with `[ -f "$path" ]` (`marker.sh:154`,
+   > `marker.sh:185`) and `[ -d "$d" ]` / `[ -f "$d/$agent.json" ]` (`context.sh:142`, `context.sh:145`),
+   > which `stat` the path without ever opening it. (b) macOS mounts do not promise an `atime` update on
+   > `open`, so it can be unchanged **after** a genuine read — a false pass. (c) It is a global
+   > side-channel: any unrelated process touching the file forges a failure.
+   >
+   > **The oracle is an instrumented read spy, and it is MANDATORY — not one option among several.**
+   > N1/N2 wrap the reading surface and assert a **count of zero**, which is a positive measurement of a
+   > thing that must not happen rather than an inference from an absent file:
+   >
+   > - Each of the six cells runs under a shim that intercepts the verbs these libraries actually use on
+   >   a state path — `[ -f ]` / `[ -d ]` / `[ -e ]`, the `read … < "$path"` redirect, `stat`, `grep`,
+   >   `jq` and `python3` — recording every call with its argument. Assertion: **zero** calls whose
+   >   argument lies under the state base.
+   > - Coverage is **enumerated per public reader**, not sampled. `marker_field` (`:151`, hence
+   >   `marker_status` `:178` and `marker_commit` `:179`), `marker_mtime` (`:182`),
+   >   `context_latest_round_dir` (`:134`), `context_highest_round` (`:168`),
+   >   `context_review_round_lookup` (`:298`), `_context_file_mtime` (`:195`) and
+   >   `_context_round_advance` (`:236`). A reader missing from that list is missing from the proof.
+   > - **The spy's own adequacy is proved by mutation, like everything else here:** with the guard
+   >   removed, the recorded count must be **non-zero**. A spy that reports zero on both trees measures
+   >   nothing and would certify the defect as fixed.
+   >
+   > Assert also that (a) nothing is created under `/`, (b) nothing is created anywhere outside the cell's
+   > own temp dir, and (c) every composed path begins with `/dev/null/unresolved-plugin-base`.
    >
    > Each consumer still resolves the base **once**, at entry, and takes its documented no-persistence path if
    > unresolved — so a newly added `marker_write` cannot silently reintroduce the defect.
@@ -666,3 +775,27 @@ its review to the immutable commit object rather than the checkout.)*
 | 3 | codex | **the primitive envelope was incomplete** — it named `marker_commit` (a delegator) and omitted `marker_path` (`:109`), `log_dir` (`:31`) and the raw resolvers (`paths.sh:34`, `marker.sh:16`); a new primitive can bypass the accessor entirely | **confirmed** | exhaustive per-library envelope table + **N5**, a structural check that the literal expansion appears only in the accessors |
 | 4 | codex | **the cache is not implementable as stated** — lazy sourcing inside command substitutions makes it **subshell-local**; eager/lazy, the status convention and diagnostic cardinality were undefined; `test-hooks.sh:33` sets the variable *before* sourcing; and "no reads" cannot be proven from an absence | **confirmed** | cache specified **eager and process-stable** with an `_UNLEASHED_BASE_OK` flag and one diagnostic per process; N1/N2 source a **fresh shell** per cell and assert on a **planted canary** |
 | 5 | codex | the header claimed rounds 1-5 in §10-§14 while the document ended at §13 | **confirmed** | §14 and §15 added — this section and the one above |
+
+## 16. Round-7 gate outcome
+
+**gemini `REQUEST_CHANGES` (1 High, 1 Medium) · codex `REQUEST_CHANGES` (1 High, 2 Medium).** Frozen at
+`b2496a8`, sha256 `c6d41a44537c7838f0d03d0fd8fb5280a4c2415970fe3577a26090c767cd6b73` — verified against
+`git show b2496a8:…` and reported identically by both arms. Transcripts:
+`~/.claude/review-transcripts/2617r7-agy.txt` (1,176 B) and `…/2617r7-codex.txt` (149,069 B).
+
+**Round 7 is round 6's two fixes failing in their own terms.** Both of round 6's headline remedies — the
+planted canary and N5 — were adopted from codex and neither was executable. That is the round's real
+lesson: *a fix proposed by a reviewer is a claim, not a verified mechanism*, and this plan's own standard
+("execute, don't assert") was applied to the sentinel and not to the two proofs built on top of it.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **the planted canary is physically impossible.** N1/N2 required a readable file at the sentinel location to prove no read occurred — but the sentinel is `/dev/null/unresolved-plugin-base`, and nothing can be created beneath a character device. The `ENOTDIR` property that makes the sentinel safe is the same one that makes the canary unplantable. codex adds that `atime` is no fallback: it does not observe the `[ -f ]`/`[ -d ]` **metadata probes** that are the actual reads, and may be unchanged after a genuine `open` | **confirmed by the plan's own executed evidence** — §7's round-6 transcript already shows `mkdir`, `mktemp` and the redirect all failing `Not a directory` at that exact path. The reader claims check out: `marker.sh:154`, `marker.sh:185`, `context.sh:142`, `context.sh:145` all `stat` without opening | the canary is **rejected**; the oracle becomes a **mandatory instrumented read spy** asserting a call count of **zero**, enumerated per public reader, whose own adequacy is proved by a non-zero count with the guard removed |
+| 2 | **both** | **N5 is trivially bypassable** — it asserts the literal `${CLAUDE_PLUGIN_DATA`, which is a **spelling** check. `$CLAUDE_PLUGIN_DATA`, `"${CLAUDE_PLUGIN_DATA}"`, `${CLAUDE_PLUGIN_DATA:?}` and `${!ref}` all evade it. codex adds that the tree **already ships the bypass** at `scripts/test-hooks.sh:446`, and that N5 had no adversarial mutation because §6's proof list said N1–N4 | **confirmed by grep** — `:446` is `[ -s "$CLAUDE_PLUGIN_DATA/logs/stop-gate.log" ]`, unbraced. Measured at `b2496a8`: **45** occurrences of the identifier across `scripts/**`, `hooks/**`, `agents/**`, `skills/**`, `.githooks/**` | N5's predicate rebuilt around **path composition from the raw variable**, not mention of it; scan set widened to the executable fences in `agents/**`/`skills/**`; allowlist enumerated by (file, reason); indirection fails closed; **N5 gains its own mutant** and §6's list is corrected to N1–**N5** |
+| 3 | codex | **the "exhaustive" envelope names a reader as a writer and omits two real mutators** — `marker_commit` delegates to `marker_field` (`marker.sh:179`), while `context_review_round_bind` (`context.sh:263-291`) and `context_review_round_clear` (`:342-345`) get no unresolved contract and no N1/N2 coverage. An unguarded `bind` can still **print a round that was never stored** | **confirmed by reading the source** — `marker_commit` is one line delegating to the reader; and `printf '%s' "$round"` (`context.sh:290`) executes unconditionally **after** the failed `mv`, so the print survives the failed write | `marker_commit` **struck** from the writing-primitive rule; both round-binding functions added, with `bind`'s contract stated as **print nothing, return 0** rather than merely "skip the write" |
+
+**Finding 3 is the campaign's meta-defect in its purest form.** Round 6 *found* that `marker_commit` is
+only a delegator, wrote that finding into the prose four paragraphs below the rule — and left
+`marker_commit` standing in the operative list. The commit message for `b2496a8` even says
+"it named marker_commit (a delegator)". The correction was known, recorded, and not applied where it
+governs. **Grep every operative restatement before declaring a design change propagated.**
