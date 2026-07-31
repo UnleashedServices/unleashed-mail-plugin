@@ -124,7 +124,11 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
   point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside every
   protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
-  by the same rules**, and says so. *(Round 6: the round-5 wording validated `XDG_STATE_HOME` and then fell back
+  by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
+  NOTHING and exits non-zero with a diagnostic** — it never invents a third location. *(Round 9, codex:
+  "validated by the same rules" named no consequence, so an implementation could validate the fallback and
+  then use it regardless. No allocation means no capture, which is the fail-closed direction: a review that
+  cannot be recorded must not appear to have run.)* *(Round 6: the round-5 wording validated `XDG_STATE_HOME` and then fell back
   **unconditionally**, so the fallback was never checked at all. Round 7 removes the group-writable
   rationale that came with it — the narrowed rules deliberately do **not** reject a group-writable
   `$HOME`, because §3 no longer claims squat resistance.)* **The multi-user claim is NARROWED, not defended by an ancestry check — round 6.** *(codex: trusted
@@ -166,7 +170,7 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 - **Ticket and round** are **required inputs** to both review skills, passed by the wrapper, not
   inferred. A skill that cannot determine them fails closed rather than guessing.
 - **The codex recipe reaches `context_repo_hash` through a shared Bash wrapper**, not directly: the
-  recipe invokes Python (`skills/codex-review/SKILL.md:49`; `:48` is the pre-clean §7 step 4 deletes) while the helper is Bash-only
+  recipe invokes Python (`skills/codex-review/SKILL.md:49`; `:48` is the pre-clean §7 `S-PRECLEAN` deletes) while the helper is Bash-only
   (`scripts/lib/context.sh:79`). One wrapper sources `context.sh`, allocates, and prints — and **that
   wrapper is what the codex skill is granted**, so no recipe re-implements the hash.
 - **The allocated path is emitted on stdout behind a stable marker** the wrapper captures verbatim and
@@ -186,6 +190,12 @@ required — a separator or `..` would otherwise escape the intended parent. And
 `makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
 a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
 writing into it. Leaf creation is `0600`; retry is bounded.
+**Plus, round 9 (codex): a pre-existing WRONG-OWNER parent is a second, separate mutation.** §7 `S-ALLOC`
+requires failing closed on a parent that exists "with a different mode **or owner**", but M1 proved only
+the mode arm — so a mode-only implementation passed every listed M1 case while violating §7. The two
+checks fail independently and each needs its own mutation. *(Where the test cannot create a
+foreign-owned directory unprivileged, stub the `stat` result rather than skipping: a skipped mutation
+proves nothing, and this one is unrunnable as-written in most CI.)*
 
 ### 4.2 — The `rm -f` grants and the pre-clean commands (High — round 1, revised in rounds 2 and 6)
 
@@ -207,7 +217,7 @@ claim — including when the reviewer is the reliable arm, and including when I 
 **What remains true** is only that the `rm -f` grants name a literal `/tmp` path this ticket removes.
 **`${CLAUDE_PLUGIN_ROOT}` grants are CORRECT and stay** — the validator idea from round 1 is withdrawn
 entirely, not narrowed. *(Round 3: the reversal reached §4.2's opening and **three other sites still
-asserted the opposite** — the "does not expand" line below, M2's validator, and §7 step 6's CHANGELOG
+asserted the opposite** — the "does not expand" line below, M2's validator, and §7 `S-RELEASE`'s CHANGELOG
 instruction. Applying a correction in one place and leaving its consequences standing is the exact
 defect this campaign has hit in every plan; here I did it to a **reversal of a finding I had already
 acted on**.)*
@@ -241,6 +251,16 @@ validation itself** *(round 4, codex: an implementation that blindly trusts a se
 passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
 `.claude`** — including a canonical/symlink alias — and **unwritable**, and require the fallback **plus
 its diagnostic** in each. Assert also that no `/tmp/` literal survives in any `allowed-tools` line.
+**Plus, round 9 (codex): every case above is an INVALID value that falls back, so M2 as written was
+passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
+fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
+and they are of the two kinds this campaign keeps needing:
+- **Positive (must PASS):** a **valid** `XDG_STATE_HOME` is **used** — allocation lands beneath it and
+  **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
+- **Negative (must FAIL closed):** the **fallback itself** is invalid — run with `HOME` pointing at an
+  unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
+  with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
+  never said what a failed validation *does*; it does this.
 **No substitution validator** — round 1's would have rejected `${CLAUDE_PLUGIN_ROOT}`, which is
 supported and correct.
 
@@ -250,7 +270,7 @@ supported and correct.
 
 | file | lines | rewrite | quote-keep | note |
 |---|---|---|---|---|
-| `skills/review-synthesis/SKILL.md` | 5 | 5 | 0 | needs a ticket/round input contract (§4.1) |
+| `skills/review-synthesis/SKILL.md` | 5 | 5 | 0 | takes the two **allocated paths** as explicit inputs — not a ticket/round contract (§4.1, §7 `S-THREAD`) |
 | `skills/gemini-review/SKILL.md` | 5 | 5 | 0 | its `:24` is `/tmp/agy-ping.txt`, a **different** path, and is NOT among these 5 |
 | `skills/codex-review/SKILL.md` | 5 | 5 | 0 | includes the `rm -f` grant, which is **deleted** not rewritten (§4.2) |
 | `docs/audits/PLUGIN_AUDIT_2026-07-19.md` | 4 | 0 | 4 | MAJ-10 — the audit finding that named this defect |
@@ -362,7 +382,7 @@ read the payload passed. The arms disagreed here — codex reported the mutation
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | The chosen directory is protected or unwritable in some permission mode | **High** | §4.1 moved off `.claude`; M2 is a **runtime** check, not a string check |
-| The withdrawn substitution validator is re-introduced and rejects the supported `${CLAUDE_PLUGIN_ROOT}` | **High** | §4.2 — the validator is withdrawn in §4.2, M2, §5 and §7 step 4; the `rm -f` grants are deleted, the `${CLAUDE_PLUGIN_ROOT}` grants **kept** |
+| The withdrawn substitution validator is re-introduced and rejects the supported `${CLAUDE_PLUGIN_ROOT}` | **High** | §4.2 — the validator is withdrawn in §4.2, M2, §5 and §7 `S-PRECLEAN`; the `rm -f` grants are deleted, the `${CLAUDE_PLUGIN_ROOT}` grants **kept** |
 | A historical quote is rewritten and the record of a real finding is corrupted | **High** | §4.3's **10** quote-keeps, pinned by M3 *(round 2: this cell said 12 while the table said 11 — the two were never reconciled, and both were wrong)* |
 | Allocation is added but callers still derive the name | **High** | `--allocate` **prints** the path behind a stable marker; **M5** (integration, both real paths) fails a derived name — **M1 cannot**, since it exercises only the allocator |
 | Per-run paths are read as making the gate tamper-proof | Medium | §3's ceiling, in the CHANGELOG |
@@ -389,41 +409,53 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
 
 ## 7. Implementation order
 
-1. **Inventory and classify all 31 sites** and commit the classification — M3 asserts it.
-2. **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
+*(**Steps carry stable labels.** Round 9, both arms: inserting the wrapper step shifted every later
+number and left **seven** cross-references pointing at the wrong step — the third time this plan has
+broken that way. Numbers are reading order; **labels are the referent**, and an inserted step cannot
+invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
+
+1. **`S-INVENTORY`** — **Inventory and classify all 31 sites** and commit the classification; M3 asserts it.
+2. **`S-ALLOC`** — **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
    `reviewer` component that is not `[A-Za-z0-9._-]+`** — a separator or `..` would otherwise escape the
    intended parent; create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate the leaf
-   with `O_CREAT|O_EXCL` in a bounded retry loop; **create the `<path>.launch` record `O_EXCL` in the
-   SAME call, containing the run ID**; then print the path behind the stable marker. Add M1.
+   with `O_CREAT|O_EXCL` **and mode `0o600`** in a bounded retry loop *(round 9, codex: this step said only
+   `O_CREAT|O_EXCL`, so an implementer using the conventional `0o666` creation mode yields `0644` and
+   **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **create the `<path>.launch` record
+   `O_EXCL` in the SAME call, containing the run ID**; then print the path behind the stable marker. Add M1.
    *(Round 8 reproduction, gemini: this step omitted the grammar and the mis-moded-parent rule, both
    mandated by §4.1 and both required by M1 — so an implementer working from §7 alone would build an
    allocator vulnerable to path escape and M1 would fail on it.)*
    *(Round 6, gemini: this step omitted the launch record entirely, so an implementer following §7 would
-   build the allocator without it and step 6's freshness check would fail closed forever.)*
-3. **Create the shared Bash wrapper** — `scripts/review/allocate-transcript.sh`. It sources
+   build the allocator without it and `S-FRESH`'s freshness check would fail closed forever.)*
+3. **`S-WRAPPER`** — **Create the shared Bash wrapper** — `scripts/review/allocate-transcript.sh`. It sources
    `context.sh` for `context_repo_hash`, calls `pty-capture.py --allocate …` with that hash, and echoes
    the marker line. **This is the entry point the codex skill is granted** (§4.2's added
    `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`), because the codex recipe runs Python and the
    hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
-4. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
-   `review-synthesis` — including a ticket/round **input contract** for synthesis.
-5. **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
+4. **`S-THREAD`** — **Thread the allocated path** through `isolated-agy-review.sh`, both review skills,
+   `brainstorm` and `review-synthesis`. Synthesis takes **the two allocated paths as explicit inputs**
+   (`--reviewer <name>=<STATUS>:<allocated-path>`) — **not** a ticket/round contract from which it
+   re-derives a name. *(Round 9, gemini: this step and §4.3's inventory note both demanded "a ticket/round
+   input contract for synthesis", contradicting §4.1, which threads paths explicitly **precisely because**
+   synthesis has no such contract. Deriving the path in a second place is the drift this design removes —
+   a re-derived name that disagrees with the allocation reads an absent file and fails closed forever.)*
+5. **`S-PRECLEAN`** — **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
    and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
    leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
-6. **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
+6. **`S-M5`** — **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
-7. **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
+7. **`S-FRESH`** — **Add the LAUNCH-RECORD freshness check** to `review-verdict.py`: the record is created `O_EXCL`
    **before dispatch**, bound to the run ID, looked up per transcript, and **fails closed when the record is absent, empty, malformed, or its run ID
    does not equal the one in the transcript's filename** *(round 7, gemini: this step said only "when
    absent", dropping the ID equality that makes the record an anchor rather than a touch-file)*.
    Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
    Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
    record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
-8. Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+8. **`S-RELEASE`** — Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
@@ -439,10 +471,11 @@ resolutions cited.)*
 - ~~Q2 / Q5 — does deleting the outer pre-clean cover "the wrapper never starts"?~~ **SETTLED, §4.2:**
   yes — an allocated empty file maps to `MISSING` in synthesis and is rejected by
   `review-verdict.py:364` (codex, round 3, with citations). The pre-clean is **deleted**, including the
-  commands (§7 step 4).
+  commands (§7 `S-PRECLEAN`).
 - ~~Q3 — is `/tmp/agy-ping.txt` in scope?~~ **SETTLED, §4.3:** out of scope, recorded as a decision.
-- ~~Q4 — what anchors freshness on the `--reviewed-sha256` path?~~ **SETTLED, §4.5 and §7 step 6**
-  *(round 5: this said "§7 step 5", which is M5 — the launch record is step 6)*: the per-allocation
+- ~~Q4 — what anchors freshness on the `--reviewed-sha256` path?~~ **SETTLED, §4.5 and §7 `S-FRESH`**
+  *(round 5 pointed at "step 5", which was M5; round 9's renumbering broke the corrected number too, which
+  is why §7 now carries stable labels)*: the per-allocation
   launch record, `<transcript-path>.launch`, created by the allocator before it prints the path.
 
 **Genuinely open:**
