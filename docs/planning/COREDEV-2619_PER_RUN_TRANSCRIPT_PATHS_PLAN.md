@@ -1,12 +1,12 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 4 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
+**Status:** Planning — **round 5 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
 arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 4, post-gate revision)
+**Last Updated:** 2026-07-31 (round 5, post-gate revision)
 
 ---
 
@@ -117,8 +117,13 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   `dontAsk`; "created on first reference" establishes provisioning, not write permission from a skill's
   Bash recipe. **`$HOME/.local/state` is confirmed absent from Claude Code's protected-path list** (round 3), so the
   **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
-  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, and outside
-  every protected root — otherwise it falls back to `$HOME/.local/state` and says so.** The unqualified
+  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside
+  every protected root, AND on TRUSTED ANCESTRY** — the canonical base, or its nearest existing
+  ancestor, must be **owned by the user and not group- or world-writable** — otherwise it falls back to
+  `$HOME/.local/state` and says so. *(Round 5, codex: an absolute, writable, **attacker-owned `0777`**
+  base passes an absolute/protected/unwritable check, and whoever controls that ancestor can rename or
+  replace the subtree however private the leaf is — so §3's multi-user claim needed either this check or
+  narrowing. M1 checked only the leaf mode; M2 had no shared-but-writable case.)* The unqualified
   "outside every protected tree" claim of round 2 was too strong.
 - **`<repo-hash>`** — reuse `context.sh`'s existing repo-hash slug, so two checkouts cannot collide.
   Everything else in the plugin is already namespaced this way.
@@ -163,7 +168,9 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
 could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
 (seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
-return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700`.
+return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700` **and on trusted
+ancestry** (owned by the user, not group/world writable), with a mutation using a **pre-existing
+attacker-owned `0777` ancestor** that must force the fallback.
 Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
 **Plus, round 3:** `ticket`/`round`/`reviewer` become **filename components**, so a rejection grammar is
 required — a separator or `..` would otherwise escape the intended parent. And
@@ -197,6 +204,7 @@ acted on**.)*
 | skill | grant | disposition |
 |---|---|---|
 | `skills/codex-review/SKILL.md:7` | `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)` | **KEEP — expands correctly** (2.1.0+) |
+| `skills/codex-review/SKILL.md:7` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` | **ADD — round 5.** §4.1 routes codex through a shared **Bash** wrapper (it is the only way to reach the Bash-only `context_repo_hash`), and a `python3`-only grant **cannot execute it**. Without this the handoff fails authorization. gemini caught the mismatch between §4.1's design and §4.2's own table |
 | `skills/codex-review/SKILL.md:7` | `Bash(rm -f /tmp/codex-out.txt*)` | **DELETE** — allocation removes the need to pre-clean |
 | `skills/gemini-review/SKILL.md:8` | `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` | **KEEP — expands correctly** |
 | `skills/gemini-review/SKILL.md:8` | `Bash(rm -f /tmp/agy-out.txt*)` | **DELETE** |
@@ -287,9 +295,11 @@ tests**, and this plan no longer describes them as proofs that fail before the f
 ### 4.5 — Freshness, which paths alone do not give (Medium — from the audit)
 
 Per-run paths stop a stale transcript being *reused*; they do not prove the transcript is *newer than
-the gate launch*. The audit's second suggestion covers that gap: **`review-verdict.py` records and checks
-transcript mtime ≥ the snapshot sidecar's mtime**, so a transcript older than the gate launch fails
-closed.
+the gate launch*. The audit's second suggestion covers that gap: **`review-verdict.py` records and checks each transcript's mtime against **its own launch record**
+(§4.5's schema below) — **not** against the snapshot sidecar. *(Round 5: this sentence still named the
+sidecar while the paragraphs below replaced it, giving two incompatible operative instructions. The
+sidecar is additionally wrong under concurrency: a later snapshot updates the shared mtime and would
+reject a valid concurrent run.)*
 
 **Adopted as in scope, with two round-2 corrections.**
 
@@ -301,7 +311,16 @@ closed.
   sidecar's mtime — so M4 could pass for the sidecar case while an implementation skips freshness
   entirely whenever the explicit digest is supplied. **Resolved in round 3, by codex:** a **per-allocation LAUNCH RECORD**, created with `O_EXCL` *before*
   dispatch and bound to the returned run ID, is the anchor — compared by `st_mtime_ns` on **both** digest
-  paths. The snapshot sidecar is a poor anchor independently of this, because under concurrency a later
+  paths.
+
+  **Its schema, creator and lookup — round 5, gemini.** The record is
+  **`<transcript-path>.launch`**: the allocated transcript path with a `.launch` suffix, in the same
+  directory, so lookup is a pure function of the `transcriptPath` already recorded in the artifact and
+  `review-verdict.py` needs no index. **The allocator creates it**, in the same `--allocate` call that
+  creates the leaf and before it prints the path — so "created before dispatch" is structural rather
+  than a caller's obligation. It contains the run ID. **`review-verdict.py` fails closed when it is
+  absent.** *(Round 5: the plan named the mechanism and never its path, extension or creator, so nothing
+  could look it up deterministically.)* The snapshot sidecar is a poor anchor independently of this, because under concurrency a later
   snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
   not a launch anchor at all.**
 
@@ -349,7 +368,10 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    Add M1.
 3. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
    `review-synthesis` — including a ticket/round **input contract** for synthesis.
-4. **Delete the two `rm -f` grants.** **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
+4. **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
+   and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
+   as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
+   leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
 5. **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
@@ -362,22 +384,30 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
-## 8. Open questions for round 5
+## 8. Open questions for round 6
 
-1. **Is `${XDG_STATE_HOME:-$HOME/.local/state}` writable from a skill's Bash recipe in every permission
-   mode, including `dontAsk`?** This is the **third** directory this plan has proposed — `~/.claude/`
-   (protected), `${CLAUDE_PLUGIN_DATA}` (resolves *into* `~/.claude/plugins/data/`, equally protected),
-   now XDG state. **Confirm it against the actual protected-path list rather than by reasoning**, and
-   say so explicitly if it is also wrong.
-2. **Does deleting the `rm -f` grants leave any path where a pre-clean is still required?**
-   `isolated-agy-review.sh` pre-cleans a path it allocated — is that sufficient for the
-   "wrapper never starts" case the audit reconstructs?
-3. **Should `/tmp/agy-ping.txt` be in scope** after all? §4.3 rules it out as a non-evidence artifact.
-4. ~~How should freshness be anchored on the explicit `--reviewed-sha256` path?~~ **ANSWERED in round 3
-   and now operative in §4.5 and §7 step 5:** a per-allocation **launch record**, `O_EXCL` before
-   dispatch, bound to the run ID, compared by `st_mtime_ns`, keyed per transcript and therefore
-   independent of the digest path. *(Round 4: this question still said "cannot be implemented until this
-   is chosen" three rounds after it was chosen.)*
-5. **Does deleting the outer pre-clean actually cover "the wrapper never starts"?** §4.2 argues an
-   allocated *empty* file fails closed because synthesis maps empty → `MISSING`. Verify that against
-   `review-synthesis` and `review-verdict.py` rather than by assertion.
+*(Round 5, both arms: this section had become the plan's main source of contradictions — it reopened
+four decisions that are settled operatively elsewhere. **A question that the plan has answered is not an
+open question; it is a contradiction with a question mark.** Q1, Q2, Q3 and Q5 are struck and their
+resolutions cited.)*
+
+- ~~Q1 — is the XDG default writable?~~ **SETTLED, §4.1:** `$HOME/.local/state` is absent from the
+  protected-path list (codex, round 3); a *set* `XDG_STATE_HOME` is validated or falls back.
+- ~~Q2 / Q5 — does deleting the outer pre-clean cover "the wrapper never starts"?~~ **SETTLED, §4.2:**
+  yes — an allocated empty file maps to `MISSING` in synthesis and is rejected by
+  `review-verdict.py:364` (codex, round 3, with citations). The pre-clean is **deleted**, including the
+  commands (§7 step 4).
+- ~~Q3 — is `/tmp/agy-ping.txt` in scope?~~ **SETTLED, §4.3:** out of scope, recorded as a decision.
+- ~~Q4 — what anchors freshness on the `--reviewed-sha256` path?~~ **SETTLED, §4.5 and §7 step 6**
+  *(round 5: this said "§7 step 5", which is M5 — the launch record is step 6)*: the per-allocation
+  launch record, `<transcript-path>.launch`, created by the allocator before it prints the path.
+
+**Genuinely open:**
+
+1. **Is trusted-ownership validation of the XDG base sufficient and portable?** §4.1 now requires the
+   canonical base — or its nearest existing ancestor — to be owned by the user and not group/world
+   writable. codex round 5: an absolute, writable, **attacker-owned** `0777` base passes the earlier
+   absolute/protected/unwritable checks, and an attacker controlling that ancestor can rename or replace
+   the subtree however private the leaf is.
+2. **Does anything else in the repo read the two fixed literals at runtime** rather than documenting
+   them? The inventory classifies by *site*; a runtime reader would need threading, not rewriting.
