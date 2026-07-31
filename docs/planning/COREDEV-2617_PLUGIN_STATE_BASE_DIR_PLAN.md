@@ -1,8 +1,14 @@
 # COREDEV-2617 — Plugin state splits across two base directories
 
-**Status:** Planning — **round 5 gated** (**gemini `APPROVE` / codex `REQUEST_CHANGES`**). **"Guard at
+**Status:** Planning — **round 6 gated** (**gemini `REQUEST_CHANGES` ×2**). Round 5's per-primitive guard
+was the **round-3 defect one layer down**: in Bash a primitive that "returns nothing" returns the **empty
+string**, and the caller's own concatenation still composes a root path (`/logs`, `/reviews/<hash>`,
+`mktemp /.stopgate.XXXXXX`). §7 now returns a **poisoned non-root sentinel**
+(`/dev/null/unresolved-plugin-base`, `ENOTDIR` for everything beneath it) from path-returning primitives
+and makes the writers **no-ops** — safe for an *unguarded* caller, which is the only property that
+survives future code. Previously — round 5 gated: **"guard at
 script entry" does not hold D′**: the state libraries are *sourced* and have no entry, so `marker_*`,
-`log_*` and `context_*` still compose root paths for any caller — §7 now guards inside each **public
+`log_*` and `context_*` still compose root paths for any caller — §7 guarded inside each **public
 primitive** off a single validated cached base, and N1/N2 must call those primitives directly. The
 `swift-reviewer.md` fence finally gets its control flow, and §13's round-4 digest was the round-3 value
 copied forward. **Round 4's approving codex verdict did not reproduce on identical bytes — see §13's
@@ -15,7 +21,7 @@ substitution still composes a root path. §4.2 and §7 now specify per-consumer 
 Previously — round 2 gated (**gemini REQUEST_CHANGES ×2 / codex REQUEST_CHANGES ×3**). The
 reviewers **split on the resolution** — gemini for the A+D hybrid, codex for D′ — and **D′ is adopted**;
 see §11. N1 contradicted D′ and is rewritten; an empty base would have redirected writes to filesystem
-root; the consumer enumeration is now in the implementation order. Rounds 1-5 are in §10-§14.
+root; the consumer enumeration is now in the implementation order. Rounds 1-6 are in §10-§15.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · **High** — a live defect, reproduced on this machine
 **Last Updated:** 2026-07-30 (round 5, post-gate revision)
 **Measured against:** HEAD `9548299` (v2.6.4), worktree `.claude/worktrees/opus5-review`, plugin `2.6.4`
@@ -227,8 +233,28 @@ return the same string today.
 
 **N3 (revised):** in one library, **bypass or remove the delegation** and inject a sentinel
 `unleashed_plugin_base` that returns a distinctive value; that library must then **fail** a test
-asserting it delegates when `paths.sh` is present. Keep the existing absent-file matrix unchanged so the
-fail-open property is preserved.
+asserting it delegates when `paths.sh` is present.
+
+> **Round 6 High — "keep the absent-file matrix unchanged" contradicts D′, and N3 was not sound.**
+> Earlier drafts ended the paragraph above with *"keep the existing absent-file matrix unchanged so the
+> fail-open property is preserved."* That cannot stand. The matrix
+> (`scripts/tests/test_shell_primitive_drift.py:92`, and `:129` for the absent case) **explicitly expects
+> the legacy base for both the unset and the empty variable** — the exact answer D′ forbids. And in
+> absent-`paths.sh` mode the three libraries take their **inline** branches (`marker.sh:21`,
+> `log.sh:19`, `context.sh:28`), which **bypass the cache §7 assigns to `paths.sh`** entirely. So the one
+> supported mode where the accessor does not exist is precisely the mode with no guard.
+>
+> **The resolution:** the inline fallback is **not** exempt. Each library's inline branch must implement
+> the *same* unresolved contract as the accessor — an unset or empty variable yields the poisoned
+> sentinel (§7), never the legacy base — so `paths.sh`'s absence changes *who computes* the answer, never
+> *what the answer is*. `paths.sh:20`'s "optimisation of maintenance, not a load-bearing dependency"
+> survives intact; what does not survive is the matrix's expectation.
+>
+> **This plan therefore mandates a test change**, stated here so it is not discovered during
+> implementation: `test_shell_primitive_drift.py`'s matrix rows for **unset** and **empty** must expect
+> the **unresolved/no-persistence** result in *both* the present and absent arms (`:92`, `:129`). The
+> `set` rows are unchanged. **N1/N2 must run the full cross-product** — `paths.sh` present *and* absent ×
+> variable set, unset and empty — six cells, not two.
 
 > **Load order is part of the mutation, not an implementation detail.** The sentinel must be injected
 > **after** `_UNLEASHED_PATHS_SH_LOADED=1` is set, or sourcing `paths.sh` overwrites it and the mutation
@@ -316,14 +342,101 @@ Mutation proofs **N1–N4**, each shown failing before the fix and passing after
    > Entry-only early exits are also **wrong** for `pre-commit-checks.sh`, `swift-lint-check.sh`,
    > `swift-build-verify.sh` and `reviewer-roster.sh`, whose primary behaviour must continue.
    >
-   > **The durable mechanism is a guard inside each public state primitive.** `paths.sh` resolves the
-   > base **once** into a validated cached value; every primitive that composes a path
-   > (`marker_dir`, `marker_write`, `marker_commit`, `log_append`, `context_*`) returns its
-   > **no-persistence result** when that cached base is unresolved or empty, and composes nothing. The
-   > guarantee then holds for **any** caller, including ones not yet written — which is what makes the
-   > consumer table an inventory of *behaviour to preserve* rather than the enforcement mechanism.
-   > **N1 and N2 must therefore call `marker_*`, `log_*` and `context_*` directly**, with the variable
-   > both **unset** and set **empty**, not only through the named scripts.
+   > **Round 6 correction — "return nothing" is the round-3 defect one layer down, and is REJECTED.**
+   > Round 5 said each primitive should return its "no-persistence result … and compose nothing." In Bash
+   > a primitive is invoked as `$(marker_dir)`, so returning nothing returns the **empty string**, and the
+   > caller's own concatenation still composes a **root** path. Every site round 5 claimed to protect is
+   > still live: `stop-quality-marker-gate.sh:66` → `/stop-last-blocked-…`, `:120` →
+   > `mktemp /.stopgate.XXXXXX`, `:132` → `/logs`, `context.sh:54` → `/reviews/<hash>`,
+   > `reviewer-roster.sh:53` → `/<slug>`. This is exactly what round 3 established about call sites —
+   > **an empty substitution composes a root path** — and it does not stop being true because the empty
+   > string now originates one function deeper. A design that requires every caller to test for empty
+   > before appending has not removed call-site enforcement; it has hidden it.
+   >
+   > **The mechanism must be safe for an UNGUARDED caller, because that is the only property that
+   > survives future code.** Two rules, and the first is what makes it work:
+   >
+   > 1. **Path-returning primitives return a POISONED, non-empty, non-root sentinel** — the literal
+   >    `/dev/null/unresolved-plugin-base`. `/dev/null` is a character device, so **every** path built
+   >    beneath it is `ENOTDIR`: `mkdir -p` fails, `mktemp` fails, `mv -f` fails, `printf > …` fails,
+   >    `[ -f … ]` is false, and a read yields nothing. An unguarded caller that concatenates and writes
+   >    therefore fails **harmlessly and loudly at a fixed, greppable path**, and can never touch `/`.
+   >    This holds for `marker_base`, `marker_dir`, `context_base`, `context_reviews_dir` and every
+   >    derived form, including callers not yet written.
+   >
+   >    **Executed on this machine, 2026-07-31** — not argued:
+   >
+   >    ```
+   >    $ mkdir -p /dev/null/unresolved-plugin-base/logs
+   >    mkdir: /dev/null: Not a directory
+   >    $ mktemp /dev/null/unresolved-plugin-base/.stopgate.XXXXXX
+   >    mktemp: mkstemp failed on …/.stopgate.BOauuq: Not a directory
+   >    $ printf 'x' > /dev/null/unresolved-plugin-base/m.json
+   >    not a directory: /dev/null/unresolved-plugin-base/m.json
+   >    $ [ -f /dev/null/unresolved-plugin-base/m.json ] ; echo $?      # 1 — false
+   >    $ ls -d /logs /reviews /.state 2>/dev/null | wc -l              # 0 — nothing at root
+   >    ```
+   >
+   >    The contrast that makes this load-bearing: with an **empty** base the same concatenation yields
+   >    **`/logs`**; with the sentinel it yields `/dev/null/unresolved-plugin-base/logs`. Every
+   >    destructive verb — `mkdir`, `mktemp`, redirect — fails `ENOTDIR`, and the `[ -f ]` guard that
+   >    fail-open code already uses returns false, so readers take their existing absent-file path.
+   > 2. **Writing primitives become no-ops** — `marker_write`, `marker_commit`, `log_append` and the
+   >    `context_snapshot*` writers return success **without** writing, so D′ persists nothing and no
+   >    consumer's primary behaviour changes. Readers return an empty result set.
+   >
+   > **The envelope must be EXHAUSTIVE, and round 5's list was not.** It named `marker_commit`, which only
+   > *delegates*, while omitting real public composers. The contract binds **every** function that returns
+   > or builds a state path:
+   >
+   > | library | functions that MUST return the sentinel when unresolved |
+   > |---|---|
+   > | `paths.sh` | `unleashed_plugin_base` (`:34`) — the raw resolver |
+   > | `marker.sh` | `marker_base` (`:16`), `marker_dir`, **`marker_path` (`:109`)** |
+   > | `log.sh` | `log_base` (`:19`), **`log_dir` (`:31`)** |
+   > | `context.sh` | `context_base` (`:28`), `context_reviews_dir` (`:54`), and every `context_*` path form |
+   >
+   > Because the sentinel is **non-empty**, an outer composer built on a guarded inner one stays poisoned
+   > rather than rooted — `marker_path` on a sentinel `marker_base` yields
+   > `/dev/null/unresolved-plugin-base/quality-marker-….json`, not `/quality-marker-….json`. That is the
+   > property "return empty" could not provide, and it is why the sentinel — not the guard's placement —
+   > is what actually holds D′.
+   >
+   > **A new primitive can still bypass the accessor and read `CLAUDE_PLUGIN_DATA` directly**, so the
+   > contract needs an enforcement test, not just prose. **N5 (new): a structural check** —
+   > `scripts/tests/` asserts that the literal expansion `${CLAUDE_PLUGIN_DATA` appears **only** inside
+   > the four accessor definitions named above, and that no other line in `scripts/**` or `hooks/**`
+   > composes a path from it. A new `marker_write` that resolves the variable itself fails N5 at review
+   > time rather than shipping a root write.
+   >
+   > **The cache is EAGER and process-stable — round 6 Medium.** "Resolve once into a cached value" is
+   > not implementable as written: the libraries source `paths.sh` lazily *from inside* the base
+   > functions, and callers invoke those through command substitutions (`marker.sh:34`, `log.sh:32`,
+   > `context.sh:39`). A variable first assigned there lives in the **subshell** and is gone on return, so
+   > a "cache" would silently re-resolve on every call. Specify it exactly:
+   >
+   > - **Eager**: resolution runs at **source time**, in the sourcing shell, before any command
+   >   substitution — not on first use.
+   > - **Process-stable**: the resolved value is a plain shell variable in that shell
+   >   (`_UNLEASHED_BASE_RESOLVED`), set once, never re-derived per call.
+   > - **Status convention**: a companion `_UNLEASHED_BASE_OK` is `1` when resolved and `0` when the
+   >   sentinel is in force. Primitives branch on that flag, never on string comparison against the
+   >   sentinel — so a caller cannot fake resolution by exporting the sentinel text.
+   > - **Diagnostic cardinality**: **exactly one** unresolved diagnostic per process, emitted at source
+   >   time (§4.1's observability requirement), not one per primitive call.
+   >
+   > **N1/N2 must source in a FRESH SHELL per cell.** The existing harness exports the variable *before*
+   > sourcing the libraries (`scripts/test-hooks.sh:33`); with an eager cache, mutating the environment
+   > afterwards cannot change the resolved value. Each of the six cells therefore starts a new shell,
+   > sets the environment, *then* sources — anything else tests the harness's ordering, not the contract.
+   >
+   > **Proving "no reads" needs a positive signal, not an absence.** An unwritten root file makes an
+   > illicit read observationally identical to a correctly skipped one. N1/N2 must therefore **plant a
+   > canary** at each path the unguarded code would have composed (e.g. a readable file at the sentinel
+   > location and, where permissions allow in a sandboxed root, at the root path) and assert the canary
+   > was **never opened** — via a spy on the read, or by asserting the canary's `atime`/access marker is
+   > unchanged. Assert also that (a) nothing is created under `/`, (b) nothing is created anywhere, and
+   > (c) every composed path begins with `/dev/null/unresolved-plugin-base`.
    >
    > Each consumer still resolves the base **once**, at entry, and takes its documented no-persistence path if
    > unresolved — so a newly added `marker_write` cannot silently reintroduce the defect.
@@ -512,3 +625,44 @@ throughout.
 codex reproduced the evidence again: HEAD, digest, `76/21/1`, sentinel `0/1`, the divergent
 `e6f1f0ab`/`a39790f5` markers, one active registry id, both variables unset. It found **no independent
 production-Python resolver**, confirming the capture hook computes the base in shell and passes it in.
+
+## 14. Round-5 gate outcome
+
+**gemini `APPROVE` · codex `REQUEST_CHANGES`.** Frozen at `093df689…`, sha256 `d0df8515…`.
+
+**The round that established the gate is non-deterministic.** This round's codex run was a *re-run* of
+round 4's prompt against byte-identical bytes, forced by the transcript loss (see the transcript-path
+notice above). It returned `REQUEST_CHANGES` where round 4 returned `APPROVE_WITH_NOTES` with no High or
+Medium — and the finding it added was real. §13 carries the retraction; the campaign's gate now requires
+an approving pair that **reproduces**.
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **"guard at script entry" cannot hold D′** — the state libraries are *sourced* (`paths.sh:12-16`) and have **no entry**, so `marker_*`, `log_*` and `context_*` still compose for any caller; entry-only exits are also wrong for consumers whose primary behaviour must continue | **confirmed** — `marker.sh:33-34,117-127`, `log.sh:31-32,42-58`, `context.sh:39,54-55,190-191,267-286` | §7 moves the guard inside each **public primitive**, off one validated cached base |
+| 2 | codex | the `swift-reviewer.md` fence's row **restated that no control flow was supplied** rather than supplying it; the fence composes *and reads through* the path | **confirmed** — `agents/swift-reviewer.md:247-249` | the row now mandates no filesystem read and `NO CAPTURE (unresolved)` per reviewer |
+| 3 | codex | §13's round-4 digest was `e07fe1ec…`, the **round-3** freeze's value copied forward | **confirmed** — `51642a4`→`e07fe1ec`, `9548299`→`19fc4e43` | corrected in §13; the identical defect in `COREDEV-2605` §14 was fixed the same round |
+| 4 | codex | stale anchors: the final pre-commit exit is `:192`, the late lint marker `:425`, the build-log call `:65-66`; `:117` is the type check, `:118` the removal | **confirmed** by execution | all corrected |
+
+## 15. Round-6 gate outcome
+
+**gemini `REQUEST_CHANGES` (2 High) · codex `REQUEST_CHANGES` (2 High, 1 Medium, 1 Low).** Frozen at
+`57ff072f…`, sha256 `e0861f6a…`. Transcripts: `~/.claude/review-transcripts/2617r6-agy.txt` (2,420 B,
+`TREE=clean`) and `…/2617r6-codex.txt` (5,303 lines).
+
+**Round 5's fix was the round-3 defect one layer down, and both reviewers said so independently.**
+Returning "no persistence result" from a primitive returns the **empty string** in Bash, and the caller's
+own concatenation still composes a root path. This is the campaign's clearest instance of a fix that
+relocates a defect instead of removing it.
+
+*(Process note: a concurrent agent committed `b9b63c6` to this worktree mid-round. It touched only
+`COREDEV-2497`'s plan. gemini's run was voided by the harness's tree-mutation assertion; codex detected
+the moving `HEAD`, re-verified this plan byte-identical to `57ff072` at `e0861f6a…`, and correctly bound
+its review to the immutable commit object rather than the checkout.)*
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | **both** | **"return nothing" still composes a root path.** `$(marker_dir)` returning empty yields `/stop-last-blocked-…` (`:66`), `mktemp /.stopgate.XXXXXX` (`:120`), `/logs` (`:132`), `/reviews/<hash>` (`context.sh:54`), `/<slug>` (`reviewer-roster.sh:53`) | **confirmed** — the same property round 3 established about call sites | path-returning primitives now return a **poisoned non-root sentinel** `/dev/null/unresolved-plugin-base` (`ENOTDIR` beneath it); writers become no-ops |
+| 2 | codex | **the absent-`paths.sh` matrix contradicts D′.** `test_shell_primitive_drift.py:92`/`:129` expect the **legacy base** for unset *and* empty, and in absent mode the libs take inline branches (`marker.sh:21`, `log.sh:19`, `context.sh:28`) that **bypass the cache** entirely — N3 was therefore not sound | **confirmed** | the inline fallback is no longer exempt; the plan **mandates the matrix change** and N1/N2 run the full six-cell cross-product |
+| 3 | codex | **the primitive envelope was incomplete** — it named `marker_commit` (a delegator) and omitted `marker_path` (`:109`), `log_dir` (`:31`) and the raw resolvers (`paths.sh:34`, `marker.sh:16`); a new primitive can bypass the accessor entirely | **confirmed** | exhaustive per-library envelope table + **N5**, a structural check that the literal expansion appears only in the accessors |
+| 4 | codex | **the cache is not implementable as stated** — lazy sourcing inside command substitutions makes it **subshell-local**; eager/lazy, the status convention and diagnostic cardinality were undefined; `test-hooks.sh:33` sets the variable *before* sourcing; and "no reads" cannot be proven from an absence | **confirmed** | cache specified **eager and process-stable** with an `_UNLEASHED_BASE_OK` flag and one diagnostic per process; N1/N2 source a **fresh shell** per cell and assert on a **planted canary** |
+| 5 | codex | the header claimed rounds 1-5 in §10-§14 while the document ended at §13 | **confirmed** | §14 and §15 added — this section and the one above |

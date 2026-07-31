@@ -3,9 +3,13 @@
 **Status:** Planning — **round 6 gated** (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**). Both
 reviewers found the **same High**: the two-column `surface → scope` instruction still contradicted the
 three-column triple schema. Also — the §13/§14 split and §14's creation are **one indivisible step**
-(either ordering breaks: a lagging helper swallows §14, a leading one raises `ValueError` on M8's
-`v2.6.1` revert, which is a suite *error*, not a rejection); **M2** moved to gate-adequacy; the round-5
-digest was the round-4 value copied forward. See §15. Previously — round 5 gated
+(either ordering breaks: a lagging helper swallows §14; a leading one raises `ValueError` **during
+implementation, in the window before §14 exists**); **M2** moved to gate-adequacy; the round-5
+digest was the round-4 value copied forward. See §15.
+*(Round 7 correction: this header previously attributed that `ValueError` to **M8's `v2.6.1` revert**.
+That is wrong, and §16 rejects it — M8 replaces **only §13** (`:389`, `:414`, `:426`), so `## 14.`
+survives the revert and `text.index` resolves. The hazard is real but lives in the implementation
+window, not in M8.)* Previously — round 5 gated
 (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**): adding §14
 **breaks `_section13()`**, which ends at `## Cross-references` and would swallow it; M5's ticket example
 has **two independent rejection causes** that mask each other; and M1/M3 are gate-adequacy comparisons,
@@ -147,7 +151,13 @@ from the module at test time:
 **Proof — and it must reject a plausible wrong implementation.**
 - **M1** hardcode the five names in the test instead of importing `VALID_AGENTS` → mutate the tuple
   (add `swift-reviewer`) and the gate must still fail. A hardcoded list passes and is inert.
-- **M2** assert only that the section contains the word "excluded" → deleting a *name* must still fail.
+- **M2** *(gate-adequacy; weak predicate corrected in round 7)* replace the row-level assertions with a
+  **weak predicate the clean §13 is GUARANTEED to satisfy** — `the parsed table has exactly nine rows` —
+  then delete one `out` **name**: the strong gate fails, the weak one still passes. *(Round 7: the
+  earlier form asserted the section contains the literal word "excluded", which step 2 never requires the
+  clean §13 to contain — a compliant "The five `out` rows emit structured JSON" makes the **weak** side
+  fail before any deletion, so the comparison never produced the required pass. A gate-adequacy mutant is
+  only meaningful when its weak side passes on the clean document.)*
 - **M3** section-scoped rather than row-scoped per-rule assertions → a deleted disposition must still be
   detectable (this is COREDEV-2602's round-7 defect, documented at `scripts/tests/test_doc_gates.py:287-290`).
 - **M9** *(round 1)* add `swift-reviewer` to `VALID_AGENTS` **without** editing §13 → the disjointness
@@ -208,6 +218,23 @@ each of the four is named, individually, so removing one is not masked by the ot
 > **finite allowlist**, and **any unknown key is a hard failure**. Prose descriptions are not row
 > content; they may sit outside the table.
 >
+> > **Round 7 High — the triples bind tokens to tokens, never a token to a SURFACE.** Allowing prose
+> > definitions to sit outside the table (the sentence immediately above) leaves every `surface_id`
+> > **ungrounded**, and the gate cannot see it. codex's counterexample: define `verdict-report` as *the
+> > JSON object passed to the synthesizer* (`agents/swift-reviewer.md:538`) and keep the approved row
+> > `verdict-report | swift-reviewer | in` untouched. **Every check still passes** — the allowlists,
+> > uniqueness, polarity, disjointness, and M4/M10-M12 — while §13 has been silently redirected from the
+> > client-facing Step-5 report onto **tool input**, which is the precise confusion §4.1's own trap
+> > warning records. Round 4 closed *false pairings between tokens*; this is a false binding **beneath**
+> > a correct token.
+> >
+> > **Fix — every `surface_id` carries a gated repository anchor.** The table gains a fourth column,
+> > `anchor`, holding a `path:line` (or an exact heading) that identifies the surface in the repo, and
+> > the gate asserts each anchor **resolves** and matches a per-surface expected fingerprint. A prose
+> > definition elsewhere is then not authoritative and cannot redirect the ID.
+> > **M12d (new):** leave all nine triples byte-identical and change **one surface's anchor/definition**
+> > to a different real surface — `verdict-report` → `agents/swift-reviewer.md:538` — and the gate must
+> > **fail**. Without M12d nothing in this plan discriminates a correct binding from this counterexample.
 > - **all nine approved triples are required** — the four `in` rows and the five `out` rows — not only
 >   the `in` set. Round 5: M2 is "not guaranteed" until the full triple set is mandatory, because a
 >   deleted `out` row is otherwise invisible.
@@ -404,7 +431,11 @@ mutations.
 `test_precedence_clause_names_all_six_contracts` is **replaced**, not deleted: assert the short pointer
 is present, that §13 no longer enumerates the six, **and** that all six survive at their destinations.
 
-**The `_section13()` boundary must move BEFORE §14 is added — round 5's High finding.** The helper
+**The `_section13()` boundary and §14's creation are ONE INDIVISIBLE change — round 6 supersedes round
+5's "BEFORE" instruction, and round 7 marks it superseded here, at the operative site.** Round 5 said the
+boundary "must move BEFORE §14 is added"; obeyed literally that raises `ValueError` in the window where
+the edited helper looks for a `## 14.` that does not yet exist. §7 step 1 is authoritative: **one step,
+not two.** The helper
 extracts from `## 13. Agent Output Style` to **`## Cross-references`**
 (`scripts/tests/test_doc_gates.py:293-296`, read and confirmed). Inserting §14 between them puts the
 whole of §14 *inside* `_section13()`, with three consequences: a test asserting §13 no longer enumerates
@@ -459,8 +490,11 @@ Baselines measured at `adda52d`: `test-hooks.sh` **304**, synthesizer **222**, s
 executable.** Round 4 noted this as framing; round 5 showed §6 and §7 step 6 still instruct "every mutant
 must fail", which cannot be satisfied by M1 or M3.
 
-- **Candidate mutants** (M4–M13): mutate the *document or the parser*; the clean gate must **reject**
-  each one.
+- **Candidate mutants** (M4–M13): each removes or corrupts something the contract requires, and the
+  clean gate must **reject** it. *(Round 7: the discriminator is **what the mutation does to the
+  contract**, not which artifact it edits. The earlier wording said candidates "mutate the document or
+  the parser", which misclassifies **M5a** — it deletes or renames a **test** (`:304`) and is still
+  properly a candidate, because it removes a required evidence artifact **without weakening the gate**.)*
 - **Gate-adequacy comparisons** (M1, **M2**, M3): these deliberately *weaken the gate* and show it stops
   catching something. They are run as a **differential** — e.g. M1 runs the same `VALID_AGENTS` mutation
   against **both** the live-import gate and a hardcoded weak gate, and asserts the live gate fails while
@@ -728,7 +762,9 @@ boundary. M6–M11 are closed, M3–M4 closed, and every cited repository locati
 ## 15. Round-6 gate outcome
 
 **gemini `REQUEST_CHANGES` (3 High, 1 Medium) · codex `REQUEST_CHANGES` (1 High, 4 Medium).**
-Frozen at `093df68f…`, sha256 `d4672051…`. Transcripts:
+Frozen at `093df689…`, sha256 `d4672051…`. *(Round 7: the commit was mistyped `093df68f…`, which
+resolves to nothing — `git rev-parse --verify` returns "Needed a single revision". The digest was
+correct.)* Transcripts:
 `~/.claude/review-transcripts/2605r6-agy.txt` (3,021 B) and `…/2605r6-codex.txt`
 (212,342 B, 71 ticket-key hits). Both transcripts are complete and reached an explicit verdict line;
 neither round-6 arm needs re-running.
