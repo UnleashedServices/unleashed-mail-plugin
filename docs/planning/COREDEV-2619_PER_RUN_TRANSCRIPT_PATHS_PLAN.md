@@ -1,12 +1,12 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 5 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
+**Status:** Planning — **round 6 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
 arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 5, post-gate revision)
+**Last Updated:** 2026-07-31 (round 6, post-gate revision)
 
 ---
 
@@ -80,8 +80,12 @@ over-claimed on three counts, each corrected:
 **And the freshness check (§4.5) is accidental-staleness detection, not operator provenance** — `cp` or
 `touch` defeats an mtime comparison. *(Round 2.)*
 
-**What it does buy, security-wise:** a correctly-owned `0700` parent and an **atomically allocated**
-name, which together close the squat/pre-seed window on a multi-user host. Detecting a *changed*
+**What it does buy, security-wise: very little, and the plan no longer claims otherwise — round 6.**
+A `0700` parent and an atomically allocated name remove the *predictable shared filename*, which is a
+real hygiene improvement. They do **not** close the squat window on a multi-user host: an attacker who
+controls any ancestor of the state directory can rename or replace the subtree however private the leaf
+is, and a rule that stopped that would need a per-component trust policy this ticket has no business
+inventing. Detecting a *changed*
 transcript is `COREDEV-2497`; cross-checking the verdict token inside it is `COREDEV-2618`.
 
 ## 4. Findings and fixes
@@ -101,7 +105,8 @@ fails three ways:
   `scripts/review/isolated-agy-review.sh:89` **deletes the target before launch** — so any scheme that
   reserves *the target itself* is undone by the caller.
 
-**Fix — allocate, do not name.** `pty-capture.py` gains a `--allocate <dir>` mode: it creates the parent
+**Fix — allocate, do not name.** `pty-capture.py` gains an allocate mode — **one command shape, used everywhere**:
+`pty-capture.py --allocate --base <dir> --ticket <T> --round <R> --reviewer <name>` *(round 6, codex: `:104` declared `--allocate <dir>` while §4.1's interface paragraph omitted `<dir>` entirely, so the wrapper and the Python parser could implement different contracts)*. It creates the parent
 `0700`, then allocates a fresh path with `O_CREAT|O_EXCL` in a retry loop, and **prints the allocated
 path on stdout** so the caller propagates it rather than re-deriving it:
 
@@ -117,13 +122,18 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   `dontAsk`; "created on first reference" establishes provisioning, not write permission from a skill's
   Bash recipe. **`$HOME/.local/state` is confirmed absent from Claude Code's protected-path list** (round 3), so the
   **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
-  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside
-  every protected root, AND on TRUSTED ANCESTRY** — the canonical base, or its nearest existing
-  ancestor, must be **owned by the user and not group- or world-writable** — otherwise it falls back to
-  `$HOME/.local/state` and says so. *(Round 5, codex: an absolute, writable, **attacker-owned `0777`**
-  base passes an absolute/protected/unwritable check, and whoever controls that ancestor can rename or
-  replace the subtree however private the leaf is — so §3's multi-user claim needed either this check or
-  narrowing. M1 checked only the leaf mode; M2 had no shared-but-writable case.)* The unqualified
+  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside every
+  protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
+  by the same rules**, and says so. *(Round 6, gemini: the round-5 wording validated `XDG_STATE_HOME`
+  and then fell back **unconditionally**, so on a distro whose default umask leaves `$HOME` group-
+  writable the fallback silently reinstated the risk the check existed for.)* **The multi-user claim is NARROWED, not defended by an ancestry check — round 6.** *(codex: trusted
+  ancestry is "neither sufficient nor implementable as written" — checking only the canonical base
+  accepts a user-owned `0700` directory beneath an attacker-writable parent, while requiring user
+  ownership of **every** ancestor rejects ordinary root-owned ones. A correct rule needs an explicit
+  trust boundary and per-component policy, which is a security mechanism this ticket has no business
+  inventing.)* **So §3 drops the squat-resistance claim.** A shared host on which an attacker controls an
+  ancestor of the state directory is **out of scope**; detecting a transcript that was changed is
+  `COREDEV-2497`'s job, not this ticket's. The unqualified
   "outside every protected tree" claim of round 2 was too strong.
 - **`<repo-hash>`** — reuse `context.sh`'s existing repo-hash slug, so two checkouts cannot collide.
   Everything else in the plugin is already namespaced this way.
@@ -132,9 +142,7 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
 - **Ticket/round stay in the name** for human legibility, not for uniqueness.
 
 **The allocator takes the metadata — round 2.** `--allocate <dir>` alone cannot own a
-`<ticket>r<round>-<reviewer>-<runid>` name it is never told the parts of. Interface:
-`--allocate --ticket <T> --round <R> --reviewer <name>`, and **the repo hash comes from one shared
-helper**: `context.sh`'s slug is Bash and the allocator is Python, so it is exposed once
+`<ticket>r<round>-<reviewer>-<runid>` name it is never told the parts of. The repo hash comes from **one shared helper**: `context.sh`'s slug is Bash and the allocator is Python, so it is exposed once
 (`context_repo_hash`, called by the wrapper) rather than reimplemented — otherwise callers rebuild parts
 of the path independently, which is the drift this design exists to remove.
 
@@ -168,9 +176,9 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
 could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
 (seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
-return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700` **and on trusted
-ancestry** (owned by the user, not group/world writable), with a mutation using a **pre-existing
-attacker-owned `0777` ancestor** that must force the fallback.
+return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700`. *(Round 6: an
+attacker-owned-ancestor mutation was specified in round 5 and is **withdrawn** with the claim it
+defended — see §3.)*
 Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
 **Plus, round 3:** `ticket`/`round`/`reviewer` become **filename components**, so a rejection grammar is
 required — a separator or `..` would otherwise escape the intended parent. And
@@ -178,7 +186,9 @@ required — a separator or `..` would otherwise escape the intended parent. And
 a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
 writing into it. Leaf creation is `0600`; retry is bounded.
 
-### 4.2 — The `allowed-tools` grants are ALREADY broken (High — round 1, codex)
+### 4.2 — The `rm -f` grants and the pre-clean commands (High — round 1, revised in rounds 2 and 6)
+
+*(The round-1 heading read "the grants are ALREADY broken". They are not — see the reversal below. The heading contradicted its own section for four rounds.)*
 
 Round 1 established something worse than the first draft claimed. `${HOME}` and `${CLAUDE_PLUGIN_DATA}` are **not** substituted in `allowed-tools`; `${CLAUDE_PLUGIN_ROOT}`
 **is** (fixed in Claude Code 2.1.0; this plugin pins 2.1.220).
@@ -318,8 +328,13 @@ reject a valid concurrent run.)*
   directory, so lookup is a pure function of the `transcriptPath` already recorded in the artifact and
   `review-verdict.py` needs no index. **The allocator creates it**, in the same `--allocate` call that
   creates the leaf and before it prints the path — so "created before dispatch" is structural rather
-  than a caller's obligation. It contains the run ID. **`review-verdict.py` fails closed when it is
-  absent.** *(Round 5: the plan named the mechanism and never its path, extension or creator, so nothing
+  than a caller's obligation. **Payload and comparison — round 6, codex.** The record contains **exactly the run ID**, as a single
+  line of lowercase hex, no trailing content. The expected ID is the one embedded in the transcript's
+  own filename (`…-<runid>.txt`), so the check is self-contained: **`review-verdict.py` reads the record,
+  requires a syntactically valid ID, and requires it to EQUAL the ID in the filename.** It **fails
+  closed** when the record is absent, empty, malformed, or mismatched. *(The round-5 wording said only
+  "contains the run ID", so an implementation that wrote the wrong ID and never read the payload still
+  passed M4's timing assertions.)* **M4 gains a mismatched-record mutation.** *(Round 5: the plan named the mechanism and never its path, extension or creator, so nothing
   could look it up deterministically.)* The snapshot sidecar is a poor anchor independently of this, because under concurrency a later
   snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
   not a launch anchor at all.**
@@ -364,8 +379,11 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
 ## 7. Implementation order
 
 1. **Inventory and classify all 31 sites** and commit the classification — M3 asserts it.
-2. **Add `pty-capture.py --allocate`**: `0700` parent, `O_CREAT|O_EXCL` retry loop, print the path.
-   Add M1.
+2. **Add `pty-capture.py --allocate`**: validate the base (§4.1), create the `0700` parent, allocate the
+   leaf with `O_CREAT|O_EXCL` in a bounded retry loop, **create the `<path>.launch` record `O_EXCL` in
+   the SAME call, containing the run ID**, then print the path behind the stable marker. Add M1.
+   *(Round 6, gemini: this step omitted the launch record entirely, so an implementer following §7 would
+   build the allocator without it and step 6's freshness check would fail closed forever.)*
 3. **Thread the allocated path** through `isolated-agy-review.sh`, both review skills, `brainstorm` and
    `review-synthesis` — including a ticket/round **input contract** for synthesis.
 4. **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
@@ -384,7 +402,7 @@ behaviour, and M5 was unsatisfiable against a wrong inventory. The set is rebuil
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
-## 8. Open questions for round 6
+## 8. Open questions for round 7
 
 *(Round 5, both arms: this section had become the plan's main source of contradictions — it reopened
 four decisions that are settled operatively elsewhere. **A question that the plan has answered is not an
