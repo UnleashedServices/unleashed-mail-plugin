@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 26** — gemini `APPROVE`, codex
-`REQUEST_CHANGES` (2 High). **That is the third lone approval of this campaign (rounds 10, 21, 26); a lone
-approval is not a pass.** Both of round 25's fixes were incomplete and codex caught both. No round has yet
-had both arms approve, let alone reproduce at the same digest.
+**Status:** Planning — **NOT GATED. Latest completed round: 27** — gemini `APPROVE`, codex
+`REQUEST_CHANGES` (2 High + 1 Medium). **Fourth lone approval (rounds 10, 21, 26, 27); a lone approval is
+not a pass.** All three findings were the same shape — a requirement enumerating N properties whose cell
+observed fewer — now a stated rule in §6.1. No round has yet had both arms approve.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 26 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 27 findings applied; **not gated**)
 
 ---
 
@@ -476,7 +476,13 @@ workflow was denied): dispatch a real skill invocation and assert the capture la
 validation itself** *(round 4, codex: an implementation that blindly trusts a set `XDG_STATE_HOME`
 passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
 `.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, and
-**unwritable**, and require the fallback **plus its diagnostic** in each. **And `.claude/worktrees` is a
+**unwritable**, and require the fallback **plus its diagnostic** in each.
+**Plus the SIBLING-PREFIX pair, which separates component containment from a string prefix**
+*(round 27, codex; verified by execution): a validator that rejects paths starting with `$HOME/.claude`
+except those starting with `$HOME/.claude/worktrees` passes **every** case above, yet **accepts
+`$HOME/.claude/worktrees-evil`** — which is not the exception, it merely starts like it — and **rejects a
+perfectly valid `$HOME/.claude-cache`*. So: `$HOME/.claude/worktrees-evil` must be **REJECTED**, and
+`$HOME/.claude-cache` must be **ACCEPTED**. Containment is by path COMPONENT, never by string prefix.* **And `.claude/worktrees` is a
 POSITIVE — it must be ACCEPTED**, being the documented exception *(round 20, codex: row 1 claimed the cell
 exercised `plugins/data`, an alias and the `worktrees` positive; the cell specified none of them, so an
 allocator rejecting **all** of `.claude` passed. **I had edited the row and not the cell** — the same
@@ -488,8 +494,10 @@ and they are of the two kinds this campaign keeps needing:
 - `[M2.4 xdg-valid-positive]` **Positive (must PASS), with the fixture INITIALLY ABSENT:** a **valid**
   `XDG_STATE_HOME` that **does not yet exist** is **created `0700` and used** — allocation lands beneath it and
   **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
-- `[M2.22 absent-fallback-positive]` **And an ABSENT `$HOME/.local/state` is created and used** when
-  `XDG_STATE_HOME` is unset *(round 26, codex: `M2.4` covers the XDG arm and `M2.5` only invalid fallbacks,
+- `[M2.22 absent-fallback-positive]` **And an ABSENT `$HOME/.local/state` is created `0700` and used** when
+  `XDG_STATE_HOME` is unset — **the mode is asserted** *(round 27, codex: the cell required creation and use
+  but not the mode, so a fallback-specific path creating it `0755` passed, and `M2.4` checks only the XDG
+  branch)* *(round 26, codex: `M2.4` covers the XDG arm and `M2.5` only invalid fallbacks,
   so an implementation accepting an absent XDG base while rejecting an absent fallback passed every stated
   cell — and the fallback is the path a fresh host actually takes)*.
 - `[M2.19 fallback-diagnostic]` **On FALLING BACK, the diagnostic is asserted in every invalid class** —
@@ -582,8 +590,15 @@ leaf is gone, the open fails, the capture aborts.
 `[M2.11 capture-requires-existing-leaf]` **The cell, stated as a mutation rather than as a consequence**
 *(round 14, gemini: the tag sat on this heading and defined nothing — the text only claimed `S-CAPTURE`
 makes M2.9 pass, which is not a proof)*: **interpose on `os.open` in ALLOCATED mode** and assert the flags
-contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW` **and `O_NONBLOCK`**, with the
-`fstat`/`S_ISREG` check and the `0600` fchmod retained *(round 25, codex)*. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
+contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW` **and `O_NONBLOCK`**
+*(round 25, codex)*. **And the other two protections are observed by their own mutations, not inferred from
+the flags** *(round 27, codex: interposing on `os.open` proves the flag set and nothing else — an
+implementation with exactly the right flags that dropped the `fstat` check and the `fchmod` passed
+`M2.11`, `M2.9` and the non-allocated regression alike)*:
+`[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED** (the
+`fstat`/`S_ISREG` check), and
+`[M2.24 allocated-mode-tightening]` **a leaf whose mode has been loosened to `0644` is re-tightened to
+`0600`** by the fchmod. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
 mutation discriminated one flag and the requirement names two.)*
 `[M2.21 protected-roots-single-source]` **The protected-root set is read from ONE place** — asserted by
@@ -892,6 +907,14 @@ must say why — and "not machine-checkable" is a claim that must itself be chec
 untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
 the allocated path" are different claims, and only the second was ever the requirement.
 
+**Property-count rule (round 27, codex): if a requirement enumerates N properties, its cell must OBSERVE
+N.** Three findings in one round were this shape — `S-CAPTURE` named four retained protections and `M2.11`
+observed only the flag set; the fallback had to be *created `0700`* and `M2.22` asserted only creation; the
+protected-root set is a **component** containment and `M2.2` exercised only cases a string-prefix check also
+satisfies. **A cell that observes a subset of a conjunction proves the subset**, and the row that cites it
+silently claims the whole. When a requirement gains a clause, its cell needs a matching assertion in the
+same edit.
+
 **Name-consistency rule (round 21, codex): one tag ID carries exactly ONE name, everywhere.** `M5.13` was
 renamed `existing-callers-updated` → `callers-scan` in the proof and the table while §7 kept the old name,
 so the document held **59 tag occurrences for 58 cells**. My verification counted definitions only in the
@@ -940,9 +963,9 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | base validated: absolute, outside the **enumerated** protected-root set, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — exercises `.claude`, `.claude/plugins/data/…`, an alias, and `.claude/worktrees` as a **positive** (round 19, codex) |
+| 1 | base validated: absolute, outside the protected-root set **by path COMPONENT**, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
-| 2b | an **absent** `$HOME/.local/state` fallback is created and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 26, codex — the fresh-host path) |
+| 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+`, not `.`/`..`, for **all three** of ticket/round/reviewer (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
@@ -964,8 +987,10 @@ requirement, and that is now visible rather than arguable.
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
 | 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
+| 15g | allocated mode keeps the `fstat`/`S_ISREG` non-regular-target defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` (round 27, codex — flag interposition proves flags only) |
+| 15h | allocated mode keeps the `0600` fchmod tightening (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` (round 27, codex) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
-| 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW`, `O_NONBLOCK`, `S_ISREG` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
+| 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
