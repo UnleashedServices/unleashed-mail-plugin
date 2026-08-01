@@ -1,17 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 18** (gemini 1 Critical + 1 High, codex
-3 High + 2 Medium + 1 Low). Round 18's concordant finding: §6.0's own round-notes **masked the tokens they
-documented** — `No caller passes --base` appeared twice inside `S-ALLOC`, once operative and once quoted in
-a note, so deleting the requirement would have left the check green. §6.0 is now **exactly-once with
-round-notes stripped, 10/10**. Round 10 returned a lone gemini `APPROVE`; **one approving arm is not a
-pass**, and no round has yet had both arms approve, let alone reproduce.
+**Status:** Planning — **NOT GATED. Latest completed round: 19** (gemini 2 High, codex 3 High + 1 Medium).
+Both arms independently **verified §6.0 is genuinely deletion-sensitive** — 10/10, exactly one occurrence
+per named section, zero after deleting each governing occurrence — and both verified the 56-cell
+bidirectional mapping. The remaining findings were scope and propagation, not mechanism. Round 10 returned
+a lone gemini `APPROVE`; **one approving arm is not a pass**, and no round has yet had both arms approve,
+let alone reproduce.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 18 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 19 findings applied; **not gated**)
 
 ---
 
@@ -127,12 +127,25 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-ha
   `dontAsk`; "created on first reference" establishes provisioning, not write permission from a skill's
   Bash recipe. **`$HOME/.local/state` is confirmed absent from Claude Code's protected-path list** (round 3), so the
   **default** is correct. But **a set `XDG_STATE_HOME` is not guaranteed safe** — it can be relative,
-  point inside `.claude`, or be unwritable. The allocator therefore **validates it: absolute, outside every
+  point inside `.claude`, or be unwritable. **The protected-root set, enumerated so it need not be
+  invented:** `.claude` and everything beneath it **except `.claude/worktrees`** — which includes
+  `.claude/plugins/data/…`, the location `COREDEV-2617` established. The implementation reads that set from
+  **one place**, and `M2.2` exercises `.claude`, a `.claude/plugins/data/…` path, a canonical/symlink alias,
+  **and `.claude/worktrees` as a POSITIVE (it must be accepted)** *(round 19, codex: row 1 certified
+  validation against "all protected roots" while `M2.2` exercised only `.claude`, so an implementation
+  treating `.claude` as the entire set passed — and a §7-only implementer had to invent the set)*.
+  The allocator therefore **validates it: absolute, outside every
   protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
   by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
   NOTHING and exits non-zero with a diagnostic** — it never invents a third location. **No caller passes
 --base, and the allocator REJECTS it if given**: selection, validation, fallback and diagnostic are the
-allocator's alone. *(Round 9, codex:
+allocator's alone. **Two distinct diagnostics, both required:** on **falling back** (XDG rejected, fallback
+valid) it says so, naming the rejected value and the reason; on **terminal failure** (neither validates) it
+names the rejected value and the reason and allocates nothing.
+*(Round 19, codex: the contract disagreed in **both** directions — `S-ALLOC` specified a diagnostic only
+when both bases fail, while §4.1 and `M2.2` require one on fallback; and `M2.18` required the terminal
+message to name value and reason while §4.1, `S-ALLOC` and row 3b asked only for "a diagnostic". A
+§7-conforming implementation could fail both M2 cells.)* *(Round 9, codex:
   "validated by the same rules" named no consequence, so an implementation could validate the fallback and
   then use it regardless. No allocation means no capture, which is the fail-closed direction: a review that
   cannot be recorded must not appear to have run.)* *(Round 6: the round-5 wording validated `XDG_STATE_HOME` and then fell back
@@ -213,8 +226,11 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 option in §4.1's shape present and spelled as specified *(round 18, codex: §6.0 compares two plan
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
-`[M5.13 existing-callers-updated]` **`create-feature-plan` and `AGENT_CONTRACTS` §2 invoke the review
-skills WITH ticket and round**, asserted against those files *(round 18, codex)*.
+`[M5.13 existing-callers-updated]` **All FOUR callers invoke the review skills with ticket and round** —
+`create-feature-plan`, `AGENT_CONTRACTS` §2, `brainstorm`, and `modern-standards-planner` — asserted
+against those files, **and the assertion enumerates them by path so a fifth caller added later fails the
+cell** *(round 19, codex: round 18 listed two of the four; the mandatory brainstorm workflow was among the
+ones missed)*.
 `[M5.7 missing-input-fails-closed]` **And the wrapper invoked without a ticket or round must FAIL CLOSED**,
 allocating nothing and exiting non-zero — **and, at the SKILL level, a recipe that derives ticket or round
 from context instead of receiving them is rejected** *(round 16, codex: the wrapper-level case is passed by
@@ -430,6 +446,9 @@ fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback b
 and they are of the two kinds this campaign keeps needing:
 - `[M2.4 xdg-valid-positive]` **Positive (must PASS):** a **valid** `XDG_STATE_HOME` is **used** — allocation lands beneath it and
   **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
+- `[M2.19 fallback-diagnostic]` **On FALLING BACK, the diagnostic is asserted in every invalid class** —
+  naming the rejected value and the reason, and distinct from the terminal message *(round 19, codex: the
+  fallback diagnostic was required by §4.1 and by `M2.2`, absent from `S-ALLOC`, and carried by no row)*.
 - `[M2.18 base-failure-diagnostic]` **And when neither base validates, the DIAGNOSTIC is asserted** —
   naming the rejected value and the reason *(round 18, gemini: `M2.5` asserted non-allocation and a
   non-zero exit but never the message `S-ALLOC` requires)*.
@@ -807,7 +826,7 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | base validated: absolute, outside protected roots, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` |
+| 1 | base validated: absolute, outside the **enumerated** protected-root set, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — exercises `.claude`, `.claude/plugins/data/…`, an alias, and `.claude/worktrees` as a **positive** (round 19, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used** (§4.1) | `[M2.4 xdg-valid-positive]` |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+`, and not `.`/`..` (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
@@ -828,7 +847,7 @@ requirement, and that is now visible rather than arguable.
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` + `[M2.9 preclean-reinstate-must-fail]` (round 15, codex — the row also claimed **grant** deletion, which these cells do not carry; grants are row 26) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**, `O_NOFOLLOW` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
-| 16 | **no substitution validator exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` |
+| 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
@@ -844,7 +863,8 @@ requirement, and that is now visible rather than arguable.
 | 20b | the CHANGELOG does **not** claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert (`S-RELEASE`) | `[M2.17 no-inert-claim]` (round 17, codex — `M2.14` tested it but no row listed it, violating §6.1's bidirectional rule) |
 | 15c | the two `rm -f` grants are **deleted, not rewritten** (`S-PRECLEAN`) | `[M2.16 grants-deleted-not-rewritten]` (round 17, codex — rewriting a grant to a non-`/tmp` path passed rows 15 and 26) |
 | 8d | the exhaustion diagnostic **names the exhausted parent** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
-| 3b | when neither base validates, a **diagnostic** is emitted (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 18, gemini) |
+| 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
+| 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is exactly `<ticket> <round> <reviewer>` (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` (round 18, gemini) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
@@ -887,7 +907,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
    **absolute, outside every protected root, and writable**, else `$HOME/.local/state` judged by those
-   same three rules; if neither validates, allocate nothing and exit non-zero with a diagnostic.
+   same three rules. **On falling back** (XDG rejected, fallback valid) it emits a diagnostic naming the
+   rejected value and the reason; **if neither validates** it allocates nothing and exits non-zero with a
+   diagnostic naming the rejected value and the reason *(round 19, codex: `S-ALLOC` specified a diagnostic
+   only for the terminal case while §4.1 and `M2.2` require one on fallback, and asked only for "a
+   diagnostic" where `M2.18` requires value and reason — the contract disagreed in both directions)*.
    **No caller passes --base, and the allocator REJECTS it if given** with a non-zero unknown-argument
    exit *(round 17, gemini: §4.1 and `S-WRAPPER` had stated only the caller half of this rule while `M2.15`
    tests **rejection** — an implementer would omit the argument at the call sites and leave the parser
@@ -928,6 +952,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    division of labour: if Bash passes the fallback the allocator cannot know XDG was rejected, and if
    Bash passes an invalid XDG for Python to reject then the wrapper has not "derived the base" at all.
    One owner, and it is the side M2 already tests.)*
+   **Missing or empty `<ticket>` or `<round>` is a hard error**: the wrapper allocates nothing and exits
+   non-zero *(round 19, gemini: row 27 cited `S-WRAPPER` for this and `S-WRAPPER` did not state it, so a
+   §7-only implementer would not build the check `M5.7` tests)*.
    **The lib directory it sources is `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}`, resolved from the
    script's OWN location** — `LIB="${UNLEASHED_LIB_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/../lib" && pwd)}"`.
    *(Round 14, gemini, High: round 13 wrote the fallback as `${CLAUDE_PLUGIN_ROOT}/scripts/lib`, but
@@ -940,10 +967,14 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`), because the codex recipe runs Python and the
    hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
-4. **`S-CALLERS`** — **Thread ticket and round through the EXISTING production callers**, which today
-   invoke the review skills with neither: `skills/create-feature-plan/SKILL.md:81` ("Run `/gemini-review`
-   and `/codex-review` on the plan") and `AGENT_CONTRACTS.md:99` (§2 step 1). Each gains an explicit
-   ticket/round argument, and the review skills' input syntax is stated where they are invoked.
+4. **`S-CALLERS`** — **Thread ticket and round through EVERY existing production caller.** The review
+   skills' invocation syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**,
+   defined here so it need not be invented. **All four known callers** invoke them today with neither
+   argument and must be updated: `skills/create-feature-plan/SKILL.md:81`, `AGENT_CONTRACTS.md:99` (§2
+   step 1), `skills/brainstorm/SKILL.md:178`, and `agents/modern-standards-planner.md:41-42`.
+   *(Round 19, codex: round 18 named only the first two, and the other two — including the **mandatory
+   brainstorm workflow** — would have failed closed under `M5.7`. An enumeration that is not exhaustive is
+   a worse failure than none, because it looks complete.)*
    *(Round 18, codex, High: `M5.7` makes a skill that cannot determine ticket/round **fail closed**, so
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
@@ -968,7 +999,7 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 7. **`S-PRECLEAN`** — **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
    and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
-   leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No substitution validator** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported `${CLAUDE_PLUGIN_ROOT}`. Add M2.
+   leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools`** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported token. *(Scoped in round 19, both arms: the unqualified "no substitution validator" contradicted `scripts/tests/test_doc_gates.py`'s existing `COREDEV2504_PluginRootConvention`, which this ticket preserves.)* Add M2.
 8. **`S-M5`** — **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
