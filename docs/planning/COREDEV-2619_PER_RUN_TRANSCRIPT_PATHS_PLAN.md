@@ -1,16 +1,16 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 21** — **gemini `APPROVE`**, codex
-`REQUEST_CHANGES` (3 Medium + 1 Low), codex noting *"no production mechanism blocks implementation … the
-requested changes are confined to mutation and coverage integrity."* **That is the second lone approval
-(round 10 was the first) and a lone approval is not a pass.** No round has yet had both arms approve, let
-alone reproduce at the same digest.
+**Status:** Planning — **NOT GATED. Latest completed round: 22** — both arms `REQUEST_CHANGES` with **no
+High findings**; both stated nothing blocks implementation and confined their changes to proof and coverage
+integrity. Round 21 was gemini `APPROVE` + codex `REQUEST_CHANGES`; **that was the second lone approval and
+a lone approval is not a pass.** No round has yet had both arms approve, let alone reproduce at the same
+digest.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 21 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 22 findings applied; **not gated**)
 
 ---
 
@@ -117,6 +117,19 @@ path on stdout** so the caller propagates it rather than re-deriving it:
 ```
 ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt
 ```
+
+**The three creation contracts, stated operatively here** *(round 22, codex: §4.1's only occurrences of
+these were inside the proof cells `M1.13`, `M1.10` and `M1.14`, so deleting the production requirement
+would have left §6.0's tokens present and the check green — masking by proof cell, the same defect as
+round 18's masking by round-note, in a form the round-18 fix did not cover)*:
+- the allocated path is `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`;
+- the allocator creates the leaf with `O_CREAT|O_EXCL` and mode `0o600`;
+- and it creates the `.launch` record `O_CREAT|O_EXCL` on that same call, never truncating an existing one.
+
+The retry loop is **bounded at 8 attempts**; and `<reviewer>` is a **hard-coded literal in each skill's own
+recipe**, never derived. *(Round 22: applying the proof-cell stripping rule caught these two as well —
+codex named three masked tokens and the sharper check found **five**. A check that only finds what a
+reviewer already told you about is not doing independent work.)*
 
 - **Outside `.claude` entirely — round 2, and this is the SECOND directory this plan has got wrong.**
   Round 1 chose `~/.claude/review-transcripts/`; round 2's "fix" chose `${CLAUDE_PLUGIN_DATA}`, which
@@ -355,8 +368,11 @@ containing it **must be rejected** — the test iterates the range rather than l
 required rejecting a NUL byte, but `execve` truncates `argv` at NUL and Python's `subprocess` raises
 `ValueError: embedded null byte` before the call is made — verified by execution. The driver cannot
 construct the invocation, so the case could never run, and the mutation was unimplementable as written.
-Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And an acceptance case per in-class family (letter, digit, `.`, `_`, `-`) asserts a
-valid component is **not** rejected. *(The acceptance half matters as much: an
+Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And an acceptance case per in-class family (letter, digit, `.`, `_`, `-`), **parameterized across all
+three inputs exactly as the sweep is**, asserts a valid component is **not** rejected *(round 22, codex:
+the sweep was parameterized in round 21 and its positive half still said only "a valid component", so a
+validator accepting `.`/`_`/`-` in the exercised position while rejecting them in another passed every
+stated case — a fix applied to one half of a proof is the same defect as one applied to one section)*. *(The acceptance half matters as much: an
 over-strict validator that rejects `COREDEV-2619` fails no negative case.)*
 
 `[M1.9 component-echo]` **Plus, round 12 (codex): the supplied COMPONENTS must appear in the returned path.** No proof asserted
@@ -550,6 +566,10 @@ contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW`, wi
 retained. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
 mutation discriminated one flag and the requirement names two.)*
+`[M2.21 protected-roots-single-source]` **The protected-root set is read from ONE place** — asserted by
+mutating that single definition and requiring **both** the XDG and fallback validation paths to change
+behaviour together *(round 22, codex: `M2.2` proves only behaviour, so two separate-but-identical lists
+passed it)*.
 `[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
 both the recipes and the writer *(round 20, codex: `S-CAPTURE` made the flag operative while `M2.11` proved
 only the resulting `os.open` flags, so renaming it consistently on both sides passed the whole proof set)*.
@@ -609,7 +629,9 @@ also a fixed shared path. **Out of scope here, recorded so it is a decision and 
 > `git ls-files | xargs grep -n` over the two literals only.)*
 
 `[M2.16 grants-deleted-not-rewritten]` **The two `rm -f` grants are DELETED, not rewritten** — the cell asserts neither skill's `allowed-tools` contains an `rm -f` grant at **any** path *(round 17, codex: row 15 covers the pre-clean COMMANDS and row 26 checks only that `/tmp` is absent, so rewriting a grant to a non-`/tmp` path passed both — `S-PRECLEAN` says delete)*.
-`[M2.15 no-base-argument]` **No caller passes --base, and the allocator REJECTS it if given** —
+`[M2.15 no-base-argument]` **The allocator refuses a caller-supplied base argument**, and no caller emits
+one *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
+clause — round 22, gemini)* —
 asserted against the wrapper's emitted command line and by invoking the allocator with `--base` and
 requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
 operative in §4.1 and `S-WRAPPER` but had **no discriminating cell** — a wrapper that still derived and
@@ -755,8 +777,10 @@ the form claimed is the same defect as a coverage row citing a cell that does no
 third time in this plan that a verification has been asserted more strongly than it was performed.)*
 
 **The rule is now a CANONICAL TOKEN, not prose identity.** Each contract has exactly one normative token
-below. Every section that states the contract must contain that token **verbatim after whitespace
-normalization** — runs of spaces and newlines collapsed to a single space, so a line wrap is not a
+below. **Markdown escaping is undone before comparison** — the table writes `\|` for a literal `|`
+because a bare pipe would break the row *(round 22, gemini: taken literally, the escaped tokens matched
+**zero** times; my checker had silently used the unescaped form, so the table and the check disagreed)*.
+Every section that states the contract must contain that token **verbatim after whitespace normalization** — runs of spaces and newlines collapsed to a single space, so a line wrap is not a
 divergence — and prose may say whatever else it likes around it. **The normalization is part of the rule**:
 round 15's version defined none, which is why it was unrunnable as written. This is mechanically checkable, and the check is run and its result
 reported before every freeze.
@@ -780,7 +804,11 @@ deletion sensitivity. `No caller passes --base` occurred **twice** inside `S-ALL
 requirement and once inside a round-17 note **quoting the wording it replaced** — so deleting the operative
 line would have left the token present and the check green. **My own commentary about a fix masked the
 fix.** Two rules follow, and both are mechanical:
-1. **Round-notes (`*( … )*`) are stripped before checking.** They are history, not contract.
+1. **Round-notes (`*( … )*`) AND tagged proof-cell spans are stripped before checking.** A cell span runs
+   from its `[M<n>.<k> name]` tag to the end of that paragraph. Notes are history; cells are *evidence*.
+   **Neither is the contract**, and either can restate a token and hide that the contract itself is gone —
+   round 18 caught the note form, round 22 caught the cell form *(all three of the path-layout and
+   open-flags tokens existed in §4.1 **only** inside `M1.13`/`M1.10`/`M1.14`)*.
 2. **Each token must then occur EXACTLY ONCE in each named section** — zero means the requirement is gone,
    two means something else is restating it and the check can no longer see a deletion.
 Tokens are therefore **full requirement clauses**, long enough that a proof cell or a note does not restate
@@ -880,6 +908,7 @@ requirement, and that is now visible rather than arguable.
 | 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` + `[M2.9 preclean-reinstate-must-fail]` (round 15, codex — the row also claimed **grant** deletion, which these cells do not carry; grants are row 26) |
+| 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**, `O_NOFOLLOW` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
@@ -944,7 +973,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
    **absolute, outside every protected root, and writable**, else `$HOME/.local/state` judged by those
    same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
-   everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`
+   everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`. **That set
+   is read from ONE place**, shared by the XDG and fallback validation paths
+   *(round 22, codex: §4.1 required single-sourcing and §7 never mentioned it, so a §7-only implementer
+   would write two lists — identical today, divergent later, which is the exact defect `scripts/lib/paths.sh`
+   exists to prevent)*
    *(round 20, codex: `S-ALLOC` said "every protected root" while the enumeration lived only in §4.1 — the
    sixth time a contract has been stated in §4.x and left as a bare cross-reference in §7)*.
    **On falling back** (XDG rejected, fallback valid) it emits a diagnostic naming the
