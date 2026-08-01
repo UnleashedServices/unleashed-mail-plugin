@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 41** — codex `REQUEST_CHANGES` (1 High); the
-gemini arm produced five findings but **no verdict line**, so its round failed closed. Three of its five
-were real and applied; two were false (the text it called missing is present in §7). Round 29's double
-approval failed its reproduction at the byte-identical digest.
+**Status:** Planning — **NOT GATED. Latest completed round: 42** — codex `REQUEST_CHANGES` (1 High +
+1 Medium), both applied; the gemini arm **degenerated** (99 KB of leaked reasoning tokens, no verdict), so
+its round failed closed. Round 42's High is a **latent bug in the existing helper**, not only a proof gap —
+see `S-CAPTURE`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 41 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 42 findings applied; **not gated**)
 
 ---
 
@@ -749,8 +749,16 @@ One mechanism cannot cover both, and asserting otherwise is how the class stayed
 - **the wrapper/codex path** — replace `pty-capture.py` **at the resolved location** in `M5.8`'s relocated
   copy, whose `scripts/` directory is exactly what `$0`-relative resolution targets, with a stub that
   appends its `argv` to a file; the recorded `argv` must contain `--allocated`;
-- **the nested gemini path** — a **source assertion** that `isolated-agy-review.sh` passes `--allocated` on
-  its `pty-capture.py` invocation, **plus a runtime consequence**: with the leaf pre-allocated and the
+- **the nested gemini path** — first, `S-CAPTURE` requires the helper to invoke **the PLUGIN's own writer,
+  resolved `$0`-relative from the helper's location**, instead of `$TREE/scripts/pty-capture.py`
+  *(round 42, codex, High, verified: `$TREE` is a detached checkout of the **reviewed** commit
+  (`isolated-agy-review.sh:53-56`), so the writer it runs is **the reviewed repository's**, not the
+  plugin's. In this repo those coincide and everything appears to work; **in a consumer install the
+  reviewed repo is the app, which has no `scripts/pty-capture.py` at all** — and against any pre-change
+  commit it exposes the legacy CLI with no `--allocated`. So `M2.20` could pass against the plugin's own
+  HEAD while row 15e claimed both production paths. This is a **latent bug in the existing helper**, not
+  only a proof gap)* — then a **source assertion** that it passes `--allocated` on that invocation,
+  **plus a runtime consequence**: with the leaf pre-allocated and the
   pre-clean removed, the capture must land in **that exact leaf**, and must **fail** when the leaf is
   absent — an end-to-end observation that only holds if the flag was genuinely honoured, and one that needs
   no interception at all
@@ -924,9 +932,12 @@ reject a valid concurrent run.)*
   snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
   not a launch anchor at all.**
 
-**Proof — M4, both polarities.** `[M4.1 timing-negative]` `[M4.2 timing-positive]` *Negative:* a transcript whose mtime predates its launch record is
+**Proof — M4, both polarities.** `[M4.1 timing-negative]` `[M4.2 timing-positive]` `[M4.10 record-precedes-dispatch]` *Negative:* a transcript whose mtime predates its launch record is
 rejected. *Positive (round 4, codex):* a transcript captured **after** an already-existing record is
-**accepted**, and the record is asserted to have existed **before dispatch** and not been replaced.
+**accepted**, and `[M4.10 record-precedes-dispatch]` **the record is asserted to have existed BEFORE dispatch and not to
+have been replaced** — the temporal rule, distinct from the mtime comparison *(round 42, codex: `M4.2`
+exercised the ordering but no row carried the requirement, so deleting it from §4.5 and `S-FRESH` left the
+tag map and all eleven §6.0 tokens green)*.
 Without the positive case, M4 passes against the explicitly rejected implementation that creates its
 "launch" record while writing the artifact — an older transcript still predates that late record. Run
 both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
@@ -1213,12 +1224,13 @@ requirement, and that is now visible rather than arguable.
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
-| 15e | `--allocated` is named **and FORWARDED** to `pty-capture.py` on **both** production paths (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
+| 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper using the **plugin's** `$0`-relative writer (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
+| 21b | the `.launch` record **exists BEFORE dispatch** (`S-FRESH`, §4.5) | `[M4.10 record-precedes-dispatch]` (round 42, codex — row 21 described only the comparison, so deleting the temporal rule left every check green) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
@@ -1400,7 +1412,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 5. **`S-CAPTURE`** — **Make `pty-capture.py` HONOUR the reservation** (round 13, both arms). When the
    caller supplies an **allocated** path (`--allocated`, set by the review recipes), open the target
    — **and both production paths, `scripts/review/isolated-agy-review.sh` and the codex recipe, must
-   FORWARD `--allocated` to their actual `pty-capture.py` invocation** *(round 35, gemini: `M2.20` asserts
+   FORWARD `--allocated` to their actual `pty-capture.py` invocation — where `isolated-agy-review.sh`
+   invokes the PLUGIN's writer resolved `$0`-relative from its own location, NOT
+   `$TREE/scripts/pty-capture.py`, which is the reviewed repository's copy and need not exist at all
+   in a consumer install** *(round 42, codex)* *(round 35, gemini: `M2.20` asserts
    that forwarding while `S-CAPTURE` described only the callee's behaviour, so row 15e cited an operative
    rule that did not exist in the step)* —
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
