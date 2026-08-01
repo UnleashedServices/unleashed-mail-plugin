@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 42** — codex `REQUEST_CHANGES` (1 High +
-1 Medium), both applied; the gemini arm **degenerated** (99 KB of leaked reasoning tokens, no verdict), so
-its round failed closed. Round 42's High is a **latent bug in the existing helper**, not only a proof gap —
-see `S-CAPTURE`.
+**Status:** Planning — **NOT GATED. Latest completed round: 43** — both arms `REQUEST_CHANGES`, both
+findings applied. Round 43 also caught that **a round-42 fix I reported as applied had never landed** (the
+edit anchor did not match and the script reported success unconditionally); it is present now, verified by
+grep rather than by a script's own say-so.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 42 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 43 findings applied; **not gated**)
 
 ---
 
@@ -761,7 +761,14 @@ One mechanism cannot cover both, and asserting otherwise is how the class stayed
   **plus a runtime consequence**: with the leaf pre-allocated and the
   pre-clean removed, the capture must land in **that exact leaf**, and must **fail** when the leaf is
   absent — an end-to-end observation that only holds if the flag was genuinely honoured, and one that needs
-  no interception at all
+  no interception at all; **and, decisively, the whole path is exercised against a REVIEWED TREE THAT DOES
+  NOT CONTAIN `scripts/pty-capture.py`, with an assertion that the executable actually run is the one under
+  the HELPER's own directory** *(round 43, codex, High: without this, a patch that keeps
+  `$TREE/scripts/pty-capture.py` and merely adds `--allocated` passes against **this** repository's HEAD —
+  where the plugin's writer and the reviewed tree's coincide — and fails in a consumer repo, which is the
+  exact wrong implementation round 42 identified. **Round 42 promised this fixture and it never reached the
+  document**: the edit's anchor did not match and my script printed success unconditionally, so the claim
+  was made without the text existing. Present this round by grep, not by a script's say-so)*
 *(round 38, codex, High, verified by execution: the round-37 wording put the shim **on `PATH`**, but
 `S-WRAPPER` requires invoking the allocator by an **explicit self-relative path**, and an explicit path
 **bypasses `PATH` lookup entirely** — measured, the real executable ran and the shim never fired. The two
@@ -1439,7 +1446,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    synthesis has no such contract. Deriving the path in a second place is the drift this design removes —
    a re-derived name that disagrees with the allocation reads an absent file and fails closed forever.)*
 7. **`S-PRECLEAN`** — **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
-   and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
+   and `scripts/review/isolated-agy-review.sh:89`. **And no `/tmp` literal remains in ANY `allowed-tools`
+   line** *(round 43, gemini: `M2.3` asserts that absence repo-wide and `S-PRECLEAN` named only the two
+   specific sites, so an implementer following §7 exactly could leave an unrelated `/tmp` literal standing,
+   satisfy the step and fail the mandatory cell — row 26 was certifying a requirement §7 did not make)*. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
    leaf** — the precise defect §4.2 exists to remove.)* **Delete the pre-clean in the Bash helper too** — `scripts/review/isolated-agy-review.sh:89`, not only
    `skills/codex-review/SKILL.md:48` *(round 35, gemini: §7 named one of the two sites §4.2 identifies)*.
