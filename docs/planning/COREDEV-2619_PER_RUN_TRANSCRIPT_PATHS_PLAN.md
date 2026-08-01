@@ -247,7 +247,11 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 `--reviewer <name>=<STATUS>:<allocated-path>` — asserted against the real invocation *(round 18, gemini:
 `M5.6` proved the allocation is *consumed* and nothing pinned the interface)*.
 `[M5.11 wrapper-cli-signature]` **The wrapper's positional signature is exactly
-`allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, or a reordering, is rejected
+`allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, a reordering, **an OMITTED third
+argument and an EMPTY third argument** are each rejected *(round 32, codex: rejecting only a fourth argument
+and a reordering is passed by `reviewer=${3:-codex}`, which silently defaults the reviewer and satisfies
+`M5.7`, the caller scan and every normal recipe call while violating the stated interface — "exactly three"
+is a claim about **too few** as much as too many)*
 *(round 18, gemini)*.
 `[M5.12 allocator-cli-shape]` **And the ALLOCATOR's own command line is asserted at runtime** — every
 option in §4.1's shape present and spelled as specified *(round 18, codex: §6.0 compares two plan
@@ -273,8 +277,15 @@ what §4.1's "never inferred" forbids)* *(round 14, gemini: round 13 recorded th
 one is a two-line test)*.
 `[M5.8 production-fallback]` **And the PRODUCTION path is exercised separately**: run the wrapper with
 **both `UNLEASHED_LIB_DIR` and `CLAUDE_PLUGIN_ROOT` unset**, **from a working directory outside the repo**
-(`cd /`), **and from a COPY of the tree at a different absolute path**, requiring it to resolve its lib dir
-and allocate successfully in both *(round 31, codex, High: `cd /` alone proves only that resolution
+(`cd /`), **and from a COPY of the tree at a different absolute path whose `context.sh` returns a DISTINCT
+sentinel**, requiring the allocated path to carry **the copy's** sentinel — proving the copy's library was
+the one sourced *(round 32, codex, High: merely relocating and succeeding is still not the mechanism.
+The original library remains at the hard-coded absolute path, so the very implementation this cell targets
+can source **the original** and allocate successfully from the copy — `M5.3` is bypassed by its own seam and
+`M5.4` still passes because the original `context_repo_hash` hashes the invocation CWD. **Third attempt at
+this cell**: round 24 asserted success with the vars unset, round 31 added relocation, and both observed an
+outcome two mechanisms share. Making the relocated library *distinguishable* is what finally separates
+them)* *(round 31, codex, High: `cd /` alone proves only that resolution
 *succeeds*, not that it is `$0`-based — a wrapper hardcoding
 `LIB="${UNLEASHED_LIB_DIR:-/absolute/current-checkout/scripts/lib}"` passes `M5.3`, `M5.4` **and** `M5.8`
 on this checkout and breaks the moment the plugin is installed or relocated. **Relocation is the only
@@ -389,7 +400,12 @@ never its **position** and never required **full-string** matching — so an una
 **accepting `A/../../escape`**, which is a real path escape. And a `0x01–0xFF` byte sweep misses higher
 code points that reach `argv` unchanged. So: each invalid character is placed **leading, medial and
 trailing**; a **valid-prefix/invalid-remainder** specimen such as `A/../../escape` must be **rejected**,
-which only full-string anchoring achieves; and the sweep includes **non-ASCII code points** above `U+00FF`)*,
+which only full-string anchoring achieves; and the sweep is **quantified over the entire argv-representable complement**, not a sample of it: for
+**every** code point that can traverse `argv` and is outside `[A-Za-z0-9._-]`, a component containing it is
+rejected — implemented as a property/range sweep rather than an enumeration *(round 32, codex: the round-31
+wording said the sweep "includes" higher code points, which is an example, not a quantification — a
+validator could reject the chosen specimens and accept some other non-ASCII character while row 4 claimed
+the complete complement. "Includes" is not "for all")*)*,
 **parameterized across all three inputs — `ticket`, `round` AND `reviewer`**
 *(round 21, codex: the cells mutated only "a component", so an implementation validating just the exercised
 position passed while accepting invalid values in the other two — the requirement is stated for three
@@ -527,6 +543,12 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **Round 32 (gemini): the fallback arm still omitted the ABSOLUTE class.** `M2.5` pointed `HOME` at an
+  unwritable directory and ran the component-sensitive cases, but never exercised a **relative** `HOME` — so
+  an implementation accepting a relative fallback passed while violating the first of the three classes.
+  The fallback arm now runs **all three**: relative, protected-root, unwritable. *(The quantifier rule found
+  by the arm that has otherwise been the weaker reviewer — worth recording, because it is the reason both
+  arms are kept.)*
   **Round 29 reproduction (codex): "the same rules" also means the COMPONENT-SENSITIVE cases, not just the
   three broad classes.** `M2.2`'s canonical/symlink alias, its `.claude/worktrees` acceptance and its
   sibling-prefix pair were applied to the **XDG arm only**, so a *fallback-specific* string-prefix validator
@@ -1086,7 +1108,7 @@ requirement, and that is now visible rather than arguable.
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
-| 12c | the wrapper's signature is exactly `<ticket> <round> <reviewer>` (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` (round 18, gemini) |
+| 12c | the wrapper's signature is **exactly three** positional args (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra, reordered, **omitted and empty** third arg all rejected (round 32, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
 | 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
