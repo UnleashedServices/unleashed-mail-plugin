@@ -1,16 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 22** — both arms `REQUEST_CHANGES` with **no
-High findings**; both stated nothing blocks implementation and confined their changes to proof and coverage
-integrity. Round 21 was gemini `APPROVE` + codex `REQUEST_CHANGES`; **that was the second lone approval and
-a lone approval is not a pass.** No round has yet had both arms approve, let alone reproduce at the same
-digest.
+**Status:** Planning — **NOT GATED. Latest completed round: 23** — both arms `REQUEST_CHANGES`, neither
+finding a production-design blocker. codex verified the full mechanical inventory independently (60 cells,
+52 rows, names consistent, §6.0 11/11, **no third masking carrier**). One gemini High was **rejected as a
+hallucinated prompt constraint** — see §6.1. No round has yet had both arms approve, let alone reproduce.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 22 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 23 findings applied; **not gated**)
 
 ---
 
@@ -193,7 +192,7 @@ codex recipe and `isolated-agy-review.sh` — and asserts the **emitted** alloca
 target, the synthesis input, **and** the artifact's `transcriptPath`. Mutate a caller to re-derive the
 name: M5 must fail.
 
-**Plus, round 11 (codex): M5 did not carry `S-WRAPPER`'s single-helper requirement.** `[M5.3 stubbed-helper]` `[M5.4 two-checkout]` M5 asserted only
+`[M5.4 two-checkout]` **Plus, round 11 (codex): M5 did not carry `S-WRAPPER`'s single-helper requirement.** M5 asserted only
 that *whatever* path was emitted propagates consistently — so a wrapper using a **constant** namespace,
 or one **reimplementing** the repo hash instead of calling `context_repo_hash`, passed M1–M5 while
 violating both the single-helper rule and the per-checkout namespace that makes concurrent worktrees
@@ -208,7 +207,7 @@ single-helper rule. Round 11 chose this form *over* a hard-coded expected hash o
 reimplementation "happens to agree on the fixture"; **a reimplementation agrees on every fixture**, which
 makes two-checkout strictly weaker, not stronger. The error was proving a *property of the value* when
 the requirement is a *fact about the call*.
-**M5 therefore STUBS the helper — through a seam, because the obvious form is unimplementable.**
+`[M5.3 stubbed-helper]` **M5 therefore STUBS the helper — through a seam, because the obvious form is unimplementable.**
 *(Round 13, gemini: `S-WRAPPER` has the wrapper **source** `context.sh`, and sourcing unconditionally
 redefines the function, so a stub installed by the test is clobbered the moment the wrapper runs. The
 only ways left would be editing `context.sh` on disk — mutating the repo and breaking concurrent runs —
@@ -308,7 +307,7 @@ ordinary filename that escapes nothing. The vector that **does** escape is the *
 NUL), which the grammar already rejects. `.` and `..` are excluded because they are meaningless as
 components and because the plan must not depend on the concatenation format never changing — not because
 they traverse. A future round must not "restore" the traversal claim.)* And
-`makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
+`[M1.3 mis-moded-parent]` `makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
 a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
 writing into it. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
@@ -322,7 +321,7 @@ nothing about the message, so a generic "allocation failed" satisfied the cell w
 **The retry loop is bounded at 8 attempts**, after which the allocator exits non-zero with a diagnostic
 naming the exhausted parent *(round 14, codex: `S-ALLOC` required a "bounded" loop and never said what the bound
 was, so M1.11's "every candidate up to the bound" was unimplementable)*.
-`[M1.3 mis-moded-parent]` `[M1.4 wrong-owner-parent]` **Plus, round 9 (codex): a pre-existing WRONG-OWNER parent is a second, separate mutation.** §7 `S-ALLOC`
+`[M1.4 wrong-owner-parent]` **Plus, round 9 (codex): a pre-existing WRONG-OWNER parent is a second, separate mutation.** §7 `S-ALLOC`
 requires failing closed on a parent that exists "with a different mode **or owner**", but M1 proved only
 the mode arm — so a mode-only implementation passed every listed M1 case while violating §7. The two
 checks fail independently and each needs its own mutation. *(Where the test cannot create a
@@ -712,18 +711,18 @@ both polarities through **both digest paths**, with **nanosecond-separated** mti
 record's exactly is accepted *(round 14, codex: every stated case used separated mtimes, so an implementation
 comparing `transcript <= launch` — rejecting equality — passed both polarities while violating
 "equal-or-newer". The boundary is the case the two stated cells cannot see)*.
-**Plus the ABSENT-RECORD mutation (round 8 reproduction, codex):** delete the `.launch` entirely — the
+`[M4.3 absent]` **Plus the ABSENT-RECORD mutation (round 8 reproduction, codex):** delete the `.launch` entirely — the
 gate must **fail**. Without it, every listed M4 case *requires a record to exist*, so an implementation
 that validates only when `.launch` is present passes them all while violating §7's explicit
 absent-record rejection. **codex wrote that §7 requirement itself in round 7 and then approved a proof
 set that never tested it** — which is precisely why the reproduction run exists.
-**Plus the MISMATCHED-RECORD mutation (round 7, gemini):** write a `.launch` whose payload is a
+`[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` **Plus the MISMATCHED-RECORD mutation (round 7, gemini):** write a `.launch` whose payload is a
 syntactically valid but *different* run ID from the one in the transcript's filename — the gate must
 **fail**. Also cover **empty** and **malformed** payloads. *(§4.5's prose announced "M4 gains a
 mismatched-record mutation" and the Proof defined only the timing cases, so an implementation that never
 read the payload passed. The arms disagreed here — codex reported the mutation present; it was not.)*
 
-`[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` `[M4.7 both-digest-paths]` **EVERY mutation above runs through BOTH digest paths — round 10, codex (High).** The "both digest
+`[M4.7 both-digest-paths]` **EVERY mutation above runs through BOTH digest paths — round 10, codex (High).** The "both digest
 paths" requirement was attached only to the **timing** polarities; the absent, mismatched, empty and
 malformed mutations inherited nothing. So an implementation that validated the launch record on the
 snapshot-sidecar path and **skipped validation entirely on the `--reviewed-sha256` path** passed the
@@ -791,7 +790,7 @@ reported before every freeze.
 | lib-dir resolution | `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}` | §4.1 · `S-WRAPPER` |
 | leaf open flags | `leaf with `O_CREAT\|O_EXCL` and mode `0o600`` | §4.1 · `S-ALLOC` |
 | `.launch` open flags | `` `.launch` record `O_CREAT\|O_EXCL` on that same call, never truncating an existing one`` | §4.1 · `S-ALLOC` |
-| reviewer provenance | `hard-coded literal in each skill's own recipe` | §4.1 · `S-ALLOC` |
+| reviewer provenance | `hard-coded literal in each skill's own recipe` | §4.1 · `S-CALLERS` |
 | retry bound | `bounded at 8 attempts` | §4.1 · `S-ALLOC` |
 | path layout | `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt` | §4.1 · `S-ALLOC` |
 | base ownership | `No caller passes --base, and the allocator REJECTS it if given` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
@@ -863,6 +862,15 @@ the class of error it was written to catch.** It now groups occurrences by ID an
 *(Seventh instance of a rename reaching some sites and not others; the first one a mechanical check
 missed.)*
 
+**A reviewer's cited constraint is itself a claim — round 23.** gemini returned a High finding rejecting
+`M1.10`'s `os.open` interposition as violating an instruction *"Does the plan propose mocking time, wrapping
+os.open … If so, REJECT"*. **No prompt in this campaign has ever contained that sentence** — verified by
+grep across every round's prompt, zero matches — and round 23's prompt in fact asks the reviewer to
+*validate* the interposition. The finding was **not** applied. Interposition stays: it is the only
+mechanism that distinguishes a single atomic create from check-then-create, which is precisely what
+`S-ALLOC` requires. *(Recorded because the campaign rule cuts both ways — a fix of mine is a claim, and so
+is a constraint a reviewer attributes to its own instructions.)*
+
 **Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** `M2.10`'s tag had
 drifted onto the pre-clean cluster three paragraphs from its own mutation — the bidirectional check still
 passed, because it verifies that a tag exists and is cited, not that it labels the right sentence. *(Five
@@ -907,7 +915,8 @@ requirement, and that is now visible rather than arguable.
 | 14 | allocated path threaded to **`isolated-agy-review.sh` and the codex recipe** (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
 | 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
-| 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` + `[M2.9 preclean-reinstate-must-fail]` (round 15, codex — the row also claimed **grant** deletion, which these cells do not carry; grants are row 26) |
+| 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
+| 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**, `O_NOFOLLOW` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
@@ -1001,9 +1010,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **the identical shape §4.1 specifies** *(a §7 restatement that added or dropped an argument would be
    the very drift these two sections exist to keep aligned; `--base` was removed from BOTH in round 14)*.
    **ticket and round are required inputs of both review skills**, passed by the wrapper, **never
-   inferred** — a skill that cannot determine them **fails closed** (§4.1). **`<reviewer>` is a hard-coded
-   literal in each skill's own recipe** — `gemini` in `skills/gemini-review`, `codex` in
-   `skills/codex-review` — passed as the wrapper's third argument, **never derived**
+   inferred** — a skill that cannot determine them **fails closed** (§4.1). **`<reviewer>` is supplied by the caller, never derived by the allocator** — see `S-CALLERS`, which owns
+   that contract *(round 23, gemini: this rule governs the **skill recipes**, not `pty-capture.py`, and the
+   allocator cannot enforce it; a step scoped to one module should not carry another module's rule)*
    *(round 17, BOTH ARMS: §7 still said "supplied by the wrapper, not a skill input", the round-16 wording
    this replaced, so a §7-only implementation could **derive** the reviewer and pass it through the
    three-argument interface — satisfying §7 and failing M5.9. Fourth time a correction has reached §4.x and
@@ -1042,7 +1051,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
 4. **`S-CALLERS`** — **Thread ticket and round through EVERY invocation site, discovered by SCAN.**
    The syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**, defined here
-   so it need not be invented. **The site set is discovered, not enumerated:** `M5.13` greps the repo for
+   so it need not be invented. **`<reviewer>` is a hard-coded literal in each skill's own recipe** —
+   `gemini` in `skills/gemini-review`, `codex` in `skills/codex-review` — passed as the wrapper's third
+   argument, **never derived** *(moved here from `S-ALLOC` in round 23, gemini: it is a caller contract)*. **The site set is discovered, not enumerated:** `M5.13` greps the repo for
    review-skill references and requires each either to carry both flags or to sit on an explicit committed
    exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
    later fails the cell; an exemption is a visible diff.
