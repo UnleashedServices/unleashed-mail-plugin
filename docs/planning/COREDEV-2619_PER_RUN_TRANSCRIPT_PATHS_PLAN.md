@@ -1203,6 +1203,14 @@ mechanism that distinguishes a single atomic create from check-then-create, whic
 `S-ALLOC` requires. *(Recorded because the campaign rule cuts both ways — a fix of mine is a claim, and so
 is a constraint a reviewer attributes to its own instructions.)*
 
+**Rewrite rule (round 48): an edit that REPLACES a clause must state what it keeps.** Two operative rules
+were lost this way — row 4's `.`/`..` rejection (round 40) and `S-ALLOC`'s component containment (round 35)
+— each time because a new clause was written *over* the old one instead of beside it. After round 48 every
+§6.1 row's claim was swept against its named step's **note-stripped** operative text; the three further
+candidates were inspected and are phrasing differences, not losses. *(The same sweep also showed my
+round-41 check had passed this clause only because it did not strip notes — a checker reading history as
+contract, which is the error this campaign most often corrects in reviewers.)*
+
 **Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** `M2.10`'s tag had
 drifted onto the pre-clean cluster three paragraphs from its own mutation — the bidirectional check still
 passed, because it verifies that a tag exists and is cited, not that it labels the right sentence. *(Five
