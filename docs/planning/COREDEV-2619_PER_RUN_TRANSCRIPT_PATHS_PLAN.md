@@ -1440,8 +1440,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
 4. **`S-CALLERS`** — **Thread ticket and round through EVERY invocation site, discovered by SCAN.**
-   The syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**, defined here
-   so it need not be invented. **`<reviewer>` is a hard-coded literal in each skill's own recipe** —
+   The syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**, and **every
+   non-exempt invocation site must use that COMPLETE shape — namespace, both flags and the `<plan>`
+   operand** *(round 49, gemini: this defined the syntax and then required only the two flags per site, so
+   `M5.15b`'s plan-operand assertion was a rule living in a cell)*. **`<reviewer>` is a hard-coded literal in each skill's own recipe** —
    `gemini` in `skills/gemini-review`, `codex` in `skills/codex-review` — passed as the wrapper's third
    argument, **never derived** *(moved here from `S-ALLOC` in round 23, gemini: it is a caller contract)*. **The site set is discovered, not enumerated:** `M5.13` greps the repo for
    review-skill references and requires each either to carry both flags or to sit on an explicit committed
