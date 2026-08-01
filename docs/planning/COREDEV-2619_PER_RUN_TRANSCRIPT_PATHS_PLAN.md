@@ -409,7 +409,12 @@ the complete complement. "Includes" is not "for all")*)*,
 **parameterized across all three inputs — `ticket`, `round` AND `reviewer`**
 *(round 21, codex: the cells mutated only "a component", so an implementation validating just the exercised
 position passed while accepting invalid values in the other two — the requirement is stated for three
-inputs and was proved for one)*: for every byte `0x01–0xFF` **not** in `[A-Za-z0-9._-]`, a component
+inputs and was proved for one)*: for **every code point representable in `argv`** and not in `[A-Za-z0-9._-]` — the whole complement, not
+the `0x01–0xFF` prefix of it, implemented as a property/range sweep rather than an enumeration
+*(round 33, codex: round 32's quantification was written **inside a round-note**, and §6.0 classifies notes
+as history rather than contract — so the operative case still swept only `0x01–0xFF`, and a validator
+enforcing the grammar through `U+00FF` while accepting `U+0100` passed it. **A fix placed in a note is not
+a fix**, by this plan's own rule about where contracts live)* — a component
 containing it **must be rejected** — the test iterates the range rather than listing members — plus empty, `.` and
 `..` as named cases.
 **NUL is excluded, because it is not reachable through this surface** *(round 16, gemini, High: the sweep
@@ -435,7 +440,7 @@ passed)*. **And the POSITIVE: a correctly formed marker line is ACCEPTED** *(rou
 defined only negatives, so a caller that rejected **every** output satisfied all of them — the same
 rejection-only gap this campaign has hit before)*.
 
-`[M1.11 exhausted-collision]` **Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
+**Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
 above observes an *outcome* — bytes intact, a different path returned — and a **check-then-create**
 implementation (`if os.path.exists(c): next_candidate()` followed by a plain `open`) produces **exactly
 those outcomes** in a single-threaded test while leaving the TOCTOU race wide open. Outcome observation
@@ -447,7 +452,7 @@ truncating an existing one**
 each needs its own)* *(round 14, codex: asserting `O_EXCL` alone is passed
 by a check-then-`touch` followed by `os.open(…, O_EXCL)` — two calls, no atomic creation. The property is
 a single creating open, so both flags must be observed together)*. Likewise **one successful retry does not distinguish a bounded loop from an unbounded
-one**: M1 adds an **exhausted-collision** case that pins the bound **exactly**: pre-create **7** candidates and
+one**: `[M1.11 exhausted-collision]` M1 adds an **exhausted-collision** case that pins the bound **exactly**: pre-create **7** candidates and
 require the allocator to **succeed on the 8th**; pre-create **8** and require it to **fail closed** with
 the diagnostic *(round 15, codex: "pre-create every candidate up to the bound" passed a two-attempt
 implementation, because M1.1 proves one retry and a bare exhaustion case proves only eventual failure.
@@ -503,7 +508,7 @@ are removed because allocation makes pre-cleaning unnecessary, not because they 
   "wrapper never starts" case the audit reconstructs is covered by allocation itself, not by cleaning.
   A pre-clean only ever existed to compensate for a *shared* name.
 
-**Proof — M2, rewritten twice.** `[M2.1 dontAsk-runtime]` `[M2.2 xdg-invalid-classes]` `[M2.3 no-tmp-literal]` A **runtime** check under a pinned **`dontAsk`** permission mode
+**Proof — M2, rewritten twice.** `[M2.1 dontAsk-runtime]` `[M2.2 xdg-invalid-classes]` A **runtime** check under a pinned **`dontAsk`** permission mode
 (round 3: the round-2 form never named a mode, so a direct-shell check could pass while the shipped
 workflow was denied): dispatch a real skill invocation and assert the capture lands. **And exercise the XDG
 validation itself** *(round 4, codex: an implementation that blindly trusts a set `XDG_STATE_HOME`
@@ -568,7 +573,7 @@ supported and correct.
 
 `[M2.6 wrapper-grant-present]` `[M2.7 plugin-root-grants-retained]` **Plus, round 11 — two PRESENCE assertions, found while building §6.1's coverage table.** Writing that
 table exposed two rows whose proof column I had filled in from memory and which **did not exist**:
-- M2 asserted only that **no `/tmp/` literal survives** in any `allowed-tools` line. That is an absence
+- `[M2.3 no-tmp-literal]` M2 asserts **no `/tmp/` literal survives** in any `allowed-tools` line. That is an absence
   check, and **absence of a `/tmp` literal is not presence of the wrapper grant**. M2 now also asserts
   `skills/codex-review/SKILL.md` **contains** the grant `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`
   — without it `S-WRAPPER`'s entry point is ungranted and the codex arm silently cannot allocate.
@@ -673,7 +678,13 @@ mutating that single definition and requiring **both** the XDG and fallback vali
 behaviour together *(round 22, codex: `M2.2` proves only behaviour, so two separate-but-identical lists
 passed it)*.
 `[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
-both the recipes and the writer *(round 20, codex: `S-CAPTURE` made the flag operative while `M2.11` proved
+both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
+on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, by interposing on
+the invocation and inspecting its argv *(round 33, codex, High: naming the flag proves only that the string
+appears. `isolated-agy-review.sh` could **accept the flag and never pass it on**, fall back to the legacy
+`O_CREAT|O_TRUNC` path, and still pass `M2.20`, `M2.11` — which tests the writer directly — and M5, which
+proves only path propagation. `M2.9` was not quantified over both paths either, so the reservation was
+unproved **end-to-end on the gemini arm**, which is the arm this ticket's own gate runs on)* *(round 20, codex: `S-CAPTURE` made the flag operative while `M2.11` proved
 only the resulting `os.open` flags, so renaming it consistently on both sides passed the whole proof set)*.
 `[M2.12 nonallocated-mode-positive]` **And the POSITIVE for the other mode**: a non-allocated call still
 **creates its target if absent**, so the change is a mode and not a global regression — the requirement
@@ -1020,6 +1031,14 @@ the class of error it was written to catch.** It now groups occurrences by ID an
 *(Seventh instance of a rename reaching some sites and not others; the first one a mechanical check
 missed.)*
 
+**Round 33, gemini High — REJECTED, and this is the SECOND time the same claim failed the same check.**
+It reported the `bounded at 8 attempts` token occurring twice in §4.1 "outside of proof cells and round
+notes", masking a deletion. The second occurrence is **inside the M1 proof paragraph** and is stripped as a
+cell span; the deletion test drops the §4.1 count to **0**, so the check is deletion-sensitive exactly as
+designed. The identical claim was raised and disproved in round 29. *(Recorded rather than re-argued each
+round: a reviewer repeating a refuted claim is not new evidence, and re-verifying it — which I did — is
+cheap enough to keep doing.)*
+
 **Round 24, gemini High #1 — REJECTED, and checked both ways.** It reported the base-ownership token
 "completely absent from §4.1". Raw `grep` agrees: **zero** literal matches, because the sentence is
 line-wrapped there. But §6.0's rule mandates whitespace normalization *before* comparison, and under the
@@ -1086,7 +1105,7 @@ requirement, and that is now visible rather than arguable.
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus `os.fstat` interposition on the opened fd**, so a pre-open `lstat` fails the cell (round 29 reproduction, codex) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus `os.fchmod` interposition**, so a path-based `chmod` fails the cell (round 29 reproduction, codex) |
-| 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
+| 15e | `--allocated` is named **and FORWARDED** to `pty-capture.py` on **both** production paths (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — argv interposed on the real invocation (round 33, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
