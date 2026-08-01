@@ -280,6 +280,11 @@ property is only sound if the call sites are statically visible; making dynamic 
 failure keeps that assumption true rather than assuming it)* *(round 20, codex: enumerations were
 claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
 by scan. The cell now supplies the **discovery mechanism** a list cannot.)*
+`[M5.15b full-invocation-shape]` **And the COMPLETE command shape is asserted at every non-exempt site** —
+namespace (`/unleashed-mail:<gemini|codex>-review`), both flags, **and the `<plan>` operand** *(round 48,
+codex: `M5.13` checked literal references plus the two flags and `M5.14` only the flag names, so a site
+could keep its bare form, gain `--ticket`/`--round`, and **omit the plan operand entirely** — passing both
+cells while violating `S-CALLERS`)*.
 `[M5.14 invocation-syntax]` **And the flags are asserted BY NAME** — `--ticket <T> --round <N>` — not merely
 that the values reach the skill *(round 20, codex: `S-CALLERS` made the syntax operative while `M5.13` and
 row 32 asserted only that ticket and round are passed, so a positional or differently-named-flag
@@ -1275,6 +1280,7 @@ requirement, and that is now visible rather than arguable.
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
 | 32 | **every** review-skill invocation site passes ticket and round and is written as a **literal command** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
+| 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30b | the wrapper invokes `pty-capture.py` from its **own location** too (`S-WRAPPER`) | `[M5.16 allocator-own-location]` (round 37, both arms — round 36 made only the library distinguishable) |
@@ -1323,7 +1329,14 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    fresh host)* — else `$HOME/.local/state` judged by those
    same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
    everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`.
-   **The candidate is CANONICALLY RESOLVED (symlinks followed) before containment is judged**
+   **The candidate is CANONICALLY RESOLVED (symlinks followed) and then containment is judged BY PATH
+   COMPONENT, never by string prefix** — so `$HOME/.claude-cache` is accepted and
+   `$HOME/.claude/worktrees-evil` rejected *(round 48, gemini: the round-35 edit **replaced** the
+   component-containment clause with canonical resolution instead of adding to it, so §7 described only
+   "outside the protected roots" and an implementer would reasonably write `str.startswith()` and fail
+   `M2.2`'s mandatory sibling-prefix pair. Second instance of a **rewrite dropping a clause the prior
+   wording carried** — and my round-41 check reported the clause "present" only because it did not strip
+   notes, which is the very error this campaign keeps correcting in reviewers)*
    *(round 35, codex: `M2.2` mandates rejecting a canonical/symlink alias into `.claude`, while `S-ALLOC`
    described only component containment — a purely lexical implementation follows §7, passes the
    sibling-prefix and `worktrees` cases, and fails the mandatory alias case. Another proof stricter than its
