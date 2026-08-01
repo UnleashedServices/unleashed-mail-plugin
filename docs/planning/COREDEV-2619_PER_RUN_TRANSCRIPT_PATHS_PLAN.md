@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 36** — the gemini arm **VOIDED by implementing
-the plan** (second occurrence, after round 25); codex `REQUEST_CHANGES` (2 High + 1 Medium), all applied.
-Round 36 also established that **the isolation harness contains the repo but not `$HOME`** — see §6.1.
-Round 29's double approval failed its reproduction at the byte-identical digest.
+**Status:** Planning — **NOT GATED. Latest completed round: 37** — both arms `REQUEST_CHANGES`, six
+findings, all applied; no `$HOME` leak and the gemini arm reviewed properly after two runaway rounds.
+Round 29's double approval failed its reproduction at the byte-identical digest; **a lone approval is not a
+pass, and a double approval triggers a reproduction rather than gating.**
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 36 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 37 findings applied; **not gated**)
 
 ---
 
@@ -261,8 +261,9 @@ and a reordering is passed by `reviewer=${3:-codex}`, which silently defaults th
 `M5.7`, the caller scan and every normal recipe call while violating the stated interface — "exactly three"
 is a claim about **too few** as much as too many)*
 *(round 18, gemini)*.
-`[M5.12 allocator-cli-shape]` **And the ALLOCATOR's own command line is asserted at runtime** — every
-option in §4.1's shape present and spelled as specified *(round 18, codex: §6.0 compares two plan
+`[M5.12 allocator-cli-shape]` **And the ALLOCATOR's own command line is asserted at runtime via the same RECORDING SHIM** — every
+option in §4.1's shape present and spelled as specified *(round 37, gemini: "asserted at runtime" across a
+Bash→Python boundary is unrunnable as interposition; the shim records `argv` and the assertion reads it)* *(round 18, codex: §6.0 compares two plan
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every review-skill reference and requires each to carry
@@ -283,11 +284,20 @@ a skill that silently **infers** both values and always calls with non-empty arg
 what §4.1's "never inferred" forbids)* *(round 14, gemini: round 13 recorded this as an accepted hole;
 "an honest hole is better than false coverage, but a hole that need not exist is still a gap", and this
 one is a two-line test)*.
+`[M5.16 allocator-own-location]` **The relocated copy's `pty-capture.py` emits a distinct allocator marker,
+and the emitted marker line must carry it** — so invoking the original checkout's allocator fails the cell
+*(round 37, both arms: `S-WRAPPER` required this and no row covered it)*.
 `[M5.8 production-fallback]` **And the PRODUCTION path is exercised separately**: run the wrapper with
 **both `UNLEASHED_LIB_DIR` and `CLAUDE_PLUGIN_ROOT` unset**, **from a working directory outside the repo**
-(`cd /`), **and from a COPY of the tree at a different absolute path whose `context.sh` returns a DISTINCT
-sentinel**, requiring the allocated path to carry **the copy's** sentinel — proving the copy's library was
-the one sourced *(round 32, codex, High: merely relocating and succeeding is still not the mechanism.
+(`cd /`), **and from a COPY of the tree at a different absolute path whose `context.sh` returns a DISTINCT sentinel
+AND whose `pty-capture.py` emits a DISTINCT allocator marker**, requiring the allocated path to carry the
+copy's sentinel **and the emitted marker line to carry the copy's allocator marker** — proving both the
+library **and the executable** came from the copy
+*(round 37, BOTH ARMS: round 36 made only the *library* distinguishable, so a wrapper could source the
+copy's sentinel `context.sh` and still invoke a **hard-coded allocator from the original checkout** — the
+original allocator receives that sentinel through `--repo-hash` and produces an identical path, passing
+`M5.3`, `M5.8` and `M5.12`. **Two executables are resolved and both must be distinguishable**; making one of
+them so is exactly the outcome-vs-mechanism trap, on its fourth visit to this cell family)* *(round 32, codex, High: merely relocating and succeeding is still not the mechanism.
 The original library remains at the hard-coded absolute path, so the very implementation this cell targets
 can source **the original** and allocate successfully from the copy — `M5.3` is bypassed by its own seam and
 `M5.4` still passes because the original `context_repo_hash` hashes the invocation CWD. **Third attempt at
@@ -699,8 +709,14 @@ behaviour together *(round 22, codex: `M2.2` proves only behaviour, so two separ
 passed it)*.
 `[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
 both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
-on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, by interposing on
-the invocation and inspecting its argv *(round 33, codex, High: naming the flag proves only that the string
+on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by
+placing a RECORDING SHIM ahead of `pty-capture.py` on `PATH`** — a stub that appends its `argv` to a file
+and exits — and asserting the recorded `argv` contains `--allocated`
+*(round 37, gemini, High: the round-33 wording said "interposing on the invocation", which is the same
+cross-process impossibility round 35 already removed from `M2.23`/`M2.24` — Bash spawning Python cannot be
+patched from the test process without `LD_PRELOAD`-class measures. A shim on `PATH` observes the same fact
+and actually runs. **Fixing this class in one cell and leaving it in three others is the propagation defect
+this campaign keeps repeating.**)* *(round 33, codex, High: naming the flag proves only that the string
 appears. `isolated-agy-review.sh` could **accept the flag and never pass it on**, fall back to the legacy
 `O_CREAT|O_TRUNC` path, and still pass `M2.20`, `M2.11` — which tests the writer directly — and M5, which
 proves only path propagation. `M2.9` was not quantified over both paths either, so the reservation was
@@ -762,8 +778,11 @@ also a fixed shared path. **Out of scope here, recorded so it is a decision and 
 > `git ls-files | xargs grep -n` over the two literals only.)*
 
 `[M2.16 grants-deleted-not-rewritten]` **The two `rm -f` grants are DELETED, not rewritten** — the cell asserts neither skill's `allowed-tools` contains an `rm -f` grant at **any** path *(round 17, codex: row 15 covers the pre-clean COMMANDS and row 26 checks only that `/tmp` is absent, so rewriting a grant to a non-`/tmp` path passed both — `S-PRECLEAN` says delete)*.
-`[M2.15 no-base-argument]` **The allocator refuses a caller-supplied base argument**, and no caller emits
-one *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
+`[M2.15 no-base-argument]` **The allocator refuses a caller-supplied base argument** — asserted by invoking it with `--base` directly
+— **and no caller emits one**, asserted by the **recording shim's `argv`** and by a source scan of the
+wrapper *(round 37, gemini: the cell said it would check "the wrapper's emitted command line", but the
+wrapper emits only the `UNLEASHED_TRANSCRIPT=` marker — it never prints the command line it used, so the
+assertion had nothing to read)* *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
 clause — round 22, gemini)* —
 asserted against the wrapper's emitted command line and by invoking the allocator with `--base` and
 requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
@@ -777,6 +796,9 @@ asserted directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:32
 generates** the ID — as though it were a proof, and `scripts/tests/test_pty_capture.py` contains **no**
 case running two captures and requiring fresh sidecars. Citing production code as its own test is the
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
+`[M2.25 home-fixtures-cleared]` **`~/.local/state/unleashed-mail/review-transcripts/` contains none of the
+39 synthetic fixtures** the two runaway review runs left there — asserted as a release postcondition
+*(round 37, codex: `S-RELEASE` made the cleanup operative and no cell failed if it was skipped)*.
 `[M2.14 version-bump]` **The release check is IN-TREE and PINS THE PRE-CHANGE VERSION**: the plan records
 the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **not** `2.6.6`
 **and** that the CHANGELOG's newest entry equals `plugin.json`
@@ -1163,6 +1185,8 @@ requirement, and that is now visible rather than arguable.
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
+| 30b | the wrapper invokes `pty-capture.py` from its **own location** too (`S-WRAPPER`) | `[M5.16 allocator-own-location]` (round 37, both arms — round 36 made only the library distinguishable) |
+| 20c | the 39 synthetic `$HOME` fixtures are cleared (`S-RELEASE`) | `[M2.25 home-fixtures-cleared]` (round 37, codex — the cleanup was operative with nothing failing if skipped) |
 | 30 | the wrapper resolves its lib dir from its **own location** — survives RELOCATION (`S-WRAPPER`) | `[M5.8 production-fallback]` — run from `cd /` **and from a relocated copy**, which a hardcoded absolute path fails (round 31, codex) (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
 | 27 | ticket/round are required inputs of **both** review skills; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` — parameterized over both recipes (round 30, codex) (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
@@ -1264,7 +1288,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **missing or empty `<reviewer>`** are each rejected — **not "a reordering", which is undetectable**
    *(round 36, codex: round 35 removed that rule from the cell and the row and left it standing here, so §7
    retained an impossible, uncovered requirement that its own §4.1 text explains cannot be implemented)*; **missing or empty `<ticket>` or `<round>` is a hard
-   error** too. In every case the wrapper allocates nothing and exits
+   error** — and `M5.11` covers the **explicitly empty** cases, not only the omitted ones
+   *(round 37, codex: `M5.11` covered an empty *reviewer* and `M5.7` an invocation *without* ticket/round,
+   so a wrapper defaulting only empty `$1`/`$2` to valid values passed every named cell and allocated
+   anyway)* too. In every case the wrapper allocates nothing and exits
    non-zero *(round 34, codex: `S-WRAPPER` presented the interface **shape** and rejected only missing
    ticket/round, while the stricter arity and nonempty-reviewer rules lived **only inside `M5.11`** — which
    §6.0 classifies as evidence, not contract. So a §7-conforming wrapper could accept a fourth argument or
