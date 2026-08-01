@@ -1,17 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED.** Round 29 produced this plan's **first double approval** (gemini
-`APPROVE_WITH_NOTES` + codex `APPROVE`, "No findings") — and the **mandatory reproduction at the identical
-digest FLIPPED**: codex returned `REQUEST_CHANGES` with 2 High, both real and both now fixed. That is the
-**fourth** double approval in this campaign to fail its re-run. Round 29's lone gemini note was also checked
-and found **false** (its "third masking carrier" is inside a cell span; the deletion test drops the count to
-zero, as designed).
+**Status:** Planning — **NOT GATED. Latest completed round: 30** — gemini `APPROVE`, codex
+`REQUEST_CHANGES` (2 High + 1 Medium). **Sixth lone approval.** All three findings were the same family the
+round-29 reproduction exposed: a cell instantiated at one member of a set the requirement quantifies over.
+Now generalised as §6.1's **quantifier rule**.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 29 + reproduction applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 30 findings applied; **not gated**)
 
 ---
 
@@ -265,7 +263,10 @@ row 32 asserted only that ticket and round are passed, so a positional or differ
 implementation passed every cell)*.
 `[M5.7 missing-input-fails-closed]` **And the wrapper invoked without a ticket or round must FAIL CLOSED**,
 allocating nothing and exiting non-zero — **and, at the SKILL level, a recipe that derives ticket or round
-from context instead of receiving them is rejected** *(round 16, codex: the wrapper-level case is passed by
+from context instead of receiving them is rejected — asserted for BOTH `gemini-review` and `codex-review`,
+independently** *(round 30, codex: the cell said only "a recipe", so one skill could silently make the
+inputs optional or inferred while the other complied; the caller scan supplies valid flags and so cannot
+catch it)* *(round 16, codex: the wrapper-level case is passed by
 a skill that silently **infers** both values and always calls with non-empty arguments, which is exactly
 what §4.1's "never inferred" forbids)* *(round 14, gemini: round 13 recorded this as an accepted hole;
 "an honest hole is better than false coverage, but a hole that need not exist is still a gap", and this
@@ -571,7 +572,11 @@ entire ticket exists to establish is gone with nothing observing its loss.
 M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean commands are absent —
 `isolated-agy-review.sh:89` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
 strings; and **(b)** a runtime mutation — **reinstate the pre-clean against an allocated path and require
-the gate to FAIL**, proving the allocation is load-bearing rather than decorative. *(Absence assertions
+the gate to FAIL, with EVERY target open interposed and asserted to include no creating retry**
+*(round 30, codex, High: requiring only "the gate fails" is passed by a writer that catches `ENOENT`,
+**retries with a creating open**, and then returns non-zero for its own reasons — `M2.11` passes on the
+normal existing-leaf path and `M2.9` sees the failure it expected. The requirement is that the missing leaf
+is **not recreated**, so that is what the cell observes)*. *(Absence assertions
 must name what they scan for. "No `/tmp` literal" and "no `rm -f` of the allocated path" are different
 claims, and only the second is the requirement.)*
 
@@ -782,6 +787,7 @@ rejected. *Positive (round 4, codex):* a transcript captured **after** an alread
 Without the positive case, M4 passes against the explicitly rejected implementation that creates its
 "launch" record while writing the artifact — an older transcript still predates that late record. Run
 both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
+`[M4.9 transcript-position]` **And every mutation runs at BOTH transcript positions** — first and second reviewer — so an implementation anchoring only the first is caught *(round 30, codex)*.
 `[M4.8 mtime-equality]` **And an EXACT-EQUALITY positive**: a transcript whose `st_mtime_ns` matches its
 record's exactly is accepted *(round 14, codex: every stated case used separated mtimes, so an implementation
 comparing `transcript <= launch` — rejecting equality — passed both polarities while violating
@@ -805,7 +811,12 @@ whole stated suite — while violating `S-FRESH`, which keys freshness to each t
 **independently of which digest path is used**. This is the same shape as round 9's `0600` and
 wrong-owner findings: **§7 stated the requirement and the proof set did not carry it.** The matrix is
 therefore *(timing-negative, timing-positive, **mtime-equality**, absent, mismatched, empty, malformed)*
-× *(sidecar, `--reviewed-sha256`)* — **fourteen** cells, none optional *(round 15, codex: the equality
+× *(sidecar, `--reviewed-sha256`)* × **transcript position — FIRST and SECOND reviewer**
+*(round 30, codex, High: `S-FRESH` requires the record to be looked up **per transcript**, and the matrix
+varied timing state and digest path only. An implementation validating just the **first** reviewer's
+transcript passed every named case, because every mutation targeted that position — while accepting an
+entirely unanchored second transcript, which is the two-reviewer gate this ticket exists to protect)*
+— **twenty-eight** cells, none optional *(round 15, codex: the equality
 positive was defined but left out of the cross-product, so an implementation using `<` on one digest
 branch and `<=` on the other passed the stated matrix)*.
 
@@ -946,6 +957,14 @@ never opens the target; `M2.24` asserted "the mode ends up `0600`" — passed by
 substitutes are the TOCTOU-vulnerable forms the contract exists to exclude, and **an outcome assertion
 cannot separate two mechanisms that produce the same outcome.**
 
+**Quantifier rule (round 30 — the generalisation of the property-count rule, after three consecutive
+rounds of the same failure).** When a requirement quantifies over a set — *both* skills, *every* transcript,
+*all three* inputs, *each* digest path, *the same* rules — **the cell must be parameterized over that set,
+not instantiated at one member.** Rounds 27, 29-reproduction and 30 each found cells that were correct for
+one member and silent about the rest: three inputs proved for one, the fallback arm sampled instead of
+copied, `M4` varied timing and digest path but never transcript position, `M5.7` said "a recipe" and meant
+two. **A universally quantified requirement with a single-instance proof is an unproved requirement.**
+
 **Property-count rule (round 27, codex): if a requirement enumerates N properties, its cell must OBSERVE
 N.** Three findings in one round were this shape — `S-CAPTURE` named four retained protections and `M2.11`
 observed only the flag set; the fallback had to be *created `0700`* and `M2.22` asserted only creation; the
@@ -1024,7 +1043,7 @@ requirement, and that is now visible rather than arguable.
 | 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
-| 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
+| 15f | a **missing reserved leaf is a hard error, not a creation** — no creating retry (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` — every target open interposed (round 30, codex) (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus `os.fstat` interposition on the opened fd**, so a pre-open `lstat` fails the cell (round 29 reproduction, codex) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus `os.fchmod` interposition**, so a path-based `chmod` fails the cell (round 29 reproduction, codex) |
@@ -1034,6 +1053,7 @@ requirement, and that is now visible rather than arguable.
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
+| 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **14-cell** cross-product (round 15 — equality had been left out of it) |
@@ -1056,7 +1076,7 @@ requirement, and that is now visible rather than arguable.
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30 | the wrapper resolves its lib dir from its **own location**, not `${CLAUDE_PLUGIN_ROOT}` (`S-WRAPPER`) | `[M5.8 production-fallback]` (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
-| 27 | ticket/round are required skill inputs; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
+| 27 | ticket/round are required inputs of **both** review skills; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` — parameterized over both recipes (round 30, codex) (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
 ## 7. Implementation order
 
