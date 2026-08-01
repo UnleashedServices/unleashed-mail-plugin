@@ -1,16 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 47** — **codex `APPROVE_WITH_NOTES`** (one Low:
-stale status metadata, now corrected); gemini `REQUEST_CHANGES` on one finding that is **real** — the
-`.`/`..` rejection had lost its coverage row in the round-40 rewrite of row 4, now restored. codex approved
-in rounds 44, 45 and 47; round 46's `REQUEST_CHANGES` was caused by an edit made between rounds, not a
-pre-existing defect.
+**Status:** Planning — **NOT GATED. Latest completed round: 49** — both arms `REQUEST_CHANGES`; two of the
+four findings were real and are applied (base validity never required a **directory** or searchability;
+`S-CALLERS` defined the full invocation shape without requiring it per-site), two were checked and are
+false. codex approved in rounds 44, 45 and 47.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 47 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 49 findings applied; **not gated**)
 
 ---
 
@@ -158,8 +157,13 @@ reviewer already told you about is not doing independent work.)*
   protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
   by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
   NOTHING and exits non-zero with a diagnostic** — it never invents a third location.
-  **"Writable" is defined for the FIRST-RUN case, which is the common one:** a base is valid if it exists
-  and is writable, **or does not exist and its nearest existing ancestor is writable** — the allocator then
+  **"Writable" is defined for the FIRST-RUN case, which is the common one:** a base is valid if it exists,
+  **is a DIRECTORY, is writable AND searchable (`W_OK|X_OK`)**, **or does not exist and its nearest existing
+  ancestor satisfies those same three predicates** *(round 49, codex: the rule said only "exists and is
+  writable", so an `exists()` + `os.access(W_OK)` validator accepts a **writable regular file** or a
+  **mode-`0200` directory** — writable but not searchable — passes every stated M2 case, and then fails when
+  it tries to create the transcript subtree **instead of falling back**. A base you cannot descend into is
+  not a usable base)* — the allocator then
   creates it `0700`. *(Round 25, codex, High: neither operative section said whether an absent
   `$XDG_STATE_HOME` or `$HOME/.local/state` is valid, and `M2.4`'s positive fixture was not required to be
   initially absent — so an `exists()`-plus-`os.access` validator passed every stated case and then failed
@@ -567,8 +571,11 @@ are removed because allocation makes pre-cleaning unnecessary, not because they 
 workflow was denied): dispatch a real skill invocation and assert the capture lands. **And exercise the XDG
 validation itself** *(round 4, codex: an implementation that blindly trusts a set `XDG_STATE_HOME`
 passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
-`.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, and
-**unwritable**, and require the fallback **plus its diagnostic** in each.
+`.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, **unwritable**, **a writable REGULAR FILE**, and **a mode-`0200`
+directory (writable, not searchable)**, and require the fallback **plus its diagnostic** in each
+*(round 49, codex: the last two are the cases an `exists()`+`W_OK` validator passes while being unusable)*;
+**and an ABSENT base whose nearest existing ancestor is not writable must fall back too** *(round 49,
+gemini: the XDG arm had a positive for absent-but-creatable and no negative for absent-but-NOT-creatable)*.
 **Plus a MUST-PASS SAFE SYMLINK, on both arms** — an `XDG_STATE_HOME` (and a `$HOME`-derived fallback)
 that is a **symlink resolving to a permitted, writable location** must be **ACCEPTED**
 *(round 39, codex, High: every symlink case in this cell aliases *into* a protected root, and the positive
@@ -1330,8 +1337,8 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
-   **absolute, outside every protected root, and writable** — where a base that **does not exist is valid
-   if its nearest existing ancestor is writable**, and the allocator then creates it `0700`
+   **absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK|X_OK`)** — where a
+   base that **does not exist is valid if its nearest existing ancestor satisfies those same predicates**, and the allocator then creates it `0700`
    *(round 26, codex: §4.1 declared absent-but-creatable bases valid and `S-ALLOC` still demanded plain
    writability, so a §7-only implementer would reject **every** absent base — including the default on a
    fresh host)* — else `$HOME/.local/state` judged by those
