@@ -1274,7 +1274,7 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32 | **every** review-skill invocation site passes ticket and round and is written as a **literal command** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
@@ -1420,6 +1420,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    review-skill references and requires each either to carry both flags or to sit on an explicit committed
    exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
    later fails the cell; an exemption is a visible diff.
+   **A review-skill invocation must be written as a LITERAL command — assembling the skill name or its
+   flags dynamically (variable expansion, concatenation, `eval`) is itself a failure**, because a static
+   scan can only bind a runtime property while the call sites are statically visible
+   *(round 46, codex: round 45 put this rule in `M5.13` alone, so a §7-conforming implementation could scan
+   literal references, permit a dynamically assembled invocation carrying both flags, and still fail a
+   mandatory cell. **A rule that lives only in a proof cell is not a rule** — my own lens item, committed
+   while fixing the finding that prompted it)*.
    *(Round 20, codex: round 19's "all four known callers" was **still not exhaustive** —
    `skills/implement/SKILL.md:161` and `:172` also instruct running both skills, and a scan finds
    references across **six** files. **Twice an enumeration was claimed complete and was wrong**, which is
