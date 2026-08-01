@@ -1,15 +1,16 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 24** — both arms `REQUEST_CHANGES`, neither
-finding a production-design blocker. codex proved §6.0 was really **10/11**, not the 11/11 claimed: a
-round-23 tag move put §4.1's only lib-token occurrence inside a cell span, and **my checker's
-strip-order bug hid it**. Order is now normative and the result is a genuine 11/11.
+**Status:** Planning — **NOT GATED. Latest completed round: 25 — the gemini arm VOIDED**: it *implemented*
+the plan instead of reviewing it (a COREDEV-2607 recurrence) and emitted no verdict, so the round fails
+closed. The isolation harness contained it completely — real tree clean, HEAD unchanged, plan digest
+identical, and none of the edits it reported exist in the repository. codex `REQUEST_CHANGES` (2 High +
+1 Medium), all applied. No round has yet had both arms approve.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 24 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 25 findings applied; **not gated**)
 
 ---
 
@@ -156,8 +157,16 @@ reviewer already told you about is not doing independent work.)*
   The allocator therefore **validates it: absolute, outside every
   protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
   by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
-  NOTHING and exits non-zero with a diagnostic** — it never invents a third location. **No caller passes
---base, and the allocator REJECTS it if given**: selection, validation, fallback and diagnostic are the
+  NOTHING and exits non-zero with a diagnostic** — it never invents a third location.
+  **"Writable" is defined for the FIRST-RUN case, which is the common one:** a base is valid if it exists
+  and is writable, **or does not exist and its nearest existing ancestor is writable** — the allocator then
+  creates it `0700`. *(Round 25, codex, High: neither operative section said whether an absent
+  `$XDG_STATE_HOME` or `$HOME/.local/state` is valid, and `M2.4`'s positive fixture was not required to be
+  initially absent — so an `exists()`-plus-`os.access` validator passed every stated case and then failed
+  on a fresh host whose state directory has not been created yet. "Not protected" and "is writable" are
+  independent predicates, and §8 had conflated them.)*
+  **`M2.4`'s positive fixture is initially ABSENT**, so first-run creation is proved rather than assumed.
+  **No caller passes --base, and the allocator REJECTS it if given**: selection, validation, fallback and diagnostic are the
 allocator's alone. **Two distinct diagnostics, both required:** on **falling back** (XDG rejected, fallback
 valid) it says so, naming the rejected value and the reason; on **terminal failure** (neither validates) it
 names the rejected value and the reason and allocates nothing.
@@ -569,8 +578,8 @@ leaf is gone, the open fails, the capture aborts.
 `[M2.11 capture-requires-existing-leaf]` **The cell, stated as a mutation rather than as a consequence**
 *(round 14, gemini: the tag sat on this heading and defined nothing — the text only claimed `S-CAPTURE`
 makes M2.9 pass, which is not a proof)*: **interpose on `os.open` in ALLOCATED mode** and assert the flags
-contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW`, with the `0600` fchmod
-retained. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
+contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW` **and `O_NONBLOCK`**, with the
+`fstat`/`S_ISREG` check and the `0600` fchmod retained *(round 25, codex)*. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
 mutation discriminated one flag and the requirement names two.)*
 `[M2.21 protected-roots-single-source]` **The protected-root set is read from ONE place** — asserted by
@@ -648,8 +657,15 @@ directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:322-328` �
 generates** the ID — as though it were a proof, and `scripts/tests/test_pty_capture.py` contains **no**
 case running two captures and requiring fresh sidecars. Citing production code as its own test is the
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
-`[M2.14 version-bump]` **The release check compares the new version against the PRE-change version** from
-the merge base, not merely the current fields against each other *(round 14, codex:
+`[M2.14 version-bump]` **The release check is IN-TREE and needs no git history**: it asserts the CHANGELOG's
+newest entry carries the same version as `plugin.json` **and that this differs from the entry immediately
+below it** — which proves a bump using only the checked-out files
+*(round 25, codex, High: the round-14 form compared against "the pre-change version from the merge base",
+which **cannot run in the shipped workflow** — `.github/workflows/plugin-ci.yml` checks out with the
+default `fetch-depth: 1`, so on a PR the merge base is absent and on a push "merge base" does not identify
+the pre-change commit. Skipping when unavailable lets an unchanged version pass; failing closed rejects a
+correct bump. **A proof that cannot run in the environment that ships it is not a proof** — the third fix
+in this campaign that named the right observation and gave it an unrunnable mechanism.)* *(round 14, codex:
 `scripts/validate-version-sync.sh:40-56,119-120` checks current-field consistency and a matching CHANGELOG
 heading, so adding the ceiling text **without bumping anything** satisfies it. Row 20 was right that no
 existing cell proves a bump; the answer is to add one, not to keep the hole.)* **And the cell also asserts
@@ -915,7 +931,7 @@ requirement, and that is now visible rather than arguable.
 | # | requirement (source) | proof cell |
 |---|---|---|
 | 1 | base validated: absolute, outside the **enumerated** protected-root set, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — exercises `.claude`, `.claude/plugins/data/…`, an alias, and `.claude/worktrees` as a **positive** (round 19, codex) |
-| 2 | a **valid** `XDG_STATE_HOME` is **used** (§4.1) | `[M2.4 xdg-valid-positive]` |
+| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+`, not `.`/`..`, for **all three** of ticket/round/reviewer (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
@@ -938,7 +954,7 @@ requirement, and that is now visible rather than arguable.
 | 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
-| 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**, `O_NOFOLLOW` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
+| 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW`, `O_NONBLOCK`, `S_ISREG` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
@@ -1093,7 +1109,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 5. **`S-CAPTURE`** — **Make `pty-capture.py` HONOUR the reservation** (round 13, both arms). When the
    caller supplies an **allocated** path (`--allocated`, set by the review recipes), open the target
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
-   **hard error**, not a creation. Retain `O_NOFOLLOW` and the `0600` fchmod. Non-allocated call sites
+   **hard error**, not a creation. **Retain `O_NOFOLLOW`, `O_NONBLOCK`, the `fstat`/`S_ISREG` regular-file
+   check AND the `0600` fchmod** *(round 25, codex: this step had listed only `O_NOFOLLOW` and the fchmod,
+   so an allocated-mode branch implementing exactly what was written would **drop the FIFO/device defence**
+   that `scripts/pty-capture.py:66,76,81` relies on and `scripts/tests/test_pty_capture.py:48` covers for
+   the existing mode — a new mode silently narrower than the one it sits beside)*. Non-allocated call sites
    keep today's create-if-absent behaviour, so this is a mode, not a global change.
    *(Without this, `_write_private`'s `O_CREAT|O_TRUNC` (`scripts/pty-capture.py:76`, `:321`) silently
    **recreates** a leaf that a retained pre-clean deleted — the `O_EXCL` reservation becomes decorative
@@ -1136,8 +1156,12 @@ four decisions that are settled operatively elsewhere. **A question that the pla
 open question; it is a contradiction with a question mark.** Q1, Q2, Q3 and Q5 are struck and their
 resolutions cited.)*
 
-- ~~Q1 — is the XDG default writable?~~ **SETTLED, §4.1:** `$HOME/.local/state` is absent from the
-  protected-path list (codex, round 3); a *set* `XDG_STATE_HOME` is validated or falls back.
+- ~~Q1 — is the XDG default writable?~~ **SETTLED, §4.1** — but the old wording answered a *different*
+  question. `$HOME/.local/state` being absent from the protected-path list settles **"is it permitted?"**,
+  not **"is it writable?"**; those are independent predicates *(round 25, codex)*. Both are now settled:
+  a base is valid if it exists and is writable, **or is absent and its nearest existing ancestor is
+  writable**, in which case the allocator creates it `0700`. A *set* `XDG_STATE_HOME` is validated by the
+  same rules or falls back.
 - ~~Q2 / Q5 — does deleting the outer pre-clean cover "the wrapper never starts"?~~ **SETTLED, §4.2:**
   yes — an allocated empty file maps to `MISSING` in synthesis and is rejected by
   `review-verdict.py:364` (codex, round 3, with citations). The pre-clean is **deleted**, including the
