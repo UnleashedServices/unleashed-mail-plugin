@@ -1,16 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 35** — both arms `REQUEST_CHANGES`, eight
-findings, all applied. Two were **unrunnable mechanisms** (a 42-minute subprocess sweep; cross-process
-interposition) and two were **proofs stricter than their requirements**. Round 29's double approval failed
-its reproduction at the byte-identical digest; **a lone approval is not a pass, and a double approval
-triggers a reproduction rather than gating.**
+**Status:** Planning — **NOT GATED. Latest completed round: 36** — the gemini arm **VOIDED by implementing
+the plan** (second occurrence, after round 25); codex `REQUEST_CHANGES` (2 High + 1 Medium), all applied.
+Round 36 also established that **the isolation harness contains the repo but not `$HOME`** — see §6.1.
+Round 29's double approval failed its reproduction at the byte-identical digest.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 35 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 36 findings applied; **not gated**)
 
 ---
 
@@ -250,7 +249,9 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 `[M5.11 wrapper-cli-signature]` **The wrapper's positional signature is exactly
 `allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, **an OMITTED third argument and an EMPTY third argument** are each rejected, **and the
 wrapper's internal positional mapping is mutated to assert each supplied component lands in its specified
-field** *(round 35, codex, High: "reject a reordering" is **not implementable** — `ticket` and `round` share
+field**. **Every rejection case also asserts that NOTHING WAS ALLOCATED** — no leaf, no `.launch`
+*(round 36, codex: the cases said only "rejected", so a wrapper that allocates from its first three
+arguments and *then* exits non-zero on a fourth passed the cell while violating §7's "allocates nothing")* *(round 35, codex, High: "reject a reordering" is **not implementable** — `ticket` and `round` share
 one grammar and `M1.8` requires every in-class family accepted in **all three** positions, so
 `allocate-transcript.sh A B codex` is indistinguishable from a legitimate call whose ticket is `A` and round
 is `B`. The wrapper has no information from which to infer caller intent, and rejecting it would demand
@@ -1013,6 +1014,16 @@ must say why — and "not machine-checkable" is a claim that must itself be chec
 untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
 the allocated path" are different claims, and only the second was ever the requirement.
 
+**The isolation harness does NOT contain writes outside the repo — corrected round 36.** Twice in this
+campaign the gemini arm *implemented* the plan instead of reviewing it (rounds 25 and 36). Both times the
+harness kept the **repository** pristine — tree clean, digest identical, none of the claimed edits present —
+and both times I reported "zero damage" on that basis. **That verification was incomplete.** Both runs also
+created `~/.local/state/unleashed-mail/review-transcripts/` and 39 synthetic fixtures there
+(`COREDEV-9999`, `testhash`, `abc`, `h1`), at `00:15` and `03:53`. The harness diffs the git worktree; it
+does not sandbox `$HOME`. The artifacts are inert — nothing reads that path until this ticket ships — but
+they sit in **exactly the directory this plan allocates into**, so `S-RELEASE` must clear them before the
+allocator goes live, and the harness's containment claim must be stated as *repo-only*.
+
 **The reproduction rule has now paid for itself FOUR times — round 29.** Round 29 was this plan's **first
 double approval**: gemini `APPROVE_WITH_NOTES`, codex `APPROVE` with the words *"No findings."* The
 mandatory re-run at the **byte-identical digest** returned codex `REQUEST_CHANGES` with **two High
@@ -1249,8 +1260,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    division of labour: if Bash passes the fallback the allocator cannot know XDG was rejected, and if
    Bash passes an invalid XDG for Python to reject then the wrapper has not "derived the base" at all.
    One owner, and it is the side M2 already tests.)*
-   **The wrapper takes EXACTLY three positional arguments.** A fourth argument, a reordering, and a
-   **missing or empty `<reviewer>`** are each rejected; **missing or empty `<ticket>` or `<round>` is a hard
+   **The wrapper takes EXACTLY three positional arguments.** A fourth argument and a
+   **missing or empty `<reviewer>`** are each rejected — **not "a reordering", which is undetectable**
+   *(round 36, codex: round 35 removed that rule from the cell and the row and left it standing here, so §7
+   retained an impossible, uncovered requirement that its own §4.1 text explains cannot be implemented)*; **missing or empty `<ticket>` or `<round>` is a hard
    error** too. In every case the wrapper allocates nothing and exits
    non-zero *(round 34, codex: `S-WRAPPER` presented the interface **shape** and rejected only missing
    ticket/round, while the stricter arity and nonempty-reviewer rules lived **only inside `M5.11`** — which
@@ -1259,6 +1272,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    mandatory proof**. This is the inverse of the usual defect — the proof stricter than the requirement —
    and it is the same principle: **a rule that lives only in a cell is not a rule.**)* *(round 19, gemini: row 27 cited `S-WRAPPER` for this and `S-WRAPPER` did not state it, so a
    §7-only implementer would not build the check `M5.7` tests)*.
+   **It invokes `pty-capture.py` by a path resolved from its OWN location too** — not a literal — and
+   `M5.8`'s relocated copy makes that allocator distinguishable as well *(round 36, codex: the
+   self-relative contract covered only `context.sh`, so a wrapper could source the relocated copy's
+   sentinel library while invoking a **hard-coded allocator from the original checkout** — passing `M5.3`,
+   `M5.8` and `M5.12`, then breaking on installation or once that checkout is removed. Two executables are
+   resolved here and only one had the contract)*.
    **The lib directory it sources is `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}`, resolved from the
    script's OWN location** — `LIB="${UNLEASHED_LIB_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/../lib" && pwd)}"`.
    *(Round 14, gemini, High: round 13 wrote the fallback as `${CLAUDE_PLUGIN_ROOT}/scripts/lib`, but
@@ -1340,7 +1359,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
    Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
    record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
-10. **`S-RELEASE`** — Version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+10. **`S-RELEASE`** — **Clear `~/.local/state/unleashed-mail/review-transcripts/` of the 39 synthetic
+   fixtures two runaway review runs left there** (`COREDEV-9999`, `testhash`, `abc`, `h1`; rounds 25 and 36)
+   *(round 36: the isolation harness sandboxes the git worktree, **not `$HOME`**, so those runs escaped into
+   precisely the directory this plan allocates into. Inert today because nothing reads the path until this
+   ticket ships — which is exactly why it must be cleared before it does)*. Then version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
