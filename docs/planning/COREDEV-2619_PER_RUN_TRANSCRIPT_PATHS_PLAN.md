@@ -1,17 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 16** (gemini 2 High + 3 Medium, codex
-3 High + 2 Medium). Round 16's headline: **§6.0, the consistency check added in round 15, failed five of
-its own seven comparisons** — both arms, independently — because it demanded prose identity and defined no
-normalization. It is now canonical tokens with a stated whitespace rule, **run and reported at 9/9**.
-Round 10 returned a lone gemini `APPROVE`; **one approving arm is not a pass**, and no round has yet had
-both arms approve, let alone reproduce.
+**Status:** Planning — **NOT GATED. Latest completed round: 17** (gemini 3 High + 1 Medium, codex
+4 High + 3 Medium). Round 17's concordant finding: the round-16 reviewer-provenance fix reached §4.1 and
+**not** §7 — the fourth instance of that class — and codex showed §6.0's own flags token was **not
+site-specific**, so deleting the `.launch` requirement still left the check reporting success. §6.0 now has
+**11 site-specific tokens, run and reported at 11/11**. Round 10 returned a lone gemini `APPROVE`; **one
+approving arm is not a pass**, and no round has yet had both arms approve, let alone reproduce.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 16 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 17 findings applied; **not gated**)
 
 ---
 
@@ -216,7 +216,7 @@ two variables is not enough — a `$PWD/scripts/lib` fallback passes under the n
 violating the `$0` requirement. Only running from elsewhere discriminates the two.)* *(round 15, BOTH ARMS: M5.3 sets `UNLEASHED_LIB_DIR`, so it **bypasses the fallback
 entirely** — an implementation that kept the broken `${CLAUDE_PLUGIN_ROOT}` form passed it, and §6.1 row 30
 claimed the opposite. A seam-based test cannot prove the behaviour of the path the seam replaces.)*
-`[M5.9 reviewer-is-a-recipe-literal]` **And `<reviewer>` is asserted to be a HARD-CODED LITERAL in each
+`[M5.9 reviewer-is-a-recipe-literal]` **And `<reviewer>` is asserted to be a hard-coded literal in each
 skill's own recipe** — `gemini` in `skills/gemini-review`, `codex` in `skills/codex-review` — matching
 that skill's identity, never a value the skill infers or receives. The cell greps each recipe for the
 literal third argument and asserts a recipe passing a *computed* reviewer is rejected.
@@ -285,8 +285,9 @@ proves nothing, and this one is unrunnable as-written in most CI.)*
 `[M1.5 invalid-component]` **Plus, round 11 (gemini, High): the rejection grammar itself had NO mutation.** Every M1 case above
 concerns collision, parent mode/owner and leaf mode; an allocator that **omitted component validation
 entirely** passed all of them. M1 therefore includes an **invalid-component** case per rejected class —
-a component containing `/`, one containing NUL, an **empty** component, and the exact values `.` and
-`..` — each asserting the allocator **fails closed and allocates nothing**. *(A rejection that still
+a component containing `/`, an **empty** component, and the exact values `.` and `..`
+*(NUL is **not** among them — see `M1.8`: it cannot reach this argv surface, and round 16 removed it there
+while leaving it here, so the two halves of the same proof disagreed — round 17, codex)* — each asserting the allocator **fails closed and allocates nothing**. *(A rejection that still
 allocates is the fail-open direction and would not be caught by asserting the return code alone.)*
 
 `[M1.6 launch-collision]` `[M1.7 launch-payload]` **Plus, round 11 (BOTH arms, concordant): the `.launch` record's CREATION had no producer-side proof.**
@@ -328,15 +329,18 @@ marker discipline** `[M5.5 marker-line-discipline]`: a caller receiving **bare s
 `UNLEASHED_TRANSCRIPT=` prefix must fail**, **and so must a marker line carrying anything else on it** —
 leading text, a trailing comment, or a second path *(round 15, codex: the cell rejected only completely
 bare stdout while row 11 claims "alone on its line", so an emitter appending commentary to the marker line
-passed)*.
+passed)*. **And the POSITIVE: a correctly formed marker line is ACCEPTED** *(round 17, codex: the cell
+defined only negatives, so a caller that rejected **every** output satisfied all of them — the same
+rejection-only gap this campaign has hit before)*.
 
 `[M1.11 exhausted-collision]` **Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
 above observes an *outcome* — bytes intact, a different path returned — and a **check-then-create**
 implementation (`if os.path.exists(c): next_candidate()` followed by a plain `open`) produces **exactly
 those outcomes** in a single-threaded test while leaving the TOCTOU race wide open. Outcome observation
 cannot distinguish it; only **flag observation** can. M1 therefore **interposes on `os.open`** and asserts **`O_CREAT` and `O_EXCL` are present on the SAME
-call** (`O_CREAT|O_EXCL`) — `[M1.10 leaf-open-flags]` for the **leaf**, and `[M1.14 launch-open-flags]`
-for **`<path>.launch`**
+call** — `[M1.10 leaf-open-flags]` asserts the **leaf with `O_CREAT|O_EXCL` and mode `0o600`**, and
+`[M1.14 launch-open-flags]` asserts the **`.launch` record `O_CREAT|O_EXCL` on that same call, never
+truncating an existing one**
 *(round 15, both arms: one cell cited by two rows is not two proofs; the flags are two separate opens and
 each needs its own)* *(round 14, codex: asserting `O_EXCL` alone is passed
 by a check-then-`touch` followed by `os.open(…, O_EXCL)` — two calls, no atomic creation. The property is
@@ -437,9 +441,13 @@ table exposed two rows whose proof column I had filled in from memory and which 
   the **absence of the validator**, so M2 asserts no substitution-validation step exists in the skill
   pipeline; see §6.1 row 16.)* **The scan is bounded and the cell carries a mutation** *(round 16, codex:
   "no validator exists" named no scan surface, so nothing would fail when a differently-named one was
-  added)*: it enumerates `skills/*/SKILL.md` and `scripts/review/*`, asserts none contains a
-  substitution-validation step, and **adds one under a different name as a mutation**, requiring the cell
-  to fail.
+  added)*: it scans **the whole repository** — every `skills/**`, `scripts/**` and `.github/workflows/**` —
+  asserts none contains a substitution-validation step, and **adds one under a different name as a
+  mutation**, requiring the cell to fail. *(Round 17, codex: the scan had been restricted to
+  `skills/*/SKILL.md` and `scripts/review/*`, so adding the validator at the **natural** place —
+  `scripts/validate-plugin-assembly.py`, which is where every other plugin validator lives — would not have
+  failed the cell. An absence assertion is only as strong as the surface it scans, and a scope that excludes
+  the most likely location is not a scan.)*
 
 `[M2.8 preclean-command-absence]` `[M2.9 preclean-reinstate-must-fail]` `[M2.10 validator-absence]` **Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
 The gemini pre-clean is `rm -f "$OUT" "$OUT.captureid"` (`scripts/review/isolated-agy-review.sh:89`) —
@@ -539,6 +547,7 @@ also a fixed shared path. **Out of scope here, recorded so it is a decision and 
 > total was internally consistent, which is how a wrong inventory survives. The figures above are
 > `git ls-files | xargs grep -n` over the two literals only.)*
 
+`[M2.16 grants-deleted-not-rewritten]` **The two `rm -f` grants are DELETED, not rewritten** — the cell asserts neither skill's `allowed-tools` contains an `rm -f` grant at **any** path *(round 17, codex: row 15 covers the pre-clean COMMANDS and row 26 checks only that `/tmp` is absent, so rewriting a grant to a non-`/tmp` path passed both — `S-PRECLEAN` says delete)*.
 `[M2.15 no-base-argument]` **No caller passes --base, and the allocator REJECTS it if given** —
 asserted against the wrapper's emitted command line and by invoking the allocator with `--base` and
 requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
@@ -554,8 +563,8 @@ the merge base, not merely the current fields against each other *(round 14, cod
 `scripts/validate-version-sync.sh:40-56,119-120` checks current-field consistency and a matching CHANGELOG
 heading, so adding the ceiling text **without bumping anything** satisfies it. Row 20 was right that no
 existing cell proves a bump; the answer is to add one, not to keep the hole.)* **And the cell also asserts
-the CHANGELOG entry contains the §3 ceiling text, and does NOT contain the claim that the
-`${CLAUDE_PLUGIN_ROOT}` grants were inert** *(round 16, codex: `S-RELEASE` prohibits that claim and no
+the CHANGELOG entry contains the §3 ceiling text.** `[M2.17 no-inert-claim]` **A separate cell asserts the
+CHANGELOG does NOT claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert** *(round 16, codex: `S-RELEASE` prohibits that claim and no
 cell checked it, so a CHANGELOG carrying both the ceiling and the prohibited falsehood passed)* *(round 15, codex: row 20 claimed both the bump and the
 ceiling text while the cell asserted only the version comparison — omitting the ceiling still passed)*.
 
@@ -694,12 +703,21 @@ reported before every freeze.
 |---|---|---|
 | allocator command shape | `--allocate --repo-hash <H> --ticket <T> --round <R> --reviewer <name>` | §4.1 · `S-ALLOC` |
 | lib-dir resolution | `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}` | §4.1 · `S-WRAPPER` |
-| leaf + `.launch` open flags | `O_CREAT\|O_EXCL` | §4.1 · `S-ALLOC` |
+| leaf open flags | `leaf with `O_CREAT\|O_EXCL` and mode `0o600`` | §4.1 · `S-ALLOC` |
+| `.launch` open flags | `` `.launch` record `O_CREAT\|O_EXCL` on that same call, never truncating an existing one`` | §4.1 · `S-ALLOC` |
+| reviewer provenance | `hard-coded literal in each skill's own recipe` | §4.1 · `S-ALLOC` |
 | retry bound | `bounded at 8 attempts` | §4.1 · `S-ALLOC` |
 | path layout | `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt` | §4.1 · `S-ALLOC` |
 | base ownership | `No caller passes --base` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
 | freshness comparison | `st_mtime_ns`, `equal-or-newer is accepted` | §4.5 · `S-FRESH` |
 | base validation rules | `absolute, outside every protected root, and writable` | §4.1 · `S-ALLOC` |
+
+**Each token must be SITE-SPECIFIC, and that is a rule the round-16 version broke.** A single
+`O_CREAT|O_EXCL` token stood for both the leaf open and the `.launch` open, and it occurs six times in this
+document including historical commentary — so **deleting the `.launch` requirement entirely still left the
+check reporting success** *(round 17, codex)*. A presence check whose token appears for more than one
+reason cannot detect the removal of any one of them: **it can certify the exact divergence it exists to
+find.** Tokens are therefore phrased to occur only at the site they govern.
 
 **A divergence is a defect even when both wordings are individually defensible**, because §7 is the
 buildable-alone section and §4.x is the reasoned one: an implementer follows §7 and then fails a proof
@@ -760,7 +778,7 @@ requirement, and that is now visible rather than arguable.
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
-| 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` (round 15 — one cell cited by two rows is not two proofs) |
+| 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
 | 11 | path printed behind `UNLEASHED_TRANSCRIPT=`, **alone on its line** (`S-ALLOC`) | `[M5.5 marker-line-discipline]` (round 15 — the cell rejected only bare stdout, not a marker line with extra content) |
 | 11b | supplied ticket/round/reviewer appear in the returned path (`S-ALLOC`) | `[M1.9 component-echo]` |
@@ -783,9 +801,11 @@ requirement, and that is now visible rather than arguable.
 | 24 | the fixed directory/basename layout (§4.1, `S-ALLOC`) | `[M1.13 full-layout]` (round 14 — basename + "lands somewhere permitted" is passed by `<base>/transcripts/<repo-hash>/…`) |
 | 25 | the dispatch works under a pinned `dontAsk` permission mode (§4.1) | `[M2.1 dontAsk-runtime]` |
 | 26 | no `/tmp` literal survives in any `allowed-tools` line (`S-PRECLEAN`) | `[M2.3 no-tmp-literal]` |
-| 31 | no caller passes `--base`; the allocator **rejects** it (§4.1, `S-WRAPPER`) | `[M2.15 no-base-argument]` (round 15, codex — the single-owner decision was operative in two sections with no discriminating cell) |
+| 31 | no caller passes `--base`; the allocator **rejects** it (§4.1, `S-ALLOC`, `S-WRAPPER` — rejection made operative round 17) | `[M2.15 no-base-argument]` |
+| 20b | the CHANGELOG does **not** claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert (`S-RELEASE`) | `[M2.17 no-inert-claim]` (round 17, codex — `M2.14` tested it but no row listed it, violating §6.1's bidirectional rule) |
+| 15c | the two `rm -f` grants are **deleted, not rewritten** (`S-PRECLEAN`) | `[M2.16 grants-deleted-not-rewritten]` (round 17, codex — rewriting a grant to a non-`/tmp` path passed rows 15 and 26) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
-| 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-ALLOC`, §4.1) | `[M5.9 reviewer-is-a-recipe-literal]` (round 16, codex — the round-15 wording contradicted `S-WRAPPER`'s own three-argument interface) |
+| 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-ALLOC` — aligned round 17, §4.1) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30 | the wrapper resolves its lib dir from its **own location**, not `${CLAUDE_PLUGIN_ROOT}` (`S-WRAPPER`) | `[M5.8 production-fallback]` (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
 | 27 | ticket/round are required skill inputs; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
@@ -802,14 +822,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    (the grammar alone accepts both) — the separator `/` is the vector that would escape the intended
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
-   mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate the leaf
-   with `O_CREAT|O_EXCL` **and mode `0o600`** in a retry loop **bounded at 8 attempts**, after which it
+   mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
+   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, in a retry loop **bounded at 8 attempts**, after which it
    exits non-zero with a diagnostic naming the exhausted parent *(round 15, codex: `S-ALLOC` still said
    only "bounded" while §4.1 and row 8c specify 8 — a §7-only implementer had to invent the bound)*
    *(round 9, codex: this step said only
    `O_CREAT|O_EXCL`, so an implementer using the conventional `0o666` creation mode yields `0644` and
    **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **create the `<path>.launch` record
-   **`O_CREAT|O_EXCL` on that same call** *(round 15, codex: `S-ALLOC` said only `O_EXCL` while M1.14 and
+   **`.launch` record `O_CREAT|O_EXCL` on that same call, never truncating an existing one**
+   *(round 17, gemini: "never truncating" was in row 9 and `M1.6` but absent from the operative step, so the
+   table certified a §7 requirement that did not exist)* *(round 15, codex: `S-ALLOC` said only `O_EXCL` while M1.14 and
    row 9 require both, so a check-then-create implementation could follow §7 and fail its mandated proof)*,
    containing exactly the run ID as a single line of lowercase hex with no
    trailing content** *(round 11, codex: `S-ALLOC` said only "containing the run ID" and `S-FRESH` required
@@ -821,7 +843,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
    **absolute, outside every protected root, and writable**, else `$HOME/.local/state` judged by those
    same three rules; if neither validates, allocate nothing and exit non-zero with a diagnostic.
-   **No caller passes --base** *(round 16, both arms: `S-ALLOC` said only "validate the base (§4.1)", so a
+   **No caller passes --base, and the allocator REJECTS it if given** with a non-zero unknown-argument
+   exit *(round 17, gemini: §4.1 and `S-WRAPPER` said only "No caller passes --base" while `M2.15` tests
+   **rejection** — an implementer would omit the argument at the call sites and leave the parser accepting
+   it, failing the proof)* *(round 16, both arms: `S-ALLOC` said only "validate the base (§4.1)", so a
    §7-only implementer had to look up the three rules elsewhere — the buildable-alone requirement is not
    satisfied by a cross-reference)*.
    Print the path **on stdout, alone on its line, prefixed by the literal marker `UNLEASHED_TRANSCRIPT=`** —
@@ -831,10 +856,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **Command shape**, so the handoff is buildable from §7 alone:
    `pty-capture.py --allocate --repo-hash <H> --ticket <T> --round <R> --reviewer <name>` —
    **the identical shape §4.1 specifies** *(a §7 restatement that added or dropped an argument would be
-   the very drift these two sections exist to keep aligned; `--base` was removed from BOTH in round 14)*. Ticket, round and
+   the very drift these two sections exist to keep aligned; `--base` was removed from BOTH in round 14)*.
    **ticket and round are required inputs of both review skills**, passed by the wrapper, **never
-   inferred** — a skill that cannot determine them **fails closed** (§4.1). **`<reviewer>` is supplied by
-   the wrapper, not a skill input**: a review skill already knows which reviewer it is.
+   inferred** — a skill that cannot determine them **fails closed** (§4.1). **`<reviewer>` is a hard-coded
+   literal in each skill's own recipe** — `gemini` in `skills/gemini-review`, `codex` in
+   `skills/codex-review` — passed as the wrapper's third argument, **never derived**
+   *(round 17, BOTH ARMS: §7 still said "supplied by the wrapper, not a skill input", the round-16 wording
+   this replaced, so a §7-only implementation could **derive** the reviewer and pass it through the
+   three-argument interface — satisfying §7 and failing M5.9. Fourth time a correction has reached §4.x and
+   not §7, which is what §6.0 exists to catch; the reviewer contract is now one of its tokens.)*
+   *(An earlier edit also left the fragment "Ticket, round and" dangling here — removed.)*
    *(Round 13, codex: §7 listed reviewer among the skill inputs and §4.1 listed only ticket and round —
    two different input contracts for the same two skills.)* Add M1.
    *(Round 8 reproduction, gemini: this step omitted the grammar and the mis-moded-parent rule, both
