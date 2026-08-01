@@ -1,16 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 25 — the gemini arm VOIDED**: it *implemented*
-the plan instead of reviewing it (a COREDEV-2607 recurrence) and emitted no verdict, so the round fails
-closed. The isolation harness contained it completely — real tree clean, HEAD unchanged, plan digest
-identical, and none of the edits it reported exist in the repository. codex `REQUEST_CHANGES` (2 High +
-1 Medium), all applied. No round has yet had both arms approve.
+**Status:** Planning — **NOT GATED. Latest completed round: 26** — gemini `APPROVE`, codex
+`REQUEST_CHANGES` (2 High). **That is the third lone approval of this campaign (rounds 10, 21, 26); a lone
+approval is not a pass.** Both of round 25's fixes were incomplete and codex caught both. No round has yet
+had both arms approve, let alone reproduce at the same digest.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 25 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 26 findings applied; **not gated**)
 
 ---
 
@@ -486,8 +485,13 @@ one-side fix, in its newest form.)* Assert also that no `/tmp/` literal survives
 passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
 and they are of the two kinds this campaign keeps needing:
-- `[M2.4 xdg-valid-positive]` **Positive (must PASS):** a **valid** `XDG_STATE_HOME` is **used** — allocation lands beneath it and
+- `[M2.4 xdg-valid-positive]` **Positive (must PASS), with the fixture INITIALLY ABSENT:** a **valid**
+  `XDG_STATE_HOME` that **does not yet exist** is **created `0700` and used** — allocation lands beneath it and
   **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
+- `[M2.22 absent-fallback-positive]` **And an ABSENT `$HOME/.local/state` is created and used** when
+  `XDG_STATE_HOME` is unset *(round 26, codex: `M2.4` covers the XDG arm and `M2.5` only invalid fallbacks,
+  so an implementation accepting an absent XDG base while rejecting an absent fallback passed every stated
+  cell — and the fallback is the path a fresh host actually takes)*.
 - `[M2.19 fallback-diagnostic]` **On FALLING BACK, the diagnostic is asserted in every invalid class** —
   naming the rejected value and the reason, and distinct from the terminal message *(round 19, codex: the
   fallback diagnostic was required by §4.1 and by `M2.2`, absent from `S-ALLOC`, and carried by no row)*.
@@ -657,9 +661,15 @@ directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:322-328` �
 generates** the ID — as though it were a proof, and `scripts/tests/test_pty_capture.py` contains **no**
 case running two captures and requiring fresh sidecars. Citing production code as its own test is the
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
-`[M2.14 version-bump]` **The release check is IN-TREE and needs no git history**: it asserts the CHANGELOG's
-newest entry carries the same version as `plugin.json` **and that this differs from the entry immediately
-below it** — which proves a bump using only the checked-out files
+`[M2.14 version-bump]` **The release check is IN-TREE and PINS THE PRE-CHANGE VERSION**: the plan records
+the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **not** `2.6.6`
+**and** that the CHANGELOG's newest entry equals `plugin.json`
+*(round 26, codex, High: the round-25 predicate — newest entry matches `plugin.json` and differs from the
+one below — **is already satisfied by the unchanged tree**: `plugin.json` is `2.6.6`, `CHANGELOG.md:16` is
+`2.6.6`, `CHANGELOG.md:69` is `2.6.5`. An implementation could leave the version alone, append the ceiling
+text to the existing `2.6.6` entry, and pass. **I replaced an unrunnable check with a non-discriminating
+one** — the second successive failure on this same cell, and the reason a pinned literal is now used
+instead of a relationship between fields that already holds.)*
 *(round 25, codex, High: the round-14 form compared against "the pre-change version from the merge base",
 which **cannot run in the shipped workflow** — `.github/workflows/plugin-ci.yml` checks out with the
 default `fetch-depth: 1`, so on a PR the merge base is absent and on a push "merge base" does not identify
@@ -932,6 +942,7 @@ requirement, and that is now visible rather than arguable.
 |---|---|---|
 | 1 | base validated: absolute, outside the **enumerated** protected-root set, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — exercises `.claude`, `.claude/plugins/data/…`, an alias, and `.claude/worktrees` as a **positive** (round 19, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
+| 2b | an **absent** `$HOME/.local/state` fallback is created and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 26, codex — the fresh-host path) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+`, not `.`/`..`, for **all three** of ticket/round/reviewer (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
@@ -960,7 +971,7 @@ requirement, and that is now visible rather than arguable.
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
-| 20 | version **bump** + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 14 — `validate-version-sync.sh` compares current fields with each other and never against the pre-change version, so it cannot prove a bump; the cell now compares against the merge base) |
+| 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **14-cell** cross-product (round 15 — equality had been left out of it) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
 | 23 | `.captureid` stays freshly generated per run (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
@@ -1015,7 +1026,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
-   **absolute, outside every protected root, and writable**, else `$HOME/.local/state` judged by those
+   **absolute, outside every protected root, and writable** — where a base that **does not exist is valid
+   if its nearest existing ancestor is writable**, and the allocator then creates it `0700`
+   *(round 26, codex: §4.1 declared absent-but-creatable bases valid and `S-ALLOC` still demanded plain
+   writability, so a §7-only implementer would reject **every** absent base — including the default on a
+   fresh host)* — else `$HOME/.local/state` judged by those
    same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
    everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`. **That set
    is read from ONE place**, shared by the XDG and fallback validation paths
