@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 43** — both arms `REQUEST_CHANGES`, both
-findings applied. Round 43 also caught that **a round-42 fix I reported as applied had never landed** (the
-edit anchor did not match and the script reported success unconditionally); it is present now, verified by
-grep rather than by a script's own say-so.
+**Status:** Planning — **NOT GATED. Latest completed round: 44** — **codex `APPROVE` with no findings**;
+gemini `REQUEST_CHANGES` on two claims that are **both demonstrably false** (verified by the deletion test
+and by reading §6.0's own table). Nothing in the plan changed this round beyond recording that disproof.
+**A single approving arm is not a pass**, so the round does not gate.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 43 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 44 — codex APPROVE, gemini findings disproved; **not gated**)
 
 ---
 
@@ -1156,6 +1156,18 @@ text *before* §6.1, so a §7 citation under a stale name was invisible to it �
 the class of error it was written to catch.** It now groups occurrences by ID and asserts a single name.
 *(Seventh instance of a rename reaching some sites and not others; the first one a mechanical check
 missed.)*
+
+**Round 44, gemini — REJECTED on both counts; THIRD false masking claim.** It reported (a) the lib token
+occurring twice in §4.1 with "neither occurrence inside a note or a proof-cell span", and (b) two tokens
+claiming `S-WRAPPER` membership they lack. Both are checkable and both are wrong:
+- **(a)** the raw count is indeed 2, but one occurrence sits **inside `M5.3`'s cell span** and is stripped,
+  so the counted total is 1. The property that matters is deletion sensitivity, and it holds: deleting the
+  **operative** statement drops §4.1's count to **0** and fails the check, while deleting the cell-internal
+  one correctly changes nothing — evidence is not contract. *(Run the deletion test, not the raw grep.)*
+- **(b)** §6.0's table names **`§4.1 · S-ALLOC`** for both tokens, not `S-WRAPPER`. The claim misread the
+  table it was auditing.
+codex, independently and in the same round, reported all eleven tokens exactly-once with every governing
+occurrence deletion-sensitive and no third carrier — which the deletion test confirms.
 
 **Round 33, gemini High — REJECTED, and this is the SECOND time the same claim failed the same check.**
 It reported the `bounded at 8 attempts` token occurring twice in §4.1 "outside of proof cells and round
