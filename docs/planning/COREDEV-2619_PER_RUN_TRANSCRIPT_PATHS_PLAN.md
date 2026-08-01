@@ -273,7 +273,13 @@ what §4.1's "never inferred" forbids)* *(round 14, gemini: round 13 recorded th
 one is a two-line test)*.
 `[M5.8 production-fallback]` **And the PRODUCTION path is exercised separately**: run the wrapper with
 **both `UNLEASHED_LIB_DIR` and `CLAUDE_PLUGIN_ROOT` unset**, **from a working directory outside the repo**
-(`cd /`), and require it to resolve its lib dir and allocate successfully *(round 16, codex: unsetting the
+(`cd /`), **and from a COPY of the tree at a different absolute path**, requiring it to resolve its lib dir
+and allocate successfully in both *(round 31, codex, High: `cd /` alone proves only that resolution
+*succeeds*, not that it is `$0`-based — a wrapper hardcoding
+`LIB="${UNLEASHED_LIB_DIR:-/absolute/current-checkout/scripts/lib}"` passes `M5.3`, `M5.4` **and** `M5.8`
+on this checkout and breaks the moment the plugin is installed or relocated. **Relocation is the only
+observation that separates `$0` from a literal.** This is the plan's own mechanism-vs-outcome rule applied
+to a cell I wrote after stating it)* *(round 16, codex: unsetting the
 two variables is not enough — a `$PWD/scripts/lib` fallback passes under the natural test CWD while
 violating the `$0` requirement. Only running from elsewhere discriminates the two.)* *(round 15, BOTH ARMS: M5.3 sets `UNLEASHED_LIB_DIR`, so it **bypasses the fallback
 entirely** — an implementation that kept the broken `${CLAUDE_PLUGIN_ROOT}` form passed it, and §6.1 row 30
@@ -376,7 +382,15 @@ space, `@`, `:` or any other out-of-class byte — passed every case while viola
 added five more characters, is beaten by the same argument with `+`, `=`, comma or tab *(round 14, codex:
 "a blacklist of those ten still accepts numerous other characters outside the class")*. **Enumeration
 cannot establish a class; only the complement can.** M1 therefore sweeps the **complement
-programmatically**, **parameterized across all three inputs — `ticket`, `round` AND `reviewer`**
+programmatically**, **anchored to the FULL string, at every POSITION, and beyond ASCII**
+*(round 31, codex, High, verified by execution: the cell varied the invalid byte and the input field but
+never its **position** and never required **full-string** matching — so an unanchored
+`re.match(r"[A-Za-z0-9._-]+", value)` plus the named empty/`.`/`..` checks passes every specimen while
+**accepting `A/../../escape`**, which is a real path escape. And a `0x01–0xFF` byte sweep misses higher
+code points that reach `argv` unchanged. So: each invalid character is placed **leading, medial and
+trailing**; a **valid-prefix/invalid-remainder** specimen such as `A/../../escape` must be **rejected**,
+which only full-string anchoring achieves; and the sweep includes **non-ASCII code points** above `U+00FF`)*,
+**parameterized across all three inputs — `ticket`, `round` AND `reviewer`**
 *(round 21, codex: the cells mutated only "a component", so an implementation validating just the exercised
 position passed while accepting invalid values in the other two — the requirement is stated for three
 inputs and was proved for one)*: for every byte `0x01–0xFF` **not** in `[A-Za-z0-9._-]`, a component
@@ -702,8 +716,11 @@ asserted against the wrapper's emitted command line and by invoking the allocato
 requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
 operative in §4.1 and `S-WRAPPER` but had **no discriminating cell** — a wrapper that still derived and
 passed `--base` to an allocator that accepted it produced identical M2/M5 outcomes)*.
-`[M2.13 captureid-freshness]` **Two successive captures produce DISTINCT `.captureid` sidecars**, asserted
-directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:322-328` — the **implementation that
+`[M2.13 captureid-freshness]` **Two successive captures produce DISTINCT `.captureid` sidecars — in BOTH
+the allocated and non-allocated modes** *(round 31, codex: the cell said only "two successive captures",
+so an implementation generating fresh sidecars in the exercised mode and reusing them in the other passed
+while violating row 23's "per run" — the quantifier rule, applied to the two modes `S-CAPTURE` creates)*,
+asserted directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:322-328` — the **implementation that
 generates** the ID — as though it were a proof, and `scripts/tests/test_pty_capture.py` contains **no**
 case running two captures and requiring fresh sidecars. Citing production code as its own test is the
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
@@ -1025,7 +1042,7 @@ requirement, and that is now visible rather than arguable.
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
-| 4 | component grammar `[A-Za-z0-9._-]+`, not `.`/`..`, for **all three** of ticket/round/reviewer (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
+| 4 | component grammar `[A-Za-z0-9._-]+` **full-string anchored**, not `.`/`..`, for **all three** inputs (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
@@ -1058,7 +1075,7 @@ requirement, and that is now visible rather than arguable.
 | 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **14-cell** cross-product (round 15 — equality had been left out of it) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
-| 23 | `.captureid` stays freshly generated per run (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
+| 23 | `.captureid` stays freshly generated per run, in **both** capture modes (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
 | 24 | the fixed directory/basename layout (§4.1, `S-ALLOC`) | `[M1.13 full-layout]` (round 14 — basename + "lands somewhere permitted" is passed by `<base>/transcripts/<repo-hash>/…`) |
 | 25 | the dispatch works under a pinned `dontAsk` permission mode (§4.1) | `[M2.1 dontAsk-runtime]` |
 | 26 | no `/tmp` literal survives in any `allowed-tools` line (`S-PRECLEAN`) | `[M2.3 no-tmp-literal]` |
@@ -1075,7 +1092,7 @@ requirement, and that is now visible rather than arguable.
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
-| 30 | the wrapper resolves its lib dir from its **own location**, not `${CLAUDE_PLUGIN_ROOT}` (`S-WRAPPER`) | `[M5.8 production-fallback]` (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
+| 30 | the wrapper resolves its lib dir from its **own location** — survives RELOCATION (`S-WRAPPER`) | `[M5.8 production-fallback]` — run from `cd /` **and from a relocated copy**, which a hardcoded absolute path fails (round 31, codex) (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
 | 27 | ticket/round are required inputs of **both** review skills; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` — parameterized over both recipes (round 30, codex) (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
 ## 7. Implementation order
