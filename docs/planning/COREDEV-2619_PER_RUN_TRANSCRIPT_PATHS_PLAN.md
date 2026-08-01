@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 37** — both arms `REQUEST_CHANGES`, six
-findings, all applied; no `$HOME` leak and the gemini arm reviewed properly after two runaway rounds.
-Round 29's double approval failed its reproduction at the byte-identical digest; **a lone approval is not a
-pass, and a double approval triggers a reproduction rather than gating.**
+**Status:** Planning — **NOT GATED. Latest completed round: 40** — gemini `APPROVE` (ninth lone approval),
+codex `REQUEST_CHANGES` (1 High + 1 Medium), both applied. Round 29's double approval failed its
+reproduction at the byte-identical digest; **a lone approval is not a pass, and a double approval triggers a
+reproduction rather than gating.**
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 37 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 40 findings applied; **not gated**)
 
 ---
 
@@ -348,11 +348,17 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
   threads into the capture target, the synthesis input and the artifact's `transcriptPath`. A marker
   rather than bare stdout, so a diagnostic line cannot be mistaken for the path.
 
-**Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.1 sentinel-collision]` `[M1.2 parent-0700]` Two random basenames are
+**Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.1 sentinel-collision]` Two random basenames are
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
 could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
 (seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
-return a *different* path, and **leave the sentinel's bytes untouched**. Assert the parent is `0700`. *(Round 6: an
+return a *different* path, and **leave the sentinel's bytes untouched**. `[M1.2 parent-0700]` **And a
+SEPARATE case with the transcript parent ABSENT asserts the allocator CREATES it `0700`**
+*(round 40, codex: this tag sat on the sentinel-collision fixture, and pre-creating the candidate necessarily
+pre-creates its parent — so asserting the parent's final mode proved nothing about creation. An allocator
+that creates new parents with the default `0755`, while correctly rejecting pre-existing mis-moded ones,
+passed both `M1.2` and `M1.3`. `M2.4`/`M2.22` cover the **base** directory, not this nested
+`<repo-hash>/` parent, so the class was not swept either)*. *(Round 6: an
 attacker-owned-ancestor mutation was specified in round 5 and is **withdrawn** with the claim it
 defended — see §3.)*
 Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
@@ -450,8 +456,13 @@ containing it **must be rejected** — the test iterates the range rather than l
 required rejecting a NUL byte, but `execve` truncates `argv` at NUL and Python's `subprocess` raises
 `ValueError: embedded null byte` before the call is made — verified by execution. The driver cannot
 construct the invocation, so the case could never run, and the mutation was unimplementable as written.
-Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And an acceptance case per in-class family (letter, digit, `.`, `_`, `-`), **parameterized across all
-three inputs exactly as the sweep is**, asserts a valid component is **not** rejected *(round 22, codex:
+Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And the **VALID class is swept exhaustively too** — every one of the 64 characters in `[A-Za-z0-9._-]` is
+accepted, in leading, medial and trailing position, **parameterized across all three inputs exactly as the
+complement sweep is** *(round 40, codex, High: one acceptance case **per family** does not prove the positive
+half — a range typo that rejects an unchosen valid letter or digit passes every negative complement case and
+every chosen representative, while row 4 claimed full grammar coverage. **The complement was swept and the
+class was sampled**; both halves of a grammar need the same treatment, and in-process both are trivially
+cheap)* *(round 22, codex:
 the sweep was parameterized in round 21 and its positive half still said only "a valid component", so a
 validator accepting `.`/`_`/`-` in the exercised position while rejecting them in another passed every
 stated case — a fix applied to one half of a proof is the same defect as one applied to one section)*. *(The acceptance half matters as much: an
@@ -1176,8 +1187,8 @@ requirement, and that is now visible rather than arguable.
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
-| 4 | component grammar `[A-Za-z0-9._-]+` **full-string anchored**, not `.`/`..`, for **all three** inputs (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
-| 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
+| 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all 64 valid chars accepted (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
+| 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
