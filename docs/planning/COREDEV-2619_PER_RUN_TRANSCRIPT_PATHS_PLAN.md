@@ -639,7 +639,12 @@ M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean
   deletion while the cell proved only invisibility to a literal scan, and those are different facts)* —
 `isolated-agy-review.sh:89` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
 strings; and **(b)** a runtime mutation — **reinstate the pre-clean against an allocated path and require
-the gate to FAIL, with EVERY target open interposed and asserted to include no creating retry**
+the gate to FAIL, with EVERY target open observed IN-PROCESS (importing the writer) and asserted to
+include no creating retry** — **not** by interposing across the skill dispatch, which spans Bash→Python and
+cannot be patched from the test process *(round 37, applying gemini's own finding to the fourth cell it
+also hits: rounds 35 and 37 removed this impossibility from `M2.23`/`M2.24` and then `M2.20`/`M5.12`/`M2.15`,
+and `M2.9` still carried it. **Fixing a class means sweeping every instance in the same edit** — the defect
+this campaign has repeated more than any other, here caught by re-reading rather than by a reviewer)*
 *(round 30, codex, High: requiring only "the gate fails" is passed by a writer that catches `ENOENT`,
 **retries with a creating open**, and then returns non-zero for its own reasons — `M2.11` passes on the
 normal existing-leaf path and `M2.9` sees the failure it expected. The requirement is that the missing leaf
