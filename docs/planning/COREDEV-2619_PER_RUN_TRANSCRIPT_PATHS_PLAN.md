@@ -1,17 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 19** (gemini 2 High, codex 3 High + 1 Medium).
-Both arms independently **verified §6.0 is genuinely deletion-sensitive** — 10/10, exactly one occurrence
-per named section, zero after deleting each governing occurrence — and both verified the 56-cell
-bidirectional mapping. The remaining findings were scope and propagation, not mechanism. Round 10 returned
-a lone gemini `APPROVE`; **one approving arm is not a pass**, and no round has yet had both arms approve,
-let alone reproduce.
+**Status:** Planning — **NOT GATED. Latest completed round: 20** (gemini 2 Medium — *"nothing blocks
+implementation"*; codex 3 High + 1 Medium + 1 Low). Both arms again verified §6.0's deletion sensitivity and
+the bidirectional cell mapping. Round 10 returned a lone gemini `APPROVE`; **one approving arm is not a
+pass**, and no round has yet had both arms approve, let alone reproduce.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 19 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 20 findings applied; **not gated**)
 
 ---
 
@@ -226,11 +224,14 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 option in §4.1's shape present and spelled as specified *(round 18, codex: §6.0 compares two plan
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
-`[M5.13 existing-callers-updated]` **All FOUR callers invoke the review skills with ticket and round** —
-`create-feature-plan`, `AGENT_CONTRACTS` §2, `brainstorm`, and `modern-standards-planner` — asserted
-against those files, **and the assertion enumerates them by path so a fifth caller added later fails the
-cell** *(round 19, codex: round 18 listed two of the four; the mandatory brainstorm workflow was among the
-ones missed)*.
+`[M5.13 callers-scan]` **A repo-wide SCAN finds every review-skill reference and requires each to carry
+`--ticket` and `--round`, or to sit on a committed exemption list** *(round 20, codex: enumerations were
+claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
+by scan. The cell now supplies the **discovery mechanism** a list cannot.)*
+`[M5.14 invocation-syntax]` **And the flags are asserted BY NAME** — `--ticket <T> --round <N>` — not merely
+that the values reach the skill *(round 20, codex: `S-CALLERS` made the syntax operative while `M5.13` and
+row 32 asserted only that ticket and round are passed, so a positional or differently-named-flag
+implementation passed every cell)*.
 `[M5.7 missing-input-fails-closed]` **And the wrapper invoked without a ticket or round must FAIL CLOSED**,
 allocating nothing and exiting non-zero — **and, at the SKILL level, a recipe that derives ticket or round
 from context instead of receiving them is rejected** *(round 16, codex: the wrapper-level case is passed by
@@ -438,8 +439,12 @@ are removed because allocation makes pre-cleaning unnecessary, not because they 
 workflow was denied): dispatch a real skill invocation and assert the capture lands. **And exercise the XDG
 validation itself** *(round 4, codex: an implementation that blindly trusts a set `XDG_STATE_HOME`
 passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
-`.claude`** — including a canonical/symlink alias — and **unwritable**, and require the fallback **plus
-its diagnostic** in each. Assert also that no `/tmp/` literal survives in any `allowed-tools` line.
+`.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, and
+**unwritable**, and require the fallback **plus its diagnostic** in each. **And `.claude/worktrees` is a
+POSITIVE — it must be ACCEPTED**, being the documented exception *(round 20, codex: row 1 claimed the cell
+exercised `plugins/data`, an alias and the `worktrees` positive; the cell specified none of them, so an
+allocator rejecting **all** of `.claude` passed. **I had edited the row and not the cell** — the same
+one-side fix, in its newest form.)* Assert also that no `/tmp/` literal survives in any `allowed-tools` line.
 **Plus, round 9 (codex): every case above is an INVALID value that falls back, so M2 as written was
 passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
@@ -477,7 +482,9 @@ table exposed two rows whose proof column I had filled in from memory and which 
   *(Round 12, codex: that presence assertion **still does not prove the requirement** — a substitution
   validator that is added but happens to **accept** `${CLAUDE_PLUGIN_ROOT}` passes it. The requirement is
   the **absence of the validator**, so M2 asserts no substitution-validation step exists in the skill
-  pipeline; see §6.1 row 16.)* **The scan is bounded and the cell carries a mutation** *(round 16, codex:
+  pipeline; see §6.1 row 16.)* `[M2.10 validator-absence]` **The scan is bounded and the cell carries a
+  mutation** *(round 20, gemini: this tag had sat on the pre-clean cluster three paragraphs away — a tag
+  must sit on the text that defines it, or the bidirectional check passes while the cell is unfindable)* *(round 16, codex:
   "no validator exists" named no scan surface, so nothing would fail when a differently-named one was
   added)*: it scans repo-wide for **the withdrawn validator specifically** — a step that validates or rewrites
   `${CLAUDE_PLUGIN_ROOT}` **inside `allowed-tools` lines** — and **adds one under a different name as a
@@ -495,7 +502,7 @@ table exposed two rows whose proof column I had filled in from memory and which 
   failed the cell. An absence assertion is only as strong as the surface it scans, and a scope that excludes
   the most likely location is not a scan.)*
 
-`[M2.8 preclean-command-absence]` `[M2.9 preclean-reinstate-must-fail]` `[M2.10 validator-absence]` **Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
+`[M2.8 preclean-command-absence]` `[M2.9 preclean-reinstate-must-fail]` **Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
 The gemini pre-clean is `rm -f "$OUT" "$OUT.captureid"` (`scripts/review/isolated-agy-review.sh:89`) —
 it **contains no `/tmp` literal**, so §6.1 row 15 cited a proof that could never fail on it. Worse, the
 failure is **silent end-to-end**: `pty-capture.py` opens the transcript with `O_CREAT|O_TRUNC`
@@ -538,6 +545,9 @@ contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW`, wi
 retained. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
 mutation discriminated one flag and the requirement names two.)*
+`[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
+both the recipes and the writer *(round 20, codex: `S-CAPTURE` made the flag operative while `M2.11` proved
+only the resulting `os.open` flags, so renaming it consistently on both sides passed the whole proof set)*.
 `[M2.12 nonallocated-mode-positive]` **And the POSITIVE for the other mode**: a non-allocated call still
 **creates its target if absent**, so the change is a mode and not a global regression — the requirement
 `S-CAPTURE` states and nothing tested.
@@ -758,6 +768,7 @@ reported before every freeze.
 | base ownership | `No caller passes --base, and the allocator REJECTS it if given` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
 | freshness comparison | `a transcript strictly OLDER than its `.launch` record is REJECTED; equal-or-newer is accepted` | §4.5 · `S-FRESH` |
 | base validation rules | `absolute, outside every protected root, and writable` | §4.1 · `S-ALLOC` |
+| protected-root set | `` `.claude` and everything beneath it **except `.claude/worktrees`** `` | §4.1 · `S-ALLOC` |
 
 **The check is EXACTLY-ONCE, over text with round-notes stripped — round 18, both arms.** Presence is not
 deletion sensitivity. `No caller passes --base` occurred **twice** inside `S-ALLOC`: once as the operative
@@ -811,6 +822,15 @@ must say why — and "not machine-checkable" is a claim that must itself be chec
 untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
 the allocated path" are different claims, and only the second was ever the requirement.
 
+**Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** `M2.10`'s tag had
+drifted onto the pre-clean cluster three paragraphs from its own mutation — the bidirectional check still
+passed, because it verifies that a tag exists and is cited, not that it labels the right sentence. *(Five
+`M2.x` cells added in rounds 17–19 also sit at the end of §4.3 rather than beside the mechanisms they
+prove. That is a **readability** defect, not a correctness one — each is defined exactly once and cited
+exactly once — and it is recorded here rather than fixed by moving text mid-campaign: an attempt to
+relocate them consumed two section headings and duplicated four cells, which is a worse failure than the
+one being fixed. It is a cleanup for the implementation commit, tracked in `S-RELEASE`.)*
+
 **Convention (round 13, corrected round 14): every row cites either a TAGGED CELL** — of the form
 `[M<n>.<k> short-name]`, placed verbatim in the proof text — **or a NAMED EXISTING TEST** with `file:line`, for
 requirements that are pre-existing regressions rather than new proofs. **Row 22 is the only instance of the
@@ -846,6 +866,7 @@ requirement, and that is now visible rather than arguable.
 | 14 | allocated path threaded to **`isolated-agy-review.sh` and the codex recipe** (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` + `[M2.9 preclean-reinstate-must-fail]` (round 15, codex — the row also claimed **grant** deletion, which these cells do not carry; grants are row 26) |
+| 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**, `O_NOFOLLOW` + `0600` retained (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
@@ -868,7 +889,8 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is exactly `<ticket> <round> <reviewer>` (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` (round 18, gemini) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | the existing callers pass ticket and round (`S-CALLERS`) | `[M5.13 existing-callers-updated]` (round 18, codex — a fail-closed rule is a compatibility change to every caller) |
+| 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-ALLOC` — aligned round 17, §4.1) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30 | the wrapper resolves its lib dir from its **own location**, not `${CLAUDE_PLUGIN_ROOT}` (`S-WRAPPER`) | `[M5.8 production-fallback]` (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
@@ -907,7 +929,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
    **absolute, outside every protected root, and writable**, else `$HOME/.local/state` judged by those
-   same three rules. **On falling back** (XDG rejected, fallback valid) it emits a diagnostic naming the
+   same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
+   everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`
+   *(round 20, codex: `S-ALLOC` said "every protected root" while the enumeration lived only in §4.1 — the
+   sixth time a contract has been stated in §4.x and left as a bare cross-reference in §7)*.
+   **On falling back** (XDG rejected, fallback valid) it emits a diagnostic naming the
    rejected value and the reason; **if neither validates** it allocates nothing and exits non-zero with a
    diagnostic naming the rejected value and the reason *(round 19, codex: `S-ALLOC` specified a diagnostic
    only for the terminal case while §4.1 and `M2.2` require one on fallback, and asked only for "a
@@ -967,14 +993,19 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`), because the codex recipe runs Python and the
    hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
-4. **`S-CALLERS`** — **Thread ticket and round through EVERY existing production caller.** The review
-   skills' invocation syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**,
-   defined here so it need not be invented. **All four known callers** invoke them today with neither
-   argument and must be updated: `skills/create-feature-plan/SKILL.md:81`, `AGENT_CONTRACTS.md:99` (§2
-   step 1), `skills/brainstorm/SKILL.md:178`, and `agents/modern-standards-planner.md:41-42`.
-   *(Round 19, codex: round 18 named only the first two, and the other two — including the **mandatory
-   brainstorm workflow** — would have failed closed under `M5.7`. An enumeration that is not exhaustive is
-   a worse failure than none, because it looks complete.)*
+4. **`S-CALLERS`** — **Thread ticket and round through EVERY invocation site, discovered by SCAN.**
+   The syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**, defined here
+   so it need not be invented. **The site set is discovered, not enumerated:** `M5.13` greps the repo for
+   review-skill references and requires each either to carry both flags or to sit on an explicit committed
+   exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
+   later fails the cell; an exemption is a visible diff.
+   *(Round 20, codex: round 19's "all four known callers" was **still not exhaustive** —
+   `skills/implement/SKILL.md:161` and `:172` also instruct running both skills, and a scan finds
+   references across **six** files. **Twice an enumeration was claimed complete and was wrong**, which is
+   the whole argument for a discovery mechanism: a list is a snapshot, and this one has been wrong every
+   time it was written.)*
+   Known sites when written: `create-feature-plan/SKILL.md:81`, `AGENT_CONTRACTS.md:99-100`,
+   `brainstorm/SKILL.md:178`, `modern-standards-planner.md:42-43`, `implement/SKILL.md:161`, `:172`.
    *(Round 18, codex, High: `M5.7` makes a skill that cannot determine ticket/round **fail closed**, so
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
