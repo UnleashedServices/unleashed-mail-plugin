@@ -544,6 +544,13 @@ validation itself** *(round 4, codex: an implementation that blindly trusts a se
 passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relative**, **inside
 `.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, and
 **unwritable**, and require the fallback **plus its diagnostic** in each.
+**Plus a MUST-PASS SAFE SYMLINK, on both arms** — an `XDG_STATE_HOME` (and a `$HOME`-derived fallback)
+that is a **symlink resolving to a permitted, writable location** must be **ACCEPTED**
+*(round 39, codex, High: every symlink case in this cell aliases *into* a protected root, and the positive
+fixture is initially absent and so is not a symlink at all — so a validator that simply **rejects every
+symlink** rather than resolving it passes every stated case while breaking a perfectly ordinary setup.
+Canonical resolution is "follow, then judge"; only a safe symlink that must be accepted distinguishes it
+from "refuse")*.
 **Plus the SIBLING-PREFIX pair, which separates component containment from a string prefix**
 *(round 27, codex; verified by execution): a validator that rejects paths starting with `$HOME/.claude`
 except those starting with `$HOME/.claude/worktrees` passes **every** case above, yet **accepts
@@ -719,10 +726,19 @@ behaviour together *(round 22, codex: `M2.2` proves only behaviour, so two separ
 passed it)*.
 `[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
 both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
-on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by
-replacing the `pty-capture.py` AT THE RESOLVED LOCATION with a RECORDING SHIM** — in `M5.8`'s relocated copy,
-whose `scripts/` directory is exactly what the wrapper's `$0`-relative resolution targets — a stub that
-appends its `argv` to a file and exits, after which the recorded `argv` must contain `--allocated`
+on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by TWO DIFFERENT mechanisms, because the two paths are not alike**
+*(round 39, codex, High: `scripts/review/isolated-agy-review.sh` creates **its own detached worktree** from
+the reviewed commit and invokes `$TREE/scripts/pty-capture.py` inside it — verified at `:53-56,90` — so a
+shim placed in `M5.8`'s relocated copy sits in a different directory entirely and can never intercept it.
+One mechanism cannot cover both, and asserting otherwise is how the class stayed unswept)*:
+- **the wrapper/codex path** — replace `pty-capture.py` **at the resolved location** in `M5.8`'s relocated
+  copy, whose `scripts/` directory is exactly what `$0`-relative resolution targets, with a stub that
+  appends its `argv` to a file; the recorded `argv` must contain `--allocated`;
+- **the nested gemini path** — a **source assertion** that `isolated-agy-review.sh` passes `--allocated` on
+  its `pty-capture.py` invocation, **plus a runtime consequence**: with the leaf pre-allocated and the
+  pre-clean removed, the capture must land in **that exact leaf**, and must **fail** when the leaf is
+  absent — an end-to-end observation that only holds if the flag was genuinely honoured, and one that needs
+  no interception at all
 *(round 38, codex, High, verified by execution: the round-37 wording put the shim **on `PATH`**, but
 `S-WRAPPER` requires invoking the allocator by an **explicit self-relative path**, and an explicit path
 **bypasses `PATH` lookup entirely** — measured, the real executable ran and the shim never fired. The two
@@ -911,7 +927,12 @@ absent-record rejection. **codex wrote that §7 requirement itself in round 7 an
 set that never tested it** — which is precisely why the reproduction run exists.
 `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` **Plus the MISMATCHED-RECORD mutation (round 7, gemini):** write a `.launch` whose payload is a
 syntactically valid but *different* run ID from the one in the transcript's filename — the gate must
-**fail**. Also cover **empty** and **malformed** payloads. *(§4.5's prose announced "M4 gains a
+**fail**. Also cover **empty** and **malformed** payloads — **including a payload that is malformed in the SAME way
+as the filename's ID, so the two still match** *(round 39, codex: the contract requires *both* a
+syntactically valid lowercase-hex ID *and* equality with the filename's, but the cell said only "malformed",
+so a verifier that skipped syntax validation and merely compared the two values rejected every ordinary
+malformed, empty and mismatched fixture and passed the whole matrix. Equality cannot stand in for
+validity)*. *(§4.5's prose announced "M4 gains a
 mismatched-record mutation" and the Proof defined only the timing cases, so an implementation that never
 read the payload passed. The arms disagreed here — codex reported the mutation present; it was not.)*
 
@@ -1151,7 +1172,7 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | base validated: absolute, **canonically resolved**, outside the protected-root set by path COMPONENT, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
+| 1 | base validated: absolute, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
@@ -1177,7 +1198,7 @@ requirement, and that is now visible rather than arguable.
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
-| 15e | `--allocated` is named **and FORWARDED** to `pty-capture.py` on **both** production paths (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — argv captured by a **recording shim** on `PATH` (round 37, gemini) |
+| 15e | `--allocated` is named **and FORWARDED** to `pty-capture.py` on **both** production paths (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
