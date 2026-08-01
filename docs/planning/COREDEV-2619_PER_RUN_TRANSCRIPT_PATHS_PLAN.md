@@ -1,15 +1,16 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 20** (gemini 2 Medium — *"nothing blocks
-implementation"*; codex 3 High + 1 Medium + 1 Low). Both arms again verified §6.0's deletion sensitivity and
-the bidirectional cell mapping. Round 10 returned a lone gemini `APPROVE`; **one approving arm is not a
-pass**, and no round has yet had both arms approve, let alone reproduce.
+**Status:** Planning — **NOT GATED. Latest completed round: 21** — **gemini `APPROVE`**, codex
+`REQUEST_CHANGES` (3 Medium + 1 Low), codex noting *"no production mechanism blocks implementation … the
+requested changes are confined to mutation and coverage integrity."* **That is the second lone approval
+(round 10 was the first) and a lone approval is not a pass.** No round has yet had both arms approve, let
+alone reproduce at the same digest.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 20 findings applied; **not gated**)
+**Last Updated:** 2026-07-31 (round 21 findings applied; **not gated**)
 
 ---
 
@@ -173,7 +174,7 @@ of the path independently, which is the drift this design exists to remove.
 input contract** — it reads two fixed names. The allocated path is therefore threaded explicitly:
 `--reviewer gemini=<STATUS>:<allocated-path>`, and the skill takes the two paths as inputs.
 
-**Proof — M5 (new, round 3): the INTEGRATION mutation M1 cannot give.** `[M5.1 propagation]` `[M5.2 re-derivation]` A correct allocator whose
+**Proof — M5 (new, round 3): the INTEGRATION mutation M1 cannot give.** `[M5.1 propagation]` `[M5.2 re-derivation]` `[M5.15 artifact-transcriptpath]` A correct allocator whose
 callers ignore its stdout and derive a fixed basename **passes M1**. So M5 drives both real paths — the
 codex recipe and `isolated-agy-review.sh` — and asserts the **emitted** allocation is the capture
 target, the synthesis input, **and** the artifact's `transcriptPath`. Mutate a caller to re-derive the
@@ -318,7 +319,8 @@ proves nothing, and this one is unrunnable as-written in most CI.)*
 `[M1.5 invalid-component]` **Plus, round 11 (gemini, High): the rejection grammar itself had NO mutation.** Every M1 case above
 concerns collision, parent mode/owner and leaf mode; an allocator that **omitted component validation
 entirely** passed all of them. M1 therefore includes an **invalid-component** case per rejected class —
-a component containing `/`, an **empty** component, and the exact values `.` and `..`
+for **each of `ticket`, `round` and `reviewer`**: a component containing `/`, an **empty** component,
+and the exact values `.` and `..`
 *(NUL is **not** among them — see `M1.8`: it cannot reach this argv surface, and round 16 removed it there
 while leaving it here, so the two halves of the same proof disagreed — round 17, codex)* — each asserting the allocator **fails closed and allocates nothing**. *(A rejection that still
 allocates is the fail-open direction and would not be caught by asserting the return code alone.)*
@@ -343,8 +345,11 @@ space, `@`, `:` or any other out-of-class byte — passed every case while viola
 added five more characters, is beaten by the same argument with `+`, `=`, comma or tab *(round 14, codex:
 "a blacklist of those ten still accepts numerous other characters outside the class")*. **Enumeration
 cannot establish a class; only the complement can.** M1 therefore sweeps the **complement
-programmatically**: for every byte `0x01–0xFF` **not** in `[A-Za-z0-9._-]`, a component containing it
-**must be rejected** — the test iterates the range rather than listing members — plus empty, `.` and
+programmatically**, **parameterized across all three inputs — `ticket`, `round` AND `reviewer`**
+*(round 21, codex: the cells mutated only "a component", so an implementation validating just the exercised
+position passed while accepting invalid values in the other two — the requirement is stated for three
+inputs and was proved for one)*: for every byte `0x01–0xFF` **not** in `[A-Za-z0-9._-]`, a component
+containing it **must be rejected** — the test iterates the range rather than listing members — plus empty, `.` and
 `..` as named cases.
 **NUL is excluded, because it is not reachable through this surface** *(round 16, gemini, High: the sweep
 required rejecting a NUL byte, but `execve` truncates `argv` at NUL and Python's `subprocess` raises
@@ -822,6 +827,14 @@ must say why — and "not machine-checkable" is a claim that must itself be chec
 untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
 the allocated path" are different claims, and only the second was ever the requirement.
 
+**Name-consistency rule (round 21, codex): one tag ID carries exactly ONE name, everywhere.** `M5.13` was
+renamed `existing-callers-updated` → `callers-scan` in the proof and the table while §7 kept the old name,
+so the document held **59 tag occurrences for 58 cells**. My verification counted definitions only in the
+text *before* §6.1, so a §7 citation under a stale name was invisible to it — **the checker could not see
+the class of error it was written to catch.** It now groups occurrences by ID and asserts a single name.
+*(Seventh instance of a rename reaching some sites and not others; the first one a mechanical check
+missed.)*
+
 **Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** `M2.10`'s tag had
 drifted onto the pre-clean cluster three paragraphs from its own mutation — the bidirectional check still
 passed, because it verifies that a tag exists and is cited, not that it labels the right sentence. *(Five
@@ -849,7 +862,7 @@ requirement, and that is now visible rather than arguable.
 | 1 | base validated: absolute, outside the **enumerated** protected-root set, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — exercises `.claude`, `.claude/plugins/data/…`, an alias, and `.claude/worktrees` as a **positive** (round 19, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used** (§4.1) | `[M2.4 xdg-valid-positive]` |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
-| 4 | component grammar `[A-Za-z0-9._-]+`, and not `.`/`..` (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
+| 4 | component grammar `[A-Za-z0-9._-]+`, not `.`/`..`, for **all three** of ticket/round/reviewer (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | parent created `0700` (`S-ALLOC`) | `[M1.2 parent-0700]` |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
@@ -864,6 +877,7 @@ requirement, and that is now visible rather than arguable.
 | 12b | the namespace is per-checkout (`S-WRAPPER`, §4.1) | `[M5.4 two-checkout]` (secondary) |
 | 13 | wrapper is the granted codex entry point (`S-WRAPPER`, §4.2) | `[M2.6 wrapper-grant-present]` |
 | 14 | allocated path threaded to **`isolated-agy-review.sh` and the codex recipe** (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
+| 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` + `[M2.9 preclean-reinstate-must-fail]` (round 15, codex — the row also claimed **grant** deletion, which these cells do not carry; grants are row 26) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
@@ -1010,7 +1024,7 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
    compatibility change to every existing caller, not only a property of the new code.)*
-   Add `[M5.13 existing-callers-updated]`.
+   Add `[M5.13 callers-scan]` and `[M5.14 invocation-syntax]`.
 5. **`S-CAPTURE`** — **Make `pty-capture.py` HONOUR the reservation** (round 13, both arms). When the
    caller supplies an **allocated** path (`--allocated`, set by the review recipes), open the target
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
