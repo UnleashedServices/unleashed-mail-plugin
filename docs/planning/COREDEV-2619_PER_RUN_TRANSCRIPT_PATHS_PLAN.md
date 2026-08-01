@@ -1,12 +1,18 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **round 7 gated (codex `REQUEST_CHANGES` 3 High + 2 Medium + 1 Low; the gemini
-arm timed out at 36 bytes — the harness's `--print-timeout` is raised from 18m to 28m).** Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
+**Status:** Planning — **NOT GATED. Latest completed round: 12** (codex `REQUEST_CHANGES` 3 High +
+4 Medium + 1 Low; the gemini arm failed at 112 bytes on `RESOURCE_EXHAUSTED (429)` — quota, so round 12
+**voids** and is re-run in full). Round 10 returned a gemini `APPROVE`; **one approving arm is not a
+pass**, and no round has yet had both arms approve, let alone reproduce.
+*(Round 12, codex, Low: this line still read "round 7 gated" inside bytes that already contained round-11
+content — a status field that lies about its own document. It is now updated in the same commit as any
+round's fixes, and it names the **round number**, not a stale verdict.)*
+Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 7, post-gate revision)
+**Last Updated:** 2026-07-31 (round 12 findings applied; **not gated**)
 
 ---
 
@@ -166,10 +172,22 @@ that *whatever* path was emitted propagates consistently — so a wrapper using 
 or one **reimplementing** the repo hash instead of calling `context_repo_hash`, passed M1–M5 while
 violating both the single-helper rule and the per-checkout namespace that makes concurrent worktrees
 safe. M5 therefore adds a **two-checkout** mutation: allocate from two distinct checkouts of the same
-repo and assert the `<repo-hash>` segments **differ**, and that each equals `context_repo_hash` evaluated
-in that checkout. *(The two-checkout form is preferred over asserting one expected literal, because a
-hard-coded expected hash passes against a reimplementation that happens to agree on the fixture and
-fails to detect the drift this design exists to remove.)*
+repo and assert the `<repo-hash>` segments **differ**.
+
+**That two-checkout case does NOT prove provenance, and the round-11 reasoning behind it was wrong —
+round 12, codex (High).** `context_repo_hash` is a pure function of `context_repo_root`
+(`scripts/lib/context.sh:69`), so a wrapper that **copies the algorithm** yields different values for two
+checkouts *and* matches the real helper in each — passing the case while violating `S-WRAPPER`'s
+single-helper rule. Round 11 chose this form *over* a hard-coded expected hash on the grounds that a
+reimplementation "happens to agree on the fixture"; **a reimplementation agrees on every fixture**, which
+makes two-checkout strictly weaker, not stronger. The error was proving a *property of the value* when
+the requirement is a *fact about the call*.
+**M5 therefore STUBS the helper**: replace `context_repo_hash` with one returning a non-derivable
+sentinel, and assert the sentinel appears in the allocated path. That observes **invocation**, which is
+what `S-WRAPPER` requires; the two-checkout case is retained only as a secondary check that the namespace
+is per-checkout at all. *(Campaign rule, earned again: **a reviewer's fix is a claim** — and so is mine.
+Round 11's fix was mine, it was wrong, and it was wrong in the specific way of testing an artefact of the
+mechanism instead of the mechanism.)*
 
 **The handoff must be specified before it can be tested**, and round 3 found three gaps: where each
 skill obtains ticket/round; how the **codex** recipe reaches the Bash-only `context_repo_hash` when its
@@ -235,6 +253,26 @@ and **equals the run ID embedded in the returned filename**. *(This is the produ
 M4 remains the consumer half. Both arms found this independently, which is why it is stated here in the
 proof rather than only in the round log.)*
 
+**Plus, round 12 (codex): the supplied COMPONENTS must appear in the returned path.** No proof asserted
+it, so a wrapper that **hard-codes** ticket/round/reviewer — or an allocator that validates them and then
+ignores them — passed M1–M5 while producing paths that collide across tickets. M1 asserts the returned
+basename contains the exact `<ticket>`, `<round>` and `<reviewer>` it was given. **And M5 asserts the
+marker discipline**: a caller receiving **bare stdout with no `UNLEASHED_TRANSCRIPT=` prefix must fail**,
+which is what makes §6.1 row 11 a real cell rather than a restatement.
+
+**Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
+above observes an *outcome* — bytes intact, a different path returned — and a **check-then-create**
+implementation (`if os.path.exists(c): next_candidate()` followed by a plain `open`) produces **exactly
+those outcomes** in a single-threaded test while leaving the TOCTOU race wide open. Outcome observation
+cannot distinguish it; only **flag observation** can. M1 therefore **interposes on `os.open`** and asserts
+`O_EXCL` is present in the flags for **both** the leaf **and** `<path>.launch` — the property `S-ALLOC`
+actually requires. Likewise **one successful retry does not distinguish a bounded loop from an unbounded
+one**: M1 adds an **exhausted-collision** case that pre-creates every candidate up to the bound and
+requires the allocator to **fail closed**, not spin. *(This is the same lesson as the campaign's
+"reachability ≠ discrimination": a test that the correct implementation passes is worthless unless the
+wrong one fails it, and here the wrong implementation is the *plausible* one — `exists()`-then-create is
+what most people write.)*
+
 ### 4.2 — The `rm -f` grants and the pre-clean commands (High — round 1, revised in rounds 2 and 6)
 
 *(The round-1 heading read "the grants are ALREADY broken". They are not — see the reversal below. The heading contradicted its own section for four rounds.)*
@@ -299,6 +337,12 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **Round 12 (codex): "the same rules" means ALL THREE classes, and this case covered only one.** The XDG
+  arm is exercised against *relative*, *inside a protected root* and *unwritable*; the fallback arm tested
+  **unwritable alone**, so an allocator that validated `XDG_STATE_HOME` completely and then accepted a
+  **relative** or **protected-root** `$HOME`-derived fallback passed every named cell. The fallback arm
+  therefore carries **one mutation per validation class**, the same three. *(A phrase like "validated by
+  the same rules" is a *quantifier*; a proof set that instantiates it once has not tested it.)*
 **No substitution validator** — round 1's would have rejected `${CLAUDE_PLUGIN_ROOT}`, which is
 supported and correct.
 
@@ -311,6 +355,24 @@ table exposed two rows whose proof column I had filled in from memory and which 
 - "No substitution validator" was a **stated decision with no cell that would fail if one were added**.
   M2 now asserts the `${CLAUDE_PLUGIN_ROOT}` grants are **still present and unrewritten** in both review
   skills — the positive form of the round-2 reversal, which four prior rounds kept re-breaking.
+  *(Round 12, codex: that presence assertion **still does not prove the requirement** — a substitution
+  validator that is added but happens to **accept** `${CLAUDE_PLUGIN_ROOT}` passes it. The requirement is
+  the **absence of the validator**, so M2 asserts no substitution-validation step exists in the skill
+  pipeline; see §6.1 row 16.)*
+
+**Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
+The gemini pre-clean is `rm -f "$OUT" "$OUT.captureid"` (`scripts/review/isolated-agy-review.sh:89`) —
+it **contains no `/tmp` literal**, so §6.1 row 15 cited a proof that could never fail on it. Worse, the
+failure is **silent end-to-end**: `pty-capture.py` opens the transcript with `O_CREAT|O_TRUNC`
+(`scripts/pty-capture.py:76`), so a retained pre-clean **deletes the reserved leaf and pty-capture
+recreates it** — the capture lands, M5's propagation assertions pass, and the `O_EXCL` reservation this
+entire ticket exists to establish is gone with nothing observing its loss.
+M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean commands are absent —
+`isolated-agy-review.sh:89` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
+strings; and **(b)** a runtime mutation — **reinstate the pre-clean against an allocated path and require
+the gate to FAIL**, proving the allocation is load-bearing rather than decorative. *(Absence assertions
+must name what they scan for. "No `/tmp` literal" and "no `rm -f` of the allocated path" are different
+claims, and only the second is the requirement.)*
 
 *(Recorded because the mechanism matters: **a coverage table built from memory certifies coverage that
 does not exist.** Every row of §6.1 was re-derived from the proof text, not from recollection — the same
@@ -481,9 +543,28 @@ that reading into an enumeration.**
 
 **The obligation is bidirectional and it is part of the plan, not a courtesy:** every operative
 requirement has a row naming the proof cell that would fail if an implementation omitted it, and **adding
-a requirement without adding its row is itself the defect.** A row whose proof column reads *none* must
-say why in the same line — an unproved requirement is allowed only when it is not machine-checkable, and
-saying so out loud is what stops it from hiding.
+a requirement without adding its row is itself the defect.**
+
+**The table's own first version was substantially wrong — round 12, codex.** Six of its rows named a
+proof that did not carry the requirement, and it omitted three requirements entirely:
+
+| row | what it claimed | why that was false |
+|---|---|---|
+| 11 | the stable marker is proved by M5's propagation | propagation passes with **no marker at all**; the marker had never even been *defined* |
+| 15 | pre-clean deletion is proved by M2's `/tmp`-literal scan | the command is `rm -f "$OUT"` — **no `/tmp` literal**, so the cell could never fail on it |
+| 16 | validator-absence is proved by "grants survive" | a validator that **accepts** `${CLAUDE_PLUGIN_ROOT}` passes that check |
+| 20 | release hygiene is "not machine-checkable" | **false** — version sync and a CHANGELOG string are both checkable; the rationale excused the only unproved row |
+| 8, 12 | `O_EXCL` and helper provenance are proved by outcome observation | a check-then-create and a copied hash produce **identical outcomes** (see M1, M5) |
+| — | 1, 3 prove "the fallback is validated by the same rules" | only **one** of the three validation classes was instantiated |
+
+**Two lessons, both already campaign rules, both re-earned here.** *A row whose proof column reads "none"
+must say why — and "not machine-checkable" is a claim that must itself be checked; row 20's was simply
+untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
+the allocated path" are different claims, and only the second was ever the requirement.
+
+**Convention (round 12): the proof column quotes a phrase appearing VERBATIM in the named proof**, so a
+row can be checked by string match rather than by judgement. Judgement is what produced the six false
+rows above; a row that cannot be mechanically tied to its proof is a row nobody will re-check.
 
 | # | requirement (source) | proof cell that fails without it |
 |---|---|---|
@@ -494,19 +575,26 @@ saying so out loud is what stops it from hiding.
 | 5 | parent created `0700` (`S-ALLOC`) | M1 parent-mode assertion |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | M1 mis-moded-parent mutation |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | M1 wrong-owner mutation |
-| 8 | leaf `O_CREAT\|O_EXCL`, mode `0o600`, bounded retry (`S-ALLOC`) | M1 sentinel-collision + mode assertion |
-| 9 | `<path>.launch` created `O_EXCL`, same call, **never truncating** (`S-ALLOC`) | M1 **launch-only collision** mutation |
+| 8 | leaf `O_CREAT\|O_EXCL`, mode `0o600` (`S-ALLOC`) | M1 sentinel-collision + mode assertion + **`os.open` flag interposition** (round 12 — sentinels alone pass a check-then-create) |
+| 8b | retry is **bounded** (`S-ALLOC`) | M1 **exhausted-collision** case (round 12 — one retry cannot distinguish bounded from unbounded) |
+| 9 | `<path>.launch` created `O_EXCL`, same call, **never truncating** (`S-ALLOC`) | M1 launch-only collision mutation + flag interposition on `.launch` (round 12) |
 | 10 | payload = one line lowercase hex, no trailing content (`S-ALLOC`, §4.5) | M1 payload assertion; M4 malformed cells |
-| 11 | path printed behind the stable marker (`S-ALLOC`) | M5 propagation assertions |
-| 12 | wrapper obtains the namespace from `context_repo_hash` (`S-WRAPPER`) | M5 **two-checkout** mutation |
+| 11 | path printed behind the stable marker `UNLEASHED_TRANSCRIPT=` (`S-ALLOC`) | M5 **bare-stdout-must-fail** assertion (round 12; the old row cited propagation, which passes without any marker) |
+| 11b | supplied ticket/round/reviewer appear in the returned path (`S-ALLOC`) | M1 — *"the supplied COMPONENTS must appear in the returned path"* (round 12) |
+| 11c | ticket/round are required skill inputs; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | M5 missing-input case (round 12) |
+| 12 | wrapper obtains the namespace **by calling** `context_repo_hash` (`S-WRAPPER`) | M5 **stubbed-helper sentinel** (round 12 — two-checkout is passed by a copied algorithm, `context.sh:69`) |
+| 12b | the namespace is per-checkout (`S-WRAPPER`, §4.1) | M5 two-checkout distinctness (secondary) |
 | 13 | wrapper is the granted codex entry point (`S-WRAPPER`, §4.2) | M2 **grant-presence** assertion (added round 11) |
 | 14 | allocated path threaded to every consumer; synthesis takes **paths** (`S-THREAD`) | M5 re-derivation mutation |
-| 15 | both `rm -f` grants **and** the pre-clean commands deleted (`S-PRECLEAN`) | M2 no-`/tmp`-literal assertion |
-| 16 | no substitution validator (`S-PRECLEAN`, §4.2) | M2 **`${CLAUDE_PLUGIN_ROOT}`-grants-survive** assertion (added round 11) |
+| 15 | both `rm -f` grants **and** the pre-clean COMMANDS deleted (`S-PRECLEAN`) | M2 — *"identified pre-clean commands are absent"* + *"reinstate the pre-clean against an allocated path and require the gate to FAIL"* (round 12 — the old cell scanned for `/tmp` literals, which `rm -f "$OUT"` does not contain) |
+| 16 | **no substitution validator exists** (`S-PRECLEAN`, §4.2) | M2 — *"no substitution-validation step exists"* (round 12 — a validator that *accepts* `${CLAUDE_PLUGIN_ROOT}` passes a grants-survive check, so that cell did not carry the requirement) |
 | 17 | freshness fails closed on absent / empty / malformed / mismatched (`S-FRESH`) | M4 cells 3–6 |
 | 18 | …on **both** digest paths (`S-FRESH`) | M4 `× {sidecar, --reviewed-sha256}` |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | M3 drift check |
-| 20 | version bump + CHANGELOG states the ceiling (`S-RELEASE`) | **none — release hygiene, not machine-checkable.** Stated so it is not mistaken for an oversight |
+| 20 | version bump + CHANGELOG states the ceiling (`S-RELEASE`) | `validate-version-sync.sh` + a CHANGELOG assertion for the §3 ceiling text (round 12 — the "not machine-checkable" rationale was **false**: both are checkable against the implementation diff, and claiming otherwise excused the only unproved row) |
+| 21 | mtime comparison: transcript older than its record ⇒ reject; newer ⇒ accept (§4.5) | M4 **timing-negative** and **timing-positive** cells (round 12 — rows 17–18 covered only record *validity* and the digest cross-product) |
+| 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **regression**, not a pre-fix proof |
+| 23 | `.captureid` stays freshly generated per run (§4.4) | `pty-capture.py:322-328` — **regression**, not a pre-fix proof |
 
 ## 7. Implementation order
 
@@ -529,7 +617,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    trailing content** *(round 11, codex: `S-ALLOC` said only "containing the run ID" and `S-FRESH` required
    rejecting "malformed" without defining it — the grammar existed only in §4.5, so an implementer working
    from §7 alone had to invent the payload format that the consumer then validates against)*; then print
-   the path behind the stable marker. Add M1.
+   the path **on stdout, alone on its line, prefixed by the literal marker `UNLEASHED_TRANSCRIPT=`** —
+   the *stable marker*, defined here because §7 referred to it four rounds running without ever saying
+   what it was *(round 12, codex)*. Callers match that prefix and take the remainder verbatim; **bare
+   stdout with no marker is a failure**, not a fallback.
+   **Command shape**, so the handoff is buildable from §7 alone:
+   `pty-capture.py --allocate --base <dir> --repo-hash <H> --ticket <T> --round <R> --reviewer <name>` —
+   **the identical shape §4.1 specifies**, `--base` included *(a §7 restatement that dropped an argument
+   §4.1 requires would be the very drift these two sections exist to keep aligned)*. Ticket, round and
+   reviewer are **required inputs of both review skills**, passed by the wrapper, **never inferred** — a
+   skill that cannot determine them **fails closed** (§4.1). Add M1.
    *(Round 8 reproduction, gemini: this step omitted the grammar and the mis-moded-parent rule, both
    mandated by §4.1 and both required by M1 — so an implementer working from §7 alone would build an
    allocator vulnerable to path escape and M1 would fail on it.)*
