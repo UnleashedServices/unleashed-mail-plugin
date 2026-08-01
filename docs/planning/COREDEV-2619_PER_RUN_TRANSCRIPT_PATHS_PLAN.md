@@ -186,7 +186,15 @@ attacker-owned-ancestor mutation was specified in round 5 and is **withdrawn** w
 defended — see §3.)*
 Must FAIL against ordinary `create/truncate` and against a name derived from ticket/round.
 **Plus, round 3:** `ticket`/`round`/`reviewer` become **filename components**, so a rejection grammar is
-required — a separator or `..` would otherwise escape the intended parent. And
+required: **`[A-Za-z0-9._-]+`, and the component must not be exactly `.` or `..`.**
+*(Round 10, codex: the bare grammar **accepts both `.` and `..`** — verified by execution — so §7's prose
+demanded a rejection its own grammar permitted, leaving §7 and M1 with contradictory acceptance criteria.
+**And the stated rationale was overstated, which the fix must not preserve:** the leaf is a single
+basename, `<ticket>r<round>-<reviewer>-<runid>.txt`, so a `..` component yields `..r9-gemini-x.txt` — an
+ordinary filename that escapes nothing. The vector that **does** escape is the **separator** `/` (and
+NUL), which the grammar already rejects. `.` and `..` are excluded because they are meaningless as
+components and because the plan must not depend on the concatenation format never changing — not because
+they traverse. A future round must not "restore" the traversal claim.)* And
 `makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
 a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
 writing into it. Leaf creation is `0600`; retry is bounded.
@@ -377,6 +385,16 @@ syntactically valid but *different* run ID from the one in the transcript's file
 mismatched-record mutation" and the Proof defined only the timing cases, so an implementation that never
 read the payload passed. The arms disagreed here — codex reported the mutation present; it was not.)*
 
+**EVERY mutation above runs through BOTH digest paths — round 10, codex (High).** The "both digest
+paths" requirement was attached only to the **timing** polarities; the absent, mismatched, empty and
+malformed mutations inherited nothing. So an implementation that validated the launch record on the
+snapshot-sidecar path and **skipped validation entirely on the `--reviewed-sha256` path** passed the
+whole stated suite — while violating `S-FRESH`, which keys freshness to each transcript's own record
+**independently of which digest path is used**. This is the same shape as round 9's `0600` and
+wrong-owner findings: **§7 stated the requirement and the proof set did not carry it.** The matrix is
+therefore *(timing-negative, timing-positive, absent, mismatched, empty, malformed)* × *(sidecar,
+`--reviewed-sha256`)* — twelve cells, none optional.
+
 ## 5. Risk register
 
 | Risk | Likelihood | Mitigation |
@@ -416,8 +434,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 
 1. **`S-INVENTORY`** — **Inventory and classify all 31 sites** and commit the classification; M3 asserts it.
 2. **`S-ALLOC`** — **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
-   `reviewer` component that is not `[A-Za-z0-9._-]+`** — a separator or `..` would otherwise escape the
-   intended parent; create the `0700` parent and **fail closed if it already exists with a different
+   `reviewer` component that is not `[A-Za-z0-9._-]+`, **and reject the exact values `.` and `..`**
+   (the grammar alone accepts both) — the separator `/` is the vector that would escape the intended
+   parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
+   not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate the leaf
    with `O_CREAT|O_EXCL` **and mode `0o600`** in a bounded retry loop *(round 9, codex: this step said only
    `O_CREAT|O_EXCL`, so an implementer using the conventional `0o666` creation mode yields `0644` and
