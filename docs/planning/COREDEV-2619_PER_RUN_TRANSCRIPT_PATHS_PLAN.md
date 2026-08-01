@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 27** — gemini `APPROVE`, codex
-`REQUEST_CHANGES` (2 High + 1 Medium). **Fourth lone approval (rounds 10, 21, 26, 27); a lone approval is
-not a pass.** All three findings were the same shape — a requirement enumerating N properties whose cell
-observed fewer — now a stated rule in §6.1. No round has yet had both arms approve.
+**Status:** Planning — **NOT GATED. Latest completed round: 28** — gemini `APPROVE`, codex
+`REQUEST_CHANGES` with **one** High (plus a prompt-hygiene Low), and codex reported the other 62 cells and
+54 rows exposed no further coverage defect. **Fifth lone approval (rounds 10, 21, 26, 27, 28); a lone
+approval is not a pass.** No round has yet had both arms approve, let alone reproduce.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 27 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 28 findings applied; **not gated**)
 
 ---
 
@@ -595,8 +595,15 @@ contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW` **a
 the flags** *(round 27, codex: interposing on `os.open` proves the flag set and nothing else — an
 implementation with exactly the right flags that dropped the `fstat` check and the `fchmod` passed
 `M2.11`, `M2.9` and the non-allocated regression alike)*:
-`[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED** (the
-`fstat`/`S_ISREG` check), and
+`[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED — with a
+READER HELD OPEN on it**, so the `open` succeeds and only the `fstat`/`S_ISREG` check can reject it
+*(round 28, codex, High, verified by execution: with `O_WRONLY|O_NONBLOCK` and **no** reader, the open
+fails `ENXIO` **before** any `fstat` runs — which is what the existing fixture at
+`scripts/tests/test_pty_capture.py:48` does. An allocated-mode implementation that **deleted** the
+`fstat` check therefore still rejected that FIFO and passed the cell. **My round-27 fix for a
+non-discriminating cell was itself non-discriminating** — the same "reachability is not discrimination"
+error, one round later. Holding a reader open makes the open succeed, so the regular-file check is the
+only thing left that can fail)*, and
 `[M2.24 allocated-mode-tightening]` **a leaf whose mode has been loosened to `0644` is re-tightened to
 `0600`** by the fchmod. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
@@ -987,7 +994,7 @@ requirement, and that is now visible rather than arguable.
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
 | 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
-| 15g | allocated mode keeps the `fstat`/`S_ISREG` non-regular-target defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` (round 27, codex — flag interposition proves flags only) |
+| 15g | allocated mode keeps the `fstat`/`S_ISREG` non-regular-target defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — FIFO **with a reader held open**, so `ENXIO` cannot mask the check (round 28, codex) |
 | 15h | allocated mode keeps the `0600` fchmod tightening (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` (round 27, codex) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
