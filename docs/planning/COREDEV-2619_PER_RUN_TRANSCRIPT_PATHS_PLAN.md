@@ -932,7 +932,7 @@ reject a valid concurrent run.)*
   snapshot overwrites its mtime. **A timestamp first written when the post-review artifact is created is
   not a launch anchor at all.**
 
-**Proof — M4, both polarities.** `[M4.1 timing-negative]` `[M4.2 timing-positive]` `[M4.10 record-precedes-dispatch]` *Negative:* a transcript whose mtime predates its launch record is
+**Proof — M4, both polarities.** `[M4.1 timing-negative]` `[M4.2 timing-positive]` *Negative:* a transcript whose mtime predates its launch record is
 rejected. *Positive (round 4, codex):* a transcript captured **after** an already-existing record is
 **accepted**, and `[M4.10 record-precedes-dispatch]` **the record is asserted to have existed BEFORE dispatch and not to
 have been replaced** — the temporal rule, distinct from the mtime comparison *(round 42, codex: `M4.2`
