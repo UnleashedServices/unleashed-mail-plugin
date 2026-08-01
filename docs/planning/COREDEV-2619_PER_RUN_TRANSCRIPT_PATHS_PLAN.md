@@ -1,15 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 28** — gemini `APPROVE`, codex
-`REQUEST_CHANGES` with **one** High (plus a prompt-hygiene Low), and codex reported the other 62 cells and
-54 rows exposed no further coverage defect. **Fifth lone approval (rounds 10, 21, 26, 27, 28); a lone
-approval is not a pass.** No round has yet had both arms approve, let alone reproduce.
+**Status:** Planning — **NOT GATED.** Round 29 produced this plan's **first double approval** (gemini
+`APPROVE_WITH_NOTES` + codex `APPROVE`, "No findings") — and the **mandatory reproduction at the identical
+digest FLIPPED**: codex returned `REQUEST_CHANGES` with 2 High, both real and both now fixed. That is the
+**fourth** double approval in this campaign to fail its re-run. Round 29's lone gemini note was also checked
+and found **false** (its "third masking carrier" is inside a cell span; the deletion test drops the count to
+zero, as designed).
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 28 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 29 + reproduction applied; **not gated**)
 
 ---
 
@@ -510,6 +512,14 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **Round 29 reproduction (codex): "the same rules" also means the COMPONENT-SENSITIVE cases, not just the
+  three broad classes.** `M2.2`'s canonical/symlink alias, its `.claude/worktrees` acceptance and its
+  sibling-prefix pair were applied to the **XDG arm only**, so a *fallback-specific* string-prefix validator
+  passed `M2.5` while accepting `.claude/worktrees-evil` or rejecting `.claude-cache` — reachable through a
+  symlinked `$HOME/.local`. The fallback arm therefore carries **the same case set as the XDG arm**: the
+  alias, the `worktrees` positive, and the sibling-prefix pair. *(Second time this exact quantifier has bitten:
+  round 19 extended "the same rules" to the three broad classes and round 27's component cases were then
+  added to one arm only. **When a rule says "the same", the proof set must be copied, not sampled.**)*
   **Round 12 (codex): "the same rules" means ALL THREE classes, and this case covered only one.** The XDG
   arm is exercised against *relative*, *inside a protected root* and *unwritable*; the fallback arm tested
   **unwritable alone**, so an allocator that validated `XDG_STATE_HOME` completely and then accepted a
@@ -596,7 +606,13 @@ the flags** *(round 27, codex: interposing on `os.open` proves the flag set and 
 implementation with exactly the right flags that dropped the `fstat` check and the `fchmod` passed
 `M2.11`, `M2.9` and the non-allocated regression alike)*:
 `[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED — with a
-READER HELD OPEN on it**, so the `open` succeeds and only the `fstat`/`S_ISREG` check can reject it
+READER HELD OPEN on it, and `os.fstat` is INTERPOSED and asserted to be called ON THE OPENED FD**, so the
+rejection is attributed to the fd-based check and not to something earlier
+*(round 29 reproduction, codex: observing only "the FIFO is rejected" is passed by an implementation that
+replaces the required fd-based `fstat` with a **pre-open `lstat`** — it never opens the target, never calls
+`fstat`, and still rejects. That substitution is exactly the TOCTOU-vulnerable form `S-CAPTURE` forbids:
+a path checked before opening can change before the open. The **mechanism** is the requirement, so the
+mechanism is what the cell observes)*
 *(round 28, codex, High, verified by execution: with `O_WRONLY|O_NONBLOCK` and **no** reader, the open
 fails `ENXIO` **before** any `fstat` runs — which is what the existing fixture at
 `scripts/tests/test_pty_capture.py:48` does. An allocated-mode implementation that **deleted** the
@@ -605,7 +621,10 @@ non-discriminating cell was itself non-discriminating** — the same "reachabili
 error, one round later. Holding a reader open makes the open succeed, so the regular-file check is the
 only thing left that can fail)*, and
 `[M2.24 allocated-mode-tightening]` **a leaf whose mode has been loosened to `0644` is re-tightened to
-`0600`** by the fchmod. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
+`0600` — with `os.fchmod` INTERPOSED and asserted to be called on the opened FD**
+*(round 29 reproduction, codex: asserting only the final mode is passed by a **path-based `chmod`**, which
+races a swapped path in a way `fchmod` on the held descriptor cannot. Same lesson as `M2.23`, same round:
+an outcome assertion cannot distinguish two mechanisms that produce the same outcome)*. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
 implementation that kept `O_TRUNC` passed while still truncating a leaf someone else reserved — the
 mutation discriminated one flag and the requirement names two.)*
 `[M2.21 protected-roots-single-source]` **The protected-root set is read from ONE place** — asserted by
@@ -914,6 +933,19 @@ must say why — and "not machine-checkable" is a claim that must itself be chec
 untrue.* And **an absence assertion must name what it scans for**: "no `/tmp` literal" and "no `rm -f` of
 the allocated path" are different claims, and only the second was ever the requirement.
 
+**The reproduction rule has now paid for itself FOUR times — round 29.** Round 29 was this plan's **first
+double approval**: gemini `APPROVE_WITH_NOTES`, codex `APPROVE` with the words *"No findings."* The
+mandatory re-run at the **byte-identical digest** returned codex `REQUEST_CHANGES` with **two High
+findings**, both real, both since fixed — over-certified fallback coverage, and two cells that observed an
+outcome where the contract names a mechanism. **An approving round is evidence about that run, not about
+the document.** Nothing here was gated on it.
+
+**Mechanism-vs-outcome rule (round 29 reproduction, codex): when a contract names a MECHANISM, the cell
+must observe the mechanism.** `M2.23` asserted "the FIFO is rejected" — passed by a pre-open `lstat` that
+never opens the target; `M2.24` asserted "the mode ends up `0600`" — passed by a path-based `chmod`. Both
+substitutes are the TOCTOU-vulnerable forms the contract exists to exclude, and **an outcome assertion
+cannot separate two mechanisms that produce the same outcome.**
+
 **Property-count rule (round 27, codex): if a requirement enumerates N properties, its cell must OBSERVE
 N.** Three findings in one round were this shape — `S-CAPTURE` named four retained protections and `M2.11`
 observed only the flag set; the fallback had to be *created `0700`* and `M2.22` asserted only creation; the
@@ -994,8 +1026,8 @@ requirement, and that is now visible rather than arguable.
 | 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
 | 15f | a **missing reserved leaf is a hard error, not a creation** (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
-| 15g | allocated mode keeps the `fstat`/`S_ISREG` non-regular-target defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — FIFO **with a reader held open**, so `ENXIO` cannot mask the check (round 28, codex) |
-| 15h | allocated mode keeps the `0600` fchmod tightening (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` (round 27, codex) |
+| 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus `os.fstat` interposition on the opened fd**, so a pre-open `lstat` fails the cell (round 29 reproduction, codex) |
+| 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus `os.fchmod` interposition**, so a path-based `chmod` fails the cell (round 29 reproduction, codex) |
 | 15e | the capture interface is the flag `--allocated`, by name (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` (round 20, codex) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
