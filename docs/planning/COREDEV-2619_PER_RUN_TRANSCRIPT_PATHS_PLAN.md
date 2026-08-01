@@ -1,15 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 30** — gemini `APPROVE`, codex
-`REQUEST_CHANGES` (2 High + 1 Medium). **Sixth lone approval.** All three findings were the same family the
-round-29 reproduction exposed: a cell instantiated at one member of a set the requirement quantifies over.
-Now generalised as §6.1's **quantifier rule**.
+**Status:** Planning — **NOT GATED. Latest completed round: 34** — gemini `APPROVE` (eighth lone approval),
+codex `REQUEST_CHANGES` with **no High findings** (2 Medium + 1 Low). Round 29's double approval failed its
+reproduction at the byte-identical digest, the fourth in this campaign to do so; **a lone approval is not a
+pass, and a double approval triggers a reproduction rather than gating.**
+*(This line is updated in the same commit as each round's fixes — round 34, codex: it had stalled at
+"round 30" while the document already carried round-33 changes.)*
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 30 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 34 findings applied; **not gated**)
 
 ---
 
@@ -1114,7 +1116,7 @@ requirement, and that is now visible rather than arguable.
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
-| 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **14-cell** cross-product (round 15 — equality had been left out of it) |
+| 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **28-cell** cross-product (round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
 | 23 | `.captureid` stays freshly generated per run, in **both** capture modes (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
 | 24 | the fixed directory/basename layout (§4.1, `S-ALLOC`) | `[M1.13 full-layout]` (round 14 — basename + "lands somewhere permitted" is passed by `<base>/transcripts/<repo-hash>/…`) |
@@ -1226,8 +1228,15 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    division of labour: if Bash passes the fallback the allocator cannot know XDG was rejected, and if
    Bash passes an invalid XDG for Python to reject then the wrapper has not "derived the base" at all.
    One owner, and it is the side M2 already tests.)*
-   **Missing or empty `<ticket>` or `<round>` is a hard error**: the wrapper allocates nothing and exits
-   non-zero *(round 19, gemini: row 27 cited `S-WRAPPER` for this and `S-WRAPPER` did not state it, so a
+   **The wrapper takes EXACTLY three positional arguments.** A fourth argument, a reordering, and a
+   **missing or empty `<reviewer>`** are each rejected; **missing or empty `<ticket>` or `<round>` is a hard
+   error** too. In every case the wrapper allocates nothing and exits
+   non-zero *(round 34, codex: `S-WRAPPER` presented the interface **shape** and rejected only missing
+   ticket/round, while the stricter arity and nonempty-reviewer rules lived **only inside `M5.11`** — which
+   §6.0 classifies as evidence, not contract. So a §7-conforming wrapper could accept a fourth argument or
+   default `$3`, satisfy every production recipe that passes its literal reviewer, and then **fail a
+   mandatory proof**. This is the inverse of the usual defect — the proof stricter than the requirement —
+   and it is the same principle: **a rule that lives only in a cell is not a rule.**)* *(round 19, gemini: row 27 cited `S-WRAPPER` for this and `S-WRAPPER` did not state it, so a
    §7-only implementer would not build the check `M5.7` tests)*.
    **The lib directory it sources is `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}`, resolved from the
    script's OWN location** — `LIB="${UNLEASHED_LIB_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/../lib" && pwd)}"`.
