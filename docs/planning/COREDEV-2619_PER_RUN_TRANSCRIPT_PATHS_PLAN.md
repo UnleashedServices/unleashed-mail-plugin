@@ -801,8 +801,11 @@ resolved location, per `M2.20`) and by a **source scan of the wrapper**
 very sentence that acknowledged the wrapper emits only its marker line. The phrase is removed rather than
 re-explained — there is no such output to read)* *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
 clause — round 22, gemini)* —
-asserted against the wrapper's emitted command line and by invoking the allocator with `--base` and
-requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
+asserted against the **recording shim's recorded `argv`** and by invoking the allocator with `--base` and
+requiring a non-zero unknown-argument exit *(round 38: this was a SECOND live occurrence of the
+"emitted command line" phrasing, in a different sentence from the one codex cited. Removing only the cited
+instance would have been the very class-not-swept defect the round-37 prompt asks reviewers to call out —
+found here by grepping the phrase rather than the line number)* *(round 15, codex: the round-14 single-owner decision was
 operative in §4.1 and `S-WRAPPER` but had **no discriminating cell** — a wrapper that still derived and
 passed `--base` to an allocator that accepted it produced identical M2/M5 outcomes)*.
 `[M2.13 captureid-freshness]` **Two successive captures produce DISTINCT `.captureid` sidecars — in BOTH
