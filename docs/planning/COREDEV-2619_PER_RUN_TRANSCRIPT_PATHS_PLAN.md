@@ -1,15 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 44** — **codex `APPROVE` with no findings**;
-gemini `REQUEST_CHANGES` on two claims that are **both demonstrably false** (verified by the deletion test
-and by reading §6.0's own table). Nothing in the plan changed this round beyond recording that disproof.
-**A single approving arm is not a pass**, so the round does not gate.
+**Status:** Planning — **NOT GATED. Latest completed round: 45** — **codex `APPROVE` with no findings for
+the SECOND consecutive round**, having independently re-verified all 67 cells, 59 rows and §6.0's
+deletion-sensitivity. gemini `REQUEST_CHANGES` on six claims, **five of which were checked and are false**
+(two misread round-notes as current contract, one contradicts the cell's own mutation text, one calls a
+0.24-second in-process sweep unrunnable, one restates the prompt's lens without an instance); its sixth —
+that a static scan cannot bind a dynamically-assembled invocation — was **fair and is applied**.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 44 — codex APPROVE, gemini findings disproved; **not gated**)
+**Last Updated:** 2026-08-01 (round 45 — codex APPROVE x2; **not gated**)
 
 ---
 
@@ -272,7 +274,11 @@ Bash→Python boundary is unrunnable as interposition; the shim records `argv` a
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every review-skill reference and requires each to carry
-`--ticket` and `--round`, or to sit on a committed exemption list** *(round 20, codex: enumerations were
+`--ticket` and `--round`, or to sit on a committed exemption list — and the scan additionally FAILS on any
+invocation whose command is assembled dynamically** (a variable-expanded or concatenated skill name), since
+a text scan cannot prove such a call passes the flags *(round 45, gemini: a static scan enforcing a runtime
+property is only sound if the call sites are statically visible; making dynamic construction itself a
+failure keeps that assumption true rather than assuming it)* *(round 20, codex: enumerations were
 claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
 by scan. The cell now supplies the **discovery mechanism** a list cannot.)*
 `[M5.14 invocation-syntax]` **And the flags are asserted BY NAME** — `--ticket <T> --round <N>` — not merely
