@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 23** — both arms `REQUEST_CHANGES`, neither
-finding a production-design blocker. codex verified the full mechanical inventory independently (60 cells,
-52 rows, names consistent, §6.0 11/11, **no third masking carrier**). One gemini High was **rejected as a
-hallucinated prompt constraint** — see §6.1. No round has yet had both arms approve, let alone reproduce.
+**Status:** Planning — **NOT GATED. Latest completed round: 24** — both arms `REQUEST_CHANGES`, neither
+finding a production-design blocker. codex proved §6.0 was really **10/11**, not the 11/11 claimed: a
+round-23 tag move put §4.1's only lib-token occurrence inside a cell span, and **my checker's
+strip-order bug hid it**. Order is now normative and the result is a genuine 11/11.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 23 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 24 findings applied; **not gated**)
 
 ---
 
@@ -116,6 +116,14 @@ path on stdout** so the caller propagates it rather than re-deriving it:
 ```
 ${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt
 ```
+
+**The wrapper sources `${UNLEASHED_LIB_DIR:-<script-dir>/../lib}`, resolved from its own location** —
+stated here in operative text *(round 24, codex: round 23's tag move put §4.1's only occurrence of this
+token **inside** `M5.3`'s cell span, so the prescribed stripping reduced it to zero and §6.0 was really
+10/11, not the 11/11 I reported. **My checker had an order-of-operations bug**: it stripped round-notes
+before cell spans, and removing a note creates a spurious paragraph break that truncates the span early,
+letting a token inside a cell survive. Cell spans are now computed on the original text, before notes are
+removed — fixing a defect I introduced in round 23 while fixing round 22's.)*.
 
 **The three creation contracts, stated operatively here** *(round 22, codex: §4.1's only occurrences of
 these were inside the proof cells `M1.13`, `M1.10` and `M1.14`, so deleting the production requirement
@@ -803,7 +811,11 @@ deletion sensitivity. `No caller passes --base` occurred **twice** inside `S-ALL
 requirement and once inside a round-17 note **quoting the wording it replaced** — so deleting the operative
 line would have left the token present and the check green. **My own commentary about a fix masked the
 fix.** Two rules follow, and both are mechanical:
-1. **Round-notes (`*( … )*`) AND tagged proof-cell spans are stripped before checking.** A cell span runs
+1. **Cell spans are stripped FIRST, on the original text; round-notes second.** *(Round 24: the reverse
+   order silently truncates a cell span — removing a note can create a paragraph break inside it — so a
+   token sitting in a cell survives and the check passes when it should fail. The rule had not fixed an
+   order, so two defensible implementations disagreed; this one is normative.)*
+   **Round-notes (`*( … )*`) AND tagged proof-cell spans are stripped before checking.** A cell span runs
    from its `[M<n>.<k> name]` tag to the end of that paragraph. Notes are history; cells are *evidence*.
    **Neither is the contract**, and either can restate a token and hide that the contract itself is gone —
    round 18 caught the note form, round 22 caught the cell form *(all three of the path-layout and
@@ -861,6 +873,13 @@ text *before* §6.1, so a §7 citation under a stale name was invisible to it �
 the class of error it was written to catch.** It now groups occurrences by ID and asserts a single name.
 *(Seventh instance of a rename reaching some sites and not others; the first one a mechanical check
 missed.)*
+
+**Round 24, gemini High #1 — REJECTED, and checked both ways.** It reported the base-ownership token
+"completely absent from §4.1". Raw `grep` agrees: **zero** literal matches, because the sentence is
+line-wrapped there. But §6.0's rule mandates whitespace normalization *before* comparison, and under the
+rule the token occurs **exactly once**. The finding applied the check without the normalization step the
+check specifies. *(Recorded because the opposite error — my own — happened in the same round: codex's High
+was correct and my checker was buggy. An arm being wrong once is not evidence about the next finding.)*
 
 **A reviewer's cited constraint is itself a claim — round 23.** gemini returned a High finding rejecting
 `M1.10`'s `os.open` interposition as violating an instruction *"Does the plan propose mocking time, wrapping
@@ -944,7 +963,7 @@ requirement, and that is now visible rather than arguable.
 | 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
-| 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-ALLOC` — aligned round 17, §4.1) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
+| 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30 | the wrapper resolves its lib dir from its **own location**, not `${CLAUDE_PLUGIN_ROOT}` (`S-WRAPPER`) | `[M5.8 production-fallback]` (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
 | 27 | ticket/round are required skill inputs; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
@@ -1068,7 +1087,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
    compatibility change to every existing caller, not only a property of the new code.)*
-   Add `[M5.13 callers-scan]` and `[M5.14 invocation-syntax]`.
+   Add `M5.13` and `M5.14`. *(Plain IDs, as every other step writes "Add M1" — round 24, gemini: the
+   bracketed `[id name]` form here was a THIRD occurrence of each tag, beyond its definition and its table
+   row.)*
 5. **`S-CAPTURE`** — **Make `pty-capture.py` HONOUR the reservation** (round 13, both arms). When the
    caller supplies an **allocated** path (`--allocated`, set by the review recipes), open the target
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
