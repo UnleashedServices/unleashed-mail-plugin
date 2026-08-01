@@ -249,7 +249,12 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 `[M5.11 wrapper-cli-signature]` **The wrapper's positional signature is exactly
 `allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, **an OMITTED third argument and an EMPTY third argument** are each rejected, **and the
 wrapper's internal positional mapping is mutated to assert each supplied component lands in its specified
-field**. **Every rejection case also asserts that NOTHING WAS ALLOCATED** — no leaf, no `.launch`
+field**. **An explicitly EMPTY `<ticket>` or `<round>` — `'' B codex`, `A '' codex` — is rejected too**
+*(round 38, codex: round 37 made this operative in `S-WRAPPER` and added no cell, while row 12c claimed
+`M5.11` rejects "extra/omitted/empty"; `M5.11` covered an empty **third** argument and `M5.7` covered
+invocations **without** ticket/round, so a wrapper using `${1:-default}` passed every defined cell and
+allocated anyway. The fix reached the contract and not the proof — the mirror of round 34's defect)*.
+**Every rejection case also asserts that NOTHING WAS ALLOCATED** — no leaf, no `.launch`
 *(round 36, codex: the cases said only "rejected", so a wrapper that allocates from its first three
 arguments and *then* exits non-zero on a fourth passed the cell while violating §7's "allocates nothing")* *(round 35, codex, High: "reject a reordering" is **not implementable** — `ticket` and `round` share
 one grammar and `M1.8` requires every in-class family accepted in **all three** positions, so
@@ -715,8 +720,14 @@ passed it)*.
 `[M2.20 allocated-flag-name]` **The capture interface is the flag `--allocated`, asserted by name** in
 both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
 on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by
-placing a RECORDING SHIM ahead of `pty-capture.py` on `PATH`** — a stub that appends its `argv` to a file
-and exits — and asserting the recorded `argv` contains `--allocated`
+replacing the `pty-capture.py` AT THE RESOLVED LOCATION with a RECORDING SHIM** — in `M5.8`'s relocated copy,
+whose `scripts/` directory is exactly what the wrapper's `$0`-relative resolution targets — a stub that
+appends its `argv` to a file and exits, after which the recorded `argv` must contain `--allocated`
+*(round 38, codex, High, verified by execution: the round-37 wording put the shim **on `PATH`**, but
+`S-WRAPPER` requires invoking the allocator by an **explicit self-relative path**, and an explicit path
+**bypasses `PATH` lookup entirely** — measured, the real executable ran and the shim never fired. The two
+fixes I added a round apart were mutually incompatible. Replacing the file the wrapper actually resolves to
+is both runnable and consistent with self-relative resolution)*
 *(round 37, gemini, High: the round-33 wording said "interposing on the invocation", which is the same
 cross-process impossibility round 35 already removed from `M2.23`/`M2.24` — Bash spawning Python cannot be
 patched from the test process without `LD_PRELOAD`-class measures. A shim on `PATH` observes the same fact
@@ -784,10 +795,11 @@ also a fixed shared path. **Out of scope here, recorded so it is a decision and 
 
 `[M2.16 grants-deleted-not-rewritten]` **The two `rm -f` grants are DELETED, not rewritten** — the cell asserts neither skill's `allowed-tools` contains an `rm -f` grant at **any** path *(round 17, codex: row 15 covers the pre-clean COMMANDS and row 26 checks only that `/tmp` is absent, so rewriting a grant to a non-`/tmp` path passed both — `S-PRECLEAN` says delete)*.
 `[M2.15 no-base-argument]` **The allocator refuses a caller-supplied base argument** — asserted by invoking it with `--base` directly
-— **and no caller emits one**, asserted by the **recording shim's `argv`** and by a source scan of the
-wrapper *(round 37, gemini: the cell said it would check "the wrapper's emitted command line", but the
-wrapper emits only the `UNLEASHED_TRANSCRIPT=` marker — it never prints the command line it used, so the
-assertion had nothing to read)* *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
+— **and no caller emits one**, asserted by the **recording shim's recorded `argv`** (the shim placed at the
+resolved location, per `M2.20`) and by a **source scan of the wrapper**
+*(round 38, codex: the round-37 text still said it would inspect "the wrapper's emitted command line" in the
+very sentence that acknowledged the wrapper emits only its marker line. The phrase is removed rather than
+re-explained — there is no such output to read)* *(deliberately paraphrased: restating §6.0's token verbatim here would mask a deletion of the operative
 clause — round 22, gemini)* —
 asserted against the wrapper's emitted command line and by invoking the allocator with `--base` and
 requiring a non-zero unknown-argument exit *(round 15, codex: the round-14 single-owner decision was
@@ -1184,7 +1196,7 @@ requirement, and that is now visible rather than arguable.
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
-| 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra/omitted/empty rejected + **positional-mapping mutation** (round 35, codex — "reject a reordering" was unimplementable) |
+| 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
 | 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
