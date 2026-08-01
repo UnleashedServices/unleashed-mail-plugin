@@ -1,17 +1,16 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 45** — **codex `APPROVE` with no findings for
-the SECOND consecutive round**, having independently re-verified all 67 cells, 59 rows and §6.0's
-deletion-sensitivity. gemini `REQUEST_CHANGES` on six claims, **five of which were checked and are false**
-(two misread round-notes as current contract, one contradicts the cell's own mutation text, one calls a
-0.24-second in-process sweep unrunnable, one restates the prompt's lens without an instance); its sixth —
-that a static scan cannot bind a dynamically-assembled invocation — was **fair and is applied**.
+**Status:** Planning — **NOT GATED. Latest completed round: 47** — **codex `APPROVE_WITH_NOTES`** (one Low:
+stale status metadata, now corrected); gemini `REQUEST_CHANGES` on one finding that is **real** — the
+`.`/`..` rejection had lost its coverage row in the round-40 rewrite of row 4, now restored. codex approved
+in rounds 44, 45 and 47; round 46's `REQUEST_CHANGES` was caused by an edit made between rounds, not a
+pre-existing defect.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 45 — codex APPROVE x2; **not gated**)
+**Last Updated:** 2026-08-01 (round 47 findings applied; **not gated**)
 
 ---
 
@@ -1227,7 +1226,7 @@ requirement, and that is now visible rather than arguable.
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
-| 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
+| 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
