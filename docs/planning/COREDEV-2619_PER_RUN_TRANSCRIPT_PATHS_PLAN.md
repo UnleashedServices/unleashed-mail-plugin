@@ -1,17 +1,16 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 34** — gemini `APPROVE` (eighth lone approval),
-codex `REQUEST_CHANGES` with **no High findings** (2 Medium + 1 Low). Round 29's double approval failed its
-reproduction at the byte-identical digest, the fourth in this campaign to do so; **a lone approval is not a
-pass, and a double approval triggers a reproduction rather than gating.**
-*(This line is updated in the same commit as each round's fixes — round 34, codex: it had stalled at
-"round 30" while the document already carried round-33 changes.)*
+**Status:** Planning — **NOT GATED. Latest completed round: 35** — both arms `REQUEST_CHANGES`, eight
+findings, all applied. Two were **unrunnable mechanisms** (a 42-minute subprocess sweep; cross-process
+interposition) and two were **proofs stricter than their requirements**. Round 29's double approval failed
+its reproduction at the byte-identical digest; **a lone approval is not a pass, and a double approval
+triggers a reproduction rather than gating.**
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 34 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 35 findings applied; **not gated**)
 
 ---
 
@@ -249,8 +248,14 @@ name, or no handoff at all passes it. Absence of the old name is not presence of
 `--reviewer <name>=<STATUS>:<allocated-path>` — asserted against the real invocation *(round 18, gemini:
 `M5.6` proved the allocation is *consumed* and nothing pinned the interface)*.
 `[M5.11 wrapper-cli-signature]` **The wrapper's positional signature is exactly
-`allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, a reordering, **an OMITTED third
-argument and an EMPTY third argument** are each rejected *(round 32, codex: rejecting only a fourth argument
+`allocate-transcript.sh <ticket> <round> <reviewer>`** — a fourth argument, **an OMITTED third argument and an EMPTY third argument** are each rejected, **and the
+wrapper's internal positional mapping is mutated to assert each supplied component lands in its specified
+field** *(round 35, codex, High: "reject a reordering" is **not implementable** — `ticket` and `round` share
+one grammar and `M1.8` requires every in-class family accepted in **all three** positions, so
+`allocate-transcript.sh A B codex` is indistinguishable from a legitimate call whose ticket is `A` and round
+is `B`. The wrapper has no information from which to infer caller intent, and rejecting it would demand
+position-specific formats that contradict the positive grammar cases. What is checkable is that position 1
+becomes the ticket, 2 the round and 3 the reviewer — so that is what the cell asserts)* *(round 32, codex: rejecting only a fourth argument
 and a reordering is passed by `reviewer=${3:-codex}`, which silently defaults the reviewer and satisfies
 `M5.7`, the caller scan and every normal recipe call while violating the stated interface — "exactly three"
 is a claim about **too few** as much as too many)*
@@ -412,7 +417,13 @@ the complete complement. "Includes" is not "for all")*)*,
 *(round 21, codex: the cells mutated only "a component", so an implementation validating just the exercised
 position passed while accepting invalid values in the other two — the requirement is stated for three
 inputs and was proved for one)*: for **every code point representable in `argv`** and not in `[A-Za-z0-9._-]` — the whole complement, not
-the `0x01–0xFF` prefix of it, implemented as a property/range sweep rather than an enumeration
+the `0x01–0xFF` prefix of it — **swept IN-PROCESS against the validator function** (import it and call it),
+with a handful of CLI specimens for the end-to-end path
+*(round 35, gemini, High, measured: driving the allocator as a **subprocess** once per code point is
+1,114,112 invocations at ~2.3 ms ≈ **42 minutes** — physically unrunnable in a suite that must return in
+seconds. The same exhaustive sweep in-process takes **0.15 s**. This is the fourth time in this campaign a
+requirement was given a mechanism that cannot run; exhaustiveness and runnability are both required, and
+here they are only compatible below the process boundary)*
 *(round 33, codex: round 32's quantification was written **inside a round-note**, and §6.0 classifies notes
 as history rather than contract — so the operative case still swept only `0x01–0xFF`, and a validator
 enforcing the grammar through `U+00FF` while accepting `U+0100` passed it. **A fix placed in a note is not
@@ -612,7 +623,9 @@ failure is **silent end-to-end**: `pty-capture.py` opens the transcript with `O_
 (`scripts/pty-capture.py:76`), so a retained pre-clean **deletes the reserved leaf and pty-capture
 recreates it** — the capture lands, M5's propagation assertions pass, and the `O_EXCL` reservation this
 entire ticket exists to establish is gone with nothing observing its loss.
-M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean commands are absent —
+M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean commands are **absent from the files** — i.e.
+  **deleted**, not merely invisible to an `allowed-tools` literal scan *(round 35, gemini: row 15 claimed
+  deletion while the cell proved only invisibility to a literal scan, and those are different facts)* —
 `isolated-agy-review.sh:89` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
 strings; and **(b)** a runtime mutation — **reinstate the pre-clean against an allocated path and require
 the gate to FAIL, with EVERY target open interposed and asserted to include no creating retry**
@@ -647,7 +660,11 @@ leaf is gone, the open fails, the capture aborts.
 
 `[M2.11 capture-requires-existing-leaf]` **The cell, stated as a mutation rather than as a consequence**
 *(round 14, gemini: the tag sat on this heading and defined nothing — the text only claimed `S-CAPTURE`
-makes M2.9 pass, which is not a proof)*: **interpose on `os.open` in ALLOCATED mode** and assert the flags
+makes M2.9 pass, which is not a proof)*: **interpose on `os.open` in ALLOCATED mode — IN-PROCESS, importing the writer directly**
+*(round 35, gemini, High: `M2.1` dispatches a **real skill invocation**, which spawns Bash which spawns
+`pty-capture.py` — you cannot interpose `os.open`/`os.fstat`/`os.fchmod` across two process boundaries
+without `LD_PRELOAD`-class measures. The **integration** assertion stays with `M2.1`; the **mechanism**
+assertions run against the writer in the test process. Separating them is what makes both runnable)* and assert the flags
 contain **neither `O_CREAT` nor `O_TRUNC`**, and **do** contain `O_NOFOLLOW` **and `O_NONBLOCK`**
 *(round 25, codex)*. **And the other two protections are observed by their own mutations, not inferred from
 the flags** *(round 27, codex: interposing on `os.open` proves the flag set and nothing else — an
@@ -1081,7 +1098,7 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | base validated: absolute, outside the protected-root set **by path COMPONENT**, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
+| 1 | base validated: absolute, **canonically resolved**, outside the protected-root set by path COMPONENT, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
@@ -1102,7 +1119,7 @@ requirement, and that is now visible rather than arguable.
 | 14 | allocated path threaded to **`isolated-agy-review.sh` and the codex recipe** (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
 | 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
-| 15 | the pre-clean **COMMANDS** deleted (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
+| 15 | the pre-clean **COMMANDS** deleted from both sites (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` — absence from the files, not from an `allowed-tools` scan (round 35, gemini) (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
 | 15f | a **missing reserved leaf is a hard error, not a creation** — no creating retry (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` — every target open interposed (round 30, codex) (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus `os.fstat` interposition on the opened fd**, so a pre-open `lstat` fails the cell (round 29 reproduction, codex) |
@@ -1129,7 +1146,7 @@ requirement, and that is now visible rather than arguable.
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
-| 12c | the wrapper's signature is **exactly three** positional args (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra, reordered, **omitted and empty** third arg all rejected (round 32, codex) |
+| 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra/omitted/empty rejected + **positional-mapping mutation** (round 35, codex — "reject a reordering" was unimplementable) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
 | 32 | **every** review-skill invocation site passes ticket and round, found by **scan** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
@@ -1176,8 +1193,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    writability, so a §7-only implementer would reject **every** absent base — including the default on a
    fresh host)* — else `$HOME/.local/state` judged by those
    same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
-   everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`. **That set
-   is read from ONE place**, shared by the XDG and fallback validation paths
+   everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`.
+   **The candidate is CANONICALLY RESOLVED (symlinks followed) before containment is judged**
+   *(round 35, codex: `M2.2` mandates rejecting a canonical/symlink alias into `.claude`, while `S-ALLOC`
+   described only component containment — a purely lexical implementation follows §7, passes the
+   sibling-prefix and `worktrees` cases, and fails the mandatory alias case. Another proof stricter than its
+   requirement)*. **That set is read from ONE place**, shared by the XDG and fallback validation paths
    *(round 22, codex: §4.1 required single-sourcing and §7 never mentioned it, so a §7-only implementer
    would write two lists — identical today, divergent later, which is the exact defect `scripts/lib/paths.sh`
    exists to prevent)*
@@ -1274,6 +1295,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    row.)*
 5. **`S-CAPTURE`** — **Make `pty-capture.py` HONOUR the reservation** (round 13, both arms). When the
    caller supplies an **allocated** path (`--allocated`, set by the review recipes), open the target
+   — **and both production paths, `scripts/review/isolated-agy-review.sh` and the codex recipe, must
+   FORWARD `--allocated` to their actual `pty-capture.py` invocation** *(round 35, gemini: `M2.20` asserts
+   that forwarding while `S-CAPTURE` described only the callee's behaviour, so row 15e cited an operative
+   rule that did not exist in the step)* —
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
    **hard error**, not a creation. **Retain `O_NOFOLLOW`, `O_NONBLOCK`, the `fstat`/`S_ISREG` regular-file
    check AND the `0600` fchmod** *(round 25, codex: this step had listed only `O_NOFOLLOW` and the fchmod,
@@ -1295,7 +1320,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 7. **`S-PRECLEAN`** — **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
    and `scripts/review/isolated-agy-review.sh:89`. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
-   leaf** — the precise defect §4.2 exists to remove.)* **Add** codex's `bash` grant (§4.2). **No validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools`** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported token. *(Scoped in round 19, both arms: the unqualified "no substitution validator" contradicted `scripts/tests/test_doc_gates.py`'s existing `COREDEV2504_PluginRootConvention`, which this ticket preserves.)* Add M2.
+   leaf** — the precise defect §4.2 exists to remove.)* **Delete the pre-clean in the Bash helper too** — `scripts/review/isolated-agy-review.sh:89`, not only
+   `skills/codex-review/SKILL.md:48` *(round 35, gemini: §7 named one of the two sites §4.2 identifies)*.
+   **Add codex's grant, exactly `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`** *(round 35, codex:
+   "add codex's bash grant (§4.2)" let an implementer add a narrower grant for `allocate-transcript.sh`,
+   satisfy §7, authorize production, and then fail `M2.6` — the exact string is the contract)*. **No validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools`** — round 1 proposed one, round 2 reversed the finding behind it, and it would reject the supported token. *(Scoped in round 19, both arms: the unqualified "no substitution validator" contradicted `scripts/tests/test_doc_gates.py`'s existing `COREDEV2504_PluginRootConvention`, which this ticket preserves.)* Add M2.
 8. **`S-M5`** — **Add M5**, the integration proof: drive the codex recipe and `isolated-agy-review.sh` and assert the
    **emitted** allocation becomes the capture target, the synthesis input and the artifact's
    `transcriptPath`; mutate a caller to re-derive the name and it must fail.
