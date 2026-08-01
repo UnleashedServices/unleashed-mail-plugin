@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 40** — gemini `APPROVE` (ninth lone approval),
-codex `REQUEST_CHANGES` (1 High + 1 Medium), both applied. Round 29's double approval failed its
-reproduction at the byte-identical digest; **a lone approval is not a pass, and a double approval triggers a
-reproduction rather than gating.**
+**Status:** Planning — **NOT GATED. Latest completed round: 41** — codex `REQUEST_CHANGES` (1 High); the
+gemini arm produced five findings but **no verdict line**, so its round failed closed. Three of its five
+were real and applied; two were false (the text it called missing is present in §7). Round 29's double
+approval failed its reproduction at the byte-identical digest.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 40 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 41 findings applied; **not gated**)
 
 ---
 
@@ -456,8 +456,12 @@ containing it **must be rejected** — the test iterates the range rather than l
 required rejecting a NUL byte, but `execve` truncates `argv` at NUL and Python's `subprocess` raises
 `ValueError: embedded null byte` before the call is made — verified by execution. The driver cannot
 construct the invocation, so the case could never run, and the mutation was unimplementable as written.
-Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And the **VALID class is swept exhaustively too** — every one of the 64 characters in `[A-Za-z0-9._-]` is
-accepted, in leading, medial and trailing position, **parameterized across all three inputs exactly as the
+Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And the **VALID class is swept exhaustively too** — every one of the **65** characters in `[A-Za-z0-9._-]` is
+accepted — 52 letters, 10 digits, and `.`, `_`, `-`, the count **derived by the generator rather than
+written as a literal** *(round 41, codex, High: round 40 said **64**, which is simply wrong — and a
+64-character sweep omits one valid character, which is exactly how the over-strict validator round 40
+existed to catch would have slipped through. Rejecting the exact components `.` and `..` does not remove
+`.` from ordinary components like `A.B`, so it is not excluded from the class)*, in leading, medial and trailing position, **parameterized across all three inputs exactly as the
 complement sweep is** *(round 40, codex, High: one acceptance case **per family** does not prove the positive
 half — a range typo that rejects an unchosen valid letter or digit passes every negative complement case and
 every chosen representative, while row 4 claimed full grammar coverage. **The complement was swept and the
@@ -1187,7 +1191,7 @@ requirement, and that is now visible rather than arguable.
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
-| 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all 64 valid chars accepted (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
+| 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
@@ -1251,7 +1255,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 
 1. **`S-INVENTORY`** — **Inventory and classify all 31 sites** and commit the classification; M3 asserts it.
 2. **`S-ALLOC`** — **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
-   `reviewer` component that is not `[A-Za-z0-9._-]+`, **and reject the exact values `.` and `..`**
+   `reviewer` component that is not `[A-Za-z0-9._-]+` **matched against the FULL string (anchored at both
+   ends)**, **and reject the exact values `.` and `..`** *(round 41, gemini: §7 named the character class but
+   not the anchoring, so an unanchored match accepts `A/../../escape` — the escape `M1.8` exists to reject)*
    (the grammar alone accepts both) — the separator `/` is the vector that would escape the intended
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
@@ -1403,7 +1409,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    so an allocated-mode branch implementing exactly what was written would **drop the FIFO/device defence**
    that `scripts/pty-capture.py:66,76,81` relies on and `scripts/tests/test_pty_capture.py:48` covers for
    the existing mode — a new mode silently narrower than the one it sits beside)*. Non-allocated call sites
-   keep today's create-if-absent behaviour, so this is a mode, not a global change.
+   keep today's create-if-absent behaviour, so this is a mode, not a global change. **`.captureid` stays
+   freshly generated per run in BOTH modes** *(round 41, gemini: `M2.13` and row 23 require it and §7 never
+   said so, though this step is the one that introduces the second mode)*.
    *(Without this, `_write_private`'s `O_CREAT|O_TRUNC` (`scripts/pty-capture.py:76`, `:321`) silently
    **recreates** a leaf that a retained pre-clean deleted — the `O_EXCL` reservation becomes decorative
    and §4.2's reinstate-and-must-fail mutation cannot fail. Twelve rounds specified the allocator and
@@ -1442,7 +1450,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    fixtures two runaway review runs left there** (`COREDEV-9999`, `testhash`, `abc`, `h1`; rounds 25 and 36)
    *(round 36: the isolation harness sandboxes the git worktree, **not `$HOME`**, so those runs escaped into
    precisely the directory this plan allocates into. Inert today because nothing reads the path until this
-   ticket ships — which is exactly why it must be cleared before it does)*. Then version bump + CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
+   ticket ships — which is exactly why it must be cleared before it does)*. Then version bump **off the pinned pre-change version `2.6.6`** *(round 41, gemini: §7 said "version bump"
+   without the baseline `M2.14` pins, so an implementer had no way to know what it must differ from)* +
+   CHANGELOG — state the **ceiling** (§3). **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
    grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
    2.1.220 in round 3.
 
