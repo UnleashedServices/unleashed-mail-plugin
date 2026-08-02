@@ -1,15 +1,18 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 60** — codex `REQUEST_CHANGES` with **one
-Medium and no Highs**, the narrowest result since round 47. Applied, plus a **second instance the sweep
-found and the reviewer did not**. Gate: **codex alone**, `APPROVE`/`APPROVE_WITH_NOTES` **plus a
-reproduction at the same digest**; gemini advisory (5th consecutive approval).
+**Status:** Planning — **NOT GATED. Latest completed round: 62** — codex `REQUEST_CHANGES` with **two
+Mediums, one Low and no Highs**: the round-61 mode sweep enumerated `range(0o1000)` and so missed the
+`S_IMODE` high bits, and `M4.11` sat outside the freshness cross-product `M4.7` claims to cover. Both
+applied, each with **a second instance the sweep found and the reviewer did not**. Gate: **codex alone**,
+`APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory (7th
+consecutive approval, and it has approved every round since 55 including six codex Highs — advisory for
+that reason).
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 60 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 62 findings applied; **not gated**)
 
 ---
 
@@ -439,11 +442,18 @@ writing into it. **And one mode cannot establish the class** *(round 61, codex)*
 whose mode differs from `0700` **at all**, so a privacy-only check (`mode & 0o077`) rejects the `0755` case
 and still accepts a usable owner-only `0300` — passing a single-value mutation while violating the operative
 rule. M1 therefore sweeps the **complement of `0o700` across the full permission space programmatically**,
-the case list **derived in the generator** (`[m for m in range(0o1000) if m != 0o700]`) and never asserted as
-a count, and asserts the allocator **allocates nothing** for every member. The owner-only members
-`0o100`–`0o600` are the ones that discriminate an exact-mode comparison from a group/world-bit check; a
-member that fails for `EACCES` rather than the mode check still satisfies the fail-closed assertion, so the
-sweep cannot pass an implementation that writes into any non-`0700` parent. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
+the case list **derived in the generator** (`[m for m in range(0o10000) if m != 0o700]`) and never asserted
+as a count, and asserts the allocator **allocates nothing** for every member. **The space is the full
+`stat.S_IMODE` twelve bits, not the low nine** *(round 62, codex: `range(0o1000)` omitted the setuid,
+setgid and sticky bits, so `0o1700` differs from `0o700` and yet sat outside the sweep — an implementation
+comparing `mode & 0o777` accepts it while passing every case)*. Two disjoint member sets discriminate: the
+owner-only `0o100`–`0o600` separate an exact-mode comparison from a group/world-bit check, and the seven
+high-bit modes `0o1700`–`0o7700` separate it from a `& 0o777` comparison. The fixture **asserts each mode
+was actually achieved** — `chmod` then `stat.S_IMODE` — and **fails the case rather than skipping it** where
+a filesystem refuses one, since a skipped mutation proves nothing; all 4096 are achievable on APFS,
+measured at 0.13 s for the whole sweep. A member that fails for `EACCES` rather than the mode check still
+satisfies the fail-closed assertion, so the sweep cannot pass an implementation that writes into any
+non-`0700` parent. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
 nothing about mode — a tag on a heading is not a cell)*. `[M1.13 full-layout]` **And the returned path is
 asserted in FULL** — `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`
@@ -1098,15 +1108,28 @@ snapshot-sidecar path and **skipped validation entirely on the `--reviewed-sha25
 whole stated suite — while violating `S-FRESH`, which keys freshness to each transcript's own record
 **independently of which digest path is used**. This is the same shape as round 9's `0600` and
 wrong-owner findings: **§7 stated the requirement and the proof set did not carry it.** The matrix is
-therefore *(timing-negative, timing-positive, **mtime-equality**, absent, mismatched, empty, malformed)*
-× *(sidecar, `--reviewed-sha256`)* × **transcript position — FIRST and SECOND reviewer**
+therefore the product of three factors, **and the factor lists below are operative text, not commentary**
+*(round 62 sweep: they had been written in the `*( … )*` round-note form, which §6.0 strips as history —
+the matrix definition was formally not contract)*:
+
+- **mutation kind (9)** — timing-negative, timing-positive, **mtime-equality**, absent, mismatched, empty,
+  malformed, **record-precedes-dispatch**, **sidecar-varied**
+- **digest path (2)** — snapshot sidecar, `--reviewed-sha256`
+- **transcript position (2)** — FIRST and SECOND reviewer
+
 *(round 30, codex, High: `S-FRESH` requires the record to be looked up **per transcript**, and the matrix
 varied timing state and digest path only. An implementation validating just the **first** reviewer's
 transcript passed every named case, because every mutation targeted that position — while accepting an
 entirely unanchored second transcript, which is the two-reviewer gate this ticket exists to protect)*
-— **twenty-eight** cells, none optional *(round 15, codex: the equality
-positive was defined but left out of the cross-product, so an implementation using `<` on one digest
-branch and `<=` on the other passed the stated matrix)*.
+
+**9 × 2 × 2 = 36 cells, none optional, and the total is DERIVED from the factor lists above rather than
+written down** — so adding a kind cannot leave a stale count *(round 62, codex: `M4.11` was defined outside
+the cross-product while `M4.7` claimed every preceding mutation ran through both digest paths, so an
+implementation consulting the sidecar only on the unexercised branch passed the stated matrix while
+violating `S-FRESH`. The sweep found `M4.10` outside it on the identical argument; both are now kinds. The
+count had already gone stale once at 14 and once at 28, which is why it is no longer written as a
+literal)* *(round 15, codex: the equality positive was defined but left out of the cross-product, so an
+implementation using `<` on one digest branch and `<=` on the other passed the stated matrix)*.
 
 ## 5. Risk register
 
@@ -1381,12 +1404,12 @@ requirement, and that is now visible rather than arguable.
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
-| 21b | the `.launch` record **exists BEFORE dispatch** (`S-FRESH`, §4.5) | `[M4.10 record-precedes-dispatch]` (round 42, codex — row 21 described only the comparison, so deleting the temporal rule left every check green) |
-| 21c | the snapshot sidecar is **not** a freshness anchor (§4.5) | `[M4.11 sidecar-not-an-anchor]` (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
+| 21b | the `.launch` record **exists BEFORE dispatch**, on **both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.10 record-precedes-dispatch]` — a **kind in the cross-product** (round 62 sweep — it sat outside it while `M4.7` claimed to cover every mutation) (round 42, codex — row 21 described only the comparison, so deleting the temporal rule left every check green) |
+| 21c | the snapshot sidecar is **not** a freshness anchor, on **both digest paths and both transcript positions** (§4.5) | `[M4.11 sidecar-not-an-anchor]` — a **kind in the cross-product** (round 62, codex — it sat outside it, so an implementation consulting the sidecar only on the unexercised digest branch passed) (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **increase** over the pinned pre-change `2.6.6` (not merely different) + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
-| 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **28-cell** cross-product (round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis) |
+| 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all kinds in **the cross-product defined by §4.5's factor lists** — cited, not restated, so the row cannot go stale (round 62; round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis, then 28 after it grew two more kinds) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
 | 23 | `.captureid` stays freshly generated per run, in **both** capture modes (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
 | 24 | the fixed directory/basename layout (§4.1, `S-ALLOC`) | `[M1.13 full-layout]` (round 14 — basename + "lands somewhere permitted" is passed by `<base>/transcripts/<repo-hash>/…`) |
