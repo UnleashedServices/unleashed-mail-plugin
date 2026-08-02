@@ -378,7 +378,8 @@ freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted
 ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call **and by
 binding the returned bytes to the emitted run ID by DERIVATION** — feed the interposed source a known value
 and require the emitted ID to equal the documented derivation of it, **not** to contain those bytes
-literally *(round 56, codex: requiring literal appearance is stricter than `S-ALLOC`, which asks only for a
+literally — **and assert the emitted ID's own width is ≥128 bits (≥32 hex chars)**, so a truncating
+derivation fails *(round 57, codex: the round-56 form proved dependence and not preservation)* *(round 56, codex: requiring literal appearance is stricter than `S-ALLOC`, which asks only for a
 fresh ≥128-bit source. A compliant `sha256(os.urandom(32)).hexdigest()` has ample entropy and fresh
 per-attempt candidates yet fails a literal-appearance assertion — and a §7-only implementer could not know
 which production mechanism the proof demanded.)* *(round 54, codex: observing the call alone is passed by an implementation that calls
@@ -1324,7 +1325,7 @@ requirement, and that is now visible rather than arguable.
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
-| 8f | the run ID is drawn from a fresh source of **≥128 bits**, the emitted ID a documented derivation of it (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
+| 8f | the run ID comes from a CSPRNG and the **EMITTED ID retains ≥128 bits** (≥32 hex chars), derivation entropy-preserving (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
