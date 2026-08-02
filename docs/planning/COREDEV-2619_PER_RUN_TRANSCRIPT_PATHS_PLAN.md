@@ -1617,7 +1617,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    and §4.2's reinstate-and-must-fail mutation cannot fail. Twelve rounds specified the allocator and
    never said the capture must land in the file it reserved.)* Add M2's pre-clean runtime mutation.
 6. **`S-THREAD`** — **Thread the allocated path** through `isolated-agy-review.sh`, both review skills,
-   `brainstorm` and `review-synthesis`. Synthesis takes **the two allocated paths as explicit inputs**
+   `brainstorm` and `review-synthesis`. **An allocated but EMPTY transcript must still classify as
+   `MISSING` in synthesis** *(round 60, codex: §4.2 justifies deleting the pre-clean by relying on exactly
+   this and `M5.17` proves it, while this step specified only path and CLI threading — so a §7-only
+   implementer could satisfy the step and fail a mandatory cell)*. Synthesis takes **the two allocated paths as explicit inputs**
    (`--reviewer <name>=<STATUS>:<allocated-path>`) — **not** a ticket/round contract from which it
    re-derives a name. *(Round 9, gemini: this step and §4.3's inventory note both demanded "a ticket/round
    input contract for synthesis", contradicting §4.1, which threads paths explicitly **precisely because**
