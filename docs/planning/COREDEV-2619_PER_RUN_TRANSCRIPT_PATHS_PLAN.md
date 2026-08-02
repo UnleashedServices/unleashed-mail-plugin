@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 59.** Gate: **codex alone**, on
-`APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory. Round 59: codex
-`REQUEST_CHANGES` (1 High + 1 Medium + 1 Low), all applied. codex separately confirmed §6.0 at 11/11 with
-deletion sensitivity and no third carrier, the 72-cell mapping, and the must-pass positives.
+**Status:** Planning — **NOT GATED. Latest completed round: 60** — codex `REQUEST_CHANGES` with **one
+Medium and no Highs**, the narrowest result since round 47. Applied, plus a **second instance the sweep
+found and the reviewer did not**. Gate: **codex alone**, `APPROVE`/`APPROVE_WITH_NOTES` **plus a
+reproduction at the same digest**; gemini advisory (5th consecutive approval).
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 59 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 60 findings applied; **not gated**)
 
 ---
 
@@ -1643,6 +1643,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    lowercase hex with no trailing content** — the same grammar `S-ALLOC` writes (§4.5) *(round 11, codex:
    this step required rejecting "malformed" and never said what that was)* *(round 7, gemini: this step said only "when
    absent", dropping the ID equality that makes the record an anchor rather than a touch-file)*.
+   **The snapshot sidecar is NOT a freshness anchor and must not affect the verdict** *(round 60, found by
+   sweeping the recently-added cells against §7 rather than by a reviewer: §4.5 states the prohibition and
+   `M4.11` proves it, and `S-FRESH` never carried it — the same defect codex reported for `M5.17`, one cell
+   over)*.
    **The operative comparison is `st_mtime_ns`: a transcript strictly OLDER than its `.launch` record is
    REJECTED; equal-or-newer is accepted** *(round 13, codex: `S-FRESH` never stated the comparison it
    exists to perform, so §7 could not be implemented without reading §4.5)*.
