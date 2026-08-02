@@ -1,22 +1,19 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 65**, run at **two effort tiers against the
-same digest** — `xhigh` and `max` each returned `REQUEST_CHANGES` with **one High, and the two Highs were
-DISJOINT**. `xhigh`: `S-ALLOC` mandates `os.fchmod` on the held descriptor while `M1.10`/`M1.12`/`M1.18`
-observe only outcomes, so close-then-`chmod(path)` passed all three — the mechanism-vs-outcome class fixed
-on **one of two symmetric arms**, `M2.24` having covered the writer. `max`: POSIX permits LF in a directory
-name, so a base satisfying every stated predicate splits the mandatory single-line `UNLEASHED_TRANSCRIPT=`
-marker — `M2.4` and `M5.5` each passed **without exercising their conjunction**. Both verified by execution
-and fixed; two new cells (`M1.20`, `M2.26`) and rows 8h/1c. Gate: **codex alone**,
-`APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory (7th
-consecutive approval, and it has approved every round since 55 including six codex Highs — advisory for
-that reason).
+**Status:** Planning — **NOT GATED. Latest completed round: 66**, run at **both effort tiers
+concurrently against one digest** — both `REQUEST_CHANGES`. The tiers **partly converged** this round
+(both found the line-terminator fix covering only the XDG arm, and the duplicate row identifier) and partly
+diverged: `xhigh` alone caught that `M2.26`'s mandatory outcome **contradicted §4.1's fallback rule** — a
+conforming implementation that fell back would fail the cell, the fourth instance of that class — while
+`max` alone caught that `fchmod` was proved CALLED but never forced to FAIL, that the no-path-`chmod`
+prohibition lived only in the cells, and that the parent's mandated `chmod` **mechanism** was unprovable
+and unnecessary. That last one was fixed by RELAXING the step to an outcome, not by adding a proof.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 65 findings applied, both tiers; **not gated**)
+**Last Updated:** 2026-08-02 (round 66 findings applied, both tiers; **not gated**)
 
 ---
 
@@ -464,7 +461,11 @@ outcome** *(round 65, codex, High)*: `S-ALLOC` mandates `os.fchmod` on the still
 **all three are outcomes**, so an allocator that CLOSES the fd and then runs `os.chmod(path, 0o600)` passes
 every one while violating §7. `os.fchmod` is therefore INTERPOSED and asserted to be called **on the leaf's
 open descriptor with `0o600`**, with **no path-based `chmod` on the target**, and the close-then-`chmod`
-substitute must FAIL the cell. This is the same rule `M2.24` already imposes on
+substitute must FAIL the cell. **And the failure polarity is forced** *(round 66 `max`, codex, High:
+proving `fchmod` is CALLED is passed by an implementation that catches `OSError` and carries on, returning
+an under-moded allocation — the call was observed, its failure was not obeyed)*: with the interposed
+`os.fchmod` made to raise, the allocator must **fail closed — allocate nothing, leave no leaf behind, exit
+non-zero**. This is the same rule `M2.24` already imposes on
 the **writer**: the mechanism-vs-outcome class had been fixed on **one of two symmetric arms**, which is
 this plan's most-repeated defect shape.
 `[M1.18 umask-achieved-modes]` **And every mode assertion runs under a SWEPT `umask`** *(round 63, codex)*:
@@ -735,9 +736,18 @@ and they are of the two kinds this campaign keeps needing:
   splits the mandatory single-line `UNLEASHED_TRANSCRIPT=` marker into two physical lines. `M2.4` proves
   base validity and `M5.5` proves marker discipline; **both pass without ever exercising their
   conjunction**, and no cell had varied the base's own BYTES. The mutation runs a base containing each line
-  terminator — LF and CR, and the CRLF pair — asserting the allocator **allocates nothing and exits
-  non-zero** naming the offending value, and a control base differing only by having those bytes removed is
-  ACCEPTED, so the rejection is attributable to the terminator and not to something else about the fixture.
+  terminator — LF and CR, and the CRLF pair — and a control base differing only by having those bytes
+  removed is ACCEPTED, so the rejection is attributable to the terminator and not to something else about
+  the fixture. **The outcome follows §4.1's fallback rule, not a blanket failure** *(round 66, codex, High:
+  the cell demanded "allocates nothing and exits non-zero" for a terminator-bearing `XDG_STATE_HOME`, but
+  §4.1 requires falling BACK when `$HOME/.local/state` is valid — so the mandatory result failed a
+  CONFORMING implementation. Fourth instance of that class.)*: with only the XDG base afflicted the
+  allocator **falls back and emits the fallback diagnostic**; only when **neither** base validates does it
+  allocate nothing and exit non-zero naming the offending value. **And the sweep runs on BOTH
+  base-selection arms — `XDG_STATE_HOME` and the `$HOME/.local/state` fallback — each in its EXISTING and
+  ABSENT form** *(round 66, both tiers: the cell named only XDG and only an existing directory, so a
+  validator applying the terminator check to the XDG arm alone passed every case and then accepted a
+  fallback beneath a `HOME` containing LF)*.
 - `[M2.4 xdg-valid-positive]` **Positive (must PASS), with the fixture INITIALLY ABSENT:** a **valid**
   `XDG_STATE_HOME` that **does not yet exist** is **created `0700` and used** — allocation lands beneath it and
   **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
@@ -757,7 +767,11 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
-  **The fallback arm runs the SAME case set as the XDG arm, item for item** — relative, inside a protected
+  **The fallback arm runs the SAME case set as the XDG arm, item for item** — **including the line
+  terminators LF, CR and CRLF** *(round 66, both tiers: the list enumerated every other predicate and
+  omitted the terminators the round-65 fix added, so "item for item" was false the moment the predicate
+  set grew — an enumeration that must be updated by hand is exactly what row 3 certifies blindly)* —
+  relative, inside a protected
   root, canonical/symlink alias, the sibling-prefix pair, a writable **regular file**, a **mode-`0200`
   directory**, and each of those again as an **absent base whose nearest existing ancestor** carries the
   defect *(round 53: written as one set applied to both arms after the fourth one-arm miss; a mechanical
@@ -914,7 +928,10 @@ error, one round later. Holding a reader open makes the open succeed, so the reg
 only thing left that can fail)*, and
 `[M2.24 allocated-mode-tightening]` **a leaf whose mode has been loosened to `0644` is re-tightened to
 `0600` — with `os.fchmod` INTERPOSED and asserted to be called on the opened FD WITH `0o600`**, and no
-path-based `chmod` on the target *(round 54, codex: asserting only that `fchmod` was called is passed by
+path-based `chmod` on the target — **plus a forced-failure polarity: with the interposed `fchmod` made to
+raise, the writer must WRITE NOTHING and fail closed** *(round 66 `max`, codex, High: catching the
+`OSError` and continuing passes the call-observation while writing into the deliberately loosened `0644`
+fixture — applied to both this arm and `M1.20`, since the two are symmetric)* *(round 54, codex: asserting only that `fchmod` was called is passed by
 `fchmod(fd, 0o644)` followed by `chmod(path, 0o600)` — the final mode is right and the fd-based defence is
 gone)*
 *(round 29 reproduction, codex: asserting only the final mode is passed by a **path-based `chmod`**, which
@@ -1445,8 +1462,8 @@ requirement, and that is now visible rather than arguable.
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
-| 1c | a base that is **valid but hostile to the single-line transport** is rejected — LF, CR, CRLF (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
-| 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
+| 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
+| 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit; for the parent this OUTCOME is the whole requirement, mechanism unconstrained (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
 | 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1542,11 +1559,18 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **the `0700` and `0600` required
    above are ACHIEVED modes, not requested ones — the ambient `umask` must not be able to clear a bit of
    either**, so a creation-mode argument alone is insufficient and the allocator enforces the final mode
-   explicitly (`os.fchmod` on the leaf's open fd; `os.chmod` on the parent immediately after `mkdir`) —
-   **the leaf's enforcement MUST be fd-based, matching `M2.24`'s rule for the writer**, while the parent
-   has no descriptor and is necessarily path-based; that asymmetry is deliberate and safe because `umask`
-   can only CLEAR bits, so `mkdir(0o700)` yields at most `0700` and the pre-`chmod` window is never MORE
-   permissive than the target
+   explicitly. **For the LEAF this is a MECHANISM requirement: `os.fchmod` on the held descriptor, and NO
+   path-based `chmod` may touch the target** — matching `M2.24`'s long-standing rule for the writer
+   *(round 66 `max`, codex: the prohibition existed only in the cells and the coverage table, so the proofs
+   were stricter than the step they cited — it is operative here now)*. **For the PARENT it is an OUTCOME
+   requirement only: the created directory IS `0700` whatever the ambient `umask`**, by either normalising
+   `umask` around the `mkdir` and restoring it, or `chmod`-ing immediately after — **the plan does not
+   choose between them** *(round 66 `max`, codex, High: the step had mandated the path-based `chmod` as a
+   mechanism, which `M1.18` cannot see and no row covered — and `umask(0)`-around-`mkdir` satisfies every
+   swept value without ever calling it. Mandating a mechanism the proof cannot observe, and which nothing
+   requires, is over-specification; the leaf differs because the fd-based form is what defeats a swapped
+   path.)*. The parent's window is safe under either: `umask` can only CLEAR bits, so `mkdir(0o700)`
+   yields at most `0700` and the transient state is never MORE permissive than the target
    *(round 63, codex: `makedirs(mode=0o700)` and `os.open(..., 0o600)` are both masked by `umask` and no
    mutation varied it, so under a restrictive `umask` an implementation that only passes the mode yields
    `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
@@ -1729,7 +1753,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    rule that did not exist in the step)* —
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
    **hard error**, not a creation. **Retain `O_NOFOLLOW`, `O_NONBLOCK`, the `fstat`/`S_ISREG` regular-file
-   check AND the `0600` fchmod** — **and the fd-based `S_ISREG` rejection must be DISTINGUISHABLE from any
+   check AND the `0600` fchmod** — **that `0600` enforcement is fd-based and NO path-based `chmod` may touch
+   the target** *(round 66 `max`, codex: `M2.24` had forbidden the path-based substitute since round 29
+   while this step never said so, so the cell was stricter than its contract)* — **and the fd-based
+   `S_ISREG` rejection must be DISTINGUISHABLE from any
    other rejection the writer makes** (its own error identity, not a generic failure), so a proof can show
    the `fstat` result is consumed **without forbidding a second, independent defence** *(round 63, codex:
    `M2.23` had required the writer to ACCEPT a FIFO whose `fstat` was forged regular, which is stricter
