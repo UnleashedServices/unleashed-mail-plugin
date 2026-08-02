@@ -1248,10 +1248,10 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | base validated: absolute, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, writable (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
-| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
+| 1 | base validated: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
+| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (ancestor satisfying the same predicates) (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
-| 3 | fallback validated by the **same three classes**; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
+| 3 | fallback validated by the **same complete predicate set** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
