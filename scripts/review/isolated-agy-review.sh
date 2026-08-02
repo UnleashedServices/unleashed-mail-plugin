@@ -35,6 +35,13 @@ set -uo pipefail
 PROMPT_REL="$1"
 OUT="$2"
 TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
+# Reviewer model. Switched from gemini-3.1-pro to gemini-3.6-flash-high after that arm failed to emit a
+# parseable verdict in 5 of 6 rounds (invented tokens REJECTED/PASS, two degenerations leaking
+# system-prompt tokens, two runs that implemented the plan instead of reviewing it). Those are token-level
+# and agent-mode failures, not reasoning failures — but they void rounds either way. `agy models` lists the
+# valid names; the isolation harness and the $HOME leak monitor stay regardless of model, because the
+# implement-instead-of-review failure comes from agy's agent mode, not from the model.
+MODEL="${MODEL:-gemini-3.6-flash-high}"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
 cd "$REPO" || exit 1
@@ -88,7 +95,7 @@ BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 # fails closed.
 rm -f "$OUT" "$OUT.captureid"
 ( cd "$TREE" && python3 "$TREE/scripts/pty-capture.py" --timeout "$TIMEOUT" "$OUT" -- \
-    agy --add-dir "$TREE" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
+    agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
 RC=$?
 
 # --- after: the assertion that would have caught COREDEV-2607 --------------------------------

@@ -1,14 +1,17 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 53** — codex `REQUEST_CHANGES` (2 High +
-1 Low), all applied; the other arm produced **no verdict token** and failed closed. Every codex finding for
-three rounds has been a **previous round's fix left incomplete**, most often on one of two symmetric arms.
+**Status:** Planning — **NOT GATED. Latest completed round: 54** — codex `REQUEST_CHANGES` (3 High +
+1 Low), all applied; the gemini arm emitted `VERDICT: PASS`, an invented token, and failed closed.
+**Reviewer model switched for round 55**: `gemini-3.1-pro` → `gemini-3.6-flash-high`, after that arm failed
+to emit a parseable verdict in **5 of 6 rounds** (invented `REJECTED`/`PASS`, two degenerations, two runs
+that implemented the plan instead of reviewing it). Maintainer-approved. The isolation harness and `$HOME`
+leak monitor are unchanged — the runaway failures come from agy's **agent mode**, not the model.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 53 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 54 findings applied; **not gated**)
 
 ---
 
@@ -368,8 +371,10 @@ PER ATTEMPT during a forced collision — every candidate within one allocation 
 codex: observing only two top-level allocations is passed by a coarse-clock or counter generator that
 differs across calls seconds apart yet **repeats within a rapid retry loop**, which is exactly when
 freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted mechanically** — the run
-ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call rather than
-inferred from output *(round 53, codex: `S-ALLOC`'s ≥128-bit requirement had no discriminating cell at all;
+ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call **and by
+binding the returned bytes to the emitted run ID** — the interposed value must appear in the allocated
+filename *(round 54, codex: observing the call alone is passed by an implementation that calls
+`secrets.token_bytes(16)`, **discards it**, and uses a counter. A call is not a use.)* *(round 53, codex: `S-ALLOC`'s ≥128-bit requirement had no discriminating cell at all;
 two differing samples cannot establish entropy)* *(round 52, codex: §4.1 requires
 concurrent captures to coexist, yet `M1.1`'s different-candidate case **stubs the run-ID source** and
 `M1.11` proves only the eight-attempt boundary — so a production generator returning a constant, or a
@@ -768,7 +773,10 @@ the flags** *(round 27, codex: interposing on `os.open` proves the flag set and 
 implementation with exactly the right flags that dropped the `fstat` check and the `fchmod` passed
 `M2.11`, `M2.9` and the non-allocated regression alike)*:
 `[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED — with a
-READER HELD OPEN on it, and `os.fstat` is INTERPOSED and asserted to be called ON THE OPENED FD**, so the
+READER HELD OPEN on it, `os.fstat` INTERPOSED and asserted to be called ON THE OPENED FD, and its RESULT
+asserted to be what drives the rejection** (the interposed `fstat` returns a forged regular-file mode and
+the allocator must then ACCEPT, proving `S_ISREG` consumes it) *(round 54, codex: proving the call happens
+is passed by a **decorative `fstat`** followed by a path-based `lstat` doing the real work)*, so the
 rejection is attributed to the fd-based check and not to something earlier
 *(round 29 reproduction, codex: observing only "the FIFO is rejected" is passed by an implementation that
 replaces the required fd-based `fstat` with a **pre-open `lstat`** — it never opens the target, never calls
@@ -783,7 +791,10 @@ non-discriminating cell was itself non-discriminating** — the same "reachabili
 error, one round later. Holding a reader open makes the open succeed, so the regular-file check is the
 only thing left that can fail)*, and
 `[M2.24 allocated-mode-tightening]` **a leaf whose mode has been loosened to `0644` is re-tightened to
-`0600` — with `os.fchmod` INTERPOSED and asserted to be called on the opened FD**
+`0600` — with `os.fchmod` INTERPOSED and asserted to be called on the opened FD WITH `0o600`**, and no
+path-based `chmod` on the target *(round 54, codex: asserting only that `fchmod` was called is passed by
+`fchmod(fd, 0o644)` followed by `chmod(path, 0o600)` — the final mode is right and the fd-based defence is
+gone)*
 *(round 29 reproduction, codex: asserting only the final mode is passed by a **path-based `chmod`**, which
 races a swapped path in a way `fchmod` on the held descriptor cannot. Same lesson as `M2.23`, same round:
 an outcome assertion cannot distinguish two mechanisms that produce the same outcome)*. *(Round 14, codex: dropping only `O_CREAT` already makes a missing leaf fail, so an
@@ -1002,6 +1013,11 @@ tag map and all eleven §6.0 tokens green)*.
 Without the positive case, M4 passes against the explicitly rejected implementation that creates its
 "launch" record while writing the artifact — an older transcript still predates that late record. Run
 both polarities through **both digest paths**, with **nanosecond-separated** mtimes.
+`[M4.11 sidecar-not-an-anchor]` **The snapshot sidecar's mtime is VARIED and must not affect the verdict** —
+including a sidecar written *after* the transcript *(round 54, codex: §4.5 forbids the sidecar as a
+freshness anchor and the matrix never varied it, so an implementation that validates `.launch` correctly
+**and additionally** rejects against a later concurrent snapshot passed every cell while reproducing the
+exact concurrency failure §4.5 describes)*.
 `[M4.9 transcript-position]` **And every mutation runs at BOTH transcript positions** — first and second reviewer — so an implementation anchoring only the first is caught *(round 30, codex)*.
 `[M4.8 mtime-equality]` **And an EXACT-EQUALITY positive**: a transcript whose `st_mtime_ns` matches its
 record's exactly is accepted *(round 14, codex: every stated case used separated mtimes, so an implementation
@@ -1280,7 +1296,7 @@ requirement, and that is now visible rather than arguable.
 | # | requirement (source) | proof cell |
 |---|---|---|
 | 1 | base validated: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
-| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** — ancestor satisfying the **complete** predicate set, discriminated on both arms (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
+| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** — ancestor satisfying the **complete** predicate set, discriminated on both arms (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent, **XDG arm**; the fallback positive is row 2b/`M2.22` (round 54, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same complete predicate set, existing AND absent-ancestor** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
@@ -1314,6 +1330,7 @@ requirement, and that is now visible rather than arguable.
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
 | 21b | the `.launch` record **exists BEFORE dispatch** (`S-FRESH`, §4.5) | `[M4.10 record-precedes-dispatch]` (round 42, codex — row 21 described only the comparison, so deleting the temporal rule left every check green) |
+| 21c | the snapshot sidecar is **not** a freshness anchor (§4.5) | `[M4.11 sidecar-not-an-anchor]` (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
