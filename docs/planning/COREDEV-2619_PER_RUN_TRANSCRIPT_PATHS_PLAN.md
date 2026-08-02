@@ -1,10 +1,10 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 63** — codex `REQUEST_CHANGES` with **three
-Mediums, one Low and no Highs**: the grammar bounded character class but never **length**; the `0700`/`0600`
-proofs sampled only the ambient **`umask`**, which masks a creation-mode argument; and `M2.23` was
-**stricter than `S-CAPTURE`**, failing a conforming defence-in-depth writer. All applied, with the missing
-length and distinguishable-cause **contracts added to §7**, not only the proofs. Gate: **codex alone**,
+**Status:** Planning — **NOT GATED. Latest completed round: 64** — codex `REQUEST_CHANGES`, **one High**:
+round 63's new length boundary sat at `PC_NAME_MAX` itself, so creating the required `<path>.launch`
+sibling must fail `ENAMETOOLONG` and **a conforming allocator could not pass its own mandatory positive**.
+Reproduced by execution, fixed by reserving headroom for the longest derived suffix (`.captureid`, ten
+bytes), and the mandatory-positive class swept across all 17 cells that assert one. Gate: **codex alone**,
 `APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory (7th
 consecutive approval, and it has approved every round since 55 including six codex Highs — advisory for
 that reason).
@@ -13,7 +13,7 @@ first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 63 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 64 findings applied; **not gated**)
 
 ---
 
@@ -463,6 +463,13 @@ passes the mode and never enforces it yields `0400`/`0500` under a restrictive `
 generator** — and asserts the ACHIEVED parent mode is `0700` and the ACHIEVED leaf mode is `0600` for every
 member, restoring the prior `umask` afterwards. One sampled value cannot establish this: which bit is
 cleared varies with the member, so a single umask is passed by an implementation that mishandles the rest.
+**The sweep necessarily includes umasks clearing the parent's owner-EXECUTE bit** (`0o100` among them),
+which is the member that pins the ORDERING `S-ALLOC` requires: an allocator that defers the parent
+`chmod` until after it creates the leaf cannot traverse its own `0600` parent and fails `EACCES`, so the
+"immediately after `mkdir`" in the step is load-bearing and this cell is what holds it *(round 64 sweep of
+the mandatory-positive class: the two known instances were a positive a CONFORMING implementation could
+not satisfy — `M2.23` round 63 and `M1.19` round 64 — and this is the ordering interaction that could
+have become a third)*.
 `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
 nothing about mode — a tag on a heading is not a cell)*. `[M1.13 full-layout]` **And the returned path is
@@ -580,10 +587,16 @@ over-strict validator that rejects `COREDEV-2619` fails no negative case.)*
 across all three inputs** *(round 63, codex)*: `M1.8` varies all valid characters at leading, medial and
 trailing position but never varies **length**, so a validator rejecting any component longer than 64
 characters passes it while violating `[A-Za-z0-9._-]+`, which bounds length not at all. The cell asserts a
-**maximal-length POSITIVE** — an assembled basename exactly at `os.pathconf(parent, 'PC_NAME_MAX')` is
-ACCEPTED — and a **one-byte-over NEGATIVE** rejected with the diagnostic naming the limit. The limit and
-the fixed overhead are **computed in the generator** from the assembled layout rather than written as
-literals, and the pair runs **for each of `ticket`, `round` and `reviewer` separately**, since an
+**maximal-length POSITIVE** — an assembled basename exactly at the limit is ACCEPTED **and every derived
+sibling is then created successfully** — and a **one-byte-over NEGATIVE** rejected with the diagnostic
+naming the limit. **The limit is `os.pathconf(parent, 'PC_NAME_MAX')` MINUS the longest suffix the run
+appends to that basename** — `.captureid` (`scripts/pty-capture.py:328`), ten bytes, not `.launch`'s seven
+*(round 64, codex, High: the round-63 cell put the positive at `PC_NAME_MAX` itself, so creating the
+`.launch` sibling must fail `ENAMETOOLONG` and a **conforming allocator could not pass its own mandatory
+positive**. Asserting the siblings are created is what makes the boundary prove headroom rather than just
+the leaf.)*. The limit, the fixed overhead and the suffix set are **computed in the generator** from the
+assembled layout and from the suffixes the implementation actually appends — never written as literals, so
+adding a sibling cannot leave the boundary stale — and the pair runs **for each of `ticket`, `round` and `reviewer` separately**, since an
 implementation bounding only one of the three passes a single-input case — the quantifier defect this plan
 has now hit at five separate sites.
 
@@ -1411,7 +1424,7 @@ requirement, and that is now visible rather than arguable.
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
-| 4b | the grammar bounds **length** only by the assembled basename's `PC_NAME_MAX`; maximal-length positive and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
+| 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
@@ -1509,10 +1522,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    explicitly (`os.fchmod` on the leaf's open fd; `os.chmod` on the parent immediately after `mkdir`)
    *(round 63, codex: `makedirs(mode=0o700)` and `os.open(..., 0o600)` are both masked by `umask` and no
    mutation varied it, so under a restrictive `umask` an implementation that only passes the mode yields
-   `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename
-   would exceed the target directory's `os.pathconf(parent, 'PC_NAME_MAX')`** — checked once the parent
-   exists and BEFORE the retry loop, exiting non-zero with a diagnostic naming the limit — **and impose no
-   bound tighter than that** *(round 63, codex: the grammar `[A-Za-z0-9._-]+` admits components of any
+   `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
+   any derived sibling appends to it, would exceed the target directory's
+   `os.pathconf(parent, 'PC_NAME_MAX')`** — the siblings being `<path>.launch` and `<path>.captureid`, so
+   the headroom is the longer of the two — checked once the parent exists and BEFORE the retry loop,
+   exiting non-zero with a diagnostic naming the limit, **and impose no bound tighter than that**
+   *(round 64, codex, High: round 63 bounded the leaf alone, which makes the mandatory maximal-length
+   positive unsatisfiable — the `.launch` creation immediately below it must then fail `ENAMETOOLONG`)* *(round 63, codex: the grammar `[A-Za-z0-9._-]+` admits components of any
    length while the leaf is a single basename, so §7 carried no length rule at all — an implementer had to
    invent one, and a validator capping components at 64 characters passed `M1.5` and `M1.8` while violating
    the stated grammar)*; **create the `<path>.launch` record
