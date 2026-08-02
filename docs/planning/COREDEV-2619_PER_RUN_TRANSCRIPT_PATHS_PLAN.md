@@ -1,14 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 56** — the review arm (now
-`gemini-3.6-flash-high`) returned `APPROVE`; codex returned `REQUEST_CHANGES` with 3 High + 1 Low, all
-applied. **Two consecutive rounds where the review arm approved a document containing High findings.**
+**Status:** Planning — **NOT GATED. Latest completed round: 58.** Gate rule (maintainer, round 57): **codex
+alone gates** on `APPROVE`/`APPROVE_WITH_NOTES`, **followed by a reproduction at the same digest**; the
+gemini arm is **advisory**. Round 58: codex `REQUEST_CHANGES` (1 High + 1 Medium + 1 Low), all applied;
+gemini `APPROVE` (advisory, 4th consecutive).
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 56 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 58 findings applied; **not gated**)
 
 ---
 
@@ -382,8 +383,15 @@ freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted
 ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call **and by
 binding the returned bytes to the emitted run ID by DERIVATION** — feed the interposed source a known value
 and require the emitted ID to equal the documented derivation of it, **not** to contain those bytes
-literally — **and assert the emitted ID's own width is ≥128 bits (≥32 hex chars)**, so a truncating
-derivation fails *(round 57, codex: the round-56 form proved dependence and not preservation)* *(round 56, codex: requiring literal appearance is stricter than `S-ALLOC`, which asks only for a
+literally — **assert the emitted ID's own width is ≥128 bits (≥32 hex chars)**, so a truncating derivation fails,
+**and assert the ID is a PURE FUNCTION OF THE SOURCE ALONE**: with the interposed source held FIXED, vary
+the clock, the attempt counter and the process ID — the emitted ID must be **identical** every time; with
+everything else held fixed, vary the source — it must change
+*(round 58, codex: width plus dependence is still not preservation. `source.hex()[0] + counter_as_31_hex`
+calls the CSPRNG, matches its documented derivation, emits a full 32 hex characters and yields distinct
+candidates per attempt — while retaining **four unpredictable bits** and relying on the counter `S-ALLOC`
+expressly forbids. Verified by construction. **Source-purity is the discriminator**: a preserving mapping
+cannot vary when only the counter varies.)* *(round 57, codex: the round-56 form proved dependence and not preservation)* *(round 56, codex: requiring literal appearance is stricter than `S-ALLOC`, which asks only for a
 fresh ≥128-bit source. A compliant `sha256(os.urandom(32)).hexdigest()` has ample entropy and fresh
 per-attempt candidates yet fails a literal-appearance assertion — and a §7-only implementer could not know
 which production mechanism the proof demanded.)* *(round 54, codex: observing the call alone is passed by an implementation that calls
@@ -1329,7 +1337,7 @@ requirement, and that is now visible rather than arguable.
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
-| 8f | the run ID comes from a CSPRNG and the **EMITTED ID retains ≥128 bits** (≥32 hex chars), derivation entropy-preserving (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
+| 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1541,8 +1549,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    later fails the cell; an exemption is a visible diff.
    **A review-skill invocation must be written as a LITERAL command.** The scan enforces this **as far as a
    text scan can**: it rejects any line that mentions `-review` together with `${`, backticks or `eval`.
-   **It cannot detect a fully assembled name** such as `kind=codex; "/unleashed-mail:${kind}-review"`, which
-   contains no literal reference to find — that is a **stated residual gap**, not a covered case
+   **It cannot detect a construction SPLIT ACROSS LINES so that no single line carries the pairing** — a
+   prefix assigned on one line, a kind on another, and the concatenation on a third — that is a **stated
+   residual gap**, not a covered case *(round 58, codex: the one-line `${kind}` example given here contains
+   **both** `-review` and `${` and would therefore be **rejected** by the rule stated two lines above it.
+   Round 57 corrected this in `M5.13` and left §7 asserting the contradiction — the fix reached the proof
+   cell and not the buildable-alone section, the exact mirror of round 56, where it reached §7 and not the
+   cell)*
    *(round 55, codex: the rule claimed the scan would reject any dynamic assembly, and no mechanism could
    deliver that. Narrowed to what a scan can actually do, and the remainder recorded, rather than leaving a
    universal claim no proof can establish — the same narrowing this plan applied to §3's squat resistance)*
