@@ -277,8 +277,12 @@ sections and does not test the implementation, so renaming an option or dropping
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every LITERAL review-skill reference and requires each to carry
 `--ticket` and `--round`, or to sit on a committed exemption list. It additionally rejects any line pairing
-`-review` with `${`, backticks or `eval` — and it CANNOT detect a fully split construction** (separate
-prefix/kind/suffix variables), which contains neither a literal reference nor such a pairing. **That is a
+`-review` with `${`, backticks or `eval` — and it CANNOT detect a construction SPLIT ACROSS LINES so that no single
+line carries the pairing** — a prefix on one line, a kind on another, the concatenation on a third
+*(round 57, codex: the example previously given, `kind=codex; "/unleashed-mail:${kind}-review"`, contains
+**both** trigger tokens on one line and would therefore be **rejected** by the stated mechanism — it
+illustrated the opposite of the residual, leaving a §7-only implementer unable to honour both the rule and
+its illustration)*. **That is a
 stated residual gap, matching `S-CALLERS` and row 32** *(round 56, codex: round 55 narrowed the step and the
 row and left this cell asserting universal rejection — the narrowing reached two surfaces of three)* *(round 45, gemini: a static scan enforcing a runtime
 property is only sound if the call sites are statically visible; making dynamic construction itself a
@@ -1395,8 +1399,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
-   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt drawing a FRESH run ID from a source
-   with at least 128 bits of entropy — never a constant, a counter, or a coarse clock — and the component
+   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt drawing a FRESH run ID from a CSPRNG
+   (`secrets`/`os.urandom`), and the EMITTED ID retaining at least 128 bits — ≥32 hex characters, the
+   derivation entropy-preserving — never a constant, a counter, a coarse clock, or a truncation**
+   *(round 57, codex: asking for a 128-bit SOURCE is satisfied by `sha256(os.urandom(32)).hexdigest()[:16]`,
+   which consumes every source byte, matches its documented derivation and passes sampled distinctness while
+   emitting only **64 bits**. Dependence on a strong source is not preservation of its entropy — the width
+   of the OUTPUT is what bounds collision probability.)* **— and the component
    grammar enforced by a SHARED, IMPORTABLE validator rather than inline logic** *(round 56, codex: without
    the shared validator being operative, a correct inline `fullmatch` fails `M1.8`)* *(round 52, codex:
    the generator is what makes allocation per-RUN and §7 never specified it)*, in a retry loop
