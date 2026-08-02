@@ -1,17 +1,14 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 54** — codex `REQUEST_CHANGES` (3 High +
-1 Low), all applied; the gemini arm emitted `VERDICT: PASS`, an invented token, and failed closed.
-**Reviewer model switched for round 55**: `gemini-3.1-pro` → `gemini-3.6-flash-high`, after that arm failed
-to emit a parseable verdict in **5 of 6 rounds** (invented `REJECTED`/`PASS`, two degenerations, two runs
-that implemented the plan instead of reviewing it). Maintainer-approved. The isolation harness and `$HOME`
-leak monitor are unchanged — the runaway failures come from agy's **agent mode**, not the model.
+**Status:** Planning — **NOT GATED. Latest completed round: 56** — the review arm (now
+`gemini-3.6-flash-high`) returned `APPROVE`; codex returned `REQUEST_CHANGES` with 3 High + 1 Low, all
+applied. **Two consecutive rounds where the review arm approved a document containing High findings.**
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 54 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 56 findings applied; **not gated**)
 
 ---
 
@@ -278,10 +275,12 @@ option in §4.1's shape present and spelled as specified *(round 37, gemini: "as
 Bash→Python boundary is unrunnable as interposition; the shim records `argv` and the assertion reads it)* *(round 18, codex: §6.0 compares two plan
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
-`[M5.13 callers-scan]` **A repo-wide SCAN finds every review-skill reference and requires each to carry
-`--ticket` and `--round`, or to sit on a committed exemption list — and the scan additionally FAILS on any
-invocation whose command is assembled dynamically** (a variable-expanded or concatenated skill name), since
-a text scan cannot prove such a call passes the flags *(round 45, gemini: a static scan enforcing a runtime
+`[M5.13 callers-scan]` **A repo-wide SCAN finds every LITERAL review-skill reference and requires each to carry
+`--ticket` and `--round`, or to sit on a committed exemption list. It additionally rejects any line pairing
+`-review` with `${`, backticks or `eval` — and it CANNOT detect a fully split construction** (separate
+prefix/kind/suffix variables), which contains neither a literal reference nor such a pairing. **That is a
+stated residual gap, matching `S-CALLERS` and row 32** *(round 56, codex: round 55 narrowed the step and the
+row and left this cell asserting universal rejection — the narrowing reached two surfaces of three)* *(round 45, gemini: a static scan enforcing a runtime
 property is only sound if the call sites are statically visible; making dynamic construction itself a
 failure keeps that assumption true rather than assuming it)* *(round 20, codex: enumerations were
 claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
@@ -377,8 +376,12 @@ codex: observing only two top-level allocations is passed by a coarse-clock or c
 differs across calls seconds apart yet **repeats within a rapid retry loop**, which is exactly when
 freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted mechanically** — the run
 ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call **and by
-binding the returned bytes to the emitted run ID** — the interposed value must appear in the allocated
-filename *(round 54, codex: observing the call alone is passed by an implementation that calls
+binding the returned bytes to the emitted run ID by DERIVATION** — feed the interposed source a known value
+and require the emitted ID to equal the documented derivation of it, **not** to contain those bytes
+literally *(round 56, codex: requiring literal appearance is stricter than `S-ALLOC`, which asks only for a
+fresh ≥128-bit source. A compliant `sha256(os.urandom(32)).hexdigest()` has ample entropy and fresh
+per-attempt candidates yet fails a literal-appearance assertion — and a §7-only implementer could not know
+which production mechanism the proof demanded.)* *(round 54, codex: observing the call alone is passed by an implementation that calls
 `secrets.token_bytes(16)`, **discards it**, and uses a counter. A call is not a use.)* *(round 53, codex: `S-ALLOC`'s ≥128-bit requirement had no discriminating cell at all;
 two differing samples cannot establish entropy)* *(round 52, codex: §4.1 requires
 concurrent captures to coexist, yet `M1.1`'s different-candidate case **stubs the run-ID source** and
@@ -478,8 +481,14 @@ the complete complement. "Includes" is not "for all")*)*,
 position passed while accepting invalid values in the other two — the requirement is stated for three
 inputs and was proved for one)*: for **every code point representable in `argv`** and not in `[A-Za-z0-9._-]` — the whole complement, not
 the `0x01–0xFF` prefix of it — **swept IN-PROCESS against the validator function** (import it and call it),
-**with the allocator asserted to CALL THAT SAME FUNCTION** — interposed at the production call site so a
-correct-but-unused validator fails the cell — plus a handful of CLI specimens for the end-to-end path
+**with the allocator's ACCEPT/REJECT DECISION asserted to EQUAL the validator's** for every swept
+specimen — the interposed validator returns a forced verdict and the allocator must follow it, so a path
+that calls the validator and then **ignores or catches its decision** fails the cell
+*(round 56, codex: interposing on the *call* still permitted an implementation that invokes the correct
+validator, discards its answer, and enforces only the CLI blacklist. Binding the **decision** is what ties
+the sweep to production.)* **And `S-ALLOC` requires the shared, importable validator** — without that, a
+correct **inline `fullmatch`** implementation would fail this mandatory cell, which is the proof being
+stricter than the contract in the same breath as being weaker than it *(round 56, codex)* — plus a handful of CLI specimens for the end-to-end path
 *(round 55, codex: making the sweep runnable in round 35 severed it from production. An implementation
 could keep a correct validator it never calls, use a blacklist in the CLI that satisfies `M1.5` and the
 handful of end-to-end specimens, and still accept another out-of-class code point. **Exhaustive against an
@@ -1315,7 +1324,7 @@ requirement, and that is now visible rather than arguable.
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
-| 8f | the run ID is drawn from a CSPRNG with **≥128 bits** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
+| 8f | the run ID is drawn from a fresh source of **≥128 bits**, the emitted ID a documented derivation of it (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1386,7 +1395,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
    the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt drawing a FRESH run ID from a source
-   with at least 128 bits of entropy — never a constant, a counter, or a coarse clock** *(round 52, codex:
+   with at least 128 bits of entropy — never a constant, a counter, or a coarse clock — and the component
+   grammar enforced by a SHARED, IMPORTABLE validator rather than inline logic** *(round 56, codex: without
+   the shared validator being operative, a correct inline `fullmatch` fails `M1.8`)* *(round 52, codex:
    the generator is what makes allocation per-RUN and §7 never specified it)*, in a retry loop
    **bounded at 8 attempts**, after which it
    exits non-zero with a diagnostic naming the exhausted parent *(round 15, codex: `S-ALLOC` still said
