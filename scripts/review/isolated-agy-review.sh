@@ -41,7 +41,7 @@ TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrap
 # and agent-mode failures, not reasoning failures — but they void rounds either way. `agy models` lists the
 # valid names; the isolation harness and the $HOME leak monitor stay regardless of model, because the
 # implement-instead-of-review failure comes from agy's agent mode, not from the model.
-MODEL="${MODEL:-gemini-3.6-flash-high}"
+MODEL="${MODEL:-gemini-3.1-pro-high}"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
 cd "$REPO" || exit 1
