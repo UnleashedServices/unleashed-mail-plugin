@@ -1,10 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 64** — codex `REQUEST_CHANGES`, **one High**:
-round 63's new length boundary sat at `PC_NAME_MAX` itself, so creating the required `<path>.launch`
-sibling must fail `ENAMETOOLONG` and **a conforming allocator could not pass its own mandatory positive**.
-Reproduced by execution, fixed by reserving headroom for the longest derived suffix (`.captureid`, ten
-bytes), and the mandatory-positive class swept across all 17 cells that assert one. Gate: **codex alone**,
+**Status:** Planning — **NOT GATED. Latest completed round: 65**, run at **two effort tiers against the
+same digest** — `xhigh` and `max` each returned `REQUEST_CHANGES` with **one High, and the two Highs were
+DISJOINT**. `xhigh`: `S-ALLOC` mandates `os.fchmod` on the held descriptor while `M1.10`/`M1.12`/`M1.18`
+observe only outcomes, so close-then-`chmod(path)` passed all three — the mechanism-vs-outcome class fixed
+on **one of two symmetric arms**, `M2.24` having covered the writer. `max`: POSIX permits LF in a directory
+name, so a base satisfying every stated predicate splits the mandatory single-line `UNLEASHED_TRANSCRIPT=`
+marker — `M2.4` and `M5.5` each passed **without exercising their conjunction**. Both verified by execution
+and fixed; two new cells (`M1.20`, `M2.26`) and rows 8h/1c. Gate: **codex alone**,
 `APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory (7th
 consecutive approval, and it has approved every round since 55 including six codex Highs — advisory for
 that reason).
@@ -13,7 +16,7 @@ first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 64 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 65 findings applied, both tiers; **not gated**)
 
 ---
 
@@ -158,7 +161,7 @@ reviewer already told you about is not doing independent work.)*
   validation against "all protected roots" while `M2.2` exercised only `.claude`, so an implementation
   treating `.claude` as the entire set passed — and a §7-only implementer had to invent the set)*.
   The allocator therefore **validates it: absolute, a DIRECTORY, outside every protected root,
-  writable AND searchable (`W_OK|X_OK`)** — otherwise it falls back to `$HOME/.local/state`, **which is validated
+  writable AND searchable (`W_OK|X_OK`), and free of the line terminators LF and CR** — otherwise it falls back to `$HOME/.local/state`, **which is validated
   by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
   NOTHING and exits non-zero with a diagnostic** — it never invents a third location.
   **"Writable" is defined for the FIRST-RUN case, which is the common one:** a base is valid if it exists,
@@ -455,6 +458,15 @@ a filesystem refuses one, since a skipped mutation proves nothing; all 4096 are 
 measured at 0.13 s for the whole sweep. A member that fails for `EACCES` rather than the mode check still
 satisfies the fail-closed assertion, so the sweep cannot pass an implementation that writes into any
 non-`0700` parent.
+`[M1.20 allocator-fchmod-on-fd]` **And the allocator's leaf enforcement is observed as a MECHANISM, not an
+outcome** *(round 65, codex, High)*: `S-ALLOC` mandates `os.fchmod` on the still-open descriptor, but
+`M1.10` observes creation flags, `M1.12` the final mode and `M1.18` the achieved mode under swept umasks —
+**all three are outcomes**, so an allocator that CLOSES the fd and then runs `os.chmod(path, 0o600)` passes
+every one while violating §7. `os.fchmod` is therefore INTERPOSED and asserted to be called **on the leaf's
+open descriptor with `0o600`**, with **no path-based `chmod` on the target**, and the close-then-`chmod`
+substitute must FAIL the cell. This is the same rule `M2.24` already imposes on
+the **writer**: the mechanism-vs-outcome class had been fixed on **one of two symmetric arms**, which is
+this plan's most-repeated defect shape.
 `[M1.18 umask-achieved-modes]` **And every mode assertion runs under a SWEPT `umask`** *(round 63, codex)*:
 `makedirs(mode=0o700)` and `os.open(..., 0o600)` both mask their mode argument, so an implementation that
 passes the mode and never enforces it yields `0400`/`0500` under a restrictive `umask` while passing
@@ -717,6 +729,15 @@ one-side fix, in its newest form.)* Assert also that no `/tmp/` literal survives
 passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
 and they are of the two kinds this campaign keeps needing:
+- `[M2.26 base-transport-conjunction]` **A base that is VALID but hostile to the transport is REJECTED**
+  *(round 65 `max`, codex, High)*: POSIX permits any byte but `/` and NUL in a directory name, so
+  `XDG_STATE_HOME` containing an LF satisfies absolute, directory, protected-root and `W_OK|X_OK` — and
+  splits the mandatory single-line `UNLEASHED_TRANSCRIPT=` marker into two physical lines. `M2.4` proves
+  base validity and `M5.5` proves marker discipline; **both pass without ever exercising their
+  conjunction**, and no cell had varied the base's own BYTES. The mutation runs a base containing each line
+  terminator — LF and CR, and the CRLF pair — asserting the allocator **allocates nothing and exits
+  non-zero** naming the offending value, and a control base differing only by having those bytes removed is
+  ACCEPTED, so the rejection is attributable to the terminator and not to something else about the fixture.
 - `[M2.4 xdg-valid-positive]` **Positive (must PASS), with the fixture INITIALLY ABSENT:** a **valid**
   `XDG_STATE_HOME` that **does not yet exist** is **created `0700` and used** — allocation lands beneath it and
   **no** fallback diagnostic is emitted. This is the metamorphic case that kills "always fall back".
@@ -1233,7 +1254,7 @@ reported before every freeze.
 | path layout | `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt` | §4.1 · `S-ALLOC` |
 | base ownership | `No caller passes --base, and the allocator REJECTS it if given` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
 | freshness comparison | `a transcript strictly OLDER than its `.launch` record is REJECTED; equal-or-newer is accepted` | §4.5 · `S-FRESH` |
-| base validation rules | `absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK\|X_OK`)` | §4.1 · `S-ALLOC` |
+| base validation rules | `absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK\|X_OK`), and free of the line terminators LF and CR` | §4.1 · `S-ALLOC` |
 | protected-root set | `` `.claude` and everything beneath it **except `.claude/worktrees`** `` | §4.1 · `S-ALLOC` |
 
 **The check is EXACTLY-ONCE, over text with round-notes stripped — round 18, both arms.** Presence is not
@@ -1423,6 +1444,8 @@ requirement, and that is now visible rather than arguable.
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
+| 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
+| 1c | a base that is **valid but hostile to the single-line transport** is rejected — LF, CR, CRLF (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
 | 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
 | 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
@@ -1519,7 +1542,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **the `0700` and `0600` required
    above are ACHIEVED modes, not requested ones — the ambient `umask` must not be able to clear a bit of
    either**, so a creation-mode argument alone is insufficient and the allocator enforces the final mode
-   explicitly (`os.fchmod` on the leaf's open fd; `os.chmod` on the parent immediately after `mkdir`)
+   explicitly (`os.fchmod` on the leaf's open fd; `os.chmod` on the parent immediately after `mkdir`) —
+   **the leaf's enforcement MUST be fd-based, matching `M2.24`'s rule for the writer**, while the parent
+   has no descriptor and is necessarily path-based; that asymmetry is deliberate and safe because `umask`
+   can only CLEAR bits, so `mkdir(0o700)` yields at most `0700` and the pre-`chmod` window is never MORE
+   permissive than the target
    *(round 63, codex: `makedirs(mode=0o700)` and `os.open(..., 0o600)` are both masked by `umask` and no
    mutation varied it, so under a restrictive `umask` an implementation that only passes the mode yields
    `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
@@ -1544,7 +1571,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
-   **absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK|X_OK`)** — where a
+   **absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK|X_OK`), and free
+   of the line terminators LF and CR** *(round 65 `max`, codex, High: POSIX permits any byte but `/` and NUL
+   in a directory name, so a base containing LF satisfied every other predicate and split the mandatory
+   single-line `UNLEASHED_TRANSCRIPT=` marker into two physical lines — verified by execution. The base
+   predicate and the transport were each proved and their CONJUNCTION was not, leaving a §7-only implementer
+   to invent either a further restriction or an encoded transport)* — where a
    base that **does not exist is valid if its nearest existing ancestor satisfies those same predicates**, and the allocator then creates it `0700`
    *(round 26, codex: §4.1 declared absent-but-creatable bases valid and `S-ALLOC` still demanded plain
    writability, so a §7-only implementer would reject **every** absent base — including the default on a
