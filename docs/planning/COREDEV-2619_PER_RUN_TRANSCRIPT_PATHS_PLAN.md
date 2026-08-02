@@ -362,7 +362,15 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
   threads into the capture target, the synthesis input and the artifact's `transcriptPath`. A marker
   rather than bare stdout, so a diagnostic line cannot be mistaken for the path.
 
-**Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.1 sentinel-collision]` Two random basenames are
+**Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.16 runid-freshness-unstubbed]` **The production run-ID source yields a FRESH candidate on every
+attempt and every run**, asserted **without stubbing it**: two allocations with identical
+ticket/round/reviewer must both succeed and return different paths *(round 52, codex: §4.1 requires
+concurrent captures to coexist, yet `M1.1`'s different-candidate case **stubs the run-ID source** and
+`M1.11` proves only the eight-attempt boundary — so a production generator returning a constant, or a
+coarse timestamp, passes every stubbed proof and every single-allocation integration case while repeatedly
+retrying one occupied pathname and rejecting the second same-metadata capture. **The generator is what makes
+allocation per-RUN**, and nothing specified or exercised it.)*
+`[M1.1 sentinel-collision]` Two random basenames are
 distinct anyway, and "neither truncated" observes nothing when both files start empty — the assertion
 could not fail. Instead: **pre-create a sentinel at the exact candidate the allocator will try first**
 (seeded by stubbing the run-ID source), containing known bytes. The allocator must retry on `EEXIST`,
@@ -574,7 +582,13 @@ passes M2 whenever the test leaves it unset)*: run with `XDG_STATE_HOME` **relat
 `.claude`** — including a canonical/symlink alias — **inside `.claude/plugins/data/…`**, **unwritable**, **a writable REGULAR FILE**, and **a mode-`0200`
 directory (writable, not searchable)**, and require the fallback **plus its diagnostic** in each
 *(round 49, codex: the last two are the cases an `exists()`+`W_OK` validator passes while being unusable)*;
-**and an ABSENT base whose nearest existing ancestor is not writable must fall back too** *(round 49,
+**and an ABSENT base whose nearest existing ancestor fails ANY of the predicates must fall back** — not
+only an unwritable ancestor, but an ancestor that is **a regular file** or a **mode-`0200` directory**
+*(round 52, codex: the regular-file and unsearchable-directory discriminators were added for the case where
+the base **exists**, so an implementation applying the full predicate only then, and checking merely `W_OK`
+on an absent base's ancestor, passed every named case and both positives while accepting
+`<writable-file>/child` or `<0200-directory>/child` — failing during creation instead of falling back.
+The quantifier rule on a new axis: **exists versus absent**, each needing the whole predicate set)* *(round 49,
 gemini: the XDG arm had a positive for absent-but-creatable and no negative for absent-but-NOT-creatable)*.
 **Plus a MUST-PASS SAFE SYMLINK, on both arms** — an `XDG_STATE_HOME` (and a `$HOME`-derived fallback)
 that is a **symlink resolving to a permitted, writable location** must be **ACCEPTED**
@@ -1249,7 +1263,7 @@ requirement, and that is now visible rather than arguable.
 | # | requirement (source) | proof cell |
 |---|---|---|
 | 1 | base validated: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
-| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** (ancestor satisfying the same predicates) (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
+| 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** — ancestor satisfying the **complete** predicate set, discriminated on both arms (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
 | 3 | fallback validated by the **same complete predicate set** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
@@ -1257,6 +1271,7 @@ requirement, and that is now visible rather than arguable.
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
+| 8e | the production run-ID source yields a fresh candidate per attempt and per run (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations, source **not** stubbed (round 52, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1325,7 +1340,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
-   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, in a retry loop **bounded at 8 attempts**, after which it
+   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt drawing a FRESH run ID from a source
+   with at least 128 bits of entropy — never a constant, a counter, or a coarse clock** *(round 52, codex:
+   the generator is what makes allocation per-RUN and §7 never specified it)*, in a retry loop
+   **bounded at 8 attempts**, after which it
    exits non-zero with a diagnostic naming the exhausted parent *(round 15, codex: `S-ALLOC` still said
    only "bounded" while §4.1 and row 8c specify 8 — a §7-only implementer had to invent the bound)*
    *(round 9, codex: this step said only
