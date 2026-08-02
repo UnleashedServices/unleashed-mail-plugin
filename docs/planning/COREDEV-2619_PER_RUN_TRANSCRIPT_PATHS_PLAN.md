@@ -636,6 +636,11 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **The fallback arm runs the SAME case set as the XDG arm, item for item** — relative, inside a protected
+  root, canonical/symlink alias, the sibling-prefix pair, a writable **regular file**, a **mode-`0200`
+  directory**, and each of those again as an **absent base whose nearest existing ancestor** carries the
+  defect *(round 53: written as one set applied to both arms after the fourth one-arm miss; a mechanical
+  parity check now compares the two case lists and caught the `0200` case missing here)*.
   **Round 53 (codex): the fallback arm also lacks the ABSENT-ANCESTOR cases.** `M2.5` tests the fallback as
   an *existing* regular file or unsearchable directory, but never an **absent** `$HOME/.local/state` whose
   nearest existing ancestor has either defect — so a fallback-specific validator applying the full predicate
