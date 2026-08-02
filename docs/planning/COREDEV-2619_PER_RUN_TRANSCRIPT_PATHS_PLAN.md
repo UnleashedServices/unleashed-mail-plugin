@@ -435,7 +435,15 @@ components and because the plan must not depend on the concatenation format neve
 they traverse. A future round must not "restore" the traversal claim.)* And
 `[M1.3 mis-moded-parent]` `makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` parent unchanged**, so M1 must include
 a mutation with a **pre-existing mis-moded parent** and assert the allocator fails closed rather than
-writing into it. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
+writing into it. **And one mode cannot establish the class** *(round 61, codex)*: `S-ALLOC` rejects a parent
+whose mode differs from `0700` **at all**, so a privacy-only check (`mode & 0o077`) rejects the `0755` case
+and still accepts a usable owner-only `0300` — passing a single-value mutation while violating the operative
+rule. M1 therefore sweeps the **complement of `0o700` across the full permission space programmatically**,
+the case list **derived in the generator** (`[m for m in range(0o1000) if m != 0o700]`) and never asserted as
+a count, and asserts the allocator **allocates nothing** for every member. The owner-only members
+`0o100`–`0o600` are the ones that discriminate an exact-mode comparison from a group/world-bit check; a
+member that fails for `EACCES` rather than the mode check still satisfies the fail-closed assertion, so the
+sweep cannot pass an implementation that writes into any non-`0700` parent. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
 nothing about mode — a tag on a heading is not a cell)*. `[M1.13 full-layout]` **And the returned path is
 asserted in FULL** — `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`
@@ -452,7 +460,10 @@ requires failing closed on a parent that exists "with a different mode **or owne
 the mode arm — so a mode-only implementation passed every listed M1 case while violating §7. The two
 checks fail independently and each needs its own mutation. *(Where the test cannot create a
 foreign-owned directory unprivileged, stub the `stat` result rather than skipping: a skipped mutation
-proves nothing, and this one is unrunnable as-written in most CI.)*
+proves nothing, and this one is unrunnable as-written in most CI.)* **The foreign uid is likewise
+parameterized, not a single value** *(round 61 sweep — the same defect codex found one row over in
+`M1.3`)*: the mutation runs over at least a **root uid (`0`)** and a **non-root uid distinct from
+`os.geteuid()`**, so an implementation that rejects only root-owned parents fails the second member.
 
 `[M1.5 invalid-component]` **Plus, round 11 (gemini, High): the rejection grammar itself had NO mutation.** Every M1 case above
 concerns collision, parent mode/owner and leaf mode; an allocator that **omitted component validation
@@ -1342,8 +1353,8 @@ requirement, and that is now visible rather than arguable.
 | 3 | fallback validated by the **same complete predicate set, existing AND absent-ancestor** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
-| 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
-| 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
+| 6 | fail closed on **every** pre-existing parent mode other than `0700` — complement swept, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — programmatic sweep over the derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
+| 7 | fail closed on pre-existing **wrong-owner** parent, uid **parameterized** — root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` (round 61 sweep — a lone foreign uid passes a reject-root-only check) |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
