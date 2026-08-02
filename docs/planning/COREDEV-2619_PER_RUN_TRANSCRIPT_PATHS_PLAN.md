@@ -367,7 +367,12 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 **Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.16 runid-freshness-unstubbed]` **The production run-ID source yields a FRESH candidate on every
 attempt and every run**, asserted **without stubbing it**: two allocations with identical
 ticket/round/reviewer must both succeed and return different paths, **and the generator is observed
-PER ATTEMPT during a forced collision — every candidate within one allocation must differ** *(round 53,
+PER ATTEMPT during a forced collision — every candidate within one allocation must differ AND each must be
+derived from an interposed CSPRNG value** *(round 55, codex: `M1.16` and `M1.17` did not prove their
+**conjunction**. An implementation can use CSPRNG bytes normally, then after `EEXIST` call the CSPRNG
+**decoratively**, discard the result, and derive retry candidates from a counter: `M1.16` still sees calls
+and distinct candidates, and a non-collision `M1.17` still sees its value emitted. Binding every attempt's
+candidate to an interposed value is what closes the gap between the two cells.)* *(round 53,
 codex: observing only two top-level allocations is passed by a coarse-clock or counter generator that
 differs across calls seconds apart yet **repeats within a rapid retry loop**, which is exactly when
 freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted mechanically** — the run
@@ -473,7 +478,12 @@ the complete complement. "Includes" is not "for all")*)*,
 position passed while accepting invalid values in the other two — the requirement is stated for three
 inputs and was proved for one)*: for **every code point representable in `argv`** and not in `[A-Za-z0-9._-]` — the whole complement, not
 the `0x01–0xFF` prefix of it — **swept IN-PROCESS against the validator function** (import it and call it),
-with a handful of CLI specimens for the end-to-end path
+**with the allocator asserted to CALL THAT SAME FUNCTION** — interposed at the production call site so a
+correct-but-unused validator fails the cell — plus a handful of CLI specimens for the end-to-end path
+*(round 55, codex: making the sweep runnable in round 35 severed it from production. An implementation
+could keep a correct validator it never calls, use a blacklist in the CLI that satisfies `M1.5` and the
+handful of end-to-end specimens, and still accept another out-of-class code point. **Exhaustive against an
+unused function proves nothing about the allocator.**)*
 *(round 35, gemini, High, measured: driving the allocator as a **subprocess** once per code point is
 1,114,112 invocations at ~2.3 ms ≈ **42 minutes** — physically unrunnable in a suite that must return in
 seconds. The same exhaustive sweep in-process takes **0.15 s**. This is the fourth time in this campaign a
@@ -1349,7 +1359,7 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | **every** review-skill invocation site passes ticket and round and is written as a **literal command** (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is **scan-bounded**, with fully-assembled names a stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
@@ -1508,9 +1518,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    review-skill references and requires each either to carry both flags or to sit on an explicit committed
    exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
    later fails the cell; an exemption is a visible diff.
-   **A review-skill invocation must be written as a LITERAL command — assembling the skill name or its
-   flags dynamically (variable expansion, concatenation, `eval`) is itself a failure**, because a static
-   scan can only bind a runtime property while the call sites are statically visible
+   **A review-skill invocation must be written as a LITERAL command.** The scan enforces this **as far as a
+   text scan can**: it rejects any line that mentions `-review` together with `${`, backticks or `eval`.
+   **It cannot detect a fully assembled name** such as `kind=codex; "/unleashed-mail:${kind}-review"`, which
+   contains no literal reference to find — that is a **stated residual gap**, not a covered case
+   *(round 55, codex: the rule claimed the scan would reject any dynamic assembly, and no mechanism could
+   deliver that. Narrowed to what a scan can actually do, and the remainder recorded, rather than leaving a
+   universal claim no proof can establish — the same narrowing this plan applied to §3's squat resistance)*
    *(round 46, codex: round 45 put this rule in `M5.13` alone, so a §7-conforming implementation could scan
    literal references, permit a dynamically assembled invocation carrying both flags, and still fail a
    mandatory cell. **A rule that lives only in a proof cell is not a rule** — my own lens item, committed
