@@ -1,19 +1,20 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 66**, run at **both effort tiers
-concurrently against one digest** — both `REQUEST_CHANGES`. The tiers **partly converged** this round
-(both found the line-terminator fix covering only the XDG arm, and the duplicate row identifier) and partly
-diverged: `xhigh` alone caught that `M2.26`'s mandatory outcome **contradicted §4.1's fallback rule** — a
-conforming implementation that fell back would fail the cell, the fourth instance of that class — while
-`max` alone caught that `fchmod` was proved CALLED but never forced to FAIL, that the no-path-`chmod`
-prohibition lived only in the cells, and that the parent's mandated `chmod` **mechanism** was unprovable
-and unnecessary. That last one was fixed by RELAXING the step to an outcome, not by adding a proof.
+**Status:** Planning — **NOT GATED. Latest completed round: 67**, both tiers concurrently on one digest
+— both `REQUEST_CHANGES`, and this round they were **fully disjoint**. `xhigh`: `M5.13`'s scan token set
+omitted interpreter indirection, so a ONE-LINE `sh -c "$cmd"` construction carried the complete shape and
+passed; and `M1.19` proved the length boundary's outcomes but never its **ordering** before the retry loop.
+`max`: `S-ALLOC` still judged the fallback by "those same three rules", a **stale count** that let a
+§7-only implementer skip the round-66 terminator check on the fallback arm; and the round-66 forced-`fchmod`-failure
+polarity had been added to the **cells only**, so an allocator that left the failed reservation behind
+conformed to §7 while failing a mandatory cell — the same proof-stricter-than-contract class the round-66
+fix addressed, reintroduced one round later by fixing the proof without the contract.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 66 findings applied, both tiers; **not gated**)
+**Last Updated:** 2026-08-02 (round 67 findings applied, both tiers; **not gated**)
 
 ---
 
@@ -287,7 +288,11 @@ sections and does not test the implementation, so renaming an option or dropping
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every LITERAL review-skill reference and requires each to carry
 `--ticket` and `--round`, or to sit on a committed exemption list. It additionally rejects any line pairing
-`-review` with `${`, backticks or `eval` — and it CANNOT detect a construction SPLIT ACROSS LINES so that no single
+`-review` with `${`, backticks, `eval`, or an interpreter invocation (`sh -c`, `bash -c`, `zsh -c`, `exec`)
+*(round 67, codex, High: the token set omitted interpreter indirection, so the ONE-LINE construction
+`cmd='/unleashed-mail:codex-review --ticket T --round R plan'; sh -c "$cmd"` carried the complete required
+shape, tripped none of the rejected tokens, and still invoked dynamically — the cell passed a plausible
+violation while row 32 claimed the only residual was split-across-lines)* — and it CANNOT detect a construction SPLIT ACROSS LINES so that no single
 line carries the pairing** — a prefix on one line, a kind on another, the concatenation on a third
 *(round 57, codex: the example previously given, `kind=codex; "/unleashed-mail:${kind}-review"`, contains
 **both** trigger tokens on one line and would therefore be **rejected** by the stated mechanism — it
@@ -611,7 +616,13 @@ the leaf.)*. The limit, the fixed overhead and the suffix set are **computed in 
 assembled layout and from the suffixes the implementation actually appends — never written as literals, so
 adding a sibling cannot leave the boundary stale — and the pair runs **for each of `ticket`, `round` and `reviewer` separately**, since an
 implementation bounding only one of the three passes a single-input case — the quantifier defect this plan
-has now hit at five separate sites.
+has now hit at five separate sites. **And the ORDERING is asserted, not just the outcome** *(round 67,
+codex: `S-ALLOC` requires the length check after parent creation and **before the retry loop**, while this
+cell and row 4b proved only boundary outcomes, sibling creation and per-input parameterization — an
+allocator that generates its first run ID and performs the same check INSIDE the loop passes every stated
+case, so the ordering clause had no deletion-sensitive coverage)*: on the one-byte-over negative the run-ID
+source is **interposed and asserted to have been called ZERO times**, which is what distinguishes a check
+before the loop from the identical check inside it.
 
 `[M1.9 component-echo]` **Plus, round 12 (codex): the supplied COMPONENTS must appear in the returned path.** No proof asserted
 it, so a wrapper that **hard-codes** ticket/round/reviewer — or an allocator that validates them and then
@@ -1461,10 +1472,10 @@ requirement, and that is now visible rather than arguable.
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
-| 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
+| 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` — **and a FAILED `fchmod` unlinks the reservation, allocates nothing, exits non-zero** (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
 | 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
 | 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit; for the parent this OUTCOME is the whole requirement, mechanism unconstrained (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
-| 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
+| 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input**, checked **before the retry loop** (zero run-ID generations on the negative) (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
@@ -1480,7 +1491,7 @@ requirement, and that is now visible rather than arguable.
 | 15f | a **missing reserved leaf is a hard error, not a creation** — no creating retry (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` — every target open observed **in-process** (round 37) (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
-| 15h | allocated mode keeps the **fd-based** `0600` `fchmod` (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
+| 15h | allocated mode keeps the **fd-based** `0600` `fchmod`, applied **before any payload byte** and **writing NOTHING if it fails** (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
 | 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper using the **plugin's** `$0`-relative writer (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
@@ -1508,7 +1519,7 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is **scan-bounded**, with fully-assembled names a stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is **scan-bounded** — the pairing must fall on ONE line, interpreter indirection included in the token set — with constructions split across lines the stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
@@ -1562,7 +1573,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    explicitly. **For the LEAF this is a MECHANISM requirement: `os.fchmod` on the held descriptor, and NO
    path-based `chmod` may touch the target** — matching `M2.24`'s long-standing rule for the writer
    *(round 66 `max`, codex: the prohibition existed only in the cells and the coverage table, so the proofs
-   were stricter than the step they cited — it is operative here now)*. **For the PARENT it is an OUTCOME
+   were stricter than the step they cited — it is operative here now)*. **If that `fchmod` FAILS the
+   allocator UNLINKS the reservation it just created, allocates nothing and exits non-zero — a leaf whose
+   mode could not be enforced is never left behind** *(round 67 `max`, codex, High: `M1.20`'s round-66
+   forced-failure polarity was added to the CELL only, so an allocator that propagated the error and left
+   the failed reservation in place conformed to §7 and failed a mandatory cell. The same defect class the
+   round-66 fix addressed, reintroduced one round later by fixing the proof without the contract.)*. **For the PARENT it is an OUTCOME
    requirement only: the created directory IS `0700` whatever the ambient `umask`**, by either normalising
    `umask` around the `mkdir` and restoring it, or `chmod`-ing immediately after — **the plan does not
    choose between them** *(round 66 `max`, codex, High: the step had mandated the path-based `chmod` as a
@@ -1604,8 +1620,13 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    base that **does not exist is valid if its nearest existing ancestor satisfies those same predicates**, and the allocator then creates it `0700`
    *(round 26, codex: §4.1 declared absent-but-creatable bases valid and `S-ALLOC` still demanded plain
    writability, so a §7-only implementer would reject **every** absent base — including the default on a
-   fresh host)* — else `$HOME/.local/state` judged by those
-   same three rules. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
+   fresh host)* — else `$HOME/.local/state`, judged by **the COMPLETE predicate set stated above, every one of
+   them and not a subset** *(round 67 `max`, codex, High: this said "those same three rules", whose
+   antecedent was the directory/writable/searchable trio — a count that went stale the moment the set grew.
+   A §7-only implementer could follow the literal step and omit the absolute-path, protected-root and
+   LF/CR checks on the fallback arm, which is precisely the round-66 finding reappearing because the fix
+   landed in §4.1 and the cells but not here. It is stated as a REFERENCE to the set, not a restatement,
+   so it cannot go stale again.)*. **The protected-root set, enumerated here so §7 stands alone:** `.claude` and
    everything beneath it **except `.claude/worktrees`** — including `.claude/plugins/data/…`.
    **The candidate is CANONICALLY RESOLVED (symlinks followed) and then containment is judged BY PATH
    COMPONENT, never by string prefix** — so `$HOME/.claude-cache` is accepted and
@@ -1754,7 +1775,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
    **hard error**, not a creation. **Retain `O_NOFOLLOW`, `O_NONBLOCK`, the `fstat`/`S_ISREG` regular-file
    check AND the `0600` fchmod** — **that `0600` enforcement is fd-based and NO path-based `chmod` may touch
-   the target** *(round 66 `max`, codex: `M2.24` had forbidden the path-based substitute since round 29
+   the target**, **applied BEFORE any payload byte is written, and if it fails the writer writes NOTHING
+   and fails closed** *(round 67 `max`, codex, High: `M2.24` requires exactly that and this step ordered
+   neither the `fchmod` nor its failure behaviour, so a writer that wrote first, or that continued past a
+   failed tightening, conformed to §7 while failing a mandatory cell)* *(round 66 `max`, codex: `M2.24` had forbidden the path-based substitute since round 29
    while this step never said so, so the cell was stricter than its contract)* — **and the fd-based
    `S_ISREG` rejection must be DISTINGUISHABLE from any
    other rejection the writer makes** (its own error identity, not a generic failure), so a proof can show
