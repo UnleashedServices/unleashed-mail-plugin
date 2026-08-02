@@ -1,9 +1,10 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 62** — codex `REQUEST_CHANGES` with **two
-Mediums, one Low and no Highs**: the round-61 mode sweep enumerated `range(0o1000)` and so missed the
-`S_IMODE` high bits, and `M4.11` sat outside the freshness cross-product `M4.7` claims to cover. Both
-applied, each with **a second instance the sweep found and the reviewer did not**. Gate: **codex alone**,
+**Status:** Planning — **NOT GATED. Latest completed round: 63** — codex `REQUEST_CHANGES` with **three
+Mediums, one Low and no Highs**: the grammar bounded character class but never **length**; the `0700`/`0600`
+proofs sampled only the ambient **`umask`**, which masks a creation-mode argument; and `M2.23` was
+**stricter than `S-CAPTURE`**, failing a conforming defence-in-depth writer. All applied, with the missing
+length and distinguishable-cause **contracts added to §7**, not only the proofs. Gate: **codex alone**,
 `APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory (7th
 consecutive approval, and it has approved every round since 55 including six codex Highs — advisory for
 that reason).
@@ -12,7 +13,7 @@ first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 62 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 63 findings applied; **not gated**)
 
 ---
 
@@ -453,7 +454,16 @@ was actually achieved** — `chmod` then `stat.S_IMODE` — and **fails the case
 a filesystem refuses one, since a skipped mutation proves nothing; all 4096 are achievable on APFS,
 measured at 0.13 s for the whole sweep. A member that fails for `EACCES` rather than the mode check still
 satisfies the fail-closed assertion, so the sweep cannot pass an implementation that writes into any
-non-`0700` parent. `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
+non-`0700` parent.
+`[M1.18 umask-achieved-modes]` **And every mode assertion runs under a SWEPT `umask`** *(round 63, codex)*:
+`makedirs(mode=0o700)` and `os.open(..., 0o600)` both mask their mode argument, so an implementation that
+passes the mode and never enforces it yields `0400`/`0500` under a restrictive `umask` while passing
+`M1.2`, `M1.12`, `M2.4` and `M2.22`, every one of which samples only the ambient value. The mutation sweeps
+`[u for u in range(0o1000) if u & 0o700]` — the umasks able to clear an owner bit, **derived in the
+generator** — and asserts the ACHIEVED parent mode is `0700` and the ACHIEVED leaf mode is `0600` for every
+member, restoring the prior `umask` afterwards. One sampled value cannot establish this: which bit is
+cleared varies with the member, so a single umask is passed by an implementation that mishandles the rest.
+`[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
 nothing about mode — a tag on a heading is not a cell)*. `[M1.13 full-layout]` **And the returned path is
 asserted in FULL** — `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`
@@ -550,8 +560,10 @@ required rejecting a NUL byte, but `execve` truncates `argv` at NUL and Python's
 `ValueError: embedded null byte` before the call is made — verified by execution. The driver cannot
 construct the invocation, so the case could never run, and the mutation was unimplementable as written.
 Asserting a rejection the OS makes unreachable proves nothing about the allocator.)* And the **VALID class is swept exhaustively too** — every one of the **65** characters in `[A-Za-z0-9._-]` is
-accepted — 52 letters, 10 digits, and `.`, `_`, `-`, the count **derived by the generator rather than
-written as a literal** *(round 41, codex, High: round 40 said **64**, which is simply wrong — and a
+accepted — 52 letters, 10 digits, and `.`, `_`, `-` — the member list and its count **derived by the
+generator from the class itself**, any figure quoted in prose being an informative annotation and never the
+source of truth *(round 63 sweep: the same self-contradiction codex found in §4.5's matrix total, which
+claimed to be derived "rather than written down" in the sentence that wrote it down)* *(round 41, codex, High: round 40 said **64**, which is simply wrong — and a
 64-character sweep omits one valid character, which is exactly how the over-strict validator round 40
 existed to catch would have slipped through. Rejecting the exact components `.` and `..` does not remove
 `.` from ordinary components like `A.B`, so it is not excluded from the class)*, in leading, medial and trailing position, **parameterized across all three inputs exactly as the
@@ -564,6 +576,16 @@ the sweep was parameterized in round 21 and its positive half still said only "a
 validator accepting `.`/`_`/`-` in the exercised position while rejecting them in another passed every
 stated case — a fix applied to one half of a proof is the same defect as one applied to one section)*. *(The acceptance half matters as much: an
 over-strict validator that rejects `COREDEV-2619` fails no negative case.)*
+`[M1.19 basename-length-boundary]` **And the grammar's LENGTH half is swept at the boundary, parameterized
+across all three inputs** *(round 63, codex)*: `M1.8` varies all valid characters at leading, medial and
+trailing position but never varies **length**, so a validator rejecting any component longer than 64
+characters passes it while violating `[A-Za-z0-9._-]+`, which bounds length not at all. The cell asserts a
+**maximal-length POSITIVE** — an assembled basename exactly at `os.pathconf(parent, 'PC_NAME_MAX')` is
+ACCEPTED — and a **one-byte-over NEGATIVE** rejected with the diagnostic naming the limit. The limit and
+the fixed overhead are **computed in the generator** from the assembled layout rather than written as
+literals, and the pair runs **for each of `ticket`, `round` and `reviewer` separately**, since an
+implementation bounding only one of the three passes a single-input case — the quantifier defect this plan
+has now hit at five separate sites.
 
 `[M1.9 component-echo]` **Plus, round 12 (codex): the supplied COMPONENTS must appear in the returned path.** No proof asserted
 it, so a wrapper that **hard-codes** ticket/round/reviewer — or an allocator that validates them and then
@@ -834,8 +856,14 @@ implementation with exactly the right flags that dropped the `fstat` check and t
 `M2.11`, `M2.9` and the non-allocated regression alike)*:
 `[M2.23 allocated-nonregular-target]` **a pre-created FIFO at the allocated path is REJECTED — with a
 READER HELD OPEN on it, `os.fstat` INTERPOSED and asserted to be called ON THE OPENED FD, and its RESULT
-asserted to be what drives the rejection** (the interposed `fstat` returns a forged regular-file mode and
-the allocator must then ACCEPT, proving `S_ISREG` consumes it) *(round 54, codex: proving the call happens
+asserted to be what drives the rejection** — unforged, the **WRITER** rejects **with the fd-based
+`S_ISREG` cause specifically**; with the interposed `fstat` forged to report a regular file **that cause
+must not fire**, and any other rejection a defence-in-depth writer raises is permitted and does not fail
+the cell *(round 63, codex: the cell had demanded outright ACCEPTANCE under the forged stat — STRICTER
+than `S-CAPTURE`, so a writer that consumes `fstat` and additionally checks by another means failed a
+mandatory cell while fully conforming. Discriminating on the rejection CAUSE proves the result is consumed
+without forbidding a second defence. The cell also attributed the behaviour to the **allocator** while
+importing the **writer**.)* *(round 54, codex: proving the call happens
 is passed by a **decorative `fstat`** followed by a path-based `lstat` doing the real work)*, so the
 rejection is attributed to the fd-based check and not to something earlier
 *(round 29 reproduction, codex: observing only "the FIFO is rejected" is passed by an implementation that
@@ -1122,8 +1150,8 @@ varied timing state and digest path only. An implementation validating just the 
 transcript passed every named case, because every mutation targeted that position — while accepting an
 entirely unanchored second transcript, which is the two-reviewer gate this ticket exists to protect)*
 
-**9 × 2 × 2 = 36 cells, none optional, and the total is DERIVED from the factor lists above rather than
-written down** — so adding a kind cannot leave a stale count *(round 62, codex: `M4.11` was defined outside
+**Their product is the cell count — none optional — and that total is DERIVED from the factor lists
+above rather than written down here** — so adding a kind cannot leave a stale count *(round 62, codex: `M4.11` was defined outside
 the cross-product while `M4.7` claimed every preceding mutation ran through both digest paths, so an
 implementation consulting the sidecar only on the unexercised branch passed the stated matrix while
 violating `S-FRESH`. The sweep found `M4.10` outside it on the identical argument; both are now kinds. The
@@ -1382,6 +1410,8 @@ requirement, and that is now visible rather than arguable.
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
+| 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
+| 4b | the grammar bounds **length** only by the assembled basename's `PC_NAME_MAX`; maximal-length positive and one-over negative, **per input** (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
@@ -1473,7 +1503,19 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    only "bounded" while §4.1 and row 8c specify 8 — a §7-only implementer had to invent the bound)*
    *(round 9, codex: this step said only
    `O_CREAT|O_EXCL`, so an implementer using the conventional `0o666` creation mode yields `0644` and
-   **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **create the `<path>.launch` record
+   **fails M1's `0600` assertion** — §7 was not sufficient on its own)*; **the `0700` and `0600` required
+   above are ACHIEVED modes, not requested ones — the ambient `umask` must not be able to clear a bit of
+   either**, so a creation-mode argument alone is insufficient and the allocator enforces the final mode
+   explicitly (`os.fchmod` on the leaf's open fd; `os.chmod` on the parent immediately after `mkdir`)
+   *(round 63, codex: `makedirs(mode=0o700)` and `os.open(..., 0o600)` are both masked by `umask` and no
+   mutation varied it, so under a restrictive `umask` an implementation that only passes the mode yields
+   `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename
+   would exceed the target directory's `os.pathconf(parent, 'PC_NAME_MAX')`** — checked once the parent
+   exists and BEFORE the retry loop, exiting non-zero with a diagnostic naming the limit — **and impose no
+   bound tighter than that** *(round 63, codex: the grammar `[A-Za-z0-9._-]+` admits components of any
+   length while the leaf is a single basename, so §7 carried no length rule at all — an implementer had to
+   invent one, and a validator capping components at 64 characters passed `M1.5` and `M1.8` while violating
+   the stated grammar)*; **create the `<path>.launch` record
    **`.launch` record `O_CREAT|O_EXCL` on that same call, never truncating an existing one**
    *(round 17, gemini: "never truncating" was in row 9 and `M1.6` but absent from the operative step, so the
    table certified a §7 requirement that did not exist)* *(round 15, codex: `S-ALLOC` said only `O_EXCL` while M1.14 and
@@ -1639,7 +1681,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    rule that did not exist in the step)* —
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
    **hard error**, not a creation. **Retain `O_NOFOLLOW`, `O_NONBLOCK`, the `fstat`/`S_ISREG` regular-file
-   check AND the `0600` fchmod** *(round 25, codex: this step had listed only `O_NOFOLLOW` and the fchmod,
+   check AND the `0600` fchmod** — **and the fd-based `S_ISREG` rejection must be DISTINGUISHABLE from any
+   other rejection the writer makes** (its own error identity, not a generic failure), so a proof can show
+   the `fstat` result is consumed **without forbidding a second, independent defence** *(round 63, codex:
+   `M2.23` had required the writer to ACCEPT a FIFO whose `fstat` was forged regular, which is stricter
+   than this step — a defence-in-depth writer that consumes `fstat` and also checks by another means still
+   rejects, and failed a mandatory cell while fully conforming)* *(round 25, codex: this step had listed only `O_NOFOLLOW` and the fchmod,
    so an allocated-mode branch implementing exactly what was written would **drop the FIFO/device defence**
    that `scripts/pty-capture.py:66,76,81` relies on and `scripts/tests/test_pty_capture.py:48` covers for
    the existing mode — a new mode silently narrower than the one it sits beside)*. Non-allocated call sites
