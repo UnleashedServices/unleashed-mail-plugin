@@ -153,8 +153,8 @@ reviewer already told you about is not doing independent work.)*
   **and `.claude/worktrees` as a POSITIVE (it must be accepted)** *(round 19, codex: row 1 certified
   validation against "all protected roots" while `M2.2` exercised only `.claude`, so an implementation
   treating `.claude` as the entire set passed — and a §7-only implementer had to invent the set)*.
-  The allocator therefore **validates it: absolute, outside every
-  protected root, and writable** — otherwise it falls back to `$HOME/.local/state`, **which is validated
+  The allocator therefore **validates it: absolute, a DIRECTORY, outside every protected root,
+  writable AND searchable (`W_OK|X_OK`)** — otherwise it falls back to `$HOME/.local/state`, **which is validated
   by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
   NOTHING and exits non-zero with a diagnostic** — it never invents a third location.
   **"Writable" is defined for the FIRST-RUN case, which is the common one:** a base is valid if it exists,
@@ -616,6 +616,12 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **Round 50 (codex): the fallback arm also lacks the DIRECTORY and SEARCHABILITY discriminators.** The
+  writable-regular-file and writable-but-unsearchable-directory cases were added to the XDG arm only, so a
+  fallback-specific `exists()`+`W_OK` validator passes every stated fallback case, accepts both invalid
+  bases, and fails later during subtree creation. Both cases now run on the fallback arm too. *(Third time
+  "validated by the same rules" has been instantiated on one arm — the quantifier rule exists for exactly
+  this, and I applied a fix to one arm again.)*
   **Round 32 (gemini): the fallback arm still omitted the ABSOLUTE class.** `M2.5` pointed `HOME` at an
   unwritable directory and ran the component-sensitive cases, but never exercised a **relative** `HOME` — so
   an implementation accepting a relative fallback passed while violating the first of the three classes.
@@ -1064,7 +1070,7 @@ reported before every freeze.
 | path layout | `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt` | §4.1 · `S-ALLOC` |
 | base ownership | `No caller passes --base, and the allocator REJECTS it if given` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
 | freshness comparison | `a transcript strictly OLDER than its `.launch` record is REJECTED; equal-or-newer is accepted` | §4.5 · `S-FRESH` |
-| base validation rules | `absolute, outside every protected root, and writable` | §4.1 · `S-ALLOC` |
+| base validation rules | `absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK\|X_OK`)` | §4.1 · `S-ALLOC` |
 | protected-root set | `` `.claude` and everything beneath it **except `.claude/worktrees`** `` | §4.1 · `S-ALLOC` |
 
 **The check is EXACTLY-ONCE, over text with round-notes stripped — round 18, both arms.** Presence is not
@@ -1545,8 +1551,10 @@ resolutions cited.)*
 - ~~Q1 — is the XDG default writable?~~ **SETTLED, §4.1** — but the old wording answered a *different*
   question. `$HOME/.local/state` being absent from the protected-path list settles **"is it permitted?"**,
   not **"is it writable?"**; those are independent predicates *(round 25, codex)*. Both are now settled:
-  a base is valid if it exists and is writable, **or is absent and its nearest existing ancestor is
-  writable**, in which case the allocator creates it `0700`. A *set* `XDG_STATE_HOME` is validated by the
+  a base is valid if it exists, **is a DIRECTORY and is writable AND searchable (`W_OK|X_OK`)**, **or is
+  absent and its nearest existing ancestor satisfies those same predicates**, in which case the allocator
+  creates it `0700` *(round 50, codex: this settled answer still said "writable" alone and so re-authorised
+  the two implementations round 49 rejected — a stale settled answer, not a reopened question)*. A *set* `XDG_STATE_HOME` is validated by the
   same rules or falls back.
 - ~~Q2 / Q5 — does deleting the outer pre-clean cover "the wrapper never starts"?~~ **SETTLED, §4.2:**
   yes — an allocated empty file maps to `MISSING` in synthesis and is rejected by
