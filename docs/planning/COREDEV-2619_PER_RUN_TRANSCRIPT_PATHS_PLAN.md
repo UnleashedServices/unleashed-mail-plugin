@@ -1,15 +1,14 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 49** — both arms `REQUEST_CHANGES`; two of the
-four findings were real and are applied (base validity never required a **directory** or searchability;
-`S-CALLERS` defined the full invocation shape without requiring it per-site), two were checked and are
-false. codex approved in rounds 44, 45 and 47.
+**Status:** Planning — **NOT GATED. Latest completed round: 53** — codex `REQUEST_CHANGES` (2 High +
+1 Low), all applied; the other arm produced **no verdict token** and failed closed. Every codex finding for
+three rounds has been a **previous round's fix left incomplete**, most often on one of two symmetric arms.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-01 (round 49 findings applied; **not gated**)
+**Last Updated:** 2026-08-01 (round 53 findings applied; **not gated**)
 
 ---
 
@@ -364,7 +363,14 @@ Q2 is about pre-cleaning: the gaps were in no open question at all, so they were
 
 **Proof — M1, rewritten in round 2 because the first version proved nothing.** `[M1.16 runid-freshness-unstubbed]` **The production run-ID source yields a FRESH candidate on every
 attempt and every run**, asserted **without stubbing it**: two allocations with identical
-ticket/round/reviewer must both succeed and return different paths *(round 52, codex: §4.1 requires
+ticket/round/reviewer must both succeed and return different paths, **and the generator is observed
+PER ATTEMPT during a forced collision — every candidate within one allocation must differ** *(round 53,
+codex: observing only two top-level allocations is passed by a coarse-clock or counter generator that
+differs across calls seconds apart yet **repeats within a rapid retry loop**, which is exactly when
+freshness matters)*. `[M1.17 runid-entropy-source]` **And the SOURCE is asserted mechanically** — the run
+ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interposing on that call rather than
+inferred from output *(round 53, codex: `S-ALLOC`'s ≥128-bit requirement had no discriminating cell at all;
+two differing samples cannot establish entropy)* *(round 52, codex: §4.1 requires
 concurrent captures to coexist, yet `M1.1`'s different-candidate case **stubs the run-ID source** and
 `M1.11` proves only the eight-attempt boundary — so a production generator returning a constant, or a
 coarse timestamp, passes every stubbed proof and every single-allocation integration case while repeatedly
@@ -630,6 +636,12 @@ and they are of the two kinds this campaign keeps needing:
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
   with a diagnostic, not to invent a path. §4.1 says the fallback "is validated by the same rules" but
   never said what a failed validation *does*; it does this.
+  **Round 53 (codex): the fallback arm also lacks the ABSENT-ANCESTOR cases.** `M2.5` tests the fallback as
+  an *existing* regular file or unsearchable directory, but never an **absent** `$HOME/.local/state` whose
+  nearest existing ancestor has either defect — so a fallback-specific validator applying the full predicate
+  only when the fallback exists, and merely `W_OK` when absent, passed `M2.5` and the positive `M2.22`.
+  Both absent-ancestor defects now run on the fallback arm. *(**Fourth** time a fix has landed on the XDG
+  arm alone. The cases are now stated as a single set applied to both arms rather than written twice.)*
   **Round 50 (codex): the fallback arm also lacks the DIRECTORY and SEARCHABILITY discriminators.** The
   writable-regular-file and writable-but-unsearchable-directory cases were added to the XDG arm only, so a
   fallback-specific `exists()`+`W_OK` validator passes every stated fallback case, accepts both invalid
@@ -1265,13 +1277,14 @@ requirement, and that is now visible rather than arguable.
 | 1 | base validated: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1) | `[M2.2 xdg-invalid-classes]` — incl. the **sibling-prefix pair** `.claude/worktrees-evil` (reject) and `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | a **valid** `XDG_STATE_HOME` is **used**, including when **absent-but-creatable** — ancestor satisfying the **complete** predicate set, discriminated on both arms (§4.1) | `[M2.4 xdg-valid-positive]` — fixture initially absent (round 25, codex) |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
-| 3 | fallback validated by the **same complete predicate set** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
+| 3 | fallback validated by the **same complete predicate set, existing AND absent-ancestor** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — a programmatic sweep of the **complement**, since no enumeration establishes a class (round 14) |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on pre-existing **mis-moded** parent (`S-ALLOC`) | `[M1.3 mis-moded-parent]` |
 | 7 | fail closed on pre-existing **wrong-owner** parent (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
-| 8e | the production run-ID source yields a fresh candidate per attempt and per run (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations, source **not** stubbed (round 52, codex) |
+| 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
+| 8f | the run ID is drawn from a CSPRNG with **≥128 bits** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
