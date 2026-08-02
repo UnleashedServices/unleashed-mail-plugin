@@ -1,15 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 58.** Gate rule (maintainer, round 57): **codex
-alone gates** on `APPROVE`/`APPROVE_WITH_NOTES`, **followed by a reproduction at the same digest**; the
-gemini arm is **advisory**. Round 58: codex `REQUEST_CHANGES` (1 High + 1 Medium + 1 Low), all applied;
-gemini `APPROVE` (advisory, 4th consecutive).
+**Status:** Planning — **NOT GATED. Latest completed round: 59.** Gate: **codex alone**, on
+`APPROVE`/`APPROVE_WITH_NOTES` **plus a reproduction at the same digest**; gemini advisory. Round 59: codex
+`REQUEST_CHANGES` (1 High + 1 Medium + 1 Low), all applied. codex separately confirmed §6.0 at 11/11 with
+deletion sensitivity and no third carrier, the 72-cell mapping, and the must-pass positives.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 58 findings applied; **not gated**)
+**Last Updated:** 2026-08-02 (round 59 findings applied; **not gated**)
 
 ---
 
@@ -248,6 +248,11 @@ asserts each consumes the **emitted** allocation *(round 14, BOTH ARMS: M5 drove
 `isolated-agy-review.sh`, and §6.1 row 14b claimed M3 covered the other two. It does not — M3 scans for the
 absence of the two old `/tmp` literals, so replacing them with `/var/tmp/codex-out.txt`, another fixed
 name, or no handoff at all passes it. Absence of the old name is not presence of the new one.)*
+`[M5.17 empty-allocated-is-missing]` **An allocated but EMPTY transcript still classifies as `MISSING` in
+the threaded synthesis flow** — asserted through `review-synthesis` itself, not via `review-verdict.py`'s
+separate downstream rejection *(round 59, codex: §4.2 relies on this to justify deleting the pre-clean, and
+§8 repeats the dependency, yet no cell proved the newly path-threaded flow preserves it and `S-THREAD` did
+not require it)*.
 `[M5.10 synthesis-cli-shape]` **Synthesis is invoked with the exact shape `S-THREAD` mandates** —
 `--reviewer <name>=<STATUS>:<allocated-path>` — asserted against the real invocation *(round 18, gemini:
 `M5.6` proved the allocation is *consumed* and nothing pinned the interface)*.
@@ -384,7 +389,9 @@ ID is drawn from `secrets`/`os.urandom` and is ≥128 bits, observed by interpos
 binding the returned bytes to the emitted run ID by DERIVATION** — feed the interposed source a known value
 and require the emitted ID to equal the documented derivation of it, **not** to contain those bytes
 literally — **assert the emitted ID's own width is ≥128 bits (≥32 hex chars)**, so a truncating derivation fails,
-**and assert the ID is a PURE FUNCTION OF THE SOURCE ALONE**: with the interposed source held FIXED, vary
+**and assert the emitted ID EQUALS the hex encoding of the interposed
+bytes** — byte-for-byte, so hashing, truncation and repetition all fail — **and that it is a pure function
+of the source alone**: with the interposed source held FIXED, vary
 the clock, the attempt counter and the process ID — the emitted ID must be **identical** every time; with
 everything else held fixed, vary the source — it must change
 *(round 58, codex: width plus dependence is still not preservation. `source.hex()[0] + counter_as_31_hex`
@@ -963,7 +970,9 @@ purest form of false coverage, and this can silently regress during the `S-CAPTU
 39 synthetic fixtures** the two runaway review runs left there — asserted as a release postcondition
 *(round 37, codex: `S-RELEASE` made the cleanup operative and no cell failed if it was skipped)*.
 `[M2.14 version-bump]` **The release check is IN-TREE and PINS THE PRE-CHANGE VERSION**: the plan records
-the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **not** `2.6.6`
+the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **semantically
+GREATER THAN** `2.6.6` *(round 59, codex: "not `2.6.6`" is satisfied by changing it to **`2.6.5`** with the
+synchronized fields and a matching CHANGELOG entry — a decrease passes an inequality)*
 **and** that the CHANGELOG's newest entry equals `plugin.json`
 *(round 26, codex, High: the round-25 predicate — newest entry matches `plugin.json` and differs from the
 one below — **is already satisfied by the unchanged tree**: `plugin.json` is `2.6.6`, `CHANGELOG.md:16` is
@@ -1365,7 +1374,7 @@ requirement, and that is now visible rather than arguable.
 | 21c | the snapshot sidecar is **not** a freshness anchor (§4.5) | `[M4.11 sidecar-not-an-anchor]` (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
-| 20 | version **bump** off the pinned pre-change `2.6.6` + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
+| 20 | version **increase** over the pinned pre-change `2.6.6` (not merely different) + CHANGELOG ceiling text (`S-RELEASE`) | `[M2.14 version-bump]` (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all in the **28-cell** cross-product (round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
 | 23 | `.captureid` stays freshly generated per run, in **both** capture modes (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
@@ -1378,6 +1387,7 @@ requirement, and that is now visible rather than arguable.
 | 8d | the exhaustion diagnostic **names the exhausted parent** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
+| 14e | an allocated but **empty** transcript classifies as `MISSING` in synthesis (`S-THREAD`, §4.2) | `[M5.17 empty-allocated-is-missing]` (round 59, codex) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
@@ -1407,9 +1417,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
    not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
    mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
-   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt drawing a FRESH run ID from a CSPRNG
-   (`secrets`/`os.urandom`), and the EMITTED ID retaining at least 128 bits — ≥32 hex characters, the
-   derivation entropy-preserving — never a constant, a counter, a coarse clock, or a truncation**
+   the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt's run ID being the LOWERCASE HEX ENCODING OF AT
+   LEAST 16 BYTES TAKEN DIRECTLY FROM A CSPRNG** (`secrets.token_hex(16)` or `os.urandom(16).hex()`) —
+   **encoding only: no hashing, no truncation, no repetition, no mixing with a counter, clock or pid**
+   *(round 59, codex: three successive attempts to state this as a PROPERTY of the output were each
+   satisfied by a construction with far less entropy — a 128-bit **source** admitted
+   `sha256(urandom(32)).hexdigest()[:16]` (64 bits); adding **width** admitted
+   `source.hex()[0] + counter_as_31_hex` (4 bits); adding **source-purity** admitted
+   `sha256(source).hexdigest()[:16] * 2` (64 bits, identical halves — verified by construction). Each new
+   property was satisfiable while entropy collapsed. **Pinning the construction ends the regress**, and
+   costs nothing: there is no reason to post-process a CSPRNG draw.)*
    *(round 57, codex: asking for a 128-bit SOURCE is satisfied by `sha256(os.urandom(32)).hexdigest()[:16]`,
    which consumes every source byte, matches its documented derivation and passes sampled distinctness while
    emitting only **64 bits**. Dependence on a strong source is not preservation of its entropy — the width
