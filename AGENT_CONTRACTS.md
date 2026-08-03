@@ -96,8 +96,8 @@ Before any implementation begins:
     recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
     digest-bound review cannot approve a moving target"* — and the round is void. This applies to the
     author exactly as §2's read-only expectation applies to the reviewer.
-1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
+1. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+2. /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
@@ -500,7 +500,7 @@ unchanged and still mandatory.
 |---|---|---|---|
 | `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:596` |
 | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:143` |
-| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:342` |
+| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:344` |
 | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:133` |
 | `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:203` |
 | `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:264` |

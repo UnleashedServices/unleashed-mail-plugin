@@ -200,6 +200,20 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 
 Do not skip to save time. Do not treat as a rubber stamp.
 
+## Required invocation inputs
+
+/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. In the recipe, bind the two
+received operands to `TICKET` and `ROUND`, then pass the reviewer as the hard-coded third argument:
+
+```bash
+TICKET='<T>'
+ROUND='<N>'
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" gemini
+```
+
 ## Diagnostics
 
 If `agy -p` is failing, check in order:

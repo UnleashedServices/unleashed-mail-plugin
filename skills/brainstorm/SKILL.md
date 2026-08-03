@@ -175,11 +175,11 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
        --plan docs/planning/FEATURE_NAME_PLAN.md
    ```
 2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
-   `/unleashed-mail:gemini-review` and `/unleashed-mail:codex-review` on `docs/planning/FEATURE_NAME_PLAN.md` (the plugin registers its skills namespaced; the bare `/gemini-review` form resolves only where the consumer workspace ships its own `.claude/skills/` copies).
+   - /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+   - /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
    Route non-TTY runs through `scripts/pty-capture.py` (see those skills).
-3. **Iterate to convergence** — revise the plan and re-run until **both** return
-   `APPROVE` / `APPROVE_WITH_NOTES` (typically 2–6 rounds). If you revise the plan, **re-run `snapshot`**
-   (step 1) and the reviews on the new bytes — an approval is only valid for the exact plan reviewed.
+3. **Iterate to convergence** — revise and re-run until **both** return `APPROVE` /
+   `APPROVE_WITH_NOTES` (typically 2–6 rounds). After a revision, re-run `snapshot` (step 1) and both reviews on the exact new bytes.
 4. **Synthesize:** run `/unleashed-mail:review-synthesis` to combine the two transcripts into one
    auditable Combined verdict — it also **persists** the artifact (`write` auto-reads the snapshot from
    step 1, so no `--reviewed-sha256` is needed):

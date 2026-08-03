@@ -158,7 +158,8 @@ fi
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
   `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it's `disable-model-invocation: true`, so it's
-  user-run only), then the Plan Review Gate (`/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review` →
+    /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+    /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
   `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the
   AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
@@ -169,7 +170,8 @@ fi
     `git worktree add` or `git clone` contains only the plan. If you gated elsewhere, either re-run the
     gate in THIS worktree or copy `docs/planning/.verdicts/` across from the checkout that gated. To
     avoid this entirely, create the worktree BEFORE the plan (`AGENT_CONTRACTS.md` §2 step 00).
-    Otherwise ask the user to run `/gemini-review` + `/codex-review` →
+    /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+    /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
     `/unleashed-mail:review-synthesis` to convergence. If the gate never ran **because a reviewer CLI
     was unavailable**, see **Unavailable reviewer** below.
   - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason

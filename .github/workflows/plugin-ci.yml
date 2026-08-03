@@ -40,7 +40,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -171,7 +171,9 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py
+      - name: callers_scan.py execution smoke on 3.9
+        run: python3 scripts/review/callers_scan.py --help >/dev/null
       - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
         # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
         # stock 3.9. A PEP-604 `X | None` in a def signature byte-compiles fine on 3.9 and only raises

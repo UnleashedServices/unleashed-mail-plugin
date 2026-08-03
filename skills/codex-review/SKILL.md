@@ -184,6 +184,20 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
 
+## Required invocation inputs
+
+/unleashed-mail:codex-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. In the recipe, bind the two
+received operands to `TICKET` and `ROUND`, then pass the reviewer as the hard-coded third argument:
+
+```bash
+TICKET='<T>'
+ROUND='<N>'
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" codex
+```
+
 ## Safety rules
 
 - **Always `-s read-only` for audits** — never `--full-auto`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox`
