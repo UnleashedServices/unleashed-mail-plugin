@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 76**, three independent review arms plus a
-**remediation pass** — `xhigh` and `max` returned `REQUEST_CHANGES`; `K3` returned `APPROVE_WITH_NOTES`.
+**Status:** Planning — **NOT GATED. Latest completed round: 77**, two independent review arms —
+`xhigh` and `max` returned `REQUEST_CHANGES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 76 findings applied — all three arms + remediation pass; **not gated**)
+**Last Updated:** 2026-08-03 (round 77 findings applied — both arms; **not gated**)
 
 ---
 
@@ -240,7 +240,7 @@ repo and assert the `<repo-hash>` segments **differ**.
 
 **That two-checkout case does NOT prove provenance, and the round-11 reasoning behind it was wrong —
 round 12, codex (High).** `context_repo_hash` is a pure function of `context_repo_root`
-(`scripts/lib/context.sh:69`), so a wrapper that **copies the algorithm** yields different values for two
+(`scripts/lib/context.sh:79` — `context_repo_hash() { _context_hash "$(context_repo_root)"; }`), so a wrapper that **copies the algorithm** yields different values for two
 checkouts *and* matches the real helper in each — passing the case while violating `S-WRAPPER`'s
 single-helper rule. Round 11 chose this form *over* a hard-coded expected hash on the grounds that a
 reimplementation "happens to agree on the fixture"; **a reimplementation agrees on every fixture**, which
@@ -850,6 +850,15 @@ independent discriminator and cannot substitute for them. These are the cases th
 contracted role" wording would have hard-failed. The `0700`/owner contract is asserted only against what
 the allocator CREATES and against a pre-existing **nested transcript parent**, which `M1.3`/`M1.4` still
 require to fail closed.
+**The absent-candidate proof holds the nearest existing ancestor valid and derives a candidate-local
+matrix from the closed predicate set already defined in §4.1 and `S-ALLOC`, not from another
+hand-maintained blacklist:** on the XDG arm, independently exercise (1) an absent relative candidate,
+which must fall back; (2) an absent candidate whose canonical path is inside an otherwise-absent protected
+subtree, which must fall back; and (3) an absent candidate beneath a permitted symlinked ancestor whose
+canonical spelling differs from the candidate's lexical spelling, which must be accepted only with the
+resolved target spelling used in the assembled and emitted path. A mutation that moves candidate-local
+validation to the nearest existing ancestor must fail this matrix while that ancestor remains valid for
+directory/access feasibility.
 - `[M2.26 base-transport-conjunction]` **A base that is VALID but hostile to the transport is REJECTED**
   *(round 65 `max`, codex, High)*: POSIX permits any byte but `/` and NUL in a directory name, so
   `XDG_STATE_HOME` containing an LF satisfies absolute, directory, protected-root and `W_OK|X_OK` — and
@@ -898,6 +907,15 @@ require to fail closed.
   directory**, and each of those again as an **absent base whose nearest existing ancestor** carries the
   defect *(round 53: written as one set applied to both arms after the fourth one-arm miss; a mechanical
   parity check now compares the two case lists and caught the `0200` case missing here)*.
+  **The fallback also carries a candidate-local/valid-ancestor matrix derived from the closed predicate
+  set already defined in §4.1 and `S-ALLOC`, not another blacklist.** With the nearest existing ancestor
+  held valid for directory/access feasibility, independently exercise (1) an absent relative candidate,
+  which must allocate nothing and fail closed; (2) an absent candidate whose canonical path is inside an
+  otherwise-absent protected subtree, which must allocate nothing and fail closed; and (3) an absent
+  candidate beneath a permitted symlinked ancestor whose canonical spelling differs from the candidate's
+  lexical spelling, which must be accepted only with the resolved target spelling used in the assembled
+  and emitted path. A mutation that moves candidate-local validation to the nearest existing ancestor must
+  fail this matrix.
   **Round 53 (codex): the fallback arm also lacks the ABSENT-ANCESTOR cases.** `M2.5` tests the fallback as
   an *existing* regular file or unsearchable directory, but never an **absent** `$HOME/.local/state` whose
   nearest existing ancestor has either defect — so a fallback-specific validator applying the full predicate
@@ -1588,10 +1606,10 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)**, and LF/CR-free (`S-ALLOC`, §4.1); mode, UID and GID are not selection predicates for any pre-existing object used during selection, and BOTH base arms must pass the three-form matrix — direct existing base, safe-symlink resolved target, and absent candidate's nearest existing ancestor — crossed with mode-`0755`/current-UID, different-GID/current-UID, and accessible foreign-UID specimens | `[M2.2 xdg-invalid-classes]` — both base arms × three accepted forms × three metadata variants, plus cross-arm invalid classes and the **sibling-prefix pair** `.claude/worktrees-evil` (reject) / `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
+| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, and **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1); mode, UID and GID are not selection predicates for any pre-existing object used during selection, and BOTH base arms must pass the three-form matrix — direct existing base, safe-symlink resolved target, and absent candidate's nearest existing ancestor — crossed with mode-`0755`/current-UID, different-GID/current-UID, and accessible foreign-UID specimens; independently, an absent candidate remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility | `[M2.2 xdg-invalid-classes]` — XDG absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus both base arms × three accepted forms × three metadata variants, cross-arm invalid classes, and the **sibling-prefix pair** `.claude/worktrees-evil` (reject) / `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | an **absent-but-creatable valid** `XDG_STATE_HOME` is created `0700` and used without fallback (§4.1) | `[M2.4 xdg-valid-positive]` — positive XDG-arm fixture initially absent; complete-predicate discrimination remains in rows 1 and 3, and the fallback positive is row 2b/`M2.22` |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
-| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, canonical protected-root containment by component, `W_OK\|X_OK`, and LF/CR-free — incl. the regular-file and unsearchable-directory discriminators; mode, UID and GID are not selection predicates for direct existing bases, safe-symlink resolved targets, or absent candidates' nearest existing ancestors on either base arm; neither base valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — fallback non-mode predicate parity across existing and absent-ancestor invalid classes, plus both base arms × three accepted forms × three metadata variants |
+| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, canonical protected-root containment by component, `W_OK\|X_OK`, and LF/CR-free — incl. the regular-file and unsearchable-directory discriminators; mode, UID and GID are not selection predicates for direct existing bases, safe-symlink resolved targets, or absent candidates' nearest existing ancestors on either base arm; independently, an absent fallback remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility; neither base valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — fallback absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus fallback non-mode predicate parity across existing and absent-ancestor invalid classes and both base arms × three accepted forms × three metadata variants |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** — through the shared, importable validator whose verdict is bound to the allocator's production accept/reject decision (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — in-process class sweeps plus forced-verdict production binding, since an unused correct validator proves nothing |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on a pre-existing **nested transcript parent beneath either base arm** whose mode differs from `0700`; sweep the complement, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — both nested-parent arms plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
