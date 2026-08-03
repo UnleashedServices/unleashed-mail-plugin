@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 78**, two independent review arms —
+**Status:** Planning — **NOT GATED. Latest completed round: 79**, two independent review arms —
 `xhigh` returned `APPROVE_WITH_NOTES`; `max` returned `REQUEST_CHANGES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 78 findings applied — both arms; **not gated**)
+**Last Updated:** 2026-08-03 (round 79 findings applied — both arms; **not gated**)
 
 ---
 
@@ -1203,57 +1203,14 @@ asserted directly *(round 14, codex: §6.1 rows 22–23 cited `pty-capture.py:32
 generates** the ID — as though it were a proof, and `scripts/tests/test_pty_capture.py` contains **no**
 case running two captures and requiring fresh sidecars. Citing production code as its own test is the
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
-`[M2.25 home-fixtures-cleared]` **`~/.local/state/unleashed-mail/review-transcripts/` contains none of the
-39 synthetic fixtures** the two runaway review runs left there — asserted as a release postcondition
-   **The closed COREDEV-2619 leak manifest — 39 files beneath
-   `~/.local/state/unleashed-mail/review-transcripts/`, ENUMERATED FROM THE REAL LEAK rather than
-   inferred from fragments.** Canonically resolve every target, **fail closed on an escape or a
-   type mismatch**, preserve the root and every unlisted entry, and use **neither globs nor
-   recursive root deletion**. Then remove exactly these 9 now-empty directories, deepest
-   first; if any is non-empty, stop and report rather than recursing.
-
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt`
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.captureid`
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.launch`
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt`
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.captureid`
-   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.launch`
-   - `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt`
-   - `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt.launch`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.captureid`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.launch`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.captureid`
-   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.launch`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.captureid`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.launch`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.captureid`
-   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.launch`
-   - `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt`
-   - `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt.launch`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.captureid`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.launch`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.captureid`
-   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.launch`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.captureid`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.launch`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.captureid`
-   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.launch`
-   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt`
-   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.captureid`
-   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.launch`
-   - `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt`
-   - `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt.launch`
-
-   Directories (deepest first): `38483bff6fb293c5b0f90254466c52bc06a785e7`, `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076`, `738b2f6174a7aed615fa597d3847744862d4d5f8`, `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a`, `abc`, `bcda793b5bdcbb9dcb2592246b9a9003385e9e38`, `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e`, `h1`, `testhash`
-*(round 37, codex: `S-RELEASE` made the cleanup operative and no cell failed if it was skipped)*.
+`[M2.25 home-fixtures-cleared]` **The release check derives its target count from `S-RELEASE`'s closed
+COREDEV-2619 leak manifest rather than from a separately stated number.** Exercise the cleanup under a
+temporary `HOME` containing all manifest entries with their specified object types plus an unlisted
+canary beneath the state root; require every listed entry removed and the canary and root retained.
+Require canonical containment and expected-type validation to fail closed before deletion. Mutations
+that omit one manifest entry, broaden deletion to the root, introduce an escaping target, or substitute
+an object of the wrong type must fail *(round 37, codex: `S-RELEASE` made the cleanup operative and no
+cell failed if it was skipped)*.
 `[M2.14 version-bump]` **The release check is IN-TREE and PINS THE PRE-CHANGE VERSION**: the plan records
 the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **semantically
 GREATER THAN** `2.6.6` *(round 59, codex: "not `2.6.6`" is satisfied by changing it to **`2.6.5`** with the
@@ -1622,7 +1579,8 @@ passed, because it verifies that a tag exists and is cited, not that it labels t
 prove. That is a **readability** defect, not a correctness one — each is defined exactly once and cited
 exactly once — and it is recorded here rather than fixed by moving text mid-campaign: an attempt to
 relocate them consumed two section headings and duplicated four cells, which is a worse failure than the
-one being fixed. It is a cleanup for the implementation commit, tracked in `S-RELEASE`.)*
+one being fixed. It remains accepted residual readability debt; no proof-text relocation is required by
+this plan.)*
 
 **Convention (round 13, corrected rounds 14 and 78): every row records exactly one proof disposition:**
 a **TAGGED CELL** — of the form `[M<n>.<k> short-name]`, placed verbatim in the proof text — a **NAMED
@@ -1684,7 +1642,7 @@ or the explicit manual-residual row identified above; that distinction is now vi
 | 21c | the snapshot sidecar is **not** a freshness anchor, on **both digest paths and both transcript positions** (§4.5) | `[M4.11 sidecar-not-an-anchor]` — a **kind in the cross-product** (round 62, codex — it sat outside it, so an implementation consulting the sidecar only on the unexercised digest branch passed) (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
 | 19 | closed 31-site migration inventory: rewrite 21 matches — `5/5/5/3/2/1` respectively in `skills/review-synthesis/SKILL.md`, `skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`, `scripts/pty-capture.py` (including its live implementation commentary), `skills/brainstorm/SKILL.md` and `README.md`; preserve 10 quote-keeps — `4/1/1/1/1/1/1` respectively in `docs/audits/PLUGIN_AUDIT_2026-07-19.md`, `scripts/review-verdict.py`, `scripts/tests/test_review_verdict.py`, `CHANGELOG.md`, `docs/planning/OCTO_ADOPTION_PLAN.md`, `docs/planning/HANDOFF.md` and `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md`; this is an exact closed set, not an extensible blacklist (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
-| 20 | version **increase** over the pinned pre-change `2.6.6` (not merely different) + a CHANGELOG sentence carrying all four ceiling clauses: per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor (`S-RELEASE`) | `[M2.14 version-bump]` — exact required sentence plus one deletion mutation per enumerated ceiling clause (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
+| 20 | version **increase** over the pinned pre-change `2.6.6` (not merely different), with the newest CHANGELOG heading equal to `plugin.json`, + a CHANGELOG sentence carrying all four ceiling clauses: per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor (`S-RELEASE`) | `[M2.14 version-bump]` — exact required sentence plus one deletion mutation per enumerated ceiling clause (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all kinds in **the cross-product defined by §4.5's factor lists** — cited, not restated, so the row cannot go stale (round 62; round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis, then 28 after it grew two more kinds) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
 | 23 | `.captureid` stays freshly generated per run, in **both** capture modes (§4.4) | `[M2.13 captureid-freshness]` (round 14 — the old cell cited `pty-capture.py:322-328`, the code that **generates** the ID; `test_pty_capture.py` has no such case, so this was production code cited as its own test) |
@@ -1707,7 +1665,7 @@ or the explicit manual-residual row identified above; that distinction is now vi
 | 28 | non-allocated call sites keep create-if-absent **and truncate a longer existing target to the exact shorter capture, leaving no stale suffix** — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` — absent-target creation plus unequal-length overwrite |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30b | the wrapper invokes `pty-capture.py` from its **own location** too (`S-WRAPPER`) | `[M5.16 allocator-own-location]` (round 37, both arms — round 36 made only the library distinguishable) |
-| 20c | the 39 synthetic `$HOME` fixtures are cleared (`S-RELEASE`) | `[M2.25 home-fixtures-cleared]` (round 37, codex — the cleanup was operative with nothing failing if skipped) |
+| 20c | cleanup uses the closed COREDEV-2619 leak manifest, canonically resolves every target beneath the state root and fails closed on an escape or expected-type mismatch, removes every listed entry, and retains the root and every unlisted entry without globs or recursive root deletion (`S-RELEASE`) | `[M2.25 home-fixtures-cleared]` (round 37, codex — the cleanup was operative with nothing failing if skipped) |
 | 30 | the wrapper resolves its lib dir from its **own location** — survives RELOCATION (`S-WRAPPER`) | `[M5.8 production-fallback]` — run from `cd /` **and from a relocated copy**, which a hardcoded absolute path fails (round 31, codex) (round 15, both arms — `M5.3` **sets** `UNLEASHED_LIB_DIR` and so bypasses the fallback entirely; it could not fail on the broken form) |
 | 27 | ticket/round are required inputs of **both** review skills; missing ⇒ fail closed (§4.1, `S-WRAPPER`) | `[M5.7 missing-input-fails-closed]` — parameterized over both recipes (round 30, codex) (round 14, gemini — declared an accepted hole in round 13; it is a two-line test, and a hole that need not exist is still a gap) |
 
@@ -2115,12 +2073,55 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    Freshness is keyed to each transcript's own record, **independently of which digest path is used**.
    Add M4. *(Round 4: this step said only "add the mtime freshness check", so §7 did not require the
    record's creation, binding, lookup or fail-closed handling — the parts that make it an anchor.)*
-10. **`S-RELEASE`** — **Clear `~/.local/state/unleashed-mail/review-transcripts/` of the 39 synthetic
-   fixtures two runaway review runs left there** (`COREDEV-9999`, `testhash`, `abc`, `h1`; rounds 25 and 36)
-   *(round 36: the isolation harness sandboxes the git worktree, **not `$HOME`**, so those runs escaped into
-   precisely the directory this plan allocates into. Inert today because nothing reads the path until this
-   ticket ships — which is exactly why it must be cleared before it does)*. Then version bump **off the pinned pre-change version `2.6.6`** *(round 41, gemini: §7 said "version bump"
-   without the baseline `M2.14` pins, so an implementer had no way to know what it must differ from)* +
+10. **`S-RELEASE`** — **Delete exactly the entries in the closed COREDEV-2619 leak manifest below; that
+   manifest contains 39 root-relative paths and expected object types. Canonically resolve every target
+   beneath `~/.local/state/unleashed-mail/review-transcripts/`, fail closed on an escape or type mismatch,
+   preserve the root and every unlisted entry, and use neither globs nor recursive root deletion.**
+
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt`
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.captureid`
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.launch`
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt`
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.captureid`
+   - **regular file** — `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.launch`
+   - **regular file** — `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt`
+   - **regular file** — `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt.launch`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.captureid`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.launch`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.captureid`
+   - **regular file** — `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.launch`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.captureid`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.launch`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.captureid`
+   - **regular file** — `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.launch`
+   - **regular file** — `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt`
+   - **regular file** — `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt.launch`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.captureid`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.launch`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.captureid`
+   - **regular file** — `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.launch`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.captureid`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.launch`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.captureid`
+   - **regular file** — `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.launch`
+   - **regular file** — `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt`
+   - **regular file** — `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.captureid`
+   - **regular file** — `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.launch`
+   - **regular file** — `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt`
+   - **regular file** — `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt.launch`
+
+   This is the closed output of the two identified runaway review runs (rounds 25 and 36). **Set
+   `plugin.json` and its synchronized version fields to a semantic version strictly greater than `2.6.6`,
+   and make that exact version the newest CHANGELOG heading.** *(Round 41, gemini: §7 said "version bump"
+   without the baseline `M2.14` pins, so an implementer had no way to know what it must differ from.)*
    **CHANGELOG — include this exact sentence: "Per-run paths prevent accidental transcript collisions and
    stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host
    where an attacker controls a state-directory ancestor."** Include this exact sentence: **"The existing
