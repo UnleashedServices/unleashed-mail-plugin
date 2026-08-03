@@ -1077,7 +1077,7 @@ passed it)*.
 both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
 on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by TWO DIFFERENT mechanisms, because the two paths are not alike**
 *(round 39, codex, High: `scripts/review/isolated-agy-review.sh` creates **its own detached worktree** from
-the reviewed commit and invokes `$TREE/scripts/pty-capture.py` inside it — verified at `:53-56,90` — so a
+the reviewed commit and invokes `$TREE/scripts/pty-capture.py` inside it — verified at its `git worktree add --detach "$SCR/tree" "$SHA"` and the `python3 scripts/pty-capture.py … agy --add-dir "$TREE"` capture line — so a
 shim placed in `M5.8`'s relocated copy sits in a different directory entirely and can never intercept it.
 One mechanism cannot cover both, and asserting otherwise is how the class stayed unswept)*:
 - **the wrapper/codex path** — replace `pty-capture.py` **at the resolved location** in `M5.8`'s relocated
