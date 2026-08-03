@@ -1205,6 +1205,54 @@ case running two captures and requiring fresh sidecars. Citing production code a
 purest form of false coverage, and this can silently regress during the `S-CAPTURE` writer change.)*
 `[M2.25 home-fixtures-cleared]` **`~/.local/state/unleashed-mail/review-transcripts/` contains none of the
 39 synthetic fixtures** the two runaway review runs left there — asserted as a release postcondition
+   **The closed COREDEV-2619 leak manifest — 39 files beneath
+   `~/.local/state/unleashed-mail/review-transcripts/`, ENUMERATED FROM THE REAL LEAK rather than
+   inferred from fragments.** Canonically resolve every target, **fail closed on an escape or a
+   type mismatch**, preserve the root and every unlisted entry, and use **neither globs nor
+   recursive root deletion**. Then remove exactly these 9 now-empty directories, deepest
+   first; if any is non-empty, stop and report rather than recursing.
+
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt`
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.captureid`
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.launch`
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt`
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.captureid`
+   - `38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.launch`
+   - `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt`
+   - `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt.launch`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.captureid`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.launch`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.captureid`
+   - `738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.launch`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.captureid`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.launch`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.captureid`
+   - `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.launch`
+   - `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt`
+   - `abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt.launch`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.captureid`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.launch`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.captureid`
+   - `bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.launch`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.captureid`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.launch`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.captureid`
+   - `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.launch`
+   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt`
+   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.captureid`
+   - `h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.launch`
+   - `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt`
+   - `testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt.launch`
+
+   Directories (deepest first): `38483bff6fb293c5b0f90254466c52bc06a785e7`, `4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076`, `738b2f6174a7aed615fa597d3847744862d4d5f8`, `9aa62bb321c69d0c52f62c9fcc86f13b005ee36a`, `abc`, `bcda793b5bdcbb9dcb2592246b9a9003385e9e38`, `df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e`, `h1`, `testhash`
 *(round 37, codex: `S-RELEASE` made the cleanup operative and no cell failed if it was skipped)*.
 `[M2.14 version-bump]` **The release check is IN-TREE and PINS THE PRE-CHANGE VERSION**: the plan records
 the version this work starts from — **`2.6.6`** — and the cell asserts `plugin.json` is **semantically
