@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 80**, two independent review arms —
+**Status:** Planning — **NOT GATED. Latest completed round: 81**, two independent review arms —
 `xhigh` returned `REQUEST_CHANGES`; `max` returned `REQUEST_CHANGES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 80 findings applied — both arms; **not gated**)
+**Last Updated:** 2026-08-03 (round 81 findings applied — both arms; **not gated**)
 
 ---
 
@@ -308,33 +308,50 @@ Bash→Python boundary is unrunnable as interposition; the shim records `argv` a
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN compares production selection and disposition with an
-INDEPENDENT, TEST-LOCAL REFERENCE MATCHER over every tracked physical line.** In that reference, a line
-is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; every other line is outside
-the scan's claim. The matcher removes only the leading prefix matched by
+INDEPENDENT, TEST-LOCAL REFERENCE MATCHER over the final transformed tracked tree.** In that reference, a
+line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`, except that candidate
+selection excludes the one exact canonical metadata path
+`scripts/review/callers-scan-exemptions.tsv`. No directory, basename, suffix, token pattern or other path
+is excluded; every line with neither anchor is outside the scan's claim. The matcher removes only the
+leading prefix matched by
 `\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*`. The entire
 remainder must then equal one of exactly two byte productions:
 `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or
 `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`. The angle-bracket operands are literal
 documentation placeholders, and fields are separated by exactly one ASCII space. Positive fixtures are
 real Markdown physical lines using the permitted prefix forms, with exactly one complete command
-production occupying each line. An exemption matches
-only the tuple `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical bytes
-at another path or line are not exempt. Every other candidate is rejected. The reference neither imports
-nor calls production's matcher. **The production exemption manifest must be
-`scripts/review/callers-scan-exemptions.tsv`, with a closed initial set of exactly 1,258 identities: the
-candidate-set complement of the eight frozen migration-source physical lines named by `S-CALLERS` among
-the 1,266 candidates at `23c5a5a`.** Its canonical serialization is sorted by repo-relative path bytes and
-then numeric physical-line number, has no header, and writes each record as
-`<repo-relative path>\t<physical-line decimal>\t<SHA-256(original line payload bytes)>\n`, where the
-payload excludes its line terminator and every record, including the last, ends in LF. The SHA-256 of
-those canonical bytes is `9013dd811d5e5fbaf8731918b76e8b026212a93cca1260ae497c709477579b1b`.
-The test derives this frozen set independently from the `23c5a5a` Git objects and the eight source
-identities, verifies the canonical digest, and requires set equality with production's parsed manifest.
-Adding, removing, relocating, or changing any one exemption must fail; so must an added blanket exemption
-or an unmanifested real candidate. This one-time derivation defines the reviewed frozen contents, not a
-production or future waiver generator. Separate discriminating mutations change production candidate
+production occupying each line. An exemption matches only the shift-stable, context-bound tuple
+`(repo-relative path, SHA-256(original line payload bytes), SHA-256(immediately preceding line payload
+bytes or BOF), SHA-256(immediately following line payload bytes or EOF))`; physical-line numbers are not
+part of the identity. The match is bijective: every exemption identity is consumed by exactly one
+candidate and every exempt candidate consumes exactly one identity, so identical or duplicated content
+cannot share a waiver. Every other candidate is rejected. The reference neither imports nor calls
+production's matcher.
+
+**After all `S-INVENTORY` rewrites and twelve `S-CALLERS` destinations are present, the initial manifest
+is the exact complement produced by the independent matcher over that final tracked tree.** Planned-changing
+candidates are derived mechanically by intersecting the frozen `S-INVENTORY` source map with reference
+candidates and projecting each intersection member to the destination predicate owned by its contract
+label; the eight caller source lines are independently projected to their twelve required destinations.
+No historical Git object is required. The manifest has no header and canonically serializes each identity
+as four tab-separated fields in the tuple order above, sorted by the complete record bytes, with lowercase
+64-hex digests and LF terminating every record including the last. Its parser rejects every noncanonical
+TSV record, including an absolute or non-normal repo-relative path, `.` or `..` components, a tab or line
+terminator in a path, a wrong field count, a non-lowercase or non-64-hex digest, a duplicate or unsorted
+record, CRLF, or a missing final LF. The implementation diff freezes the resulting canonical bytes and
+their SHA-256 in the test fixture; no pre-migration count or digest is prescribed. Production never
+derives, generates, or widens waivers automatically, and any later change requires an explicit reviewed
+manifest diff.
+
+The must-pass fixture represents the complete final transformation: the manifest itself, every required
+`S-INVENTORY` rewrite, and all eight caller source lines transformed into twelve command lines. It includes
+a rewritten synthesis candidate, an unchanged candidate whose physical line moves because a caller line
+is split, and the exact metadata-file exclusion. The same positive must run in a shallow checkout where
+`23c5a5a` is unavailable. Stale pre-migration identities, any exclusion broader than the
+one exact metadata path, any noncanonical manifest record, and any changed, moved, duplicated, removed or
+newly introduced unmanifested candidate must fail. Separate discriminating mutations change production candidate
 selection and flip the production non-match default from reject to accept. Further mutations append a token after
-the literal `<plan>` and duplicate an exempt line at another path or physical line; the independent
+the literal `<plan>` and duplicate an exempt line at another path or context; the independent
 reference and production matcher must reject both. **The cell observes the DEFAULT-DENY DECISION ITSELF,
 not a list of cases** — which
 no enumeration of bypasses can detect *(round 69, both tiers, High: four
@@ -846,12 +863,16 @@ to isolate path classification; the safe-symlink form instead varies
 metadata in the closed matrix below *(round 20, codex: row 1 claimed the cell
 exercised `plugins/data`, an alias and the `worktrees` positive; the cell specified none of them, so an
 allocator rejecting **all** of `.claude` passed. **I had edited the row and not the cell** — the same
-one-side fix, in its newest form.)* **Path classification is also a closed six-case relation matrix on the
-XDG arm, with every other predicate held valid: the protected root and a protected descendant are
-rejected; the exception root and a proper path-component descendant such as
-`$HOME/.claude/worktrees/project` are accepted; the sibling prefix is rejected; and the outside path is
-accepted. The proper-descendant positive is mandatory, and a mutation that recognizes the exception only
-by exact equality must fail.** Assert also that no `/tmp/` literal survives in any `allowed-tools` line.
+one-side fix, in its newest form.)* **Path classification on the XDG arm is bound to an independently
+computed containment relation, with every other predicate held valid. The test generates valid
+path-component names and constructs canonical candidates at multiple depths relative to the protected
+root and exception root; it derives each expected decision from path-component containment and compares
+the allocator's actual decision with that reference. Fixed controls retain the protected root, a protected
+descendant, the exception root, the sibling prefix and an outside path, while proper descendants of the
+exception are generated rather than enumerated. This generated comparison runs here for XDG and is
+repeated by `M2.5` for fallback. A direct-parent-only classifier mutation — accepting only the exception
+root or a candidate whose parent is that root — must fail at a generated deeper depth.** Assert also that
+no `/tmp/` literal survives in any `allowed-tools` line.
 **Plus, round 9 (codex): every case above is an INVALID value that falls back, so M2 as written was
 passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
@@ -925,10 +946,12 @@ directory/access feasibility.
   directory**, and each of those again as an **absent base whose nearest existing ancestor** carries the
   defect *(round 53: written as one set applied to both arms after the fourth one-arm miss; a mechanical
   parity check now compares the two case lists and caught the `0200` case missing here)*.
-  **The fallback arm repeats the same closed six-case path-relation matrix item for item: protected root,
-  protected descendant, exception root, exception proper descendant, sibling prefix, and outside path.
-  The two exception cases and the outside case pass; the other three fail closed. An exact-equality-only
-  exception mutation must fail on the proper-descendant positive.**
+  **The fallback arm repeats the same independently computed containment-relation comparison item for
+  item. It generates valid path-component names and canonical candidates at multiple depths, derives the
+  protected-region and exception-region decisions from component containment, and binds the allocator's
+  actual fallback decision to that reference while retaining the fixed root, sibling-prefix and outside
+  controls. Proper descendants of the exception are generated rather than enumerated, and a
+  direct-parent-only classifier mutation must fail at a generated deeper depth.**
   **The fallback also carries a candidate-local/valid-ancestor matrix derived from the closed predicate
   set already defined in §4.1 and `S-ALLOC`, not another blacklist.** With the nearest existing ancestor
   held valid for directory/access feasibility, independently exercise (1) an absent relative candidate,
@@ -1635,10 +1658,10 @@ or the explicit manual-residual row identified above; that distinction is now vi
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, and **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1); mode, UID and GID are not selection predicates for any pre-existing object used during selection, and BOTH base arms must pass the three-form matrix — direct existing base, safe-symlink resolved target, and absent candidate's nearest existing ancestor — crossed with mode-`0755`/current-UID, different-GID/current-UID, and accessible foreign-UID specimens; independently, an absent candidate remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility; the exception includes its root and every proper path-component descendant | `[M2.2 xdg-invalid-classes]` — XDG absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus both base arms × three accepted forms × three metadata variants, cross-arm invalid classes, and the closed path-relation matrix covering protected root/descendant, exception root/descendant, sibling prefix and outside path, including the exception-descendant positive and exact-equality-only mutation |
+| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, and **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1); mode, UID and GID are not selection predicates for any pre-existing object used during selection, and BOTH base arms must pass the three-form matrix — direct existing base, safe-symlink resolved target, and absent candidate's nearest existing ancestor — crossed with mode-`0755`/current-UID, different-GID/current-UID, and accessible foreign-UID specimens; independently, an absent candidate remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility; the exception includes its root and every proper path-component descendant | `[M2.2 xdg-invalid-classes]` — XDG absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus both base arms × three accepted forms × three metadata variants, cross-arm invalid classes, and allocator decisions bound on both arms to an independently computed path-component containment reference over generated component names and multiple depths, with a direct-parent-only mutation required to fail |
 | 2 | an **absent-but-creatable valid** `XDG_STATE_HOME` is created `0700` and used without fallback (§4.1) | `[M2.4 xdg-valid-positive]` — positive XDG-arm fixture initially absent; complete-predicate discrimination remains in rows 1 and 3, and the fallback positive is row 2b/`M2.22` |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
-| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, canonical protected-root containment by component, `W_OK\|X_OK`, and LF/CR-free — incl. the regular-file and unsearchable-directory discriminators; mode, UID and GID are not selection predicates for direct existing bases, safe-symlink resolved targets, or absent candidates' nearest existing ancestors on either base arm; independently, an absent fallback remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility; the exception includes its root and every proper path-component descendant; neither base valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — fallback absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus fallback non-mode predicate parity across existing and absent-ancestor invalid classes, both base arms × three accepted forms × three metadata variants, and the closed path-relation matrix with its exception-descendant positive and exact-equality-only mutation |
+| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, canonical protected-root containment by component, `W_OK\|X_OK`, and LF/CR-free — incl. the regular-file and unsearchable-directory discriminators; mode, UID and GID are not selection predicates for direct existing bases, safe-symlink resolved targets, or absent candidates' nearest existing ancestors on either base arm; independently, an absent fallback remains subject to the candidate-local predicate set while its valid nearest existing ancestor supplies only directory/access feasibility; the exception includes its root and every proper path-component descendant; neither base valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — fallback absent-candidate/valid-ancestor discrimination across relative rejection, canonical protected-subtree rejection, and permitted-symlink canonical-spelling acceptance, with an ancestor-only-validation mutation; plus fallback non-mode predicate parity across existing and absent-ancestor invalid classes, both base arms × three accepted forms × three metadata variants, and the independently computed containment-relation comparison over generated component names and multiple depths, with the allocator's fallback decision bound to the reference and a direct-parent-only mutation required to fail |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** — through the shared, importable validator whose verdict is bound to the allocator's production accept/reject decision (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — in-process class sweeps plus forced-verdict production binding, since an unused correct validator proves nothing |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
 | 6 | fail closed on a pre-existing **nested transcript parent beneath either base arm** whose mode differs from `0700`; sweep the complement, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — both nested-parent arms plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
@@ -1695,7 +1718,7 @@ or the explicit manual-residual row identified above; that distinction is now vi
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` and parses only the first `=` and first `:`, preserving later delimiters in the path (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then default-deny unless the non-exempt remainder is exactly `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`, with literal angle-bracket operands and single ASCII spaces, and that one exact command occupies its own physical line, or the occurrence has a residual-waiver exemption bound to `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical content elsewhere is not exempt, lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap; `scripts/review/callers-scan-exemptions.tsv` is the digest-bound 1,258-entry complement of the eight migration-source lines among the 1,266 candidates at `23c5a5a`, must equal the independently derived frozen set, and cannot be generated or widened automatically—later or changed candidates remain default-reject (`S-CALLERS`) | `[M5.13 callers-scan]` — independent test-local selection and disposition, real-Markdown single-command positives, trailing-token rejection, relocated-exemption rejection, frozen-manifest set equality, and add/remove/relocate/change plus blanket-exemption mutations |
+| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`, excluding only the exact canonical metadata path `scripts/review/callers-scan-exemptions.tsv`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then default-deny unless the non-exempt remainder is exactly `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`, with literal angle-bracket operands and single ASCII spaces, and that one exact command occupies its own physical line, or the occurrence has a bijective residual-waiver exemption bound to its repo-relative path, original-line digest and immediate preceding/following context digests rather than a physical-line number; lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap; after all required rewrites and the eight-source-to-twelve-destination caller migration, the initial manifest is the independently derived exact complement over the final tracked tree, its canonical four-field TSV parser rejects every noncanonical record, and its final bytes and digest are frozen in the implementation diff; production cannot generate or widen waivers automatically, and later changes require an explicit reviewed manifest diff (`S-CALLERS`) | `[M5.13 callers-scan]` — independent final-tree selection and disposition; complete post-migration fixture including the self-manifest exclusion, every required inventory rewrite, all caller splits, a rewritten synthesis line and an unchanged candidate shifted by a split; shallow-checkout success without historical objects; real-Markdown positives and trailing-token rejection; plus stale-identity, broader-path-exclusion, noncanonical-record, add/remove/move/duplicate/change, blanket-exemption and newly unmanifested-candidate mutations |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 32c | the closed pre-change migration source contains exactly twelve reviewer occurrences across eight frozen source lines with the enumerated per-line reviewer multisets; each context-bound destination replaces its own frozen source site, identified by path, frozen line, reviewer, and immutable surrounding-line hashes, producing twelve final physical lines with one **complete** command each, and each of the four dual-reviewer sources is split; an exact command elsewhere in the same file cannot satisfy the identity, and deleting a destination, relocating it as a byte-identical duplicate at another same-file source site, removing any required operand, appending a trailing operand, or leaving a dual-command line unsplit is rejected even with a matching exemption (`S-CALLERS`) | `[M5.15b full-invocation-shape]` — context-bound eight-source-line → twelve-destination-line positive plus all twelve identities × deletion/missing-operand/trailing-operand-with-exemption, the unchanged-count relocation/duplication mutation, and four source identities × unsplit-with-matching-exemption mutations (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent **and truncate a longer existing target to the exact shorter capture, leaving no stale suffix** — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` — absent-target creation plus unequal-length overwrite |
@@ -1973,22 +1996,33 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `gemini` in `skills/gemini-review`, `codex` in `skills/codex-review` — passed as the wrapper's third
    argument, **never derived** *(moved here from `S-ALLOC` in round 23, gemini: it is a caller contract)*.
    **The site set is a closed lexical universe, discovered rather than enumerated:** a tracked physical line
-   is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; lines containing neither
-   anchor are outside the scan's claim. For each candidate, remove only the leading prefix matched by the
+   is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`, except that selection
+   excludes only the exact canonical metadata path `scripts/review/callers-scan-exemptions.tsv`; no
+   directory, basename, suffix, token pattern or other path exclusion is permitted. Lines containing
+   neither anchor are outside the scan's claim. For each candidate, remove only the leading prefix matched by the
    exact regex `\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*`
    — unordered or ordered list marker, blockquote marker, four-space indent or tab indent — and require the
    **ENTIRE remainder to equal one of the two byte productions above**, or to match an exemption identified
-   by `(repo-relative path, physical-line number, SHA-256(original line bytes))`. **Every other candidate is
-   rejected.** Identical content at another path or line is not exempt. The exemption manifest is an
-   explicit residual waiver, not proof that exempt content is non-invoking. Production selection and
-   disposition are compared with the independent reference matcher defined by `M5.13`.
-   **The initial production manifest is `scripts/review/callers-scan-exemptions.tsv`, containing exactly
-   the 1,258-entry candidate-set complement of the eight migration-source physical lines below among the
-   1,266 candidates at frozen revision `23c5a5a`.** Use the canonical tab-separated serialization and
-   SHA-256 `9013dd811d5e5fbaf8731918b76e8b026212a93cca1260ae497c709477579b1b` defined by `M5.13`.
-   These one-time frozen contents are the reviewed closed allowlist; production must not derive, generate,
-   or append waivers. A later candidate, or an exemption whose path, line, or original bytes change, is
-   not automatically exempt and remains default-reject until an explicit reviewed manifest update.
+   by the shift-stable, context-bound tuple `(repo-relative path, SHA-256(original line payload bytes),
+   SHA-256(immediately preceding line payload bytes or BOF), SHA-256(immediately following line payload
+   bytes or EOF))`; absolute physical-line numbers are not part of the identity. **Every other candidate is
+   rejected.** Matching is bijective, so every exemption is consumed by exactly one candidate and every
+   exempt candidate consumes exactly one exemption; identical, moved or duplicated content cannot share a
+   waiver. The exemption manifest is an explicit residual waiver, not proof that exempt content is
+   non-invoking. Production selection and disposition are compared with the independent reference matcher
+   defined by `M5.13`.
+   **After all `S-INVENTORY` rewrites and twelve `S-CALLERS` destinations are present, the initial manifest
+   is the exact complement produced by the independent matcher over that final tracked tree.** Derive the
+   planned-changing candidates mechanically by intersecting the frozen `S-INVENTORY` source-to-destination
+   map with reference candidates and projecting each match to its owning destination predicate; separately
+   project the eight caller source lines below to their twelve destinations. The canonical manifest has no
+   header, serializes the four identity fields as tab-separated values in tuple order, sorts by complete
+   record bytes, requires normalized repo-relative paths and lowercase 64-hex digests, and ends every
+   record including the last with LF. Its parser rejects every noncanonical TSV record, including bad path
+   grammar, field count, digest grammar, ordering, uniqueness or line termination. Freeze the resulting
+   canonical bytes and their SHA-256 in the implementation diff and test fixture. Production never
+   derives, generates or widens waivers automatically; later changes require an explicit reviewed manifest
+   diff and remain default-reject until that diff lands.
    **A review-skill invocation must be written as a LITERAL command, and the scan enforces this as an
    ALLOWLIST with a DEFAULT of REJECT.** A non-exempt invocation **occupies its own physical line**
    *(round 69, both tiers, High: "a line MENTIONING a review-skill name" cannot be the trigger, because
