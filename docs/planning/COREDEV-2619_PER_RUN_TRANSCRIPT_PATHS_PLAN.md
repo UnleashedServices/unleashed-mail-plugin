@@ -1,6 +1,6 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 71**, both tiers plus a **remediation pass**
+**Status:** Planning — **NOT GATED. Latest completed round: 72**, both tiers plus a **remediation pass**
 — both independent reviews returned `REQUEST_CHANGES`. Their six-block union now requires atomic `0700`
 visibility for every shared directory, closes and location-binds the caller matcher's accepted language,
 protects the frozen live migration sites from exemptions, and proves the gemini skill-to-helper handoff.
@@ -9,7 +9,7 @@ first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 71 findings applied — both tiers + remediation pass; **not gated**)
+**Last Updated:** 2026-08-03 (round 72 findings applied — both tiers + remediation pass; **not gated**)
 
 ---
 
@@ -153,10 +153,11 @@ reviewer already told you about is not doing independent work.)*
   **and `.claude/worktrees` as a POSITIVE (it must be accepted)** *(round 19, codex: row 1 certified
   validation against "all protected roots" while `M2.2` exercised only `.claude`, so an implementation
   treating `.claude` as the entire set passed — and a §7-only implementer had to invent the set)*.
-  The allocator therefore validates it against this complete rule: **absolute, a DIRECTORY, outside every protected root,
-  writable AND searchable (`W_OK|X_OK`), and free of the line terminators LF and CR; after canonical
-  resolution, an existing XDG or fallback base is valid only if it also has exact mode `0700` and is
-  owned by `os.geteuid()`; otherwise an invalid XDG base falls back and an invalid fallback fails closed**.
+  The allocator therefore validates it against this complete rule: **absolute, a DIRECTORY, canonically
+  resolved and outside every protected root by path-component containment, writable AND searchable
+  (`W_OK|X_OK`), and free of the line terminators LF and CR; a pre-existing selected XDG or fallback base
+  is judged only by those predicates, and its mode, UID, and GID are not selection predicates; otherwise
+  an invalid XDG base falls back and an invalid fallback fails closed**.
   The fallback is **validated by the same rules**, and says so. **If the fallback also fails validation the allocator allocates
   NOTHING and exits non-zero with a diagnostic** — it never invents a third location.
   **"Writable" is defined for the FIRST-RUN case, which is the common one:** an existing base is valid
@@ -305,7 +306,9 @@ the scan's claim. The matcher removes only the leading prefix matched by
 remainder must then equal one of exactly two byte productions:
 `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or
 `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`. The angle-bracket operands are literal
-documentation placeholders, and fields are separated by exactly one ASCII space. An exemption matches
+documentation placeholders, and fields are separated by exactly one ASCII space. Positive fixtures are
+real Markdown physical lines using the permitted prefix forms, with exactly one complete command
+production occupying each line. An exemption matches
 only the tuple `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical bytes
 at another path or line are not exempt. Every other candidate is rejected. The reference neither imports
 nor calls production's matcher. Separate discriminating mutations change production candidate selection
@@ -337,14 +340,18 @@ property is only sound if the call sites are statically visible; making dynamic 
 failure keeps that assumption true rather than assuming it)* *(round 20, codex: enumerations were
 claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
 by scan. The cell now supplies the **discovery mechanism** a list cannot.)*
-`[M5.15b full-invocation-shape]` **And the COMPLETE command shape is asserted for the closed baseline of
-twelve reviewer occurrences across eight frozen physical lines, regardless of exemption membership** —
-namespace, both flags, **and the literal `<plan>` operand, with no trailing operand**. Parameterize the
-mutation over every frozen occurrence. For each occurrence separately: delete that occurrence (retaining
-the other occurrence on a two-reviewer line), remove each required operand in turn, and append a trailing
-operand. Add the matching `(repo-relative path, physical-line number, SHA-256(mutated line bytes))`
-exemption tuple to every malformed variant and require the cell to fail. The unmodified baseline also
-asserts the exact per-line reviewer multiset enumerated by `S-CALLERS` *(round 48, codex: `M5.13`
+`[M5.15b full-invocation-shape]` **And the positive maps the closed pre-change baseline of twelve reviewer
+occurrences across eight frozen source lines to twelve conforming destination lines** — exactly once per
+stable `(source repo-relative path, frozen source line, reviewer)` identity, in the same file, with the
+four dual-reviewer source lines split into adjacent gemini then codex destinations. Every destination
+occupies its own physical line and has the COMPLETE command shape — namespace, both flags, **and the
+literal `<plan>` operand, with no trailing operand**. The positive asserts the one-to-one source-to-
+destination mapping and all twelve destination identities. Parameterize the mutation over those twelve
+stable identities. For each identity separately: delete its destination, remove each required operand in
+turn, and append a trailing operand. Add the matching `(repo-relative path, physical-line number,
+SHA-256(mutated line bytes))` exemption tuple to every malformed variant and require the cell to fail.
+Also join either command pair from a formerly dual-reviewer source onto one physical line, retaining both
+commands, and require that unsplit form to fail. *(Round 48, codex: `M5.13`
 checked literal references plus the two flags and `M5.14` only the flag names, so a site could keep its
 bare form, gain `--ticket`/`--round`, and **omit the plan operand entirely** — passing both cells while
 violating `S-CALLERS`)*.
@@ -482,11 +489,10 @@ NUL), which the grammar already rejects. `.` and `..` are excluded because they 
 components and because the plan must not depend on the concatenation format never changing — not because
 they traverse. A future round must not "restore" the traversal claim.)* And
 `[M1.3 mis-moded-parent]` `makedirs(mode=0o700, exist_ok=True)` **leaves an existing `0755` directory unchanged**, so M1 must include
-a mutation with a **pre-existing mis-moded contracted directory** and assert the allocator fails closed rather than
-writing into it. Parameterize the mutation over all three directory roles: the selected XDG base, the
-selected fallback base, and the nested transcript parent beneath each of the XDG and fallback arms.
-**And one mode cannot establish the class** *(round 61, codex)*: `S-ALLOC` rejects each such role
-whose mode differs from `0700` **at all**, so a privacy-only check (`mode & 0o077`) rejects the `0755` case
+a mutation with a **pre-existing mis-moded nested transcript parent** and assert the allocator fails closed rather than
+writing into it. Parameterize the mutation over the nested transcript parent beneath each of the XDG and
+fallback base arms. **And one mode cannot establish the class** *(round 61, codex)*: `S-ALLOC` rejects
+each such nested parent whose mode differs from `0700` **at all**, so a privacy-only check (`mode & 0o077`) rejects the `0755` case
 and still accepts a usable owner-only `0300` — passing a single-value mutation while violating the operative
 rule. M1 therefore sweeps the **complement of `0o700` across the full permission space programmatically**,
 the case list **derived in the generator** (`[m for m in range(0o10000) if m != 0o700]`) and never asserted
@@ -499,8 +505,8 @@ high-bit modes `0o1700`–`0o7700` separate it from a `& 0o777` comparison. The 
 was actually achieved** — `chmod` then `stat.S_IMODE` — and **fails the case rather than skipping it** where
 a filesystem refuses one, since a skipped mutation proves nothing; all 4096 are achievable on APFS,
 measured at 0.13 s for the whole sweep. A member that fails for `EACCES` rather than the mode check still
-satisfies the fail-closed assertion, so the sweep cannot pass an implementation that writes into any
-non-`0700` contracted directory role.
+satisfies the fail-closed assertion, so the sweep cannot pass an implementation that writes into a
+non-`0700` nested transcript parent.
 `[M1.20 allocator-fchmod-on-fd]` **And the allocator's leaf enforcement is observed as a MECHANISM, not an
 outcome** *(round 65, codex, High)*: `S-ALLOC` mandates `os.fchmod` on the still-open descriptor, but
 `M1.10` observes creation flags, `M1.12` the final mode and `M1.18` the achieved mode under swept umasks —
@@ -545,11 +551,10 @@ nothing about the message, so a generic "allocation failed" satisfied the cell w
 **The retry loop is bounded at 8 attempts**, after which the allocator exits non-zero with a diagnostic
 naming the exhausted parent *(round 14, codex: `S-ALLOC` required a "bounded" loop and never said what the bound
 was, so M1.11's "every candidate up to the bound" was unimplementable)*.
-`[M1.4 wrong-owner-parent]` **Plus, round 9 (codex): a pre-existing WRONG-OWNER contracted directory is a second, separate mutation.**
-Parameterize it over the selected XDG base, the selected fallback base, and the nested transcript parent
-beneath each of the XDG and fallback arms. §7 `S-ALLOC`
-requires failing closed on any such role that exists "with a different mode **or owner**", but M1 proved only
-the mode arm — so a mode-only implementation passed every listed M1 case while violating §7. The two
+`[M1.4 wrong-owner-parent]` **Plus, round 9 (codex): a pre-existing WRONG-OWNER nested transcript parent is a second, separate mutation.**
+Parameterize it over the nested transcript parent beneath each of the XDG and fallback base arms. §7
+`S-ALLOC` requires failing closed when such a parent has a different owner, but M1 proved only the mode
+arm — so a mode-only implementation passed every listed M1 case while violating §7. The two
 checks fail independently and each needs its own mutation. *(Where the test cannot create a
 foreign-owned directory unprivileged, stub the `stat` result rather than skipping: a skipped mutation
 proves nothing, and this one is unrunnable as-written in most CI.)* **The foreign uid is likewise
@@ -806,12 +811,16 @@ passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` enti
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
 and they are of the two kinds this campaign keeps needing:
 **And a PRE-EXISTING ordinary base is a must-PASS positive on BOTH arms**
-*(maintainer decision, round 72, adopting `max`'s reading over the round-71 rule)*: a selected
-`XDG_STATE_HOME` — and separately a selected `$HOME/.local/state` — that already exists with mode `0755`,
-and one owned by a different group, are each **ACCEPTED and used**, with allocation proceeding beneath
-them. These are the cases the round-71 "every contracted role" wording would have hard-failed. The
-`0700`/owner contract is asserted only against what the allocator CREATES and against a pre-existing
-**nested transcript parent**, which `M1.3`/`M1.4` still require to fail closed.
+*(maintainer decision, round 72, adopting `max`'s reading over the round-71 rule)*: independently for a
+selected `XDG_STATE_HOME` and a selected `$HOME/.local/state`, exercise three otherwise-identical,
+accessible specimens — a mode-`0755` base with the current UID, a different-GID base with the current UID,
+and an otherwise-valid base whose `st_uid != os.geteuid()`. Each is **ACCEPTED and used**, with allocation
+proceeding beneath it. The foreign-UID specimen uses the same interposed-`stat` seam permitted for `M1.4`,
+so it is runnable without privileged ownership changes; the different-GID specimen is retained as an
+independent discriminator and cannot substitute for it. These are the cases the round-71 "every
+contracted role" wording would have hard-failed. The `0700`/owner contract is asserted only against what
+the allocator CREATES and against a pre-existing **nested transcript parent**, which `M1.3`/`M1.4` still
+require to fail closed.
 - `[M2.26 base-transport-conjunction]` **A base that is VALID but hostile to the transport is REJECTED**
   *(round 65 `max`, codex, High)*: POSIX permits any byte but `/` and NUL in a directory name, so
   `XDG_STATE_HOME` containing an LF satisfies absolute, directory, protected-root and `W_OK|X_OK` — and
@@ -1358,7 +1367,7 @@ reported before every freeze.
 | path layout | `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt` | §4.1 · `S-ALLOC` |
 | base ownership | `No caller passes --base, and the allocator REJECTS it if given` | §4.1 · `S-ALLOC` · `S-WRAPPER` |
 | freshness comparison | `a transcript strictly OLDER than its `.launch` record is REJECTED; equal-or-newer is accepted` | §4.5 · `S-FRESH` |
-| base validation rules | `absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK\|X_OK`), and free of the line terminators LF and CR; after canonical resolution, an existing XDG or fallback base is valid only if it also has exact mode `0700` and is owned by `os.geteuid()`; otherwise an invalid XDG base falls back and an invalid fallback fails closed` | §4.1 · `S-ALLOC` |
+| base validation rules | `absolute, a DIRECTORY, canonically resolved and outside every protected root by path-component containment, writable AND searchable (`W_OK\|X_OK`), and free of the line terminators LF and CR; a pre-existing selected XDG or fallback base is judged only by those predicates, and its mode, UID, and GID are not selection predicates; otherwise an invalid XDG base falls back and an invalid fallback fails closed` | §4.1 · `S-ALLOC` |
 | protected-root set | `` `.claude` and everything beneath it **except `.claude/worktrees`** `` | §4.1 · `S-ALLOC` |
 
 **The check is EXACTLY-ONCE, over text with round-notes stripped — round 18, both arms.** Presence is not
@@ -1536,14 +1545,14 @@ requirement, and that is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
-| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)** (`S-ALLOC`, §4.1); exact-mode/current-owner enforcement for an existing selected base is covered separately by rows 6 and 7 | `[M2.2 xdg-invalid-classes]` — incl. exact-`0700`, current-owner canonical positives and the **sibling-prefix pair** `.claude/worktrees-evil` (reject) / `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
+| 1 | XDG candidate selection applies the complete non-mode/owner predicate set: absolute, **a DIRECTORY**, **canonically resolved (follow, then judge)**, outside the protected-root set by path COMPONENT, **writable AND searchable (`W_OK\|X_OK`)**, and LF/CR-free (`S-ALLOC`, §4.1); for a pre-existing selected base, mode, UID and GID are not selection predicates, and BOTH base arms must accept independent mode-`0755`/current-UID, different-GID/current-UID, and accessible foreign-UID specimens | `[M2.2 xdg-invalid-classes]` — cross-arm invalid classes and must-pass discrimination, plus the safe-symlink and **sibling-prefix pair** `.claude/worktrees-evil` (reject) / `.claude-cache` (accept), which a string-prefix check fails (round 27, codex) |
 | 2 | an **absent-but-creatable valid** `XDG_STATE_HOME` is created `0700` and used without fallback (§4.1) | `[M2.4 xdg-valid-positive]` — positive XDG-arm fixture initially absent; complete-predicate discrimination remains in rows 1 and 3, and the fallback positive is row 2b/`M2.22` |
 | 2b | an **absent** `$HOME/.local/state` fallback is created **`0700`** and used (§4.1) | `[M2.22 absent-fallback-positive]` (round 27 — the cell had not asserted the mode) |
-| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; exact-mode/current-owner enforcement for an existing selected base is covered separately by rows 6 and 7; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — incl. exact-`0700`, current-owner canonical positives |
+| 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, canonical protected-root containment by component, `W_OK\|X_OK`, and LF/CR-free — incl. the regular-file and unsearchable-directory discriminators; a pre-existing selected fallback has no mode, UID or GID selection predicate; neither base valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — fallback non-mode predicate parity across existing and absent-ancestor invalid classes |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** — through the shared, importable validator whose verdict is bound to the allocator's production accept/reject decision (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — in-process class sweeps plus forced-verdict production binding, since an unused correct validator proves nothing |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
-| 6 | fail closed on a pre-existing **nested transcript parent** whose mode differs from `0700`; a pre-existing **selected base** is NOT mode-contracted and an ordinary `0755` one is ACCEPTED (maintainer decision, round 72) — formerly "every contracted role" — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — whose mode differs from `0700`; complement swept, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — directory-role/arm parameterization plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
-| 7 | fail closed on a pre-existing **wrong-owner nested transcript parent**; a pre-existing selected base is not owner-contracted (maintainer decision, round 72; §3 places attacker-controlled ancestors out of scope) — formerly all roles — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — with uid **parameterized** as root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` — directory-role/arm parameterization plus the uid sweep (round 61 — a lone foreign uid passes a reject-root-only check) |
+| 6 | fail closed on a pre-existing **nested transcript parent beneath either base arm** whose mode differs from `0700`; sweep the complement, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — both nested-parent arms plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
+| 7 | fail closed on a pre-existing **wrong-owner nested transcript parent beneath either base arm**, with uid **parameterized** as root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` — both nested-parent arms plus the uid sweep (round 61 — a lone foreign uid passes a reject-root-only check) |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID is the **direct lowercase-hex encoding of ≥16 CSPRNG bytes** — no hashing, truncation, repetition or mixing (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
@@ -1596,9 +1605,9 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` and parses only the first `=` and first `:`, preserving later delimiters in the path (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then default-deny unless the non-exempt remainder is exactly `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`, with literal angle-bracket operands and single ASCII spaces, or the occurrence has a residual-waiver exemption bound to `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical content elsewhere is not exempt, lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` — independent test-local selection and disposition, trailing-token rejection, and relocated-exemption rejection |
+| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then default-deny unless the non-exempt remainder is exactly `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`, with literal angle-bracket operands and single ASCII spaces, and that one exact command occupies its own physical line, or the occurrence has a residual-waiver exemption bound to `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical content elsewhere is not exempt, lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` — independent test-local selection and disposition, real-Markdown single-command positives, trailing-token rejection, and relocated-exemption rejection |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
-| 32c | the closed baseline contains exactly twelve reviewer occurrences across eight frozen physical lines with the enumerated per-line reviewer multisets; every occurrence has the **complete** command shape — namespace, both flags and literal `<plan>` — and deleting it, removing any required operand, or appending a trailing operand is rejected even with a matching exemption (`S-CALLERS`) | `[M5.15b full-invocation-shape]` — all twelve occurrences × deletion/missing-operand/trailing-operand-with-exemption mutations (round 48, codex — flags alone let a site omit the plan operand) |
+| 32c | the closed pre-change migration source contains exactly twelve reviewer occurrences across eight frozen source lines with the enumerated per-line reviewer multisets; each stable source identity maps exactly once to a same-file reviewer-named destination, producing twelve final physical lines with one **complete** command each, and each of the four dual-reviewer sources is split; deleting a destination, removing any required operand, appending a trailing operand, or leaving a dual-command line unsplit is rejected even with a matching exemption (`S-CALLERS`) | `[M5.15b full-invocation-shape]` — eight-source-line → twelve-destination-line positive plus all twelve stable identities × deletion/missing-operand/trailing-operand-with-exemption and unsplit-dual-line mutations (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent **and truncate a longer existing target to the exact shorter capture, leaving no stale suffix** — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` — absent-target creation plus unequal-length overwrite |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30b | the wrapper invokes `pty-capture.py` from its **own location** too (`S-WRAPPER`) | `[M5.16 allocator-own-location]` (round 37, both arms — round 36 made only the library distinguishable) |
@@ -1620,8 +1629,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    not the anchoring, so an unanchored match accepts `A/../../escape` — the escape `M1.8` exists to reject)*
    (the grammar alone accepts both) — the separator `/` is the vector that would escape the intended
    parent, and it is what the character class excludes; `.`/`..` are rejected as meaningless components,
-   not as traversal (§4.1, round 10); create the `0700` parent and **fail closed if it already exists with a different
-   mode or owner** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
+   not as traversal (§4.1, round 10); create the nested transcript parent `0700` and **fail closed if a
+   pre-existing nested transcript parent beneath either base arm has a mode other than `0700` or an owner
+   other than `os.geteuid()`** (`makedirs(exist_ok=True)` silently accepts a `0755` directory); allocate
    the leaf with `O_CREAT|O_EXCL` and mode `0o600`, **each attempt's run ID being the LOWERCASE HEX ENCODING OF AT
    LEAST 16 BYTES TAKEN DIRECTLY FROM A CSPRNG** (`secrets.token_hex(16)` or `os.urandom(16).hex()`) —
    **encoding only: no hashing, no truncation, no repetition, no mixing with a counter, clock or pid**
@@ -1661,9 +1671,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    allocator process, create it under a temporarily normalized `umask`, restoring the entry value in a
    `finally` path before every success or failure return; post-publication mode correction is not
    permitted. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
-   **A PRE-EXISTING selected base is NOT subject to the `0700` contract** — it is judged solely by the
-   candidate-selection predicate set, and an ordinary `0755` or group-owned state directory is **accepted,
-   not a failure** *(maintainer decision, round 72: the round-71 rule reached every "contracted role",
+   **A PRE-EXISTING selected base is NOT subject to a mode or ownership contract** — under the complete
+   selection rule below, an accessible ordinary `0755`, different-group, or foreign-UID state directory is
+   **accepted, not a failure** *(maintainer decision, round 72: the round-71 rule reached every "contracted role",
    which contradicted the base-validity contract for a base the allocator never created and would have
    hard-failed the common `~/.local/state` at `0755` instead of using it. Privacy does not depend on the
    base: the allocator creates the nested transcript parent `0700` and the leaf `0600` itself, so the
@@ -1692,10 +1702,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
    `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`, with
    `<base>` **selected by the allocator itself** — `$XDG_STATE_HOME` when it is
-   **absolute, a DIRECTORY, outside every protected root, writable AND searchable (`W_OK|X_OK`), and free
-   of the line terminators LF and CR; after canonical resolution, an existing XDG or fallback base is
-   valid only if it also has exact mode `0700` and is owned by `os.geteuid()`; otherwise an invalid XDG
-   base falls back and an invalid fallback fails closed** *(round 65 `max`, codex, High: POSIX permits any byte but `/` and NUL
+   **absolute, a DIRECTORY, canonically resolved and outside every protected root by path-component
+   containment, writable AND searchable (`W_OK|X_OK`), and free of the line terminators LF and CR; a
+   pre-existing selected XDG or fallback base is judged only by those predicates, and its mode, UID, and
+   GID are not selection predicates; otherwise an invalid XDG base falls back and an invalid fallback
+   fails closed** *(round 65 `max`, codex, High: POSIX permits any byte but `/` and NUL
    in a directory name, so a base containing LF satisfied every other predicate and split the mandatory
    single-line `UNLEASHED_TRANSCRIPT=` marker into two physical lines — verified by execution. The base
    predicate and the transport were each proved and their CONJUNCTION was not, leaving a §7-only implementer
@@ -1874,8 +1885,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    references across **six** files. **Twice an enumeration was claimed complete and was wrong**, which is
    the whole argument for a discovery mechanism: a list is a snapshot, and this one has been wrong every
    time it was written.)*
-   **Frozen live invocation baseline — exactly twelve reviewer occurrences across eight physical lines,
-   none of which may be exempt.** The exact repo-relative line and expected reviewer multiset are:
+   **Frozen pre-change migration-source baseline — exactly twelve reviewer occurrences across eight source
+   physical lines, none of which may be exempt.** This is the closed source inventory, not the required
+   final layout. The exact repo-relative source line and expected reviewer multiset are:
    `skills/create-feature-plan/SKILL.md:81` → `{gemini × 1, codex × 1}`;
    `AGENT_CONTRACTS.md:99` → `{gemini × 1}`;
    `AGENT_CONTRACTS.md:100` → `{codex × 1}`;
@@ -1883,10 +1895,15 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `agents/modern-standards-planner.md:42` → `{gemini × 1}`;
    `agents/modern-standards-planner.md:43` → `{codex × 1}`;
    `skills/implement/SKILL.md:161` → `{gemini × 1, codex × 1}`; and
-   `skills/implement/SKILL.md:172` → `{gemini × 1, codex × 1}`. Each baseline occurrence must retain the
-   complete production shape: an exemption cannot waive deletion, a missing required operand, or a
-   trailing operand. This is a closed baseline set, not another enumeration of future callers; the matcher
-   remains the discovery mechanism.
+   `skills/implement/SKILL.md:172` → `{gemini × 1, codex × 1}`. Give every source occurrence the stable
+   identity `(source repo-relative path, frozen source line, reviewer)` and map each identity exactly once
+   to a same-file destination named for that reviewer. Each destination contains one exact command
+   production on its own physical line. The four dual-reviewer sources are split into adjacent gemini then
+   codex destination lines, yielding twelve destination lines in the final form; every single-reviewer
+   source yields one destination line. An exemption cannot waive deletion, a missing required operand, a
+   trailing operand, or an unsplit dual-command line. This is a closed migration-source set, not another
+   enumeration of future callers; the default-deny matcher remains the discovery mechanism for future
+   callers.
    *(Round 18, codex, High: `M5.7` makes a skill that cannot determine ticket/round **fail closed**, so
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
