@@ -404,13 +404,324 @@ def parse_pre_args(pre: list[str]) -> "tuple[float | None, str]":
     return timeout, (positional[0] if positional else "/tmp/pty-out.txt")
 
 
-if __name__ == "__main__":
-    # argv shape: pty-capture.py [--timeout SECONDS|--timeout=SECONDS] [out-path] -- <command> [args...]
-    argv = sys.argv[1:]
-    if "--" not in argv:
-        raise SystemExit(
-            "usage: pty-capture.py <out-path> -- <command> [args...]"
+ALLOCATION_MARKER = "UNLEASHED_TRANSCRIPT="
+ALLOCATION_ATTEMPTS = 8
+RUN_ID_BYTES = 16
+DERIVED_SIBLING_SUFFIXES = (".launch", ".captureid")
+_COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+_ALLOCATE_OPTIONS = ("--repo-hash", "--ticket", "--round", "--reviewer")
+
+
+class AllocationError(RuntimeError):
+    """A fail-closed transcript allocation error suitable for a stderr diagnostic."""
+
+
+def is_valid_transcript_component(value: str) -> bool:
+    """Return whether a caller-supplied path component has the S-ALLOC grammar."""
+    return value not in ("", ".", "..") and _COMPONENT_RE.fullmatch(value) is not None
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
+
+
+def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, str | None]":
+    """Return (canonical candidate, None), or (None, rejection reason)."""
+    if not candidate:
+        return None, "value is empty"
+    if "\n" in candidate or "\r" in candidate:
+        return None, "value contains a line terminator"
+    if not os.path.isabs(candidate):
+        return None, "value is not an absolute path"
+    if not home or not os.path.isabs(home):
+        return None, "HOME is unavailable or not absolute, so protected roots cannot be validated"
+
+    canonical = os.path.realpath(candidate)
+    if "\n" in canonical or "\r" in canonical:
+        return None, "canonical path contains a line terminator"
+    protected_root = os.path.realpath(os.path.join(home, ".claude"))
+    worktree_exception = os.path.realpath(os.path.join(home, ".claude", "worktrees"))
+    if _path_is_within(canonical, protected_root) and not _path_is_within(canonical, worktree_exception):
+        return None, "canonical path is inside the protected .claude root"
+
+    probe = canonical
+    while not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    if not os.path.isdir(probe):
+        return None, f"nearest existing path {probe!r} is not a directory"
+    if not os.access(probe, os.W_OK | os.X_OK):
+        return None, f"nearest existing directory {probe!r} is not writable and searchable"
+    if os.path.exists(canonical) and not os.path.isdir(canonical):
+        return None, "value is not a directory"
+    return canonical, None
+
+
+def _select_allocation_base(environ: "dict[str, str]", diagnostic_stream) -> str:
+    home = environ.get("HOME", "")
+    xdg = environ.get("XDG_STATE_HOME")
+    xdg_reason = None
+    if xdg:
+        canonical, xdg_reason = _validate_base_candidate(xdg, home)
+        if canonical is not None:
+            return canonical
+
+    fallback = os.path.join(home, ".local", "state") if home else ""
+    canonical, fallback_reason = _validate_base_candidate(fallback, home)
+    if canonical is None:
+        parts = []
+        if xdg:
+            parts.append(f"XDG_STATE_HOME={xdg!r} rejected: {xdg_reason}")
+        parts.append(f"fallback={fallback!r} rejected: {fallback_reason}")
+        raise AllocationError("no valid transcript state base: " + "; ".join(parts))
+
+    if xdg and xdg_reason is not None:
+        diagnostic_stream.write(
+            f"pty-capture: XDG_STATE_HOME={xdg!r} rejected: {xdg_reason}; "
+            f"falling back to {fallback!r}\n"
         )
-    sep = argv.index("--")
-    _timeout, _out = parse_pre_args(argv[:sep])
-    sys.exit(main(_out, argv[sep + 1:], _timeout))
+        diagnostic_stream.flush()
+    return canonical
+
+
+def _mkdir_private_chain(path: str) -> None:
+    """Create every absent component at its achieved, publication-time mode 0700."""
+    missing = []
+    cursor = path
+    while not os.path.exists(cursor):
+        missing.append(cursor)
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            raise AllocationError(f"cannot find an existing ancestor for {path!r}")
+        cursor = parent
+    if not os.path.isdir(cursor):
+        raise AllocationError(f"existing ancestor {cursor!r} is not a directory")
+
+    for directory in reversed(missing):
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            if not os.path.isdir(directory):
+                raise AllocationError(f"concurrent path {directory!r} is not a directory")
+
+
+def _validate_existing_private_directory(path: str, metadata=None) -> None:
+    """Require an existing allocator-owned shared directory to be ours and exactly 0700."""
+    info = metadata if metadata is not None else os.stat(path)
+    if not stat.S_ISDIR(info.st_mode):
+        raise AllocationError(f"nested transcript parent {path!r} is not a directory")
+    mode = stat.S_IMODE(info.st_mode)
+    if mode != 0o700:
+        raise AllocationError(f"nested transcript parent {path!r} has mode {mode:#06o}, expected 0o0700")
+    if info.st_uid != os.geteuid():
+        raise AllocationError(
+            f"nested transcript parent {path!r} has owner {info.st_uid}, expected {os.geteuid()}"
+        )
+
+
+def _ensure_private_directory(path: str) -> None:
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    _validate_existing_private_directory(path)
+
+
+def _ensure_allocation_parent(base: str, repo_hash: str) -> str:
+    _mkdir_private_chain(base)
+    parent = base
+    for component in ("unleashed-mail", "review-transcripts", repo_hash):
+        parent = os.path.join(parent, component)
+        _ensure_private_directory(parent)
+    return parent
+
+
+def _generate_run_id() -> str:
+    """Encode one direct 128-bit CSPRNG draw; do not transform it beyond lowercase hex."""
+    return os.urandom(RUN_ID_BYTES).hex()
+
+
+def _allocation_basename(ticket: str, round_value: str, reviewer: str, run_id: str) -> str:
+    return f"{ticket}r{round_value}-{reviewer}-{run_id}.txt"
+
+
+def _basename_limit(parent: str) -> int:
+    name_max = os.pathconf(parent, "PC_NAME_MAX")
+    return name_max - max(len(suffix) for suffix in DERIVED_SIBLING_SUFFIXES)
+
+
+def _unlink_reservation(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "short write while creating launch record")
+        view = view[written:]
+
+
+def _create_launch_record(path: str, run_id: str) -> bool:
+    """Create and owner-reopen a launch record; return False on an exclusive-name collision."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return False
+
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+            _write_all(fd, (run_id + "\n").encode("ascii"))
+        finally:
+            os.close(fd)
+    except BaseException:
+        _unlink_reservation(path)
+        raise
+
+    try:
+        verify_fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        os.close(verify_fd)
+    except BaseException:
+        _unlink_reservation(path)
+        raise
+    return True
+
+
+def _validate_basename_length(parent: str, ticket: str, round_value: str, reviewer: str) -> None:
+    limit = _basename_limit(parent)
+    expected_name = _allocation_basename(
+        ticket,
+        round_value,
+        reviewer,
+        "0" * (RUN_ID_BYTES * 2),
+    )
+    if len(expected_name) > limit:
+        raise AllocationError(
+            f"assembled transcript basename length {len(expected_name)} exceeds limit {limit} "
+            f"for parent {parent!r}"
+        )
+
+
+def _reserve_transcript(parent: str, ticket: str, round_value: str, reviewer: str) -> str:
+    leaf_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    for _attempt in range(ALLOCATION_ATTEMPTS):
+        run_id = _generate_run_id()
+        path = os.path.join(parent, _allocation_basename(ticket, round_value, reviewer, run_id))
+        try:
+            leaf_fd = os.open(path, leaf_flags, 0o600)
+        except FileExistsError:
+            continue
+
+        try:
+            try:
+                os.fchmod(leaf_fd, 0o600)
+            finally:
+                os.close(leaf_fd)
+        except BaseException:
+            _unlink_reservation(path)
+            raise
+
+        try:
+            launch_created = _create_launch_record(path + ".launch", run_id)
+        except BaseException:
+            _unlink_reservation(path)
+            raise
+        if not launch_created:
+            _unlink_reservation(path)
+            continue
+        return path
+
+    raise AllocationError(
+        f"exhausted {ALLOCATION_ATTEMPTS} transcript allocation attempts in parent {parent!r}"
+    )
+
+
+def allocate_transcript(
+    repo_hash: str,
+    ticket: str,
+    round_value: str,
+    reviewer: str,
+    environ: "dict[str, str] | None" = None,
+    diagnostic_stream=None,
+) -> str:
+    """Atomically reserve one private transcript leaf and its launch record."""
+    values = {
+        "repo-hash": repo_hash,
+        "ticket": ticket,
+        "round": round_value,
+        "reviewer": reviewer,
+    }
+    for label, value in values.items():
+        if not is_valid_transcript_component(value):
+            raise AllocationError(f"invalid {label} component: {value!r}")
+
+    env = dict(os.environ if environ is None else environ)
+    diagnostics = sys.stderr if diagnostic_stream is None else diagnostic_stream
+    entry_umask = os.umask(0)
+    try:
+        try:
+            base = _select_allocation_base(env, diagnostics)
+            parent = _ensure_allocation_parent(base, repo_hash)
+            _validate_basename_length(parent, ticket, round_value, reviewer)
+            return _reserve_transcript(parent, ticket, round_value, reviewer)
+        except AllocationError:
+            raise
+        except OSError as exc:
+            raise AllocationError(f"transcript allocation failed: {exc}") from exc
+    finally:
+        os.umask(entry_umask)
+
+
+def _parse_allocate_args(args: list[str]) -> "tuple[str, str, str, str]":
+    values = {}
+    index = 0
+    while index < len(args):
+        option = args[index]
+        if option not in _ALLOCATE_OPTIONS:
+            raise AllocationError(f"unknown allocation argument: {option!r}")
+        if option in values:
+            raise AllocationError(f"duplicate allocation argument: {option}")
+        if index + 1 >= len(args):
+            raise AllocationError(f"allocation argument {option} requires a value")
+        values[option] = args[index + 1]
+        index += 2
+    missing = [option for option in _ALLOCATE_OPTIONS if option not in values]
+    if missing:
+        raise AllocationError("missing allocation arguments: " + ", ".join(missing))
+    return tuple(values[option] for option in _ALLOCATE_OPTIONS)
+
+
+def cli_main(argv: "list[str] | None" = None, environ: "dict[str, str] | None" = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--allocate":
+        try:
+            repo_hash, ticket, round_value, reviewer = _parse_allocate_args(args[1:])
+            path = allocate_transcript(repo_hash, ticket, round_value, reviewer, environ=environ)
+        except AllocationError as exc:
+            sys.stderr.write(f"pty-capture: {exc}\n")
+            sys.stderr.flush()
+            return 1
+        sys.stdout.write(ALLOCATION_MARKER + path + "\n")
+        sys.stdout.flush()
+        return 0
+
+    if "--" not in args:
+        raise SystemExit("usage: pty-capture.py <out-path> -- <command> [args...]")
+    separator = args.index("--")
+    timeout, out_path = parse_pre_args(args[:separator])
+    return main(out_path, args[separator + 1:], timeout)
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())
