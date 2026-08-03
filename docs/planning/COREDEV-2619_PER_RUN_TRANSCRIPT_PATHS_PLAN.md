@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 77**, two independent review arms —
-`xhigh` and `max` returned `REQUEST_CHANGES`.
+**Status:** Planning — **NOT GATED. Latest completed round: 78**, two independent review arms —
+`xhigh` returned `APPROVE_WITH_NOTES`; `max` returned `REQUEST_CHANGES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 77 findings applied — both arms; **not gated**)
+**Last Updated:** 2026-08-03 (round 78 findings applied — both arms; **not gated**)
 
 ---
 
@@ -964,28 +964,12 @@ table exposed two rows whose proof column I had filled in from memory and which 
 - "No substitution validator" was a **stated decision with no cell that would fail if one were added**.
   M2 now asserts the `${CLAUDE_PLUGIN_ROOT}` grants are **still present and unrewritten** in both review
   skills — the positive form of the round-2 reversal, which four prior rounds kept re-breaking.
-  *(Round 12, codex: that presence assertion **still does not prove the requirement** — a substitution
-  validator that is added but happens to **accept** `${CLAUDE_PLUGIN_ROOT}` passes it. The requirement is
-  the **absence of the validator**, so M2 asserts no substitution-validation step exists in the skill
-  pipeline; see §6.1 row 16.)* `[M2.10 validator-absence]` **The scan is bounded and the cell carries a
-  mutation** *(round 20, gemini: this tag had sat on the pre-clean cluster three paragraphs away — a tag
-  must sit on the text that defines it, or the bidirectional check passes while the cell is unfindable)* *(round 16, codex:
-  "no validator exists" named no scan surface, so nothing would fail when a differently-named one was
-  added)*: it scans repo-wide for **the withdrawn validator specifically** — a step that validates or rewrites
-  `${CLAUDE_PLUGIN_ROOT}` **inside `allowed-tools` lines** — and **adds one under a different name as a
-  mutation**, requiring the cell to fail.
-  *(Round 18, codex, High: round 17 broadened this to "no substitution-validation step exists" repo-wide,
-  which **fails against the existing repository**. `scripts/tests/test_doc_gates.py:43-83`
-  (`COREDEV2504_PluginRootConvention`) is exactly such a validator — it scans agent/skill bodies, accepts
-  the exact `${CLAUDE_PLUGIN_ROOT}` token and rejects non-substituted spellings — and it lives inside the
-  stated scan surface. The cell could not pass without deleting an unrelated, working defence. Fixing a
-  too-narrow scope by making it unbounded is not a fix; the requirement was always about the
-  **`allowed-tools` validator round 1 proposed and round 2 withdrew**, not about substitution validation
-  in general.)* *(Round 17, codex: the scan had been restricted to
-  `skills/*/SKILL.md` and `scripts/review/*`, so adding the validator at the **natural** place —
-  `scripts/validate-plugin-assembly.py`, which is where every other plugin validator lives — would not have
-  failed the cell. An absence assertion is only as strong as the surface it scans, and a scope that excludes
-  the most likely location is not a scan.)*
+  *(Round 78, max, Medium: the locked policy remains that no step may validate or rewrite
+  `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools`. That is a semantic absence claim over an open
+  implementation space: a generic frontmatter parser or computed key can violate it without matching any
+  bounded lexical predicate. The former validator-absence mutation cell is withdrawn rather than extended
+  with more scanner spellings. M2.7 continues to prove only that the grants are retained; compliance with
+  the no-validator policy is an explicit residual manual diff-review gap.)*
 
 `[M2.8 preclean-command-absence]` `[M2.9 preclean-reinstate-must-fail]` **Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
 The gemini pre-clean in `scripts/review/isolated-agy-review.sh` is anchored by the exact command
@@ -1582,7 +1566,8 @@ candidates were inspected and are phrasing differences, not losses. *(The same s
 round-41 check had passed this clause only because it did not strip notes — a checker reading history as
 contract, which is the error this campaign most often corrects in reviewers.)*
 
-**Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** `M2.10`'s tag had
+**Placement rule (round 20, gemini): a tag sits on the text that DEFINES its cell.** The now-withdrawn
+`M2.10` tag had
 drifted onto the pre-clean cluster three paragraphs from its own mutation — the bidirectional check still
 passed, because it verifies that a tag exists and is cited, not that it labels the right sentence. *(Five
 `M2.x` cells added in rounds 17–19 also sit at the end of §4.3 rather than beside the mechanisms they
@@ -1591,18 +1576,20 @@ exactly once — and it is recorded here rather than fixed by moving text mid-ca
 relocate them consumed two section headings and duplicated four cells, which is a worse failure than the
 one being fixed. It is a cleanup for the implementation commit, tracked in `S-RELEASE`.)*
 
-**Convention (round 13, corrected round 14): every row cites either a TAGGED CELL** — of the form
-`[M<n>.<k> short-name]`, placed verbatim in the proof text — **or a NAMED EXISTING TEST** with `file:line`, for
-requirements that are pre-existing regressions rather than new proofs. **Row 22 is the only instance of the
-second form** and its citation was re-read at round 14
+**Convention (round 13, corrected rounds 14 and 78): every row records exactly one proof disposition:**
+a **TAGGED CELL** — of the form `[M<n>.<k> short-name]`, placed verbatim in the proof text — a **NAMED
+EXISTING TEST** with `file:line` for a pre-existing regression rather than a new proof, or an **EXPLICIT
+MANUAL RESIDUAL** when an open semantic absence has no mechanically discriminating bounded cell. **Row 22
+is the only existing-test row; row 16 is the only manual-residual row.** Row 22's citation was re-read at round 14
 (`scripts/tests/test_review_verdict.py:143` — `test_one_transcript_cannot_back_TWO_approvals`).
 *(Round 14, codex, Low: the round-13 wording claimed "every row cites a TAGGED CELL" while four rows cited
 none, and it miscounted the tags. A convention stated more strongly than it is followed is the same defect
 as a coverage row stated more strongly than its proof.)* Round 12's "quote a phrase" convention was applied to **four** rows and
 violated by the other **25** (gemini, round 13), which is the same one-place-fix defect the plan keeps
-hitting. Tags are exact tokens, so the mapping is checked by string match in both directions: **every row
-cites a tag that exists, and every tag is cited by a row.** A requirement with no tag is an uncovered
-requirement, and that is now visible rather than arguable.
+hitting. Tags are exact tokens, so the mapping is checked by string match in both directions: **each of the
+76 remaining tagged cells is defined exactly once and cited by exactly one row, and every tagged citation
+names its definition.** A row without a tagged cell is uncovered unless it is the named existing-test row
+or the explicit manual-residual row identified above; that distinction is now visible rather than arguable.
 
 | # | requirement (source) | proof cell |
 |---|---|---|
@@ -1641,14 +1628,14 @@ requirement, and that is now visible rather than arguable.
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod`, applied **before any payload byte** and **writing NOTHING if it fails** (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
 | 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper resolving the **plugin's** writer from its own relocated `$0`-relative directory without consulting `CLAUDE_PLUGIN_ROOT`, including when that variable is unset (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; relocated helper/plugin writer with a distinct marker and recorded `argv`, run outside both trees with the variable unset and a reviewed tree containing no writer, for the gemini path |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
-| 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
+| 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | **Manual residual (round 78, max):** no bounded lexical mutation cell can discriminate this semantic absence over the open implementation space; manual diff review must inspect for any validator or rewrite, including generic frontmatter parsing and computed keys. |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
 | 17 | freshness fails closed on absent / mismatched / empty / malformed (`S-FRESH`) | `[M4.3 absent]` `[M4.4 mismatched]` `[M4.5 empty]` `[M4.6 malformed]` |
 | 18 | …on **both** digest paths (`S-FRESH`) | `[M4.7 both-digest-paths]` |
 | 21b | the `.launch` record **exists BEFORE dispatch**, on **both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.10 record-precedes-dispatch]` — a **kind in the cross-product** (round 62 sweep — it sat outside it while `M4.7` claimed to cover every mutation) (round 42, codex — row 21 described only the comparison, so deleting the temporal rule left every check green) |
 | 21c | the snapshot sidecar is **not** a freshness anchor, on **both digest paths and both transcript positions** (§4.5) | `[M4.11 sidecar-not-an-anchor]` — a **kind in the cross-product** (round 62, codex — it sat outside it, so an implementation consulting the sidecar only on the unexercised digest branch passed) (round 54, codex — the prohibition had no row and the matrix never varied the sidecar) |
 | 18b | the record is looked up **per transcript**, not once per run (`S-FRESH`) | `[M4.9 transcript-position]` (round 30, codex — every mutation had targeted the first reviewer's transcript) |
-| 19 | 31 sites inventoried and classified (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
+| 19 | closed 31-site migration inventory: rewrite 21 matches — `5/5/5/3/2/1` respectively in `skills/review-synthesis/SKILL.md`, `skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`, `scripts/pty-capture.py` (including its live implementation commentary), `skills/brainstorm/SKILL.md` and `README.md`; preserve 10 quote-keeps — `4/1/1/1/1/1/1` respectively in `docs/audits/PLUGIN_AUDIT_2026-07-19.md`, `scripts/review-verdict.py`, `scripts/tests/test_review_verdict.py`, `CHANGELOG.md`, `docs/planning/OCTO_ADOPTION_PLAN.md`, `docs/planning/HANDOFF.md` and `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md`; this is an exact closed set, not an extensible blacklist (`S-INVENTORY`) | `[M3.1 inventory-drift]` |
 | 20 | version **increase** over the pinned pre-change `2.6.6` (not merely different) + a CHANGELOG sentence carrying all four ceiling clauses: per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor (`S-RELEASE`) | `[M2.14 version-bump]` — exact required sentence plus one deletion mutation per enumerated ceiling clause (round 26, codex — the round-25 in-tree predicate was satisfied by the **unchanged** tree) |
 | 21 | mtime comparison: older ⇒ reject; **equal**-or-newer ⇒ accept, **on both digest paths and both transcript positions** (`S-FRESH`, §4.5) | `[M4.1 timing-negative]` + `[M4.2 timing-positive]` + `[M4.8 mtime-equality]`, all kinds in **the cross-product defined by §4.5's factor lists** — cited, not restated, so the row cannot go stale (round 62; round 34, codex — the row still said 14 after §4.5 grew the transcript-position axis, then 28 after it grew two more kinds) |
 | 22 | `review-verdict.py`'s distinct-evidence check keeps working (§4.4) | `test_review_verdict.py:143-155` — **existing regression** (verified present), not a pre-fix proof |
@@ -1683,7 +1670,14 @@ number and left **seven** cross-references pointing at the wrong step — the th
 broken that way. Numbers are reading order; **labels are the referent**, and an inserted step cannot
 invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
 
-1. **`S-INVENTORY`** — **Inventory and classify all 31 sites** and commit the classification; M3 asserts it.
+1. **`S-INVENTORY`** — Apply and commit the closed, frozen 31-site manifest: rewrite 21 matches —
+   `5/5/5/3/2/1` respectively in `skills/review-synthesis/SKILL.md`, `skills/gemini-review/SKILL.md`,
+   `skills/codex-review/SKILL.md`, `scripts/pty-capture.py` (including its live implementation commentary),
+   `skills/brainstorm/SKILL.md` and `README.md`; preserve 10 quote-keeps — `4/1/1/1/1/1/1` respectively
+   in `docs/audits/PLUGIN_AUDIT_2026-07-19.md`, `scripts/review-verdict.py`,
+   `scripts/tests/test_review_verdict.py`, `CHANGELOG.md`, `docs/planning/OCTO_ADOPTION_PLAN.md`,
+   `docs/planning/HANDOFF.md` and `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md`. This is an
+   exact closed set, not an extensible blacklist; M3 pins it and rejects misclassification in either direction.
 2. **`S-ALLOC`** — **Add `pty-capture.py --allocate`**: validate the base (§4.1); **reject any `ticket`/`round`/
    `reviewer` component that is not `[A-Za-z0-9._-]+` **matched against the FULL string (anchored at both
    ends)**, **and reject the exact values `.` and `..`** *(round 41, gemini: §7 named the character class but
