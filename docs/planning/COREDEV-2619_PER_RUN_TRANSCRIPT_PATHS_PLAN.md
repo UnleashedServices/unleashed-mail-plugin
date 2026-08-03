@@ -1,20 +1,20 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 68**, both tiers concurrently — both
-`REQUEST_CHANGES` and this round they **CONVERGED on two Highs**. (1) The round-67 interpreter-token fix
-reached the cell and the coverage row and **not §7**, so `S-CALLERS` still listed only `${`/backticks/`eval`
-— the same land-the-proof-without-the-contract defect recorded one round earlier. (2) The token blacklist
-was defeated twice more (`cmd='…'; $cmd` and `; command $cmd`), so the rule is now an **ALLOWLIST**: a
-mention of a review-skill name passes only at COMMAND POSITION in the complete literal shape. Also a
-genuine **marker-injection vector** — a rejected base embedding `\nUNLEASHED_TRANSCRIPT=…\n` could make the
-diagnostic emit a second valid marker; stdout now carries **exactly one** marker and diagnostics are
-**stderr-only with values escaped**, which also makes `M1.15`'s stderr requirement operative.
+**Status:** Planning — **NOT GATED. Latest completed round: 69**, both tiers plus a **remediation pass**
+— all three `REQUEST_CHANGES`. Both tiers converged on `M5.18` covering only the fallback diagnostic and on
+a duplicate row label. The sharpest finding closes an **exit polarity**: an implementation could send
+fallback and exhaustion diagnostics to stderr and the TERMINAL one to stdout, where an injected marker
+would be the **only** marker — so round 68's cardinality check passes. Now every non-zero exit leaves
+stdout empty and the wrapper propagates failure before parsing. The `S-CALLERS` allowlist was also **not
+implementable**: it triggered on "a line mentioning a review-skill name", but `${kind}-review` does not
+contain the name, so the trigger and the mandatory negative contradicted each other. It is now a closed
+full-line matcher defaulting to reject, and `M5.13` observes that **decision** rather than a case list.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 68 findings applied, both tiers; **not gated**)
+**Last Updated:** 2026-08-02 (round 69 findings applied — both tiers + remediation pass; **not gated**)
 
 ---
 
@@ -234,6 +234,11 @@ reimplementation "happens to agree on the fixture"; **a reimplementation agrees 
 makes two-checkout strictly weaker, not stronger. The error was proving a *property of the value* when
 the requirement is a *fact about the call*.
 `[M5.3 stubbed-helper]` **M5 therefore STUBS the helper — through a seam, because the obvious form is unimplementable.**
+**The recorded `--repo-hash` argument is asserted EQUAL to the stub's value, not merely to CONTAIN it, and
+the namespace is asserted STABLE across two tickets in ONE checkout** *(round 69, codex `max`: the cell
+required only that the sentinel "appears" in the allocated path, so a wrapper passing
+`<sentinel>-<ticket>` satisfied it — and satisfied `M5.4` as well, since two checkouts still differ —
+while breaking the fixed per-repo segment the layout depends on. A substring is not an equality.)*
 *(Round 13, gemini: `S-WRAPPER` has the wrapper **source** `context.sh`, and sourcing unconditionally
 redefines the function, so a stub installed by the test is clobbered the moment the wrapper runs. The
 only ways left would be editing `context.sh` on disk — mutating the repo and breaking concurrent runs —
@@ -287,8 +292,15 @@ Bash→Python boundary is unrunnable as interposition; the shim records `argv` a
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every LITERAL review-skill reference and requires each to carry
-`--ticket` and `--round`, or to sit on a committed exemption list. **The literal-command rule is an ALLOWLIST, not a token blacklist**: a mention of a review-skill name
-passes only if it stands at COMMAND POSITION in the complete literal shape, and any other mention fails
+`--ticket` and `--round`, or to sit on a committed exemption list. **The cell observes the DEFAULT-DENY DECISION ITSELF, not a list of cases**: the scanner is compared
+against the **defined reference matcher**, and the discriminating mutation **flips the non-match default
+from reject to accept** — which no enumeration of bypasses can detect *(round 69, both tiers, High: four
+named negatives plus one positive is still a finite blacklist, and a scanner rejecting exactly those four
+while accepting every other non-literal carrier passed the whole prescribed set. The historical bypasses
+are RETAINED AS REGRESSIONS, and no further bypass is added to an open-ended list.)*. The retained
+regressions are the four that actually defeated earlier forms of this rule — `${kind}`, `eval`,
+`sh -c "$cmd"`, bare `$cmd` — plus a conforming literal invocation and the **real Markdown site forms** as
+must-pass positives
 *(rounds 67-68, both tiers, High: as a blacklist this regressed twice — round 67 added the interpreter
 forms after `sh -c "$cmd"` slipped through, and round 68 defeated that with `$cmd` and `command $cmd`,
 neither carrying a listed token. The mutation set therefore includes all four historical bypasses
@@ -643,7 +655,12 @@ manufacture a second** *(round 68, codex)*: the mutation supplies a base whose n
 (a) the diagnostic went to **stderr** with the value **escaped**, (b) stdout carries **exactly one** marker
 line, and (c) the caller consumed the **allocated** path and not the injected one. A caller presented with
 two syntactically valid markers must **fail closed**, not pick either. `M5.5` proves a malformed single
-line and cannot see this: two well-formed lines are individually valid.
+line and cannot see this: two well-formed lines are individually valid. **The mutation runs THROUGH THE REAL
+WRAPPER at BOTH outcomes with the SAME injected value** *(round 69, codex `max`, High)*: the successful
+fallback above, **and terminal base-validation failure** — where it asserts the non-zero status is
+**propagated before stdout is parsed**, stdout is **EMPTY**, the diagnostic is escaped on **stderr**, and
+**no path is consumed**. The terminal path is the complementary case: there the injected marker would be the
+**only** marker, so a cardinality check alone cannot see it.
 
 **Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
 above observes an *outcome* — bytes intact, a different path returned — and a **check-then-create**
@@ -781,7 +798,9 @@ and they are of the two kinds this campaign keeps needing:
   naming the rejected value and the reason, and distinct from the terminal message *(round 19, codex: the
   fallback diagnostic was required by §4.1 and by `M2.2`, absent from `S-ALLOC`, and carried by no row)*.
 - `[M2.18 base-failure-diagnostic]` **And when neither base validates, the DIAGNOSTIC is asserted** —
-  naming the rejected value and the reason *(round 18, gemini: `M2.5` asserted non-allocation and a
+  naming the rejected value and the reason, **on STDERR and with the value ESCAPED, stdout being empty**
+  *(round 69, codex `max`: the cell asserted content and never the channel, which is the whole gap the
+  terminal-path injection walks through)* *(round 18, gemini: `M2.5` asserted non-allocation and a
   non-zero exit but never the message `S-ALLOC` requires)*.
 - `[M2.5 fallback-invalid-classes]` **Negative (must FAIL closed):** the **fallback itself** is invalid — run with `HOME` pointing at an
   unwritable directory *and* `XDG_STATE_HOME` unset, and require the allocator to **refuse to allocate**
@@ -1008,7 +1027,9 @@ appears. `isolated-agy-review.sh` could **accept the flag and never pass it on**
 proves only path propagation. `M2.9` was not quantified over both paths either, so the reservation was
 unproved **end-to-end on the gemini arm**, which is the arm this ticket's own gate runs on)* *(round 20, codex: `S-CAPTURE` made the flag operative while `M2.11` proved
 only the resulting `os.open` flags, so renaming it consistently on both sides passed the whole proof set)*.
-`[M2.12 nonallocated-mode-positive]` **And the POSITIVE for the other mode**: a non-allocated call still
+`[M2.12 nonallocated-mode-positive]` **and it asserts TRUNCATION with UNEQUAL lengths — a short capture
+replacing a longer target, so a stale suffix is detectable** *(round 69, codex `max`; the three-over-three
+regression cannot fail on it)*. **And the POSITIVE for the other mode**: a non-allocated call still
 **creates its target if absent**, so the change is a mode and not a global regression — the requirement
 `S-CAPTURE` states and nothing tested.
 
@@ -1479,7 +1500,7 @@ requirement, and that is now visible rather than arguable.
 | 7 | fail closed on pre-existing **wrong-owner** parent, uid **parameterized** — root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` (round 61 sweep — a lone foreign uid passes a reject-root-only check) |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
-| 8f | the run ID comes from a CSPRNG, the **emitted ID retains ≥128 bits**, and the derivation is **entropy-preserving — a pure function of the source alone** (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
+| 8f | the run ID is the **direct lowercase-hex encoding of ≥16 CSPRNG bytes** — no hashing, truncation, repetition or mixing (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` — **and a FAILED `fchmod` unlinks the reservation, allocates nothing, exits non-zero** (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
 | 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
@@ -1489,8 +1510,8 @@ requirement, and that is now visible rather than arguable.
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
 | 11 | path printed behind `UNLEASHED_TRANSCRIPT=`, **alone on its line** (`S-ALLOC`) | `[M5.5 marker-line-discipline]` (round 15 — the cell rejected only bare stdout, not a marker line with extra content) |
-| 11b | stdout carries **exactly one** marker; diagnostics are **stderr-only with values escaped**, so a rejected value cannot inject a second valid marker (`S-ALLOC`) | `[M5.18 single-marker-no-injection]` (round 68, codex — `M5.5` tests malformed single lines, and two well-formed lines are individually valid) |
-| 11b | supplied ticket/round/reviewer appear in the returned path (`S-ALLOC`) | `[M1.9 component-echo]` |
+| 11b | the exit polarity is **closed** — zero exit ⇒ exactly one marker on stdout; **every non-zero exit ⇒ EMPTY stdout**; all diagnostics **stderr-only, values escaped**, wrapper propagates failure before parsing (`S-ALLOC`, `S-WRAPPER`) | `[M5.18 single-marker-no-injection]` (round 69 — the terminal path made an injected marker the ONLY marker, which a cardinality check cannot see; `M2.18` carries the terminal diagnostic's channel under row 3b) |
+| 11c | supplied ticket/round/reviewer appear in the returned path (`S-ALLOC`) | `[M1.9 component-echo]` |
 | 12 | wrapper obtains the namespace **by calling** `context_repo_hash` (`S-WRAPPER`) | `[M5.3 stubbed-helper]` (via the `UNLEASHED_LIB_DIR` seam — round 13) |
 | 12b | the namespace is per-checkout (`S-WRAPPER`, §4.1) | `[M5.4 two-checkout]` (secondary) |
 | 13 | wrapper is the granted codex entry point (`S-WRAPPER`, §4.2) | `[M2.6 wrapper-grant-present]` |
@@ -1500,7 +1521,7 @@ requirement, and that is now visible rather than arguable.
 | 15 | the pre-clean **COMMANDS** deleted from both sites (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` — absence from the files, not from an `allowed-tools` scan (round 35, gemini) (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
 | 15f | a **missing reserved leaf is a hard error, not a creation** — no creating retry (`S-CAPTURE`) | `[M2.9 preclean-reinstate-must-fail]` — every target open observed **in-process** (round 37) (round 23, codex — this is what `M2.9` actually discriminates, and it is the only cell that catches an implementation which catches `ENOENT` and recreates on a second open; row 15b covers only the first open's flags) |
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
-| 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
+| 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence, with a **distinguishable rejection identity** (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod`, applied **before any payload byte** and **writing NOTHING if it fails** (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
 | 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper using the **plugin's** `$0`-relative writer (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
@@ -1523,13 +1544,13 @@ requirement, and that is now visible rather than arguable.
 | 20b | the CHANGELOG does **not** claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert (`S-RELEASE`) | `[M2.17 no-inert-claim]` (round 17, codex — `M2.14` tested it but no row listed it, violating §6.1's bidirectional rule) |
 | 15c | the two `rm -f` grants are **deleted, not rewritten** (`S-PRECLEAN`) | `[M2.16 grants-deleted-not-rewritten]` (round 17, codex — rewriting a grant to a non-`/tmp` path passed rows 15 and 26) |
 | 8d | the exhaustion diagnostic **names the exhausted parent**, on **stderr** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
-| 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
+| 3b | when neither base validates, the diagnostic **names the rejected value and the reason**, on **stderr with the value escaped and stdout empty** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14e | an allocated but **empty** transcript classifies as `MISSING` in synthesis (`S-THREAD`, §4.2) | `[M5.17 empty-allocated-is-missing]` (round 59, codex) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is an **ALLOWLIST** — a mention not at command position in the complete literal shape fails, whatever tokens it carries — with a name never appearing on any single line the stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32 | every review-skill invocation site passes ticket and round; enforcement is a **closed full-line matcher with a default of REJECT**, exemptions binding **exact content**; a name never appearing on any single line is the stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
@@ -1670,8 +1691,15 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    Print the path **on stdout, alone on its line, prefixed by the literal marker `UNLEASHED_TRANSCRIPT=`** —
    the *stable marker*, defined here because §7 referred to it four rounds running without ever saying
    what it was *(round 12, codex)*. Callers match that prefix and take the remainder verbatim; **bare
-   stdout with no marker is a failure**, not a fallback. **Stdout carries EXACTLY ONE marker line; a caller
-   seeing zero or more than one fails closed** — and **every diagnostic goes to STDERR, never stdout, with
+   stdout with no marker is a failure**, not a fallback. **The exit polarity is CLOSED: a successful allocation exits
+   ZERO with exactly one marker line on stdout, and EVERY non-zero exit leaves stdout EMPTY** — a caller
+   seeing zero or more than one marker, or any output on a non-zero exit, **fails closed**, and
+   `S-WRAPPER` **propagates a non-zero allocator status BEFORE parsing any captured output**
+   *(round 69, codex `max`, High: the previous wording made the one-marker rule unconditional while the
+   TERMINAL base-validation failure path was covered by `M2.18`, which asserts the diagnostic's content and
+   never its channel. An implementation could send fallback and exhaustion diagnostics to stderr and print
+   the terminal one to stdout; a rejected value embedding a marker then yields EXACTLY ONE false marker, so
+   the round-68 cardinality check passes and nothing required the wrapper to notice the non-zero status.)* — and **every diagnostic goes to STDERR, never stdout, with
    any rejected value rendered ESCAPED so an embedded newline cannot become a line of its own**
    *(round 68, codex: `S-ALLOC` required the fallback diagnostic to NAME the rejected value and told
    callers to accept any matching marker line, while requiring neither the channel nor escaped rendering
@@ -1755,10 +1783,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
    later fails the cell; an exemption is a visible diff.
    **A review-skill invocation must be written as a LITERAL command, and the scan enforces this as an
-   ALLOWLIST.** Every line mentioning a review-skill name must have that mention **at COMMAND POSITION in
-   the complete literal shape** — `/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>` —
-   or sit on the committed exemption list; **any other mention is a violation, whatever tokens it does or
-   does not contain** *(rounds 67-68, both tiers, High: the rule had been a BLACKLIST of `${`, backticks and
+   ALLOWLIST with a DEFAULT of REJECT.** A non-exempt invocation **occupies its own physical line**, and
+   after removing only an **explicitly enumerated** set of Markdown structural prefixes (list bullet,
+   blockquote marker, fence indent) the **ENTIRE remainder must FULL-MATCH** the literal command grammar
+   `/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`. **Every non-match is rejected**,
+   and an exemption binds **exact content** — never a whole file, never a glob
+   *(round 69, both tiers, High: "a line MENTIONING a review-skill name" cannot be the trigger, because
+   `${kind}-review` **does not literally contain the name** — a literal-name scan would follow this step and
+   never even FIND the `${kind}` construction `M5.13` requires it to reject. The trigger and the mandatory
+   negative contradicted each other, so the rule as written was not implementable, and "COMMAND POSITION"
+   was never defined for Markdown prose.)* *(rounds 67-68, both tiers, High: the rule had been a BLACKLIST of `${`, backticks and
    `eval`, extended in round 67 with `sh -c`/`bash -c`/`zsh -c`/`exec`, and round 68 defeated the extension
    twice over with `cmd='…'; $cmd` and `cmd='…'; command $cmd` — neither contains a listed token and both
    invoke dynamically. **Enumerating the ways a shell can invoke indirectly is unbounded**, so the third
@@ -1818,14 +1852,25 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    so an allocated-mode branch implementing exactly what was written would **drop the FIFO/device defence**
    that `scripts/pty-capture.py:66,76,81` relies on and `scripts/tests/test_pty_capture.py:48` covers for
    the existing mode — a new mode silently narrower than the one it sits beside)*. Non-allocated call sites
-   keep today's create-if-absent behaviour, so this is a mode, not a global change. **`.captureid` stays
+   keep today's create-if-absent behaviour **AND today's truncation — a shorter capture must replace a
+   longer existing target exactly, leaving no stale suffix** *(round 69, codex `max`: §7 called this "not a
+   global change" and `M2.12` tests only creation of an ABSENT target, so removing `O_TRUNC` from BOTH modes
+   passed every specified cell. The shipped regression cannot see it either — `scripts/tests/test_pty_capture.py:39`
+   writes `b"new"` over `b"old"`, three bytes over three, so an untruncated write is byte-identical.
+   Verified by reading the file.)*, so this is a mode, not a global change. **`.captureid` stays
    freshly generated per run in BOTH modes** *(round 41, gemini: `M2.13` and row 23 require it and §7 never
    said so, though this step is the one that introduces the second mode)*.
    *(Without this, `_write_private`'s `O_CREAT|O_TRUNC` (`scripts/pty-capture.py:76`, `:321`) silently
    **recreates** a leaf that a retained pre-clean deleted — the `O_EXCL` reservation becomes decorative
    and §4.2's reinstate-and-must-fail mutation cannot fail. Twelve rounds specified the allocator and
    never said the capture must land in the file it reserved.)* Add M2's pre-clean runtime mutation.
-6. **`S-THREAD`** — **Thread the allocated path** through `isolated-agy-review.sh`, both review skills,
+6. **`S-THREAD`** — **The allocated path is an OPAQUE SINGLE SHELL ARGUMENT**: every expansion of it is
+   quoted, it is preserved byte-for-byte, and a reviewer specification is split only at its **first
+   structural delimiters** *(round 69, codex `max`: base validity excludes only LF and CR, so spaces, tabs,
+   colons, backslashes, glob characters and quotes are all still VALID in a base — and callers are told to
+   take the marker remainder verbatim. An implementation with an unquoted `$path`, a default-IFS `read`, or
+   an unrestricted `split(":")` passes every stated positive on conventional temp paths and corrupts a valid
+   `XDG_STATE_HOME` such as `/tmp/review state`.)* — **Thread the allocated path** through `isolated-agy-review.sh`, both review skills,
    `brainstorm` and `review-synthesis`. **An allocated but EMPTY transcript must still classify as
    `MISSING` in synthesis** *(round 60, codex: §4.2 justifies deleting the pre-clean by relying on exactly
    this and `M5.17` proves it, while this step specified only path and CLI threading — so a §7-only
