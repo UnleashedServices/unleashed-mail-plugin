@@ -79,8 +79,20 @@ by another review round.
   demand an explicit reviewed update. **Generate it last.** Do not re-propose a shift-stable identity
   without addressing the `hooks/hooks.json:121`/`:133` collision (byte-identical candidates, identical
   neighbours — a content-only identity is not injective on this tree).
-- **Round 84's findings** — the round was in flight at freeze. Fold them in here when it lands.
+- **`M5.15b`'s mutations must regenerate the manifest per mutation.** Round 84, `xhigh`, High — and a
+  direct consequence of the round-83 shift-sensitive identity. The deletion, relocation and joined-line
+  mutations each shift *other* exempt candidates, so an unchanged manifest fails on a **manifest
+  mismatch before destination validation is even reached**. The mutation then passes for the wrong
+  reason. **When implementing `M5.15b`, rebuild the exemption manifest for each mutated tree** so the
+  assertion discriminates the thing it names. Verified as real on the frozen tree, not hypothetical.
+- **Stale round metadata in the plan header** (`:3`, `:10` say round 82). Round 84, `max`, Low.
+  Documentation only — `max` states explicitly it does not affect implementation.
 - Anything `xhigh` raised as a *note* while approving rounds 78–80.
+
+**Round 84 result, for the record:** the arms **inverted** — `max` returned `APPROVE_WITH_NOTES` with
+only the Low above, while `xhigh` returned `REQUEST_CHANGES`. Each arm has now approved at least once
+(`xhigh` r78–80, `max` r84) and **never simultaneously**. That is the clearest single argument that the
+gate rule "both arms at one digest" was demanding, not that the plan is unsound.
 
 ---
 
