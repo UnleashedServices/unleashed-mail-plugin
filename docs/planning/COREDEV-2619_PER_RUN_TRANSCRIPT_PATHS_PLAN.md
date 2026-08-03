@@ -1,20 +1,20 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 67**, both tiers concurrently on one digest
-— both `REQUEST_CHANGES`, and this round they were **fully disjoint**. `xhigh`: `M5.13`'s scan token set
-omitted interpreter indirection, so a ONE-LINE `sh -c "$cmd"` construction carried the complete shape and
-passed; and `M1.19` proved the length boundary's outcomes but never its **ordering** before the retry loop.
-`max`: `S-ALLOC` still judged the fallback by "those same three rules", a **stale count** that let a
-§7-only implementer skip the round-66 terminator check on the fallback arm; and the round-66 forced-`fchmod`-failure
-polarity had been added to the **cells only**, so an allocator that left the failed reservation behind
-conformed to §7 while failing a mandatory cell — the same proof-stricter-than-contract class the round-66
-fix addressed, reintroduced one round later by fixing the proof without the contract.
+**Status:** Planning — **NOT GATED. Latest completed round: 68**, both tiers concurrently — both
+`REQUEST_CHANGES` and this round they **CONVERGED on two Highs**. (1) The round-67 interpreter-token fix
+reached the cell and the coverage row and **not §7**, so `S-CALLERS` still listed only `${`/backticks/`eval`
+— the same land-the-proof-without-the-contract defect recorded one round earlier. (2) The token blacklist
+was defeated twice more (`cmd='…'; $cmd` and `; command $cmd`), so the rule is now an **ALLOWLIST**: a
+mention of a review-skill name passes only at COMMAND POSITION in the complete literal shape. Also a
+genuine **marker-injection vector** — a rejected base embedding `\nUNLEASHED_TRANSCRIPT=…\n` could make the
+diagnostic emit a second valid marker; stdout now carries **exactly one** marker and diagnostics are
+**stderr-only with values escaped**, which also makes `M1.15`'s stderr requirement operative.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 67 findings applied, both tiers; **not gated**)
+**Last Updated:** 2026-08-02 (round 68 findings applied, both tiers; **not gated**)
 
 ---
 
@@ -287,12 +287,14 @@ Bash→Python boundary is unrunnable as interposition; the shim records `argv` a
 sections and does not test the implementation, so renaming an option or dropping `--repo-hash` passed
 every functional cell as long as wrapper and allocator agreed with each other)*.
 `[M5.13 callers-scan]` **A repo-wide SCAN finds every LITERAL review-skill reference and requires each to carry
-`--ticket` and `--round`, or to sit on a committed exemption list. It additionally rejects any line pairing
-`-review` with `${`, backticks, `eval`, or an interpreter invocation (`sh -c`, `bash -c`, `zsh -c`, `exec`)
-*(round 67, codex, High: the token set omitted interpreter indirection, so the ONE-LINE construction
-`cmd='/unleashed-mail:codex-review --ticket T --round R plan'; sh -c "$cmd"` carried the complete required
-shape, tripped none of the rejected tokens, and still invoked dynamically — the cell passed a plausible
-violation while row 32 claimed the only residual was split-across-lines)* — and it CANNOT detect a construction SPLIT ACROSS LINES so that no single
+`--ticket` and `--round`, or to sit on a committed exemption list. **The literal-command rule is an ALLOWLIST, not a token blacklist**: a mention of a review-skill name
+passes only if it stands at COMMAND POSITION in the complete literal shape, and any other mention fails
+*(rounds 67-68, both tiers, High: as a blacklist this regressed twice — round 67 added the interpreter
+forms after `sh -c "$cmd"` slipped through, and round 68 defeated that with `$cmd` and `command $cmd`,
+neither carrying a listed token. The mutation set therefore includes all four historical bypasses
+— `${kind}`, `eval`, `sh -c "$cmd"`, bare `$cmd` — each of which must FAIL under the allowlist, plus a
+conforming literal invocation that must PASS, so the rule is proved by discrimination and not by
+enumeration)* — and it CANNOT detect a construction SPLIT ACROSS LINES so that no single
 line carries the pairing** — a prefix on one line, a kind on another, the concatenation on a third
 *(round 57, codex: the example previously given, `kind=codex; "/unleashed-mail:${kind}-review"`, contains
 **both** trigger tokens on one line and would therefore be **rejected** by the stated mechanism — it
@@ -635,6 +637,13 @@ bare stdout while row 11 claims "alone on its line", so an emitter appending com
 passed)*. **And the POSITIVE: a correctly formed marker line is ACCEPTED** *(round 17, codex: the cell
 defined only negatives, so a caller that rejected **every** output satisfied all of them — the same
 rejection-only gap this campaign has hit before)*.
+`[M5.18 single-marker-no-injection]` **Exactly ONE marker line on stdout, and a rejected value cannot
+manufacture a second** *(round 68, codex)*: the mutation supplies a base whose name embeds
+`\nUNLEASHED_TRANSCRIPT=/stale/review.txt\n`, drives the fallback path that must diagnose it, and asserts
+(a) the diagnostic went to **stderr** with the value **escaped**, (b) stdout carries **exactly one** marker
+line, and (c) the caller consumed the **allocated** path and not the injected one. A caller presented with
+two syntactically valid markers must **fail closed**, not pick either. `M5.5` proves a malformed single
+line and cannot see this: two well-formed lines are individually valid.
 
 **Plus, round 12 (codex, High): the sentinel cases prove NON-TRUNCATION, not ATOMICITY.** Every M1 case
 above observes an *outcome* — bytes intact, a different path returned — and a **check-then-create**
@@ -1480,6 +1489,7 @@ requirement, and that is now visible rather than arguable.
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
 | 11 | path printed behind `UNLEASHED_TRANSCRIPT=`, **alone on its line** (`S-ALLOC`) | `[M5.5 marker-line-discipline]` (round 15 — the cell rejected only bare stdout, not a marker line with extra content) |
+| 11b | stdout carries **exactly one** marker; diagnostics are **stderr-only with values escaped**, so a rejected value cannot inject a second valid marker (`S-ALLOC`) | `[M5.18 single-marker-no-injection]` (round 68, codex — `M5.5` tests malformed single lines, and two well-formed lines are individually valid) |
 | 11b | supplied ticket/round/reviewer appear in the returned path (`S-ALLOC`) | `[M1.9 component-echo]` |
 | 12 | wrapper obtains the namespace **by calling** `context_repo_hash` (`S-WRAPPER`) | `[M5.3 stubbed-helper]` (via the `UNLEASHED_LIB_DIR` seam — round 13) |
 | 12b | the namespace is per-checkout (`S-WRAPPER`, §4.1) | `[M5.4 two-checkout]` (secondary) |
@@ -1512,14 +1522,14 @@ requirement, and that is now visible rather than arguable.
 | 31 | no caller passes `--base`; the allocator **rejects** it (§4.1, `S-ALLOC`, `S-WRAPPER` — rejection made operative round 17) | `[M2.15 no-base-argument]` |
 | 20b | the CHANGELOG does **not** claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert (`S-RELEASE`) | `[M2.17 no-inert-claim]` (round 17, codex — `M2.14` tested it but no row listed it, violating §6.1's bidirectional rule) |
 | 15c | the two `rm -f` grants are **deleted, not rewritten** (`S-PRECLEAN`) | `[M2.16 grants-deleted-not-rewritten]` (round 17, codex — rewriting a grant to a non-`/tmp` path passed rows 15 and 26) |
-| 8d | the exhaustion diagnostic **names the exhausted parent** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
+| 8d | the exhaustion diagnostic **names the exhausted parent**, on **stderr** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
 | 3c | on **falling back**, a diagnostic names the rejected value and the reason (`S-ALLOC`, §4.1) | `[M2.19 fallback-diagnostic]` (round 19, codex — `S-ALLOC` had specified a diagnostic only when **both** bases fail) |
 | 14e | an allocated but **empty** transcript classifies as `MISSING` in synthesis (`S-THREAD`, §4.2) | `[M5.17 empty-allocated-is-missing]` (round 59, codex) |
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is **scan-bounded** — the pairing must fall on ONE line, interpreter indirection included in the token set — with constructions split across lines the stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
+| 32 | every review-skill invocation site passes ticket and round; literal-command enforcement is an **ALLOWLIST** — a mention not at command position in the complete literal shape fails, whatever tokens it carries — with a name never appearing on any single line the stated residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` (round 20, codex — two successive enumerations were claimed exhaustive and both were wrong) |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
 | 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` (round 14, gemini) |
@@ -1660,7 +1670,18 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    Print the path **on stdout, alone on its line, prefixed by the literal marker `UNLEASHED_TRANSCRIPT=`** —
    the *stable marker*, defined here because §7 referred to it four rounds running without ever saying
    what it was *(round 12, codex)*. Callers match that prefix and take the remainder verbatim; **bare
-   stdout with no marker is a failure**, not a fallback.
+   stdout with no marker is a failure**, not a fallback. **Stdout carries EXACTLY ONE marker line; a caller
+   seeing zero or more than one fails closed** — and **every diagnostic goes to STDERR, never stdout, with
+   any rejected value rendered ESCAPED so an embedded newline cannot become a line of its own**
+   *(round 68, codex: `S-ALLOC` required the fallback diagnostic to NAME the rejected value and told
+   callers to accept any matching marker line, while requiring neither the channel nor escaped rendering
+   nor a unique marker — so a rejected base containing a literal `\nUNLEASHED_TRANSCRIPT=/stale/review.txt\n`
+   makes the diagnostic emit a SECOND syntactically clean marker, and a §7-only implementer had to invent
+   which one to consume. `M2.26` sees the fallback and the diagnostic; `M5.5` tests malformed single lines,
+   not two valid-looking ones.)* *(round 68 `max`, codex: this also makes `M1.15`'s stderr requirement
+   operative — it had asserted the channel while §4.1, `S-ALLOC` and row 8d required only a non-zero exit
+   and a naming diagnostic, so an allocator printing to stdout conformed to §7 and failed a mandatory
+   cell.)*
    **Command shape**, so the handoff is buildable from §7 alone:
    `pty-capture.py --allocate --repo-hash <H> --ticket <T> --round <R> --reviewer <name>` —
    **the identical shape §4.1 specifies** *(a §7 restatement that added or dropped an argument would be
@@ -1733,8 +1754,16 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    review-skill references and requires each either to carry both flags or to sit on an explicit committed
    exemption list (the skills' own definitions; prose that describes rather than invokes). A caller added
    later fails the cell; an exemption is a visible diff.
-   **A review-skill invocation must be written as a LITERAL command.** The scan enforces this **as far as a
-   text scan can**: it rejects any line that mentions `-review` together with `${`, backticks or `eval`.
+   **A review-skill invocation must be written as a LITERAL command, and the scan enforces this as an
+   ALLOWLIST.** Every line mentioning a review-skill name must have that mention **at COMMAND POSITION in
+   the complete literal shape** — `/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>` —
+   or sit on the committed exemption list; **any other mention is a violation, whatever tokens it does or
+   does not contain** *(rounds 67-68, both tiers, High: the rule had been a BLACKLIST of `${`, backticks and
+   `eval`, extended in round 67 with `sh -c`/`bash -c`/`zsh -c`/`exec`, and round 68 defeated the extension
+   twice over with `cmd='…'; $cmd` and `cmd='…'; command $cmd` — neither contains a listed token and both
+   invoke dynamically. **Enumerating the ways a shell can invoke indirectly is unbounded**, so the third
+   round of that regress is not attempted: a mention that is not itself the literal command fails, and the
+   allowlist cannot be widened by inventing a new indirection.)*
    **It cannot detect a construction SPLIT ACROSS LINES so that no single line carries the pairing** — a
    prefix assigned on one line, a kind on another, and the concatenation on a third — that is a **stated
    residual gap**, not a covered case *(round 58, codex: the one-line `${kind}` example given here contains
