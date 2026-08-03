@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 74**, both tiers plus a **remediation pass**
+**Status:** Planning — **NOT GATED. Latest completed round: 75**, both tiers plus a **remediation pass**
 — both independent reviews returned `REQUEST_CHANGES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 74 findings applied — both tiers + remediation pass; **not gated**)
+**Last Updated:** 2026-08-03 (round 75 findings applied — both tiers + remediation pass; **not gated**)
 
 ---
 
@@ -103,7 +103,7 @@ fails three ways:
   plan never specified. **M1 (refuse) and M2 (same name re-runs cleanly) encoded contradictory
   semantics.**
 - **Reservation is defeated by the existing callers.** `pty-capture.py` truncates its target, and
-  `scripts/review/isolated-agy-review.sh:89` **deletes the target before launch** — so any scheme that
+  `scripts/review/isolated-agy-review.sh`'s pre-clean — the `rm -f "$OUT" "$OUT.captureid"` immediately before the capture — **deletes the target before launch** — so any scheme that
   reserves *the target itself* is undone by the caller.
 
 **Fix — allocate, do not name.** `pty-capture.py` gains an allocate mode — **one command shape, used everywhere** — and it carries `--repo-hash`, because §4.1 forbids the Python allocator from reimplementing the Bash-only `context_repo_hash` *(round 7, gemini: the round-6 shape omitted it, so the allocator could not build the path it is specified to build)*:
@@ -130,8 +130,8 @@ round 18's masking by round-note, in a form the round-18 fix did not cover)*:
 - the allocated path is `<base>/unleashed-mail/review-transcripts/<repo-hash>/<ticket>r<round>-<reviewer>-<runid>.txt`;
 - the allocator creates the leaf with `O_CREAT|O_EXCL` and mode `0o600`;
 - and it creates the `.launch` record `O_CREAT|O_EXCL` on that same call, never truncating an existing one;
-  that record has achieved mode `0600`, independent of the entry `umask`, and is reopenable by its owner
-  after close before the marker is emitted.
+  that record has achieved mode `0600`, independent of the entry `umask`, and, after its creating
+  descriptor is closed, is owner-reopenable by successful allocator return.
 
 The retry loop is **bounded at 8 attempts**; and `<reviewer>` is a **hard-coded literal in each skill's own
 recipe**, never derived. *(Round 22: applying the proof-cell stripping rule caught these two as well —
@@ -543,11 +543,12 @@ passes the mode and never enforces it yields `0400`/`0500` under a restrictive `
 `M1.2`, `M1.12`, `M2.4` and `M2.22`, every one of which samples only the ambient value. The mutation sweeps
 `[u for u in range(0o1000) if u & 0o700]` — the umasks able to clear an owner bit, **derived in the
 generator** — and asserts the ACHIEVED parent mode is `0700` and the ACHIEVED leaf mode is `0600` for every
-member. Every swept success also stats `<path>.launch` as exact mode `0600`. The harness records the
-creating-descriptor close event and interposes at marker emission; before allowing the marker write, it
-independently reopens the record and verifies its mode and payload, requiring
-`create → close → owner-reopen succeeds → marker write` under every swept umask. A mutation that emits
-the marker before close/reopen or omits launch-mode enforcement must fail. The
+member. The harness records the creating-descriptor close event and requires closure before successful
+allocator return; after the allocator returns, every swept success independently stats and reopens
+`<path>.launch` and verifies its exact mode and payload, requiring
+`create → close → successful allocator return → owner-reopen/payload succeeds` under every swept umask.
+A mutation that leaves the descriptor unclosed at return, prevents post-return owner reopen, corrupts the
+payload, or omits launch-mode enforcement must fail. The
 cell derives a **creation-site × exit-edge matrix**. Its creation fixtures include multi-component absent
 XDG and fallback bases and a wholly absent fixed transcript subtree. The harness observes every individual
 `mkdir` publication — including each absent base component and `unleashed-mail`, `review-transcripts`, and
@@ -972,7 +973,8 @@ table exposed two rows whose proof column I had filled in from memory and which 
   the most likely location is not a scan.)*
 
 `[M2.8 preclean-command-absence]` `[M2.9 preclean-reinstate-must-fail]` **Plus, round 12 (codex, High): the pre-clean COMMANDS are invisible to an `allowed-tools` literal scan.**
-The gemini pre-clean is `rm -f "$OUT" "$OUT.captureid"` (`scripts/review/isolated-agy-review.sh:89`) —
+The gemini pre-clean in `scripts/review/isolated-agy-review.sh` is anchored by the exact command
+`rm -f "$OUT" "$OUT.captureid"` —
 it **contains no `/tmp` literal**, so §6.1 row 15 cited a proof that could never fail on it. Worse, the
 failure is **silent end-to-end**: `pty-capture.py` opens the transcript with `O_CREAT|O_TRUNC`
 (`scripts/pty-capture.py:76`), so a retained pre-clean **deletes the reserved leaf and pty-capture
@@ -981,7 +983,7 @@ entire ticket exists to establish is gone with nothing observing its loss.
 M2 therefore adds: **(a)** a source assertion that **both** identified pre-clean commands are **absent from the files** — i.e.
   **deleted**, not merely invisible to an `allowed-tools` literal scan *(round 35, gemini: row 15 claimed
   deletion while the cell proved only invisibility to a literal scan, and those are different facts)* —
-`isolated-agy-review.sh:89` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
+that exact command in `scripts/review/isolated-agy-review.sh` and `skills/codex-review/SKILL.md:48`, matched as commands, not as `/tmp`
 strings; and **(b)** a runtime mutation — **reinstate the pre-clean against an allocated path and require
 the gate to FAIL, with EVERY target open observed IN-PROCESS (importing the writer) and asserted to
 include no creating retry** — **not** by interposing across the skill dispatch, which spans Bash→Python and
@@ -1084,7 +1086,7 @@ One mechanism cannot cover both, and asserting otherwise is how the class stayed
 - **the nested gemini path** — first, `S-CAPTURE` requires the helper to invoke **the PLUGIN's own writer,
   resolved `$0`-relative from the helper's location**, instead of `$TREE/scripts/pty-capture.py`
   *(round 42, codex, High, verified: `$TREE` is a detached checkout of the **reviewed** commit
-  (`isolated-agy-review.sh:53-56`), so the writer it runs is **the reviewed repository's**, not the
+  (`isolated-agy-review.sh`'s `git worktree add --detach "$SCR/tree" "$SHA"`), so the writer it runs is **the reviewed repository's**, not the
   plugin's. In this repo those coincide and everything appears to work; **in a consumer install the
   reviewed repo is the app, which has no `scripts/pty-capture.py` at all** — and against any pre-change
   commit it exposes the legacy CLI with no `--allocated`. So `M2.20` could pass against the plugin's own
@@ -1100,7 +1102,12 @@ One mechanism cannot cover both, and asserting otherwise is how the class stayed
   where the plugin's writer and the reviewed tree's coincide — and fails in a consumer repo, which is the
   exact wrong implementation round 42 identified. **Round 42 promised this fixture and it never reached the
   document**: the edit's anchor did not match and my script printed success unconditionally, so the claim
-  was made without the text existing. Present this round by grep, not by a script's say-so)*
+  was made without the text existing. Present this round by grep, not by a script's say-so)*. The nested
+  arm uses a relocated helper/plugin copy whose writer emits a distinct marker and records `argv`; run the
+  helper from a working directory outside both the relocated plugin and the reviewed tree, with
+  `CLAUDE_PLUGIN_ROOT` unset and a reviewed tree containing no writer, and require that copied writer's
+  marker plus an `argv` entry containing `--allocated`. A hard-coded original-checkout path, `$TREE`,
+  `$PWD`, or environment-derived resolution must fail through that same relocation observation
 *(round 38, codex, High, verified by execution: the round-37 wording put the shim **on `PATH`**, but
 `S-WRAPPER` requires invoking the allocator by an **explicit self-relative path**, and an explicit path
 **bypasses `PATH` lookup entirely** — measured, the real executable ran and the shim never fired. The two
@@ -1224,10 +1231,9 @@ collisions and stale reuse; they do not make the gate tamper-proof, establish op
 protect a host where an attacker controls a state-directory ancestor."** The cell parameterizes four
 deletion mutations, one for each required clause: collision/stale-reuse prevention, no tamper-proofing,
 no operator provenance, and no protection from an attacker-controlled state-directory ancestor.
-`[M2.17 no-inert-claim]` **A separate cell asserts the
-CHANGELOG does NOT claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert** *(round 16, codex: `S-RELEASE` prohibits that claim and no
-cell checked it, so a CHANGELOG carrying both the ceiling and the prohibited falsehood passed)* *(round 15, codex: row 20 claimed both the bump and the
-ceiling text while the cell asserted only the version comparison — omitting the ceiling still passed)*.
+`[M2.17 retained-grants-changelog-sentence]` **A separate cell requires the CHANGELOG entry to contain
+this exact sentence: "The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude
+Code 2.1.0 and later expand that placeholder." Deleting that sentence must fail the cell.**
 
 **Proof — M3 (was M5):** `[M3.1 inventory-drift]` a drift check asserting no output literal survives outside the enumerated
 `quote-keep` set, and that the set is exactly the one above.
@@ -1268,7 +1274,7 @@ reject a valid concurrent run.)*
   **`<transcript-path>.launch`**: the allocated transcript path with a `.launch` suffix, in the same
   directory, so lookup is a pure function of the `transcriptPath` already recorded in the artifact and
   `review-verdict.py` needs no index. **The allocator creates it**, in the same `--allocate` call that
-  creates the leaf and before it prints the path — so "created before dispatch" is structural rather
+  creates the leaf and ensures it exists by successful allocator return — so "created before dispatch" is structural rather
   than a caller's obligation. **Payload and comparison — round 6, codex.** The record contains **exactly the run ID**, as a single
   line of lowercase hex, no trailing content. The expected ID is the one embedded in the transcript's
   own filename (`…-<runid>.txt`), so the check is self-contained: **`review-verdict.py` reads the record,
@@ -1598,7 +1604,7 @@ requirement, and that is now visible rather than arguable.
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` — **and a FAILED `fchmod` unlinks the reservation, allocates nothing, exits non-zero** (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
 | 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
-| 8g | the shared-directory `0700`, leaf `0600`, and `.launch` `0600` are **ACHIEVED** modes; the `.launch` record is owner-reopenable after close **BEFORE the marker is emitted** (round 76, codex: my round-75 narrowing was wrong in the other direction — the same apply had strengthened `M1.18` to require `create → close → owner-reopen → marker write` with an early-emit mutation that must fail, so the pre-emission claim became TRUE and the narrowed row was weaker than both §7 and its own cell); every allocator-created shared `0700` directory is already exact-mode when visible; simultaneous first-run allocators succeed with distinct leaves across both base arms and the nested parent; and every success or failure preserves the entry `umask` (`S-ALLOC`); pre-existing role enforcement remains in rows 6 and 7 | `[M1.18 umask-achieved-modes]` — swept owner-bit-clearing umasks with the ordered `create → close → owner-reopen/payload succeeds → marker write` probe on every success, multi-component absent-base and wholly absent fixed-subtree fixtures observing every individual intermediate `mkdir` publication, the derived creation-site × exit-edge restoration matrix, and synchronized two-process mutations whose affected directory begins absent |
+| 8g | the shared-directory `0700`, leaf `0600`, and `.launch` `0600` are **ACHIEVED** modes; the `.launch` record is owner-reopenable after close by successful allocator return; every allocator-created shared `0700` directory is already exact-mode when visible; simultaneous first-run allocators succeed with distinct leaves across both base arms and the nested parent; and every success or failure preserves the entry `umask` (`S-ALLOC`); pre-existing role enforcement remains in rows 6 and 7 | `[M1.18 umask-achieved-modes]` — swept owner-bit-clearing umasks with a post-return owner-reopen/mode/payload probe on every success, multi-component absent-base and wholly absent fixed-subtree fixtures observing every individual intermediate `mkdir` publication, the derived creation-site × exit-edge restoration matrix, and synchronized two-process mutations whose affected directory begins absent |
 | 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input**, checked **before the retry loop** (zero run-ID generations on the negative) (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1617,7 +1623,7 @@ requirement, and that is now visible rather than arguable.
 | 1c | the protected-root set is read from **one place** (§4.1, `S-ALLOC`) | `[M2.21 protected-roots-single-source]` (round 22, codex — behaviour proofs pass two identical lists) |
 | 15g | allocated mode keeps the **fd-based** `fstat`/`S_ISREG` defence, with a **distinguishable rejection identity** (`S-CAPTURE`) | `[M2.23 allocated-nonregular-target]` — reader-held FIFO **plus in-process `os.fstat` observation on the opened fd**, so a pre-open `lstat` fails the cell (round 37) |
 | 15h | allocated mode keeps the **fd-based** `0600` `fchmod`, applied **before any payload byte** and **writing NOTHING if it fails** (`S-CAPTURE`) | `[M2.24 allocated-mode-tightening]` — mode assertion **plus in-process `os.fchmod` observation**, so a path-based `chmod` fails the cell (round 37) |
-| 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper using the **plugin's** `$0`-relative writer (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; **source assertion + runtime consequence** for the nested gemini worktree (round 39, both arms — the row still said "on `PATH`", the mechanism round 38 proved cannot work) |
+| 15e | `--allocated` is named **and FORWARDED** on **both** paths, the gemini helper resolving the **plugin's** writer from its own relocated `$0`-relative directory without consulting `CLAUDE_PLUGIN_ROOT`, including when that variable is unset (`S-CAPTURE`) | `[M2.20 allocated-flag-name]` — relocated-copy shim for the wrapper path; relocated helper/plugin writer with a distinct marker and recorded `argv`, run outside both trees with the variable unset and a reviewed tree containing no writer, for the gemini path |
 | 15b | capture in allocated mode: **no `O_CREAT`, no `O_TRUNC`**; `O_NOFOLLOW` + `O_NONBLOCK` (`S-CAPTURE`) | `[M2.11 capture-requires-existing-leaf]` (round 14 — now a flag-interposition mutation on **both** flags, not a claimed consequence) |
 | 16 | **no validator of `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools` exists** (`S-PRECLEAN`, §4.2) | `[M2.10 validator-absence]` (round 19, both arms — the row and `S-PRECLEAN` still said "no substitution validator" unscoped, which the repo's own `COREDEV2504_PluginRootConvention` contradicts) |
 | 16b | the `${CLAUDE_PLUGIN_ROOT}` grants are retained unrewritten (§4.2) | `[M2.7 plugin-root-grants-retained]` |
@@ -1635,7 +1641,7 @@ requirement, and that is now visible rather than arguable.
 | 25 | the dispatch works under a pinned `dontAsk` permission mode (§4.1) | `[M2.1 dontAsk-runtime]` |
 | 26 | no `/tmp` literal survives in any `allowed-tools` line (`S-PRECLEAN`) | `[M2.3 no-tmp-literal]` |
 | 31 | no caller passes `--base`; the allocator **rejects** it (§4.1, `S-ALLOC`, `S-WRAPPER` — rejection made operative round 17) | `[M2.15 no-base-argument]` |
-| 20b | the CHANGELOG does **not** claim the `${CLAUDE_PLUGIN_ROOT}` grants were inert (`S-RELEASE`) | `[M2.17 no-inert-claim]` (round 17, codex — `M2.14` tested it but no row listed it, violating §6.1's bidirectional rule) |
+| 20b | the CHANGELOG includes the exact sentence "The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude Code 2.1.0 and later expand that placeholder." (`S-RELEASE`) | `[M2.17 retained-grants-changelog-sentence]` — deletion of the exact sentence must fail |
 | 15c | the two `rm -f` grants are **deleted, not rewritten** (`S-PRECLEAN`) | `[M2.16 grants-deleted-not-rewritten]` (round 17, codex — rewriting a grant to a non-`/tmp` path passed rows 15 and 26) |
 | 8d | the exhaustion diagnostic **names the exhausted parent**, on **stderr** (`S-ALLOC`) | `[M1.15 exhaustion-diagnostic]` (round 18, both arms — a generic "allocation failed" passed row 8c) |
 | 3b | when neither base validates, the diagnostic **names the rejected value and the reason**, on **stderr with the value escaped and stdout empty** (`S-ALLOC`, §4.1) | `[M2.18 base-failure-diagnostic]` (round 19 — the row and operative text had asked only for "a diagnostic" while the cell required value+reason) |
@@ -1740,8 +1746,8 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    trailing content** *(round 11, codex: `S-ALLOC` said only "containing the run ID" and `S-FRESH` required
    rejecting "malformed" without defining it — the grammar existed only in §4.5, so an implementer working
    from §7 alone had to invent the payload format that the consumer then validates against)*. **The
-   `.launch` record has achieved mode `0600`, independent of the entry `umask`, and after its creating
-   descriptor is closed it must be reopenable by its owner before the marker is emitted.** This requires
+   `.launch` record has achieved mode `0600`, independent of the entry `umask`. After its creating
+   descriptor is closed, the `.launch` record must be owner-reopenable by successful allocator return.** This requires
    the result without prescribing path-based mode correction or any other particular mechanism; then print
    **The path layout is fixed and stated here, not only in §4.1** *(round 13, both arms: `S-ALLOC` never
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
@@ -1967,7 +1973,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    FORWARD `--allocated` to their actual `pty-capture.py` invocation — where `isolated-agy-review.sh`
    invokes the PLUGIN's writer resolved `$0`-relative from its own location, NOT
    `$TREE/scripts/pty-capture.py`, which is the reviewed repository's copy and need not exist at all
-   in a consumer install** *(round 42, codex)* *(round 35, gemini: `M2.20` asserts
+   in a consumer install. `isolated-agy-review.sh` resolves the plugin writer from the helper's own
+   relocated `$0`-relative directory without consulting `CLAUDE_PLUGIN_ROOT`, and this must work when that
+   variable is unset** *(round 42, codex)* *(round 35, gemini: `M2.20` asserts
    that forwarding while `S-CAPTURE` described only the callee's behaviour, so row 15e cited an operative
    rule that did not exist in the step)* —
    **without `O_CREAT` and without `O_TRUNC`**: the reserved leaf must already exist and its absence is a
@@ -2020,12 +2028,12 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    synthesis has no such contract. Deriving the path in a second place is the drift this design removes —
    a re-derived name that disagrees with the allocation reads an absent file and fails closed forever.)*
 7. **`S-PRECLEAN`** — **Delete the two `rm -f` grants AND the pre-clean COMMANDS themselves** — `skills/codex-review/SKILL.md:48`
-   and `scripts/review/isolated-agy-review.sh:89`. **And no `/tmp` literal remains in ANY `allowed-tools`
+   and the exact command `rm -f "$OUT" "$OUT.captureid"` in `scripts/review/isolated-agy-review.sh`. **And no `/tmp` literal remains in ANY `allowed-tools`
    line** *(round 43, gemini: `M2.3` asserts that absence repo-wide and `S-PRECLEAN` named only the two
    specific sites, so an implementer following §7 exactly could leave an unrelated `/tmp` literal standing,
    satisfy the step and fail the mandatory cell — row 26 was certifying a requirement §7 did not make)*. *(Round 5, codex: this step named only the grants, so
    as frozen the plan still permitted retaining a pre-clean that **destroys the allocated `O_EXCL`
-   leaf** — the precise defect §4.2 exists to remove.)* **Delete the pre-clean in the Bash helper too** — `scripts/review/isolated-agy-review.sh:89`, not only
+   leaf** — the precise defect §4.2 exists to remove.)* **Delete that exact command in the Bash helper too** — `scripts/review/isolated-agy-review.sh`, not only
    `skills/codex-review/SKILL.md:48` *(round 35, gemini: §7 named one of the two sites §4.2 identifies)*.
    **Add codex's grant, exactly `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`** *(round 35, codex:
    "add codex's bash grant (§4.2)" let an implementer add a narrower grant for `allocate-transcript.sh`,
@@ -2057,9 +2065,9 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    without the baseline `M2.14` pins, so an implementer had no way to know what it must differ from)* +
    **CHANGELOG — include this exact sentence: "Per-run paths prevent accidental transcript collisions and
    stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host
-   where an attacker controls a state-directory ancestor."** **Do not claim the `${CLAUDE_PLUGIN_ROOT}`
-   grants were inert**: that was a round-1 finding, reversed in round 2 and verified against the pinned
-   2.1.220 in round 3.
+   where an attacker controls a state-directory ancestor."** Include this exact sentence: **"The existing
+   `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude Code 2.1.0 and later expand that
+   placeholder."**
 
 ## 8. Open questions — NONE REMAIN
 
@@ -2084,7 +2092,8 @@ resolutions cited.)*
 - ~~Q4 — what anchors freshness on the `--reviewed-sha256` path?~~ **SETTLED, §4.5 and §7 `S-FRESH`**
   *(round 5 pointed at "step 5", which was M5; round 9's renumbering broke the corrected number too, which
   is why §7 now carries stable labels)*: the per-allocation
-  launch record, `<transcript-path>.launch`, created by the allocator before it prints the path.
+  launch record, `<transcript-path>.launch`, created by successful allocator return and therefore before
+  dispatch.
 
 **Genuinely open:**
 
