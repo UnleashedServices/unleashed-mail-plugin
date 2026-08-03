@@ -805,6 +805,13 @@ one-side fix, in its newest form.)* Assert also that no `/tmp/` literal survives
 passed by two wrong implementations** — one that ignores `XDG_STATE_HOME` entirely and always uses the
 fallback, and one that validates `XDG_STATE_HOME` but then trusts the fallback blindly. Two more cases,
 and they are of the two kinds this campaign keeps needing:
+**And a PRE-EXISTING ordinary base is a must-PASS positive on BOTH arms**
+*(maintainer decision, round 72, adopting `max`'s reading over the round-71 rule)*: a selected
+`XDG_STATE_HOME` — and separately a selected `$HOME/.local/state` — that already exists with mode `0755`,
+and one owned by a different group, are each **ACCEPTED and used**, with allocation proceeding beneath
+them. These are the cases the round-71 "every contracted role" wording would have hard-failed. The
+`0700`/owner contract is asserted only against what the allocator CREATES and against a pre-existing
+**nested transcript parent**, which `M1.3`/`M1.4` still require to fail closed.
 - `[M2.26 base-transport-conjunction]` **A base that is VALID but hostile to the transport is REJECTED**
   *(round 65 `max`, codex, High)*: POSIX permits any byte but `/` and NUL in a directory name, so
   `XDG_STATE_HOME` containing an LF satisfies absolute, directory, protected-root and `W_OK|X_OK` — and
@@ -1535,8 +1542,8 @@ requirement, and that is now visible rather than arguable.
 | 3 | fallback candidate selection applies the **same complete non-mode/owner predicate set, existing AND absent-ancestor** — absolute, directory, outside protected roots by component, `W_OK\|X_OK` — incl. the regular-file and unsearchable-directory discriminators; exact-mode/current-owner enforcement for an existing selected base is covered separately by rows 6 and 7; neither valid ⇒ allocate nothing, exit non-zero (§4.1) | `[M2.5 fallback-invalid-classes]` — incl. exact-`0700`, current-owner canonical positives |
 | 4 | component grammar `[A-Za-z0-9._-]+` full-string anchored, **both halves swept** — complement rejected, all **65** valid chars accepted, **and the exact values `.` and `..` rejected** — through the shared, importable validator whose verdict is bound to the allocator's production accept/reject decision (`S-ALLOC`, §4.1) | `[M1.5 invalid-component]` + `[M1.8 grammar-class-sweep]` — in-process class sweeps plus forced-verdict production binding, since an unused correct validator proves nothing |
 | 5 | the **nested transcript parent** is CREATED `0700` when absent (`S-ALLOC`) | `[M1.2 parent-0700]` — absent-parent case, not the pre-created sentinel's parent (round 40, codex) |
-| 6 | fail closed on **every** pre-existing contracted directory role — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — whose mode differs from `0700`; complement swept, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — directory-role/arm parameterization plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
-| 7 | fail closed on pre-existing **wrong-owner** contracted directory roles — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — with uid **parameterized** as root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` — directory-role/arm parameterization plus the uid sweep (round 61 — a lone foreign uid passes a reject-root-only check) |
+| 6 | fail closed on a pre-existing **nested transcript parent** whose mode differs from `0700`; a pre-existing **selected base** is NOT mode-contracted and an ordinary `0755` one is ACCEPTED (maintainer decision, round 72) — formerly "every contracted role" — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — whose mode differs from `0700`; complement swept, not one value (`S-ALLOC`) | `[M1.3 mis-moded-parent]` — directory-role/arm parameterization plus the programmatically derived non-`0700` mode space, since a privacy-only check passes a lone `0755` (round 61, codex) |
+| 7 | fail closed on a pre-existing **wrong-owner nested transcript parent**; a pre-existing selected base is not owner-contracted (maintainer decision, round 72; §3 places attacker-controlled ancestors out of scope) — formerly all roles — selected XDG base, selected fallback base, and nested transcript parent beneath each base arm — with uid **parameterized** as root and non-root ≠ `geteuid()` (`S-ALLOC`) | `[M1.4 wrong-owner-parent]` — directory-role/arm parameterization plus the uid sweep (round 61 — a lone foreign uid passes a reject-root-only check) |
 | 8 | leaf created `O_CREAT\|O_EXCL` — **both flags, one call** (`S-ALLOC`) | `[M1.1 sentinel-collision]` + `[M1.10 leaf-open-flags]` (round 14 — `O_EXCL` alone is passed by check-then-`touch`) |
 | 8e | the run-ID source yields a fresh candidate **per attempt and per run** (`S-ALLOC`, §4.1) | `[M1.16 runid-freshness-unstubbed]` — two same-metadata allocations **plus per-attempt observation during a forced collision**, source not stubbed (round 53, codex) |
 | 8f | the run ID is the **direct lowercase-hex encoding of ≥16 CSPRNG bytes** — no hashing, truncation, repetition or mixing (`S-ALLOC`) | `[M1.17 runid-entropy-source]` — the source call is interposed, not inferred from output (round 53, codex) |
@@ -1649,12 +1656,20 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    forced-failure polarity was added to the CELL only, so an allocator that propagated the error and left
    the failed reservation in place conformed to §7 and failed a mandatory cell. The same defect class the
    round-66 fix addressed, reintroduced one round later by fixing the proof without the contract.)*.
-   **Every shared directory whose contracted mode is `0700` — the XDG base, fallback base, and nested
-   transcript parent — must already be exact-mode when its name becomes visible.** In the single-purpose
+   **Every directory THIS ALLOCATION CREATES — an absent XDG base, an absent fallback base, or the nested
+   transcript parent — must already be `0700` when its name becomes visible.** In the single-purpose
    allocator process, create it under a temporarily normalized `umask`, restoring the entry value in a
    `finally` path before every success or failure return; post-publication mode correction is not
-   permitted. On `EEXIST`, validate exact mode and
-   owner. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
+   permitted. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
+   **A PRE-EXISTING selected base is NOT subject to the `0700` contract** — it is judged solely by the
+   candidate-selection predicate set, and an ordinary `0755` or group-owned state directory is **accepted,
+   not a failure** *(maintainer decision, round 72: the round-71 rule reached every "contracted role",
+   which contradicted the base-validity contract for a base the allocator never created and would have
+   hard-failed the common `~/.local/state` at `0755` instead of using it. Privacy does not depend on the
+   base: the allocator creates the nested transcript parent `0700` and the leaf `0600` itself, so the
+   guarantee holds whatever the base's own mode is — and §3 already places attacker-controlled ancestors
+   out of scope. The `0700`/owner contract therefore binds only what this allocation creates, plus the
+   nested transcript parent on `EEXIST`, where a mis-moded or foreign-owned parent still fails closed.)*
    **Reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
    any derived sibling appends to it, would exceed the target directory's
    `os.pathconf(parent, 'PC_NAME_MAX')`** — the siblings being `<path>.launch` and `<path>.captureid`, so
