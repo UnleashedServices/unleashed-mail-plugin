@@ -15,7 +15,7 @@ so the recurring "0-byte / nothing captured" failure cannot happen.
 
 Usage
 -----
-    python3 pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]
+    python3 pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]
 
 `--timeout` bounds the wall-clock run: on expiry the child is terminated (bounded ladder),
 the partial transcript is still written, and the wrapper exits 124 (the timeout(1) convention).
@@ -59,27 +59,27 @@ POLL_INTERVAL_SEC = 0.1
 SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
 
 
-def _write_private(path: str, data: bytes) -> None:
+def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
 
     O_NOFOLLOW: if `path` is already a symlink, open() raises (ELOOP) instead of writing THROUGH it to
-    an attacker-chosen target. O_NONBLOCK + an fstat S_ISREG check reject a pre-created FIFO/device at the
-    predictable path (O_NOFOLLOW alone permits a FIFO — with no reader the write blocks forever, with an
-    attacker-held reader it leaks the transcript, round 5: codex). O_CREAT|O_TRUNC: create-or-truncate a
-    regular file. fchmod: O_CREAT only applies the mode on creation, so an existing 0644 file is tightened.
+    an attacker-chosen target. O_NONBLOCK plus fd-based fstat/S_ISREG rejects a FIFO or device at the
+    predictable path; without that check, a FIFO blocks with no reader or leaks to an attacker-held reader
+    (round 5: codex). Non-allocated writes use O_CREAT|O_TRUNC; allocated writes use neither and require the
+    reserved leaf. fd-based fchmod tightens mode before any payload is written.
 
-    Uses open()'s `opener` hook so the returned file object OWNS the fd and closes it exactly once —
-    no manual fd bookkeeping, and structurally impossible to double-close (round 2: gemini). The opener
-    is the only place that still holds a raw fd: if a check fails there, close it before raising, since
-    open() never received it.
+    The open() opener gives its file object fd ownership, avoiding manual bookkeeping and double-close
+    (round 2: gemini). Only the opener still holds a raw fd; if a check fails, it closes before raising
+    because open() never received it.
     """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    create_flags = 0 if allocated else os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY | create_flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
     def _opener(p, _flags):
         fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise OSError(errno.ENOTSUP, "refusing a non-regular capture target (FIFO/device/dir)", p)
+                raise NonRegularCaptureTargetError(errno.ENOTSUP, "refusing a non-regular capture target", p)
             os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
         except BaseException:
             os.close(fd)                # open() hasn't taken ownership yet, so we must close it here
@@ -109,7 +109,7 @@ def _signal_child(pid: int, sig: int) -> None:
         pass
 
 
-def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
+def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated: bool = False) -> int:
     if not cmd:
         raise SystemExit("no command given after `--`")
     # If the wrapper itself is asked to terminate — CI timeout, process manager,
@@ -318,7 +318,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
             # capture, or read a world-readable transcript. Create with O_NOFOLLOW (a pre-existing symlink
             # at out_path makes open() fail rather than being followed) and force mode 0600 (fchmod, since
             # O_CREAT only sets the mode when the file did not already exist).
-            _write_private(out_path, cleaned)
+            _write_private(out_path, cleaned, allocated=allocated)
             # PROVENANCE: leave a per-run capture ID beside the transcript. review-verdict.py auto-reads
             # `<out>.captureid` and uses distinct capture IDs as authoritative, content-independent proof
             # that two reviewers were two separate wrapper runs (full review, #41). Best-effort — a
@@ -360,6 +360,10 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None) -> int:
     return exit_status
 
 
+class NonRegularCaptureTargetError(OSError):
+    """The opened capture target failed the fd-based regular-file check."""
+
+
 def _parse_timeout_value(val: str) -> float:
     try:
         t = float(val)
@@ -372,36 +376,41 @@ def _parse_timeout_value(val: str) -> float:
     return t
 
 
-def parse_pre_args(pre: list[str]) -> "tuple[float | None, str]":
+def parse_pre_args(pre: list[str]) -> "tuple[float | None, str, bool]":
     """Parse the tokens BEFORE `--`: an optional timeout in either `--timeout SECONDS` (space) or
-    `--timeout=SECONDS` (equals) form, plus at most one out-path. Returns (timeout, out_path).
+    `--timeout=SECONDS` (equals) form, an optional `--allocated`, and at most one out-path. Returns
+    (timeout, out_path, allocated).
 
     B1 (COREDEV-2503): the equals form was previously unrecognized and fell into `positional` as the
     out-path — so a caller passing `--timeout=600` got an UNBOUNDED run (and its real out-path became a
     'too many arguments' error, or was silently replaced). Both forms now share `_parse_timeout_value`.
     """
     timeout = None
+    allocated = False
     positional: list[str] = []
     i = 0
     while i < len(pre):
         if pre[i] == "--timeout":
             if i + 1 >= len(pre):
-                raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [out-path] -- <cmd>\n"
+                raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [--allocated] [out-path] -- <cmd>\n"
                                  "error: --timeout requires a value")
             timeout = _parse_timeout_value(pre[i + 1])
             i += 2
         elif pre[i].startswith("--timeout="):
             timeout = _parse_timeout_value(pre[i][len("--timeout="):])
             i += 1
+        elif pre[i] == "--allocated":
+            allocated = True
+            i += 1
         else:
             positional.append(pre[i])
             i += 1
     if len(positional) > 1:
         raise SystemExit(
-            "usage: pty-capture.py [--timeout SECONDS] [out-path] -- <command> [args...]\n"
+            "usage: pty-capture.py [--timeout SECONDS] [--allocated] [out-path] -- <command> [args...]\n"
             f"error: too many arguments before '--': {positional}"
         )
-    return timeout, (positional[0] if positional else "/tmp/pty-out.txt")
+    return timeout, (positional[0] if positional else "/tmp/pty-out.txt"), allocated
 
 
 ALLOCATION_MARKER = "UNLEASHED_TRANSCRIPT="
@@ -717,10 +726,10 @@ def cli_main(argv: "list[str] | None" = None, environ: "dict[str, str] | None" =
         return 0
 
     if "--" not in args:
-        raise SystemExit("usage: pty-capture.py <out-path> -- <command> [args...]")
+        raise SystemExit("usage: pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]")
     separator = args.index("--")
-    timeout, out_path = parse_pre_args(args[:separator])
-    return main(out_path, args[separator + 1:], timeout)
+    timeout, out_path, allocated = parse_pre_args(args[:separator])
+    return main(out_path, args[separator + 1:], timeout, allocated=allocated)
 
 
 if __name__ == "__main__":

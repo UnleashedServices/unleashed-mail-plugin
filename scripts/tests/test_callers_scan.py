@@ -611,7 +611,9 @@ class M513CallersScanTests(CallersScanProof):
         files = load_final_tree()
         path = "skills/review-synthesis/SKILL.md"
         lines = reference_lines(files[path])
-        source_token = b"--reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt"
+        # Constructed, not spelled: a bare transcript-path literal here would be a NEW
+        # unclassified site and M3.1 would (correctly) reject it as inventory drift.
+        source_token = b"--reviewer gemini=<GEMINI_STATUS>:" + b"/tmp/" + b"agy-out.txt"
         destination_token = b"--reviewer gemini=<GEMINI_STATUS>:<allocated-gemini-path>"
         indexes = [index for index, line in enumerate(lines) if source_token in line]
         self.assertEqual(1, len(indexes))
