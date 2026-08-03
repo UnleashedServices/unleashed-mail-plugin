@@ -1,13 +1,13 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 75**, both tiers plus a **remediation pass**
-— both independent reviews returned `REQUEST_CHANGES`.
+**Status:** Planning — **NOT GATED. Latest completed round: 76**, three independent review arms plus a
+**remediation pass** — `xhigh` and `max` returned `REQUEST_CHANGES`; `K3` returned `APPROVE_WITH_NOTES`.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-03 (round 75 findings applied — both tiers + remediation pass; **not gated**)
+**Last Updated:** 2026-08-03 (round 76 findings applied — all three arms + remediation pass; **not gated**)
 
 ---
 
@@ -131,7 +131,7 @@ round 18's masking by round-note, in a form the round-18 fix did not cover)*:
 - the allocator creates the leaf with `O_CREAT|O_EXCL` and mode `0o600`;
 - and it creates the `.launch` record `O_CREAT|O_EXCL` on that same call, never truncating an existing one;
   that record has achieved mode `0600`, independent of the entry `umask`, and, after its creating
-  descriptor is closed, is owner-reopenable by successful allocator return.
+  descriptor is closed, is owner-reopenable before the marker is emitted.
 
 The retry loop is **bounded at 8 attempts**; and `<reviewer>` is a **hard-coded literal in each skill's own
 recipe**, never derived. *(Round 22: applying the proof-cell stripping rule caught these two as well —
@@ -543,23 +543,20 @@ passes the mode and never enforces it yields `0400`/`0500` under a restrictive `
 `M1.2`, `M1.12`, `M2.4` and `M2.22`, every one of which samples only the ambient value. The mutation sweeps
 `[u for u in range(0o1000) if u & 0o700]` — the umasks able to clear an owner bit, **derived in the
 generator** — and asserts the ACHIEVED parent mode is `0700` and the ACHIEVED leaf mode is `0600` for every
-member. The harness records the creating-descriptor close event and requires closure before successful
-allocator return; after the allocator returns, every swept success independently stats and reopens
-`<path>.launch` and verifies its exact mode and payload, requiring
-`create → close → successful allocator return → owner-reopen/payload succeeds` under every swept umask.
-A mutation that leaves the descriptor unclosed at return, prevents post-return owner reopen, corrupts the
-payload, or omits launch-mode enforcement must fail. The
-cell derives a **creation-site × exit-edge matrix**. Its creation fixtures include multi-component absent
+member. The harness records the creating-descriptor close event and interposes marker emission; every
+swept success independently stats and reopens `<path>.launch` after close, verifies its exact mode and
+payload, and only then allows the marker write, requiring
+`create → close → owner-reopen/mode/payload succeeds → marker write` under every swept umask. An
+early-marker mutation, a mutation that leaves the descriptor unclosed before marker emission, prevents
+pre-marker owner reopen, corrupts the payload, or omits launch-mode enforcement must fail. The
+cell derives a **creation-site sweep**. Its creation fixtures include multi-component absent
 XDG and fallback bases and a wholly absent fixed transcript subtree. The harness observes every individual
 `mkdir` publication — including each absent base component and `unleashed-mail`, `review-transcripts`, and
 `<repo-hash>` — and requires every created component to be exact mode `0700` when visible. The creation-site
 axis covers publication of the XDG base, publication of the fallback base, every intermediate component,
 and publication of the nested transcript parent beneath each base arm. An implementation that normalizes
-to `umask 0` but relies on `os.makedirs(..., mode=0o700)` for a multi-component tree must fail. The
-exit-edge axis is success, injected creation failure, and racing-`EEXIST` validation failure. At every
-matrix point the harness observes balanced normalize/restore calls and asserts that the
-post-call `umask` equals the recorded entry value before the harness restores any state of its own;
-deleting production restoration on any edge must fail. One sampled value cannot establish the achieved modes: which bit is
+to `umask 0` but relies on `os.makedirs(..., mode=0o700)` for a multi-component tree must fail. One sampled
+value cannot establish the achieved modes: which bit is
 cleared varies with the member, so a single umask is passed by an implementation that mishandles the rest.
 The cell also performs a synchronized two-process first-run mutation under ambient `umask 0o100`:
 each synchronized case begins with the affected directory absent; pause allocator A immediately after
@@ -1077,7 +1074,8 @@ passed it)*.
 both the recipes and the writer — **and asserted to be FORWARDED to the actual `pty-capture.py` invocation
 on BOTH production paths**, `scripts/review/isolated-agy-review.sh` and the codex recipe, **observed by TWO DIFFERENT mechanisms, because the two paths are not alike**
 *(round 39, codex, High: `scripts/review/isolated-agy-review.sh` creates **its own detached worktree** from
-the reviewed commit and invokes `$TREE/scripts/pty-capture.py` inside it — verified at its `git worktree add --detach "$SCR/tree" "$SHA"` and the `python3 scripts/pty-capture.py … agy --add-dir "$TREE"` capture line — so a
+the reviewed commit with `git worktree add --detach "$SCR/tree" "$SHA"` and then runs the
+`$TREE/scripts/pty-capture.py` invocation — so a
 shim placed in `M5.8`'s relocated copy sits in a different directory entirely and can never intercept it.
 One mechanism cannot cover both, and asserting otherwise is how the class stayed unswept)*:
 - **the wrapper/codex path** — replace `pty-capture.py` **at the resolved location** in `M5.8`'s relocated
@@ -1604,8 +1602,8 @@ requirement, and that is now visible rather than arguable.
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` — **and a FAILED `fchmod` unlinks the reservation, allocates nothing, exits non-zero** (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
 | 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
-| 8g | the shared-directory `0700`, leaf `0600`, and `.launch` `0600` are **ACHIEVED** modes; the `.launch` record is owner-reopenable after close by successful allocator return; every allocator-created shared `0700` directory is already exact-mode when visible; simultaneous first-run allocators succeed with distinct leaves across both base arms and the nested parent; and every success or failure preserves the entry `umask` (`S-ALLOC`); pre-existing role enforcement remains in rows 6 and 7 | `[M1.18 umask-achieved-modes]` — swept owner-bit-clearing umasks with a post-return owner-reopen/mode/payload probe on every success, multi-component absent-base and wholly absent fixed-subtree fixtures observing every individual intermediate `mkdir` publication, the derived creation-site × exit-edge restoration matrix, and synchronized two-process mutations whose affected directory begins absent |
-| 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input**, checked **before the retry loop** (zero run-ID generations on the negative) (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
+| 8g | the shared-directory `0700`, leaf `0600`, and `.launch` `0600` are **ACHIEVED** modes; the `.launch` record is owner-reopenable after close before marker emission; every allocator-created shared `0700` directory is already exact-mode when visible; simultaneous first-run allocators succeed with distinct leaves across both base arms and the nested parent (`S-ALLOC`); pre-existing role enforcement remains in rows 6 and 7 | `[M1.18 umask-achieved-modes]` — swept owner-bit-clearing umasks with an ordered `create → close → owner-reopen/mode/payload → marker write` probe on every success, multi-component absent-base and wholly absent fixed-subtree fixtures observing every individual intermediate `mkdir` publication, the creation-site sweep, and synchronized two-process mutations whose affected directory begins absent |
+| 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative rejected with a diagnostic naming the computed limit, **per input**, checked **before the retry loop** (zero run-ID generations on the negative) (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
 | 10 | payload = one line lowercase hex, **equal to the run ID in the filename** (`S-ALLOC`, §4.5) | `[M1.7 launch-payload]` |
@@ -1713,9 +1711,8 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    round-66 fix addressed, reintroduced one round later by fixing the proof without the contract.)*.
    **Every directory THIS ALLOCATION CREATES — an absent XDG base, an absent fallback base, or the nested
    transcript parent — must already be `0700` when its name becomes visible.** In the single-purpose
-   allocator process, create it under a temporarily normalized `umask`, restoring the entry value in a
-   `finally` path before every success or failure return; post-publication mode correction is not
-   permitted. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
+   allocator process, create it under a temporarily normalized `umask`; post-publication mode correction
+   is not permitted. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
    **A PRE-EXISTING selected base is NOT subject to a mode or ownership contract** — under the complete
    selection rule below, an accessible ordinary `0755`, different-group, or foreign-UID state directory is
    **accepted, not a failure** *(maintainer decision, round 72: the round-71 rule reached every "contracted role",
@@ -1747,7 +1744,7 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    rejecting "malformed" without defining it — the grammar existed only in §4.5, so an implementer working
    from §7 alone had to invent the payload format that the consumer then validates against)*. **The
    `.launch` record has achieved mode `0600`, independent of the entry `umask`. After its creating
-   descriptor is closed, the `.launch` record must be owner-reopenable by successful allocator return.** This requires
+   descriptor is closed, the `.launch` record must be owner-reopenable before the marker is emitted.** This requires
    the result without prescribing path-based mode correction or any other particular mechanism; then print
    **The path layout is fixed and stated here, not only in §4.1** *(round 13, both arms: `S-ALLOC` never
    reproduced it, so an implementer working from §7 alone had to invent the directory structure)*:
@@ -1762,7 +1759,8 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    single-line `UNLEASHED_TRANSCRIPT=` marker into two physical lines — verified by execution. The base
    predicate and the transport were each proved and their CONJUNCTION was not, leaving a §7-only implementer
    to invent either a further restriction or an encoded transport)* — where a
-   base that **does not exist is valid if its nearest existing ancestor satisfies those same predicates**, and the allocator then creates it `0700`
+   base that **does not exist remains itself subject to the complete path/transport predicate set stated
+   above; only directory/access feasibility is evaluated on its nearest existing ancestor**, and the allocator then creates it `0700`
    *(round 26, codex: §4.1 declared absent-but-creatable bases valid and `S-ALLOC` still demanded plain
    writability, so a §7-only implementer would reject **every** absent base — including the default on a
    fresh host)* — else `$HOME/.local/state`, judged by **the COMPLETE predicate set stated above, every one of
