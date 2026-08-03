@@ -1,20 +1,15 @@
 # COREDEV-2619 — Per-run transcript paths
 
-**Status:** Planning — **NOT GATED. Latest completed round: 69**, both tiers plus a **remediation pass**
-— all three `REQUEST_CHANGES`. Both tiers converged on `M5.18` covering only the fallback diagnostic and on
-a duplicate row label. The sharpest finding closes an **exit polarity**: an implementation could send
-fallback and exhaustion diagnostics to stderr and the TERMINAL one to stdout, where an injected marker
-would be the **only** marker — so round 68's cardinality check passes. Now every non-zero exit leaves
-stdout empty and the wrapper propagates failure before parsing. The `S-CALLERS` allowlist was also **not
-implementable**: it triggered on "a line mentioning a review-skill name", but `${kind}-review` does not
-contain the name, so the trigger and the mandatory negative contradicted each other. It is now a closed
-full-line matcher defaulting to reject, and `M5.13` observes that **decision** rather than a case list.
+**Status:** Planning — **NOT GATED. Latest completed round: 70**, both tiers plus a **remediation pass**
+— both independent reviews returned `REQUEST_CHANGES`. Their six-block union now requires atomic `0700`
+visibility for every shared directory, closes and location-binds the caller matcher's accepted language,
+protects the frozen live migration sites from exemptions, and proves the gemini skill-to-helper handoff.
 Blocks `COREDEV-2497`, whose §7 step 1 requires this to land
 first.
 **Ticket:** `COREDEV-2619` (Epic `COREDEV-2485`) · **High** — a live **gate bypass**, documented by the
 2026-07-19 audit as MAJ-10 and reproduced twice on this campaign.
 **Measured against:** HEAD `5187467` (v2.6.6), worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-08-02 (round 69 findings applied — both tiers + remediation pass; **not gated**)
+**Last Updated:** 2026-08-03 (round 70 findings applied — both tiers + remediation pass; **not gated**)
 
 ---
 
@@ -214,12 +209,14 @@ input contract** — it reads two fixed names. The allocated path is therefore t
 
 **Proof — M5 (new, round 3): the INTEGRATION mutation M1 cannot give.** `[M5.1 propagation]` `[M5.2 re-derivation]` `[M5.15 artifact-transcriptpath]` A correct allocator whose
 callers ignore its stdout and derive a fixed basename **passes M1**. So M5 drives both real paths — the
-codex recipe and `isolated-agy-review.sh` — and asserts the **emitted** allocation is the capture
-target, the synthesis input, **and** the artifact's `transcriptPath`. Mutate a caller to re-derive the
-name: M5 must fail. `M5.1` runs both real production arms with valid base paths containing spaces, tabs,
-glob characters, backslashes, single and double quotes, `:` and `=`. It records command argv at every
-handoff and the final artifact, requiring the allocated path to remain one byte-identical argument through
-capture and synthesis and the same byte-identical value in `transcriptPath`.
+gemini recipe into `isolated-agy-review.sh`, and the codex recipe — and asserts the **emitted** allocation
+is the capture target, the synthesis input, **and** the artifact's `transcriptPath`. Mutate a caller to
+re-derive the name: M5 must fail. `M5.1` runs both real production arms with valid base paths containing
+spaces, tabs, glob characters, backslashes, single and double quotes, `:` and `=`. It records command argv
+at every handoff — including the gemini recipe's actual helper argv — and the final artifact, requiring the
+allocated path to remain one byte-identical argument through capture and synthesis and the same
+byte-identical value in `transcriptPath`. Mutating only the gemini recipe to pass an unquoted, fixed or
+re-derived helper argument must fail.
 
 `[M5.4 two-checkout]` **Plus, round 11 (codex): M5 did not carry `S-WRAPPER`'s single-helper requirement.** M5 asserted only
 that *whatever* path was emitted propagates consistently — so a wrapper using a **constant** namespace,
@@ -301,11 +298,18 @@ every functional cell as long as wrapper and allocator agreed with each other)*.
 INDEPENDENT, TEST-LOCAL REFERENCE MATCHER over every tracked physical line.** In that reference, a line
 is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; every other line is outside
 the scan's claim. The matcher removes only the leading prefix matched by
-`\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*`, then requires the
-entire remainder to full-match the literal command grammar or equal an exact-content exemption; every other
-candidate is rejected. The reference neither imports nor calls production's matcher. Separate
-discriminating mutations change production candidate selection and flip the production non-match default
-from reject to accept. **The cell observes the DEFAULT-DENY DECISION ITSELF, not a list of cases** — which
+`\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*`. The entire
+remainder must then equal one of exactly two byte productions:
+`/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or
+`/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`. The angle-bracket operands are literal
+documentation placeholders, and fields are separated by exactly one ASCII space. An exemption matches
+only the tuple `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical bytes
+at another path or line are not exempt. Every other candidate is rejected. The reference neither imports
+nor calls production's matcher. Separate discriminating mutations change production candidate selection
+and flip the production non-match default from reject to accept. Further mutations append a token after
+the literal `<plan>` and duplicate an exempt line at another path or physical line; the independent
+reference and production matcher must reject both. **The cell observes the DEFAULT-DENY DECISION ITSELF,
+not a list of cases** — which
 no enumeration of bypasses can detect *(round 69, both tiers, High: four
 named negatives plus one positive is still a finite blacklist, and a scanner rejecting exactly those four
 while accepting every other non-literal carrier passed the whole prescribed set. The historical bypasses
@@ -330,11 +334,14 @@ property is only sound if the call sites are statically visible; making dynamic 
 failure keeps that assumption true rather than assuming it)* *(round 20, codex: enumerations were
 claimed exhaustive twice and were wrong both times — two callers in round 18, four in round 19, six files
 by scan. The cell now supplies the **discovery mechanism** a list cannot.)*
-`[M5.15b full-invocation-shape]` **And the COMPLETE command shape is asserted at every non-exempt site** —
-namespace (`/unleashed-mail:<gemini|codex>-review`), both flags, **and the `<plan>` operand** *(round 48,
-codex: `M5.13` checked literal references plus the two flags and `M5.14` only the flag names, so a site
-could keep its bare form, gain `--ticket`/`--round`, and **omit the plan operand entirely** — passing both
-cells while violating `S-CALLERS`)*.
+`[M5.15b full-invocation-shape]` **And the COMPLETE command shape is asserted at every frozen live
+invocation site regardless of exemption membership** — namespace, both flags, **and the literal `<plan>`
+operand, with no trailing operand**. Mutate one frozen site by removing a required operand and adding the
+matching `(repo-relative path, physical-line number, SHA-256(mutated line bytes))` exemption tuple: the
+cell must still fail *(round 48, codex: `M5.13`
+checked literal references plus the two flags and `M5.14` only the flag names, so a site could keep its
+bare form, gain `--ticket`/`--round`, and **omit the plan operand entirely** — passing both cells while
+violating `S-CALLERS`)*.
 `[M5.14 invocation-syntax]` **And the flags are asserted BY NAME** — `--ticket <T> --round <N>` — not merely
 that the values reach the skill *(round 20, codex: `S-CALLERS` made the syntax operative while `M5.13` and
 row 32 asserted only that ticket and round are passed, so a positional or differently-named-flag
@@ -505,15 +512,15 @@ passes the mode and never enforces it yields `0400`/`0500` under a restrictive `
 `M1.2`, `M1.12`, `M2.4` and `M2.22`, every one of which samples only the ambient value. The mutation sweeps
 `[u for u in range(0o1000) if u & 0o700]` — the umasks able to clear an owner bit, **derived in the
 generator** — and asserts the ACHIEVED parent mode is `0700` and the ACHIEVED leaf mode is `0600` for every
-member, restoring the prior `umask` afterwards. One sampled value cannot establish this: which bit is
+member. The cell records the entry `umask` and, after both a successful allocation and a forced failure,
+asserts that the post-call value equals it before the harness restores any state of its own; deleting
+production restoration must fail. One sampled value cannot establish the achieved modes: which bit is
 cleared varies with the member, so a single umask is passed by an implementation that mishandles the rest.
-**The sweep necessarily includes umasks clearing the parent's owner-EXECUTE bit** (`0o100` among them),
-which is the member that pins the ORDERING `S-ALLOC` requires: an allocator that defers the parent
-`chmod` until after it creates the leaf cannot traverse its own `0600` parent and fails `EACCES`, so the
-"immediately after `mkdir`" in the step is load-bearing and this cell is what holds it *(round 64 sweep of
-the mandatory-positive class: the two known instances were a positive a CONFORMING implementation could
-not satisfy — `M2.23` round 63 and `M1.19` round 64 — and this is the ordering interaction that could
-have become a third)*.
+The cell also performs a synchronized two-process first-run mutation under ambient `umask 0o100`:
+pause allocator A immediately after `mkdir` returns but before any possible path-based `chmod`, start
+allocator B, and require both allocations to succeed with distinct leaves. Parameterize that mutation over
+creation of the XDG base, creation of the fallback base, and creation of the nested transcript parent under
+each base arm. A create-then-correct implementation must fail this mutation.
 `[M1.12 leaf-mode-0600]` **The allocated leaf is created mode `0600`, asserted by
 `stat` on the returned path** *(round 14, gemini: the tag sat on the atomicity paragraph, which asserts
 nothing about mode — a tag on a heading is not a cell)*. `[M1.13 full-layout]` **And the returned path is
@@ -1518,7 +1525,7 @@ requirement, and that is now visible rather than arguable.
 | 8b | leaf mode `0o600` (`S-ALLOC`) | `[M1.12 leaf-mode-0600]` |
 | 8h | the leaf's mode enforcement is **fd-based** — `os.fchmod` on the held descriptor, no path-based `chmod` — **and a FAILED `fchmod` unlinks the reservation, allocates nothing, exits non-zero** (`S-ALLOC`) | `[M1.20 allocator-fchmod-on-fd]` (round 65, codex — three cells observed only the outcome, so close-then-`chmod(path)` passed them all; `M2.24` had fixed the writer arm only) |
 | 1d | a base **valid but hostile to the single-line transport** — LF, CR, CRLF — on **both base arms, existing and absent**, falling back when only XDG is afflicted and failing closed only when neither validates (`S-ALLOC`, §4.1) | `[M2.26 base-transport-conjunction]` (round 66 — the identifier was a duplicate `1c`, the outcome contradicted §4.1's fallback rule, and the sweep covered the XDG arm only) (round 65 `max`, codex — `M2.4` and `M5.5` each passed without exercising their conjunction) |
-| 8g | the `0700` and `0600` are **ACHIEVED** modes — the ambient `umask` cannot clear a bit; for the parent this OUTCOME is the whole requirement, mechanism unconstrained (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept over the umasks able to clear an owner bit, derived in the generator (round 63, codex — every mode cell sampled only the ambient value) |
+| 8g | the `0700` and `0600` are **ACHIEVED** modes; every shared `0700` directory is already exact-mode when visible; simultaneous first-run allocators succeed with distinct leaves across both base arms and the nested parent; and every success or failure preserves the entry `umask` (`S-ALLOC`) | `[M1.18 umask-achieved-modes]` — swept owner-bit-clearing umasks, post-call restoration assertions, and the synchronized two-process first-run mutation |
 | 4b | the grammar bounds **length** only by `PC_NAME_MAX` **less the longest derived-sibling suffix**; maximal-length positive — siblings created — and one-over negative, **per input**, checked **before the retry loop** (zero run-ID generations on the negative) (`S-ALLOC`, §4.1) | `[M1.19 basename-length-boundary]` (round 64, codex — the boundary at `PC_NAME_MAX` itself made the positive unsatisfiable for a conforming allocator) (round 63, codex — `M1.8` swept characters and positions but never length, so a 64-character cap passed it) |
 | 8c | retry is bounded at **8 attempts**, then exits non-zero (`S-ALLOC`) | `[M1.11 exhausted-collision]` (round 14 — "bounded" with no stated bound was unimplementable) |
 | 9 | `<path>.launch` created `O_CREAT\|O_EXCL`, same call, **never truncating** (`S-ALLOC`, now operative — round 17) | `[M1.6 launch-collision]` + `[M1.14 launch-open-flags]` |
@@ -1529,7 +1536,7 @@ requirement, and that is now visible rather than arguable.
 | 12 | wrapper obtains the namespace **by calling** `context_repo_hash`, passes its value unchanged as the exact `--repo-hash` argument, and keeps it stable across tickets in one checkout (`S-WRAPPER`) | `[M5.3 stubbed-helper]` — exact recorded-argv equality via the `UNLEASHED_LIB_DIR` seam and a two-ticket stability assertion |
 | 12b | the namespace is per-checkout (`S-WRAPPER`, §4.1) | `[M5.4 two-checkout]` (secondary) |
 | 13 | wrapper is the granted codex entry point (`S-WRAPPER`, §4.2) | `[M2.6 wrapper-grant-present]` |
-| 14 | allocated path threaded to **`isolated-agy-review.sh` and the codex recipe** as one byte-identical argument through capture, synthesis and artifact recording, including valid bases with whitespace, glob characters, backslashes, quotes, `:` and `=` (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
+| 14 | allocated path threaded through both explicit handoffs — **gemini-review recipe → `isolated-agy-review.sh`** and the codex-review recipe → its capture command — as one byte-identical argument through capture, synthesis and artifact recording, including valid bases with whitespace, glob characters, backslashes, quotes, `:` and `=` (`S-THREAD`) | `[M5.1 propagation]` + `[M5.2 re-derivation]` |
 | 14d | the emitted allocation becomes the artifact's `transcriptPath` (`S-M5`) | `[M5.15 artifact-transcriptpath]` (round 21, codex — `S-M5` requires it, `M5` asserts it, and no row carried it) |
 | 14b | …and to `brainstorm` + `review-synthesis` (`S-THREAD`) | `[M5.6 brainstorm-synthesis-consumption]` (round 14, both arms — the round-13 claim that M3 covered these was **false**: M3 proves absence of the old literal, never presence of the new path) |
 | 15 | the pre-clean **COMMANDS** deleted from both sites (`S-PRECLEAN`) | `[M2.8 preclean-command-absence]` — absence from the files, not from an `allowed-tools` scan (round 35, gemini) (round 23, codex — `M2.9` was mapped here but proves something else; see row 15f) |
@@ -1564,9 +1571,9 @@ requirement, and that is now visible rather than arguable.
 | 14c | synthesis is invoked as `--reviewer <name>=<STATUS>:<allocated-path>` and parses only the first `=` and first `:`, preserving later delimiters in the path (`S-THREAD`) | `[M5.10 synthesis-cli-shape]` (round 18, gemini) |
 | 12c | the wrapper's signature is **exactly three** positional args, each landing in its field (`S-WRAPPER`) | `[M5.11 wrapper-cli-signature]` — extra arg, omitted/empty **reviewer**, empty **ticket/round**, each allocating nothing, + **positional-mapping mutation** (round 38, codex) |
 | 1b | the allocator's command line matches §4.1's shape **in the implementation** (`S-ALLOC`) | `[M5.12 allocator-cli-shape]` (round 18, codex — §6.0 compares plan sections, not code) |
-| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then require a full command-grammar match or an exact-content exemption and REJECT every other candidate; lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` — independent test-local selection and disposition over every tracked line, with separate candidate-selection and non-match-default mutations |
+| 32 | a tracked line is a candidate iff its original bytes contain `/unleashed-mail:` or `-review`; strip only `\A(?:(?:[ \t]{0,3}(?:[-+*]\|[0-9]+[.)])[ \t]+)\|(?:[ \t]{0,3}>[ \t]?)\|(?: {4}\|\t))*`, then default-deny unless the non-exempt remainder is exactly `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`, with literal angle-bracket operands and single ASCII spaces, or the occurrence has a residual-waiver exemption bound to `(repo-relative path, physical-line number, SHA-256(original line bytes))`; identical content elsewhere is not exempt, lines with neither anchor are outside the claim, and an invocation with neither anchor on one physical line is the residual gap (`S-CALLERS`) | `[M5.13 callers-scan]` — independent test-local selection and disposition, trailing-token rejection, and relocated-exemption rejection |
 | 32b | the invocation syntax is exactly `--ticket <T> --round <N>` (`S-CALLERS`) | `[M5.14 invocation-syntax]` (round 20, codex) |
-| 32c | the **complete** command shape — namespace, both flags and the `<plan>` operand — at every non-exempt site (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
+| 32c | the **complete** command shape — namespace, both flags and the literal `<plan>` operand, with missing or trailing operands rejected — at every frozen live invocation site regardless of exemption membership (`S-CALLERS`) | `[M5.15b full-invocation-shape]` (round 48, codex — flags alone let a site omit the plan operand) |
 | 28 | non-allocated call sites keep create-if-absent **and truncate a longer existing target to the exact shorter capture, leaving no stale suffix** — a mode, not a global change (`S-CAPTURE`) | `[M2.12 nonallocated-mode-positive]` — absent-target creation plus unequal-length overwrite |
 | 29 | `<reviewer>` is a **hard-coded literal in each skill recipe**, never derived (`S-CALLERS`, §4.1 — retargeted round 24) | `[M5.9 reviewer-is-a-recipe-literal]` (round 17, both arms — §7 still carried the superseded "supplied by the wrapper" wording) |
 | 30b | the wrapper invokes `pty-capture.py` from its **own location** too (`S-WRAPPER`) | `[M5.16 allocator-own-location]` (round 37, both arms — round 36 made only the library distinguishable) |
@@ -1623,18 +1630,14 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    mode could not be enforced is never left behind** *(round 67 `max`, codex, High: `M1.20`'s round-66
    forced-failure polarity was added to the CELL only, so an allocator that propagated the error and left
    the failed reservation in place conformed to §7 and failed a mandatory cell. The same defect class the
-   round-66 fix addressed, reintroduced one round later by fixing the proof without the contract.)*. **For the PARENT it is an OUTCOME
-   requirement only: the created directory IS `0700` whatever the ambient `umask`**, by either normalising
-   `umask` around the `mkdir` and restoring it, or `chmod`-ing immediately after — **the plan does not
-   choose between them** *(round 66 `max`, codex, High: the step had mandated the path-based `chmod` as a
-   mechanism, which `M1.18` cannot see and no row covered — and `umask(0)`-around-`mkdir` satisfies every
-   swept value without ever calling it. Mandating a mechanism the proof cannot observe, and which nothing
-   requires, is over-specification; the leaf differs because the fd-based form is what defeats a swapped
-   path.)*. The parent's window is safe under either: `umask` can only CLEAR bits, so `mkdir(0o700)`
-   yields at most `0700` and the transient state is never MORE permissive than the target
-   *(round 63, codex: `makedirs(mode=0o700)` and `os.open(..., 0o600)` are both masked by `umask` and no
-   mutation varied it, so under a restrictive `umask` an implementation that only passes the mode yields
-   `0400`/`0500` and still passed every stated mode cell)*; **reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
+   round-66 fix addressed, reintroduced one round later by fixing the proof without the contract.)*.
+   **Every shared directory whose contracted mode is `0700` — the XDG base, fallback base, and nested
+   transcript parent — must already be exact-mode when its name becomes visible.** In the single-purpose
+   allocator process, create it under a temporarily normalized `umask`, restoring the entry value in a
+   `finally` path before every success or failure return; post-publication mode correction is not
+   permitted. On `EEXIST`, validate exact mode and
+   owner. This atomic-visibility rule is what lets simultaneous legitimate first allocations coexist.
+   **Reject the inputs when the ASSEMBLED basename, PLUS the longest suffix
    any derived sibling appends to it, would exceed the target directory's
    `os.pathconf(parent, 'PC_NAME_MAX')`** — the siblings being `<path>.launch` and `<path>.captureid`, so
    the headroom is the longer of the two — checked once the parent exists and BEFORE the retry loop,
@@ -1788,11 +1791,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)`), because the codex recipe runs Python and the
    hash helper is Bash-only. *(Round 8 reproduction, gemini: §4.1 required this wrapper and §7 never
    said to create it — an implementer could not build the handoff from §7 alone without inventing it.)*
-4. **`S-CALLERS`** — **Thread ticket and round through EVERY invocation site, discovered by SCAN.**
-   The syntax is **`/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`**, and **every
-   non-exempt invocation site must use that COMPLETE shape — namespace, both flags and the `<plan>`
-   operand** *(round 49, gemini: this defined the syntax and then required only the two flags per site, so
-   `M5.15b`'s plan-operand assertion was a rule living in a cell)*. **`<reviewer>` is a hard-coded literal in each skill's own recipe** —
+4. **`S-CALLERS`** — **Thread ticket and round through every invocation site covered by the scan.** After
+   prefix removal, a non-exempt invocation line must equal one of these two byte strings:
+   `/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>` or
+   `/unleashed-mail:codex-review --ticket <T> --round <N> <plan>`. The angle-bracket operands and the
+   single ASCII spaces between fields are literal documentation placeholders. **`<reviewer>` is a hard-coded literal in each skill's own recipe** —
    `gemini` in `skills/gemini-review`, `codex` in `skills/codex-review` — passed as the wrapper's third
    argument, **never derived** *(moved here from `S-ALLOC` in round 23, gemini: it is a caller contract)*.
    **The site set is a closed lexical universe, discovered rather than enumerated:** a tracked physical line
@@ -1800,11 +1803,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    anchor are outside the scan's claim. For each candidate, remove only the leading prefix matched by the
    exact regex `\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*`
    — unordered or ordered list marker, blockquote marker, four-space indent or tab indent — and require the
-   **ENTIRE remainder to FULL-MATCH** the literal command grammar
-   `/unleashed-mail:<gemini|codex>-review --ticket <T> --round <N> <plan>`, or to equal an exemption's exact
-   content. **Every other candidate is rejected.** An exemption never binds a whole file or glob. Production
-   selection and disposition are compared with the independent reference matcher defined by `M5.13`, so a
-   caller added later fails the cell and an exemption is a visible diff.
+   **ENTIRE remainder to equal one of the two byte productions above**, or to match an exemption identified
+   by `(repo-relative path, physical-line number, SHA-256(original line bytes))`. **Every other candidate is
+   rejected.** Identical content at another path or line is not exempt. The exemption manifest is an
+   explicit residual waiver, not proof that exempt content is non-invoking. Production selection and
+   disposition are compared with the independent reference matcher defined by `M5.13`.
    **A review-skill invocation must be written as a LITERAL command, and the scan enforces this as an
    ALLOWLIST with a DEFAULT of REJECT.** A non-exempt invocation **occupies its own physical line**
    *(round 69, both tiers, High: "a line MENTIONING a review-skill name" cannot be the trigger, because
@@ -1835,8 +1838,10 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    references across **six** files. **Twice an enumeration was claimed complete and was wrong**, which is
    the whole argument for a discovery mechanism: a list is a snapshot, and this one has been wrong every
    time it was written.)*
-   Known sites when written: `create-feature-plan/SKILL.md:81`, `AGENT_CONTRACTS.md:99-100`,
-   `brainstorm/SKILL.md:178`, `modern-standards-planner.md:42-43`, `implement/SKILL.md:161`, `:172`.
+   **Frozen live invocation sites for the baseline migration — none may be exempt:**
+   `create-feature-plan/SKILL.md:81`, `AGENT_CONTRACTS.md:99-100`, `brainstorm/SKILL.md:178`,
+   `modern-standards-planner.md:42-43`, `implement/SKILL.md:161`, `:172`. This is a closed baseline set,
+   not another enumeration of future callers; the matcher remains the discovery mechanism.
    *(Round 18, codex, High: `M5.7` makes a skill that cannot determine ticket/round **fail closed**, so
    applying that contract without updating these two callers **breaks the canonical documented workflow** —
    and `M5.1`/`M5.6` never exercise them, so nothing would have caught it. A fail-closed rule is a
@@ -1888,8 +1893,11 @@ invalidate one. Cite `S-PRECLEAN`, never "step 5".)*
    colons, backslashes, glob characters and quotes are all still VALID in a base — and callers are told to
    take the marker remainder verbatim. An implementation with an unquoted `$path`, a default-IFS `read`, or
    an unrestricted `split(":")` passes every stated positive on conventional temp paths and corrupts a valid
-   `XDG_STATE_HOME` such as `/tmp/review state`.)* — **Thread the allocated path** through `isolated-agy-review.sh`, both review skills,
-   `brainstorm` and `review-synthesis`. **An allocated but EMPTY transcript must still classify as
+   `XDG_STATE_HOME` such as `/tmp/review state`.)*. `skills/gemini-review/SKILL.md` consumes the wrapper
+   marker and passes its remainder byte-for-byte as the single second argument to
+   `isolated-agy-review.sh`; `skills/codex-review/SKILL.md` consumes the same marker and passes its
+   remainder byte-for-byte as the single allocated-path argument to its capture command. **Thread the
+   allocated path** onward through `brainstorm` and `review-synthesis`. **An allocated but EMPTY transcript must still classify as
    `MISSING` in synthesis** *(round 60, codex: §4.2 justifies deleting the pre-clean by relying on exactly
    this and `M5.17` proves it, while this step specified only path and CLI threading — so a §7-only
    implementer could satisfy the step and fail a mandatory cell)*. Synthesis takes **the two allocated paths as explicit inputs**
