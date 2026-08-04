@@ -1,13 +1,13 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **round 22 gated (both arms, one finding each).** The non-detection list is **six**, not five — round 21's fix changed "three"→"five" and dropped the **two-pass reader** itself. And F3's off-by-one was corrected in the fixture but not the restatements: every one now says **F3 excludes caps ≤ N (N = 64 MiB); caps > N are outside the proof**. gemini separately confirmed **§7 step 5 is satisfiable end to end**, the `caps ≤ N` arithmetic is exact, and **no implementation blockers remain**. See §29. Previously — **round 21 gated (both arms).** Every finding was against round 20's fix — the **fifth consecutive propagation round**. §7 step 5's I16b exception had been narrowed to the *helper-side* form, demanding the caller-side form be shown caught (impossible); **F3's bound is now concrete — N = 64 MiB, streaming N + 1** — after codex showed the "catches every cap at or below N" claim is **false** against the shipped `review-verdict.py:229-231`; row 8 gets the same bound; and two stale "three residues" restatements are corrected to five. *Text written as a gloss becomes normative when moved into an operative list.* See §28. Previously — **round 20 gated (both arms): an UNSATISFIABLE acceptance criterion.** Round 19 added F3's cap bound and I17's `/proc/self/fd/N` form to §3.1 and propagated neither — so **§7 step 5 demanded I17 be shown caught by a mechanism §3.1 says does not catch it**, which gemini correctly called an implementation blocker. §7 step 5 now excepts **I16b and I17's `/proc` form** and shows F3 **to its bound N**; §6 says **two** exceptions; §5's risk register carries all four items. *When an authoritative section gains an item, every citing section is stale until proven otherwise.* See §27. Previously — **round 19 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES`**). §3.1's exception list was itself short by two: **F3's size-cap bound** and **I17's `/proc/self/fd/N` reopen** are ceilings the plan has admitted since rounds 6 and 8, recorded in tables and never in §3.1 — the section every other section refers back to. §3.1 now lists **five** non-detections, §7 step 6's CHANGELOG carries them all, and the positive scope is narrowed to *every reviewer transcript in an approving artifact*. *For every ceiling recorded anywhere, does §3.1 state it?* See §26. Previously — **round 18 gated** (**both arms**). Third round on one class, and the third time I fixed the sites a reviewer *listed* instead of the class: **seven more overclaims** remained, including ARCH-1 literally saying "It seals the *path* out of the helper". Closed **by sweep** this time. **§3.1 now names its own exceptions** (rows 2, 5b, 6b) — §5 had been asserting "§3.1 states this plainly" about residues §3.1 never mentioned — and `_open_regular_fd`'s **two incompatible contracts** are resolved to the tuple. Both arms re-derived and re-confirmed **2, 5b, 6b**. *When a finding names a CLASS, close it with a query, not a list.* See §25. Previously — **round 17 gated** (**both arms, one finding**). Round 16's narrowing note was placed **immediately below a sentence making the exact claim it narrows** — "re-opening becomes structurally unavailable inside `_digest_transcript_fd`". Five operative sites now narrowed: the invariants constrain the **interface**, not the body; **ARCH-2** establishes one seam call with an unchanged argument, **not** one resolution; ARCH-3's "module globals are irrelevant" is qualified to the fixtures' own verdicts. **Both arms independently re-derived the residue set with reachability AND discrimination and confirmed 2, 5b, 6b**, plus the counts (16 rows / 17 mutants / 13 cases). *A claim that a propagation is complete is not a propagation.* See §24. Previously — **round 16 gated** (**both arms `REQUEST_CHANGES`**). Round 15's reopening of row 2 **held**, and both arms then found the plan still **over-reads ARCH-1** everywhere else: a parameter-list check bounds the *interface*, never the *body*, and §6.0 row 2 is the plan's own counterexample (path smuggled through module state keyed by the fd). Every operative ARCH-1 claim is narrowed. **codex supplied a full branch-reachability re-derivation of all sixteen rows — the first end-to-end check of this table — and it confirms residues 2, 5b, 6b.** New method rule: **reachability and discrimination are separate requirements** (row 6b reached its branch and still could not be told apart). See §23. Previously — **round 15 gated — A CORRECTION REVERSED.** Round 14 closed §6.0 row 2 on a codex finding; round 15 **reopens** it, with **codex reversing itself** and gemini reaching the same place independently. I18 never reaches the **success branch** a post-hash probe runs on, *and* ARCH-1 inspects only the parameter list — so the path can be smuggled through module state and the probe can live **inside** the helper I18 stubs away. Residues are back to **three (2, 5b, 6b)**. The method lesson: **a re-derivation must establish BRANCH REACHABILITY, not just fixture level.** See §22. Previously — **round 14 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**). **Row 2 is closed too**: ARCH-1 makes the helper **fd-only**, so its `Path.open()` probe cannot be inside the helper — it is caller-side, and I18's zero-path-reads limb rejects it. Residues are now **5b and 6b** — two. **Four consecutive rounds, four residue corrections, none of which needed a new proof** — only a re-reading of proofs already present (I18 r7, C15 r11, C4a/C4b r4, ARCH-1 r5). See §21. Previously — **round 13 gated** (**both arms `REQUEST_CHANGES`, same High**). **Row 5b was over-broad**: C4a closes its symlink limb (differing target bytes → digest mismatch, not the exact `SYMLINK` message) and C4b closes its not-regular limb (`io.open` lacks `O_NONBLOCK` → blocks → the timeout fires). Row 5 is now split **four** ways — 5a permission (C15), **5b missing (the only genuinely unreachable limb)**, 5c symlink (C4a), 5d not-regular (C4b); count 14 → 16. **C4a and C4b are not new — they date from round 4, and row 5 had simply never been checked against them.** The standing rule is therefore *re-derive every residue against the WHOLE proof set*. See §20. Previously — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
+**Status:** Planning — **round 22 gated (both arms, one finding each).** The non-detection list is **six**, not five — round 21's fix changed "three"→"five" and dropped the **two-pass reader** itself. And F3's off-by-one was corrected in the fixture but not the restatements: every one now says **F3 excludes caps ≤ N (N = 64 MiB); caps > N are outside the proof**. gemini separately confirmed **§7 step 5 is satisfiable end to end**, the `caps ≤ N` arithmetic is exact, and **no implementation blockers remain**. See §29. Previously — **round 21 gated (both arms).** Every finding was against round 20's fix — the **fifth consecutive propagation round**. §7 step 5's I16b exception had been narrowed to the *helper-side* form, demanding the caller-side form be shown caught (impossible); **F3's bound is now concrete — N = 64 MiB, streaming N + 1** — after codex showed the "catches every cap at or below N" claim is **false** against the shipped `_read_regular_file` bounded-read branch in `scripts/review-verdict.py` (`fh.read(_MAX_TRUSTED_READ_BYTES + 1)` followed by `len(data) > _MAX_TRUSTED_READ_BYTES`); row 8 gets the same bound; and two stale "three residues" restatements are corrected to five. *Text written as a gloss becomes normative when moved into an operative list.* See §28. Previously — **round 20 gated (both arms): an UNSATISFIABLE acceptance criterion.** Round 19 added F3's cap bound and I17's `/proc/self/fd/N` form to §3.1 and propagated neither — so **§7 step 5 demanded I17 be shown caught by a mechanism §3.1 says does not catch it**, which gemini correctly called an implementation blocker. §7 step 5 now excepts **I16b and I17's `/proc` form** and shows F3 **to its bound N**; §6 says **two** exceptions; §5's risk register carries all four items. *When an authoritative section gains an item, every citing section is stale until proven otherwise.* See §27. Previously — **round 19 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES`**). §3.1's exception list was itself short by two: **F3's size-cap bound** and **I17's `/proc/self/fd/N` reopen** are ceilings the plan has admitted since rounds 6 and 8, recorded in tables and never in §3.1 — the section every other section refers back to. §3.1 now lists **five** non-detections, §7 step 6's CHANGELOG carries them all, and the positive scope is narrowed to *every reviewer transcript in an approving artifact*. *For every ceiling recorded anywhere, does §3.1 state it?* See §26. Previously — **round 18 gated** (**both arms**). Third round on one class, and the third time I fixed the sites a reviewer *listed* instead of the class: **seven more overclaims** remained, including ARCH-1 literally saying "It seals the *path* out of the helper". Closed **by sweep** this time. **§3.1 now names its own exceptions** (rows 2, 5b, 6b) — §5 had been asserting "§3.1 states this plainly" about residues §3.1 never mentioned — and `_open_regular_fd`'s **two incompatible contracts** are resolved to the tuple. Both arms re-derived and re-confirmed **2, 5b, 6b**. *When a finding names a CLASS, close it with a query, not a list.* See §25. Previously — **round 17 gated** (**both arms, one finding**). Round 16's narrowing note was placed **immediately below a sentence making the exact claim it narrows** — "re-opening becomes structurally unavailable inside `_digest_transcript_fd`". Five operative sites now narrowed: the invariants constrain the **interface**, not the body; **ARCH-2** establishes one seam call with an unchanged argument, **not** one resolution; ARCH-3's "module globals are irrelevant" is qualified to the fixtures' own verdicts. **Both arms independently re-derived the residue set with reachability AND discrimination and confirmed 2, 5b, 6b**, plus the counts (16 rows / 17 mutants / 13 cases). *A claim that a propagation is complete is not a propagation.* See §24. Previously — **round 16 gated** (**both arms `REQUEST_CHANGES`**). Round 15's reopening of row 2 **held**, and both arms then found the plan still **over-reads ARCH-1** everywhere else: a parameter-list check bounds the *interface*, never the *body*, and §6.0 row 2 is the plan's own counterexample (path smuggled through module state keyed by the fd). Every operative ARCH-1 claim is narrowed. **codex supplied a full branch-reachability re-derivation of all sixteen rows — the first end-to-end check of this table — and it confirms residues 2, 5b, 6b.** New method rule: **reachability and discrimination are separate requirements** (row 6b reached its branch and still could not be told apart). See §23. Previously — **round 15 gated — A CORRECTION REVERSED.** Round 14 closed §6.0 row 2 on a codex finding; round 15 **reopens** it, with **codex reversing itself** and gemini reaching the same place independently. I18 never reaches the **success branch** a post-hash probe runs on, *and* ARCH-1 inspects only the parameter list — so the path can be smuggled through module state and the probe can live **inside** the helper I18 stubs away. Residues are back to **three (2, 5b, 6b)**. The method lesson: **a re-derivation must establish BRANCH REACHABILITY, not just fixture level.** See §22. Previously — **round 14 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**). **Row 2 is closed too**: ARCH-1 makes the helper **fd-only**, so its `Path.open()` probe cannot be inside the helper — it is caller-side, and I18's zero-path-reads limb rejects it. Residues are now **5b and 6b** — two. **Four consecutive rounds, four residue corrections, none of which needed a new proof** — only a re-reading of proofs already present (I18 r7, C15 r11, C4a/C4b r4, ARCH-1 r5). See §21. Previously — **round 13 gated** (**both arms `REQUEST_CHANGES`, same High**). **Row 5b was over-broad**: C4a closes its symlink limb (differing target bytes → digest mismatch, not the exact `SYMLINK` message) and C4b closes its not-regular limb (`io.open` lacks `O_NONBLOCK` → blocks → the timeout fires). Row 5 is now split **four** ways — 5a permission (C15), **5b missing (the only genuinely unreachable limb)**, 5c symlink (C4a), 5d not-regular (C4b); count 14 → 16. **C4a and C4b are not new — they date from round 4, and row 5 had simply never been checked against them.** The standing rule is therefore *re-derive every residue against the WHOLE proof set*. See §20. Previously — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
 1 High, 2 Medium, 1 Low**). Round 11 **inverts** the round-9/10 defect: instead of a closure claim that
 outran the fixtures, the `ACCEPTED-NOT-CLOSED` set **outlived the fixture that closed it**. **I18 is a
 caller-level test** (added round 7) and its two-limbed oracle — *caller fails* **and** *zero path reads* —
 closes §6.0 rows **1**, **6a**, **7**, row **9's caller half** and mutant **I12b**; residues drop
 **six → three** (rows 2, 5, 6b) and row 6 is split. Round 10's I12 split had also never reached §6's
 mutant preamble or C12's pairing; and C12 alone cannot reject `st_size`/`getsize` at all — **F2** does,
-per the plan's own measurement at `:1017`. The mandated **`DENIED`** cause had no case and no mutant for
+per the `st_size as the count` measurement in §13's ARCH-3 escape table. The mandated **`DENIED`** cause had no case and no mutant for
 seven rounds: **C15/I19** added, so counts are now **17 mutants / 13 cases**. See §18.
 Previously — round 10 gated (**gemini REQUEST_CHANGES / codex REQUEST_CHANGES**), and the
 High was again unanimous: **round 9's narrowing was still not fully propagated** — §6.0 **row 9** (and,
@@ -27,9 +27,10 @@ does **not** prove. See §15. Rounds 4-22 are in §11-§29.
 **Ticket:** `COREDEV-2497` (Epic `COREDEV-2485`)
 **Split out on 2026-07-30 (maintainer decision):** `COREDEV-2618` (verdict-token cross-check) ·
 `COREDEV-2619` (per-run transcript paths). **This plan is now §4.1 + §4.2 only.**
-**Sequencing:** `COREDEV-2619` should land **first** — see §7.
-**Measured against:** HEAD `b2496a8` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
-**Last Updated:** 2026-07-31 (round 22, post-gate revision — six non-detections; F3 bound restated)
+**Sequencing:** `COREDEV-2619` has landed; §7 step 1 is retained as the now-satisfied prerequisite.
+**Substantive measurements:** HEAD `b2496a8` (v2.6.4). Worktree `.claude/worktrees/opus5-review`.
+**Citation re-anchor:** HEAD `8b658d1` (2026-08-04); physical source-line anchors were replaced by content identifiers.
+**Last Updated:** 2026-08-04 (citation re-anchor only; requirements and proofs unchanged)
 
 ---
 
@@ -45,7 +46,7 @@ The sweep also showed two of the four original sections are not the small additi
 - **§4.3 (verdict cross-check) → `COREDEV-2618`.** As specified it accepts a verdict the reviewer
   **quoted** rather than emitted, rejects `APPROVE_WITH_NITS` (which `review-synthesis` *mandates* be
   recorded as `APPROVE_WITH_NOTES`), is case-sensitive on a label the shipped gemini prompt writes as
-  `Verdict:`, and fails closed on absent tokens that `review-synthesis:45-48` explicitly licenses via
+  `Verdict:`, and fails closed on absent tokens that the `Inputs` section of `skills/review-synthesis/SKILL.md` explicitly licenses via
   prose inference. Fixing it means changing three shipped skills' contracts.
 - **§4.4 (per-run paths) → `COREDEV-2619`.** 20 sites across 6 files, including two `allowed-tools`
   literal-prefix grants that a naive migration silently breaks.
@@ -63,6 +64,11 @@ reviewers assessed a plan whose central number pointed at another project's file
 > unaffected** — 512,723 is still 7.8× the 65,536 cap, and
 > `_read_regular_file('/tmp/rev/2497r1-codex.txt')` returns `None` (executed).
 
+> **COREDEV-2619 supersession note (2026-08-04).** The fixed shared plan-review paths in this
+> historical incident have now been replaced by allocator-reserved paths carried through
+> `pty-capture.py --allocated`. The incident remains evidence for the prerequisite; fixed paths are
+> no longer current plan-review behaviour.
+
 ## 1. Context — reproduced, not inherited
 
 The verdict artifact is **forgeable**. Reproduced in 3 attempts: a hand-written artifact carrying
@@ -74,20 +80,22 @@ binding). The gap is that **`verify` never re-checks the transcript files** — 
 
 ## 2. The defect, stated exactly
 
-`cmd_verify` (`scripts/review-verdict.py:555`) re-derives the plan identity and digest (`:736-748`) and
-calls `_quorum_problem` at **`:728`** — the function is defined at **`:74`** and runs to **`:200`** (the
-next top-level `def` is `_sha256_bytes` at `:202`). Its checks span
-`:84-199`: reviewer **count/shape** (`:84`), duplicate and stray **names** (`:86`, `:95`), **status
-membership** (`:99-100`), the empty-file hash (`:121-122`), digest **syntax** (`:144`), and — through the
-nested `_provenance` helper (`:155`) — that each reviewer carries a **distinct** `transcriptPath`,
-`captureId` and `transcriptSha256` (`:174-199`). Every one of those provenance checks reads the artifact's
-own fields; **none of them opens a transcript.** It **never resolves
-`transcriptPath`** — the only filesystem calls in `cmd_verify`'s body touch the plan and the artifact
-(`:557`, `:562`, `:564`, `:567`, `:747`) — so:
+In `scripts/review-verdict.py`, `cmd_verify` re-derives the plan identity with
+`_plan_identity(plan)`, re-hashes it with `_sha256_bytes(plan)`, and invokes
+`_quorum_problem(art.get("verdict"), reviewers)`. The `_quorum_problem` function checks reviewer
+**count/shape**; duplicate, missing and stray **names**; normalized **status membership** via the
+`bad = [...]` comprehension; the `_EMPTY_SHA256` value; digest **syntax** via `_SHA256_HEX`; and —
+through its nested `_provenance(field)` helper — distinct `transcriptPath`, `captureId`, and
+`transcriptSha256` artifact fields. Every provenance check reads the artifact's own values; **none
+opens a transcript.** The filesystem operations in `cmd_verify` resolve/read only the plan and its
+verdict artifact. COREDEV-2619 added `_transcript_freshness_problem(transcript)` to the write-time
+`_parse_reviewer` path, but `cmd_verify` still neither calls that function nor resolves
+`transcriptPath` — so:
 
-> **Round 4 correction.** Earlier drafts cited `_quorum_problem` as `:99`, which is neither its
-> definition nor its call site but one line *inside* it. gemini reported this citation as verified.
-> Eighth of the class §9 tracks.
+> **Round 4 correction.** Earlier drafts cited the `bad = [...]` status-membership comprehension
+> inside `_quorum_problem` as though it were the function's definition or call site. The stable
+> anchors are the `def _quorum_problem(...)` symbol and `cmd_verify`'s call above. gemini reported
+> the old citation as verified. Eighth of the class §9 tracks.
 
 - a `transcriptPath` that does not exist passes;
 - a transcript modified or replaced after approval passes;
@@ -163,8 +171,9 @@ a boundary that does not exist.
 
 ### 4.1 — `verify` does not resolve `transcriptPath` (High)
 
-**Do NOT reuse `_read_regular_file`.** It is a UTF-8 text reader capped at 65,536 **characters**
-(`scripts/review-verdict.py:211`, returning `None` past `_MAX_TRUSTED_READ_BYTES`). Executed against the
+**Do NOT reuse `_read_regular_file`.** In `scripts/review-verdict.py`, that function opens text
+with `encoding="utf-8"` and caps the read at `_MAX_TRUSTED_READ_BYTES` by reading one extra
+character and returning `None` on overflow. Executed against the
 real round-1 codex transcript (512,723 bytes): returns `None`. Reusing it would reject *every legitimate
 codex review* — the fix breaking the gate it repairs.
 
@@ -203,10 +212,11 @@ round of `COREDEV-2503`'s review. A hand-rolled replacement would silently drop 
    flag decorative. Open the recorded string as given.
 
 **Correction to round 2, which misstated the regression risk.** `_read_regular_file` does **not** guard
-`planPath`. Executed — it has exactly **two** callers: `:385` (the `captureId` sidecar) and `:480` (the
-reviewed-digest sidecar). Plan identity and digest use `_plan_identity` + `_sha256_bytes` (`:747`) and
-never touch it. **Regression duty:** both sidecar paths must keep the capped decode, and two existing
-tests must be handled explicitly — see §4.5.
+`planPath`. Its exactly two current call sites are content-identifiable: `_parse_reviewer` uses it
+for `transcript + ".captureid"`, and `cmd_write` uses it for
+`_reviewed_sha_sidecar(plan)`. Plan identity and digest use `_plan_identity` +
+`_sha256_bytes` and never touch it. **Regression duty:** both sidecar paths must keep the capped
+decode, and two existing tests must be handled explicitly — see §4.5.
 
 **Fail closed with a DISTINCT message per cause.** "Transcript missing", "transcript is empty" and
 "transcript changed since approval" imply different recoveries; one message conflates them, and a shared
@@ -236,8 +246,8 @@ anything. **One** test breaks under §4.1 — (a) below. (b) was moved to `CORED
 retained here only as the record of why; **this ticket has exactly one test repair**, and §7 step 4 says
 so (round 4 caught it still ordering "two").
 
-**(a) `test_uppercase_and_padded_digests_are_normalized_not_rejected`
-(`scripts/tests/test_review_verdict.py:123-141`).** After a legitimate `_write`, it rewrites
+**(a) `scripts/tests/test_review_verdict.py`'s
+`test_uppercase_and_padded_digests_are_normalized_not_rejected`.** After a legitimate `_write`, it rewrites
 `transcriptSha256` to `"A"*64` and `" " + "a"*64 + " "`, sets reviewer 1's to `"b"*64`, and asserts
 `returncode == 0`. Under §4.1 those digests no longer match the fixture transcripts, so **verify fails
 and this test breaks.** Its purpose is legitimate — proving the hex check is not over-strict, because a
@@ -252,12 +262,12 @@ recorded digest to the real digest of the fixture transcript, uppercased and spa
 (`_sha256_bytes(self.tx).upper()`)". Three defects, all confirmed by opening the file:
 
 1. **`_sha256_bytes` is not reachable from the test module.** It appears **zero** times in
-   `scripts/tests/test_review_verdict.py`, which drives the script as a **subprocess** (`SCRIPT`, `:10`)
-   and imports only `json, os, stat, subprocess, sys, tempfile, unittest` (`:2-8`). The prescribed call
-   would `NameError`.
+   `scripts/tests/test_review_verdict.py`, whose module-level `SCRIPT` constant points at the CLI and
+   whose shared `run(*args)` helper drives it as a **subprocess**. Its import block contains only
+   `json, os, stat, subprocess, sys, tempfile, unittest`. The prescribed call would `NameError`.
 2. **`.upper()` alone drops half the test's purpose.** The test asserts **two** forms — `"A"*64` *and*
    `" " + "a"*64 + " "`. Uppercasing exercises case; nothing exercises padding.
-3. **It repairs one reviewer and leaves the other broken.** `:137` is
+3. **It repairs one reviewer and leaves the other broken.** The test's assignment is
    `r["transcriptSha256"] = good if i == 0 else "b" * 64` — the loop overwrites **both** entries.
    Reviewer 1's `"b"*64` is equally fabricated and equally fails a §4.1 re-digest of `tx2` (whose real
    digest is `f5edc4ed…`), so verify still fails and the test still breaks.
@@ -278,40 +288,50 @@ would not have achieved self-consistency anyway: many tests pair `codex=APPROVE`
 `COREDEV-2618`, which has to decide the whole vocabulary anyway.
 
 > **Round 4 corrected the evidence for that conclusion — it was wrong in both directions.** The claim
-> was "**five** tests explicitly pair `codex=APPROVE` with `tx2` (`:66`, `:831`, `:904`, `:909`,
-> `:989`)". Measured, with each line printed from the file:
+> named five tests: `test_approving_artifact_requires_a_transcript_per_reviewer`,
+> `test_plain_approve_also_verifies`, `test_invalid_reviewer_status_rejected`,
+> `test_missing_plan_on_write_rejected`, and `test_transcript_digest_recorded`. Measured from the
+> test bodies:
 >
-> - **`:66` and `:909` attach no transcript at all.** Both are direct `run("write", …)` calls passing a
->   bare `"codex=APPROVE"`, and both assert `returncode != 0` — `:66` is
->   `test_approving_artifact_requires_a_transcript_per_reviewer`, `:909` is
->   `test_missing_plan_on_write_rejected`. `tx2` is never involved. Two of the five cited sites are not
->   pairings.
-> - **`:904`** does pass `tx2` to codex via `_write`, but the run aborts on `gemini=MAYBE` before an
->   approving pairing is exercised.
-> - Of the five cited, **`:831` and `:989`** are the ones that actually exercise it.
-> - **Nine uncited sites pair explicitly**, via `codex=APPROVE:{self.tx2}`: `:87`, `:213`, `:229`,
->   `:518`, `:520`, `:560`, `:796`, `:807`, `:1060`.
+> - **`test_approving_artifact_requires_a_transcript_per_reviewer` and
+>   `test_missing_plan_on_write_rejected` attach no transcript at all.** Both call `run("write", …)`
+>   directly with bare reviewer specs and assert `returncode != 0`; `tx2` is never involved.
+> - **`test_invalid_reviewer_status_rejected`** reaches `tx2` only through `_write`'s auto-attachment,
+>   but aborts on `gemini=MAYBE` before an approving pairing is exercised.
+> - Of those five, **`test_plain_approve_also_verifies` and `test_transcript_digest_recorded`** are
+>   the ones that actually exercise the pairing through `_write`'s default transcript attachment.
+> - **Nine explicit pairing sites** live in
+>   `test_a_same_basename_plan_in_a_different_dir_cannot_reuse_the_artifact`,
+>   `test_a_symlinked_captureid_sidecar_is_ignored_not_trusted`,
+>   `test_an_oversized_captureid_sidecar_is_refused_not_trusted`, the two parameter rows in
+>   `test_write_enforces_reviewer_identity_for_ALL_verdicts`,
+>   `test_a_duplicate_reviewer_is_corrupt_not_contradictory_advice`,
+>   `test_non_approving_write_needs_no_binding`,
+>   `test_non_approving_verdict_not_blocked_by_stale_snapshot`, and
+>   `COREDEV2603_RepoRelativePlanIdentity._gate`.
 >
 > The **conclusion is unchanged and in fact strengthened** — there are far more than five — but the
-> count and four of the five citations were not evidence. gemini reported all five as verified.
+> count and four of the five original numeric citations were not evidence. gemini reported all five
+> as verified.
 
 **The sidecar regression inventory — completed in round 4.** The prologue extraction must leave every
 test that pins `_read_regular_file`'s behaviour green. Round 3 named only the two **symlink** tests, which
 cover just one of the three properties §4.1 promises to preserve:
 
-| test | line | property it pins |
-|---|---|---|
-| `test_a_symlinked_captureid_sidecar_is_ignored_not_trusted` | `:200` | `O_NOFOLLOW` (captureId sidecar) |
-| `test_symlinked_snapshot_sidecar_is_ignored` | `:757` | `O_NOFOLLOW` (snapshot sidecar) |
-| `test_an_oversized_captureid_sidecar_is_refused_not_trusted` | `:218` | the 65,536-char **cap** — the epilogue §4.1 keeps unchanged |
-| `test_fifo_snapshot_sidecar_is_ignored` | `:773` | `O_NONBLOCK` + `S_ISREG` — the FIFO refusal |
-| `test_invalid_utf8_snapshot_sidecar_does_not_traceback` | `:811` | the **decode** epilogue |
+| test (stable symbol in `scripts/tests/test_review_verdict.py`) | property it pins |
+|---|---|
+| `test_a_symlinked_captureid_sidecar_is_ignored_not_trusted` | `O_NOFOLLOW` (captureId sidecar) |
+| `test_symlinked_snapshot_sidecar_is_ignored` | `O_NOFOLLOW` (snapshot sidecar) |
+| `test_an_oversized_captureid_sidecar_is_refused_not_trusted` | the 65,536-char **cap** — the epilogue §4.1 keeps unchanged |
+| `test_fifo_snapshot_sidecar_is_ignored` | `O_NONBLOCK` + `S_ISREG` — the FIFO refusal |
+| `test_invalid_utf8_snapshot_sidecar_does_not_traceback` | the **decode** epilogue |
 
 All five must stay green. The last three are the ones that actually exercise the cap, the non-blocking
 regular-file check and the decode — precisely the properties a hand-rolled replacement would drop.
 
-> **Round 5: `:773` does not safely pin `O_NONBLOCK`, and this must be fixed as part of step 2.** The
-> shared subprocess helper `run()` (`scripts/tests/test_review_verdict.py:13-15`) passes **no timeout**,
+> **Round 5: `test_fifo_snapshot_sidecar_is_ignored` does not safely pin `O_NONBLOCK`, and this
+> must be fixed as part of step 2.** The shared `run(*args)` subprocess helper in
+> `scripts/tests/test_review_verdict.py` passes **no timeout**,
 > and the string `timeout` appears **zero** times in the whole module (measured). So a build that drops
 > `O_NONBLOCK` **blocks inside `os.open`** before any assertion runs: the test hangs instead of failing.
 > That is the same "a hang is not an assertion" defect this plan states for C4b — present in the existing
@@ -330,7 +350,7 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 I17's direct `/proc/self/fd/N` reopen, and **(d)** a size cap **above F3's bound N** *(round 22: "above the largest tested size" is wrong now that F3 streams N+1 — a cap of exactly N+1 accepts the fixture; the proven exclusion is caps ≤ N)*. *(Round 20:
 (c) and (d) were added to §3.1 in round 19 and not here, so this row asserted a smaller exception set than
 the section it cites.)* Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one. *(Round 11: this row previously listed **six** residues — rows 1, 2, 5, 6, 7 and row 9's caller half — on the stated ground that **"no fixture exercises a caller."** That ground was false from round 7 onward: **I18 is a caller-level fixture**, and its two-limbed oracle closes rows 1, 6a, 7 and row 9's caller half. The residue set was never re-derived after the fixture that shrank it was added, so the plan under-claimed its own coverage for four rounds — the mirror image of the over-claiming this section exists to prevent, and equally a defect.)* |
-| Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 now names **all five** tests — `:200`, `:218`, `:757`, `:773`, `:811` — not just the two symlink ones |
+| Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 names all five tests by function, not just the two symlink cases |
 | The whole change is inert because tests only cover `write` | **High** | Every §4.1 test must mutate the transcript on disk **between** `write` and `verify` — see §6's trap |
 | **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants **constrain the helper's INTERFACE** — they do not seal its body *(round 17)*. §3.1 accepts **six** non-detections *(round 22)* — the **two-pass reader**, the three §6.0 rows (row 2's being **in-helper**, not caller-side), I17's `/proc` form, and a cap **above F3's bound N**; **three** §6.0 rows are marked accepted-not-closed — **2**, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
 
@@ -419,8 +439,8 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
   the assertions establish; a resolution that never reaches the seam — `exists`, `getsize`, a second
   `io.open` — is rows 2/5b/6b.)* *(Round 6 added the typed cause — without it the distinct-message cases are unsatisfiable
   except by re-resolving the path.)* The current prologue collapses both failure modes to `None`:
-  `except OSError: return None` (`review-verdict.py:219-220`) and
-  `if not stat.S_ISREG(...): return None` (`:222-223`). But C2 and C4 demand **distinct** messages for
+  `_read_regular_file`'s `except OSError: return None` and
+  `if not stat.S_ISREG(os.fstat(fd).st_mode): return None` branches. But C2 and C4 demand **distinct** messages for
   *missing*, *symlink/FIFO*, *empty* and *changed*. With a bare `None` the only way to tell them apart is
   `os.path.exists(path)` — a second resolution §4.1 step 5 forbids, which no instrumentation caught
   because it is a `stat`, not an open.
@@ -632,13 +652,13 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 | # | the wrong implementation | property it violates | closed by |
 |---|---|---|---|
 | 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | **CLOSED by I18's retry arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — that arrangement stubs the helper's **first** call to return a mismatching digest while the path on disk digests to the artifact's recorded `D`. A path-first caller trusts its own read, matches `D`, and **approves**, where the correct caller fails; and I18 asserts **zero path reads**, which a pre-read violates outright |
-| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — **restored in round 15 after round 14 wrongly closed it. Both arms, from different angles.** gemini: the probe runs on the **success branch**, and *neither* I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch and the short-read arrangement fails it on the empty diagnosis, so the probe never executes and the zero-path-reads assertion stays green. codex (**reversing its own round-14 finding**): ARCH-1 inspects only the **parameter list** (`:372-377`), so an implementation can smuggle the path through module state keyed by the fd — `_digest_transcript_fd(fd)` keeps its exact signature, hashes, then probes **inside the helper**, which I18 stubs away entirely. **Neither form is rejected.** The caller-side form escapes because the probe runs on the success branch that no I18 arrangement reaches; the in-helper form escapes because I18 stubs the helper. *(Round 16, gemini: the round-15 wording ended "I18 rejects only the caller-side form", contradicting the sentence before it — gemini's own argument is that the caller-side form escapes too. Merging two independent arguments left a claim neither supports.)* |
+| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — **restored in round 15 after round 14 wrongly closed it. Both arms, from different angles.** gemini: the probe runs on the **success branch**, and *neither* I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch and the short-read arrangement fails it on the empty diagnosis, so the probe never executes and the zero-path-reads assertion stays green. codex (**reversing its own round-14 finding**): ARCH-1 inspects only the **parameter list** (the exact-`(fd,)` signature contract above), so an implementation can smuggle the path through module state keyed by the fd — `_digest_transcript_fd(fd)` keeps its exact signature, hashes, then probes **inside the helper**, which I18 stubs away entirely. **Neither form is rejected.** The caller-side form escapes because the probe runs on the success branch that no I18 arrangement reaches; the in-helper form escapes because I18 stubs the helper. *(Round 16, gemini: the round-15 wording ended "I18 rejects only the caller-side form", contradicting the sentence before it — gemini's own argument is that the caller-side form escapes too. Merging two independent arguments left a claim neither supports.)* |
 | 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **I18's deterministic red-branch test** (F5b removed in round 8 — it had no distinguishing oracle) |
 | 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
 | 5a | failure-path re-classification through `io.open`, on a **permission** failure | re-open on the red branch | **CLOSED by C15** *(round 12; was ACCEPTED-NOT-CLOSED)* — C15 stubs `os.open` to raise `EACCES`/`EPERM`, and an `io.open` retry **bypasses that stub** and reads the real file. The correct helper returns cause `DENIED`; this implementation re-classifies off the successful second open and returns something else, so C15's exact-cause assertion fails. The mutant is **I19**'s sibling: C15 discriminates them |
 | 5b | failure-path re-classification through `io.open`, on the **missing** limb | re-open on the red branch | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** (§3.1) — `io.open` on an absent path raises `ENOENT`, so the re-classification lands on the *same* `MISSING` diagnosis a correct implementation gives. No case can separate them; this is the one genuinely unreachable limb |
-| 5c | failure-path re-classification through `io.open`, on the **symlink** limb | re-open on the red branch | **CLOSED by C4a** *(round 13)* — C4a's symlink must point at a regular file whose bytes **differ** from the recorded transcript (`:786-788`). An `io.open` re-classification follows the link, reads the differing bytes and reports a **digest mismatch**, so C4a's exact `SYMLINK` message assertion rejects it |
-| 5d | failure-path re-classification through `io.open`, on the **not-regular** limb | re-open on the red branch | **CLOSED by C4b** *(round 13)* — `io.open` lacks `O_NONBLOCK`, so a FIFO read **blocks forever**; C4b carries a timeout precisely for that (`:791-793`, measured `exit=124`) and rejects it |
+| 5c | failure-path re-classification through `io.open`, on the **symlink** limb | re-open on the red branch | **CLOSED by C4a** *(round 13)* — C4a's fixture contract requires a symlink to a regular target whose bytes **differ** from the recorded transcript. An `io.open` re-classification follows the link, reads the differing bytes and reports a **digest mismatch**, so C4a's exact `SYMLINK` message assertion rejects it |
+| 5d | failure-path re-classification through `io.open`, on the **not-regular** limb | re-open on the red branch | **CLOSED by C4b** *(round 13)* — `io.open` lacks `O_NONBLOCK`, so a FIFO read **blocks forever**; C4b's fixture contract carries a timeout precisely for that (measured `exit=124`) and rejects it |
 | 6a | `os.path.getsize` for the **empty** diagnosis | second resolution; contradicts Q3 | **CLOSED by I18's short-read arrangement** *(round 11)* — against a stubbed `(D, 0)` it reads `getsize` = **100**, calls the file non-empty and **approves** where the correct caller fails; the `getsize` call is itself a path read |
 | 6b | `os.path.exists` for the **missing** diagnosis | second resolution; contradicts Q3 | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** — *(round 16: the reason given was that "no fixture takes a missing-resolution branch", which is **false** — C1/C2a/C3 all reach it. The correct reason is that reaching the branch is not enough: on a genuinely missing path `os.path.exists` returns **False**, yielding the **same** `MISSING` diagnosis a correct implementation gives, so every case that reaches the branch observes an identical result. **Branch reachability without a behavioural difference is not closure** — the mirror image of the round-14 error.)* *(Round 11 split this row: its two halves have different status, which is the same defect round 10 found in I12, I16 and row 9.)* |
 | 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | **CLOSED by I18's short-read arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — mechanically identical to row 6a: `getsize` returns 100 where the streamed count is 0, so this caller approves where the correct one fails |
@@ -660,12 +680,13 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
 #### New cases — only for what lives outside the helper's constrained interface
 
 - **C11** an approving artifact whose reviewer `status` is `"approve"` (lowercase) or `"APPROVE "`
-  (trailing space) → the transcripts **must still be checked**. `_quorum_problem` normalises with
-  `.strip().upper()` (`:99-100`), so such an artifact passes quorum; a §4.2 skip written as
+  (trailing space) → the transcripts **must still be checked**. `_quorum_problem` normalises reviewer status with the
+  `str(r.get("status", "")).strip().upper()` expression, so such an artifact passes quorum; a §4.2 skip written as
   `if r.get("status") not in APPROVING: continue` silently exempts it. Normalise identically or the
   skip becomes the bypass.
 - **C12** the streamed-count contract. **Round 5 rewrote this case: as first written it was
-  tautological.** `sha256(b"")` **is** `_EMPTY_SHA256` (`review-verdict.py:36`) — verified by execution —
+  tautological.** `sha256(b"")` **is** the module constant `_EMPTY_SHA256` in
+  `scripts/review-verdict.py` — verified by execution —
   so "empty diagnosed from the streamed count" and "empty diagnosed from the digest constant" return the
   *same answer on every fixture*, and no artifact-level case can separate them. C12 is therefore
   **ARCH-3's direct helper test**, not a behavioural case: call the helper on zero-, one- and
@@ -673,7 +694,7 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   **Paired mutant: `I12a` only — and C12 closes only PART of it; `F2` closes the rest.**
   C12 rejects a **fabricated** count — `len(last_chunk)`, a constant, an off-by-one. It **cannot** reject
   `st_size` or `os.path.getsize`, because on C12's static, offset-zero fixtures those are *equal* to the
-  true streamed count. **This plan measured exactly that**: `:1017` records "`st_size` as the count |
+  true streamed count. **This plan measured exactly that** in §13's ARCH-3 escape table: "`st_size` as the count |
   equals the streamed count on **every** static fixture (0 / 100 / 150,000)". What separates them is
   **F2's non-zero starting offset**, where the streamed count is strictly less than the file's size. So
   I12a's rejection is **F2 + C12**, and neither alone.
@@ -693,9 +714,9 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
 - **C14** fail-closed on unexpected errors: a `transcriptPath` containing a **NUL byte** (which raises
   `ValueError`, not `OSError`) must produce a gate **failure**, never a skipped entry. Paired mutant
   **I14**: swallow non-`OSError` exceptions and continue → C14 must fail.
-- **C15** *(round 11, from codex)* **the `DENIED` cause has a case at last.** ARCH-2 mandates the errno
-  mapping `EACCES`/`EPERM → DENIED` (`:385`), and §6 requires a mutation proof for **every** fix
-  (`:310`) — yet across twelve cases and sixteen mutants **nothing exercised that branch**. An
+- **C15** *(round 11, from codex)* **the `DENIED` cause has a case at last.** ARCH-2's errno table mandates the
+  mapping `EACCES`/`EPERM → DENIED`, and §6's opening acceptance rule requires a mutation proof
+  for **every** fix — yet across twelve cases and sixteen mutants **nothing exercised that branch**. An
   implementation mapping permission errors to `MISSING` satisfied the entire stated suite, and the one
   cause a CI runner is most likely to actually hit was the one with no test. C15 stubs `os.open` **in
   process** to raise `OSError(errno.EACCES)` — and separately `EPERM` — and asserts the returned cause is
@@ -746,7 +767,7 @@ exception" is now true, for a different reason than the original wording gave.)*
   where the trusted bytes never come from the validated fd at all. Different mutant, different row.)*
 - **I10** delete the non-empty check, or emit **one shared message** for all three causes → C2b must fail
   on the **exact** message. Without distinct messages this mutant is unobservable, because
-  `_quorum_problem` already rejects the empty-file hash (`_EMPTY_SHA256`, `:36`).
+  `_quorum_problem` already rejects the module's `_EMPTY_SHA256` constant.
   *(Round 4: reworded. I10 previously named "the `st_size` non-empty check", contradicting §8 Q3's
   adopted answer. The check is on the **streamed byte count** — see §4.1 step 4 and I12.)*
 - **I11** compare the digests as **sets/multisets** rather than per reviewer entry → C10 must
@@ -761,7 +782,7 @@ exception" is now true, for a different reason than the original wording gave.)*
     fd already advanced past byte 0 — is what kills `st_size` and `os.path.getsize`, because only there
     does the true streamed count differ from the file's size. **Required rejection.**
     *(Round 11: this half said "**C12** must fail on it" for all three forms. On C12's static offset-zero
-    fixtures `st_size` **equals** the streamed count — the plan's own escape-analysis row `:1017` records
+    fixtures `st_size` **equals** the streamed count — §13's `st_size as the count` escape-analysis row records
     that measurement — so C12 alone cannot reject two of the three forms it named. The mutant is
     unchanged; the mechanism that kills it is now stated correctly.)*
   - **I12b — the CALLER ignores the helper's count** and re-derives emptiness from `st_size`,
@@ -784,7 +805,7 @@ exception" is now true, for a different reason than the original wording gave.)*
   outside the per-entry loop → C13 must fail.
 - **I14** *(round 4)* swallow non-`OSError` exceptions and skip the entry → C14 must fail.
 - **I15** *(round 5)* keep `_read_regular_file`'s **UTF-8 decode** in the new helper
-  (`review-verdict.py:224` is the current form) instead of streaming raw bytes → **C5b must fail**. C5b
+  (`_read_regular_file` currently opens with `encoding="utf-8"`) instead of streaming raw bytes → **C5b must fail**. C5b
   was required to PASS but had no mutant, so nothing proved it could ever fail; a decoding helper is the
   plausible wrong implementation it exists to kill.
 - **I16** *(round 5; retargeted round 7; split in round 10)* a second pass over the same descriptor.
@@ -821,7 +842,7 @@ exception" is now true, for a different reason than the original wording gave.)*
     **zero** path reads. A caller with a short-read fallback instead re-opens the path, recovers 100
     bytes, and approves.
     *(Round 11, from codex — Low: this read "fails with the **typed empty cause**", but the `cause`
-    vocabulary is the five-value `{OK, MISSING, SYMLINK, NOT_REGULAR, DENIED}` (`:377`) and contains no
+    vocabulary is the five-value `{OK, MISSING, SYMLINK, NOT_REGULAR, DENIED}` (ARCH-2's cause-vocabulary contract) and contains no
     `EMPTY`. Emptiness is deliberately a **caller** diagnosis derived from `OK` + `count == 0`, never a
     helper cause — so the sentence asked for a value the plan's own type forbids. The oracle is
     unaffected; only the name was wrong.)*
@@ -868,7 +889,8 @@ exception" is now true, for a different reason than the original wording gave.)*
   > catches every cap "**at or below** N" is **false**: a conventional cap accepts a file of exactly its
   > own size and rejects only size+1 — the shipped implementation does exactly this,
   > `data = fh.read(_MAX_TRUSTED_READ_BYTES + 1)` then `if len(data) > _MAX_TRUSTED_READ_BYTES`
-  > (`scripts/review-verdict.py:229-231`). So a helper capped at exactly N passes an N-byte fixture while
+  > (the `_read_regular_file` branch that reads `_MAX_TRUSTED_READ_BYTES + 1` and rejects only
+  > when `len(data) > _MAX_TRUSTED_READ_BYTES`). So a helper capped at exactly N passes an N-byte fixture while
   > the plan classified it as caught.)* Streaming **N + 1** makes the proven exclusion **every cap
   > strictly below N + 1, i.e. ≤ N** — stated that way rather than as an open-ended claim.
 
@@ -886,7 +908,8 @@ exception" is now true, for a different reason than the original wording gave.)*
   reviewer — whose transcript has since been deleted must still `verify` to its existing outcome, with
   today's text.
 - **C9** *(new)* the single-descriptor property, in-process because a subprocess `run()` offers no seam.
-  The suite already loads the module in-process (`test_review_verdict.py:1001-1006`), so this needs no
+  The suite already loads the module in-process through `WriteTextNofollowTest._mod` in
+  `scripts/tests/test_review_verdict.py`, so this needs no
   new dependency. Two halves:
   - **C9a behavioural** — monkeypatch `_open_regular_fd` with a wrapper that calls the real one and then
     `os.replace()`es different bytes over the path *before returning the fd*; `verify` must return **0**
@@ -949,12 +972,12 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
 
 ## 7. Implementation order
 
-1. **`COREDEV-2619` first** (separate ticket). Once §4.1 re-digests, a clobbered transcript becomes a hard
+1. **`COREDEV-2619` first — prerequisite now satisfied.** Once §4.1 re-digests, a clobbered transcript becomes a hard
    gate failure — so per-run paths must remove the collision *before* it turns fatal. Confirmed safe by
    both round-2 reviewers: the wrappers already accept arbitrary out-paths and `review-verdict.py`
    already records arbitrary transcript paths, so existing artifacts keep resolving.
-2. `_open_regular_fd` extraction, with the **five** sidecar tests of §4.5 still green — `:200`, `:218`,
-   `:757`, `:773`, `:811`, covering `O_NOFOLLOW`, the cap, `O_NONBLOCK`/`S_ISREG` and the decode epilogue.
+2. `_open_regular_fd` extraction, with the **five** sidecar tests named in §4.5 still green,
+   covering `O_NOFOLLOW`, the cap, `O_NONBLOCK`/`S_ISREG` and the decode epilogue.
 3. §4.1 + §4.2 together — resolve, re-digest, per-reviewer, approving artifacts only, streamed-count
    emptiness, distinct messages per cause. §4.2 is the same code path, not a later step.
    **ARCH-1, ARCH-2 and ARCH-3 are acceptance conditions of this step**, not follow-up work: the step is
@@ -963,7 +986,8 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    **F1** (pipe — ESPIPE on any seek/pread), **F2** (non-zero offset), **F3** (size, to a stated bound)
    and **F4** (unlinked fd — closes reopen-by-recovered-*name*). **§3.1's narrowed guarantee applies:**
    a two-pass reader is **not** rejected, and the CHANGELOG must say so.
-   **Step 2 also gives `run()` a bounded timeout** (`test_review_verdict.py:13`) — without it the FIFO
+   **Step 2 also gives `scripts/tests/test_review_verdict.py`'s shared `run(*args)` helper a bounded
+   timeout** — without it the FIFO
    regression tests hang instead of failing.
 4. §4.5's **one** test repair — (a) — using the executable repair stated there. *(Round 4: this step
    said "two"; (b) moved to `COREDEV-2618` in round 3.)*
@@ -1046,32 +1070,40 @@ an implementation that checks nothing. **Every §4.1 test must mutate the transc
    precisely when the two disagree, and the streamed count is the truthful one. (gemini argued for
    `st_size` on early-exit grounds; codex's reasoning is stronger and is adopted.)
 4. ~~`captureId` advisory-compare?~~ **ANSWERED in round 3 — explicitly DEFERRED to `COREDEV-2618`**, and
-   removed from this plan's scope. Both reviewers agreed. `pty-capture.py:328` writes the sidecar inside a
-   best-effort `try` opened at `:327`, so it cannot support a failing check, and adding warn-only behaviour here would
+   removed from this plan's scope. Both reviewers agreed. In `scripts/pty-capture.py`, `main` writes
+   `out_path + '.captureid'` through `_write_private(...)` inside the `# PROVENANCE` best-effort
+   `try`; its `except OSError` cleanup never sets `capture_error`. It therefore cannot support a
+   failing check, and adding warn-only behaviour here would
    reintroduce exactly the phantom scope round 2 created by declaring it "adopted" with no step and no
    case.
 
 ## 9. Notes — the citation record, kept because it keeps mattering
 
 - **Eleven wrong citations across four drafts**, every one the same shape: a number taken from a
-  `grep -n`/`sed` offset instead of from the file. Four self-caught; three by codex in round 3
-  (`agents/swift-reviewer.md:160`→`:247`, `scripts/capture-reviewer-verdict.sh:43`→`:45`, and
-  `AGENT_CONTRACTS.md:113`, which documents the `agy-ping` preflight and **never mentions the transcript
-  paths at all**). **Round 4 added four more**, all in text written *by* round 3:
-  `_quorum_problem` at `:99` (§2 — it is defined at `:74` and called at `:728`); `:66` and `:909` as
-  `tx2` pairings (§4.5(b) — neither attaches a transcript); and §10 row 2's own `:195`/`:247`, which
-  drifted the moment the plan was edited. **Three of the four were reported as VERIFIED by gemini.**
-  The rule §9 exists for held again: *print the line you are citing, from the file, before writing it
-  down* — and prefer a section name to a line number in text that will outlive the draft.
+  `grep -n`/`sed` offset instead of from the file. Four self-caught; three by codex in round 3:
+  a claimed transcript-path transition in `agents/swift-reviewer.md` (whose stable content is the
+  code-review roster, not the plan-review capture recipe), a claimed transition in
+  `scripts/capture-reviewer-verdict.sh` (the SubagentStop code-review capture hook), and
+  `AGENT_CONTRACTS.md`'s `Preflight & unavailable-reviewer recovery` `agy-ping` example, which
+  never mentions plan-review transcript paths. **Round 4 added four more**, all in text written *by*
+  round 3: the `bad = [...]` expression inside `_quorum_problem` cited as the function itself;
+  `test_approving_artifact_requires_a_transcript_per_reviewer` and
+  `test_missing_plan_on_write_rejected` cited as `tx2` pairings though neither attaches a
+  transcript; and §10 row 2 citing the draft's own physical lines rather than §6 and §7 by section.
+  **Three of the four were reported as VERIFIED by gemini.** The rule §9 exists for held again:
+  *identify the cited content before writing it down* — and prefer a symbol, exact fragment, or
+  section name to a physical line number.
 - **Round 2's four "self-corrections" included two that were themselves wrong.** The byte figure
   (512,723 was right; I "corrected" it to another project's file) and the claim that a strict `…$` anchor
   "matches 1/1 on both round-1 transcripts" — on the real transcript it matches **three** times, two of
   them another plan's verdicts quoted in the review body. Which means **"take the last match" is
   load-bearing, not defensive** — the opposite of what round 2 concluded. Both now belong to
   `COREDEV-2618`.
-- The two claims that *did* hold: ANSI and CRLF are normalised at capture time
-  (`scripts/pty-capture.py:314`) — though `ANSI_RE` at `:56` is **CSI-only**, so the guarantee is
-  narrower than round 2 stated.
+- The two claims that *did* hold: `scripts/pty-capture.py`'s `main` computes
+  `cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')`, so ANSI and CRLF are
+  normalised at capture time — though the module-level `ANSI_RE =
+  re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')` is **CSI-only**, so the guarantee is narrower than round 2
+  stated.
 - `COREDEV-2603` moved the artifact to `schemaVersion` 3. This plan adds **no** new fields and needs no
   bump — it re-checks fields that already exist.
 - Checks executed for this round: the forgery; `_quorum_problem`'s `APPROVE`-with-no-`transcriptPath`
@@ -1096,9 +1128,9 @@ and the isolated `agy` harness reported `TREE=clean`.
 | # | finding | verified | fix |
 |---|---|---|---|
 | 1 | **C9a is vacuous** — it monkeypatches `_open_regular_fd` but never asserts the seam was *called*, so an implementation that ignores it and does its own `os.open` → close → `pathlib` reopen passes trivially, race intact | **confirmed** | C9a now asserts one seam call + one replacement per transcript; C9b's own gap noted (patching `builtins.open` misses a cached `io.open`); and the **structural** fix — take only the raw fd — is stated as preferred over detecting the reopen |
-| 2 | dangling ranges naming four identifiers the rescope deleted (I7, I8, C6, C7) — in the §6 mutant preamble and the §7 step-5 enumeration | **confirmed** | both enumerated explicitly rather than as ranges. *(Round 4: this row previously cited those two spots as `:195` and `:247`, which were the reviewed draft's line numbers and now resolve to unrelated lines — the §9 class, inside the table that records §9 fixes. Line numbers dropped in favour of the section names, which do not drift.)* |
-| 3 | §4.5(b) belongs to `COREDEV-2618`, and the proposed repair would not have worked | **confirmed by execution** | many tests pair `codex=APPROVE` with `tx2`, so changing `tx2` moves the inconsistency rather than removing it. Moved to 2618. *(Round 4: the "five tests (`:66`, `:831`, `:904`, `:909`, `:989`)" evidence was wrong in both directions — see §4.5(b). Conclusion unchanged.)* |
-| 4 | the risk register claimed §4.5 "names both sidecar tests"; it named neither | **confirmed** | now names `test_review_verdict.py:200` and `:757` |
+| 2 | dangling ranges naming four identifiers the rescope deleted (I7, I8, C6, C7) — in the §6 mutant preamble and the §7 step-5 enumeration | **confirmed** | both enumerated explicitly rather than as ranges. *(Round 4: this row previously cited the draft's physical lines for those two sections; after the edit they resolved into unrelated §9 prose inside the table recording §9 fixes. The §6 preamble and §7 step are now named directly.)* |
+| 3 | §4.5(b) belongs to `COREDEV-2618`, and the proposed repair would not have worked | **confirmed by execution** | many tests pair `codex=APPROVE` with `tx2`, so changing `tx2` moves the inconsistency rather than removing it. Moved to 2618. *(Round 4: the five-test evidence naming `test_approving_artifact_requires_a_transcript_per_reviewer`, `test_plain_approve_also_verifies`, `test_invalid_reviewer_status_rejected`, `test_missing_plan_on_write_rejected`, and `test_transcript_digest_recorded` was wrong in both directions — see §4.5(b). Conclusion unchanged.)* |
+| 4 | the risk register claimed §4.5 "names both sidecar tests"; it named neither | **confirmed** | now names `test_a_symlinked_captureid_sidecar_is_ignored_not_trusted` and `test_symlinked_snapshot_sidecar_is_ignored` |
 
 **And a fifth, low but pointed:** §0's "638 `lumawake` matches" is **628**. The file is unchanged
 (769,988 bytes), so this was not drift — **I propagated a subagent's number without re-measuring it**,
@@ -1146,16 +1178,18 @@ ARCH-3 was added in round 5 and "seal" was struck in round 17.)*
 | 1 | both | **C9a is defeatable again** — a digest taken *before* the seam call passes "one seam call + one replacement"; routing that read through `pathlib` also evades C9b's `builtins.open` patch | **confirmed by execution** — `digest-first via pathlib` → C9a PASS, C9b PASS, race intact; stopped only by C4b, and only by blocking forever (`exit=124`), which is not an assertion | ARCH-1 + ARCH-2 as mandatory acceptance conditions; C9 demoted to a regression guard; §4.1 step 3 fixes the signature |
 | 2 | both | **"prefer the structural fix" is not binding** — an implementer taking the detect-the-reopen route was still conformant | **confirmed** | "prefer it" → **MUST**, in §4.1 step 3, the §6 C9 block and §7 step 5; the injectable-opener alternative is **removed** |
 | 3 | codex | **§4.1, I10 and §8 Q3 contradict each other** on the empty-file mechanism — §4.1 specified `st_size`, I10 named "the `st_size` check", Q3 recorded the streamed count as *adopted* | **confirmed** — all three read | Q3's answer propagated: §4.1 step 4 makes the streamed count the sole basis; I10 reworded; **I12/C12** added |
-| 4 | codex | **§4.5(a)'s repair is not executable** — `_sha256_bytes` is unreachable from the test module, `.upper()` drops the padding half, and the test overwrites **both** digests so reviewer 1's `"b"*64` still fails | **confirmed** — `_sha256_bytes` occurs **0** times in the test file, which drives the script by subprocess (`:10`) and imports only stdlib (`:2-8`); `:137` overwrites both | repair rewritten to transform each reviewer's **own recorded** digest, read back from the artifact |
-| 5 | codex | **the sidecar regression inventory is incomplete** — the two symlink tests cover only `O_NOFOLLOW`, not the cap, the FIFO refusal or the decode epilogue | **confirmed** — `:218`, `:773`, `:811` verified by name | §4.5 now tables **all five** with the property each pins |
+| 4 | codex | **§4.5(a)'s repair is not executable** — `_sha256_bytes` is unreachable from the test module, `.upper()` drops the padding half, and the test overwrites **both** digests so reviewer 1's `"b"*64` still fails | **confirmed** — `_sha256_bytes` occurs **0** times in the test module; its `SCRIPT` constant and `run(*args)` helper drive the CLI by subprocess; its import block is stdlib-only; and the assignment `r["transcriptSha256"] = good if i == 0 else "b" * 64` overwrites both | repair rewritten to transform each reviewer's **own recorded** digest, read back from the artifact |
+| 5 | codex | **the sidecar regression inventory is incomplete** — the two symlink tests cover only `O_NOFOLLOW`, not the cap, the FIFO refusal or the decode epilogue | **confirmed** — `test_an_oversized_captureid_sidecar_is_refused_not_trusted`, `test_fifo_snapshot_sidecar_is_ignored`, and `test_invalid_utf8_snapshot_sidecar_does_not_traceback` verified by name | §4.5 now tables **all five** with the property each pins |
 | 6 | codex | **§7 step 4 still ordered "two test repairs"** after (b) moved to 2618 | **confirmed** | step 4 says one; §4.5's heading corrected |
-| 7 | codex | **two mechanism citations misleading** — `_quorum_problem` at `:99`, and `pty-capture.py:322-327` for a `try` at `:327` | **confirmed** — `:74` def, `:728` call | §2 rewritten with the real anchors and the checks' true span |
+| 7 | codex | **two mechanism citations misleading** — the `bad = [...]` status-comprehension was cited as `_quorum_problem`, and the `# PROVENANCE` block's `try` was cited as the sidecar write | **confirmed** — the stable anchors are `def _quorum_problem(...)`, `cmd_verify`'s call, and `main`'s `_write_private(out_path + '.captureid', ...)` expression | §2 rewritten with the real anchors and the checks' true span |
 | 8 | gemini | **C4b has no mutant asserting its necessity** | **partly** — "dangling identifier" is the wrong term (C4b *is* defined); the real gap is no paired mutant, and C4b's only effect against a realistic wrong build is a **hang** | C4b must assert its distinct message **and** carry a timeout; C4a's fixture pinned; the same no-mutant gap applied to C5b |
 
 ### Where the reviewers diverged, and the standing pattern
 
 **gemini found the class but not its full extent**, and — as in round 3 — **reported as "verified" three
-citations that are wrong** (`:99`, and `:66`/`:909` as `tx2` pairings), plus a fourth it did not check.
+citations that are wrong** (the `bad = [...]` comprehension as `_quorum_problem`, and
+`test_approving_artifact_requires_a_transcript_per_reviewer` /
+`test_missing_plan_on_write_rejected` as `tx2` pairings), plus a fourth it did not check.
 Its finding 1 sketch is real but is itself caught by C9b; the variant that survives both halves needed the
 `pathlib` route. **codex** produced the sharper mechanism work again: the `st_size`/Q3 contradiction, the
 unexecutable test repair, and the incomplete sidecar inventory are all codex-only and all held.
@@ -1184,10 +1218,10 @@ why. That is the first round-over-round narrowing this plan has had.
 | 1 | both | **ARCH-1's forbidden-name list is defeated in both directions.** `os.lseek`/`os.dup` two-pass and a callee escape pass it; codex added module-global path smuggling and a delegated cap. And a **correct** `io.FileIO(fd, closefd=False)` reader is **rejected** by it | **confirmed by execution** — two-pass passes ARCH-1 *and* is a real defect (count from pass 1 = 100,000, digest from pass 2 after an in-place write); callee escape passes; `io.FileIO` reader fails on `io` | name list **deleted**. ARCH-1 keeps only the signature assertion (a signature fact cannot be aliased or false-positive); **ARCH-3** adds syscall accounting + direct helper contract tests |
 | 2 | codex | **the digest/count contract is unproved** — hash every chunk but `return len(last_chunk)` has the exact signature, no forbidden name, and passes every case because the count is still zero exactly when no bytes stream | **confirmed by execution** — digest correct, count 3,392 vs a true 200,000 | ARCH-3's direct helper tests assert the **exact count** on zero/one/many-chunk fixtures |
 | 3 | codex | **C12 is tautological** — `sha256(b"")` *is* `_EMPTY_SHA256`, so "empty from streamed count" and "empty from digest constant" are indistinguishable on any artifact-level fixture | **confirmed by execution** — the two constants are byte-identical | C12 rewritten as ARCH-3's helper contract test, not a behavioural case |
-| 4 | codex | **the sidecar FIFO test cannot pin `O_NONBLOCK`** — `run()` (`test_review_verdict.py:13-15`) passes no timeout and `timeout` occurs **0** times in the module, so dropping `O_NONBLOCK` hangs rather than fails | **confirmed** — measured | step 2 gives `run()` a bounded timeout; FIFO cases assert on message |
+| 4 | codex | **the sidecar FIFO test cannot pin `O_NONBLOCK`** — `scripts/tests/test_review_verdict.py`'s shared `run(*args)` helper passes no timeout and `timeout` occurs **0** times in the module, so dropping `O_NONBLOCK` hangs rather than fails | **confirmed** — measured | step 2 gives `run()` a bounded timeout; FIFO cases assert on message |
 | 5 | codex | **C5b had no mutant** — it was required to PASS with nothing proving it could fail | **confirmed** — the mutant list had no decode variant | **I15** added: keep the UTF-8 decode → C5b must fail |
 | 6 | codex | **caller-only escape** — `p = entry["transcriptPath"].strip(); _open_regular_fd(p)` makes one seam call and no other filesystem call, yet violates §4.1 step 6 | **confirmed** by reading | ARCH-2 now asserts the seam receives the recorded string **byte-identical** |
-| 7 | codex | `pty-capture.py:322-327` "writes the sidecar" — `:327` only opens the `try`; the write is at `:328` | **confirmed** — printed | citation corrected |
+| 7 | codex | the `# PROVENANCE` block's best-effort `try` "writes the sidecar" — the `try` itself is only scaffolding; the content site is `_write_private(out_path + '.captureid', (os.urandom(16).hex() + '\n').encode())` | **confirmed** — printed | citation corrected |
 
 ### The methodological point, because it is the one that keeps recurring
 
@@ -1254,9 +1288,9 @@ cap's absence.
 | 1 | both | ARCH-3's accounting misses C-level seeks, `os.pread`, cached aliases, `mmap`/`ctypes`/subprocesses | **executed** — `os.lseek` observed 0 while a real seek occurred | ARCH-3 rewritten as fixtures F1/F2/F3; no instrumentation |
 | 2 | both | the "exact count" contract test cannot reject the `st_size` mutant on static fixtures | **executed** — st_size == streamed at 0/100/150,000 | F2's non-zero offset makes them differ |
 | 3 | codex | `io.FileIO` is an immutable C type and cannot be wrapped; a cached alias also **false-rejects correct code** | **executed** — `TypeError`; codex executed the alias case | the false-positive claim in §12 is retracted in place |
-| 4 | codex | rows 6/7 — a caller `stat` is not an open, so accounting never saw it; and the seam gives no way to tell causes apart | **confirmed** — `review-verdict.py:219-220` and `:222-223` both return bare `None` | **ARCH-2 gains a typed cause** `{OK, MISSING, NOT_REGULAR, DENIED}`, removing the *motive* to re-resolve |
+| 4 | codex | rows 6/7 — a caller `stat` is not an open, so accounting never saw it; and the seam gives no way to tell causes apart | **confirmed** — `_read_regular_file`'s `except OSError: return None` and non-`S_ISREG` `return None` branches collapse both causes | **ARCH-2 gains a typed cause** `{OK, MISSING, NOT_REGULAR, DENIED}`, removing the *motive* to re-resolve |
 | 5 | codex | row 8's raised cap is not closed — finite sizes cannot prove absence | **confirmed** by argument, and a delegated cap sits in a callee | F3 states its bound instead of claiming closure |
-| 6 | codex | the ARCH rewrite was not propagated — five statements still describe the deleted design | **confirmed** — `:117`, `:251`, `:497`, `:557`, `:708` | all five corrected |
+| 6 | codex | the ARCH rewrite was not propagated — five statements still describe the deleted design | **confirmed** — a content sweep found five operative references to the deleted forbidden-name/syscall-accounting observer design | all five corrected |
 | 7 | gemini | C12 contradicts itself: called a helper test, then asserts caller behaviour | **confirmed** | C12 is F2's assertion on the helper; the caller assertion is ARCH-2's |
 
 ### Where the reviewers diverged
@@ -1364,7 +1398,7 @@ F5 was removed for two better reasons, both codex's:
 | 3 | codex | **F5b had no distinguishing oracle** — a retrying caller that eventually reads the recorded state is also "self-consistent" | **confirmed** | replaced by a **deterministic red-branch test** for I18 |
 | 4 | codex | round 7 not propagated: the status line, risk register, §6.0 and §7 all still claimed closure | **confirmed** | all narrowed to match §3.1 |
 | 5 | **both** | §7 said "**fourteen** mutants" while I17/I18 existed — the list silently omitted them | **confirmed** | now **sixteen**, enumerated |
-| 6 | codex | `:99` and `:121` are single-line anchors for two-line expressions | **confirmed** | `:99-100`, `:121-122` |
+| 6 | codex | the first physical lines of the status-membership and empty-digest comprehensions were cited as though each complete expression occupied one line | **confirmed** | anchored instead to the full `bad = [... if ... .strip().upper() not in APPROVING]` and `empty_t = [... if ... == _EMPTY_SHA256]` expressions |
 
 ### The pattern this round makes undeniable
 
@@ -1446,7 +1480,7 @@ round 9 fixed *some* of the rows the narrowing touched and the summary claimed *
 |---|---|---|---|---|
 | 1 | **both** | **the narrowing is still not fully propagated** — §6.0 **row 9** still credited caller-side closure to "an ARCH-2 assertion"; codex additionally caught **row 5** still crediting I18 for arbitrary failure-path re-classification | **confirmed** — the round-9 summary claimed six rows; only four carried the marker | rows 5 and 9 marked `ACCEPTED-NOT-CLOSED`, each naming why no fixture reaches it |
 | 2 | gemini | the "what changed" summary was **garbled about row 9** — "the residues of 9" conflated the §6.0 row with mutants I9/I16 | **confirmed** — a direct consequence of finding 1 | summary rewritten to name exactly the rows it marks |
-| 3 | codex | **I12 has no live mechanism** — C12 is ARCH-3's *direct helper test* and asserts nothing about a caller, yet I12 named a **caller** behaviour ("diagnose emptiness from `st_size`…") and pointed at C12 | **confirmed** — C12's own text (`:570-576`) restricts it to the helper's returned digest/count | **I12 split a/b**, mirroring I16: **I12a** (helper returns a derived count) is a required rejection by C12; **I12b** (caller re-derives emptiness) is `ACCEPTED-NOT-CLOSED` per §3.1 |
+| 3 | codex | **I12 has no live mechanism** — C12 is ARCH-3's *direct helper test* and asserts nothing about a caller, yet I12 named a **caller** behaviour ("diagnose emptiness from `st_size`…") and pointed at C12 | **confirmed** — C12's content contract says to call `_digest_transcript_fd` directly on zero-, one-, and many-chunk fixtures and assert only its returned digest/count | **I12 split a/b**, mirroring I16: **I12a** (helper returns a derived count) is a required rejection by C12; **I12b** (caller re-derives emptiness) is `ACCEPTED-NOT-CLOSED` per §3.1 |
 | 4 | codex | **I18's short-read arrangement could reject a correct implementation** — it returned a matching digest with a merely "smaller" positive count and demanded failure, but §4.1 makes any positive count non-empty, so a correct caller **approves** | **confirmed** — the oracle contradicted the contract it was testing | the stub now returns **`(D, 0)`** against a promised `st_size` of 100, with the retry arrangement's one-helper-call / zero-path-read assertions |
 | 5 | codex | **C9's "THE PROOF" bullet overclaims against §3.1** — "re-opening becomes structurally unavailable" is stated without qualification, while §3.1 accepts caller-side residues as not closed | **confirmed** | qualified to *inside `_digest_transcript_fd`*, with the helper/end-to-end distinction stated in place |
 | 6 | codex | the status header still read **"Awaiting round 9"** although §16 records round 9 as complete | **confirmed** | header rewritten for round 10; the cross-reference line now reads §11–§17 |
@@ -1487,9 +1521,9 @@ are the same defect: *a classification asserted rather than re-derived from the 
 | 1 | codex | **I18 makes four "accepted" caller behaviours observable.** The short-read arrangement returns `(D, 0)` while the path holds 100 bytes digesting to `D`, so any caller using `st_size`, `getsize` or the non-empty digest **approves** where the correct one fails — rejecting §6.0 rows **6a**, **7**, row **9's caller half** and mutant **I12b**. The retry arrangement rejects row **1**, whose path-first digest is `D` while the stubbed helper disagrees. §7's exception list is wrong in consequence, and row 6 needs splitting | **confirmed by deriving each case against I18's two-limbed oracle** (*caller fails* **and** *zero path reads*). Rows **2** and **5** were then thought correctly excluded — *round 14 overturned the row-2 half of that: ARCH-1 makes the helper fd-only, so the probe cannot be inside it* | rows 1, 6a, 7 and 9's caller half marked **CLOSED by I18**; row 6 split **6a/6b**; I12b closed; §5, §6.0's preamble, §7 step 5 and C9's round-10 note all corrected. Residues: **six → three** (2, 5, 6b) |
 | 2 | gemini | **the I12 split never reached §6's mutant preamble** — it claims "**one** stated exception: **I16**" and "every other mutant, **I9 included**, must be caught", while §7 step 5 names **two** residues (I16b *and* I12b). §6 and §7 disagreed on both the count and the identity | **confirmed** — both texts read; the preamble also names the unsplit `I16` rather than `I16b` | preamble rewritten to `I16b`, with I12b named as caught. *(After finding 1 the count "exactly one" is now true — for a different reason than the original wording gave)* |
 | 3 | gemini | **C12 still pairs with the unsplit `I12`** and claims it must fail on "infer emptiness from the digest constant" — which is **I12b**, whose own definition states C12 does not reach it. The plan asserted a case rejects a mutant the same plan says it cannot see | **confirmed** — C12's text and I12b's text contradict each other directly | C12 pairs with **I12a** only |
-| 4 | codex | **C12 cannot reject all of I12a either.** Its static offset-zero fixtures assert exact counts, but `st_size` and `getsize` **equal** the streamed count there — the plan's own escape-analysis row `:1017` measured exactly that. **F2's** non-zero offset is what rejects those two forms; C12 rejects fabricated counts | **confirmed against the plan's own measurement** — the strongest kind of finding available here, since the refuting evidence was already in the document | I12a's rejection restated as **F2 + C12**, neither alone |
-| 5 | codex | **the mandatory `DENIED` mapping has no case and no mutant.** ARCH-2 requires `EACCES`/`EPERM → DENIED` (`:385`) and §6 requires a mutation proof for every fix (`:310`), yet nothing in twelve cases and sixteen mutants exercises that branch — an implementation mapping permission errors to `MISSING` satisfied the whole stated suite | **confirmed by grep** — `DENIED` occurs only in ARCH-2's contract text, never in a case, mutant or test | **C15** added (in-process `os.open` stub raising `EACCES`/`EPERM`, *not* a `chmod` fixture — root defeats it) with paired mutant **I19**. Counts: **17 mutants, 13 cases** |
-| 6 | codex | *(Low)* I18 demands a "**typed empty cause**", but the `cause` vocabulary is `{OK, MISSING, SYMLINK, NOT_REGULAR, DENIED}` (`:377`) — no `EMPTY`. Emptiness is deliberately a caller diagnosis from `OK` + `count == 0` | **confirmed** — the wording asked for a value the plan's own type forbids; the oracle itself is unaffected | reworded to "the empty **diagnostic**" |
+| 4 | codex | **C12 cannot reject all of I12a either.** Its static offset-zero fixtures assert exact counts, but `st_size` and `getsize` **equal** the streamed count there — §13's `st_size as the count` ARCH-3 escape row measured exactly that. **F2's** non-zero offset is what rejects those two forms; C12 rejects fabricated counts | **confirmed against the plan's own measurement** — the strongest kind of finding available here, since the refuting evidence was already in the document | I12a's rejection restated as **F2 + C12**, neither alone |
+| 5 | codex | **the mandatory `DENIED` mapping has no case and no mutant.** ARCH-2's errno table requires `EACCES`/`EPERM → DENIED` and §6's opening acceptance rule requires a mutation proof for every fix, yet nothing in twelve cases and sixteen mutants exercises that branch — an implementation mapping permission errors to `MISSING` satisfied the whole stated suite | **confirmed by grep** — `DENIED` occurs only in ARCH-2's contract text, never in a case, mutant or test | **C15** added (in-process `os.open` stub raising `EACCES`/`EPERM`, *not* a `chmod` fixture — root defeats it) with paired mutant **I19**. Counts: **17 mutants, 13 cases** |
+| 6 | codex | *(Low)* I18 demands a "**typed empty cause**", but the `cause` vocabulary is `{OK, MISSING, SYMLINK, NOT_REGULAR, DENIED}` (ARCH-2's cause-vocabulary contract) — no `EMPTY`. Emptiness is deliberately a caller diagnosis from `OK` + `count == 0` | **confirmed** — the wording asked for a value the plan's own type forbids; the oracle itself is unaffected | reworded to "the empty **diagnostic**" |
 
 **Concordance was on the I12 split, from opposite directions** — gemini found the split missing from §6's
 preamble and from C12's pairing; codex found that neither mechanism the split names is stated correctly.
@@ -1536,7 +1570,7 @@ sha256 `76119663bb0d121fc4b865eac6ae1fceab88a8d796d05bf842be15e6d5947c66` — co
 
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
-| 1 | **both** | **row 5b is over-broad.** It marked missing, symlink *and* not-regular re-classification as wholly accepted, but **C4a** closes the symlink limb — its target's bytes differ, so an `io.open` re-classification follows the link and reports a digest mismatch instead of the exact `SYMLINK` message — and **C4b** closes the not-regular limb, because `io.open` lacks `O_NONBLOCK` and blocks on a FIFO, which C4b's timeout catches | **confirmed against the case text** (`:786-788`, `:791-793`) — both fixture details were pinned in **round 4** and have been in the plan ever since | row 5 split four ways: **5a** permission (C15), **5b** missing (**accepted**), **5c** symlink (C4a), **5d** not-regular (C4b). Only the missing limb is genuinely unreachable — `io.open` on an absent path raises `ENOENT` and lands on the same `MISSING` diagnosis a correct implementation gives. Count 14 → **16** |
+| 1 | **both** | **row 5b is over-broad.** It marked missing, symlink *and* not-regular re-classification as wholly accepted, but **C4a** closes the symlink limb — its target's bytes differ, so an `io.open` re-classification follows the link and reports a digest mismatch instead of the exact `SYMLINK` message — and **C4b** closes the not-regular limb, because `io.open` lacks `O_NONBLOCK` and blocks on a FIFO, which C4b's timeout catches | **confirmed against C4a's differing-target-bytes clause and C4b's timeout/exact-message clause** — both fixture details were pinned in **round 4** and have been in the plan ever since | row 5 split four ways: **5a** permission (C15), **5b** missing (**accepted**), **5c** symlink (C4a), **5d** not-regular (C4b). Only the missing limb is genuinely unreachable — `io.open` on an absent path raises `ENOENT` and lands on the same `MISSING` diagnosis a correct implementation gives. Count 14 → **16** |
 | 2 | codex | §6.0's I18 discussion still read "Rows **2** and **5** remain accepted", contradicting the table, §5, §7 and the header | **confirmed** — the sentence was I18-specific analysis but reads as a residue list | corrected to **2 and 5b**, with the reason noted in place |
 
 **The lesson is now sharper than "re-derive when a proof is added".** Rounds 11 and 12 each found a
@@ -1584,7 +1618,7 @@ reached the same conclusion by different routes, which is the strongest evidence
 
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
-| 1 | **both** | **row 2 is not closed by I18.** gemini: the probe runs on the **success branch**, and neither I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch, the short-read arrangement on the empty diagnosis, so the probe never executes and zero-path-reads stays green. codex, *reversing its own round-14 finding*: **ARCH-1 inspects only the parameter list** (`:372-377`), so an implementation can smuggle the path through module state keyed by the fd — the helper keeps its exact `(fd,)` signature, hashes, then probes **inside** the helper, which I18 stubs away | **confirmed both ways.** The two arguments are independent and compatible: even the caller-side form is unreached, *and* ARCH-1 does not force the probe to be caller-side at all. The plan had itself recorded the module-global smuggling route at `:360-365` | row 2 restored to **ACCEPTED-NOT-CLOSED**; residues back to **three** (2, 5b, 6b). Header, §5, §6.0 and §7 step 5 all reverted |
+| 1 | **both** | **row 2 is not closed by I18.** gemini: the probe runs on the **success branch**, and neither I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch, the short-read arrangement on the empty diagnosis, so the probe never executes and zero-path-reads stays green. codex, *reversing its own round-14 finding*: **ARCH-1 inspects only the parameter list** (its exact-`(fd,)` signature assertion), so an implementation can smuggle the path through module state keyed by the fd — the helper keeps its exact `(fd,)` signature, hashes, then probes **inside** the helper, which I18 stubs away | **confirmed both ways.** The two arguments are independent and compatible: even the caller-side form is unreached, *and* ARCH-1 does not force the probe to be caller-side at all. The plan had itself recorded the module-global/class-attribute/closure smuggling route in ARCH-1's body caveat | row 2 restored to **ACCEPTED-NOT-CLOSED**; residues back to **three** (2, 5b, 6b). Header, §5, §6.0 and §7 step 5 all reverted |
 | 2 | codex | *(Low)* the header and §21 say "four consecutive corrections" while §6.0 still says three and omits the round-14 event | **confirmed** | §6.0's note reconciled |
 
 **What this round changes about the method.** Rounds 11-14 all corrected residues in **one direction**
@@ -1638,7 +1672,7 @@ available: the narrowing note sits immediately BELOW a sentence making the exact
 
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
-| 1 | **both** | **the invariant language is still overclaimed in operative text.** gemini: `:841-842` still says "Re-opening becomes *structurally unavailable* **inside `_digest_transcript_fd`**" — the precise claim round 16 disproved — in the sentence *immediately preceding* round 16's note saying every such claim was narrowed. codex adds four more sites (`:303`, `:340-345`, `:372-377`, `:433-443`) and a second invariant: **ARCH-2** is described as proving exactly one *resolution*, when its assertions establish only **one seam call with an unchanged argument** — rows 2, 5b and 6b are the unobserved additional-resolution branches | **confirmed at every site** | all five narrowed. "Seal" is struck: the invariants constrain the **interface**, not the body. ARCH-2 now states what it establishes and what it does not — it removes the *motive* for a second resolution, which is not preventing the act. ARCH-3's "aliasing, callees, module globals are all irrelevant" is qualified to *irrelevant to the fixtures' own verdicts* |
+| 1 | **both** | **the invariant language is still overclaimed in operative text.** gemini: C9's **"THE PROOF FOR THE HELPER'S INTERFACE"** bullet still says "Re-opening becomes *structurally unavailable* **inside `_digest_transcript_fd`**" — the precise claim round 16 disproved — in the sentence *immediately preceding* round 16's note saying every such claim was narrowed. codex adds the §5 validate-then-reopen risk row, §6.0's structural-invariant preamble, ARCH-1's signature paragraph, and ARCH-2's caller contract, plus a second invariant: **ARCH-2** is described as proving exactly one *resolution*, when its assertions establish only **one seam call with an unchanged argument** — rows 2, 5b and 6b are the unobserved additional-resolution branches | **confirmed at every site** | all five narrowed. "Seal" is struck: the invariants constrain the **interface**, not the body. ARCH-2 now states what it establishes and what it does not — it removes the *motive* for a second resolution, which is not preventing the act. ARCH-3's "aliasing, callees, module globals are all irrelevant" is qualified to *irrelevant to the fixtures' own verdicts* |
 
 **Both arms independently confirmed the residue set is now correct**, each by full re-derivation with
 **both** reachability and discrimination:
@@ -1671,7 +1705,7 @@ literally saying "It seals the *path* out of the helper".
 
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
-| 1 | **both** | **the invariants are still overclaimed in seven operative places** — ARCH-1 "seals the path out of the helper" (`:380`); ARCH-2's heading "resolves the recorded string exactly once" (`:382`); ARCH-2 "passes **only** the resulting fd onward" (`:417`); "the sealed helper" revived at `:349` and `:618`; the risk register's singular "the caller-side residue" (`:303`); and §7 step 5's "the caller-side residues are §6.0's rows" (`:927`), which mis-describes row 2's in-helper form | **confirmed at every site by grep** | all seven narrowed **by sweep, not by list**: `grep -E 'seals? the (path\|helper)\|sealed helper\|exactly once\|caller-side residue'` over operative text, leaving only round-record quotations. A stale "two structural invariants" (there are three) surfaced in the same sweep |
+| 1 | **both** | **the invariants are still overclaimed in seven operative places** — ARCH-1's "seals the path out of the helper" sentence; ARCH-2's "resolves the recorded string exactly once" heading; ARCH-2's "passes **only** the resulting fd onward" sentence; "the sealed helper" in §6.0's structural-replacement introduction and its defeating-implementations preamble; the §5 risk register's singular "the caller-side residue"; and §7 step 5's "the caller-side residues are §6.0's rows", which mis-describes row 2's in-helper form | **confirmed at every site by grep** | all seven narrowed **by sweep, not by list**: `grep -E 'seals? the (path\|helper)\|sealed helper\|exactly once\|caller-side residue'` over operative text, leaving only round-record quotations. A stale "two structural invariants" (there are three) surfaced in the same sweep |
 | 2 | gemini | **§3.1 does not state its own exceptions.** It names only the two-pass reader, while §5's risk register asserts "**§3.1 states this plainly**" about the whole validate-then-reopen class and its three residues | **confirmed** — the section that *defines* the guarantee omitted the exceptions the rest of the plan refers back to it for | §3.1 now names rows **2, 5b, 6b** and why each escapes: row 2 unreached, rows 5b/6b reached but **indistinguishable** |
 | 3 | codex | *(Medium)* **`_open_regular_fd` has two incompatible contracts** — §4.1/§7 require `(fd \| None, Cause)` and C15 asserts a returned `DENIED` cause, while ARCH-2 also permits "a dedicated exception per cause". An implementation taking the advertised exception route satisfies neither C15 nor §7 | **confirmed** | the tuple is chosen; the alternative is struck |
 
@@ -1744,7 +1778,7 @@ than the round it costs to find by review.
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
 | 1 | gemini | **§7 step 5's I16b exception is narrower than I16b.** Round 16 labelled I16b "HELPER-side, not caller-side" as a *description*; round 20 wrote that label **into the exception**, so the step now demands a **caller-side** production-conditional second pass be shown caught — impossible by I16b's own definition, wherever it lives | **confirmed** — another unsatisfiable criterion, produced by combining two correct edits from different rounds | the exception covers I16b **in either form**; the label is marked as describing where it was found |
-| 2 | **both** | **F3's bound N is undefined, and the exclusion claim is false.** gemini: "larger than any plausible cap" is not a test size and "N = the largest size tested" is circular. codex, sharper: the claim that F3 catches every cap "**at or below** N" is **wrong** — a conventional cap accepts a file of exactly its own size, and **the shipped implementation does exactly that** (`scripts/review-verdict.py:229-231`: read `cap + 1`, reject only if `len > cap`). A helper capped at exactly N passes F3 while the plan called it caught | **confirmed by reading the implementation** | **N = 64 MiB, and F3 streams N + 1 bytes.** The proven exclusion is stated as **caps ≤ N**, not as an open-ended claim |
+| 2 | **both** | **F3's bound N is undefined, and the exclusion claim is false.** gemini: "larger than any plausible cap" is not a test size and "N = the largest size tested" is circular. codex, sharper: the claim that F3 catches every cap "**at or below** N" is **wrong** — a conventional cap accepts a file of exactly its own size, and **the shipped implementation does exactly that** in `_read_regular_file`: `fh.read(_MAX_TRUSTED_READ_BYTES + 1)`, then reject only when `len(data) > _MAX_TRUSTED_READ_BYTES`. A helper capped at exactly N passes F3 while the plan called it caught | **confirmed by reading the implementation** | **N = 64 MiB, and F3 streams N + 1 bytes.** The proven exclusion is stated as **caps ≤ N**, not as an open-ended claim |
 | 3 | gemini | **§7 step 5 leaves §6.0 row 8 in the absolute required-rejection set** without the "to bound N" qualification it gives F3 — demanding absolute rejection of a cap the plan says is undetectable | **confirmed** — the same defect as I17, one row over | row 8 is shown to the bound |
 | 4 | gemini | *(Medium)* two stale "three residues" restatements — §6.0's preamble and §5's second risk row — survived round 20's propagation | **confirmed** | both now say five, and name which |
 
@@ -1768,7 +1802,7 @@ Transcripts: `2497r22-agy.txt` (2,362 B) and `2497r22-codex.txt` (179,134 B).
 
 **gemini confirmed three things explicitly**, which is worth recording because they were the round's
 directed questions: **§7 step 5 is now satisfiable end to end**; **N = 64 MiB and the `caps ≤ N` framing
-are exact** (it re-derived the inclusive-cap arithmetic against `review-verdict.py:229-231`); and **no
+are exact** (it re-derived the inclusive-cap arithmetic against `_read_regular_file`'s read-one-extra / reject-only-on-overflow branch); and **no
 implementation blockers remain**.
 
 **Finding 1 is a lesson about the check I built to prevent it.** Between rounds I wrote a consistency
