@@ -348,21 +348,31 @@ _AGENT_TOKEN = re.compile(r"[a-z][a-z0-9-]*")
 
 
 def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: list[str]) -> None:
-    """§4.3 (COREDEV-2583) — assert the effort floor on BOTH axes and in the policy text.
+    """§4.3 (COREDEV-2583) — assert the effort FLOOR on BOTH axes and in the policy text.
+
+    The floor is a floor, not a pin. Assets INHERIT the session effort by omitting `effort:`,
+    so a `max` session runs its subagents at `max` instead of being silently pulled down to
+    `xhigh` — which is what a hard `effort: xhigh` pin did, because frontmatter effort overrides
+    the session in BOTH directions (verified against code.claude.com/docs/en/sub-agents).
+    What is forbidden is a DOWNWARD pin: if an asset states an effort at all it must be `xhigh`
+    or `max`, so no asset can quietly run below the floor.
 
     Sibling of `check_model_tiering`, and deliberately a HARD assertion rather than a warning: a
     silently under-powered gate is exactly the defect §4.1 exists to close, and it is invisible
     at runtime. With `effort` load-bearing, an asset that silently loses its pin — or a new asset
     landing without one — must fail CI, not merely be noted.
 
-    Mutation proof: drop the pin from any single agent or skill, or delete the §11 effort-policy
-    sentence, and strict validation fails naming the file.
+    Mutation proof: pin `effort: high` (or any level below the floor) on any single agent or
+    skill, or delete the §11 effort-policy sentence, and strict validation fails naming the file.
+    Omitting `effort:` is legal and is the default — that is inheritance, not drift.
     """
+    ALLOWED_PINS = {"xhigh", "max"}
     for rel, effort in sorted(asset_efforts.items()):
-        if effort != "xhigh":
-            got = f"`effort: {effort}`" if effort else "no `effort:` key"
+        if effort and effort not in ALLOWED_PINS:
             problems.append(
-                f"{rel}: {got} — every agent and skill must pin `effort: xhigh` "
+                f"{rel}: `effort: {effort}` is BELOW the floor — omit `effort:` to inherit the "
+                f"session level, or pin `xhigh`/`max`. A downward pin silently under-powers the "
+                f"asset and is invisible at runtime "
                 f"(AGENT_CONTRACTS §11 effort policy; COREDEV-2583 §4.1)")
 
     contracts = root / "AGENT_CONTRACTS.md"
@@ -374,10 +384,10 @@ def check_effort_policy(root: Path, asset_efforts: dict[str, str], problems: lis
         return
     # The policy sentence must SAY xhigh — otherwise the docs and the assets could drift apart
     # while both halves individually look fine, which is the §3 failure this ticket exists to end.
-    if "every agent and every skill pins `effort: xhigh`" not in content:
+    if "no agent or skill pins an effort below `xhigh`" not in content:
         problems.append(
             "AGENT_CONTRACTS.md §11: the effort policy line is missing or does not state "
-            "`xhigh` — expected the sentence \"every agent and every skill pins `effort: xhigh`\"")
+            "the floor — expected the sentence \"no agent or skill pins an effort below `xhigh`\"")
 
 
 def check_model_tiering(root: Path, agent_models: dict[str, str], problems: list[str]) -> None:

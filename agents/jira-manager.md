@@ -8,7 +8,6 @@ description: >
   starting work on any feature or bug fix, when completing a milestone, after
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
-effort: xhigh
 model: sonnet
 # Blocks the file-editing tools + subagent dispatch, and (MIN-5) the github MCP write surface — it drives
 # GitHub via the `gh` CLI (Bash), never mcp__github. Bash is deliberately retained (`gh pr view`), so this

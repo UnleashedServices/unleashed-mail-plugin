@@ -1,7 +1,6 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-effort: xhigh
 allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)
 ---
 

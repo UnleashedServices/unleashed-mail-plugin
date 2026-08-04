@@ -5,7 +5,6 @@ description: >
   resolution via Xcode, security auditing, version pinning in the project file, and
   CI integration. Activates when adding dependencies, updating packages, or managing
   package security.
-effort: xhigh
 allowed-tools: Read, Write, Edit, Bash(swift *), Bash(xcodebuild *), Bash(xcrun *), Grep, Glob
 ---
 

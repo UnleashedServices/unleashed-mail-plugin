@@ -1,10 +1,8 @@
 ---
 name: implement
 description: Implement a feature using specialized coding agents (db, logic, UI) with TDD and modern standards
-effort: xhigh
 argument-hint: [feature name or docs/planning/PLAN.md path]
 allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
-disable-model-invocation: true
 ---
 
 # Implement: $ARGUMENTS
@@ -157,7 +155,7 @@ fi
 ```
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
-  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it's `disable-model-invocation: true`, so it's
+  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it is model-invocable, so it can also be
     /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
     /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
   `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the

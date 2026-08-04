@@ -6,7 +6,6 @@ description: >
   implementations, sync services, or any code touching email fetching, sending,
   folder/label management, attachments, or push notification handling.
   Ensures both providers stay feature-aligned.
-effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

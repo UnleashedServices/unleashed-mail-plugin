@@ -311,7 +311,7 @@ class COREDEV2583_EffortPolicy(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             body = ("## 11. Model Tiering Policy\n\n"
-                    + ("**Effort policy: every agent and every skill pins `effort: xhigh`.**\n"
+                    + ("**Effort policy: assets INHERIT the session effort — no agent or skill pins an effort below `xhigh`.**"
                        if policy_line else "**Effort policy: pick something sensible.**\n"))
             (root / "AGENT_CONTRACTS.md").write_text(body, encoding="utf-8")
             vpa.check_effort_policy(root, efforts, p)
@@ -321,24 +321,31 @@ class COREDEV2583_EffortPolicy(unittest.TestCase):
         self.assertEqual(
             self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": "xhigh"}), [])
 
-    def test_missing_agent_pin_fails(self):
-        p = self._problems({"agents/a.md": "", "skills/s/SKILL.md": "xhigh"})
-        self.assertTrue(p)
-        self.assertIn("agents/a.md", p[0])
+    def test_absent_pin_is_legal_because_it_INHERITS(self):
+        # The policy is a FLOOR, not a pin. Omitting `effort:` means the asset inherits the
+        # session level, so a `max` session reaches its subagents instead of being silently
+        # capped at xhigh — frontmatter effort overrides the session in BOTH directions.
+        self.assertEqual(
+            self._problems({"agents/a.md": "", "skills/s/SKILL.md": ""}), [],
+            "omitting `effort:` is inheritance, not drift, and must not fail")
 
-    def test_missing_SKILL_pin_fails(self):
-        # The regression guard for the ordering bug: a skill must be checked too.
-        p = self._problems({"agents/a.md": "xhigh", "skills/s/SKILL.md": ""})
-        self.assertTrue(p, "a skill missing its pin must fail — not only agents")
-        self.assertIn("skills/s/SKILL.md", p[0])
+    def test_downward_pin_fails_on_both_axes(self):
+        # A skill must be checked as well as an agent — the ordering-bug regression guard.
+        for level in ("high", "medium", "low"):
+            for rel in ("agents/a.md", "skills/s/SKILL.md"):
+                with self.subTest(level=level, asset=rel):
+                    p = self._problems({rel: level})
+                    self.assertTrue(p, f"`effort: {level}` is below the floor and must fail")
+                    self.assertIn(rel, p[0])
 
-    def test_downgraded_effort_fails(self):
-        for level in ("high", "medium", "low", "max"):
+    def test_pins_at_or_above_the_floor_are_legal(self):
+        for level in ("xhigh", "max"):
             with self.subTest(level=level):
-                p = self._problems({"agents/a.md": level})
-                self.assertTrue(p, f"`effort: {level}` is not the mandated floor")
+                self.assertEqual(
+                    self._problems({"agents/a.md": level, "skills/s/SKILL.md": level}), [],
+                    f"`effort: {level}` is at or above the floor and must be accepted")
 
-    def test_policy_sentence_must_state_xhigh(self):
+    def test_policy_sentence_must_state_the_floor(self):
         p = self._problems({"agents/a.md": "xhigh"}, policy_line=False)
         self.assertTrue(p)
         self.assertIn("effort policy line", p[0])

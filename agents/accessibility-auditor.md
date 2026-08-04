@@ -8,7 +8,6 @@ description: >
   Invoke automatically after any SwiftUI view is created or modified, after any
   UI component change, when adding buttons/controls/images, when modifying
   navigation or layout, or when touching WKWebView rendering code.
-effort: xhigh
 model: sonnet
 tools: Read, Bash, Grep, Glob
 disallowedTools: Write, Edit

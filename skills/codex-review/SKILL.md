@@ -3,7 +3,6 @@ name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-effort: xhigh
 allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)
 ---
 

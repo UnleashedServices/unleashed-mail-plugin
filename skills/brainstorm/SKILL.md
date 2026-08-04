@@ -1,10 +1,8 @@
 ---
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
-effort: xhigh
 argument-hint: [feature description]
 allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
-disable-model-invocation: true
 ---
 
 # Feature Brainstorm: $ARGUMENTS

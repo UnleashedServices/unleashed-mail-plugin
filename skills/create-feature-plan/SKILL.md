@@ -1,7 +1,6 @@
 ---
 name: create-feature-plan
 description: Scaffold a new FEATURE_NAME_PLAN.md under docs/planning/ using the project template.
-effort: xhigh
 ---
 
 # Create Feature Plan

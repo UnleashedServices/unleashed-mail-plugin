@@ -391,8 +391,8 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 
 ## Workflow skills (3)
 
-These three orchestration workflows ship as `disable-model-invocation` **skills** (custom commands
-have merged into skills) — you invoke them exactly as before, and Claude won't auto-trigger them:
+These three orchestration workflows ship as **skills** (custom commands have merged into skills) — you
+invoke them exactly as before, and Claude can now also trigger them itself when the task calls for one:
 
 | Skill | Usage |
 |---|---|

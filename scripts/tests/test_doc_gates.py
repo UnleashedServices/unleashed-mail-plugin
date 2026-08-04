@@ -265,9 +265,11 @@ class COREDEV2583_DocDefects(unittest.TestCase):
         # `default` is NOT in the runtime table; an earlier draft of this plan proposed adding it.
         self.assertIn("no** `default` alias", _read("CLAUDE.md"))
 
-    def test_b_claude_md_documents_the_mandatory_effort_pin(self):
+    def test_b_claude_md_documents_the_effort_floor(self):
         claude_md = _read("CLAUDE.md")
-        self.assertIn("`effort: xhigh`", claude_md)
+        self.assertIn("**`effort:` is a FLOOR, not a pin**", claude_md)
+        self.assertIn("assets omit `effort:` and **inherit** the session level", claude_md)
+        self.assertIn("CI rejects any pin below `xhigh`; `xhigh`/`max` are legal", claude_md)
         self.assertIn("CLAUDE_CODE_EFFORT_LEVEL", claude_md,
                       "the honest limit (the env var outranks frontmatter) must be stated")
 
