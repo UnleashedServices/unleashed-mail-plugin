@@ -143,9 +143,9 @@
       "sourceSha256": "e1563fc84db030571e7158cd9ba06af097f55e59373248aab6ec0ec8eb01096e"
     },
     {
-      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:55",
+      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:56",
       "path": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md",
-      "line": 55,
+      "line": 56,
       "class": "quote-keep",
       "reason": "The predecessor plan preserves the measured stale-transcript incident.",
       "sourceSha256": "720374b95a3a3b6357a6f0405c48ad69787a1cc0b58ac44b7deadb826b636d3b"
@@ -258,7 +258,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 202,
+        "line": 200,
         "payloads": [
           "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
         ],
@@ -280,7 +280,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 203,
+        "line": 201,
         "payloads": [
           "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\" \\"
         ],
@@ -302,7 +302,7 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 7,
+        "line": 6,
         "payloads": [
           "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)"
         ],
@@ -326,7 +326,7 @@
         "S-CAPTURE"
       ],
       "destination": {
-        "line": 48,
+        "line": 47,
         "payloads": [
           "# COREDEV2619_CODEX_CAPTURE_BEGIN",
           ": \"${TICKET:?bind TICKET to the --ticket operand}\"",
@@ -366,7 +366,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 65,
+        "line": 64,
         "payloads": [
           "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
         ],
@@ -389,7 +389,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 68,
+        "line": 67,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -412,7 +412,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 201,
+        "line": 200,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -434,7 +434,7 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 8,
+        "line": 7,
         "payloads": [
           "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *)"
         ],
@@ -457,7 +457,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 73,
+        "line": 72,
         "payloads": [
           "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
         ],
@@ -480,7 +480,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 139,
+        "line": 138,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
           "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
@@ -504,7 +504,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 200,
+        "line": 199,
         "payloads": [
           "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -527,7 +527,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 203,
+        "line": 202,
         "payloads": [
           "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
@@ -553,7 +553,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 25,
+        "line": 24,
         "payloads": [
           "  --reviewer \"gemini=<STATUS>:<gemini-allocated-path>\" \\"
         ],
@@ -575,7 +575,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 26,
+        "line": 25,
         "payloads": [
           "  --reviewer \"codex=<STATUS>:<codex-allocated-path>\""
         ],
@@ -597,7 +597,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 42,
+        "line": 41,
         "payloads": [
           "1. Parse the two explicit `--reviewer` arguments using only their first structural `=` and `:`",
           "   delimiters, then read those exact path remainders. Treat a **missing, empty, or 0-byte** allocated file",
@@ -623,7 +623,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 206,
+        "line": 205,
         "payloads": [
           "    --reviewer \"$GEMINI_PERSIST_SPEC\" \\"
         ],
@@ -645,7 +645,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 207,
+        "line": 206,
         "payloads": [
           "    --reviewer \"$CODEX_PERSIST_SPEC\" \\"
         ],

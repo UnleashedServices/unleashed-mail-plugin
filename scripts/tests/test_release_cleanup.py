@@ -39,7 +39,8 @@ CEILING_SENTENCE = (
     "protect a host where an attacker controls a state-directory ancestor."
 )
 RETAINED_GRANTS_SENTENCE = (
-    "The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because "
+    "The existing `${CLAUDE_PLUGIN_ROOT}` allowed-"
+    "tools grants are retained because "
     "Claude Code 2.1.0 and later expand that placeholder."
 )
 CEILING_CLAUSES = (
@@ -600,7 +601,8 @@ class ReleaseMetadataProofs(unittest.TestCase):
     def test_M2_17_inert_grants_claim_mutation_is_rejected_independently(self) -> None:
         plugin, readme, changelog = self.release_sources()
         inert_claim = (
-            "\n\nThe existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants were inert."
+            "\n\nThe existing `${CLAUDE_PLUGIN_ROOT}` allowed-"
+            "tools grants were inert."
         )
         mutant = _replace_once(
             changelog,

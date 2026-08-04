@@ -240,14 +240,14 @@ DESTINATIONS = (
         "skills/implement/SKILL.md",
         161,
         "gemini",
-        "5159ca9f871c4923361700507f0f0681bf406609d9212e53e4d76093b1e12fc4",
+        "c8107787ff2a6e3a566b3678d2ecb3f71bd8e0b1803eadd43e4d9a1e21e2b84c",
         "8f2c267ed2a52efdb9058e8d2df61d5f9be1cba8f5dd272e67ca5286f715a2e8",
     ),
     ReferenceDestination(
         "skills/implement/SKILL.md",
         161,
         "codex",
-        "5159ca9f871c4923361700507f0f0681bf406609d9212e53e4d76093b1e12fc4",
+        "c8107787ff2a6e3a566b3678d2ecb3f71bd8e0b1803eadd43e4d9a1e21e2b84c",
         "8f2c267ed2a52efdb9058e8d2df61d5f9be1cba8f5dd272e67ca5286f715a2e8",
     ),
     ReferenceDestination(
@@ -429,7 +429,7 @@ class M513CallersScanTests(CallersScanProof):
         ]
         self.assertTrue(implement_candidates)
         shifted = min(implement_candidates, key=lambda item: item.line_number)
-        self.assertEqual(163, shifted.line_number)
+        self.assertEqual(161, shifted.line_number)
         stale = ReferenceIdentity(
             shifted.path, shifted.line_number - 1, shifted.identity.payload_sha256
         )
