@@ -18,13 +18,17 @@ nothing automatically; it produces a Markdown block for the human running the ga
 > the earlier "read-only" label was wrong about the write (full review, #41).
 
 Run it **after** both review transcripts are captured (see `/gemini-review` and
-`/codex-review`):
+`/codex-review`). Supply the two allocated paths explicitly; there are no shared default paths:
 
-- gemini → `/tmp/agy-out.txt`  (Antigravity `agy`, free-form plaintext)
-- codex  → `/tmp/codex-out.txt` (`codex exec`, free-form plaintext)
+```text
+/unleashed-mail:review-synthesis \
+  --reviewer "gemini=<STATUS>:<gemini-allocated-path>" \
+  --reviewer "codex=<STATUS>:<codex-allocated-path>"
+```
 
-Those are the default paths the two review skills write. If the caller specifies custom paths in the
-prompt (e.g. "synthesize `/tmp/a.txt` and `/tmp/b.txt`"), read those instead.
+Each value after `--reviewer` is one opaque argument. Split it at the first `=` into name/remainder,
+then at the first `:` into status/path. The complete remainder after that first `:` is the allocated
+path: do not split it again, trim it, resolve it independently, or reconstruct it from ticket/round.
 
 > **Scope — keep this distinct from the code-review synthesizer.** This is the **plan-review**
 > synthesizer: **2 prose transcripts**, before implementation. It is deliberately separate from the
@@ -35,13 +39,11 @@ prompt (e.g. "synthesize `/tmp/a.txt` and `/tmp/b.txt`"), read those instead.
 
 ## Inputs
 
-1. Read `/tmp/agy-out.txt` (gemini) and `/tmp/codex-out.txt` (codex). Treat a **missing, empty, or
-   0-byte** file as **"reviewer did not return"** — never as silent approval. **Staleness (MAJ-10):**
-   these are fixed, shared paths, so a transcript left by a *previous* round or plan is neither missing
-   nor empty and would otherwise read as this round's verdict. `/gemini-review` and `/codex-review` now
-   `rm -f` the path **before** each dispatch, so a wrapper that never started leaves it *absent* → MISSING.
-   Still confirm each transcript is **this round's** review (it names the current plan / matches the
-   feedback you just sent); if you cannot confirm it is fresh, treat it as MISSING and re-run the review.
+1. Parse the two explicit `--reviewer` arguments using only their first structural `=` and `:`
+   delimiters, then read those exact path remainders. Treat a **missing, empty, or 0-byte** allocated file
+   as **"reviewer did not return" (`MISSING`)** — never as silent approval. Still confirm each transcript
+   is **this round's** review (it names the current plan / matches the feedback you just sent); if you
+   cannot confirm it is fresh, treat it as MISSING and re-run the review.
 2. From each transcript, extract the reviewer's verdict token. Each review skill asks the reviewer to end
    with an explicit `VERDICT:` / `Verdict:` line — prefer that. If it is absent, infer the verdict from
    the prose **conservatively**: when ambiguous, pick the **more conservative** verdict and lower the
@@ -126,17 +128,85 @@ reviewers never saw. Instead **re-run `/gemini-review` + `/codex-review` on the 
 fresh `snapshot` taken before dispatch), then synthesize those transcripts. An approval is only valid for
 the exact plan the reviewers actually reviewed.
 
-Then persist — pass the plan that was reviewed plus each reviewer's status + transcript. `write`
-auto-reads the snapshot sidecar and aborts if the plan changed since, so **no `--reviewed-sha256`
-argument is needed** in the normal flow:
+Then persist — bind `PLAN_PATH`, `COMBINED_VERDICT`, `GEMINI_REVIEWER_SPEC`, and
+`CODEX_REVIEWER_SPEC` to the current synthesis inputs in one Bash invocation. Each reviewer spec must be
+the exact single argument supplied to this skill. The runnable recipe parses only the first delimiters,
+classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the original spec
+unchanged. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so no
+`--reviewed-sha256` argument is needed in the normal flow:
 
 ```bash
+# COREDEV2619_SYNTHESIS_PERSIST_BEGIN
+: "${PLAN_PATH:?bind PLAN_PATH to the reviewed plan}"
+: "${COMBINED_VERDICT:?bind COMBINED_VERDICT to the synthesis result}"
+: "${GEMINI_REVIEWER_SPEC:?bind the complete gemini reviewer argument}"
+: "${CODEX_REVIEWER_SPEC:?bind the complete codex reviewer argument}"
+
+parse_reviewer_spec() {
+    local spec="$1" expected_name="$2" name rest status transcript
+    case "$spec" in
+        *=*) ;;
+        *) printf 'review synthesis: malformed reviewer specification\n' >&2; return 1 ;;
+    esac
+    name="${spec%%=*}"
+    rest="${spec#*=}"
+    case "$rest" in
+        *:*) ;;
+        *) printf 'review synthesis: reviewer specification lacks a transcript path\n' >&2; return 1 ;;
+    esac
+    status="${rest%%:*}"
+    transcript="${rest#*:}"
+    if [ "$name" != "$expected_name" ] || [ -z "$transcript" ]; then
+        printf 'review synthesis: invalid reviewer specification\n' >&2
+        return 1
+    fi
+    case "$status" in
+        APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES|MISSING) ;;
+        *) printf 'review synthesis: invalid reviewer status\n' >&2; return 1 ;;
+    esac
+    PARSED_REVIEWER_NAME="$name"
+    PARSED_REVIEWER_STATUS="$status"
+    PARSED_TRANSCRIPT_PATH="$transcript"
+}
+
+persist_reviewer_spec() {
+    local spec="$1" expected_name="$2"
+    parse_reviewer_spec "$spec" "$expected_name" || return 1
+    if [ "$PARSED_REVIEWER_STATUS" = MISSING ] || [ ! -s "$PARSED_TRANSCRIPT_PATH" ]; then
+        printf '%s=MISSING' "$PARSED_REVIEWER_NAME"
+    else
+        printf '%s' "$spec"
+    fi
+}
+
+if GEMINI_PERSIST_SPEC="$(persist_reviewer_spec "$GEMINI_REVIEWER_SPEC" gemini)"; then
+    :
+else
+    status="$?"
+    exit "$status"
+fi
+if CODEX_PERSIST_SPEC="$(persist_reviewer_spec "$CODEX_REVIEWER_SPEC" codex)"; then
+    :
+else
+    status="$?"
+    exit "$status"
+fi
+if [ "$GEMINI_PERSIST_SPEC" = gemini=MISSING ] || [ "$CODEX_PERSIST_SPEC" = codex=MISSING ]; then
+    case "$COMBINED_VERDICT" in
+        APPROVE|APPROVE_WITH_NOTES)
+            printf 'review synthesis: a missing transcript cannot produce approval\n' >&2
+            exit 1
+            ;;
+    esac
+fi
+
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
-    --plan docs/planning/FEATURE_NAME_PLAN.md \
-    --verdict <COMBINED_VERDICT> \
-    --reviewer gemini=<GEMINI_STATUS>:/tmp/agy-out.txt \
-    --reviewer codex=<CODEX_STATUS>:/tmp/codex-out.txt \
-    --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    --plan "$PLAN_PATH" \
+    --verdict "$COMBINED_VERDICT" \
+    --reviewer "$GEMINI_PERSIST_SPEC" \
+    --reviewer "$CODEX_PERSIST_SPEC" \
+    --created-at "${CREATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+# COREDEV2619_SYNTHESIS_PERSIST_END
 ```
 
 `write` aborts if the plan changed since the snapshot. An **APPROVING** verdict REQUIRES a reviewed-digest

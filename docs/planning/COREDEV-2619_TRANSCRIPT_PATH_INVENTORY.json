@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ticket": "COREDEV-2619",
   "step": "S-INVENTORY",
   "frozenCommit": "78e28f26cb56572b22fe1635552dd10fa95bdb48",
@@ -97,6 +97,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 187,
+        "payloads": [
+          "- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two explicitly supplied per-run transcript paths and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each allocated path is carried as one opaque `--reviewer \"<name>=<STATUS>:<path>\"` argument; a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a."
+        ],
+        "payloadSha256": "4c113e8aad72f7ccc1647fd8102aafa306f61e579d08430498f4b419bc017407"
+      },
       "sourceSha256": "54edc358667a681e92fd16dd34d7e38da3646f8d159c70573b288fcd6781a3cf",
       "precedingAnchorLine": 186,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -168,6 +175,13 @@
       "contracts": [
         "S-CAPTURE"
       ],
+      "destination": {
+        "line": 27,
+        "payloads": [
+          "    python3 pty-capture.py --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "e6cbdd84ae6ec80ab2462d612c1fa361c70a0731c54c3f8649da8fcfec63cb20"
+      },
       "sourceSha256": "f9457755ff4929f0aef8cf8d6e936e4eb727294fa8815cb8b462b375fa3015cb",
       "precedingAnchorLine": 26,
       "precedingAnchorSha256": "619a3a00d8b193ccecfc03a8ca0b433cba5cf3ae54c116d1b6ce7c91a59e8091",
@@ -183,6 +197,13 @@
       "contracts": [
         "S-CAPTURE"
       ],
+      "destination": {
+        "line": 31,
+        "payloads": [
+          "    python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "59b6861e17c81eb47109f192e80dc0be2b6b646fcf634ea32f32b0bc6effaf69"
+      },
       "sourceSha256": "5a3eb5808cdf4ae356f45bb138dc2dfee451b644714aed7dcbe9cacd9228699e",
       "precedingAnchorLine": 30,
       "precedingAnchorSha256": "c1a51d38bbfedd5c6a58023f2d20ae8fd2650f8c393ac0baba62891d7ce236cb",
@@ -198,6 +219,13 @@
       "contracts": [
         "S-CAPTURE"
       ],
+      "destination": {
+        "line": 317,
+        "payloads": [
+          "            # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the"
+        ],
+        "payloadSha256": "e801f26ecb1d6d6f4b6c0f28d7395f2a9cf6824cdc59e491bdee252c99274ce0"
+      },
       "sourceSha256": "a3955210fd5b09f37b8ad298f732e4547394efb05ceb4e00316179fcb2513ce5",
       "precedingAnchorLine": 316,
       "precedingAnchorSha256": "b72a7be9a37c412be33dc87730941394c494bc7a909e2c7f47161b21dcdb5a02",
@@ -229,6 +257,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 202,
+        "payloads": [
+          "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
+        ],
+        "payloadSha256": "46712a23b08956488b54cd0f8b716e0001829e259fe19797e053580612b27a3d"
+      },
       "sourceSha256": "147256856f08cdd932f6ee395953c3137ef99fafc1c1240bba99cc6497fc4781",
       "precedingAnchorLine": 193,
       "precedingAnchorSha256": "8f60baf074a984d1c75bb7db0456219ca6a8a232cbe014815a2962e1a9c24db7",
@@ -244,6 +279,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 203,
+        "payloads": [
+          "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\" \\"
+        ],
+        "payloadSha256": "039a529a6d32414ff1e2a9a2eadb976f634a8b221b24dbb1d8ed02df5c3bc9e4"
+      },
       "sourceSha256": "f7020818a7143be993c629ab484d841b97c6e6db8b37fbeaad6ec395d97afcc5",
       "precedingAnchorLine": 193,
       "precedingAnchorSha256": "8f60baf074a984d1c75bb7db0456219ca6a8a232cbe014815a2962e1a9c24db7",
@@ -259,6 +301,13 @@
       "contracts": [
         "S-PRECLEAN"
       ],
+      "destination": {
+        "line": 7,
+        "payloads": [
+          "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)"
+        ],
+        "payloadSha256": "2a8437077ff515d4438d797941cd09e3b16cd69f398ff7fc5c966eb9962e725d"
+      },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
       "precedingAnchorSha256": "40f48895dc59fd5a8d06c29cbbdb4a19a4c6a5910697154278835c5f212a0c35",
@@ -276,6 +325,30 @@
         "S-WRAPPER",
         "S-CAPTURE"
       ],
+      "destination": {
+        "line": 48,
+        "payloads": [
+          "# COREDEV2619_CODEX_CAPTURE_BEGIN",
+          ": \"${TICKET:?bind TICKET to the --ticket operand}\"",
+          ": \"${ROUND:?bind ROUND to the --round operand}\"",
+          "if TRANSCRIPT_MARKER=\"$(",
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex",
+          ")\"; then",
+          "    :",
+          "else",
+          "    status=\"$?\"",
+          "    exit \"$status\"",
+          "fi",
+          "case \"$TRANSCRIPT_MARKER\" in",
+          "    UNLEASHED_TRANSCRIPT=?*) ;;",
+          "    *) printf 'codex review: allocator returned an invalid marker\\n' >&2; exit 1 ;;",
+          "esac",
+          "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
+          "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
+          "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "1069bb9682d1a7d66d6b881f553c25f1f145b95748a37904d2125efa0bd91e06"
+      },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
       "precedingAnchorSha256": "1c584669f86902bc99c3e6e42bb9131553b9bd014730200a82ecdcdbfd324367",
@@ -292,6 +365,13 @@
         "S-CAPTURE",
         "S-THREAD"
       ],
+      "destination": {
+        "line": 65,
+        "payloads": [
+          "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "251dbf0f8b8b035c4184e02faca43af7efc666b8aea85cd2c6db46f521131915"
+      },
       "sourceSha256": "140cfc84e527dc2259392ae57eed8ba2e0c5a61496d8476a25d7db90a8c1a4cf",
       "precedingAnchorLine": 47,
       "precedingAnchorSha256": "1c584669f86902bc99c3e6e42bb9131553b9bd014730200a82ecdcdbfd324367",
@@ -308,6 +388,14 @@
         "S-CAPTURE",
         "S-THREAD"
       ],
+      "destination": {
+        "line": 68,
+        "payloads": [
+          "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
+          "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
+        ],
+        "payloadSha256": "f2042e3932ca79b23b425ca5a15fc507e70809a82eb226a287b2818afda31c2c"
+      },
       "sourceSha256": "92e2d03c635c1e692a47f4bbcc4ae4f3e7eb6901adba5aa8122b501fbd1aeda0",
       "precedingAnchorLine": 50,
       "precedingAnchorSha256": "ba4b9432176d80f1659a2db5ed53f14f1081fa239fec065b19b7e372d8732b3a",
@@ -323,6 +411,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 201,
+        "payloads": [
+          "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
+        ],
+        "payloadSha256": "2fa4e7b2b3d16f2e54394bd0913718f32afe3dbbc1cd98c57f73c310d7638029"
+      },
       "sourceSha256": "2db38ffecb2222616bb614ba6bc7eaea51228347866d78c3e7cf654678fc7829",
       "precedingAnchorLine": 180,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -338,6 +433,13 @@
       "contracts": [
         "S-PRECLEAN"
       ],
+      "destination": {
+        "line": 8,
+        "payloads": [
+          "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *)"
+        ],
+        "payloadSha256": "ab65a9247b188fee9bb0e9296baaaef0e4858f9f9a715bc615b84ac47e102438"
+      },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
       "precedingAnchorSha256": "40f48895dc59fd5a8d06c29cbbdb4a19a4c6a5910697154278835c5f212a0c35",
@@ -354,6 +456,13 @@
         "S-CAPTURE",
         "S-THREAD"
       ],
+      "destination": {
+        "line": 73,
+        "payloads": [
+          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
+        ],
+        "payloadSha256": "9b09976bb2c59a329694ce545d72aa027dad5fd2085a58b449e8659902598a8a"
+      },
       "sourceSha256": "023d8ab2eb52d46c113492552938fc963f61b06013b013de4689daf63bbef35d",
       "precedingAnchorLine": 70,
       "precedingAnchorSha256": "a1a0d04d359495626280628ff9f1fb4050b910765c4a5eb1fb111a5e35371ebb",
@@ -370,6 +479,14 @@
         "S-CAPTURE",
         "S-THREAD"
       ],
+      "destination": {
+        "line": 139,
+        "payloads": [
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
+          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
+        ],
+        "payloadSha256": "bd4e8d1581a114f8070f7d719de107b3631124cfaf8703503ca59a640886e8a7"
+      },
       "sourceSha256": "39c3aae64f0722977fcad2430f6ba7ade99d0a6a8855ba69a42873c173e9ab39",
       "precedingAnchorLine": 136,
       "precedingAnchorSha256": "fdb4dc5dcc5130f71c9d2117caf24a16d309537e97dd3a646f616d54d791c777",
@@ -386,6 +503,14 @@
         "S-CAPTURE",
         "S-THREAD"
       ],
+      "destination": {
+        "line": 200,
+        "payloads": [
+          "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
+          "   allocated file back into context; do not reconstruct its name."
+        ],
+        "payloadSha256": "981690c6089e9c0de60631c26d3b90da03436cc269a5c9dab3534615c8cea4cd"
+      },
       "sourceSha256": "2bd217d4fef72dd066b7bd3099643c9e03a195e02f4c8c5e607e93a41c78760c",
       "precedingAnchorLine": 196,
       "precedingAnchorSha256": "9b71e9e51f157c171ea31aef40c9a87437cdfabc9102b1b03b62d8f81023359f",
@@ -401,6 +526,17 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 203,
+        "payloads": [
+          "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
+          "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
+          "   \"<name>=<STATUS>:<allocated-path>\"` argument. Make sure each review prompt asks the reviewer to finish",
+          "   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the",
+          "   synthesis can read it deterministically."
+        ],
+        "payloadSha256": "32d57d69d0ef0edc8a1a773acaaca69b4fa8dc4e08f86724941bf7f5b06cac5e"
+      },
       "sourceSha256": "ed22e9edc7d8a3ffe5028b2ee66fd6933789aad09f530bb47167e5ced441bbfd",
       "precedingAnchorLine": 198,
       "precedingAnchorSha256": "a9c0975f017e72906e35f6e7b49217d2637bbc02f78ff93c28ba52c728f2262a",
@@ -416,6 +552,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 25,
+        "payloads": [
+          "  --reviewer \"gemini=<STATUS>:<gemini-allocated-path>\" \\"
+        ],
+        "payloadSha256": "8d72fcd1d654554221c31bd72987940658ad5d000c953e86259160e7942ccab6"
+      },
       "sourceSha256": "79a223e3bab3f5ca3c2600bb9bf878eb311e62c4facc4bde608e2748f7b6d6c6",
       "precedingAnchorLine": 22,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -431,6 +574,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 26,
+        "payloads": [
+          "  --reviewer \"codex=<STATUS>:<codex-allocated-path>\""
+        ],
+        "payloadSha256": "9110bd7d570f8b8ef13ac81356f46f9ded8e2c77bbc568cc3bfe21605f552b68"
+      },
       "sourceSha256": "416c9417bc7eb1173a951308a7d14ce5acd1a808702858900a7fb3c9dfc01022",
       "precedingAnchorLine": 22,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -446,6 +596,17 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 42,
+        "payloads": [
+          "1. Parse the two explicit `--reviewer` arguments using only their first structural `=` and `:`",
+          "   delimiters, then read those exact path remainders. Treat a **missing, empty, or 0-byte** allocated file",
+          "   as **\"reviewer did not return\" (`MISSING`)** — never as silent approval. Still confirm each transcript",
+          "   is **this round's** review (it names the current plan / matches the feedback you just sent); if you",
+          "   cannot confirm it is fresh, treat it as MISSING and re-run the review."
+        ],
+        "payloadSha256": "0ebe165137ecb68438ea8cf8a8b6de40e9db66c38090d9d440babec19d4d0f38"
+      },
       "sourceSha256": "7c910ce2d36799340f5e22b9ee1eb8a9e316027213845970f0327caace338bfb",
       "precedingAnchorLine": 37,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -461,6 +622,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 206,
+        "payloads": [
+          "    --reviewer \"$GEMINI_PERSIST_SPEC\" \\"
+        ],
+        "payloadSha256": "2dd8a9060b2f3b531aff69aa22148cce68dd6bf484c84f5fb142acd5d4e51b0f"
+      },
       "sourceSha256": "ca3f44a34edfa4cc64175b45c7ffffa7f65b4aee8a5381cd7f88f67230d1b1d7",
       "precedingAnchorLine": 136,
       "precedingAnchorSha256": "b72088873ef2b7bac9c4888fee7a50a507260f4c68afac28c5eebac838fe0034",
@@ -476,6 +644,13 @@
       "contracts": [
         "S-THREAD"
       ],
+      "destination": {
+        "line": 207,
+        "payloads": [
+          "    --reviewer \"$CODEX_PERSIST_SPEC\" \\"
+        ],
+        "payloadSha256": "8fb1fedbb4ba971d6562c28c3f62489557375f695c686e440cbdd017c45343a6"
+      },
       "sourceSha256": "833317d1cd59935e55540c732344b39897b17fb10d304aa7c81fae6f65447157",
       "precedingAnchorLine": 136,
       "precedingAnchorSha256": "b72088873ef2b7bac9c4888fee7a50a507260f4c68afac28c5eebac838fe0034",

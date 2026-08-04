@@ -4,7 +4,7 @@ description: Read-only Codex CLI review for plans, debug sessions, and post-impl
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
 effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(codex *), Bash(rm -f /tmp/codex-out.txt*)
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)
 ---
 
 # Codex CLI Review
@@ -45,17 +45,37 @@ Docs: https://developers.openai.com/codex/cli/reference
 # expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
 # previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
 # MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-rm -f /tmp/codex-out.txt /tmp/codex-out.txt.captureid
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/codex-out.txt -- \
+# COREDEV2619_CODEX_CAPTURE_BEGIN
+: "${TICKET:?bind TICKET to the --ticket operand}"
+: "${ROUND:?bind ROUND to the --round operand}"
+if TRANSCRIPT_MARKER="$(
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" codex
+)"; then
+    :
+else
+    status="$?"
+    exit "$status"
+fi
+case "$TRANSCRIPT_MARKER" in
+    UNLEASHED_TRANSCRIPT=?*) ;;
+    *) printf 'codex review: allocator returned an invalid marker\n' >&2; exit 1 ;;
+esac
+CODEX_TRANSCRIPT="${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}"
+printf '%s\n' "$TRANSCRIPT_MARKER"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 --allocated "$CODEX_TRANSCRIPT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
-# Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
+# COREDEV2619_CODEX_CAPTURE_END
+# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
+# matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
 
 # Skill-based audit through the wrapper:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/security.txt -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 ```
 
-Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
+Interface: `pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]`.
+Read the allocated path back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill
+running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
 
 ## Monitor, not Bash background (user-confirmed preference)
 
@@ -178,7 +198,7 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 
 ## Full workflow (plan or debug → implementation → post-impl audit)
 
-1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/codex-out.txt` + `/tmp/agy-out.txt` into one auditable **Combined verdict** block before implementation.
+1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer "<name>=<STATUS>:<allocated-path>"` argument to produce the auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
 3. **Full diff review:** optionally also run `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
@@ -189,14 +209,10 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 
 Ticket and round are required operands received from that invocation; never infer either from the plan,
-branch, or prior transcript. If either is absent, stop before allocation. In the recipe, bind the two
-received operands to `TICKET` and `ROUND`, then pass the reviewer as the hard-coded third argument:
-
-```bash
-TICKET='<T>'
-ROUND='<N>'
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" codex
-```
+branch, or prior transcript. If either is absent, stop before allocation. Bind the two received operands
+to `TICKET` and `ROUND` in the same Bash invocation, then run the complete allocation-and-capture recipe
+above. It passes the hard-coded reviewer literal `codex`, removes only the marker prefix, and quotes every
+later expansion of `CODEX_TRANSCRIPT` so the allocated path remains one opaque argument.
 
 ## Safety rules
 

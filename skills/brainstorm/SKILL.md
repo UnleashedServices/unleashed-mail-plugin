@@ -182,18 +182,27 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
    `APPROVE_WITH_NOTES` (typically 2–6 rounds). After a revision, re-run `snapshot` (step 1) and both reviews on the exact new bytes.
 4. **Synthesize:** run `/unleashed-mail:review-synthesis` to combine the two transcripts into one
    auditable Combined verdict — it also **persists** the artifact (`write` auto-reads the snapshot from
-   step 1, so no `--reviewed-sha256` is needed):
+   step 1, so no `--reviewed-sha256` is needed). Bind the exact allocated paths returned by the two
+   review recipes; do not reconstruct them:
 
    ```bash
    # The bare `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in the skill body -> the plugin install
    # path; the `:-.` form is NOT substituted (it would resolve to `.`) and would fail to persist the
    # artifact, so /implement would report "no artifact" (COREDEV-2504). Matches implement.
+   # COREDEV2619_BRAINSTORM_PERSIST_BEGIN
+   : "${PLAN_PATH:?bind PLAN_PATH to the reviewed plan}"
+   : "${COMBINED_VERDICT:?bind COMBINED_VERDICT to the synthesis result}"
+   : "${GEMINI_STATUS:?bind GEMINI_STATUS to the gemini result}"
+   : "${GEMINI_TRANSCRIPT:?bind GEMINI_TRANSCRIPT to its exact allocated path}"
+   : "${CODEX_STATUS:?bind CODEX_STATUS to the codex result}"
+   : "${CODEX_TRANSCRIPT:?bind CODEX_TRANSCRIPT to its exact allocated path}"
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
-       --plan docs/planning/FEATURE_NAME_PLAN.md \
-       --verdict <COMBINED_VERDICT> \
-       --reviewer gemini=<STATUS>:/tmp/agy-out.txt \
-       --reviewer codex=<STATUS>:/tmp/codex-out.txt \
-       --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+       --plan "$PLAN_PATH" \
+       --verdict "$COMBINED_VERDICT" \
+       --reviewer "gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}" \
+       --reviewer "codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}" \
+       --created-at "${CREATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+   # COREDEV2619_BRAINSTORM_PERSIST_END
    ```
 5. **Then** hand off: `/unleashed-mail:implement FEATURE_NAME`.
 

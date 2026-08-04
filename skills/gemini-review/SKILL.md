@@ -5,7 +5,7 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
 # what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
 effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
+allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *)
 ---
 
 # Antigravity (`agy`) Review
@@ -55,8 +55,10 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 > [`codex-review`](../codex-review/SKILL.md), which already runs `-s read-only`. **Isolate instead of
 > constraining** — that is what the wrapper below does.
 
-Interface: `isolated-agy-review.sh <prompt-file> <out-path> [timeout]`. The prompt path is **relative
-to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable copy.
+Interface: `isolated-agy-review.sh <prompt-file> <allocated-path> [timeout]`. The prompt path is
+**relative to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable
+copy. Use the complete allocation-and-capture recipe under "Required invocation inputs" below; never
+derive or normalize the allocated path.
 
 ```bash
 # Creates a disposable DETACHED worktree at the reviewed commit, rewrites the prompt's absolute paths
@@ -68,7 +70,7 @@ to the repo root**; the wrapper rewrites absolute paths inside it to point at th
 # one would be read as this round's verdict) and extracts the verdict with an ANCHORED grep — a loose
 # `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
-    .agy-prompt.md /tmp/agy-out.txt 1500
+    .agy-prompt.md "$GEMINI_TRANSCRIPT" 1500
 # -> EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
 # Exit 3 = the reviewer mutated the tree. Exit 1 = setup/prompt failure (e.g. a truncated prompt,
 # which the wrapper refuses to launch on rather than burning 20 minutes).
@@ -134,7 +136,8 @@ EOF
 # SUPERSEDED — this raw form points agy at the WORKING TREE, which it can write to (COREDEV-2607).
 # Use scripts/review/isolated-agy-review.sh instead; it wraps exactly this pipeline, but against a
 # disposable detached checkout, and asserts the real tree is unchanged afterwards.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" .agy-prompt.md /tmp/agy-out.txt 1500
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
+    .agy-prompt.md "$GEMINI_TRANSCRIPT" 1500
 ```
 
 ### From an interactive terminal (no wrapper needed)
@@ -194,9 +197,14 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 3. **Write the task** to a workspace prompt file (e.g., `.agy-prompt.md`) with all context including absolute paths to any files agy must read.
 4. **Invoke** via PTY wrapper from non-TTY contexts, or directly from a real terminal.
 5. **Continue the conversation** with `agy -c` or `agy -i` for follow-up questions. Do not treat the first response as final.
-6. **Capture output** — if invoking from Claude Code's Bash tool, the PTY wrapper writes to `/tmp/agy-out.txt`. Read that file back into context.
+6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that
+   allocated file back into context; do not reconstruct its name.
 7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/agy-out.txt` + `/tmp/codex-out.txt` into one auditable **Combined verdict** block before implementation. Make sure each review prompt asks the reviewer to finish with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the synthesis can read it deterministically.
+8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke
+   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer
+   "<name>=<STATUS>:<allocated-path>"` argument. Make sure each review prompt asks the reviewer to finish
+   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the
+   synthesis can read it deterministically.
 
 Do not skip to save time. Do not treat as a rubber stamp.
 
@@ -205,13 +213,32 @@ Do not skip to save time. Do not treat as a rubber stamp.
 /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
 
 Ticket and round are required operands received from that invocation; never infer either from the plan,
-branch, or prior transcript. If either is absent, stop before allocation. In the recipe, bind the two
-received operands to `TICKET` and `ROUND`, then pass the reviewer as the hard-coded third argument:
+branch, or prior transcript. If either is absent, stop before allocation. Bind the two received operands
+to `TICKET` and `ROUND` in the same Bash invocation, then run this complete recipe. The marker remainder
+is copied with shell prefix removal only; every later expansion is quoted so the path remains one opaque
+argument.
 
 ```bash
-TICKET='<T>'
-ROUND='<N>'
+# COREDEV2619_GEMINI_CAPTURE_BEGIN
+: "${TICKET:?bind TICKET to the --ticket operand}"
+: "${ROUND:?bind ROUND to the --round operand}"
+if TRANSCRIPT_MARKER="$(
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" gemini
+)"; then
+    :
+else
+    status="$?"
+    exit "$status"
+fi
+case "$TRANSCRIPT_MARKER" in
+    UNLEASHED_TRANSCRIPT=?*) ;;
+    *) printf 'gemini-review: allocator returned an invalid marker\n' >&2; exit 1 ;;
+esac
+GEMINI_TRANSCRIPT="${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}"
+printf '%s\n' "$TRANSCRIPT_MARKER"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
+    .agy-prompt.md "$GEMINI_TRANSCRIPT" 1500
+# COREDEV2619_GEMINI_CAPTURE_END
 ```
 
 ## Diagnostics

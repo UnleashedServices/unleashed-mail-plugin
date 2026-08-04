@@ -25,13 +25,15 @@
 # the round rather than being cleaned up silently — the same rule `AGENT_CONTRACTS.md` §2 step 0b
 # applies to the author, applied to the reviewer.
 #
-# Usage: isolated-agy-review.sh <prompt-file> <out-path> [timeout-seconds]
+# Usage: isolated-agy-review.sh <prompt-file> <allocated-path> [timeout-seconds]
 #   <prompt-file>  path to the review prompt, RELATIVE TO THE REPO ROOT (e.g. .agy-prompt-2597r4.md)
-#   <out-path>     where to write the transcript
+#   <allocated-path>  exact reserved transcript leaf received from allocate-transcript.sh
 # Exit: 0 review captured · 1 setup/prompt failure · 3 the reviewer MUTATED the working tree (round void)
 set -uo pipefail
 
-[ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <out-path> [timeout]" >&2; exit 1; }
+[ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout]" >&2; exit 1; }
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 PROMPT_REL="$1"
 OUT="$2"
 TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
@@ -94,7 +96,7 @@ BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 # previous-round transcript would be read as THIS round's verdict. Absent maps to MISSING -> the gate
 # fails closed.
 rm -f "$OUT" "$OUT.captureid"
-( cd "$TREE" && python3 "$TREE/scripts/pty-capture.py" --timeout "$TIMEOUT" "$OUT" -- \
+( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
     agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
 RC=$?
 

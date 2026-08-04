@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""Runnable COREDEV-2619 S-THREAD proof cells."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+REPO = Path(__file__).resolve().parents[2]
+ALLOCATE = REPO / "scripts" / "review" / "allocate-transcript.sh"
+ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
+PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
+REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
+
+GEMINI_SKILL = REPO / "skills" / "gemini-review" / "SKILL.md"
+CODEX_SKILL = REPO / "skills" / "codex-review" / "SKILL.md"
+BRAINSTORM_SKILL = REPO / "skills" / "brainstorm" / "SKILL.md"
+SYNTHESIS_SKILL = REPO / "skills" / "review-synthesis" / "SKILL.md"
+
+GEMINI_BEGIN = "# COREDEV2619_GEMINI_CAPTURE_BEGIN"
+GEMINI_END = "# COREDEV2619_GEMINI_CAPTURE_END"
+CODEX_BEGIN = "# COREDEV2619_CODEX_CAPTURE_BEGIN"
+CODEX_END = "# COREDEV2619_CODEX_CAPTURE_END"
+BRAINSTORM_BEGIN = "# COREDEV2619_BRAINSTORM_PERSIST_BEGIN"
+BRAINSTORM_END = "# COREDEV2619_BRAINSTORM_PERSIST_END"
+SYNTHESIS_BEGIN = "# COREDEV2619_SYNTHESIS_PERSIST_BEGIN"
+SYNTHESIS_END = "# COREDEV2619_SYNTHESIS_PERSIST_END"
+
+
+WRITER_SHIM = r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+args = sys.argv[1:]
+if args and args[0] == "--allocate":
+    os.execv(
+        sys.executable,
+        [sys.executable, os.environ["THREAD_REAL_ALLOCATOR"]] + args,
+    )
+
+record = {
+    "argv": args,
+    "cwd": os.getcwd(),
+    "script": str(pathlib.Path(__file__).resolve()),
+}
+with open(os.environ["THREAD_CAPTURE_LOG"], "a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record) + "\n")
+
+separator = args.index("--")
+pre = args[:separator]
+allocated_index = pre.index("--allocated")
+out_path = pre[allocated_index + 1]
+reviewer = os.environ["THREAD_REVIEWER"]
+payload = (reviewer + " review\nVERDICT: APPROVE\n").encode("utf-8")
+pathlib.Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+with open(out_path, "wb") as stream:
+    stream.write(payload)
+with open(out_path + ".captureid", "w", encoding="utf-8") as stream:
+    stream.write("capture-" + reviewer + "\n")
+'''
+
+
+BASH_SHIM = r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+args = sys.argv[1:]
+if args and pathlib.Path(args[0]).name == "isolated-agy-review.sh":
+    with open(os.environ["THREAD_HELPER_LOG"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(args) + "\n")
+    clean_env = dict(os.environ)
+    clean_env.pop("CLAUDE_PLUGIN_ROOT", None)
+    os.execve(os.environ["THREAD_REAL_BASH"], [os.environ["THREAD_REAL_BASH"]] + args, clean_env)
+os.execv(os.environ["THREAD_REAL_BASH"], [os.environ["THREAD_REAL_BASH"]] + args)
+'''
+
+
+PYTHON_SHIM = r'''#!/bin/sh
+if [ "${1-}" = "${THREAD_REVIEW_VERDICT-}" ] && [ "${2-}" = "write" ]; then
+    : > "${THREAD_VERDICT_ARGV_LOG:?}"
+    for argument in "$@"; do
+        printf '%s\n' "$argument" >> "$THREAD_VERDICT_ARGV_LOG"
+    done
+fi
+exec "${THREAD_REAL_PYTHON:?}" "$@"
+'''
+
+
+def extract_recipe(path: Path, begin: str, end: str) -> str:
+    source = path.read_text(encoding="utf-8")
+    if source.count(begin) != 1 or source.count(end) != 1:
+        raise AssertionError(f"{path}: expected one {begin!r}/{end!r} recipe region")
+    start = source.index(begin) + len(begin)
+    finish = source.index(end, start)
+    return source[start:finish].strip() + "\n"
+
+
+def run_checked(argv: List[str], cwd: Path, env: Dict[str, str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        argv,
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+class TranscriptThreadingFixture(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix=".thread-proof-", dir=str(REPO))
+        self.root = Path(self.temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir(mode=0o700)
+        self.tmpdir = self.root / "tmp"
+        self.tmpdir.mkdir(mode=0o700)
+        self.reviewed = self.root / "reviewed app without plugin writer"
+        self.plugin = self.root / "relocated plugin copy"
+        self.bin_dir = self.root / "bin"
+        self.bin_dir.mkdir()
+        self.capture_log = self.root / "capture.jsonl"
+        self.helper_log = self.root / "helper.jsonl"
+        self.verdict_argv_log = self.root / "verdict-argv.txt"
+
+        self.real_bash = shutil.which("bash")
+        self.real_python = sys.executable
+        if self.real_bash is None:
+            self.skipTest("bash is required")
+
+        self._make_reviewed_repo()
+        self._make_relocated_plugin()
+        self._write_executable(self.bin_dir / "bash", BASH_SHIM)
+        self._write_executable(self.bin_dir / "python3", PYTHON_SHIM)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    @staticmethod
+    def _write_executable(path: Path, payload: str) -> None:
+        path.write_text(payload, encoding="utf-8")
+        path.chmod(0o755)
+
+    def _make_reviewed_repo(self) -> None:
+        self.reviewed.mkdir()
+        prompt = "# Review fixture\n\n" + ("read-only fixture material\n" * 80)
+        (self.reviewed / ".agy-prompt.md").write_text(prompt, encoding="utf-8")
+        (self.reviewed / "FEATURE_PLAN.md").write_text("# Plan\nThread paths.\n", encoding="utf-8")
+        env = dict(os.environ)
+        commands = (
+            ["git", "init", "-q"],
+            ["git", "config", "user.name", "Fixture"],
+            ["git", "config", "user.email", "fixture@example.invalid"],
+            ["git", "add", ".agy-prompt.md", "FEATURE_PLAN.md"],
+            ["git", "commit", "-q", "-m", "fixture"],
+        )
+        for command in commands:
+            result = run_checked(list(command), self.reviewed, env)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def _make_relocated_plugin(self) -> None:
+        review_dir = self.plugin / "scripts" / "review"
+        library_dir = self.plugin / "scripts" / "lib"
+        review_dir.mkdir(parents=True)
+        library_dir.mkdir()
+        shutil.copy2(ALLOCATE, review_dir / ALLOCATE.name)
+        shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
+        shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
+        self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
+
+    def environment(
+        self,
+        base: Path,
+        reviewer: str,
+        use_xdg: bool = True,
+        home: Optional[Path] = None,
+    ) -> Dict[str, str]:
+        if use_xdg:
+            base.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ)
+        env.pop("UNLEASHED_LIB_DIR", None)
+        if use_xdg:
+            env["XDG_STATE_HOME"] = str(base)
+        else:
+            env.pop("XDG_STATE_HOME", None)
+        env.update(
+            {
+                "CLAUDE_PLUGIN_ROOT": str(self.plugin),
+                "HOME": str(home or self.home),
+                "TMPDIR": str(self.tmpdir),
+                "TICKET": "COREDEV-2619",
+                "ROUND": "85",
+                "THREAD_CAPTURE_LOG": str(self.capture_log),
+                "THREAD_HELPER_LOG": str(self.helper_log),
+                "THREAD_REAL_ALLOCATOR": str(PTY_CAPTURE),
+                "THREAD_REAL_BASH": str(self.real_bash),
+                "THREAD_REAL_PYTHON": str(self.real_python),
+                "THREAD_REVIEWER": reviewer,
+                "PATH": str(self.bin_dir) + os.pathsep + env.get("PATH", ""),
+            }
+        )
+        return env
+
+    def run_capture_recipe(
+        self,
+        reviewer: str,
+        base: Path,
+        use_xdg: bool = True,
+        home: Optional[Path] = None,
+    ) -> Tuple[str, dict, List[List[str]]]:
+        if reviewer == "gemini":
+            recipe = extract_recipe(GEMINI_SKILL, GEMINI_BEGIN, GEMINI_END)
+        elif reviewer == "codex":
+            recipe = extract_recipe(CODEX_SKILL, CODEX_BEGIN, CODEX_END)
+        else:
+            raise AssertionError(f"unsupported reviewer fixture: {reviewer}")
+
+        for log in (self.capture_log, self.helper_log):
+            if log.exists():
+                log.unlink()
+        result = run_checked(
+            [str(self.real_bash), "-c", recipe],
+            self.reviewed,
+            self.environment(base, reviewer, use_xdg=use_xdg, home=home),
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+        marker_prefix = "UNLEASHED_TRANSCRIPT="
+        markers = [line for line in result.stdout.splitlines() if line.startswith(marker_prefix)]
+        self.assertEqual(1, len(markers), result.stdout)
+        allocated = markers[0][len(marker_prefix):]
+        records = [json.loads(line) for line in self.capture_log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(1, len(records), records)
+        helper_records = []
+        if self.helper_log.exists():
+            helper_records = [
+                json.loads(line) for line in self.helper_log.read_text(encoding="utf-8").splitlines()
+            ]
+        return allocated, records[0], helper_records
+
+    def allocate_empty(self, reviewer: str, base: Path) -> str:
+        env = self.environment(base, reviewer)
+        result = run_checked(
+            [str(self.real_bash), str(ALLOCATE), "COREDEV-2619", "85", reviewer],
+            self.reviewed,
+            env,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        prefix = "UNLEASHED_TRANSCRIPT="
+        self.assertTrue(result.stdout.startswith(prefix), result.stdout)
+        return result.stdout[len(prefix):].rstrip("\n")
+
+    def run_persistence_recipe(
+        self,
+        recipe: str,
+        bindings: Dict[str, str],
+    ) -> Tuple[dict, List[str]]:
+        plan = self.reviewed / "FEATURE_PLAN.md"
+
+        snapshot = run_checked(
+            [sys.executable, str(REVIEW_VERDICT), "snapshot", "--plan", str(plan)],
+            self.reviewed,
+            dict(os.environ),
+        )
+        self.assertEqual(0, snapshot.returncode, snapshot.stderr)
+
+        env = dict(os.environ)
+        env.update(
+            {
+                "CLAUDE_PLUGIN_ROOT": str(REPO),
+                "PLAN_PATH": str(plan),
+                "CREATED_AT": "2026-08-03T12:00:00Z",
+                "THREAD_REAL_PYTHON": str(self.real_python),
+                "THREAD_REVIEW_VERDICT": str(REVIEW_VERDICT),
+                "THREAD_VERDICT_ARGV_LOG": str(self.verdict_argv_log),
+                "PATH": str(self.bin_dir) + os.pathsep + env.get("PATH", ""),
+            }
+        )
+        env.update(bindings)
+        result = run_checked([str(self.real_bash), "-c", recipe], self.reviewed, env)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+        artifact = self.reviewed / ".verdicts" / "FEATURE_PLAN.md.verdict.json"
+        self.assertTrue(artifact.is_file(), result.stdout + result.stderr)
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        argv = self.verdict_argv_log.read_text(encoding="utf-8").splitlines()
+        return payload, argv
+
+    def run_synthesis(
+        self,
+        gemini_spec: str,
+        codex_spec: str,
+        combined_verdict: str,
+    ) -> Tuple[dict, List[str]]:
+        return self.run_persistence_recipe(
+            extract_recipe(SYNTHESIS_SKILL, SYNTHESIS_BEGIN, SYNTHESIS_END),
+            {
+                "COMBINED_VERDICT": combined_verdict,
+                "GEMINI_REVIEWER_SPEC": gemini_spec,
+                "CODEX_REVIEWER_SPEC": codex_spec,
+            },
+        )
+
+    def run_brainstorm_persistence(
+        self,
+        gemini_path: str,
+        codex_path: str,
+    ) -> Tuple[dict, List[str]]:
+        return self.run_persistence_recipe(
+            extract_recipe(BRAINSTORM_SKILL, BRAINSTORM_BEGIN, BRAINSTORM_END),
+            {
+                "COMBINED_VERDICT": "APPROVE",
+                "GEMINI_STATUS": "APPROVE",
+                "GEMINI_TRANSCRIPT": gemini_path,
+                "CODEX_STATUS": "APPROVE",
+                "CODEX_TRANSCRIPT": codex_path,
+            },
+        )
+
+    def assert_artifact_paths(self, artifact: dict, gemini_path: str, codex_path: str) -> None:
+        by_name = {reviewer["name"]: reviewer for reviewer in artifact["reviewers"]}
+        self.assertEqual(gemini_path, by_name["gemini"]["transcriptPath"])
+        self.assertEqual(codex_path, by_name["codex"]["transcriptPath"])
+
+    @staticmethod
+    def reviewer_values(argv: List[str]) -> List[str]:
+        return [argv[index + 1] for index, value in enumerate(argv) if value == "--reviewer"]
+
+
+class TranscriptPathPropagationTests(TranscriptThreadingFixture):
+    def test_M5_1_M5_6_both_arms_and_consumers_preserve_one_opaque_argument(self) -> None:
+        """Rejects unquoted/re-derived handoffs in capture, synthesis, brainstorm, or artifact."""
+        hostile_base = self.root / "state space\tglob[*]?\\single' double\" colon: equals="
+
+        gemini_path, gemini_capture, gemini_helpers = self.run_capture_recipe("gemini", hostile_base)
+        codex_path, codex_capture, codex_helpers = self.run_capture_recipe("codex", hostile_base)
+
+        expected_prefix = str(hostile_base.resolve()) + os.sep
+        self.assertTrue(gemini_path.startswith(expected_prefix), gemini_path)
+        self.assertTrue(codex_path.startswith(expected_prefix), codex_path)
+        self.assertEqual([], codex_helpers)
+        self.assertEqual(1, len(gemini_helpers), gemini_helpers)
+        self.assertEqual(
+            [
+                str(self.plugin / "scripts" / "review" / "isolated-agy-review.sh"),
+                ".agy-prompt.md",
+                gemini_path,
+                "1500",
+            ],
+            gemini_helpers[0],
+        )
+        for expected, record in ((gemini_path, gemini_capture), (codex_path, codex_capture)):
+            with self.subTest(expected=expected):
+                argv = record["argv"]
+                allocated_index = argv.index("--allocated")
+                self.assertEqual(expected, argv[allocated_index + 1])
+                self.assertEqual(1, argv.count(expected), argv)
+                self.assertTrue(Path(expected).is_file())
+
+        self.assertEqual(
+            str((self.plugin / "scripts" / "pty-capture.py").resolve()),
+            gemini_capture["script"],
+        )
+        self.assertFalse((self.reviewed / "scripts" / "pty-capture.py").exists())
+
+        artifact, argv = self.run_synthesis(
+            f"gemini=APPROVE:{gemini_path}",
+            f"codex=APPROVE:{codex_path}",
+            "APPROVE",
+        )
+        self.assert_artifact_paths(artifact, gemini_path, codex_path)
+        self.assertEqual(
+            [f"gemini=APPROVE:{gemini_path}", f"codex=APPROVE:{codex_path}"],
+            self.reviewer_values(argv),
+        )
+
+        brainstorm_artifact, brainstorm_argv = self.run_brainstorm_persistence(
+            gemini_path, codex_path
+        )
+        self.assert_artifact_paths(brainstorm_artifact, gemini_path, codex_path)
+        self.assertEqual(
+            [f"gemini=APPROVE:{gemini_path}", f"codex=APPROVE:{codex_path}"],
+            self.reviewer_values(brainstorm_argv),
+        )
+
+    def test_M5_1_terminal_space_and_tab_bases_are_not_trimmed(self) -> None:
+        """Rejects strip/read parsing that silently changes an otherwise valid selected base."""
+        for suffix in ("terminal-space ", "terminal-tab\t"):
+            with self.subTest(suffix=suffix):
+                base = self.root / suffix
+                gemini_path, gemini_capture, _helpers = self.run_capture_recipe("gemini", base)
+                codex_path, codex_capture, _helpers = self.run_capture_recipe("codex", base)
+                for allocated, record in (
+                    (gemini_path, gemini_capture),
+                    (codex_path, codex_capture),
+                ):
+                    self.assertTrue(allocated.startswith(str(base.resolve()) + os.sep), allocated)
+                    index = record["argv"].index("--allocated")
+                    self.assertEqual(allocated, record["argv"][index + 1])
+
+                artifact, _argv = self.run_synthesis(
+                    f"gemini=APPROVE:{gemini_path}",
+                    f"codex=APPROVE:{codex_path}",
+                    "APPROVE",
+                )
+                self.assert_artifact_paths(artifact, gemini_path, codex_path)
+
+    def test_M5_1_safe_symlink_bases_keep_the_emitted_canonical_spelling(self) -> None:
+        """Rejects restoring a lexical base spelling after the allocator canonicalizes it."""
+        xdg_target = self.root / "canonical XDG target:=one"
+        xdg_target.mkdir()
+        xdg_link = self.root / "lexical XDG link"
+        xdg_link.symlink_to(xdg_target, target_is_directory=True)
+
+        fallback_target = self.root / "canonical fallback home:=two"
+        (fallback_target / ".local" / "state").mkdir(parents=True)
+        fallback_link = self.root / "lexical fallback home"
+        fallback_link.symlink_to(fallback_target, target_is_directory=True)
+
+        cases = (
+            ("xdg", xdg_link, True, self.home, xdg_target.resolve()),
+            (
+                "fallback",
+                self.root / "unused XDG base",
+                False,
+                fallback_link,
+                (fallback_target / ".local" / "state").resolve(),
+            ),
+        )
+        for label, base, use_xdg, home, canonical_base in cases:
+            with self.subTest(base_kind=label):
+                gemini_path, _capture, _helpers = self.run_capture_recipe(
+                    "gemini", base, use_xdg=use_xdg, home=home
+                )
+                codex_path, _capture, _helpers = self.run_capture_recipe(
+                    "codex", base, use_xdg=use_xdg, home=home
+                )
+                canonical_prefix = str(canonical_base) + os.sep
+                self.assertTrue(gemini_path.startswith(canonical_prefix), gemini_path)
+                self.assertTrue(codex_path.startswith(canonical_prefix), codex_path)
+                self.assertNotIn(str(xdg_link if use_xdg else fallback_link), gemini_path)
+                self.assertNotIn(str(xdg_link if use_xdg else fallback_link), codex_path)
+
+                artifact, _argv = self.run_synthesis(
+                    f"gemini=APPROVE:{gemini_path}",
+                    f"codex=APPROVE:{codex_path}",
+                    "APPROVE",
+                )
+                self.assert_artifact_paths(artifact, gemini_path, codex_path)
+
+    def test_M5_10_reviewer_specs_split_only_the_first_equals_and_colon(self) -> None:
+        """Rejects unrestricted split('=')/split(':') and loss of later path delimiters."""
+        base = self.root / "delimiter:=base=more:still"
+        gemini_path = self.allocate_empty("gemini", base)
+        codex_path = self.allocate_empty("codex", base)
+        Path(gemini_path).write_text("gemini review\nVERDICT: APPROVE\n", encoding="utf-8")
+        Path(codex_path).write_text("codex review\nVERDICT: APPROVE\n", encoding="utf-8")
+
+        gemini_spec = f"gemini=APPROVE:{gemini_path}"
+        codex_spec = f"codex=APPROVE:{codex_path}"
+        artifact, argv = self.run_synthesis(gemini_spec, codex_spec, "APPROVE")
+
+        self.assertEqual([gemini_spec, codex_spec], self.reviewer_values(argv))
+        self.assert_artifact_paths(artifact, gemini_path, codex_path)
+
+    def test_M5_17_allocated_but_empty_transcript_classifies_as_missing(self) -> None:
+        """Rejects treating a reserved zero-byte leaf as an approving or returned review."""
+        base = self.root / "empty synthesis:=base"
+        gemini_path = self.allocate_empty("gemini", base)
+        codex_path = self.allocate_empty("codex", base)
+        self.assertEqual(0, Path(gemini_path).stat().st_size)
+        Path(codex_path).write_text("codex review\nVERDICT: APPROVE\n", encoding="utf-8")
+
+        artifact, argv = self.run_synthesis(
+            f"gemini=APPROVE:{gemini_path}",
+            f"codex=APPROVE:{codex_path}",
+            "DISAGREEMENT",
+        )
+
+        by_name = {reviewer["name"]: reviewer for reviewer in artifact["reviewers"]}
+        self.assertEqual("MISSING", by_name["gemini"]["status"])
+        self.assertNotIn("transcriptPath", by_name["gemini"])
+        self.assertEqual(
+            ["gemini=MISSING", f"codex=APPROVE:{codex_path}"],
+            self.reviewer_values(argv),
+        )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

@@ -24,11 +24,11 @@ Examples
 --------
     # Codex review — capture is guaranteed, no -o flag needed. Always force xhigh effort
     # (the config default is fragile — see skills/codex-review/SKILL.md).
-    python3 pty-capture.py /tmp/codex-out.txt -- \
+    python3 pty-capture.py --allocated "$CODEX_TRANSCRIPT" -- \
         codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
 
     # Antigravity (agy) review.
-    python3 pty-capture.py /tmp/agy-out.txt -- \
+    python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- \
         agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
@@ -314,7 +314,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')
             # SESSION-SAFE write (#44 review §4). Review transcripts can quote message bodies / tokens,
             # and the recipes use predictable /tmp paths, so a pre-created symlink or a 0644 file is a
-            # local hazard: another user could pre-seed `/tmp/agy-out.txt` as a symlink to redirect the
+            # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the
             # capture, or read a world-readable transcript. Create with O_NOFOLLOW (a pre-existing symlink
             # at out_path makes open() fail rather than being followed) and force mode 0600 (fchmod, since
             # O_CREAT only sets the mode when the file did not already exist).

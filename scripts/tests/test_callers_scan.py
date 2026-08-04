@@ -614,14 +614,13 @@ class M513CallersScanTests(CallersScanProof):
         # Constructed, not spelled: a bare transcript-path literal here would be a NEW
         # unclassified site and M3.1 would (correctly) reject it as inventory drift.
         source_token = b"--reviewer gemini=<GEMINI_STATUS>:" + b"/tmp/" + b"agy-out.txt"
-        destination_token = b"--reviewer gemini=<GEMINI_STATUS>:<allocated-gemini-path>"
-        indexes = [index for index, line in enumerate(lines) if source_token in line]
+        destination_token = b'--reviewer "$GEMINI_PERSIST_SPEC"'
+        indexes = [index for index, line in enumerate(lines) if destination_token in line]
         self.assertEqual(1, len(indexes))
         index = indexes[0]
-        stale_identity = identity_for(path, index, lines[index])
-        lines[index] = lines[index].replace(source_token, destination_token)
-        files[path] = encode_lines(files[path], lines)
         final_identity = identity_for(path, index, lines[index])
+        stale_payload = lines[index].replace(destination_token, source_token)
+        stale_identity = identity_for(path, index, stale_payload)
 
         parsed = self.assert_manifest_is_exact_complement(files, reference_manifest(files))
         serialized = {item.serialize() for item in parsed}

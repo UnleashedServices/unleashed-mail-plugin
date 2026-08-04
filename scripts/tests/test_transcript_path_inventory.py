@@ -45,6 +45,7 @@ EXPECTED_CONTRACT_COUNTS = {
     "S-THREAD": 15,
     "S-WRAPPER": 1,
 }
+EXPECTED_SCHEMA_VERSION = 2
 SHA256_LENGTH = 64
 
 
@@ -63,6 +64,23 @@ def _payload_lines(raw: bytes) -> list[bytes]:
 
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _destination_payloads(site: dict) -> list[bytes]:
+    return [payload.encode("utf-8") for payload in site["destination"]["payloads"]]
+
+
+def _destination_sha256(payloads: list[bytes]) -> str:
+    return _sha256(b"\n".join(payloads))
+
+
+def _sequence_positions(lines: list[bytes], payloads: list[bytes]) -> list[int]:
+    width = len(payloads)
+    return [
+        index
+        for index in range(len(lines) - width + 1)
+        if lines[index : index + width] == payloads
+    ]
 
 
 def _load_manifest() -> dict:
@@ -111,10 +129,32 @@ def _derived_file_counts(sites: list[dict]) -> dict[str, dict[str, int]]:
     return counts
 
 
+def _contract_problems(location: str, contracts: list[str], payloads: list[bytes]) -> list[str]:
+    problems = []
+    joined = b"\n".join(payloads)
+    if "S-PRECLEAN" in contracts and (
+        b"rm -f" in joined or any(literal.encode("utf-8") in joined for literal in EXPECTED_LITERALS)
+    ):
+        problems.append(f"{location}: destination violates S-PRECLEAN")
+    if "S-WRAPPER" in contracts and b"scripts/review/allocate-transcript.sh" not in joined:
+        problems.append(f"{location}: destination lacks S-WRAPPER allocation")
+    if "S-CAPTURE" in contracts and not any(
+        token in joined
+        for token in (b"--allocated", b"GEMINI_TRANSCRIPT", b"allocated", b"reserved")
+    ):
+        problems.append(f"{location}: destination lacks S-CAPTURE evidence")
+    if "S-THREAD" in contracts and not any(
+        token in joined
+        for token in (b"TRANSCRIPT", b"allocated", b"PERSIST_SPEC")
+    ):
+        problems.append(f"{location}: destination lacks S-THREAD evidence")
+    return problems
+
+
 def _manifest_problems(manifest: dict) -> list[str]:
     problems = []
-    if manifest.get("schemaVersion") != 1:
-        problems.append("schemaVersion must be 1")
+    if manifest.get("schemaVersion") != EXPECTED_SCHEMA_VERSION:
+        problems.append(f"schemaVersion must be {EXPECTED_SCHEMA_VERSION}")
     if manifest.get("ticket") != "COREDEV-2619" or manifest.get("step") != "S-INVENTORY":
         problems.append("ticket/step identity drifted")
     if manifest.get("frozenCommit") != FROZEN_COMMIT:
@@ -136,6 +176,7 @@ def _manifest_problems(manifest: dict) -> list[str]:
 
     class_counts = Counter()
     contract_counts = Counter()
+    destination_identities = []
     for site in sites:
         if not isinstance(site, dict):
             problems.append(f"site is not an object: {site!r}")
@@ -169,6 +210,7 @@ def _manifest_problems(manifest: dict) -> list[str]:
         if classification == "rewrite":
             if not isinstance(contracts, list) or not contracts:
                 problems.append(f"{location}: rewrite lacks an owning contract label")
+                contracts = []
             else:
                 contract_counts.update(contracts)
             for key in anchor_keys:
@@ -177,9 +219,47 @@ def _manifest_problems(manifest: dict) -> list[str]:
             for key in ("precedingAnchorSha256", "followingAnchorSha256"):
                 if key in site and not _is_sha256(site[key]):
                     problems.append(f"{location}: {key} is not lowercase SHA-256")
-        elif any(key in site for key in ("contracts",) + anchor_keys):
+
+            destination = site.get("destination")
+            if not isinstance(destination, dict):
+                problems.append(f"{location}: rewrite lacks its frozen destination")
+                continue
+            destination_line = destination.get("line")
+            raw_payloads = destination.get("payloads")
+            if not isinstance(destination_line, int) or destination_line < 1:
+                problems.append(f"{location}: destination line must be positive")
+            if (
+                not isinstance(raw_payloads, list)
+                or not raw_payloads
+                or any(
+                    not isinstance(payload, str)
+                    or not payload
+                    or "\n" in payload
+                    or "\r" in payload
+                    for payload in raw_payloads
+                )
+            ):
+                problems.append(f"{location}: destination payloads must be nonempty physical lines")
+                continue
+            payloads = [payload.encode("utf-8") for payload in raw_payloads]
+            payload_sha256 = destination.get("payloadSha256")
+            if not _is_sha256(payload_sha256):
+                problems.append(f"{location}: destination payloadSha256 is not lowercase SHA-256")
+            elif payload_sha256 != _destination_sha256(payloads):
+                problems.append(f"{location}: destination payloadSha256 does not hash its payload block")
+            if any(
+                literal.encode("utf-8") in payload
+                for literal in EXPECTED_LITERALS
+                for payload in payloads
+            ):
+                problems.append(f"{location}: destination retains a legacy output literal")
+            problems.extend(_contract_problems(location, contracts, payloads))
+            destination_identities.append((path, destination_line, payload_sha256))
+        elif any(key in site for key in ("contracts", "destination") + anchor_keys):
             problems.append(f"{location}: quote-keep must not carry rewrite-only fields")
 
+    if len(destination_identities) != len(set(destination_identities)):
+        problems.append("rewrite destination identities are not unique")
     derived_totals = {
         "sites": len(sites),
         "files": len({site.get("path") for site in sites if isinstance(site, dict)}),
@@ -210,17 +290,12 @@ def _observed_literal_sites(manifest: dict, tree: dict[str, list[bytes]]) -> set
 def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
     problems = []
     sites = manifest["sites"]
-    expected_sites = {_site_key(site) for site in sites}
+    quote_keep_sites = {_site_key(site) for site in sites if site["class"] == "quote-keep"}
     observed_sites = _observed_literal_sites(manifest, tree)
-    for path, line in sorted(expected_sites - observed_sites):
-        problems.append(f"{path}:{line}: classified output literal is missing")
-    for path, line in sorted(observed_sites - expected_sites):
-        problems.append(f"{path}:{line}: unclassified output literal")
-
-    rewrite_lines = {}
-    for site in sites:
-        if site["class"] == "rewrite":
-            rewrite_lines.setdefault(site["path"], set()).add(site["line"])
+    for path, line in sorted(quote_keep_sites - observed_sites):
+        problems.append(f"{path}:{line}: quote-keep output literal is missing")
+    for path, line in sorted(observed_sites - quote_keep_sites):
+        problems.append(f"{path}:{line}: output literal survives outside the quote-keep set")
 
     for site in sites:
         location = site["location"]
@@ -228,78 +303,177 @@ def _tree_problems(manifest: dict, tree: dict[str, list[bytes]]) -> list[str]:
         if lines is None:
             problems.append(f"{location}: classified file is missing")
             continue
-        if site["line"] > len(lines):
-            problems.append(f"{location}: physical line is missing")
-            continue
-        if _sha256(lines[site["line"] - 1]) != site["sourceSha256"]:
-            problems.append(f"{location}: source payload hash drifted")
-        if site["class"] != "rewrite":
+        if site["class"] == "quote-keep":
+            if site["line"] > len(lines):
+                problems.append(f"{location}: quote-keep physical line is missing")
+            elif _sha256(lines[site["line"] - 1]) != site["sourceSha256"]:
+                problems.append(f"{location}: quote-keep payload hash drifted")
             continue
 
-        preceding = site["line"] - 1
-        while preceding in rewrite_lines[site["path"]]:
-            preceding -= 1
-        following = site["line"] + 1
-        while following in rewrite_lines[site["path"]]:
-            following += 1
-        if preceding != site["precedingAnchorLine"] or following != site["followingAnchorLine"]:
-            problems.append(f"{location}: stored anchor lines do not bracket the frozen rewrite cluster")
+        if any(_sha256(payload) == site["sourceSha256"] for payload in lines):
+            problems.append(f"{location}: legacy source payload survives")
+
+        destination = site["destination"]
+        start = destination["line"] - 1
+        expected_payloads = _destination_payloads(site)
+        stop = start + len(expected_payloads)
+        if stop > len(lines):
+            problems.append(
+                f"{location}: destination at final line {destination['line']} is missing"
+            )
             continue
-        if preceding < 1 or following > len(lines):
-            problems.append(f"{location}: context anchor is missing")
-            continue
-        if _sha256(lines[preceding - 1]) != site["precedingAnchorSha256"]:
-            problems.append(f"{location}: preceding context anchor drifted")
-        if _sha256(lines[following - 1]) != site["followingAnchorSha256"]:
-            problems.append(f"{location}: following context anchor drifted")
+        actual_payloads = lines[start:stop]
+        if actual_payloads != expected_payloads:
+            problems.append(
+                f"{location}: destination payload drifted at final line {destination['line']}"
+            )
+        else:
+            problems.extend(_contract_problems(location, site["contracts"], actual_payloads))
     return problems
 
 
+def _completed_positive_tree(
+    manifest: dict, tree: dict[str, list[bytes]]
+) -> dict[str, list[bytes]]:
+    """Materialize only exact legacy-source gaps for mutation-test discrimination.
+
+    The real-tree assertion never uses this fixture.  It lets the 21 mutation
+    cases begin from a passing positive even while an implementation step still
+    carries its frozen source.  A missing destination whose source is already
+    gone is deliberately not repaired here.
+    """
+    completed = {path: list(lines) for path, lines in tree.items()}
+    for site in manifest["sites"]:
+        if site["class"] != "rewrite":
+            continue
+        lines = completed[site["path"]]
+        source_positions = [
+            index
+            for index, payload in enumerate(lines)
+            if _sha256(payload) == site["sourceSha256"]
+        ]
+        if not source_positions:
+            continue
+        if len(source_positions) != 1:
+            raise AssertionError(f"{site['location']}: source payload is not unique")
+        payloads = _destination_payloads(site)
+        if _sequence_positions(lines, payloads):
+            del lines[source_positions[0]]
+        else:
+            lines[source_positions[0] : source_positions[0] + 1] = payloads
+    return completed
+
+
+def _nonempty_line_count(tree: dict[str, list[bytes]]) -> int:
+    return sum(bool(payload) for lines in tree.values() for payload in lines)
+
+
+def _occupied_destination_count(manifest: dict, tree: dict[str, list[bytes]]) -> int:
+    occupied = 0
+    for site in manifest["sites"]:
+        if site["class"] != "rewrite":
+            continue
+        lines = tree[site["path"]]
+        start = site["destination"]["line"] - 1
+        width = len(site["destination"]["payloads"])
+        slot = lines[start : start + width]
+        if len(slot) == width and all(slot):
+            occupied += 1
+    return occupied
+
+
 class M3_1_InventoryDrift(unittest.TestCase):
-    """Freeze the pre-rewrite source identities that later steps must replace in place."""
+    """Bind every frozen source identity to its exact final destination."""
+
+    maxDiff = None
 
     @classmethod
     def setUpClass(cls):
         cls.manifest = _load_manifest()
         cls.tree = _tracked_tree()
+        cls.completed_tree = _completed_positive_tree(cls.manifest, cls.tree)
 
     def test_manifest_reproduces_the_locked_section_7_inventory(self):
         self.assertEqual([], _manifest_problems(self.manifest))
 
-    def test_current_tree_matches_every_frozen_source_identity(self):
+    def test_current_tree_matches_every_frozen_destination_identity(self):
         self.assertEqual([], _tree_problems(self.manifest, self.tree))
 
-    def test_each_site_deletion_is_detected_at_that_identity(self):
-        for site in self.manifest["sites"]:
-            with self.subTest(location=site["location"]):
-                mutated = dict(self.tree)
-                lines = list(mutated[site["path"]])
-                del lines[site["line"] - 1]
-                mutated[site["path"]] = lines
-                problems = _tree_problems(self.manifest, mutated)
-                self.assertTrue(
-                    any(problem.startswith(site["location"] + ":") for problem in problems),
-                    f"deleting {site['location']} was not attributed to that identity: {problems}",
-                )
+    def test_manifest_derived_completed_tree_is_a_passing_positive_control(self):
+        self.assertEqual([], _tree_problems(self.manifest, self.completed_tree))
 
-    def test_each_rewrite_relocation_is_detected_with_counts_unchanged(self):
+    def test_each_rewrite_destination_deletion_is_detected_with_counts_unchanged(self):
         rewrites = [site for site in self.manifest["sites"] if site["class"] == "rewrite"]
         self.assertEqual(EXPECTED_TOTALS["rewrite"], len(rewrites))
+        baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
+        baseline_nonempty = _nonempty_line_count(self.completed_tree)
+        baseline_occupied = _occupied_destination_count(self.manifest, self.completed_tree)
+        self.assertEqual(EXPECTED_TOTALS["rewrite"], baseline_occupied)
         for site in rewrites:
             with self.subTest(location=site["location"]):
-                mutated = dict(self.tree)
+                mutated = dict(self.completed_tree)
                 lines = list(mutated[site["path"]])
-                moved = lines.pop(site["line"] - 1)
-                lines.append(moved)
+                start = site["destination"]["line"] - 1
+                width = len(site["destination"]["payloads"])
+                self.assertEqual(_destination_payloads(site), lines[start : start + width])
+                line_count = len(lines)
+                # Delete the expected payload while retaining nonempty physical
+                # slots, so a guard that only counts sites/lines still passes.
+                for offset in range(width):
+                    lines[start + offset] = (
+                        f"# M3.1 deleted destination {site['location']} part {offset + 1}"
+                    ).encode("utf-8")
                 mutated[site["path"]] = lines
+                self.assertEqual(line_count, len(lines))
+                self.assertEqual(baseline_nonempty, _nonempty_line_count(mutated))
                 self.assertEqual(
-                    len(_observed_literal_sites(self.manifest, self.tree)),
-                    len(_observed_literal_sites(self.manifest, mutated)),
+                    baseline_occupied,
+                    _occupied_destination_count(self.manifest, mutated),
+                )
+                self.assertEqual(
+                    baseline_literals,
+                    _observed_literal_sites(self.manifest, mutated),
                 )
                 problems = _tree_problems(self.manifest, mutated)
-                self.assertTrue(
-                    any(problem.startswith(site["location"] + ":") for problem in problems),
-                    f"relocating {site['location']} was not attributed to that identity: {problems}",
+                self.assertIn(
+                    f"{site['location']}: destination payload drifted at final line "
+                    f"{site['destination']['line']}",
+                    problems,
+                )
+
+    def test_each_rewrite_same_file_relocation_is_detected_with_counts_unchanged(self):
+        rewrites = [site for site in self.manifest["sites"] if site["class"] == "rewrite"]
+        self.assertEqual(EXPECTED_TOTALS["rewrite"], len(rewrites))
+        baseline_literals = _observed_literal_sites(self.manifest, self.completed_tree)
+        for site in rewrites:
+            with self.subTest(location=site["location"]):
+                mutated = dict(self.completed_tree)
+                lines = list(mutated[site["path"]])
+                original_payload_counts = Counter(lines)
+                start = site["destination"]["line"] - 1
+                width = len(site["destination"]["payloads"])
+                moved = lines[start : start + width]
+                self.assertEqual(_destination_payloads(site), moved)
+                del lines[start : start + width]
+                if start == len(lines):
+                    lines[0:0] = moved
+                else:
+                    lines.extend(moved)
+                mutated[site["path"]] = lines
+                self.assertEqual(
+                    original_payload_counts,
+                    Counter(lines),
+                    "same-file relocation must preserve aggregate payload counts",
+                )
+                self.assertEqual(
+                    baseline_literals,
+                    _observed_literal_sites(self.manifest, mutated),
+                )
+                problems = _tree_problems(self.manifest, mutated)
+                self.assertIn(
+                    f"{site['location']}: destination payload drifted at final line "
+                    f"{site['destination']['line']}",
+                    problems,
                 )
 
     def test_reclassification_in_either_direction_is_detected(self):
@@ -321,7 +495,7 @@ class M3_1_InventoryDrift(unittest.TestCase):
         lines.append(EXPECTED_LITERALS[0].encode("utf-8"))
         mutated["SECURITY.md"] = lines
         self.assertIn(
-            f"SECURITY.md:{new_line}: unclassified output literal",
+            f"SECURITY.md:{new_line}: output literal survives outside the quote-keep set",
             _tree_problems(self.manifest, mutated),
         )
 
