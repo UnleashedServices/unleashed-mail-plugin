@@ -92,10 +92,7 @@ BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 [ "$BYTES" -ge 1000 ] || { echo "assembled prompt is only ${BYTES} bytes — truncated" >&2; exit 1; }
 
 # --- run --------------------------------------------------------------------------------------
-# Pre-clean so a wrapper that never starts leaves the transcript ABSENT, never STALE: a stale
-# previous-round transcript would be read as THIS round's verdict. Absent maps to MISSING -> the gate
-# fails closed.
-rm -f "$OUT" "$OUT.captureid"
+# Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
     agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
 RC=$?
