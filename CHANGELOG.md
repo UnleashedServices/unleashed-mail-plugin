@@ -13,26 +13,26 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.6.7] — 2026-08-03
+
+### Fixed
+
+- **Review transcripts are allocated per run and freshness-bound** (`COREDEV-2619`): both recipes reserve distinct leaves, carry each path unchanged through capture, synthesis and artifact recording, and validate its capture identity and nanosecond mtime against its own pre-dispatch launch record on both digest paths. The explicitly armed release tool deletes only the closed 39-file manifest, then its nine empty parents; its assertion/mutation suite covers set equality, forbidden primitives, containment, types, preservation, directory pruning and release metadata.
+
+  Per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor.
+  The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude Code 2.1.0 and later expand that placeholder.
+
 ## [2.6.6] — 2026-07-31
 
 ### Changed
 
-- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan gated over 19
-  review rounds). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers'
-  machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan gated over 19 review rounds). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers' machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
 
-  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as *"out of
-  scope"* and the five reviewers as *"in scope"* would have passed every gate the section had while
-  asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id |
-  scope | anchor` — that is the *only* scope statement, exclusive and normative: exactly nine approved
-  triples, every field from a finite allowlist, any unknown key or catch-all row a hard failure.
+  §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as *"out of scope"* and the five reviewers as *"in scope"* would have passed every gate while asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id | scope | anchor` — that is the only scope statement:
+  exclusive and normative, with exactly nine approved triples, every field from a finite allowlist, and any unknown key or catch-all row a hard failure.
 
-  Each row carries a repository **anchor** (`path:line`), because binding a token to a token still left
-  every `surface_id` free to be *defined* elsewhere: `verdict-report` could be redefined as the JSON
-  passed to the synthesizer tool and every check would still pass while §13 was silently redirected off
-  the client-facing report. The anchor's **path is pinned** to a canonical map; only its **line** is
-  resolution-driven, and the gate walks up from the surface's fingerprint to its nearest enclosing real
-  heading, fence-aware.
+  Each row carries a repository **anchor** (`path:line`), because binding a token to a token still left every `surface_id` free to be defined elsewhere: `verdict-report` could be redefined as the JSON passed to the synthesizer while every check passed.
+  The anchor's **path is pinned** to a canonical map; only its **line** is resolution-driven, and the gate walks up from the surface's fingerprint to its nearest enclosing real heading, fence-aware.
 
 - **The payload-region invariant moved verbatim to §5 (Code Review Pipeline)**, where the contract it
   protects lives, together with the precedence rule and the six machine contracts it enumerates. §13

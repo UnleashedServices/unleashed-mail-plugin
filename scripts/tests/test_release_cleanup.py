@@ -1,0 +1,616 @@
+#!/usr/bin/env python3
+"""COREDEV-2619 S-RELEASE assertion/mutation proof pairs.
+
+Every destructive exercise in this module is confined to a synthetic state
+tree created by ``tempfile.TemporaryDirectory``.  The production cleanup is
+never invoked with an implicit or real HOME-derived path.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from collections import Counter
+from pathlib import Path, PurePosixPath
+from types import ModuleType, SimpleNamespace
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
+from unittest import mock
+
+
+REPO = Path(__file__).resolve().parents[2]
+PRODUCTION_PATH = REPO / "scripts" / "review" / "cleanup_coredev_2619_leaks.py"
+PLAN_PATH = REPO / "docs" / "planning" / "COREDEV-2619_PER_RUN_TRANSCRIPT_PATHS_PLAN.md"
+PLUGIN_PATH = REPO / ".claude-plugin" / "plugin.json"
+README_PATH = REPO / "README.md"
+CHANGELOG_PATH = REPO / "CHANGELOG.md"
+
+BASELINE_VERSION = (2, 6, 6)
+CEILING_SENTENCE = (
+    "Per-run paths prevent accidental transcript collisions and stale reuse; "
+    "they do not make the gate tamper-proof, establish operator provenance, or "
+    "protect a host where an attacker controls a state-directory ancestor."
+)
+RETAINED_GRANTS_SENTENCE = (
+    "The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because "
+    "Claude Code 2.1.0 and later expand that placeholder."
+)
+CEILING_CLAUSES = (
+    "prevent accidental transcript collisions and stale reuse",
+    "do not make the gate tamper-proof",
+    "establish operator provenance",
+    "protect a host where an attacker controls a state-directory ancestor",
+)
+
+
+def _load_module(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load module: " + str(path))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
+
+
+production = _load_module(PRODUCTION_PATH, "coredev2619_release_cleanup")
+PRODUCTION_SOURCE = PRODUCTION_PATH.read_text(encoding="utf-8")
+
+
+def _plan_manifest() -> Tuple[Tuple[str, str], ...]:
+    source = PLAN_PATH.read_text(encoding="utf-8")
+    start = source.index('10. **`S-RELEASE`**')
+    end = source.index("This is the closed output", start)
+    entries = re.findall(
+        r"^\s+- \*\*([^*]+)\*\* — `([^`]+)`$",
+        source[start:end],
+        flags=re.MULTILINE,
+    )
+    if len(entries) != 39:
+        raise AssertionError("S-RELEASE must carry exactly 39 typed manifest entries")
+    return tuple(entries)
+
+
+PLAN_MANIFEST = _plan_manifest()
+EXPECTED_PATHS = tuple(path for _expected_type, path in PLAN_MANIFEST)
+EXPECTED_TYPES = {path: expected_type for expected_type, path in PLAN_MANIFEST}
+EXPECTED_DIRECTORIES = tuple(
+    sorted(
+        {PurePosixPath(path).parent.as_posix() for path in EXPECTED_PATHS},
+        key=lambda path: (-len(PurePosixPath(path).parts), os.fsencode(path)),
+    )
+)
+
+
+def _replace_once(source: str, old: str, new: str) -> str:
+    if source.count(old) != 1:
+        raise AssertionError("mutation anchor must occur exactly once: " + repr(old))
+    return source.replace(old, new, 1)
+
+
+def _function(tree: ast.AST, name: str) -> ast.FunctionDef:
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    ]
+    if len(matches) != 1:
+        raise AssertionError("expected one function named " + name)
+    return matches[0]
+
+
+def _call_leaf(call: ast.Call) -> str:
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return ""
+
+
+def _assert_literal_unlink_source_contract(source: str) -> None:
+    tree = ast.parse(source, filename=str(PRODUCTION_PATH), feature_version=9)
+    delete_function = _function(tree, "delete_leak_files")
+    unlink_function = _function(tree, "unlink_regular_file")
+
+    literal_loops = [
+        node
+        for node in ast.walk(delete_function)
+        if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Name)
+        and node.iter.id == "LEAK_MANIFEST"
+    ]
+    if len(literal_loops) != 1:
+        raise AssertionError("file deletion must iterate LEAK_MANIFEST literally once")
+
+    forbidden = {
+        "call",
+        "glob",
+        "popen",
+        "Popen",
+        "remove",
+        "removedirs",
+        "rename",
+        "renames",
+        "replace",
+        "rglob",
+        "rmdir",
+        "rmtree",
+        "run",
+        "system",
+    }
+    phase_calls = [
+        _call_leaf(node)
+        for function in (delete_function, unlink_function)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    ]
+    used_forbidden = sorted(set(phase_calls) & forbidden)
+    if used_forbidden:
+        raise AssertionError("forbidden file-deletion primitive: " + ", ".join(used_forbidden))
+
+    unlink_calls = [
+        node
+        for node in ast.walk(unlink_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "os"
+        and node.func.attr == "unlink"
+    ]
+    if len(unlink_calls) != 1:
+        raise AssertionError("non-recursive unlink routine must call os.unlink exactly once")
+
+
+def _version(value: str) -> Tuple[int, int, int]:
+    match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)", value)
+    if match is None:
+        raise AssertionError("not a semantic version: " + repr(value))
+    return tuple(int(group) for group in match.groups())  # type: ignore[return-value]
+
+
+def _first_match(pattern: str, source: str, label: str) -> str:
+    match = re.search(pattern, source, flags=re.MULTILINE)
+    if match is None:
+        raise AssertionError("missing " + label)
+    return match.group(1)
+
+
+def _latest_changelog_release(changelog: str) -> Tuple[str, str]:
+    heading = re.search(r"^## \[([0-9]+\.[0-9]+\.[0-9]+)\].*$", changelog, re.MULTILINE)
+    if heading is None:
+        raise AssertionError("CHANGELOG has no release heading")
+    following = re.search(
+        r"^## \[[0-9]+\.[0-9]+\.[0-9]+\].*$",
+        changelog[heading.end() :],
+        re.MULTILINE,
+    )
+    end = len(changelog) if following is None else heading.end() + following.start()
+    return heading.group(1), changelog[heading.start() : end]
+
+
+def _assert_release_metadata_contract(plugin: str, readme: str, changelog: str) -> None:
+    plugin_version = json.loads(plugin)["version"]
+    if _version(plugin_version) <= BASELINE_VERSION:
+        raise AssertionError("plugin version must be greater than 2.6.6")
+
+    readme_h1 = _first_match(
+        r"^# UnleashedMail — Claude Code Plugin v([0-9]+\.[0-9]+\.[0-9]+)$",
+        readme,
+        "README H1 version",
+    )
+    readme_latest = _first_match(
+        r"^### v([0-9]+\.[0-9]+\.[0-9]+)$",
+        readme,
+        "README newest-version heading",
+    )
+    changelog_version, newest_entry = _latest_changelog_release(changelog)
+    if (readme_h1, readme_latest, changelog_version) != (
+        plugin_version,
+        plugin_version,
+        plugin_version,
+    ):
+        raise AssertionError("release version fields are not synchronized")
+    if CEILING_SENTENCE not in newest_entry:
+        raise AssertionError("newest CHANGELOG entry is missing the exact ceiling sentence")
+    if RETAINED_GRANTS_SENTENCE not in newest_entry:
+        raise AssertionError("newest CHANGELOG entry is missing the retained-grants sentence")
+
+    for paragraph in re.split(r"\n\s*\n", newest_entry):
+        if "${CLAUDE_PLUGIN_ROOT}" in paragraph and "inert" in paragraph.casefold():
+            raise AssertionError("newest CHANGELOG entry claims retained grants were inert")
+
+
+class SyntheticStateTreeMixin:
+    def make_state_tree(
+        self,
+        filename_family_canary: bool = False,
+        root_canary: bool = False,
+    ) -> Tuple[Path, Dict[str, Path]]:
+        temporary = tempfile.TemporaryDirectory(prefix="coredev-2619-release-")
+        self.addCleanup(temporary.cleanup)
+        temporary_root = Path(temporary.name)
+        state_root = (
+            temporary_root
+            / "synthetic-home"
+            / ".local"
+            / "state"
+            / "unleashed-mail"
+            / "review-transcripts"
+        )
+        state_root.mkdir(parents=True)
+        objects = {}  # type: Dict[str, Path]
+        for relative_path in EXPECTED_PATHS:
+            target = state_root.joinpath(*PurePosixPath(relative_path).parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((relative_path + "\n").encode("ascii"))
+            objects[relative_path] = target
+
+        if filename_family_canary:
+            canary = state_root / EXPECTED_DIRECTORIES[0] / "COREDEV-9999r1-codex-unlisted.txt"
+            canary.write_bytes(b"unlisted filename-family canary\n")
+            objects["family-canary"] = canary
+        if root_canary:
+            canary = state_root / "unlisted-root-canary.keep"
+            canary.write_bytes(b"unlisted root canary\n")
+            objects["root-canary"] = canary
+        return state_root, objects
+
+    def assert_all_manifest_paths_exist(self, state_root: Path) -> None:
+        for relative_path in EXPECTED_PATHS:
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
+                relative_path,
+            )
+
+
+class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
+    maxDiff = None
+
+    def assert_file_deletion_contract(
+        self,
+        cleaner: Callable[[Path], object],
+    ) -> None:
+        state_root, objects = self.make_state_tree(filename_family_canary=True)
+        root_before = os.stat(str(state_root), follow_symlinks=False)
+        report = cleaner(state_root)
+
+        self.assertTrue(state_root.is_dir(), "the state root must survive")
+        root_after = os.stat(str(state_root), follow_symlinks=False)
+        self.assertEqual(
+            (root_before.st_dev, root_before.st_ino),
+            (root_after.st_dev, root_after.st_ino),
+            "recursive deletion/root replacement must change this identity",
+        )
+        self.assertEqual(
+            Counter(EXPECTED_PATHS),
+            Counter(report.attempted_relative_paths),
+            "attempted deletion multiset must equal the plan manifest",
+        )
+        self.assertEqual(
+            set(EXPECTED_PATHS),
+            set(report.attempted_relative_paths),
+            "attempted deletion set must equal the plan manifest",
+        )
+        for relative_path in EXPECTED_PATHS:
+            self.assertFalse(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
+                relative_path,
+            )
+        self.assertTrue(objects["family-canary"].is_file())
+        for relative_directory in EXPECTED_DIRECTORIES:
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_directory).parts).is_dir()
+            )
+
+    def test_M2_25_literal_manifest_and_nonrecursive_unlink_assertions_hold(self) -> None:
+        self.assertEqual(39, len(PLAN_MANIFEST))
+        self.assertEqual({"regular file"}, set(EXPECTED_TYPES.values()))
+        self.assertEqual(9, len(EXPECTED_DIRECTORIES))
+        self.assertEqual(
+            PLAN_MANIFEST,
+            tuple(
+                (entry.expected_type, entry.relative_path)
+                for entry in production.LEAK_MANIFEST
+            ),
+        )
+        self.assertEqual(EXPECTED_DIRECTORIES, production.EMPTY_DIRECTORY_MANIFEST)
+        _assert_literal_unlink_source_contract(PRODUCTION_SOURCE)
+        self.assert_file_deletion_contract(production.delete_leak_files)
+
+    def test_M2_25_filename_family_glob_mutation_is_rejected(self) -> None:
+        def glob_mutant(state_root: Path) -> object:
+            root_metadata = os.stat(str(state_root), follow_symlinks=False)
+            removed = []  # type: List[str]
+            for target in state_root.rglob("*.txt*"):
+                if target.is_file():
+                    removed.append(target.relative_to(state_root).as_posix())
+                    target.unlink()
+            return SimpleNamespace(
+                attempted_relative_paths=tuple(removed),
+                root_identity=(root_metadata.st_dev, root_metadata.st_ino),
+            )
+
+        with self.assertRaises(AssertionError):
+            self.assert_file_deletion_contract(glob_mutant)
+
+    def test_M2_25_recursive_root_deletion_mutation_is_rejected(self) -> None:
+        def recursive_root_mutant(state_root: Path) -> object:
+            root_metadata = os.stat(str(state_root), follow_symlinks=False)
+            shutil.rmtree(state_root)
+            return SimpleNamespace(
+                attempted_relative_paths=EXPECTED_PATHS,
+                root_identity=(root_metadata.st_dev, root_metadata.st_ino),
+            )
+
+        with self.assertRaises(AssertionError):
+            self.assert_file_deletion_contract(recursive_root_mutant)
+
+    def test_M2_25_forbidden_primitive_source_mutations_are_rejected(self) -> None:
+        loop_anchor = (
+            "    for entry in LEAK_MANIFEST:\n"
+            "        attempted.append(entry.relative_path)\n"
+        )
+        mutations = {
+            "filename-glob": _replace_once(
+                PRODUCTION_SOURCE,
+                loop_anchor,
+                "    for entry in root.rglob(\"*.txt*\"):\n"
+                "        attempted.append(str(entry))\n",
+            ),
+            "directory-removal": _replace_once(
+                PRODUCTION_SOURCE,
+                "    os.unlink(str(target))\n",
+                "    os.rmdir(str(target))\n",
+            ),
+            "root-replacement": _replace_once(
+                PRODUCTION_SOURCE,
+                "    os.unlink(str(target))\n",
+                "    os.replace(str(target), str(target.parent))\n",
+            ),
+            "shell": _replace_once(
+                PRODUCTION_SOURCE,
+                "    os.unlink(str(target))\n",
+                "    os.system(\"rm -f -- \" + str(target))\n",
+            ),
+        }
+        for label, mutant in mutations.items():
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                _assert_literal_unlink_source_contract(mutant)
+
+    def test_M2_25_canonical_escape_mutation_fails_before_any_unlink(self) -> None:
+        state_root, objects = self.make_state_tree()
+        outside = state_root.parents[4] / "outside-target.txt"
+        outside.write_bytes(b"outside must survive\n")
+        victim = objects[EXPECTED_PATHS[0]]
+        victim.unlink()
+        victim.symlink_to(outside)
+
+        with self.assertRaisesRegex(production.CleanupError, "escapes the state root"):
+            production.delete_leak_files(state_root)
+
+        self.assertTrue(victim.is_symlink())
+        self.assertEqual(b"outside must survive\n", outside.read_bytes())
+        for relative_path in EXPECTED_PATHS[1:]:
+            self.assertTrue(objects[relative_path].is_file())
+
+    def test_M2_25_type_mismatch_mutation_fails_before_any_unlink(self) -> None:
+        state_root, objects = self.make_state_tree()
+        victim = objects[EXPECTED_PATHS[-1]]
+        victim.unlink()
+        victim.mkdir()
+
+        with self.assertRaisesRegex(production.CleanupError, "type mismatch"):
+            production.delete_leak_files(state_root)
+
+        self.assertTrue(victim.is_dir())
+        for relative_path in EXPECTED_PATHS[:-1]:
+            self.assertTrue(objects[relative_path].is_file())
+
+    def test_M2_25_full_cleanup_preserves_root_canary_and_removes_exactly_nine_dirs(self) -> None:
+        state_root, objects = self.make_state_tree(root_canary=True)
+        root_before = os.stat(str(state_root), follow_symlinks=False)
+
+        report = production.cleanup_coredev_2619_leaks(state_root)
+
+        root_after = os.stat(str(state_root), follow_symlinks=False)
+        self.assertEqual(
+            (root_before.st_dev, root_before.st_ino),
+            (root_after.st_dev, root_after.st_ino),
+        )
+        self.assertEqual(Counter(EXPECTED_PATHS), Counter(report.attempted_relative_paths))
+        self.assertEqual(EXPECTED_DIRECTORIES, report.removed_directories)
+        self.assertEqual(9, len(report.removed_directories))
+        self.assertTrue(objects["root-canary"].is_file())
+        for relative_directory in EXPECTED_DIRECTORIES:
+            self.assertFalse(
+                state_root.joinpath(*PurePosixPath(relative_directory).parts).exists()
+            )
+
+    def test_M2_25_directory_omission_mutation_is_rejected_before_deletion(self) -> None:
+        state_root, _objects = self.make_state_tree()
+        with mock.patch.object(
+            production,
+            "EMPTY_DIRECTORY_MANIFEST",
+            production.EMPTY_DIRECTORY_MANIFEST[:-1],
+        ):
+            with self.assertRaisesRegex(production.CleanupError, "9 unique paths"):
+                production.cleanup_coredev_2619_leaks(state_root)
+        self.assert_all_manifest_paths_exist(state_root)
+
+    def test_M2_25_deepest_first_assertion_rejects_shallow_first_mutation(self) -> None:
+        state_root, _objects = self.make_state_tree()
+        nested_root = state_root / "ordering-fixture"
+        (nested_root / "parent" / "child").mkdir(parents=True)
+        removed = production._remove_empty_directories(
+            nested_root,
+            ("parent", "parent/child"),
+        )
+        self.assertEqual(("parent/child", "parent"), removed)
+
+        mutant_source = _replace_once(
+            PRODUCTION_SOURCE,
+            "    return -len(relative.parts), os.fsencode(relative.as_posix())\n",
+            "    return len(relative.parts), os.fsencode(relative.as_posix())\n",
+        )
+        with tempfile.TemporaryDirectory(prefix="coredev-2619-order-mutant-") as raw:
+            mutant_path = Path(raw) / "cleanup_mutant.py"
+            mutant_path.write_text(mutant_source, encoding="utf-8")
+            mutant = _load_module(mutant_path, "coredev2619_shallow_first_mutant")
+            mutant_root = Path(raw) / "mutant-root"
+            (mutant_root / "parent" / "child").mkdir(parents=True)
+            with self.assertRaisesRegex(mutant.CleanupError, "not empty"):
+                mutant._remove_empty_directories(
+                    mutant_root,
+                    ("parent", "parent/child"),
+                )
+
+    def test_M2_25_nonempty_directory_mutation_stops_without_recursing(self) -> None:
+        state_root, _objects = self.make_state_tree()
+        blocking_directory = state_root.joinpath(
+            *PurePosixPath(EXPECTED_DIRECTORIES[0]).parts
+        )
+        nested_canary = blocking_directory / "unlisted" / "keep.txt"
+        nested_canary.parent.mkdir()
+        nested_canary.write_bytes(b"must survive\n")
+        root_before = os.stat(str(state_root), follow_symlinks=False)
+
+        with self.assertRaisesRegex(production.CleanupError, "not empty"):
+            production.cleanup_coredev_2619_leaks(state_root)
+
+        root_after = os.stat(str(state_root), follow_symlinks=False)
+        self.assertEqual(
+            (root_before.st_dev, root_before.st_ino),
+            (root_after.st_dev, root_after.st_ino),
+        )
+        self.assertEqual(b"must survive\n", nested_canary.read_bytes())
+        for relative_path in EXPECTED_PATHS:
+            self.assertFalse(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists()
+            )
+        for relative_directory in EXPECTED_DIRECTORIES:
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_directory).parts).is_dir()
+            )
+
+    def test_cli_requires_apply_and_uses_only_the_explicit_synthetic_root(self) -> None:
+        state_root, objects = self.make_state_tree(root_canary=True)
+        fake_home = state_root.parents[4] / "different-synthetic-home"
+        fake_home.mkdir()
+        home_canary = fake_home / "must-not-be-read-or-removed"
+        home_canary.write_bytes(b"fake HOME canary\n")
+        environment = dict(os.environ)
+        environment["HOME"] = str(fake_home)
+
+        refused = subprocess.run(
+            [sys.executable, str(PRODUCTION_PATH), "--state-root", str(state_root)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(2, refused.returncode)
+        self.assert_all_manifest_paths_exist(state_root)
+
+        applied = subprocess.run(
+            [
+                sys.executable,
+                str(PRODUCTION_PATH),
+                "--state-root",
+                str(state_root),
+                "--apply",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(0, applied.returncode, applied.stderr)
+        self.assertIn("removed 39 manifest files and 9 empty manifest directories", applied.stdout)
+        self.assertTrue(objects["root-canary"].is_file())
+        self.assertEqual(b"fake HOME canary\n", home_canary.read_bytes())
+
+
+class ReleaseMetadataProofs(unittest.TestCase):
+    def release_sources(self) -> Tuple[str, str, str]:
+        return (
+            PLUGIN_PATH.read_text(encoding="utf-8"),
+            README_PATH.read_text(encoding="utf-8"),
+            CHANGELOG_PATH.read_text(encoding="utf-8"),
+        )
+
+    def test_M2_14_version_increase_and_ceiling_assertions_hold(self) -> None:
+        _assert_release_metadata_contract(*self.release_sources())
+
+    def test_M2_14_synchronized_version_decrease_mutation_is_rejected(self) -> None:
+        plugin, readme, changelog = self.release_sources()
+        plugin_object = json.loads(plugin)
+        current = plugin_object["version"]
+        plugin_object["version"] = "2.6.5"
+        plugin_mutant = json.dumps(plugin_object)
+        readme_mutant = _replace_once(
+            readme,
+            "Plugin v" + current,
+            "Plugin v2.6.5",
+        )
+        readme_mutant = _replace_once(
+            readme_mutant,
+            "### v" + current,
+            "### v2.6.5",
+        )
+        changelog_mutant = _replace_once(
+            changelog,
+            "## [" + current + "]",
+            "## [2.6.5]",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "greater than 2.6.6"):
+            _assert_release_metadata_contract(
+                plugin_mutant,
+                readme_mutant,
+                changelog_mutant,
+            )
+
+    def test_M2_14_each_ceiling_clause_deletion_mutation_is_rejected(self) -> None:
+        plugin, readme, changelog = self.release_sources()
+        for clause in CEILING_CLAUSES:
+            with self.subTest(clause=clause):
+                mutant = _replace_once(changelog, clause, "[deleted ceiling clause]")
+                with self.assertRaisesRegex(AssertionError, "ceiling sentence"):
+                    _assert_release_metadata_contract(plugin, readme, mutant)
+
+    def test_M2_17_retained_grants_sentence_deletion_mutation_is_rejected(self) -> None:
+        plugin, readme, changelog = self.release_sources()
+        mutant = _replace_once(changelog, RETAINED_GRANTS_SENTENCE, "")
+        with self.assertRaisesRegex(AssertionError, "retained-grants sentence"):
+            _assert_release_metadata_contract(plugin, readme, mutant)
+
+    def test_M2_17_inert_grants_claim_mutation_is_rejected_independently(self) -> None:
+        plugin, readme, changelog = self.release_sources()
+        inert_claim = (
+            "\n\nThe existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants were inert."
+        )
+        mutant = _replace_once(
+            changelog,
+            RETAINED_GRANTS_SENTENCE,
+            RETAINED_GRANTS_SENTENCE + inert_claim,
+        )
+        self.assertIn(RETAINED_GRANTS_SENTENCE, mutant)
+        with self.assertRaisesRegex(AssertionError, "claims retained grants were inert"):
+            _assert_release_metadata_contract(plugin, readme, mutant)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.6
+# UnleashedMail — Claude Code Plugin v2.6.7
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -8,14 +8,14 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ## What's New
 
+### v2.6.7
+
+- **Per-run transcript paths and freshness (`COREDEV-2619`)** — reviewer captures are atomically allocated, threaded unchanged through review and synthesis, and bound to per-capture launch records so stale output cannot satisfy a later run; a one-shot release tool cleans only the closed 39-file leak manifest and its nine empty parents.
+
 ### v2.6.6
 
-- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`) — a **scope narrowing,
-  not a relaxation.** §13's scope is now a parseable four-column table binding each surface to its
-  producer and to a repository **anchor**; the five capture-roster reviewers are `out` because their
-  output is machine-consumed and governed by their own contracts, which are unchanged and still
-  mandatory. The payload-region invariant moves verbatim to **§5**, and the blocked-handoff prefix gets
-  its own **§14**.
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`) — a **scope narrowing, not a relaxation.** §13's scope is now a parseable four-column table binding each surface to its producer and to a repository **anchor**; the five capture-roster reviewers are `out` because their output is machine-consumed and governed by their own contracts, which are unchanged and still mandatory.
+  The payload-region invariant moves verbatim to **§5**, and the blocked-handoff prefix gets its own **§14**.
 
 ### v2.6.5
 
