@@ -199,6 +199,18 @@ def _quorum_problem(verdict, reviewers) -> str | None:
                 "transcript content is recorded for more than one reviewer, i.e. one review standing in for two")
     return None
 
+
+# S-FRESH applies to the per-run allocator layout introduced by COREDEV-2619. Historical callers and
+# unit fixtures outside that layout remain readable, while every allocator-produced path is required to
+# carry its own run-bound launch record. The allocator draws exactly 16 bytes and hex-encodes them.
+_RUN_ID_HEX_LENGTH = 16 * 2
+_TRANSCRIPT_RUN_ID = re.compile(
+    r"-([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH) + r"})\.txt\Z"
+)
+_LAUNCH_RECORD = re.compile(
+    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z"
+)
+
 def _sha256_bytes(path: str) -> str:
     """Raw-byte SHA-256 of a file (never text-normalized — a whitespace edit must change it)."""
     h = hashlib.sha256()
@@ -348,6 +360,120 @@ def _plan_identity(path: str) -> tuple[str, str]:
     return rel.replace(os.sep, "/"), "repo-relative"
 
 
+def _is_per_run_transcript(path: str) -> bool:
+    """Return whether `path` has the allocator name or state-root-relative directory shape."""
+    repo_directory = os.path.dirname(path)
+    transcripts_directory = os.path.dirname(repo_directory)
+    product_directory = os.path.dirname(transcripts_directory)
+    return (
+        _TRANSCRIPT_RUN_ID.search(os.path.basename(path)) is not None
+        or (
+            os.path.basename(transcripts_directory) == "review-transcripts"
+            and os.path.basename(product_directory) == "unleashed-mail"
+        )
+    )
+
+
+def _read_launch_record(launch_path: str):
+    """Return (run ID, descriptor metadata, problem) for one exact launch-record line."""
+    launch_fd = -1
+    try:
+        launch_fd = os.open(
+            launch_path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except FileNotFoundError:
+        return None, None, "launch record is absent: " + launch_path
+    except OSError:
+        return None, None, "launch record is unreadable or non-regular: " + launch_path
+
+    try:
+        launch_info = os.fstat(launch_fd)
+        if not stat.S_ISREG(launch_info.st_mode):
+            return None, None, "launch record is unreadable or non-regular: " + launch_path
+        with os.fdopen(launch_fd, "rb") as stream:
+            launch_fd = -1
+            record = stream.read(_RUN_ID_HEX_LENGTH + 2)
+            if record == b"":
+                return None, None, "launch record is EMPTY: " + launch_path
+            record_match = _LAUNCH_RECORD.fullmatch(record)
+            if record_match is None:
+                return None, None, "launch record is malformed: " + launch_path
+    except OSError:
+        return None, None, "launch record is unreadable or non-regular: " + launch_path
+    finally:
+        if launch_fd >= 0:
+            try:
+                os.close(launch_fd)
+            except OSError:
+                pass
+
+    return record_match.group(1).decode("ascii"), launch_info, None
+
+
+def _regular_file_info(path: str):
+    """Return (descriptor metadata, problem), refusing symlinks and non-regular files."""
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None, "transcript is unreadable or non-regular: " + path
+        return info, None
+    except OSError:
+        return None, "transcript is unreadable or non-regular: " + path
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _transcript_freshness_problem(transcript: str):
+    """Return the per-run transcript freshness failure, or None when the record is valid.
+
+    Each call derives and opens its own sibling record; neither the other reviewer nor the reviewed-plan
+    snapshot can become the anchor.
+    """
+    transcript = os.path.realpath(transcript)
+    if not _is_per_run_transcript(transcript):
+        return None
+
+    filename_match = _TRANSCRIPT_RUN_ID.search(os.path.basename(transcript))
+    if filename_match is None:
+        return "per-run transcript filename has no canonical run ID: " + transcript
+    filename_run_id = filename_match.group(1)
+    launch_path = transcript + ".launch"
+    record_run_id, launch_info, launch_problem = _read_launch_record(launch_path)
+    if launch_problem is not None:
+        return launch_problem
+
+    if record_run_id != filename_run_id:
+        return "launch record run ID does not match transcript filename: " + launch_path
+
+    transcript_info, transcript_problem = _regular_file_info(transcript)
+    if transcript_problem is not None:
+        return transcript_problem
+
+    transcript_mtime_ns = transcript_info.st_mtime_ns
+    launch_mtime_ns = launch_info.st_mtime_ns
+    if transcript_mtime_ns < launch_mtime_ns:
+        return (
+            "transcript is OLDER than its launch record "
+            + f"({transcript_mtime_ns} < {launch_mtime_ns}): "
+            + transcript
+        )
+    return None
+
+
 def _parse_reviewer(spec: str) -> dict:
     """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?, transcriptPath?, captureId?}."""
     if "=" not in spec:
@@ -366,7 +492,16 @@ def _parse_reviewer(spec: str) -> dict:
             # 0-byte file recorded transcriptSha256 = e3b0c442…855 (the empty-string digest) and
             # sailed through — the exact "a missing/empty transcript is never APPROVE" rule this
             # artifact exists to record. `agy` writes precisely 0 bytes from a non-TTY on failure.
-            raise SystemExit(f"review-verdict: reviewer {name!r} transcript is EMPTY: {transcript}")
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript is EMPTY and therefore MISSING: "
+                + transcript
+            )
+        freshness_problem = _transcript_freshness_problem(transcript)
+        if freshness_problem is not None:
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript failed freshness: "
+                + freshness_problem
+            )
         out["transcriptSha256"] = _sha256_bytes(transcript)
         # PROVENANCE beyond content-inequality (full review, #41). Record the canonical capture PATH,
         # and a wrapper-produced capture ID when `pty-capture.py` left one beside the transcript

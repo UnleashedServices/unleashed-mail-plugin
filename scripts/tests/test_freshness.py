@@ -1,0 +1,880 @@
+#!/usr/bin/env python3
+"""Runnable COREDEV-2619 S-FRESH proof pairs and closed M4 matrix."""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import importlib.util
+import io
+import itertools
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+REPO = Path(__file__).resolve().parents[2]
+VERDICT_PATH = REPO / "scripts" / "review-verdict.py"
+ALLOCATOR_PATH = REPO / "scripts" / "pty-capture.py"
+
+MUTATION_KINDS = (
+    "timing-negative",
+    "timing-positive",
+    "mtime-equality",
+    "absent",
+    "mismatched",
+    "empty",
+    "malformed",
+    "record-precedes-dispatch",
+    "sidecar-varied",
+)
+DIGEST_PATHS = ("snapshot-sidecar", "reviewed-sha256")
+TRANSCRIPT_POSITIONS = ("FIRST", "SECOND")
+M4_CASES = tuple(
+    itertools.product(MUTATION_KINDS, DIGEST_PATHS, TRANSCRIPT_POSITIONS)
+)
+M4_TOTAL = (
+    len(MUTATION_KINDS) * len(DIGEST_PATHS) * len(TRANSCRIPT_POSITIONS)
+)
+
+ACCEPTED_KINDS = {
+    "timing-positive",
+    "mtime-equality",
+    "record-precedes-dispatch",
+    "sidecar-varied",
+}
+RUN_IDS = (
+    "0123456789abcdef0123456789abcdef",
+    "fedcba9876543210fedcba9876543210",
+)
+BASE_MTIME_NS = 1_700_000_000_000_000_000
+MALFORMED_RECORDS = (
+    RUN_IDS[0].upper().encode("ascii") + b"\n",
+    RUN_IDS[0].encode("ascii"),
+    RUN_IDS[0].encode("ascii") + b"\ntrailing",
+    RUN_IDS[0].encode("ascii") + b"\n" + RUN_IDS[0].encode("ascii") + b"\n",
+    b"abc\n",
+    b"g" * len(RUN_IDS[0]) + b"\n",
+)
+
+
+def _replace_once(source: str, old: str, new: str) -> str:
+    if source.count(old) != 1:
+        raise AssertionError("mutation anchor must occur exactly once: " + repr(old))
+    return source.replace(old, new, 1)
+
+
+def _load_module(path: Path, label: str):
+    module_name = "m4_" + "".join(
+        character if character.isalnum() else "_" for character in label
+    )
+    spec = importlib.util.spec_from_file_location(module_name, str(path))
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load allocator module " + str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _MarkerObserver(io.StringIO):
+    def __init__(self, test: unittest.TestCase, expected_run_id: str) -> None:
+        super().__init__()
+        self.test = test
+        self.expected_run_id = expected_run_id
+        self.marker_paths = []  # type: List[Path]
+        self.events = []  # type: List[str]
+        self.real_open = os.open
+        self.real_close = os.close
+
+    def write(self, value: str) -> int:
+        marker = "UNLEASHED_TRANSCRIPT="
+        if value.startswith(marker):
+            transcript = Path(value[len(marker):].rstrip("\n"))
+            launch = Path(str(transcript) + ".launch")
+            self.events.append("marker")
+            self.test.assertTrue(
+                launch.is_file(),
+                "the launch record must exist before the allocation marker permits dispatch",
+            )
+            descriptor = self.real_open(
+                str(launch),
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                payload = os.read(descriptor, len(self.expected_run_id) + 2)
+            finally:
+                self.real_close(descriptor)
+            self.test.assertEqual(
+                (self.expected_run_id + "\n").encode("ascii"),
+                payload,
+                "the owner must be able to reopen the closed, run-bound record before dispatch",
+            )
+            self.marker_paths.append(transcript)
+        return super().write(value)
+
+
+class FreshnessFixture(unittest.TestCase):
+    maxDiff = None
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix=".m4-freshness-proof-",
+            dir=str(REPO),
+        )
+        self.root = Path(self.temporary.name)
+        self.verdict_source = VERDICT_PATH.read_text(encoding="utf-8")
+        self.allocator_source = ALLOCATOR_PATH.read_text(encoding="utf-8")
+        self.case_number = 0
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def next_case_root(self, label: str) -> Path:
+        self.case_number += 1
+        root = self.root / (str(self.case_number) + "-" + label)
+        root.mkdir(parents=True)
+        return root
+
+    def write_script(self, source: str, label: str, filename: str) -> Path:
+        directory = self.root / ("source-" + label)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / filename
+        path.write_text(source, encoding="utf-8")
+        return path
+
+    @staticmethod
+    def invoke(
+        script: Path,
+        args: Sequence[str],
+        extra_environment: Optional[Dict[str, str]] = None,
+    ) -> subprocess.CompletedProcess:
+        environment = dict(os.environ)
+        if extra_environment:
+            environment.update(extra_environment)
+        return subprocess.run(
+            [sys.executable, str(script)] + list(args),
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def set_mtime_ns(self, path: Path, value: int) -> None:
+        os.utime(str(path), ns=(value, value))
+        self.assertEqual(
+            value,
+            path.stat().st_mtime_ns,
+            "the proof filesystem must preserve the requested nanosecond boundary",
+        )
+
+    def create_transcript(
+        self,
+        parent: Path,
+        reviewer: str,
+        run_id: str,
+        content: bytes,
+    ) -> Path:
+        parent.mkdir(parents=True, exist_ok=True)
+        # The real allocator requires each shared state-directory component to be private. A manual
+        # companion transcript must preserve that invariant when the other reviewer is allocator-driven.
+        os.chmod(parent, 0o700)
+        os.chmod(parent.parent, 0o700)
+        os.chmod(parent.parent.parent, 0o700)
+        path = parent / ("COREDEV-2619r9-" + reviewer + "-" + run_id + ".txt")
+        path.write_bytes(content)
+        launch = Path(str(path) + ".launch")
+        launch.write_bytes((run_id + "\n").encode("ascii"))
+        os.chmod(path, 0o600)
+        os.chmod(launch, 0o600)
+        # Equality is the neutral valid baseline: comparator-polarity mutants aimed at the selected
+        # reviewer cannot be rejected accidentally by the untouched companion reviewer.
+        self.set_mtime_ns(launch, BASE_MTIME_NS + 150_000_000)
+        self.set_mtime_ns(path, BASE_MTIME_NS + 150_000_000)
+        return path
+
+    def allocate_with_observer(
+        self,
+        source: str,
+        case_root: Path,
+        reviewer: str,
+        run_id: str,
+        label: str,
+    ) -> Path:
+        script = self.write_script(source, "allocator-" + label, "pty-capture.py")
+        module = _load_module(script, "allocator_" + label + "_" + str(self.case_number))
+        module._generate_run_id = lambda: run_id
+
+        home = case_root / "home"
+        state = case_root / "state"
+        home.mkdir(mode=0o700)
+        environment = {
+            "HOME": str(home),
+            "XDG_STATE_HOME": str(state),
+        }
+        observer = _MarkerObserver(self, run_id)
+        events = observer.events
+        launch_descriptors = set()
+        launch_create_flags = []  # type: List[int]
+        real_open = os.open
+        real_close = os.close
+
+        def open_spy(path, flags, mode=0o777, *args, **kwargs):
+            descriptor = real_open(path, flags, mode, *args, **kwargs)
+            path_string = os.fsdecode(path)
+            if path_string.endswith(".launch"):
+                if flags & os.O_CREAT:
+                    events.append("launch-create")
+                    launch_descriptors.add(descriptor)
+                    launch_create_flags.append(flags)
+                else:
+                    events.append("launch-reopen")
+            return descriptor
+
+        def close_spy(descriptor):
+            if descriptor in launch_descriptors:
+                events.append("launch-close")
+                launch_descriptors.remove(descriptor)
+            return real_close(descriptor)
+
+        argv = [
+            "--allocate",
+            "--repo-hash",
+            "RepoHash09",
+            "--ticket",
+            "COREDEV-2619",
+            "--round",
+            "9",
+            "--reviewer",
+            reviewer,
+        ]
+        with mock.patch.object(module.os, "open", open_spy), mock.patch.object(
+            module.os, "close", close_spy
+        ), contextlib.redirect_stdout(observer):
+            status = module.cli_main(argv, environ=environment)
+
+        self.assertEqual(0, status)
+        self.assertEqual(1, len(observer.marker_paths), observer.getvalue())
+        self.assertEqual(1, len(launch_create_flags), events)
+        self.assertTrue(launch_create_flags[0] & os.O_EXCL, events)
+        self.assertFalse(launch_create_flags[0] & os.O_TRUNC, events)
+        self.assertLess(events.index("launch-create"), events.index("launch-close"))
+        self.assertLess(events.index("launch-close"), events.index("launch-reopen"))
+        self.assertLess(events.index("launch-reopen"), events.index("marker"))
+        return observer.marker_paths[0]
+
+    def configure_kind(
+        self,
+        kind: str,
+        transcript: Path,
+        run_id: str,
+        malformed_payload: Optional[bytes],
+    ) -> None:
+        launch = Path(str(transcript) + ".launch")
+        if kind == "timing-negative":
+            self.set_mtime_ns(transcript, BASE_MTIME_NS + 100_000_000)
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 200_000_000)
+        elif kind == "timing-positive":
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
+            self.set_mtime_ns(transcript, BASE_MTIME_NS + 200_000_000)
+        elif kind == "mtime-equality":
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 150_000_000)
+            self.set_mtime_ns(transcript, BASE_MTIME_NS + 150_000_000)
+        elif kind == "absent":
+            launch.unlink()
+        elif kind == "mismatched":
+            other = RUN_IDS[1] if run_id == RUN_IDS[0] else RUN_IDS[0]
+            launch.write_bytes((other + "\n").encode("ascii"))
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
+        elif kind == "empty":
+            launch.write_bytes(b"")
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
+        elif kind == "malformed":
+            if malformed_payload is None:
+                raise AssertionError("malformed cells require an explicit payload")
+            launch.write_bytes(malformed_payload)
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
+        elif kind in ("record-precedes-dispatch", "sidecar-varied"):
+            self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
+            self.set_mtime_ns(transcript, BASE_MTIME_NS + 200_000_000)
+        else:
+            raise AssertionError("unknown M4 mutation kind: " + kind)
+
+    def run_matrix_cell(
+        self,
+        verdict_script: Path,
+        kind: str,
+        digest_path: str,
+        position: str,
+        allocator_source: Optional[str] = None,
+        malformed_payload: Optional[bytes] = None,
+        sidecar_offset_ns: int = 300_000_000,
+    ) -> subprocess.CompletedProcess:
+        label = "-".join((kind, digest_path, position.lower()))
+        case_root = self.next_case_root(label)
+        plan = case_root / "COREDEV-2619_PLAN.md"
+        plan.write_text("# Plan\nS-FRESH proof bytes.\n", encoding="utf-8")
+        transcript_parent = (
+            case_root
+            / "state"
+            / "unleashed-mail"
+            / "review-transcripts"
+            / "RepoHash09"
+        )
+
+        transcripts = []  # type: List[Path]
+        reviewers = ("gemini", "codex")
+        target_index = TRANSCRIPT_POSITIONS.index(position)
+        for index, reviewer in enumerate(reviewers):
+            content = (
+                reviewer + " distinct review body\nVERDICT: APPROVE\n"
+            ).encode("utf-8")
+            if kind == "record-precedes-dispatch" and index == target_index:
+                transcript = self.allocate_with_observer(
+                    self.allocator_source if allocator_source is None else allocator_source,
+                    case_root,
+                    reviewer,
+                    RUN_IDS[index],
+                    label,
+                )
+                transcript.write_bytes(content)
+            else:
+                transcript = self.create_transcript(
+                    transcript_parent,
+                    reviewer,
+                    RUN_IDS[index],
+                    content,
+                )
+            transcripts.append(transcript)
+
+        self.configure_kind(
+            kind,
+            transcripts[target_index],
+            RUN_IDS[target_index],
+            malformed_payload,
+        )
+
+        snapshot_needed = digest_path == "snapshot-sidecar" or kind == "sidecar-varied"
+        if snapshot_needed:
+            snapshot = self.invoke(verdict_script, ["snapshot", "--plan", str(plan)])
+            self.assertEqual(0, snapshot.returncode, snapshot.stderr)
+
+        sidecar = (
+            plan.parent
+            / ".verdicts"
+            / (plan.name + ".reviewed-sha256")
+        )
+        if kind == "sidecar-varied":
+            self.assertTrue(sidecar.is_file())
+            self.set_mtime_ns(sidecar, BASE_MTIME_NS + sidecar_offset_ns)
+
+        args = [
+            "write",
+            "--plan",
+            str(plan),
+            "--verdict",
+            "APPROVE",
+        ]
+        for reviewer, transcript in zip(reviewers, transcripts):
+            args.extend(
+                ["--reviewer", reviewer + "=APPROVE:" + str(transcript)]
+            )
+        if digest_path == "reviewed-sha256":
+            args.extend(
+                ["--reviewed-sha256", hashlib.sha256(plan.read_bytes()).hexdigest()]
+            )
+        return self.invoke(
+            verdict_script,
+            args,
+            {"M4_PLAN": str(plan)},
+        )
+
+    def assert_matrix_cell(
+        self,
+        verdict_script: Path,
+        kind: str,
+        digest_path: str,
+        position: str,
+        allocator_source: Optional[str] = None,
+        malformed_payload: Optional[bytes] = None,
+        sidecar_offset_ns: int = 300_000_000,
+    ) -> None:
+        result = self.run_matrix_cell(
+            verdict_script,
+            kind,
+            digest_path,
+            position,
+            allocator_source=allocator_source,
+            malformed_payload=malformed_payload,
+            sidecar_offset_ns=sidecar_offset_ns,
+        )
+        output = result.stdout + result.stderr
+        if kind in ACCEPTED_KINDS:
+            self.assertEqual(0, result.returncode, output)
+        else:
+            self.assertNotEqual(0, result.returncode, output)
+
+    def assert_real_kind(self, kind: str) -> None:
+        malformed_payloads = MALFORMED_RECORDS if kind == "malformed" else (None,)
+        sidecar_offsets = (
+            (50_000_000, 200_000_000, 300_000_000)
+            if kind == "sidecar-varied"
+            else (300_000_000,)
+        )
+        for digest_path in DIGEST_PATHS:
+            for position in TRANSCRIPT_POSITIONS:
+                for malformed_payload in malformed_payloads:
+                    for sidecar_offset in sidecar_offsets:
+                        with self.subTest(
+                            kind=kind,
+                            digest=digest_path,
+                            position=position,
+                            malformed=malformed_payload,
+                            sidecar_offset=sidecar_offset,
+                        ):
+                            self.assert_matrix_cell(
+                                VERDICT_PATH,
+                                kind,
+                                digest_path,
+                                position,
+                                malformed_payload=malformed_payload,
+                                sidecar_offset_ns=sidecar_offset,
+                            )
+
+    def assert_verdict_mutations_rejected(
+        self,
+        kind: str,
+        mutations: Iterable[Tuple[str, str]],
+    ) -> None:
+        malformed_payload = MALFORMED_RECORDS[0] if kind == "malformed" else None
+        for mutation_label, source in mutations:
+            script = self.write_script(
+                source,
+                "verdict-" + mutation_label,
+                "review-verdict.py",
+            )
+            for digest_path in DIGEST_PATHS:
+                for position in TRANSCRIPT_POSITIONS:
+                    with self.subTest(
+                        mutation=mutation_label,
+                        digest=digest_path,
+                        position=position,
+                    ):
+                        with self.assertRaises(AssertionError):
+                            self.assert_matrix_cell(
+                                script,
+                                kind,
+                                digest_path,
+                                position,
+                                malformed_payload=malformed_payload,
+                            )
+
+    def verdict_mutations(self, kind: str) -> List[Tuple[str, str]]:
+        source = self.verdict_source
+        if kind == "timing-negative":
+            return [
+                (
+                    "older-polarity-flipped",
+                    _replace_once(
+                        source,
+                        "    if transcript_mtime_ns < launch_mtime_ns:\n",
+                        "    if transcript_mtime_ns > launch_mtime_ns:\n",
+                    ),
+                ),
+                (
+                    "integer-second-comparison",
+                    _replace_once(
+                        source,
+                        "    transcript_mtime_ns = transcript_info.st_mtime_ns\n"
+                        "    launch_mtime_ns = launch_info.st_mtime_ns\n",
+                        "    transcript_mtime_ns = int(transcript_info.st_mtime)\n"
+                        "    launch_mtime_ns = int(launch_info.st_mtime)\n",
+                    ),
+                ),
+            ]
+        if kind == "timing-positive":
+            return [
+                (
+                    "newer-rejected",
+                    _replace_once(
+                        source,
+                        "    if transcript_mtime_ns < launch_mtime_ns:\n",
+                        "    if transcript_mtime_ns != launch_mtime_ns:\n",
+                    ),
+                )
+            ]
+        if kind == "mtime-equality":
+            return [
+                (
+                    "equality-rejected",
+                    _replace_once(
+                        source,
+                        "    if transcript_mtime_ns < launch_mtime_ns:\n",
+                        "    if transcript_mtime_ns <= launch_mtime_ns:\n",
+                    ),
+                )
+            ]
+        record_error_anchor = {
+            "absent": (
+                "        return None, None, \"launch record is absent: \" + launch_path\n",
+                "absent-accepted",
+            ),
+            "empty": (
+                "                return None, None, \"launch record is EMPTY: \" + launch_path\n",
+                "empty-record-accepted",
+            ),
+            "malformed": (
+                "                return None, None, \"launch record is malformed: \" + launch_path\n",
+                "malformed-record-accepted",
+            ),
+        }
+        if kind in record_error_anchor:
+            anchor, label = record_error_anchor[kind]
+            indentation = anchor[: len(anchor) - len(anchor.lstrip())]
+            fake_success = (
+                indentation
+                + "return (\n"
+                + indentation
+                + "    _TRANSCRIPT_RUN_ID.search(\n"
+                + indentation
+                + "        os.path.basename(launch_path[:-len(\".launch\")])\n"
+                + indentation
+                + "    ).group(1),\n"
+                + indentation
+                + "    os.stat(launch_path[:-len(\".launch\")]),\n"
+                + indentation
+                + "    None,\n"
+                + indentation
+                + ")\n"
+            )
+            return [(label, _replace_once(source, anchor, fake_success))]
+        if kind == "mismatched":
+            anchor = (
+                "        return \"launch record run ID does not match transcript filename: \" "
+                "+ launch_path\n"
+            )
+            return [
+                (
+                    "mismatch-accepted",
+                    _replace_once(source, anchor, "        return None\n"),
+                )
+            ]
+        if kind == "sidecar-varied":
+            return [
+                (
+                    "snapshot-sidecar-used-as-anchor",
+                    _replace_once(
+                        source,
+                        "    launch_mtime_ns = launch_info.st_mtime_ns\n",
+                        "    launch_mtime_ns = os.stat(\n"
+                        "        _reviewed_sha_sidecar(os.environ[\"M4_PLAN\"])\n"
+                        "    ).st_mtime_ns\n",
+                    ),
+                )
+            ]
+        raise AssertionError("no verdict mutation for " + kind)
+
+
+class M4ClosedMatrixProofs(FreshnessFixture):
+    def assert_closed_matrix(
+        self,
+        mutation_kinds: Sequence[str],
+        cases: Sequence[Tuple[str, str, str]],
+    ) -> None:
+        expected = set(
+            itertools.product(MUTATION_KINDS, DIGEST_PATHS, TRANSCRIPT_POSITIONS)
+        )
+        derived_total = (
+            len(mutation_kinds)
+            * len(DIGEST_PATHS)
+            * len(TRANSCRIPT_POSITIONS)
+        )
+        self.assertEqual(set(MUTATION_KINDS), set(mutation_kinds))
+        self.assertEqual(expected, set(cases))
+        self.assertEqual(derived_total, len(cases))
+        self.assertEqual(len(cases), len(set(cases)))
+
+    def test_M4_matrix_assertion_is_the_closed_derived_cross_product(self) -> None:
+        self.assertEqual(M4_TOTAL, len(M4_CASES))
+        self.assert_closed_matrix(MUTATION_KINDS, M4_CASES)
+
+    def test_M4_matrix_missing_factor_mutation_is_rejected(self) -> None:
+        kinds = MUTATION_KINDS[:-1]
+        cases = tuple(itertools.product(kinds, DIGEST_PATHS, TRANSCRIPT_POSITIONS))
+        with self.assertRaises(AssertionError):
+            self.assert_closed_matrix(kinds, cases)
+
+
+class M4TimingNegativeProofs(FreshnessFixture):
+    def test_M4_timing_negative_assertion_strictly_older_rejects(self) -> None:
+        self.assert_real_kind("timing-negative")
+
+    def test_M4_timing_negative_polarity_and_second_precision_mutations_are_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "timing-negative", self.verdict_mutations("timing-negative")
+        )
+
+
+class M4TimingPositiveProofs(FreshnessFixture):
+    def test_M4_timing_positive_assertion_newer_accepts(self) -> None:
+        self.assert_real_kind("timing-positive")
+
+    def test_M4_timing_positive_rejection_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "timing-positive", self.verdict_mutations("timing-positive")
+        )
+
+
+class M4MtimeEqualityProofs(FreshnessFixture):
+    def test_M4_mtime_equality_assertion_equal_accepts(self) -> None:
+        self.assert_real_kind("mtime-equality")
+
+    def test_M4_mtime_equality_less_or_equal_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "mtime-equality", self.verdict_mutations("mtime-equality")
+        )
+
+
+class M4AbsentRecordProofs(FreshnessFixture):
+    def test_M4_absent_assertion_missing_record_rejects(self) -> None:
+        self.assert_real_kind("absent")
+
+    def test_M4_absent_fail_open_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "absent", self.verdict_mutations("absent")
+        )
+
+
+class M4MismatchedRecordProofs(FreshnessFixture):
+    def test_M4_mismatched_assertion_wrong_run_id_rejects(self) -> None:
+        self.assert_real_kind("mismatched")
+
+    def test_M4_mismatched_binding_bypass_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "mismatched", self.verdict_mutations("mismatched")
+        )
+
+
+class M4EmptyRecordProofs(FreshnessFixture):
+    def test_M4_empty_assertion_empty_record_rejects(self) -> None:
+        self.assert_real_kind("empty")
+
+    def test_M4_empty_record_bypass_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "empty", self.verdict_mutations("empty")
+        )
+
+
+class M4MalformedRecordProofs(FreshnessFixture):
+    def test_M4_malformed_assertion_exact_lowercase_single_line_grammar(self) -> None:
+        self.assert_real_kind("malformed")
+
+    def test_M4_malformed_grammar_bypass_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "malformed", self.verdict_mutations("malformed")
+        )
+
+
+class M4RecordPrecedesDispatchProofs(FreshnessFixture):
+    def test_M4_record_precedes_dispatch_assertion_for_every_digest_and_position(self) -> None:
+        self.assert_real_kind("record-precedes-dispatch")
+
+    def test_M4_marker_before_record_and_nonexclusive_create_mutations_are_rejected(self) -> None:
+        marker_before_record = _replace_once(
+            self.allocator_source,
+            "        try:\n"
+            "            launch_created = _create_launch_record(path + \".launch\", run_id)\n",
+            "        sys.stdout.write(ALLOCATION_MARKER + path + \"\\n\")\n"
+            "        sys.stdout.flush()\n"
+            "        try:\n"
+            "            launch_created = _create_launch_record(path + \".launch\", run_id)\n",
+        )
+        nonexclusive_create = _replace_once(
+            self.allocator_source,
+            "    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, \"O_NOFOLLOW\", 0)\n",
+            "    flags = os.O_WRONLY | os.O_CREAT | getattr(os, \"O_NOFOLLOW\", 0)\n",
+        )
+        for label, source in (
+            ("marker-before-record", marker_before_record),
+            ("nonexclusive-record", nonexclusive_create),
+        ):
+            for digest_path in DIGEST_PATHS:
+                for position in TRANSCRIPT_POSITIONS:
+                    with self.subTest(
+                        mutation=label,
+                        digest=digest_path,
+                        position=position,
+                    ):
+                        with self.assertRaises(AssertionError):
+                            self.assert_matrix_cell(
+                                VERDICT_PATH,
+                                "record-precedes-dispatch",
+                                digest_path,
+                                position,
+                                allocator_source=source,
+                            )
+
+
+class M4SidecarVariedProofs(FreshnessFixture):
+    def test_M4_sidecar_varied_assertion_sidecar_time_never_anchors_freshness(self) -> None:
+        self.assert_real_kind("sidecar-varied")
+
+    def test_M4_sidecar_written_after_transcript_anchor_mutation_is_rejected(self) -> None:
+        self.assert_verdict_mutations_rejected(
+            "sidecar-varied", self.verdict_mutations("sidecar-varied")
+        )
+
+
+class SFreshAdditionalProofs(FreshnessFixture):
+    def test_per_transcript_lookup_assertion_second_record_is_checked_independently(self) -> None:
+        for digest_path in DIGEST_PATHS:
+            self.assert_matrix_cell(
+                VERDICT_PATH,
+                "mismatched",
+                digest_path,
+                "SECOND",
+            )
+
+    def test_per_transcript_lookup_once_per_run_mutation_is_rejected(self) -> None:
+        mutant = _replace_once(
+            self.verdict_source,
+            "        freshness_problem = _transcript_freshness_problem(transcript)\n",
+            "        global _first_freshness_transcript\n"
+            "        try:\n"
+            "            freshness_transcript = _first_freshness_transcript\n"
+            "        except NameError:\n"
+            "            _first_freshness_transcript = transcript\n"
+            "            freshness_transcript = transcript\n"
+            "        freshness_problem = _transcript_freshness_problem(freshness_transcript)\n",
+        )
+        script = self.write_script(
+            mutant,
+            "once-per-run-record",
+            "review-verdict.py",
+        )
+        for digest_path in DIGEST_PATHS:
+            with self.subTest(digest=digest_path):
+                with self.assertRaises(AssertionError):
+                    self.assert_matrix_cell(
+                        script,
+                        "mismatched",
+                        digest_path,
+                        "SECOND",
+                    )
+
+    def run_empty_transcript(self, source: str, label: str) -> subprocess.CompletedProcess:
+        script = self.write_script(source, label, "review-verdict.py")
+        case_root = self.next_case_root(label)
+        plan = case_root / "PLAN.md"
+        plan.write_text("# Plan\n", encoding="utf-8")
+        parent = (
+            case_root
+            / "state"
+            / "unleashed-mail"
+            / "review-transcripts"
+            / "RepoHash09"
+        )
+        empty = self.create_transcript(parent, "gemini", RUN_IDS[0], b"")
+        other = self.create_transcript(
+            parent,
+            "codex",
+            RUN_IDS[1],
+            b"codex rejection body\nVERDICT: REQUEST_CHANGES\n",
+        )
+        return self.invoke(
+            script,
+            [
+                "write",
+                "--plan",
+                str(plan),
+                "--verdict",
+                "REQUEST_CHANGES",
+                "--reviewer",
+                "gemini=REQUEST_CHANGES:" + str(empty),
+                "--reviewer",
+                "codex=REQUEST_CHANGES:" + str(other),
+            ],
+        )
+
+    def test_allocated_empty_transcript_assertion_classifies_as_missing(self) -> None:
+        result = self.run_empty_transcript(
+            self.verdict_source,
+            "empty-transcript-assertion",
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("EMPTY", output)
+        self.assertIn("MISSING", output)
+
+    def test_allocated_empty_transcript_guard_removal_mutation_is_rejected(self) -> None:
+        mutant = _replace_once(
+            self.verdict_source,
+            "        if os.path.getsize(transcript) == 0:\n",
+            "        if False and os.path.getsize(transcript) == 0:\n",
+        )
+        result = self.run_empty_transcript(mutant, "empty-transcript-guard-removed")
+        with self.assertRaises(AssertionError):
+            output = result.stdout + result.stderr
+            self.assertNotEqual(0, result.returncode, output)
+            self.assertIn("MISSING", output)
+
+    def run_duplicate_evidence(self, source: str, label: str) -> subprocess.CompletedProcess:
+        script = self.write_script(source, label, "review-verdict.py")
+        case_root = self.next_case_root(label)
+        plan = case_root / "PLAN.md"
+        plan.write_text("# Plan\n", encoding="utf-8")
+        parent = (
+            case_root
+            / "state"
+            / "unleashed-mail"
+            / "review-transcripts"
+            / "RepoHash09"
+        )
+        shared = self.create_transcript(
+            parent,
+            "gemini",
+            RUN_IDS[0],
+            b"one review cannot back two approvals\nVERDICT: APPROVE\n",
+        )
+        digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        return self.invoke(
+            script,
+            [
+                "write",
+                "--plan",
+                str(plan),
+                "--verdict",
+                "APPROVE",
+                "--reviewer",
+                "gemini=APPROVE:" + str(shared),
+                "--reviewer",
+                "codex=APPROVE:" + str(shared),
+                "--reviewed-sha256",
+                digest,
+            ],
+        )
+
+    def test_distinct_evidence_assertion_survives_added_freshness_check(self) -> None:
+        result = self.run_duplicate_evidence(
+            self.verdict_source,
+            "distinct-evidence-assertion",
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_distinct_evidence_bypass_mutation_is_rejected(self) -> None:
+        mutant = _replace_once(
+            self.verdict_source,
+            "    problem = _quorum_problem(verdict, reviewers)\n",
+            "    problem = None\n",
+        )
+        result = self.run_duplicate_evidence(mutant, "distinct-evidence-bypassed")
+        with self.assertRaises(AssertionError):
+            self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
