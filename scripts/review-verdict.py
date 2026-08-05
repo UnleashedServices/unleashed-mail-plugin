@@ -405,6 +405,20 @@ def _is_per_run_transcript(path: str) -> bool:
       planting a `.launch` beside a genuinely legacy transcript only makes the gate STRICTER,
       because the record must then validate rather than being skipped.
 
+    **The filename branch is deliberately not conditioned on the directory** (PR #63 review, item 4).
+    It means any basename ending `-<32 lowercase hex>.txt` takes the per-run branch wherever it lives,
+    so a transcript outside the allocator directory that happens to match — a digest-suffixed name like
+    `review-<md5>.txt` is the realistic collision, MD5 hex being exactly 32 characters — is now required
+    to carry a `.launch` and is REJECTED without one.
+
+    That is accepted, because the alternative is a fail-open. Requiring the layout as well would make a
+    genuinely allocated transcript that was copied or moved out of `unleashed-mail/review-transcripts/`
+    classify as legacy and skip the check entirely, which is precisely the stale/foreign acceptance the
+    check exists to reject — and moving a file is far easier than the collision it would guard against.
+    A false positive here costs a re-run through the allocator, which is the mandated path anyway; the
+    recovery is to rename the file, never to plant a `.launch` beside it, since a hand-written record
+    would forge exactly the provenance this check verifies.
+
     `hash_directory` is the per-run repo-hash component, not the repository root (Rovo thread 3).
     """
     hash_directory = os.path.dirname(path)
