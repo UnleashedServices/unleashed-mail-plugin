@@ -237,6 +237,10 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
             threading.BRAINSTORM_END,
         )
 
+    def capture_helper_source(self) -> str:
+        """The committed `capture-codex-review.sh` the codex recipe now calls."""
+        return threading.CAPTURE_CODEX.read_text(encoding="utf-8")
+
     def persist_helper_source(self) -> str:
         """The committed `persist-verdict.sh`.
 
@@ -293,8 +297,13 @@ class M51AndM52PropagationProofs(M5PathFixture):
                         self.assertNotIn(str(fallback_link), allocated)
 
     def test_M5_2_rederived_capture_target_mutations_are_rejected(self) -> None:
+        # Same property for both arms — the capture must open the leaf the allocator EMITTED, not one
+        # it re-derives — but the two arms now carry it in different places. codex's capture moved into
+        # `capture-codex-review.sh`, so its mutant replaces the staged helper; gemini's is still inline
+        # in the recipe. `in_helper` says which, rather than the test guessing from the reviewer name.
         mutations = {
             "codex": (
+                True,
                 '--allocated "$CODEX_TRANSCRIPT" -- \\\n',
                 '--allocated "${XDG_STATE_HOME}/derived-codex.txt" -- \\\n',
             ),
@@ -302,19 +311,32 @@ class M51AndM52PropagationProofs(M5PathFixture):
             # is the re-derived transcript PATH; including the timeout pinned an unrelated literal,
             # so retuning it broke this test for a reason it does not test (PR #63 review, gap 12).
             "gemini": (
+                False,
                 '.agy-prompt.md "$GEMINI_TRANSCRIPT"',
                 '.agy-prompt.md "${XDG_STATE_HOME}/derived-gemini.txt"',
             ),
         }
-        for reviewer, (old, new) in mutations.items():
+        for reviewer, (in_helper, old, new) in mutations.items():
             with self.subTest(reviewer=reviewer):
-                recipe = _replace_once(self.capture_source(reviewer), old, new)
-                with self.assertRaises(AssertionError):
-                    self.assert_capture_uses_emitted_path(
-                        reviewer,
-                        recipe,
-                        self.root / ("mutation base " + reviewer),
+                recipe = self.capture_source(reviewer)
+                if in_helper:
+                    self.install_capture_helper(
+                        _replace_once(self.capture_helper_source(), old, new)
                     )
+                else:
+                    recipe = _replace_once(recipe, old, new)
+                try:
+                    with self.assertRaises(AssertionError):
+                        self.assert_capture_uses_emitted_path(
+                            reviewer,
+                            recipe,
+                            self.root / ("mutation base " + reviewer),
+                        )
+                finally:
+                    # Restore INLINE, not via addCleanup: cleanups run after tearDown, by which point
+                    # the staged plugin directory no longer exists.
+                    if in_helper:
+                        self.install_capture_helper(self.capture_helper_source())
 
 
 class M56ConsumerProofs(M5PathFixture):

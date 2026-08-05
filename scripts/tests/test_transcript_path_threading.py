@@ -22,6 +22,7 @@ PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
 REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
 PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
+CAPTURE_CODEX = REPO / "scripts" / "review" / "capture-codex-review.sh"
 
 GEMINI_SKILL = REPO / "skills" / "gemini-review" / "SKILL.md"
 CODEX_SKILL = REPO / "skills" / "codex-review" / "SKILL.md"
@@ -159,13 +160,18 @@ class TranscriptThreadingFixture(unittest.TestCase):
         self.reviewed.mkdir()
         prompt = "# Review fixture\n\n" + ("read-only fixture material\n" * 80)
         (self.reviewed / ".agy-prompt.md").write_text(prompt, encoding="utf-8")
+        # The codex arm's prompt file was never created here. The old inline recipe passed
+        # `$(cat .codex-prompt.md)`, which expands EMPTY on a missing file, so every codex capture
+        # proof had been running against an empty prompt without failing — `capture-codex-review.sh`
+        # checks the prompt is readable and non-empty, and that is what surfaced it.
+        (self.reviewed / ".codex-prompt.md").write_text(prompt, encoding="utf-8")
         (self.reviewed / "FEATURE_PLAN.md").write_text("# Plan\nThread paths.\n", encoding="utf-8")
         env = dict(os.environ)
         commands = (
             ["git", "init", "-q"],
             ["git", "config", "user.name", "Fixture"],
             ["git", "config", "user.email", "fixture@example.invalid"],
-            ["git", "add", ".agy-prompt.md", "FEATURE_PLAN.md"],
+            ["git", "add", ".agy-prompt.md", ".codex-prompt.md", "FEATURE_PLAN.md"],
             ["git", "commit", "-q", "-m", "fixture"],
         )
         for command in commands:
@@ -179,8 +185,20 @@ class TranscriptThreadingFixture(unittest.TestCase):
         library_dir.mkdir()
         shutil.copy2(ALLOCATE, review_dir / ALLOCATE.name)
         shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
+        shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
         shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
+
+    def install_capture_helper(self, source: str) -> None:
+        """Replace the staged `capture-codex-review.sh` with `source`.
+
+        The codex capture rules moved out of the skill body into that script, so an M5 mutant now has
+        to replace the script the recipe calls rather than edit the recipe text. The recipe under test
+        stays the shipped one, which is the point.
+        """
+        self._write_executable(
+            self.plugin / "scripts" / "review" / CAPTURE_CODEX.name, source
+        )
 
     def environment(
         self,

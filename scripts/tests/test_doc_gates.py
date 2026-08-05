@@ -179,10 +179,37 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                 self.assertIn(ref, src, f"COREDEV-2504: {rel} lost the bare-token reference {ref!r}")
 
     def test_codex_review_pty_timeout_is_1200(self):
-        # COREDEV-2504 medium: the two codex-review pty caps must be 1200s (xhigh survives), not 600.
+        # COREDEV-2504 medium: every codex-review pty cap must be 1200s (xhigh survives), not 600.
+        # One of the two caps moved into `capture-codex-review.sh` when the capture recipe was
+        # extracted (COREDEV-2642), so counting occurrences in the SKILL alone would now pass while
+        # the cap that actually governs a gate round went unchecked. Assert BOTH homes.
         src = _read("skills/codex-review/SKILL.md")
-        self.assertEqual(src.count("--timeout 1200"), 2, "codex-review must use --timeout 1200 (x2)")
-        self.assertNotIn("--timeout 600", src, "codex-review must not keep the 600s cap that SIGTERMs xhigh")
+        helper = _read("scripts/review/capture-codex-review.sh")
+        self.assertEqual(
+            src.count("--timeout 1200"), 1,
+            "codex-review's audit capture must still use --timeout 1200",
+        )
+        self.assertIn(
+            'capture-codex-review.sh" "$TICKET" "$ROUND" .codex-prompt.md 1200', src,
+            "the capture recipe must pass the 1200s cap to the helper",
+        )
+        self.assertIn(
+            'TIMEOUT="${4-1200}"', helper,
+            "the helper's default cap must be 1200s",
+        )
+        self.assertIn(
+            '--timeout "$TIMEOUT"', helper,
+            "the helper must pass its cap through to pty-capture",
+        )
+        for label, text in (("skill", src), ("helper", helper)):
+            self.assertNotIn(
+                "--timeout 600", text,
+                f"codex-review {label} must not keep the 600s cap that SIGTERMs xhigh",
+            )
+            self.assertNotIn(
+                "{4-600}", text,
+                f"codex-review {label} must not default to the 600s cap",
+            )
 
 
 class F13_CFRStateMachine(unittest.TestCase):

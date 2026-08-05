@@ -326,14 +326,10 @@
         "S-CAPTURE"
       ],
       "destination": {
+        "path": "scripts/review/capture-codex-review.sh",
         "line": 51,
         "payloads": [
-          "# COREDEV2619_CODEX_CAPTURE_BEGIN",
-          ": \"${TICKET:?bind TICKET to the --ticket operand}\"",
-          ": \"${ROUND:?bind ROUND to the --round operand}\"",
-          "if TRANSCRIPT_MARKER=\"$(",
-          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex",
-          ")\"; then",
+          "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
           "    :",
           "else",
           "    status=\"$?\"",
@@ -341,13 +337,14 @@
           "fi",
           "case \"$TRANSCRIPT_MARKER\" in",
           "    UNLEASHED_TRANSCRIPT=?*) ;;",
-          "    *) printf 'codex review: allocator returned an invalid marker\\n' >&2; exit 1 ;;",
+          "    *) die \"allocator returned an invalid marker\" ;;",
           "esac",
           "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
           "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
-          "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+          "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
+          "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
         ],
-        "payloadSha256": "1069bb9682d1a7d66d6b881f553c25f1f145b95748a37904d2125efa0bd91e06"
+        "payloadSha256": "55cdb5015fcf9ed3dea5150e2fa39bc65528c4a43abee730209c2f1d30f17732"
       },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
@@ -366,11 +363,13 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 68,
+        "path": "scripts/review/capture-codex-review.sh",
+        "line": 63,
         "payloads": [
-          "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+          "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
+          "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
         ],
-        "payloadSha256": "251dbf0f8b8b035c4184e02faca43af7efc666b8aea85cd2c6db46f521131915"
+        "payloadSha256": "a6b61949bf4e951563f6434ead78bdbcd20bcc807d0724e6a1683874b4b34e93"
       },
       "sourceSha256": "140cfc84e527dc2259392ae57eed8ba2e0c5a61496d8476a25d7db90a8c1a4cf",
       "precedingAnchorLine": 47,
@@ -389,7 +388,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 71,
+        "line": 61,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -412,7 +411,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 210,
+        "line": 200,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],

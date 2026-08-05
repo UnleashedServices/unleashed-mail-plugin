@@ -35,38 +35,28 @@ Docs: https://developers.openai.com/codex/cli/reference
 **Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
 
 ```bash
-# Put the prompt in a workspace file, then run codex through the wrapper.
-# Wrapper timeout is 1200s: mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
-# SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
-# (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
-# otherwise kill the run before the wrapper's cap fires.
-# MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed one.
-# Each round allocates its own transcript leaf, so a wrapper that never starts (codex absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a STALE
-# previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
-# MISSING -> the gate fails closed.
-# DO NOT `rm -f` THE RESERVED LEAF. The allocator creates it 0-byte and pty-capture.py --allocated opens
-# it WITHOUT O_CREAT, so deleting it makes the final write fail on a missing file AFTER the full review
-# has run — the round is lost (PR #63 review, gap 14). Retries must RE-ALLOCATE.
+# Put the prompt in `.codex-prompt.md`, bind TICKET and ROUND, then run this ONE command. It allocates
+# the per-run transcript leaf, prints the `UNLEASHED_TRANSCRIPT=` marker for synthesis to bind, and
+# captures the review into that exact leaf through the PTY wrapper.
+#
+# ONE command, so the `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above covers it. This
+# used to be two `:` guards, an `if`/`else` around the allocator and a `case` on the marker — a compound
+# command matching no grant, so the block every gate round must run prompted every time.
+#
+# The rules it carries, which now live in one place instead of in a skill body:
+#   * timeout 1200s — mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
+#     SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
+#     (COREDEV-2504). Keep the Monitor pattern below: an outer runner timeout could otherwise kill the
+#     run before the wrapper's cap fires.
+#   * MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
+#     one. Each round allocates its own leaf, so a wrapper that never starts (codex absent / auth
+#     expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a
+#     STALE previous-round transcript that review-synthesis would read as THIS round's verdict. Absent
+#     maps to MISSING -> the gate fails closed.
+#   * DO NOT `rm -f` the reserved leaf on a retry; retries must RE-ALLOCATE (gap 14). The script says
+#     why at the line that would tempt you.
 # COREDEV2619_CODEX_CAPTURE_BEGIN
-: "${TICKET:?bind TICKET to the --ticket operand}"
-: "${ROUND:?bind ROUND to the --round operand}"
-if TRANSCRIPT_MARKER="$(
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" "$TICKET" "$ROUND" codex
-)"; then
-    :
-else
-    status="$?"
-    exit "$status"
-fi
-case "$TRANSCRIPT_MARKER" in
-    UNLEASHED_TRANSCRIPT=?*) ;;
-    *) printf 'codex review: allocator returned an invalid marker\n' >&2; exit 1 ;;
-esac
-CODEX_TRANSCRIPT="${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}"
-printf '%s\n' "$TRANSCRIPT_MARKER"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 --allocated "$CODEX_TRANSCRIPT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" .codex-prompt.md 1200
 # COREDEV2619_CODEX_CAPTURE_END
 # Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
 # matches codex's. Preserve the marker remainder byte-for-byte for synthesis.

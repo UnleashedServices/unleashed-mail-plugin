@@ -744,17 +744,21 @@ class M513CallersScanTests(CallersScanProof):
             if site.get("class") != "rewrite":
                 continue
             destination = site["destination"]
-            lines = reference_lines(files[site["path"]])
+            # A rewrite's destination is not always in its source file: the codex capture body moved
+            # into `capture-codex-review.sh`, and reading the source file at the destination's line
+            # numbers would silently land on unrelated lines and skip them.
+            destination_path = destination.get("path", site["path"])
+            lines = reference_lines(files[destination_path])
             for offset in range(len(destination["payloads"])):
                 line_number = destination["line"] + offset
                 payload = lines[line_number - 1]
-                if not reference_is_candidate(site["path"], payload):
+                if not reference_is_candidate(destination_path, payload):
                     continue
                 if reference_is_exact(payload):
                     continue
-                final_identity = identity_for(site["path"], line_number - 1, payload)
+                final_identity = identity_for(destination_path, line_number - 1, payload)
                 stale_identity = ReferenceIdentity(
-                    site["path"], line_number, site["sourceSha256"]
+                    destination_path, line_number, site["sourceSha256"]
                 )
                 self.assertNotEqual(
                     final_identity.payload_sha256,
@@ -856,30 +860,70 @@ class M513CallersScanTests(CallersScanProof):
 
 class M514InvocationSyntaxTests(CallersScanProof):
     def test_M5_14_review_recipes_require_inputs_and_literal_reviewer(self):
+        """Each arm allocates exactly once, under its own LITERAL name.
+
+        The two arms keep that call in different files now: codex's capture moved into
+        `scripts/review/capture-codex-review.sh` so its recipe could be one granted command
+        (COREDEV-2642), while gemini's is still inline. `allocates_in` names the file to read rather
+        than the test assuming the skill — a version that kept assuming it would have gone looking for
+        the call in the skill, not found it, and reported a missing allocation for a call that moved.
+        """
         recipes = {
-            "gemini": "skills/gemini-review/SKILL.md",
-            "codex": "skills/codex-review/SKILL.md",
+            "gemini": {
+                "skill": "skills/gemini-review/SKILL.md",
+                "allocates_in": "skills/gemini-review/SKILL.md",
+                "wrapper_call": (
+                    b'bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" '
+                    b'"$TICKET" "$ROUND" gemini'
+                ),
+            },
+            "codex": {
+                "skill": "skills/codex-review/SKILL.md",
+                "allocates_in": "scripts/review/capture-codex-review.sh",
+                "wrapper_call": (
+                    b'if TRANSCRIPT_MARKER="$(bash "${SCRIPT_DIR}/allocate-transcript.sh" '
+                    b'"$TICKET" "$ROUND" codex)"; then'
+                ),
+            },
         }
-        for reviewer, path in recipes.items():
+        for reviewer, spec in recipes.items():
             with self.subTest(reviewer=reviewer):
-                payload = (REPO / path).read_bytes()
-                lines = reference_lines(payload)
+                payload = (REPO / spec["skill"]).read_bytes()
+                allocating = (REPO / spec["allocates_in"]).read_bytes()
                 invocation = (
                     f"/unleashed-mail:{reviewer}-review "
                     "--ticket <T> --round <N> <plan>"
                 ).encode("ascii")
-                wrapper_call = (
-                    b'bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" '
-                    + b'"$TICKET" "$ROUND" '
-                    + reviewer.encode("ascii")
-                )
-                self.assertIn(invocation, lines)
-                self.assertIn(wrapper_call, lines)
+                wrapper_call = spec["wrapper_call"]
+
+                self.assertIn(invocation, reference_lines(payload))
+                self.assertIn(wrapper_call, reference_lines(allocating))
                 allocation_calls = [
-                    line for line in lines if b"allocate-transcript.sh" in line
+                    line
+                    for line in reference_lines(allocating)
+                    if b"allocate-transcript.sh" in line and not line.lstrip().startswith(b"#")
                 ]
                 self.assertEqual([wrapper_call], allocation_calls)
-                self.assertNotIn(b'"$REVIEWER"', wrapper_call)
+                self.assertIn(reviewer.encode("ascii"), wrapper_call)
+                # Assert against the FILE, not against `wrapper_call`: a check that the literal defined
+                # ten lines above does not contain `"$REVIEWER"` is true no matter what ships.
+                self.assertNotIn(
+                    b'"$REVIEWER"',
+                    allocating,
+                    f"{spec['allocates_in']} derives the reviewer name at runtime",
+                )
+                # The skill must not ALSO allocate — one call per round, wherever it lives.
+                if spec["allocates_in"] != spec["skill"]:
+                    self.assertEqual(
+                        [],
+                        [
+                            line
+                            for line in reference_lines(payload)
+                            if b"allocate-transcript.sh" in line
+                            and not line.lstrip().startswith(b"#")
+                        ],
+                        f"{spec['skill']} allocates as well as its helper",
+                    )
                 self.assertIn(b"If either is absent, stop before allocation.", payload)
 
     def test_M5_14_each_destination_requires_ticket_and_round_flags_by_name(self):
