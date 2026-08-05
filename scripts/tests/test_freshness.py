@@ -645,6 +645,44 @@ class M4ClosedMatrixProofs(FreshnessFixture):
             "a test drives a kind that is not in MUTATION_KINDS, so the matrix understates coverage",
         )
 
+    def test_no_mutation_kind_is_silently_skipped_at_runtime(self) -> None:
+        """The other half of the same failure mode — and the half the AST check cannot see.
+
+        `test_every_mutation_kind_is_actually_exercised_by_a_test` reads this module's AST, so it
+        catches a kind whose proof class was DELETED. It cannot catch a class that still exists and
+        skips at runtime: the string literal is still there, so the kind still looks exercised.
+        Verified blind — decorating a kind's class with `@unittest.skip` left the whole suite green.
+
+        Gap 22 named "a deleted OR SKIPPED kind", so closing only the deletion half and calling it
+        closed was the same error the fix was meant to prevent.
+
+        Runs the kind-driving classes in-process and asserts none of their tests skipped. Note a
+        skip is legitimate elsewhere in this repo (the zsh-agreement test skips where zsh is absent),
+        so this is deliberately scoped to the M4 kind proofs rather than a blanket no-skip rule.
+        """
+        import unittest as _unittest
+
+        module = sys.modules[__name__]
+        loader = _unittest.TestLoader()
+        suite = _unittest.TestSuite()
+        for name in dir(module):
+            candidate = getattr(module, name)
+            if not isinstance(candidate, type) or not issubclass(candidate, _unittest.TestCase):
+                continue
+            if candidate is type(self) or not name.startswith(("M4", "SFresh")):
+                continue          # exclude this class, or the run would recurse into itself
+            suite.addTests(loader.loadTestsFromTestCase(candidate))
+
+        self.assertGreater(suite.countTestCases(), 0, "no kind-proof classes were collected")
+        result = _unittest.TestResult()
+        suite.run(result)
+
+        self.assertEqual(
+            [], [str(test) for test, _reason in result.skipped],
+            "a mutation-kind proof skipped at runtime — the matrix would stay green while its "
+            "cells stopped running",
+        )
+
     def test_M4_matrix_missing_factor_mutation_is_rejected(self) -> None:
         kinds = MUTATION_KINDS[:-1]
         cases = tuple(itertools.product(kinds, DIGEST_PATHS, TRANSCRIPT_POSITIONS))
