@@ -35,7 +35,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Changed
 
-- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan gated over 19 review rounds). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers' machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`, plan reviewed over 19 rounds — but **it shipped without an approving round**: round 19's verdict on these bytes was codex `REQUEST_CHANGES` (3 High + 1 Medium), with the gemini arm emitting no parseable verdict line. The earlier wording, "plan gated over 19 review rounds", claimed a pass the plan's own status line does not record). **This is a scope narrowing, not a relaxation** — the five capture-roster reviewers' machine contracts are untouched and still mandatory; §13 simply stops claiming to govern them.
 
   §13's scope was a prose paragraph, and a paragraph listing the four intended surfaces as *"out of scope"* and the five reviewers as *"in scope"* would have passed every gate while asserting the exact inverse. It is now a **parseable four-column table** — `surface_id | producer_id | scope | anchor` — that is the only scope statement:
   exclusive and normative, with exactly nine approved triples, every field from a finite allowlist, and any unknown key or catch-all row a hard failure.
@@ -79,7 +79,7 @@ an unrelated captured specialist to `VALID_AGENTS`.
 
 ### Fixed
 
-- **Plugin state split across two base directories** (`COREDEV-2617`, plan gated over 19 review rounds).
+- **Plugin state split across two base directories** (`COREDEV-2617`, plan reviewed over **18** rounds, not the 19 previously claimed here — and **it shipped without a reproducing approval**: round 18's double approval failed re-run at the byte-identical digest, and the re-run found a real fail-open→fail-closed regression in the agent fence).
   `CLAUDE_PLUGIN_DATA` is exported to hook and MCP subprocesses but **not** to an ordinary shell. Every
   library fell back to `${HOME}/.claude/unleashed-mail`, so a marker, log or snapshot written outside a
   hook went to a *different* directory than the one the hooks read — and neither could see the other.
