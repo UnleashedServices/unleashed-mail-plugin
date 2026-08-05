@@ -67,8 +67,12 @@ if [ -n "$SESSION_KEY" ]; then
     # :123 mv -f's into it. With an unresolved base the sentinel makes each fail ENOTDIR, but
     # the gate must not depend on that — skip the sentinel machinery outright and let the gate
     # fall through to its normal non-blocking result.
-    unleashed_base_ok || SENTINEL=""
+    # ORDER IS LOAD-BEARING. These two statements were reversed, so the guard was DEAD CODE: the
+    # assignment below unconditionally overwrote the `SENTINEL=""` the guard had just set, and the
+    # gate's safety rested only on `/dev/null`'s ENOTDIR making the later mktemp/mv fail — the very
+    # accident the comment above says the gate "must not depend on" (PR #63 review, gap 26).
     SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
+    unleashed_base_ok || SENTINEL=""
 else
     SENTINEL=""
 fi

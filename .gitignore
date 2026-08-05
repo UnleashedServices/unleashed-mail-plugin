@@ -30,3 +30,20 @@ __pycache__/
 logs/
 *.jsonl
 reviews/
+
+# Test fixture trees, created in the REPO ROOT by tempfile.TemporaryDirectory(dir=REPO)
+# (COREDEV-2642, PR #63 review gap 23). These hold DELIBERATELY WEAKENED COPIES of the gate
+# scripts — mutation proofs need the mutant to sit where the real one does. A killed run leaves
+# them behind, and a later `git add -A` then commits a weakened gate: exactly the COREDEV-2597
+# incident. Cleanup is `addCleanup`-based and so does not survive SIGKILL, which is why these
+# are ignored rather than merely tidied up.
+#
+# All SEVEN prefixes are listed, not just the five the review cited — the same hazard applies to
+# every fixture rooted in the repo, and a partial list is how the next one gets missed.
+.callers-default-mutant-*/
+.callers-selection-mutant-*/
+.callers-shallow-*/
+.m4-freshness-proof-*/
+.m5-wrapper-proof-*/
+.thread-proof-*/
+.wrapper-proof-*/

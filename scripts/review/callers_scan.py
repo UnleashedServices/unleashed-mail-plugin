@@ -223,9 +223,49 @@ def strip_markdown_prefix(payload: bytes) -> bytes:
     return payload[match.end() :]
 
 
+# Invisible and direction-control sequences that can sit INSIDE a spelled invocation while
+# defeating the ASCII anchor test below: `/unleashed-mail:gemini<ZWSP>-review` renders as the
+# command to a human but `b"...gemini-review" in payload` is False, so the line was never a
+# candidate and the scanner's default-DENY never applied to it (PR #63 review, gap 25).
+_INVISIBLE_SEQUENCES = (
+    b"\x00",              # NUL
+    b"\xe2\x80\x8b",      # U+200B ZERO WIDTH SPACE
+    b"\xe2\x80\x8c",      # U+200C ZERO WIDTH NON-JOINER
+    b"\xe2\x80\x8d",      # U+200D ZERO WIDTH JOINER
+    b"\xef\xbb\xbf",      # U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM
+    b"\xe2\x80\xaa",      # U+202A..U+202E embeddings and overrides
+    b"\xe2\x80\xab",
+    b"\xe2\x80\xac",
+    b"\xe2\x80\xad",
+    b"\xe2\x80\xae",
+    b"\xe2\x81\xa6",      # U+2066..U+2069 isolates
+    b"\xe2\x81\xa7",
+    b"\xe2\x81\xa8",
+    b"\xe2\x81\xa9",
+)
+
+
+def strip_invisible(payload: bytes) -> bytes:
+    """Remove invisible/bidi sequences so an anchor cannot be split by one."""
+    for sequence in _INVISIBLE_SEQUENCES:
+        payload = payload.replace(sequence, b"")
+    return payload
+
+
 def is_candidate(path: str, payload: bytes) -> bool:
     if path == EXEMPTION_PATH:
         return False
+    # Re-test ONLY when normalisation actually CHANGED the line. Selecting every line that merely
+    # CONTAINS an invisible byte would sweep in the plan documents that discuss CRLF/BOM handling
+    # and carry those bytes as examples -- an earlier version of this fix did exactly that and
+    # turned hundreds of prose lines into rejects. What matters is whether removing them REVEALS an
+    # invocation that was hidden; nothing else about selection changes.
+    #
+    # Invalid UTF-8 needs no arm: the anchors are ASCII byte sequences, so surrounding undecodable
+    # bytes cannot conceal one -- `anchor in payload` still matches through them.
+    normalized = strip_invisible(payload)
+    if normalized != payload and any(anchor in normalized for anchor in ANCHORS):
+        return True
     return any(anchor in payload for anchor in ANCHORS)
 
 

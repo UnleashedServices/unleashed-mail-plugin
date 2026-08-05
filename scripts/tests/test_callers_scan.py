@@ -845,3 +845,59 @@ class M515bFullInvocationShapeTests(CallersScanProof):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class EvasiveSelectionProofs(unittest.TestCase):
+    """PR #63 review, gap 25 — candidate selection was the scanner's one default-ALLOW step.
+
+    Everything below `is_candidate` is deny-by-default, but a line that SPELLS an invocation while
+    defeating the ASCII anchor test never reached it: a zero-width space inside `gemini-review`, a
+    bidi override, a BOM, a NUL, or a non-UTF-8 document all render as the command to a human while
+    `b"/unleashed-mail:gemini-review" in payload` is False. Selection must therefore fail CLOSED.
+    """
+
+    def test_plain_invocation_is_still_selected(self) -> None:
+        self.assertTrue(production.is_candidate("docs/x.md", b"/unleashed-mail:gemini-review --ticket X"))
+
+    def test_ordinary_prose_is_still_not_selected(self) -> None:
+        """The deletion test: the guard must be conditional, not select everything."""
+        self.assertFalse(production.is_candidate("docs/x.md", b"This line mentions nothing relevant."))
+
+    def test_an_invocation_hidden_by_an_invisible_char_is_selected(self) -> None:
+        """Normalisation must REVEAL an anchor that the raw byte test missed."""
+        # A ZWSP must sit INSIDE **every** anchor. `is_candidate` tests them with `any()`,
+        # and ANCHORS are two coarse substrings (`/unleashed-mail:` and `-review`), so
+        # breaking only one still matches the other. That is a real robustness property of
+        # the coarse anchors — evasion has to defeat ALL of them. Two earlier versions of
+        # this fixture proved nothing, and the validity assertion below caught both.
+        hidden = "/unleashed-mail\u200b:gemini-rev\u200biew --ticket X".encode("utf-8")
+        self.assertFalse(
+            any(anchor in hidden for anchor in production.ANCHORS),
+            "fixture invalid: the raw anchors must NOT match, or this proves nothing",
+        )
+        self.assertTrue(production.is_candidate("docs/x.md", hidden))
+
+    def test_prose_merely_containing_an_invisible_char_is_not_selected(self) -> None:
+        """The discrimination that matters — and the reason the first fix was wrong.
+
+        Selecting every line that CONTAINS such a byte swept in the plan documents that discuss
+        CRLF/BOM handling and carry those bytes as examples: hundreds of prose lines became
+        rejects. Only a line where stripping them REVEALS an invocation may be selected.
+        """
+        for label, payload in {
+            "bom in prose": "prose \ufeff more prose".encode("utf-8"),
+            "nul in prose": b"prose \x00 more prose",
+            "invalid utf-8": b"prose \xff\xfe more prose",
+            "zwsp in prose": "prose \u200b more prose".encode("utf-8"),
+        }.items():
+            with self.subTest(label=label):
+                self.assertFalse(
+                    production.is_candidate("docs/x.md", payload),
+                    label + " does not hide an invocation and must not be selected",
+                )
+
+    def test_the_exemption_manifest_itself_is_still_excluded(self) -> None:
+        """Failing closed must not start scanning the exemption file and recursing on itself."""
+        self.assertFalse(
+            production.is_candidate(production.EXEMPTION_PATH, b"/unleashed-mail:gemini-review")
+        )
