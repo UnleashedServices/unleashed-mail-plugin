@@ -685,5 +685,49 @@ os.execv(sys.executable, [sys.executable, os.environ["PTY"]] + sys.argv[1:])
                 self.assertTrue(all(path.exists() and Path(str(path) + ".launch").exists() for path in paths))
 
 
+def _rmtree_quiet(path: str) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+
+
+class SymlinkedAllocatorParentProofs(unittest.TestCase):
+    """PR #63 second-round review: `os.stat()` followed a symlinked state component.
+
+    `$XDG_STATE_HOME/unleashed-mail` being a SYMLINK to a 0700 same-owner directory satisfied every
+    check, because `os.stat()` reports the TARGET. The mode of the target says nothing about who can
+    replace the link — and whoever can replace it retargets every future allocation. `lstat` reports
+    S_IFLNK, so the existing S_ISDIR test rejects it with no new branch.
+    """
+
+    def setUp(self) -> None:
+        spec = importlib.util.spec_from_file_location("_pc_symlink_parent", str(PTY))
+        self.mod = importlib.util.module_from_spec(spec)
+        sys.modules["_pc_symlink_parent"] = self.mod
+        spec.loader.exec_module(self.mod)
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(_rmtree_quiet, self.root)
+
+    def test_a_real_private_directory_is_accepted(self) -> None:
+        """Deletion test: the guard must be conditional, not reject every directory."""
+        path = os.path.join(self.root, "real")
+        os.mkdir(path, 0o700)
+        self.mod._validate_existing_private_directory(path)
+
+    def test_a_symlink_to_a_private_directory_is_rejected(self) -> None:
+        target = os.path.join(self.root, "target")
+        os.mkdir(target, 0o700)
+        link = os.path.join(self.root, "link")
+        os.symlink(target, link)
+        with self.assertRaises(self.mod.AllocationError):
+            self.mod._validate_existing_private_directory(link)
+
+    def test_a_loose_mode_directory_is_still_rejected(self) -> None:
+        """The pre-existing 0700 requirement must survive the lstat change."""
+        path = os.path.join(self.root, "loose")
+        os.mkdir(path, 0o755)
+        with self.assertRaises(self.mod.AllocationError):
+            self.mod._validate_existing_private_directory(path)
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

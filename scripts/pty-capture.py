@@ -570,8 +570,18 @@ def _mkdir_private_chain(path: str) -> None:
 
 
 def _validate_existing_private_directory(path: str, metadata=None) -> None:
-    """Require an existing allocator-owned shared directory to be ours and exactly 0700."""
-    info = metadata if metadata is not None else os.stat(path)
+    """Require an existing allocator-owned shared directory to be ours, exactly 0700, and NOT a symlink.
+
+    lstat, not stat. `os.stat()` follows the link, so a pre-existing component such as
+    `$XDG_STATE_HOME/unleashed-mail` that is a SYMLINK to a 0700 directory owned by the same user
+    satisfied every check here while the bytes lived somewhere else entirely (PR #63 second-round
+    review). That defeats what the 0700 requirement is for: the mode of the link's TARGET says
+    nothing about who can replace the LINK, and whoever can retargets every future allocation.
+
+    A symlink now fails the S_ISDIR test — `lstat` reports S_IFLNK — so it is rejected by the check
+    that already exists rather than needing a new branch.
+    """
+    info = metadata if metadata is not None else os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise AllocationError(f"nested transcript parent {path!r} is not a directory")
     mode = stat.S_IMODE(info.st_mode)
