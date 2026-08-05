@@ -1,8 +1,8 @@
 # COREDEV-2642 — PR #63 remediation handoff
 
 **PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main`
-**State at handoff:** 19 commits pushed, **494 tests green**, all 6 CI checks green
-**Last commit:** `5806944`
+**State at handoff:** 28 commits pushed, **500 tests green**, all 6 CI checks green
+**Last commit:** `427a916`
 
 ---
 
@@ -12,8 +12,27 @@ PR #63 drew **four independent reviews**: `gemini-code-assist` (2 inline), `atla
 `chatgpt-codex-connector` (4 inline), and a multi-agent pass over the full 90-file delta that filed
 **30 gaps** (2 high / 19 medium / 9 low) plus triage of the other three reviews' 7 threads.
 
-**27 of the 30 gaps are done**, including both Highs. Codex then re-reviewed the remediation itself
-and filed **10 further P2s**; 2 of those are done.
+**27 of the 30 gaps are done**, including both Highs.
+
+The remediation was then reviewed **twice more**: codex re-reviewed it and filed **13 P2s** (5 closed),
+and **Kimi K3 at max effort** reviewed the 20-commit diff — the first look by a family other than codex
+— and filed **5 findings, all closed**.
+
+**The two families found different classes, and that is the argument for using both.** Codex found
+protocol and security defects: a TOCTOU, reservation timing, a parser form, a symlinked allocator
+parent. Kimi found **claims that did not hold** — four of its five were commit messages that
+overstated what the commit achieved:
+
+| Kimi finding | claimed vs actual |
+|---|---|
+| cleanup resumability | claimed the tool recoverable; only the FILE phase was, the directory phase still aborted |
+| test guards | 8 files defined classes after `unittest.main()`; direct execution ran 13 of 43 |
+| 18m→28m sweep | claimed the class swept; only `skills/` had been grepped |
+| CHANGELOG note | described a permission risk closed two commits later |
+| kind-binding | gap 22 said "deleted OR SKIPPED"; only deletion was closed |
+
+Three of those five are the same error: **closing half of something and describing it as closed.**
+When a finding names two things, verify both halves before writing the commit message.
 
 ## 2. Done
 
@@ -38,20 +57,43 @@ and filed **10 further P2s**; 2 of those are done.
    validates one file and the digest records another. A correct fix threads ONE `O_NOFOLLOW`
    descriptor through `islink` → `realpath` → `_regular_file_info` → the hash. This is the
    fail-closed gate's core with 30 freshness mutation proofs around it. Not attempted at depth.
-2. **Helper extraction — gaps 7–9 + thread 7.** `scripts/review/persist-verdict.sh` EXISTS and its
+2. **Helper extraction — gaps 7–9, thread 7, AND the `implement` gate fence.** Now FIVE sites, not
+   four: scoping `implement`'s grant (gap 1) left its mandatory Phase 1 Design Gate fence — which
+   opens `ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'` and uses functions, `tr`, `ls` — matching no grant, so
+   the one block that must run before any implementation now prompts every time. That fence is the
+   HIGHEST-RISK extraction of the five: it carries the MAJ-9 quoted-heredoc argument binding and the
+   physical-containment guard that has already been bypassed four different ways. Preserve both
+   exactly. `scripts/review/persist-verdict.sh` EXISTS and its
    fail-closed matrix is verified. Wiring it in broke 14 tests, because the M5 proofs
    (`test_m5_path_contract.py`, `test_transcript_path_threading.py`) **extract and mutate the inline
    shell** — anchors like `transcript="${rest#*:}"`. Moving the logic deletes their anchors. The
    refactor is: recipe → one granted call, AND re-point all 14 anchors at the helper, in ONE commit.
    Attempted and reverted once; the tree was left green.
 
-**Bounded, safe to take next:**
+**Nothing bounded remains.** Everything left needs a proof set or a core path redesigned ALONGSIDE
+the fix — attempting one without the other is how you get a half-fix with a confident commit message.
 
-3. `callers_scan.py:269` — because `ANCHORS` uses `any()`, ordinary prose (`security-reviewer`,
-   `pr-review`) is selected. The over-selection counterpart to gap 25's under-selection.
-5. `review-verdict.py:385` — my classifier widening means any basename ending `-<32 hex>.txt` takes
-   the per-run branch. Decide: acceptable fail-closed, or a regression for legacy transcripts.
-6. `pty-capture.py:545` — `os.stat()` follows symlinks when validating allocator parents.
+3. **`callers_scan.py:269` over-selection — MEASURED, attempted, reverted.** `ANCHORS` uses `any()`,
+   so the bare `-review` anchor matches `security-reviewer`, `pr-review`, `code-review` in prose.
+   Measured tree-wide:
+
+   | anchors | candidates | real invocations |
+   |---|---|---|
+   | current (`/unleashed-mail:`, `-review`) | **1407** | 14 |
+   | namespace only | 101 | 14 |
+   | namespace + `/gemini-review`, `/codex-review` | **193** | 14 |
+
+   **This is the blocker on item 7.** Narrowing keeps all 14 real invocations and takes the exemption
+   manifest from ~1393 entries to ~179 — from "generate an enormous artifact" to something a person
+   can review. Do NOT use `all()`: M5.13 mutates `any()`→`all()` and asserts the mutant is rejected,
+   because `/unleashed-mail:review-synthesis` contains no `-review`. Reverted because changing
+   `ANCHORS` fails **14 proof methods** across M5.13/14/15b — the whole S-CALLERS proof set, which
+   encodes the current anchor semantics via an independent reference implementation.
+
+4. **`review-verdict.py:385`** — the classifier widening means any basename ending `-<32 hex>.txt`
+   takes the per-run branch, so a custom or historical transcript outside the allocator directory is
+   now treated as per-run and must carry a `.launch`. Judgement call: acceptable fail-closed, or a
+   regression for legacy transcripts.
 
 **Must be LAST, before push:**
 
