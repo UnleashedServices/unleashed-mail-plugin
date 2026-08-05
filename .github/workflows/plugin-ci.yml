@@ -28,7 +28,9 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10: measured 3m00s, but this PR added an `apt-get install zsh` step whose duration
+    # depends on the package mirror, so the headroom is less predictable than the median suggests.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -270,7 +272,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
+    # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
+    # A cap that close to the observed time turns a slow runner into a red build that says
+    # nothing about the code (PR #63 second-round review).
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
