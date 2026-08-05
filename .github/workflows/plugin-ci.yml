@@ -193,9 +193,11 @@ jobs:
         # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
         # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).
         run: |
-          set -uo pipefail
-          python3 scripts/review/cleanup_coredev_2619_leaks.py --state-root /nonexistent-state-root >/dev/null 2>&1
-          status=$?
+          # GitHub Actions runs `run:` under `bash -eo pipefail`, so a bare non-zero command ABORTS
+          # the step before the next line executes. Capturing an EXPECTED failure therefore needs
+          # `|| status=$?`, which suppresses -e; `status=$?` on the following line never runs.
+          status=0
+          python3 scripts/review/cleanup_coredev_2619_leaks.py --state-root /nonexistent-state-root >/dev/null 2>&1 || status=$?
           [ "$status" -eq 2 ] || { echo "expected refusal exit 2 without --apply, got $status"; exit 1; }
       - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
         # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
