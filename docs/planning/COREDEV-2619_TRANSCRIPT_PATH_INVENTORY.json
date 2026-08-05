@@ -143,9 +143,9 @@
       "sourceSha256": "e1563fc84db030571e7158cd9ba06af097f55e59373248aab6ec0ec8eb01096e"
     },
     {
-      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:57",
+      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:62",
       "path": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md",
-      "line": 57,
+      "line": 62,
       "class": "quote-keep",
       "reason": "The predecessor plan preserves the measured stale-transcript incident.",
       "sourceSha256": "720374b95a3a3b6357a6f0405c48ad69787a1cc0b58ac44b7deadb826b636d3b"

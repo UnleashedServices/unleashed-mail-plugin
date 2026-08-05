@@ -1,6 +1,11 @@
 # COREDEV-2497 — `verify` must re-check the transcripts it approved
 
-**Status:** Planning — **post-round-23 remediation applied; re-gate required.** Seven requested blocks are applied: I12a's production-conditional metadata count is disclosed as the seventh residual; C5a/C2c now use the production allocator/capture creator; I18 is pinned to `cmd_verify`; §7 carries the mandatory one-pass/count contract and total cause map; C11's two negative arrangements are explicit. The overlapping one-pass finding was applied once at the stricter full-contract reading; no findings conflict. See §30.
+**Status:** Planning — **post-round-4 remediation applied; re-gate required.** The round-23 freeze is
+now recorded as the uncommitted working-tree snapshot it was; C2c/C5a close the production-shape cross-
+product over the exact `{gemini, codex}` roster; the helper returns `(digest, saw_bytes)` rather than an
+exact byte total; and C14 makes the `os.open` versus `fstat` errno partition stage-specific. The stricter
+production-shape reading is applied at both C5a sizes and for each C2c reviewer arm. No findings conflict.
+See §30.
 Previously — **round 22 gated (both arms, one finding each).** The non-detection list is **six**, not five — round 21's fix changed "three"→"five" and dropped the **two-pass reader** itself. And F3's off-by-one was corrected in the fixture but not the restatements: every one now says **F3 excludes caps ≤ N (N = 64 MiB); caps > N are outside the proof**. gemini separately confirmed **§7 step 5 is satisfiable end to end**, the `caps ≤ N` arithmetic is exact, and **no implementation blockers remain**. See §29. Previously — **round 21 gated (both arms).** Every finding was against round 20's fix — the **fifth consecutive propagation round**. §7 step 5's I16b exception had been narrowed to the *helper-side* form, demanding the caller-side form be shown caught (impossible); **F3's bound is now concrete — N = 64 MiB, streaming N + 1** — after codex showed the "catches every cap at or below N" claim is **false** against the shipped `_read_regular_file` bounded-read branch in `scripts/review-verdict.py` (`fh.read(_MAX_TRUSTED_READ_BYTES + 1)` followed by `len(data) > _MAX_TRUSTED_READ_BYTES`); row 8 gets the same bound; and two stale "three residues" restatements are corrected to five. *Text written as a gloss becomes normative when moved into an operative list.* See §28. Previously — **round 20 gated (both arms): an UNSATISFIABLE acceptance criterion.** Round 19 added F3's cap bound and I17's `/proc/self/fd/N` form to §3.1 and propagated neither — so **§7 step 5 demanded I17 be shown caught by a mechanism §3.1 says does not catch it**, which gemini correctly called an implementation blocker. §7 step 5 now excepts **I16b and I17's `/proc` form** and shows F3 **to its bound N**; §6 says **two** exceptions; §5's risk register carries all four items. *When an authoritative section gains an item, every citing section is stale until proven otherwise.* See §27. Previously — **round 19 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES`**). §3.1's exception list was itself short by two: **F3's size-cap bound** and **I17's `/proc/self/fd/N` reopen** are ceilings the plan has admitted since rounds 6 and 8, recorded in tables and never in §3.1 — the section every other section refers back to. §3.1 now lists **five** non-detections, §7 step 6's CHANGELOG carries them all, and the positive scope is narrowed to *every reviewer transcript in an approving artifact*. *For every ceiling recorded anywhere, does §3.1 state it?* See §26. Previously — **round 18 gated** (**both arms**). Third round on one class, and the third time I fixed the sites a reviewer *listed* instead of the class: **seven more overclaims** remained, including ARCH-1 literally saying "It seals the *path* out of the helper". Closed **by sweep** this time. **§3.1 now names its own exceptions** (rows 2, 5b, 6b) — §5 had been asserting "§3.1 states this plainly" about residues §3.1 never mentioned — and `_open_regular_fd`'s **two incompatible contracts** are resolved to the tuple. Both arms re-derived and re-confirmed **2, 5b, 6b**. *When a finding names a CLASS, close it with a query, not a list.* See §25. Previously — **round 17 gated** (**both arms, one finding**). Round 16's narrowing note was placed **immediately below a sentence making the exact claim it narrows** — "re-opening becomes structurally unavailable inside `_digest_transcript_fd`". Five operative sites now narrowed: the invariants constrain the **interface**, not the body; **ARCH-2** establishes one seam call with an unchanged argument, **not** one resolution; ARCH-3's "module globals are irrelevant" is qualified to the fixtures' own verdicts. **Both arms independently re-derived the residue set with reachability AND discrimination and confirmed 2, 5b, 6b**, plus the counts (16 rows / 17 mutants / 13 cases). *A claim that a propagation is complete is not a propagation.* See §24. Previously — **round 16 gated** (**both arms `REQUEST_CHANGES`**). Round 15's reopening of row 2 **held**, and both arms then found the plan still **over-reads ARCH-1** everywhere else: a parameter-list check bounds the *interface*, never the *body*, and §6.0 row 2 is the plan's own counterexample (path smuggled through module state keyed by the fd). Every operative ARCH-1 claim is narrowed. **codex supplied a full branch-reachability re-derivation of all sixteen rows — the first end-to-end check of this table — and it confirms residues 2, 5b, 6b.** New method rule: **reachability and discrimination are separate requirements** (row 6b reached its branch and still could not be told apart). See §23. Previously — **round 15 gated — A CORRECTION REVERSED.** Round 14 closed §6.0 row 2 on a codex finding; round 15 **reopens** it, with **codex reversing itself** and gemini reaching the same place independently. I18 never reaches the **success branch** a post-hash probe runs on, *and* ARCH-1 inspects only the parameter list — so the path can be smuggled through module state and the probe can live **inside** the helper I18 stubs away entirely. Residues are back to **three (2, 5b, 6b)**. The method lesson: **a re-derivation must establish BRANCH REACHABILITY, not just fixture level.** See §22. Previously — **round 14 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**). **Row 2 is closed too**: ARCH-1 makes the helper **fd-only**, so its `Path.open()` probe cannot be inside the helper — it is caller-side, and I18's zero-path-reads limb rejects it. Residues are now **5b and 6b** — two. **Four consecutive rounds, four residue corrections, none of which needed a new proof** — only a re-reading of proofs already present (I18 r7, C15 r11, C4a/C4b r4, ARCH-1 r5). See §21. Previously — **round 13 gated** (**both arms `REQUEST_CHANGES`, same High**). **Row 5b was over-broad**: C4a closes its symlink limb (differing target bytes → digest mismatch, not the exact `SYMLINK` message) and C4b closes its not-regular limb (`io.open` lacks `O_NONBLOCK` → blocks → the timeout fires). Row 5 is now split **four** ways — 5a permission (C15), **5b missing (the only genuinely unreachable limb)**, 5c symlink (C4a), 5d not-regular (C4b); count 14 → 16. **C4a and C4b are not new — they date from round 4, and row 5 had simply never been checked against them.** The standing rule is therefore *re-derive every residue against the WHOLE proof set*. See §20. Previously — **round 12 gated** (**gemini `APPROVE` · codex `REQUEST_CHANGES` 1 High**) — and the split verdict is the point: gemini approved with zero findings after confirming round 11's re-classification row by row, while codex found that **C15, added in round 11, closes row 5's permission limb**. Row 5 is now split **5a** (CLOSED by C15) / **5b** (accepted); residues stay three but are **2, 5b, 6b**. Twice in two rounds a newly added proof has invalidated a classification made before it existed — *a proof added is a classification invalidated.* See §19. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` ×2 High · codex `REQUEST_CHANGES`
 1 High, 2 Medium, 1 Low**). Round 11 **inverts** the round-9/10 defect: instead of a closure claim that
 outran the fixtures, the `ACCEPTED-NOT-CLOSED` set **outlived the fixture that closed it**. **I18 is a
@@ -160,13 +165,13 @@ because both yield the same `MISSING` diagnosis a correct implementation gives.
   F3/F4 return the same bytes, ARCH-1 still sees `(fd,)`, C9b counts only opens of the recorded path, and
   I18 stubs the helper. **This is neither a two-pass reader nor rows 2/5b/6b**, so a guarantee stated as
   "two-pass plus those three rows" is incomplete.
-- **I12a's production-conditional regular/offset-zero metadata count is not caught.** A helper can sum
-  the chunks it feeds to SHA-256 for F1, F2 and every non-production descriptor, yet return
-  `fstat(fd).st_size`, cached opener size metadata, or path-size metadata carried through module state
-  only for production's regular descriptor at offset zero. Every regular offset-zero fixture is static,
-  so its metadata size equals the streamed count; replacing the pathname in C9a does not change the
-  already-open inode's size, and C9a requires different bytes rather than a different size. Static
-  F3/C12 and production cases therefore cannot distinguish this form
+- **I12a's production-conditional regular/offset-zero metadata-derived emptiness is not caught.** A helper
+  can set `saw_bytes` only when a non-empty buffer is fed to SHA-256 for F1, F2 and every non-production
+  descriptor, yet derive `saw_bytes` from `fstat(fd).st_size`, cached opener size metadata, or path-size
+  metadata carried through module state only for production's regular descriptor at offset zero. Every
+  regular offset-zero fixture is static, so metadata-derived emptiness equals the streamed flag;
+  replacing the pathname in C9a does not change whether the already-open inode is empty. Static F3/C12
+  and production cases therefore cannot distinguish this form
   without reviving the rejected instrumentation or probabilistic-race routes above. It is
   **`ACCEPTED-NOT-CLOSED`**, while §4.1 and §7 still prohibit it as an implementation.
 
@@ -207,19 +212,19 @@ round of `COREDEV-2503`'s review. A hand-rolled replacement would silently drop 
    round 7 caught this step still specifying the bare `int | None` form the round-6 rewrite replaced.
 2. `_read_regular_file` keeps its decode + cap epilogue **unchanged**, for the two sidecars it guards.
 3. **MANDATORY SIGNATURE — not a preference.** The digest routine is
-   **`_digest_transcript_fd(fd: int) -> tuple[str, int]`**: it takes the raw descriptor and **nothing
+   **`_digest_transcript_fd(fd: int) -> tuple[str, bool]`**: it takes the raw descriptor and **nothing
    else**. No path parameter, no opener parameter, no default-bound callable, no keyword fallback. It
    streams raw bytes through `hashlib` in **one forward pass**: no cap, no decode, no seek, no re-read,
-   **no re-open**. It returns the hex digest **and the number of bytes actually streamed**.
-4. **The streamed count — not `st_size` — is the sole basis for the "empty" diagnosis.** Use the
-   `fstat` for the `S_ISREG` check only. This propagates §8 Q3's round-3 answer, which earlier drafts
-   recorded as adopted while §4.1 and I10 still specified `st_size`; a shrink/grow race is precisely
-   when the two disagree and the streamed count is the truthful one.
+   **no re-open**. It returns the hex digest and `saw_bytes`, which becomes true only when a non-empty
+   buffer is fed to SHA-256. No exact byte total is part of the contract.
+4. **`saw_bytes` — not `st_size` — is the sole basis for the "empty" diagnosis.** Use the `fstat` for
+   the `S_ISREG` check only. A non-empty file descriptor positioned at EOF correctly returns
+   `saw_bytes == False`; metadata-derived emptiness would invert that result.
 5. **No second resolution of the recorded path, on any branch.** Once `transcriptPath` has been opened
    through the seam, the *name* must never be touched again — not by `os.path.exists`, `os.path.getsize`,
    `os.stat`, `os.lstat`, `os.path.realpath`, `open`, `io.open` or `pathlib`, and not on the failure
-   branch to "classify the cause", not on a retry, and not as a short-read fallback. **No retry on digest
-   mismatch and no short-read fallback exist at all** — round 7 showed a correct helper can sit behind a
+   branch to "classify the cause", not on a retry, and not as an empty-read fallback. **No retry on digest
+   mismatch and no metadata-based empty-read fallback exist at all** — round 7 showed a correct helper can sit behind a
    caller that reopens on mismatch and passes every fixture, so the prohibition must be stated as a
    contract and tested at production `cmd_verify`'s boundary by **I18's deterministic red-branch test**, not inferred. *(Round 7: this step previously claimed
    "§6's ARCH-1 invariant asserts this at the source level" — source inspection was deleted in round 5.)*
@@ -363,12 +368,12 @@ regular-file check and the decode — precisely the properties a hand-rolled rep
 | The digest check is silently gutted while repairing §4.5(a) | **High** | §4.5 names the trap and the correct repair; C2c must FAIL for any C-case green to mean anything |
 | Tightening breaks the non-approving recovery path | Medium | §4.2 + C8, and **C11** for the case-sensitivity variant |
 | A validate-then-reopen implementation ships green | **Accepted, not closed** | **§3.1 states this plainly.** ARCH-1 + ARCH-2's typed cause + F1-F4 + **C5a** + **I18** reject every defect found in rounds 4-7 **except (a)** a two-pass reader and **(b)** three residues §6.0 records as `ACCEPTED-NOT-CLOSED` — rows **2**, **5b** and **6b** — **(c)**
-I17's direct `/proc/self/fd/N` reopen, **(d)** a size cap **above the F3 + C5a bound N** *(round 22: "above the largest tested size" is wrong now that F3 streams N+1 — a cap of exactly N+1 accepts the fixture; the proven exclusion is caps ≤ N)*, and **(e)** I12a's production-conditional regular/offset-zero metadata-derived count. *(Round 20:
+I17's direct `/proc/self/fd/N` reopen, **(d)** a size cap **above the F3 + C5a bound N** *(round 22: "above the largest tested size" is wrong now that F3 streams N+1 — a cap of exactly N+1 accepts the fixture; the proven exclusion is caps ≤ N)*, and **(e)** I12a's production-conditional regular/offset-zero metadata-derived emptiness. *(Round 20:
 (c) and (d) were added to §3.1 in round 19 and not here, so this row asserted a smaller exception set than
 the section it cites.)* Eight rounds showed the single-pass property is not provable by instrumentation, by a non-production fixture, or by a race — so the plan narrows the guarantee instead of claiming one. *(Round 11: this row previously listed **six** residues — rows 1, 2, 5, 6, 7 and row 9's caller half — on the stated ground that **"no fixture exercises a caller."** That ground was false from round 7 onward: **I18 is a caller-level fixture**, and its two-limbed oracle closes rows 1, 6a, 7 and row 9's caller half. The residue set was never re-derived after the fixture that shrank it was added, so the plan under-claimed its own coverage for four rounds — the mirror image of the over-claiming this section exists to prevent, and equally a defect.)* |
 | Factoring regresses the sidecars | Medium | Epilogue untouched; §4.5 names all five tests by function, not just the two symlink cases |
 | The whole change is inert because tests only cover `write` | **High** | Every digest-changing or path-changing negative artifact case whose purpose is proving re-digestion must make a non-degenerate mutation **between** `write` and `verify`; C11 names its two required negative arrangements. Positive, hand-written-artifact, direct-helper and injected-error proofs are excluded — see §6's trap |
-| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants **constrain the helper's INTERFACE** — they do not seal its body *(round 17)*. §3.1 accepts **seven** non-detections *(round 23)* — the **two-pass reader**, the three §6.0 rows (row 2's being **in-helper**, not caller-side), I17's `/proc` form, a cap **above the F3 + C5a bound N**, and I12a's production-conditional regular/offset-zero metadata-derived count; **three** §6.0 rows are marked accepted-not-closed — **2**, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
+| **The proof set is defeated again in round 5** | **High** | §6.0's structural invariants **constrain the helper's INTERFACE** — they do not seal its body *(round 17)*. §3.1 accepts **seven** non-detections *(round 23)* — the **two-pass reader**, the three §6.0 rows (row 2's being **in-helper**, not caller-side), I17's `/proc` form, a cap **above the F3 + C5a bound N**, and I12a's production-conditional regular/offset-zero metadata-derived emptiness; **three** §6.0 rows are marked accepted-not-closed — **2**, **5b** and 6b *(round 11: was six; I18 closes 1, 6a, 7 and 9's caller half. Round 12: row 5 split — C15 closes its permission limb 5a)* |
 
 ## 6. Verification
 
@@ -403,7 +408,7 @@ The reason is a property of the technique, and it generalises:
 > Everything else is invisible** — path resolutions that are not opens (`os.path.exists`,
 > `os.path.getsize`, `os.lstat`, `os.path.realpath`), opens routed elsewhere (`pathlib.Path.open`, a
 > cached `io.open`), reads that precede the seam, and re-opens hidden on a branch that a green-path test
-> never takes (retry-on-mismatch, short-read fallback, failure-path re-classification).
+> never takes (retry-on-mismatch, metadata-based empty-read fallback, failure-path re-classification).
 
 Adding a case per escape is the move that produced rounds 2, 3 and 4. **So the class is addressed
 structurally instead** — **constrained at the helper's interface**, not closed end-to-end: per §3.1 the
@@ -412,7 +417,7 @@ cannot reach stay `ACCEPTED-NOT-CLOSED`. *(Round 17: this said "sealed at the he
 seal binds `_digest_transcript_fd`". A signature check binds what the function **accepts**; row 2's
 module-state route shows the body can still resolve a path. "Seal" is the word that carried the
 overclaim through five rounds.)*
-**As of round 23 the invariants cannot reach rows 2, 5b and 6b — and §3.1's full non-detection list is SEVEN: those three, plus the two-pass reader, I17's `/proc` form, a cap above the F3 + C5a bound N, and I12a's production-conditional regular/offset-zero metadata-derived count**; three §6.0 rows. *(Round 14 closed row 2; **round 15 reopened it** — see the table.)* Rows 1, 6a, 7 and row 9's caller half are
+**As of round 23 the invariants cannot reach rows 2, 5b and 6b — and §3.1's full non-detection list is SEVEN: those three, plus the two-pass reader, I17's `/proc` form, a cap above the F3 + C5a bound N, and I12a's production-conditional regular/offset-zero metadata-derived emptiness**; three §6.0 rows. *(Round 14 closed row 2; **round 15 reopened it** — see the table.)* Rows 1, 6a, 7 and row 9's caller half are
 closed by **I18**, the production-`cmd_verify` boundary fixture round 7 added and whose reach nothing re-derived until round
 11. The behavioural cases are kept only for what genuinely lives outside the helper's constrained interface.
 
@@ -442,7 +447,7 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
 > A forbidden-name list is a **proxy for the property, not the property** — the same defect C9a had, one
 > level up. So the name list is deleted. What replaces it asserts the property directly.
 
-- **ARCH-1 — the sealed signature.** `_digest_transcript_fd(fd: int) -> tuple[str, int]`. A test asserts
+- **ARCH-1 — the sealed signature.** `_digest_transcript_fd(fd: int) -> tuple[str, bool]`. A test asserts
   by `inspect.signature` that the parameter list is **exactly `(fd,)`** — no path, no opener, no
   default-bound callable, no `*args`/`**kwargs`, no keyword-only fallback. This is a **signature fact**,
   not a name match, so aliasing, callees and closures cannot evade it, and it cannot false-positive.
@@ -468,15 +473,16 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
   condition — so an implementation taking the advertised exception route could not satisfy either. One
   mechanism, chosen: the tuple.)*
 
-  | condition | cause |
+  | stage and condition | cause |
   |---|---|
-  | `ENOENT` / `ENOTDIR` | `MISSING` |
-  | `ELOOP` (what `O_NOFOLLOW` raises on a symlink — measured, errno 62 on darwin) | `SYMLINK` |
+  | `os.open`: `ENOENT` / `ENOTDIR` | `MISSING` |
+  | `os.open`: `ELOOP` (what `O_NOFOLLOW` raises on a symlink — measured, errno 62 on darwin) | `SYMLINK` |
+  | `os.open`: `EACCES` / `EPERM` | `DENIED` |
+  | `os.open`: every unmatched `OSError`, including an unknown integer errno or `None` | `UNREADABLE`; preserve the original errno and never re-resolve the path |
   | open succeeds, `fstat` is not `S_ISREG` (a FIFO opens cleanly under `O_NONBLOCK` — measured) | `NOT_REGULAR` |
-  | `EACCES` / `EPERM` | `DENIED` |
-  | every other `os.open` or `fstat` `OSError` | `UNREADABLE`; preserve the original errno for diagnostics, close any descriptor already acquired, and never re-resolve the path |
-  | `OK` + streamed count 0 | *empty* (caller) |
-  | `OK` + non-zero count + digest mismatch | *changed* (caller) |
+  | open succeeds, `fstat` raises **any** `OSError`, including the special `os.open` errnos, an unknown integer errno, or `None` | `UNREADABLE`; preserve the original errno, close the acquired descriptor, and never re-resolve the path |
+  | `OK` + `saw_bytes == False` | *empty* (caller) |
+  | `OK` + `saw_bytes == True` + digest mismatch | *changed* (caller) |
 
   The catch-all is mandatory: the result is total over the `OSError` failures the factored prologue
   already handles. It must not traceback, skip the entry, retry, or misreport an unlisted failure as
@@ -494,8 +500,8 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
   Removing the motive is stronger than detecting the act.
 
   **ARCH-2 also owns the caller-side assertions:** that the caller bases its *empty* diagnosis on the
-  count the helper returned (never on `st_size` or `getsize`), and that it performs **no retry and no
-  short-read fallback** (I18's red-branch test). For I18, the runnable oracle is the conjunction of
+  `saw_bytes` flag the helper returned (never on `st_size` or `getsize`), and that it performs **no retry and no
+  metadata-based empty-read fallback** (I18's red-branch test). For I18, the runnable oracle is the conjunction of
   **one `_open_regular_fd(recorded_path)` call with the byte-identical recorded argument** and **zero
   additional path resolutions through the closed observed-route list**: `pathlib.Path.read_bytes()` /
   `Path.open()` for row 1, and `os.path.getsize()` for rows 6a / 7 and I12b. The seam is mocked to
@@ -557,7 +563,7 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
   below are executed.**
 
   - **F1 — a NON-SEEKABLE fd (a pipe).** Write a known payload, close the write end, pass the read end.
-    A forward-streaming helper returns the exact digest and count. Anything that seeks or `pread`s
+    A forward-streaming helper returns the exact digest and `saw_bytes == True`. Anything that seeks or `pread`s
     **raises `OSError` ESPIPE** — it cannot be caught by accident and needs no observation:
 
     | implementation | F1 |
@@ -570,36 +576,34 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
     never depends on `st_size` being meaningful.
 
     > **Honest limit, measured — do not overclaim F1.** On macOS `fstat` on a pipe reports the
-    > *currently buffered* byte count, so an `st_size`-based helper **passed F1** when the whole payload
-    > fitted in the pipe buffer. F1 does **not** discriminate the `st_size` mutant. F2 rejects the
+    > *currently buffered* byte count, so an `st_size > 0` emptiness helper **passed F1** when the whole
+    > payload fitted in the pipe buffer. F1 does **not** discriminate that metadata mutant. F2 rejects the
     > unconditional form, but not I12a's production-conditional regular/offset-zero form (§3.1).
 
-  - **F2 — a regular fd PRE-POSITIONED at a non-zero offset K.** The contract is "read forward from the
-    descriptor's current position to EOF", which the natural implementation satisfies without trying.
-    Every wrong shape violates it observably:
+  - **F2 — a regular fd PRE-POSITIONED, with non-zero-suffix and EOF arms.** The contract is "read
+    forward from the descriptor's current position to EOF", which the natural implementation satisfies
+    without trying. Use the same non-empty 50,004-byte regular file for two subtests: one descriptor at
+    `K = 1000`, and a freshly opened descriptor positioned exactly at EOF.
 
-    | implementation | F2 (K = 1000, file 50,004 B) |
-    |---|---|
-    | correct | **PASS** — count 49,004, digest of `bytes[K:]` |
-    | unconditional `st_size` as the count | **FAIL** — count 50,004 |
-    | seek-to-zero two-pass | **FAIL** — digest is of `bytes[0:]` |
-    | `os.pread` from 0 | **FAIL** — count 50,004 *and* wrong digest |
+    | implementation | F2 at K = 1000 | F2 at EOF on the non-empty file |
+    |---|---|---|
+    | correct | **PASS** — digest of `bytes[K:]`, `saw_bytes == True` | **PASS** — empty digest, `saw_bytes == False` while `st_size` is positive |
+    | unconditional metadata-derived emptiness | `saw_bytes == True` | **FAIL** — reports true from positive `st_size` although no buffer was hashed |
+    | seek-to-zero two-pass | **FAIL** — digest is of `bytes[0:]` | **FAIL** — digest is of `bytes[0:]` and flag is true |
+    | `os.pread` from 0 | **FAIL** — wrong digest | **FAIL** — wrong digest and flag |
 
-    **F2 rejects the fixture-reachable, unconditional offset-sensitive size/count and rewind forms shown
-    above.** It does not reject a helper that returns metadata only for a regular descriptor at offset
-    zero and sums hashed chunk lengths everywhere else: F2 deliberately starts at a non-zero offset,
-    while every regular offset-zero fixture is static and has metadata size equal to streamed count.
-    That production-conditional I12a form is `ACCEPTED-NOT-CLOSED` in §3.1. F2 also does not reject
-    `return len(last_chunk)` for this fixture: the 49,004-byte suffix can arrive as one chunk under the
-    existing 65,536-byte read pattern, making that wrong count accidentally exact. That mutant belongs
-    solely to **C12's many-chunk fixture**. F1 is kept because it fails *loudly and
-    content-independently*, which F2 does not.
+    **F2 rejects the fixture-reachable unconditional metadata-derived emptiness and rewind forms shown
+    above.** It does not reject a helper that derives `saw_bytes` from metadata only for a regular
+    descriptor at offset zero and uses the real streamed flag everywhere else: the EOF arm is not at
+    production's offset, while every regular offset-zero fixture is static and its metadata emptiness
+    equals the streamed flag. That production-conditional I12a form is `ACCEPTED-NOT-CLOSED` in §3.1.
+    F1 is kept because it fails seeks *loudly and content-independently*, which F2 does not.
 
     > **Round 7: F1+F2+F3 are jointly defeatable for pass-counting, and the reason matters.** codex executed
     > `if regular and current_offset == 0: <two passes> else: <one forward pass>`. F1 exercises the
     > non-regular branch; F2 deliberately exercises a **non-production** offset; F3 now pins a regular
     > offset-zero descriptor but is static and cannot tell one pass from two, so the forbidden branch
-    > still returns the expected digest and count.
+    > still returns the expected digest and flag.
     > gemini found a second escape of the same shape: recover the path *from the descriptor* and reopen
     > by name (`os.readlink(f"/proc/self/fd/{fd}")` on Linux — pure stdlib; on macOS it needs
     > `fcntl(F_GETPATH)`, which I could **not** invoke from Python here, so I am not claiming to have
@@ -612,8 +616,8 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
     constant, never "the largest size tested".** Write exactly `N + 1` deterministic bytes to a regular
     file, freshly open it so its descriptor is at offset zero, and immediately before invoking
     `_digest_transcript_fd` assert both `stat.S_ISREG(os.fstat(fd).st_mode)` and
-    `os.lseek(fd, 0, os.SEEK_CUR) == 0`. F3 MUST PASS, asserting the exact SHA-256 and a count of
-    `N + 1`. **F3 proves helper-local caps only.** Its production-shaped descriptor rejects a
+    `os.lseek(fd, 0, os.SEEK_CUR) == 0`. F3 MUST PASS, asserting the exact SHA-256 and
+    `saw_bytes == True`. **F3 proves helper-local caps only.** Its production-shaped descriptor rejects a
     helper-local inclusive cap `≤ N`, including one conditional on `S_ISREG` plus offset zero, because
     the cap pattern accepts exactly-cap input and rejects only overflow. An `N`-byte fixture cannot
     reject a cap of exactly `N`, which is why the size is `N + 1` and not `N`. A cap in
@@ -628,8 +632,8 @@ is real and load-bearing. The set is not wrong; it is **incomplete in a way more
     fixture was mandated but never specified.)*
 
   - **F4 — an UNLINKED fd.** Open the transcript, then unlink the path, then call the helper. The inode
-    stays readable through the descriptor. Measured: a correct one-pass helper returns the exact digest
-    and count (49,004 bytes) on an unlinked fd.
+    stays readable through the descriptor. A correct one-pass helper returns the exact digest and
+    `saw_bytes == True` on the non-empty unlinked fd.
 
     > **Round 8 correction — F4 is weaker than round 7 claimed, and the claim was wrong on Linux.**
     > Round 7 said path recovery fails "by construction". On Linux an unlinked inode is still reopenable
@@ -706,18 +710,18 @@ Every row was **executed** against a harness that re-creates C1, C2a/b/c, C3, C4
 | # | the wrong implementation | property it violates | closed by |
 |---|---|---|---|
 | 1 | digest via `pathlib.Path(path).read_bytes()` **first**, then "confirm" with the seam | the trusted bytes never come from the validated fd | **CLOSED by I18's retry arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — that arrangement stubs the helper's **first** call to return a mismatching digest while the path on disk digests to the artifact's recorded `D`. A path-first caller trusts its own read, matches `D`, and **approves**, where the correct caller fails; I18 observes this named `Path.read_bytes()` / `Path.open()` route and requires zero additional resolutions through it |
-| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — **restored in round 15 after round 14 wrongly closed it. Both arms, from different angles.** gemini: the probe runs on the **success branch**, and *neither* I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch and the short-read arrangement fails it on the empty diagnosis, so the probe never executes and the closed observed-route assertion stays green. codex (**reversing its own round-14 finding**): ARCH-1 inspects only the **parameter list** (the exact-`(fd,)` signature contract above), so an implementation can smuggle the path through module state keyed by the fd — `_digest_transcript_fd(fd)` keeps its exact signature, hashes, then probes **inside the helper**, which I18 stubs away entirely. **Neither form is rejected.** The caller-side form escapes because the probe runs on the success branch that no I18 arrangement reaches; the in-helper form escapes because I18 stubs the helper. *(Round 16, gemini: the round-15 wording ended "I18 rejects only the caller-side form", contradicting the sentence before it — gemini's own argument is that the caller-side form escapes too. Merging two independent arguments left a claim neither supports.)* |
+| 2 | hash from the fd, then a second `Path.open()` probe to re-check `S_ISREG` | second resolution of the name | **ACCEPTED-NOT-CLOSED** (§3.1) — **restored in round 15 after round 14 wrongly closed it. Both arms, from different angles.** gemini: the probe runs on the **success branch**, and *neither* I18 arrangement reaches it — the retry arrangement fails the caller on a digest mismatch and the empty-read arrangement fails it on the empty diagnosis, so the probe never executes and the closed observed-route assertion stays green. codex (**reversing its own round-14 finding**): ARCH-1 inspects only the **parameter list** (the exact-`(fd,)` signature contract above), so an implementation can smuggle the path through module state keyed by the fd — `_digest_transcript_fd(fd)` keeps its exact signature, hashes, then probes **inside** the helper, which I18 stubs away entirely. **Neither form is rejected.** The caller-side form escapes because the probe runs on the success branch that no I18 arrangement reaches; the in-helper form escapes because I18 stubs the helper. *(Round 16, gemini: the round-15 wording ended "I18 rejects only the caller-side form", contradicting the sentence before it — gemini's own argument is that the caller-side form escapes too. Merging two independent arguments left a claim neither supports.)* |
 | 3 | retry-once: a second descriptor **only** when the digest disagrees | re-open, hidden on the red branch | **I18's deterministic red-branch test** (F5b removed in round 8 — it had no distinguishing oracle) |
-| 4 | short-read fallback: re-open when fewer bytes stream than `fstat` promised | re-open, under exactly the shrink race Q3 names | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
+| 4 | empty-read fallback: re-open when `saw_bytes` is false but `fstat` metadata says the file is non-empty | re-open on the empty red branch | the explicit **no-fallback contract** (§4.1 step 5) + I18's red-branch test |
 | 5a | failure-path re-classification through `io.open`, on a **permission** failure | re-open on the red branch | **CLOSED by C15** *(round 12; was ACCEPTED-NOT-CLOSED)* — C15 stubs `os.open` to raise `EACCES`/`EPERM`, and an `io.open` retry **bypasses that stub** and reads the real file. The correct helper returns cause `DENIED`; this implementation re-classifies off the successful second open and returns something else, so C15's exact-cause assertion fails. The mutant is **I19**'s sibling: C15 discriminates them |
 | 5b | failure-path re-classification through `io.open`, on the **missing** limb | re-open on the red branch | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** (§3.1) — `io.open` on an absent path raises `ENOENT`, so the re-classification lands on the *same* `MISSING` diagnosis a correct implementation gives. No case can separate them; this is the one genuinely unreachable limb |
 | 5c | failure-path re-classification through `io.open`, on the **symlink** limb | re-open on the red branch | **CLOSED by C4a** *(round 13)* — C4a's fixture contract requires a symlink to a regular target whose bytes **differ** from the recorded transcript. An `io.open` re-classification follows the link, reads the differing bytes and reports a **digest mismatch**, so C4a's exact `SYMLINK` message assertion rejects it |
 | 5d | failure-path re-classification through `io.open`, on the **not-regular** limb | re-open on the red branch | **CLOSED by C4b** *(round 13)* — `io.open` lacks `O_NONBLOCK`, so a FIFO read **blocks forever**; C4b's fixture contract carries a timeout precisely for that (measured `exit=124`) and rejects it |
-| 6a | `os.path.getsize` for the **empty** diagnosis | second resolution; contradicts Q3 | **CLOSED by I18's short-read arrangement** *(round 11)* — against a stubbed `(D, 0)` it reads `getsize` = **100**, calls the file non-empty and **approves** where the correct caller fails; the `getsize` call is itself a path read |
+| 6a | `os.path.getsize` for the **empty** diagnosis | second resolution; contradicts Q3 | **CLOSED by I18's empty-read arrangement** *(round 11)* — against a stubbed `(D, False)` it reads `getsize` = **100**, calls the file non-empty and **approves** where the correct caller fails; the `getsize` call is itself a path read |
 | 6b | `os.path.exists` for the **missing** diagnosis | second resolution; contradicts Q3 | the **typed cause** removes the motive; **ACCEPTED-NOT-CLOSED** — *(round 16: the reason given was that "no fixture takes a missing-resolution branch", which is **false** — C1/C2a/C3 all reach it. The correct reason is that reaching the branch is not enough: on a genuinely missing path `os.path.exists` returns **False**, yielding the **same** `MISSING` diagnosis a correct implementation gives, so every case that reaches the branch observes an identical result. **Branch reachability without a behavioural difference is not closure** — the mirror image of the round-14 error.)* *(Round 11 split this row: its two halves have different status, which is the same defect round 10 found in I12, I16 and row 9.)* |
-| 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | **CLOSED by I18's short-read arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — mechanically identical to row 6a: `getsize` returns 100 where the streamed count is 0, so this caller approves where the correct one fails |
+| 7 | `os.path.getsize(path)` for the non-empty check after hashing the fd | same, post-hash | **CLOSED by I18's empty-read arrangement** *(round 11; was ACCEPTED-NOT-CLOSED)* — mechanically identical to row 6a: `getsize` returns 100 where `saw_bytes` is false, so this caller approves where the correct one fails |
 | 8 | the cap **raised**, not removed (1 MiB / 64 MiB "DoS guard"), in the helper or production opener | I6's defect above the typical measured point | **F3 + C5a, TO THEIR STATED BOUND ONLY.** F3 rejects helper-local caps on a regular, offset-zero descriptor; allocator-created C5a rejects an inclusive cap of `N` in `_open_regular_fd` conditional on production's `_is_per_run_transcript` predicate, through production creator → `write` → `verify` with preserved provenance. Round 6: no finite set of sizes proves the absence of an arbitrary higher cap, and a delegated `_digest_impl(fd)` holds the cap in a callee. The plan states the bound rather than claiming closure |
-| 9 | no truthful streamed byte count — the helper returns metadata/a fabricated count, or the caller infers "empty" from the digest constant | Q3's streamed count absent | **Fixture-reachable helper forms: F2 + C12. Production-conditional regular/offset-zero metadata form: `ACCEPTED-NOT-CLOSED` (§3.1). Caller form: CLOSED by I18's short-read arrangement.** Against `(D, 0)` with `D ≠ _EMPTY_SHA256`, the constant-inferring caller calls the file non-empty and **approves**. C12 rejects fabricated counts; F2 rejects unconditional `st_size`/`getsize` forms. Neither reaches a metadata branch restricted to production's regular descriptor at offset zero, where every static fixture has metadata size equal to streamed count. |
+| 9 | no truthful `saw_bytes` flag — the helper derives emptiness from metadata, or the caller infers "empty" from metadata/the digest constant | streamed observation absent | **Fixture-reachable helper form: F2's EOF arm. Production-conditional regular/offset-zero metadata form: `ACCEPTED-NOT-CLOSED` (§3.1). Caller form: CLOSED by I18's empty-read arrangement.** Against `(D, False)` with `D ≠ _EMPTY_SHA256`, the constant-inferring caller calls the file non-empty and **approves**. C12 asserts the digest/flag contract; F2 rejects unconditional metadata-derived emptiness. Neither reaches a metadata branch restricted to production's regular descriptor at offset zero, where every static fixture has the same metadata and streamed emptiness. |
 | 10 | digests compared as 12-hex **prefixes** (reusing the display variables) | a 48-bit check, not 256-bit | **C13** |
 | 11 | the comparison hoisted **out** of the per-entry loop (loop-variable reuse) | only the last entry's content is checked | **C13** |
 | 12 | `except (OSError, ValueError, TypeError): continue` — a recorded path that *raises* silently skips the entry | fail-open; reachable with a NUL byte in `transcriptPath` | **C14** |
@@ -740,23 +744,19 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   `str(r.get("status", "")).strip().upper()` expression, so either artifact passes quorum; a §4.2 skip
   written as `if r.get("status") not in APPROVING: continue` silently exempts it. Normalise identically
   or the raw-status skip passes these two required negative arrangements.
-- **C12** the streamed-count contract. **Round 5 rewrote this case: as first written it was
+- **C12** the digest/stream-observation contract. **Round 5 rewrote this case: as first written it was
   tautological.** `sha256(b"")` **is** the module constant `_EMPTY_SHA256` in
   `scripts/review-verdict.py` — verified by execution —
-  so "empty diagnosed from the streamed count" and "empty diagnosed from the digest constant" return the
+  so "empty diagnosed from the stream" and "empty diagnosed from the digest constant" return the
   *same answer on every fixture*, and no artifact-level case can separate them. C12 is therefore
-  **ARCH-3's direct helper test**, not a behavioural case: call the helper on zero-, one- and
-  many-chunk fixtures and assert the **exact returned count** alongside the exact digest.
-  **Paired mutant: `I12a` only — and C12 closes only the fabricated-count forms; F2 closes the
-  fixture-reachable unconditional metadata forms.**
-  C12 rejects a **fabricated** count — `len(last_chunk)`, a constant, an off-by-one. It **cannot** reject
-  `st_size` or `os.path.getsize`, because on C12's static, offset-zero fixtures those are *equal* to the
-  true streamed count. **This plan measured exactly that** in §13's ARCH-3 escape table: "`st_size` as the count |
-  equals the streamed count on **every** static fixture (0 / 100 / 150,000)". What separates them is
-  **F2's non-zero starting offset**, where the streamed count is strictly less than the file's size —
-  but only when the metadata form is reachable there. Thus **F2 + C12** reject I12a's
-  fixture-reachable forms, and neither alone does. A helper that uses metadata only for production's
-  regular descriptor at offset zero remains `ACCEPTED-NOT-CLOSED` because every such fixture is static.
+  **ARCH-3's direct helper test**, not a behavioural case: call the helper on empty and non-empty streams
+  (including a payload large enough that a conventional implementation may read it more than once) and
+  assert the exact digest plus `saw_bytes == False` for the empty stream and `True` for every non-empty
+  stream. The test imposes no read-chunk size and asserts no exact byte total or chunk sum.
+  **Paired mutant: `I12a` only.** C12 pins the flag contract; F2's EOF arm rejects the
+  fixture-reachable unconditional metadata-derived form. A helper that uses real stream observation for
+  F2 but derives emptiness from metadata only for production's regular descriptor at offset zero remains
+  `ACCEPTED-NOT-CLOSED` because every such fixture is static.
   *(Round 11, from gemini: C12's pairing was still the **unsplit `I12`** and still claimed it must fail on
   "infer emptiness from the digest constant" — which is **I12b**, whose own definition below states that
   C12 does not reach it. The plan asserted that a case rejects a mutant the same plan says the case cannot
@@ -764,8 +764,8 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   *(Round 11, from codex: the "C12 must fail on it" claim was too strong for two of I12a's three forms,
   by the plan's **own** escape-analysis measurement. A proof that cannot fail on the implementation it
   names is not a proof — the same shape as the round-5 tautology this case was rewritten to escape.)*
-  *(Round 7: the "caller bases its empty diagnosis on the returned count" assertion belongs to **ARCH-2**,
-  not to C12 — §13 said it had moved and C12 still claimed it. It is now stated in ARCH-2.)*
+  *(Round 7 moved the caller's empty-diagnosis assertion to **ARCH-2**. The current round-4 relaxation
+  changes its input from an exact count to `saw_bytes`; it still does not belong to C12.)*
 - **C13** per-entry, full-width comparison: mutate **only reviewer 0's** transcript and separately **only
   reviewer 1's**, and additionally record a digest that shares its first 12 hex characters with the real
   one. All three must FAIL. Its positive normalization arm starts from a legitimate `write`, captures
@@ -775,17 +775,17 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   digests, compare once outside the loop, or compare the valid normalized digest as a raw string without
   case/whitespace normalization → C13 must fail on its corresponding negative or positive arm.
 - **C14** fail-closed on unexpected errors: a `transcriptPath` containing a **NUL byte** (which raises
-  `ValueError`, not `OSError`) must produce a gate **failure**, never a skipped entry. Derive the
-  catch-all errno test set from the closed partition rather than hand-picking examples:
-  `special = {ENOENT, ENOTDIR, ELOOP, EACCES, EPERM}` and
-  `catch_all = (set(errno.errorcode) - special) | {None}`. For every member, separately stub `os.open`
-  and `fstat` to raise an `OSError` carrying that exact errno; the `fstat` arrangement uses a descriptor
-  already acquired by `os.open`. Each must produce a controlled `UNREADABLE` failure that preserves the
-  exact errno (including `None`) for diagnostics, with no traceback, skip, retry, second path resolution,
-  or misleading `MISSING` diagnosis; every `fstat` arrangement must close its acquired descriptor.
-  Paired mutant **I14**: swallow non-`OSError` exceptions and continue, or let any complement
-  `os.open`/`fstat` `OSError` traceback, skip, retry, lose its errno, leak the acquired descriptor, or
-  masquerade as `MISSING` → C14 must fail.
+  `ValueError`, not `OSError`) must produce a gate **failure**, never a skipped entry. Invert the proof
+  around the stage-specific default rather than treating `errno.errorcode` as an exhaustive universe.
+  For `os.open`, exercise every closed special branch: `ENOENT` and `ENOTDIR` map to `MISSING`, `ELOOP`
+  maps to `SYMLINK`, and `EACCES` and `EPERM` map to `DENIED`. Then exercise the `os.open` default with
+  `None` and a generated integer asserted absent from `errno.errorcode`; both map to `UNREADABLE` and
+  preserve that exact errno. For `fstat`, first acquire a descriptor through `os.open`, then raise each
+  of the five special-set errnos, `None`, and the generated unknown errno. **Every** `fstat` arm maps to
+  `UNREADABLE`, preserves the exact errno, closes the acquired descriptor, and performs no retry or
+  second path resolution. No arrangement may traceback, skip the entry, or misreport `MISSING`/`DENIED`.
+  Paired mutant **I14**: swallow the NUL-path exception; map `fstat(EACCES)` to `DENIED` without closing
+  the descriptor; or re-raise the generated unknown errno → C14 must fail.
 - **C15** *(round 11, from codex)* **the `DENIED` cause has a case at last.** ARCH-2's errno table mandates the
   mapping `EACCES`/`EPERM → DENIED`, and §6's opening acceptance rule requires a mutation proof
   for **every** fix — yet across twelve cases and sixteen mutants **nothing exercised that branch**. An
@@ -802,26 +802,30 @@ Two more were blocked, but only by a fixture detail §6 never pinned:
   `DENIED` — so C15's exact-cause assertion rejects it. That was not noticed when C15 was added in round
   11, which is the second time a new case silently closed a pre-existing residue. **Whenever a case or
   fixture is added to this plan, re-derive §6.0's classifications against it before shipping.**
-- **C5a executes the production allocator/capture creator → `write` → `verify` at two exact sizes**, not
-  one: 512,723 bytes and **`N + 1` bytes, where `N = 64 MiB`**. Both approving artifacts must reuse the
-  creator used by the production launch/capture flow; do not synthesize a matching pathname or enumerate
-  allocator filenames or sidecars in the test. Assert that `write` preserves the creator's resulting
-  allocator-produced transcript path, launch record and provenance fields, including `captureId`, before
-  both verifies PASS. F3 proves helper-local caps only; only **F3 + production-shaped C5a** establish the
-  production-path bound through `N`.
+- **C5a executes the production allocator/capture flow → `write` → `verify` at two exact sizes**, not
+  one: 512,723 bytes and **`N + 1` bytes, where `N = 64 MiB`**. At **each** size, under a test-owned state
+  root, create both reviewer transcripts in production order `{gemini, codex}` through
+  `scripts/review/allocate-transcript.sh` followed by `scripts/pty-capture.py --allocated`, using
+  distinct payloads of that exact size. Do not synthesize a matching pathname or enumerate allocator
+  filenames or sidecars in the test. Assert that `write` preserves both allocator-produced transcript
+  paths, launch records and provenance fields, including each `captureId`, before production `verify`
+  passes. At `N + 1`, separately activate an opener-cap mutant only for Gemini and only for Codex while
+  **both** entries remain per-run; each reviewer-conditional mutant must make C5a fail. This enumeration
+  is closed because the mandatory reviewer roster is exactly `{gemini, codex}`. F3 proves helper-local
+  caps only; only **F3 + production-shaped C5a** establish the production-path bound through `N`.
 
 **Implementation mutants — each must be caught by its named mechanism**, with **three** stated
 exceptions — **I16b**, **I17's direct `/proc/self/fd/N` form**, and **I12a's production-conditional
-regular/offset-zero metadata-derived count** *(round 20: this said "exactly one"
+regular/offset-zero metadata-derived emptiness** *(round 20: this said "exactly one"
 and predates round 19's addition of I17's exemption to §3.1; the F3 + C5a cap proof is bounded by N
 rather than excepted, since their helper-local and production-path arms jointly catch every inclusive cap
 **≤ N** — round 22 corrected "at or below the largest tested size", which is off by one: the fixtures
 stream **N + 1**, so a cap of exactly N+1 accepts that size and lies outside the proof)*. **I16b's**
-*production-conditional / stable-multipass* residue and the specified I12a metadata form are accepted as
+*production-conditional / stable-multipass* residue and the specified I12a metadata-derived emptiness form are accepted as
 not closed by §3.1.
 **I16a's** unconditional `lseek`/`pread` forms **are** rejected, by F1 and F2. Every other mutant in this
 list — **I9 included, and I12b as of round 11** — must be caught: the §6.0 sweep records I9 as caught by
-C9a, and I18's short-read arrangement catches I12b.
+C9a, and I18's empty-read arrangement catches I12b.
 
 *(Round 11, from gemini: this preamble named the exception as "**I16**" — the whole mutant rather than its
 accepted half — and asserted "every other mutant, **I9 included**, must be caught", while §7 step 5
@@ -831,7 +835,9 @@ mutant definitions, but not into this preamble — the third time in this campai
 argument and not the operative restatement. Round 11 additionally **closes** I12b, so "exactly one
 exception" is now true, for a different reason than the original wording gave.)*
 
-- **I1** `os.path.exists` instead of re-digesting → C2c must fail.
+- **I1** `os.path.exists` instead of re-digesting → C2c must fail. Include two reviewer-conditional
+  arms: bypass re-digestion only for Gemini, then only for Codex, while both artifact entries are
+  allocator-created per-run transcripts. C2c's corresponding changed-reviewer arm must reject each.
 - **I2** re-digest only the first reviewer → C2a's second-entry deletion must fail.
 - **I3** apply the checks to non-approving artifacts too → C8 must fail.
 - **I4** `if path: verify(path)` — skip when `transcriptPath` is absent. **This passes every round-1
@@ -841,12 +847,13 @@ exception" is now true, for a different reason than the original wording gave.)*
   follows links).
 - **I6** install an inclusive cap of exactly `N` in each of two required mutant placements: **(a)**
   helper-local and conditional on a regular descriptor at offset zero → production-shaped F3 must reject
-  it while the correct helper returns the exact digest and `N + 1` count; **(b)** inside
+  it while the correct helper returns the exact digest and `saw_bytes == True`; **(b)** inside
   `_open_regular_fd`, conditional on the production `_is_per_run_transcript` predicate → end-to-end,
   allocator-created C5a at `N + 1` must reject it while the correct production creator → `write` →
-  `verify` path passes with its provenance intact. Reusing `_read_regular_file` on that predicate is the
-  same production-path defect and must also fail C5a. Neither F3 nor C5a alone establishes both
-  placements.
+  `verify` path passes with its provenance intact. Run I6(b) once with the cap conditional on Gemini and
+  once conditional on Codex while both entries are allocator-created per-run transcripts. Reusing
+  `_read_regular_file` behind either reviewer condition is the same production-path defect and must also
+  fail C5a. Neither F3 nor C5a alone establishes both placements.
 - **I9** *(the sweep's headline)* validate with `_open_regular_fd`, **close the fd, then reopen the path**
   for hashing. **C9a must fail on this mutant** — the §6.0 sweep records I9 as caught by C9a, and the
   reopened bytes feed the digest. It is a required rejection, not an accepted gap.
@@ -857,36 +864,34 @@ exception" is now true, for a different reason than the original wording gave.)*
   on the **exact** message. Without distinct messages this mutant is unobservable, because
   `_quorum_problem` already rejects the module's `_EMPTY_SHA256` constant.
   *(Round 4: reworded. I10 previously named "the `st_size` non-empty check", contradicting §8 Q3's
-  adopted answer. The check is on the **streamed byte count** — see §4.1 step 4 and I12.)*
+  adopted answer. The current check is on **`saw_bytes`** — see §4.1 step 4 and I12.)*
 - **I11** compare the digests as **sets/multisets** rather than per reviewer entry → C10 must
   fail. A plausible order-insensitive one-liner that permits the two reviewers' transcripts to be swapped.
 - **I12** *(round 4; split in round 10)* emptiness diagnosed from `st_size`, `os.path.getsize`, or the
-  digest constant instead of the streamed count. **Split, because the two halves have different status —
+  digest constant instead of `saw_bytes`. **Split, because the two halves have different status —
   the same defect round 10 found in I16 and in §6.0 row 9:**
-  - **I12a — the HELPER returns a derived count**: `st_size`, `os.path.getsize`, cached opener metadata,
-    or `len(last_chunk)` in place of the true streamed count. **Split by fixture reachability.**
-    **Required rejection for the fixture-reachable forms:** C12 calls the helper directly on zero-, one-
-    and many-chunk fixtures and asserts the exact returned count, which kills a fabricated count
-    (`len(last_chunk)`, a constant, an off-by-one); F2's non-zero-offset descriptor kills unconditional
-    `st_size` and `os.path.getsize`. Those forms require **F2 + C12 together — neither alone**.
-    **`ACCEPTED-NOT-CLOSED` for the production-conditional metadata form:** a helper may sum the lengths
-    of chunks actually hashed for F1/F2 and every non-production descriptor, but return
+  - **I12a — the HELPER returns metadata-derived `saw_bytes`**: `st_size > 0`,
+    `os.path.getsize(path) > 0`, or cached opener metadata in place of observing whether a non-empty
+    buffer was fed to SHA-256. **Split by fixture reachability. Required rejection for the
+    fixture-reachable form:** F2's EOF arm uses a non-empty regular file with positive `st_size` but no
+    bytes left to stream, so an unconditional metadata flag returns true where the correct result is
+    false. C12 separately asserts the exact digest and flag on empty and non-empty streams without
+    constraining read granularity.
+    **`ACCEPTED-NOT-CLOSED` for the production-conditional metadata form:** a helper may use real stream
+    observation for F1/F2 and every non-production descriptor, but derive `saw_bytes` from
     `fstat(fd).st_size`, cached opener metadata, or path-size metadata carried through module state only
     when the descriptor is regular and at offset zero. All regular offset-zero fixtures are static, so
-    metadata equals the streamed count; C9a's pathname replacement does not change the already-open
-    inode's size and need not change the path's size. This form still violates §4.1 and §7; the accepted
-    label records only the proof ceiling.
-    *(Round 11: this half said "**C12** must fail on it" for all three forms. On C12's static offset-zero
-    fixtures `st_size` **equals** the streamed count — §13's `st_size as the count` escape-analysis row records
-    that measurement — so C12 alone cannot reject two of the three forms it named. The mutant is
-    unchanged; the mechanism that kills it is now stated correctly.)*
-  - **I12b — the CALLER ignores the helper's count** and re-derives emptiness from `st_size`,
-    `os.path.getsize`, or the digest constant. **CLOSED by I18's short-read arrangement — round 11.**
-    That arrangement stubs the helper to return **`(D, 0)`** while the path on disk holds **100 bytes**
+    metadata-derived emptiness equals the streamed flag. This form still violates §4.1 and §7; the
+    accepted label records only the proof ceiling.
+    *(Round 4 removes the prior exact-total mutant family. No read-chunk size is imposed merely to
+    rescue those proofs.)*
+  - **I12b — the CALLER ignores the helper's `saw_bytes` flag** and re-derives emptiness from `st_size`,
+    `os.path.getsize`, or the digest constant. **CLOSED by I18's empty-read arrangement — round 11.**
+    That arrangement stubs the helper to return **`(D, False)`** while the path on disk holds **100 bytes**
     whose digest **is** `D`. A caller re-deriving emptiness from `st_size`/`getsize` reads **100** →
     "non-empty" → digest matches → it **approves**; a caller inferring emptiness from the digest constant
-    sees `D ≠ _EMPTY_SHA256` → "non-empty" → it **approves**. The correct caller uses the returned count
-    `0`, diagnoses empty, and **fails**. I18's production-`cmd_verify`-fails assertion rejects the `st_size` and digest-
+    sees `D ≠ _EMPTY_SHA256` → "non-empty" → it **approves**. The correct caller uses the returned flag,
+    diagnoses empty, and **fails**. I18's production-`cmd_verify`-fails assertion rejects the `st_size` and digest-
     constant forms; its closed observed-route assertion rejects `os.path.getsize`. The conjunction also
     requires one unchanged-argument seam call and one helper call. **Required rejection.**
     *(Round 11, from codex: the round-10 classification rested on "**no fixture in this plan exercises a
@@ -900,10 +905,10 @@ exception" is now true, for a different reason than the original wording gave.)*
 - **I13** *(round 4)* compare truncated digests (the 12-hex display form), perform the comparison once
   outside the per-entry loop, or compare the valid uppercase/padded digest as a raw string without
   normalization → C13 must fail on the corresponding negative or positive arm.
-- **I14** *(round 4)* swallow non-`OSError` exceptions and skip the entry, or mishandle any errno in
-  C14's derived catch-all complement (including `None`) by traceback, skip, retry, second resolution,
-  errno loss, descriptor leak, or `MISSING` misclassification → C14's NUL and complement subtests must
-  fail.
+- **I14** *(round 4)* swallow the NUL-path `ValueError` and skip the entry; map `fstat(EACCES)` through
+  the `os.open` special mapping to `DENIED` without closing the acquired descriptor; or re-raise an
+  unknown integer errno absent from `errno.errorcode` instead of returning `UNREADABLE` with that errno
+  preserved → C14's NUL, stage-specific and default subtests must fail.
 - **I15** *(round 5)* keep `_read_regular_file`'s **UTF-8 decode** in the new helper
   (`_read_regular_file` currently opens with `encoding="utf-8"`) instead of streaming raw bytes → **C5b must fail**. C5b
   was required to PASS but had no mutant, so nothing proved it could ever fail; a decoding helper is the
@@ -927,7 +932,8 @@ exception" is now true, for a different reason than the original wording gave.)*
   covers the plausible shape, not every descriptor-derived reopen.)*
 - **I18** *(round 7; retargeted round 8; production-boundary correction round 23)* production
   `cmd_verify` retries an otherwise correct per-entry check on digest mismatch, **or** falls back on a
-  short read. Two arrangements are required because one construction cannot trigger both branches.
+  metadata-positive empty read. Two arrangements are required because one construction cannot trigger
+  both branches.
   Both invoke production `cmd_verify` **in-process**, never a lower per-entry helper, using a schema-valid
   dual-review approving artifact with the targeted reviewer first. In both, create a 100-byte regular
   targeted transcript with digest `D`, freshly open it at offset zero before the observation window,
@@ -939,24 +945,24 @@ exception" is now true, for a different reason than the original wording gave.)*
   mock and is therefore permitted. This oracle is deliberately limited to the routes used by rows 1,
   6a, 7, row 9's caller half and I12b; it does not claim universal path-access detection.
   - **retry:** the artifact records `D`. Stub `_digest_transcript_fd` with a **two-element** side-effect
-    list **for the targeted descriptor only**: first call returns `("0"*64, 100)` — a **mismatching**
-    digest with a correct count — and the second returns `(D, 100)`; delegate the other reviewer's
+    list **for the targeted descriptor only**: first call returns `("0"*64, True)` — a **mismatching**
+    digest with `saw_bytes == True` — and the second returns `(D, True)`; delegate the other reviewer's
     descriptor to the correct helper. Assert production `cmd_verify` **fails**, the whole-invocation seam
     and helper assertions above hold, and the second targeted result remains unconsumed. The paired outer
     `cmd_verify` retry mutant wraps an otherwise correct per-entry check, consumes that second targeted
     result, proceeds through the valid second reviewer and **approves**, so the I18 mutation test must
     fail. A single-element target list is forbidden because a retrying mutant would raise
     `StopIteration` and appear rejected for the wrong reason.
-  - **short-read fallback:** the artifact records `D`. Stub the helper to return **`(D, 0)`** — the digest
-    **matches**, but the streamed count is **0** against the already-open descriptor's `st_size` of
-    **100**. Per §4.1 step 4 the streamed count is the sole basis for the "empty" diagnosis, so the
+  - **empty-read fallback:** the artifact records `D`. Stub the helper to return **`(D, False)`** — the digest
+    **matches**, but no bytes were observed against the already-open descriptor's `st_size` of **100**.
+    Per §4.1 step 4 `saw_bytes` is the sole basis for the "empty" diagnosis, so the
     correct production `cmd_verify` **fails with the empty diagnostic**; the whole-invocation
     one-seam-call, one-helper-call and zero-
-    additional-observed-route-resolution assertions above must all hold. A caller with a short-read
-    fallback instead re-opens the path, recovers 100 bytes, and approves.
+    additional-observed-route-resolution assertions above must all hold. A caller with a metadata-based
+    empty-read fallback instead re-opens the path, recovers 100 bytes, and approves.
     *(Round 11, from codex — Low: this read "fails with the **typed empty cause**", but the `cause`
     vocabulary is the six-value `{OK, MISSING, SYMLINK, NOT_REGULAR, DENIED, UNREADABLE}` (ARCH-2's cause-vocabulary contract) and contains no
-    `EMPTY`. Emptiness is deliberately a **caller** diagnosis derived from `OK` + `count == 0`, never a
+    `EMPTY`. Emptiness is deliberately a **caller** diagnosis derived from `OK` + `saw_bytes == False`, never a
     helper cause — so the sentence asked for a value the plan's own type forbids. The oracle is
     unaffected; only the name was wrong.)*
 
@@ -995,12 +1001,16 @@ exception" is now true, for a different reason than the original wording gave.)*
   each reviewer entry; deletion of the second entry is I2's required discriminator. C2a also has an
   `ENOTDIR` arm whose recorded path traverses through a non-directory component; it must produce the
   exact same `MISSING` cause/diagnosis as the `ENOENT` deletion arm.**
-  **C2c's production-provenance arm is mandatory:** obtain the targeted transcript and approving
-  artifact through the same production allocator/capture creator C5a uses, assert `write` preserved the
-  creator's allocator path, launch record and provenance fields (including `captureId`), then append the
-  byte and invoke production `verify`. It must fail with the exact changed-transcript diagnosis. A paired
-  bypass that skips re-digestion only when `_is_per_run_transcript` is true or production provenance is
-  present must make C2c fail. Reuse the creator as a unit; do not enumerate path names or sidecars.
+  **C2c's production-provenance arm is mandatory:** under a test-owned state root, create **both**
+  reviewer transcripts in production order `{gemini, codex}` by invoking
+  `scripts/review/allocate-transcript.sh` and then `scripts/pty-capture.py --allocated`, with distinct
+  payloads. Assert `write` preserved both allocator paths, launch records and provenance fields
+  (including each `captureId`). Run C2c twice against that fully production-shaped pair: append one byte
+  to Gemini only, then in a fresh arrangement append one byte to Codex only, retaining production order.
+  Each production `verify` must fail with the exact changed-transcript diagnosis. Reviewer-conditional
+  bypass mutants that skip re-digestion only for Gemini or only for Codex when both entries satisfy
+  `_is_per_run_transcript` or carry production provenance must make the corresponding arm fail. Reuse the
+  production flow as a unit; do not enumerate path names or sidecars.
 - **C3** `transcriptPath` **absent**, `null`, and `""` — three shapes, **each separately named**, all
   must fail. Round 4: C2's variants are named and C3's were not, so a partial C3 covering only *absent*
   would still leave I4 uncaught.
@@ -1013,7 +1023,7 @@ exception" is now true, for a different reason than the original wording gave.)*
   > **N = 64 MiB — a FIXED constant, not "the largest size tested".** F3 writes **N + 1 deterministic
   > bytes** to a regular file, freshly opens it at offset zero, and immediately before calling the helper
   > asserts `stat.S_ISREG(os.fstat(fd).st_mode)` and `os.lseek(fd, 0, os.SEEK_CUR) == 0`. It then asserts
-  > the helper returns the exact digest and count. F3 proves helper-local caps only; C5a supplies the
+  > the helper returns the exact digest and `saw_bytes == True`. F3 proves helper-local caps only; C5a supplies the
   > production `write` → `verify` arm. *(codex: "larger than any plausible cap" is not a test size, and defining N as
   > "the largest size tested" is circular — no numeric value bound F3 at all. Worse, the claim that F3
   > catches every cap "**at or below** N" is **false**: a conventional cap accepts a file of exactly its
@@ -1031,12 +1041,15 @@ exception" is now true, for a different reason than the original wording gave.)*
     failing, and a hang is not an assertion (measured: `exit=124`).
 - **C5** both must **VERIFY SUCCESSFULLY**: **(a)** invoke the production allocator/capture creator, then
   production `write` → `verify`, at exactly two transcript sizes — the *typical* case measured at
-  512,723 bytes and **`N + 1` bytes, where `N = 64 MiB`**; both must PASS through `_open_regular_fd`, and
-  `write` must preserve the creator's allocator-produced path, launch record and provenance fields,
-  including `captureId`; **(b)** a **non-UTF-8** transcript — *defensive*, since a timeout-killed PTY
-  capture can end mid-multibyte. Reuse the creator rather than reproducing its path/sidecar rules in the
-  fixture. F3 proves helper-local caps only; only **F3 + production-shaped C5a** establish the
-  production-path bound. This is the case that catches a fix worse than the defect.
+  512,723 bytes and **`N + 1` bytes, where `N = 64 MiB`**. At each size, create both Gemini and Codex
+  transcripts with distinct payloads under a test-owned state root through
+  `scripts/review/allocate-transcript.sh` followed by `scripts/pty-capture.py --allocated`; retain
+  production order. Both size arrangements must PASS through `_open_regular_fd`, and `write` must
+  preserve both allocator-produced paths, launch records and provenance fields, including each
+  `captureId`; **(b)** a **non-UTF-8** transcript — *defensive*, since a timeout-killed PTY capture can
+  end mid-multibyte. Reuse the creator rather than reproducing its path/sidecar rules in the fixture. F3
+  proves helper-local caps only; only **F3 + production-shaped C5a** establish the production-path bound.
+  This is the case that catches a fix worse than the defect.
 - **C8** a non-approving artifact — `REQUEST_CHANGES` **and** `DISAGREEMENT`, including a `MISSING`
   reviewer — whose transcript has since been deleted must still `verify` to its existing outcome, with
   today's text.
@@ -1116,33 +1129,40 @@ digest before production `verify`.
    already records arbitrary transcript paths, so existing artifacts keep resolving.
 2. `_open_regular_fd` extraction, with the **five** sidecar tests named in §4.5 still green,
    covering `O_NOFOLLOW`, the cap, `O_NONBLOCK`/`S_ISREG` and the decode epilogue.
-3. §4.1 + §4.2 together — resolve, re-digest, per-reviewer, approving artifacts only, streamed-count
+3. §4.1 + §4.2 together — resolve, re-digest, per-reviewer, approving artifacts only, `saw_bytes`
    emptiness, distinct messages per cause. §4.2 is the same code path, not a later step.
    **ARCH-1, ARCH-2 and ARCH-3 are acceptance conditions of this step**, not follow-up work: the step is
-   not done until `_digest_transcript_fd(fd: int) -> tuple[str, int]` exists with exactly that signature,
+   not done until `_digest_transcript_fd(fd: int) -> tuple[str, bool]` exists with exactly that signature,
    and implements a raw-byte SHA-256 stream from the descriptor's current offset to EOF in **one forward
-   pass**, with no cap, decode, seek/pread, reread or reopen. The returned count is accumulated **solely
-   by summing the lengths of the exact chunks fed to SHA-256**; `st_size`, path-size metadata and cached
-   opener metadata are prohibited as count sources.
-   `_open_regular_fd` returns the closed total cause partition: `ENOENT`/`ENOTDIR → MISSING`,
-   `ELOOP → SYMLINK`, a successfully opened non-regular descriptor → `NOT_REGULAR`,
-   `EACCES`/`EPERM → DENIED`, and every other `os.open`/`fstat` `OSError → UNREADABLE`, preserving the
-   original errno (including `None`), closing any descriptor already acquired and performing no second
-   resolution. The helper must then pass
-   **F1** (pipe — ESPIPE on any seek/pread), **F2** (non-zero offset), **F3** (size — write exactly
+   pass**, with no cap, decode, seek/pread, reread or reopen. `saw_bytes` becomes true only when a
+   non-empty buffer is fed to SHA-256; the empty diagnosis uses only that flag. No exact byte total,
+   chunk sum or read-chunk size is required.
+   `_open_regular_fd` returns the stage-specific total cause partition. Only `os.open` maps
+   `ENOENT`/`ENOTDIR → MISSING`, `ELOOP → SYMLINK`, and `EACCES`/`EPERM → DENIED`; every unmatched
+   `os.open` `OSError → UNREADABLE`. A successfully opened non-regular descriptor maps to
+   `NOT_REGULAR`; **every** `fstat` `OSError`, regardless of errno, maps to `UNREADABLE`. Every default
+   preserves the original errno (including `None` or an integer absent from `errno.errorcode`), closes
+   any descriptor already acquired and performs no second resolution. The helper must then pass
+   **F1** (pipe — ESPIPE on any seek/pread), **F2** (non-zero-offset and EOF arms on a non-empty regular
+   file; the EOF arm returns the empty digest and `saw_bytes == False` despite positive `st_size`), **F3** (size — write exactly
    `N + 1` deterministic bytes where `N = 64 MiB`; freshly open an `S_ISREG` regular descriptor at
    offset zero; assert both shape facts immediately before the helper; MUST PASS with the exact SHA-256
-   and count `N + 1`; discriminates helper-local inclusive caps `≤ N`, caps `> N` outside the proof)
+   and `saw_bytes == True`; discriminates helper-local inclusive caps `≤ N`, caps `> N` outside the proof)
    and **F4** (unlinked fd — closes reopen-by-recovered-*name*). **§3.1's narrowed guarantee applies:**
    a production-conditional/stable two-pass reader is **not rejected by the proof**. That evidence gap is
    not permission to implement I16b; the one-forward-pass contract above remains mandatory, and the
    CHANGELOG must disclose the limitation.
-   **F3 proves helper-local caps only. For both exact sizes, C5a MUST invoke the production
-   allocator/capture creator and carry its output through production `write` → `verify`: 512,723 bytes
-   and `N + 1` bytes. Both MUST PASS, and `write` must preserve the creator's allocator-produced path,
-   launch record and provenance fields, including `captureId`. Reuse the creator; do not enumerate its
-   path or sidecar rules. Only F3 + production-shaped C5a establish the production-path bound through
-   `N`.**
+   **F3 proves helper-local caps only. At each exact C5a size — 512,723 bytes and `N + 1` bytes — create
+   both reviewer transcripts in production order `{gemini, codex}` under a test-owned state root through
+   `scripts/review/allocate-transcript.sh` followed by `scripts/pty-capture.py --allocated`, using
+   distinct payloads. Carry the fully production-shaped pair through production `write` → `verify`.
+   Both size arrangements MUST PASS, and `write` must preserve both allocator-produced paths, launch
+   records and provenance fields, including each `captureId`. At `N + 1`, cap Gemini and Codex
+   separately while both entries remain per-run; each mutant must fail. C2c reuses a fully
+   production-shaped pair and runs twice, mutating Gemini and Codex separately while retaining production
+   order. Reuse the flow; do not enumerate its path or sidecar rules. The cross-product is closed because
+   the mandatory roster is exactly `{gemini, codex}`. Only F3 + production-shaped C5a establish the
+   production-path bound through `N`.**
    **Step 2 also gives `scripts/tests/test_review_verdict.py`'s shared `run(*args)` helper a bounded
    timeout** — without it the FIFO
    regression tests hang instead of failing.
@@ -1165,27 +1185,33 @@ digest before production `verify`.
    defines, round 4 added six identifiers, round 5 added three (I15, I16, ARCH-3), and **round 11 added
    C15/I19 for the `DENIED` cause, which had been mandated by ARCH-2 since round 4 with no case and no
    mutant**. **C2a runs once for each reviewer entry; deletion of the second entry is I2's required
-   discriminator, and its `ENOTDIR` arm must map exactly to `MISSING`. C2c's production-provenance arm
-   and both C5a sizes reuse the production allocator/capture creator and assert that `write` preserves
-   its allocator path, launch record and provenance, including `captureId`. Both C11 status forms start
+   discriminator, and its `ENOTDIR` arm must map exactly to `MISSING`. C2c runs twice against a fully
+   production-shaped `{gemini, codex}` pair, mutating each reviewer separately in production order; both
+   C5a sizes create both reviewer transcripts with distinct payloads. Every transcript is created under
+   a test-owned state root through `scripts/review/allocate-transcript.sh` followed by
+   `scripts/pty-capture.py --allocated`, and `write` must preserve both allocator paths, launch records
+   and provenance fields, including each `captureId`. I1's reviewer-conditional bypass and I6(b)'s
+   reviewer-conditional cap each run once for Gemini and once for Codex while both entries remain
+   per-run. This is the closed cross-product because the roster is exactly `{gemini, codex}`. Both C11 status forms start
    from a legitimate `write`, change the targeted transcript's digest, and require production `verify`
-   to fail with the changed-transcript diagnosis. C14 derives the catch-all errno set as the complement
-   of the closed special sets, including `None`, and asserts exact errno preservation plus descriptor
-   closure. Both I18 arrangements invoke production `cmd_verify` in-process on a schema-valid dual-review
+   to fail with the changed-transcript diagnosis. C14 exercises every special `os.open` mapping, then
+   its default with `None` and a generated errno absent from `errno.errorcode`; its `fstat` arms use the
+   special errnos, `None`, and that generated errno, always asserting `UNREADABLE`, exact errno
+   preservation and acquired-descriptor closure. Both I18 arrangements invoke production `cmd_verify` in-process on a schema-valid dual-review
    approving artifact with the target first; no lower per-entry helper is the test subject, and call
    counts cover the whole invocation. They mock `_open_regular_fd` to return an already-open descriptor
    for the target and assert one unchanged-argument seam call plus one helper call; the retry arrangement
    also proves the second targeted helper result was not consumed. The outer `cmd_verify` retry mutant
    must consume that result and make the test fail by approving. F3 uses a freshly opened `S_ISREG` regular descriptor at
    offset zero containing exactly `N + 1` deterministic bytes and asserts both shape facts immediately
-   before its helper call.** Each mutant shown caught by its named mechanism **except the residues §3.1 accepts:** **I12a's production-conditional regular/offset-zero metadata-derived count**, and **I16b's
+   before its helper call.** Each mutant shown caught by its named mechanism **except the residues §3.1 accepts:** **I12a's production-conditional regular/offset-zero metadata-derived emptiness**, and **I16b's
    production-conditional second pass in EITHER form** — the label "helper-side" describes where round 16
    found it, **not a restriction on the exception**: a second pass hiding behind a branch no fixture takes
    is unreachable wherever it lives *(round 21, gemini: the parenthetical "(HELPER-side, not
    caller-side)" read as excluding the caller-side form from the exception, i.e. demanding it be shown
    caught — impossible by I16b's own definition, and therefore another unsatisfiable criterion)* —
-   **and I17's direct `/proc/self/fd/N` form**, which F4 does not catch. For I12a, F2 + C12 retain
-   required rejection only for fixture-reachable unconditional metadata and fabricated-count forms; the
+   **and I17's direct `/proc/self/fd/N` form**, which F4 does not catch. For I12a, F2's EOF arm retains
+   required rejection for the fixture-reachable unconditional metadata-derived form; the
    regular/offset-zero production-conditional form is the accepted residual. **F3 is shown to its stated
    helper-local bound N, while production-shaped C5a is shown through the production opener at exactly
    512,723 bytes and `N + 1`, with creator provenance preserved; only their conjunction closes §6.0 row
@@ -1199,7 +1225,7 @@ digest before production `verify`.
    in §6's "exactly one exception" and §5's risk register.)* *(round 16, gemini:
    this read "caller-side residue". I16b branches **inside** the helper on a condition no fixture takes;
    the residues are §6.0's rows — of which row 2 has an **in-helper** form, so "caller-side" does not describe them collectively *(round 18)*. One word was describing two different kinds of residue)* *(round 11: I12b was the second exception and is
-   now closed by I18's short-read arrangement)*; production-shaped C5a shown **PASSING** at both exact sizes and C5b shown
+   now closed by I18's empty-read arrangement)*; production-shaped C5a shown **PASSING** at both exact sizes and C5b shown
    **PASSING** on its non-UTF-8 fixture; and **each of §6.0's defeating implementations shown rejected**
    — that table is the acceptance suite for this step, not commentary, **except rows 2, 5b and 6b, whose
    closure §6.0 records as accepted-not-closed** *(round 11: was "rows whose closure … accepted-not-closed"
@@ -1210,7 +1236,7 @@ digest before production `verify`.
    transcript-content validation remains `COREDEV-2618`. Also state **§3.1's full seven-item
    non-detection list: a two-pass reader, §6.0 rows 2 / 5b / 6b, the F3 + C5a size-cap bound, I17's
    `/proc/self/fd/N` reopen, and I12a's production-conditional regular/offset-zero metadata-derived
-   count.**
+   emptiness.**
    *(Round 19, codex: §3.1 requires the CHANGELOG to disclose these and this step mandated only the
    two-pass limitation — so an implementation could satisfy §7 as written while omitting the rest of the
    promised disclosure.)*
@@ -1251,10 +1277,11 @@ digest before production `verify`.
    narrowed.** Both reviewers reached this independently; codex: *"no finite trial count is acceptable
    for a required non-flaky gate."* The maintainer confirmed. F5/F5b are out of the gating suite and
    §3.1 states what the plan does not prove. See §15.
-3. ~~`st_size` vs streamed bytes?~~ **ANSWERED in round 3 — count bytes actually streamed.** Use the
-   `fstat` for the `S_ISREG` check, but base the *empty* diagnosis on what was read: a shrink/grow race is
-   precisely when the two disagree, and the streamed count is the truthful one. (gemini argued for
-   `st_size` on early-exit grounds; codex's reasoning is stronger and is adopted.)
+3. ~~`st_size` vs streamed bytes?~~ **ANSWERED in round 3, relaxed in the current round 4 — observe
+   whether any bytes streamed, not their exact total.** Use `fstat` for the `S_ISREG` check, but base the
+   *empty* diagnosis only on `saw_bytes`, which becomes true solely when a non-empty buffer is fed to
+   SHA-256. A non-empty file descriptor positioned at EOF is therefore empty for this invocation even
+   though `st_size` is positive. No production consumer needs an exact byte total.
 4. ~~`captureId` advisory-compare?~~ **ANSWERED in round 3 — explicitly DEFERRED to `COREDEV-2618`**, and
    removed from this plan's scope. Both reviewers agreed. In `scripts/pty-capture.py`, `main` writes
    `out_path + '.captureid'` through `_write_private(...)` inside the `# PROVENANCE` best-effort
@@ -2000,7 +2027,10 @@ a defect they share — compare each against the source, never against each othe
 ## 30. Round-23 gate outcome
 
 **Both arms `REQUEST_CHANGES` — xhigh 1 High + 1 Medium; max 2 High + 3 Medium.** Frozen at
-`647203e`, sha256 `e5af3eee716a6c2f193a16fd6bb8231a6f4bea809c7ddbec85fc16827a582193`.
+sha256 `e5af3eee716a6c2f193a16fd6bb8231a6f4bea809c7ddbec85fc16827a582193` in an
+**uncommitted working tree**. That digest is the round's only authoritative artifact identity; no commit
+carries the blob. The contemporaneous `HEAD` was `647203e`, but the plan blob committed there hashes to
+`51bb02cf5880cbaac3d46ee866bb82bd98b899d37e8facba50ca03d3c2583f78`, so it is not the frozen artifact.
 The seven supplied remediation blocks are applied below without a new findings sweep.
 
 | # | from | severity | directed finding | applied remediation |
@@ -2017,3 +2047,33 @@ The seven supplied remediation blocks are applied below without a new findings s
 the stricter union: the full algorithm plus the chunk-sum-only count rule and the explicit evidence-gap
 disclaimer. For production shape, the stricter reading is used: **both** C5a sizes, not merely one, come
 from the production creator, and C2c does too. **There are no genuine conflicts among the seven blocks.**
+
+### Round-4 gate outcome — current remediation cycle
+
+**Both arms `REQUEST_CHANGES`.** Frozen at commit `12fcf2e`, sha256
+`de1184e540d33cd3ec22573802dc0e2e179ac1dd7f82b845589f7bccd10b1444`. The commit's plan blob and the
+pre-edit working-tree bytes were re-hashed and both matched that digest. xhigh stopped on the inaccurate
+round-23 freeze record above and performed no substantive content review. max supplied the three
+substantive findings and completed fixture-dimension audit recorded here. No new findings sweep was run.
+
+| # | from | severity | directed finding | applied remediation |
+|---|---|---|---|---|
+| 1 | xhigh / verified repository state | High | Round 23 paired an uncommitted working-tree digest with the contemporaneous `HEAD` commit, whose blob is different | §7 and `ARCH`/`F`/`C`/`I` proofs are unchanged for this item. The round-23 record now identifies the uncommitted snapshot by sha256 alone and names `647203e` only as the non-matching contemporaneous `HEAD`. All other recorded commit/digest pairs in this plan were mechanically checked, are consistent, and remain unchanged |
+| 2 | max | High | Production provenance was not crossed with both reviewer identities/order | C2c runs once per reviewer against a fully production-shaped `{gemini, codex}` pair. At both C5a sizes, both entries are created through `allocate-transcript.sh` then `pty-capture.py --allocated` under a test-owned state root with distinct payloads. I1 and I6(b) carry Gemini-only and Codex-only conditional arms while both entries remain per-run |
+| 3 | max | High | C12's exact-total claim depended on helper-selected read granularity | `_digest_transcript_fd` now returns `tuple[str, bool]`; `saw_bytes` becomes true only for a non-empty buffer fed to SHA-256. F2 adds the non-empty-file-at-EOF arm, C12 asserts digest plus flag for empty/non-empty streams without a chunk-size rule, and I12 drops the exact-total mutant family while retaining the existing production-conditional metadata-derived-emptiness residual |
+| 4 | max | Medium | C14 applied `os.open`'s special errno subtraction to `fstat` and treated `errno.errorcode` as exhaustive | The cause map is stage-specific. C14 covers every special `os.open` branch, its default with `None` and a generated unknown errno, and `fstat` with the special errnos, `None`, and that unknown errno; every `fstat` failure is `UNREADABLE`, preserves errno and closes the acquired descriptor. I14 includes the requested `fstat(EACCES)` leak/misclassification and unknown-errno re-raise mutants |
+
+**Completed fixture-dimension audit.** Descriptor kind/offset, path/link state, bounded size, encoding,
+allocator path, launch record, `captureId`, provenance and production `cmd_verify` remain pinned. The
+previously unpinned production-provenance × reviewer-identity/order conjunction is closed by the exact
+two-reviewer cross-product, including the both-per-run shape. Read granularity is removed from the
+contract rather than arbitrarily bounded. The existing §3.1 scope is unchanged: static/two-pass
+behaviour, production-conditional metadata-derived emptiness, caps above N, `/proc` reopening and content
+semantics remain disclosed ceilings.
+
+**Overlap and conflicts.** The stricter production-shape reading is used: both reviewers are production-
+created at both C5a sizes, both C2c reviewer mutations retain production order, and C14's `fstat` default
+is exercised with all five `os.open`-special errnos plus `None` and the generated unknown errno. xhigh's
+`NO CHANGE` instruction applies to its failed content-review arm: no §7 or proof edit is attributed to
+that block. The §7/proof edits implement max's findings against the verified `12fcf2e` artifact. **There
+are no genuine conflicts among the four blocks.**
