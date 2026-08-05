@@ -22,7 +22,23 @@ from typing import Iterable, Mapping, Sequence
 
 
 EXEMPTION_PATH = "scripts/review/callers-scan-exemptions.tsv"
-ANCHORS = (b"/unleashed-mail:", b"-review")
+# Selection anchors.  A bare `-review` was over-selecting badly: it matches `security-reviewer`,
+# `pr-review` and `code-review` anywhere in prose, so the tree yielded 1409 candidates against 14 real
+# invocations, and the residual manifest that must be reviewed by hand came to ~1395 rows (PR #63
+# review, gap on `callers_scan.py:269`).  Naming the two review commands instead drops the unrelated
+# review words while keeping every spelling of a real one.  Measured over the tracked tree:
+#
+#     /unleashed-mail: + -review                    1409 candidates, 14 exact productions
+#     /unleashed-mail: only                          103 candidates, 14 exact productions
+#     /unleashed-mail: + /gemini-review /codex-review  195 candidates, 14 exact productions
+#     /unleashed-mail: + gemini-review codex-review    268 candidates, 14 exact productions   <- this
+#
+# The slash-prefixed variant is smaller but narrows further than the defect warrants: it stops
+# selecting `unleashed-mail:gemini-review …` and a bare `gemini-review --ticket …`, both of which are
+# documented-invocation spellings this scanner exists to reject.  The set below is a strict SUBSET of
+# the old one, so nothing that was covered becomes uncovered except the false positives, and all four
+# historical bypasses still select on `/unleashed-mail:`.
+ANCHORS = (b"/unleashed-mail:", b"gemini-review", b"codex-review")
 MARKDOWN_PREFIX = re.compile(
     br"\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|"
     br"(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -44,7 +45,7 @@ production = load_module(PRODUCTION_PATH, "coredev2619_callers_scan")
 
 # This matcher is deliberately test-local.  It does not import production's regex,
 # anchors, productions, candidate selector, prefix stripper, or matcher.
-REFERENCE_ANCHORS = (b"/unleashed-mail:", b"-review")
+REFERENCE_ANCHORS = (b"/unleashed-mail:", b"gemini-review", b"codex-review")
 REFERENCE_PREFIX = re.compile(
     br"\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|"
     br"(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*"
@@ -409,17 +410,32 @@ class M513CallersScanTests(CallersScanProof):
         self.assertEqual((), production.validate_migration_destinations(files))
         self.assertEqual(12, len(destination_positions(self, files)))
 
-        hooks_lines = reference_lines(files["hooks/hooks.json"])
-        self.assertEqual(hooks_lines[120], hooks_lines[132])
-        self.assertEqual(hooks_lines[119], hooks_lines[131])
-        self.assertEqual(hooks_lines[121], hooks_lines[133])
-        hook_records = {
+        # Identical residual payloads at different physical lines must yield DISTINCT manifest
+        # identities. Located by search rather than pinned to one file's line numbers: this was
+        # `hooks/hooks.json` lines 121/133, a matcher regex naming `security-reviewer` and
+        # `prompt-review`, which the narrowed anchors deliberately stop selecting — it is not an
+        # invocation of anything. The property is about the identity tuple, not about that file.
+        repeated = defaultdict(list)
+        for candidate in reference_candidates(files):
+            if not reference_is_exact(candidate.payload):
+                repeated[(candidate.path, candidate.payload)].append(candidate.line_number)
+        duplicates = sorted(
+            (path, payload, tuple(sorted(numbers)))
+            for (path, payload), numbers in repeated.items()
+            if len(numbers) > 1
+        )
+        self.assertTrue(
+            duplicates,
+            "no residual payload occurs twice, so distinct-identity would prove nothing",
+        )
+        duplicate_path, _duplicate_payload, duplicate_lines = duplicates[0]
+        duplicate_records = {
             candidate.identity
             for candidate in reference_candidates(files)
-            if candidate.path == "hooks/hooks.json"
-            and candidate.line_number in (121, 133)
+            if candidate.path == duplicate_path
+            and candidate.line_number in duplicate_lines
         }
-        self.assertEqual(2, len(hook_records))
+        self.assertEqual(len(duplicate_lines), len(duplicate_records))
 
         implement_candidates = [
             candidate
@@ -485,7 +501,7 @@ class M513CallersScanTests(CallersScanProof):
         self.assertEqual(4, len(report.rejected))
 
     def test_M5_13_only_the_exact_metadata_path_is_excluded(self):
-        payload = b"dynamic ${kind}-review invocation\n"
+        payload = b"dynamic /unleashed-mail:${kind}-review invocation\n"
         files = {
             EXEMPTION_PATH: payload,
             "docs/callers-scan-exemptions.tsv": payload,
@@ -524,7 +540,7 @@ class M513CallersScanTests(CallersScanProof):
         original = "return any(anchor in payload for anchor in ANCHORS)"
         replacement = "return all(anchor in payload for anchor in ANCHORS)"
         self.assertEqual(1, source.count(original))
-        files = {"docs/selection.md": b"a -review mention with only one anchor\n"}
+        files = {"docs/selection.md": b"a codex-review mention with only one anchor\n"}
         self.assertEqual(1, len(reference_candidates(files)))
         self.assertEqual(1, len(production.scan_files(files, ()).candidates))
 
@@ -536,6 +552,65 @@ class M513CallersScanTests(CallersScanProof):
                 self.assertEqual(0, len(mutant.scan_files(files, ()).candidates))
             finally:
                 sys.modules.pop("coredev2619_selection_mutant", None)
+
+    def test_M5_13_anchors_select_review_commands_but_not_unrelated_review_words(self):
+        """The narrowing's own claim, line by line: only false positives left scope.
+
+        A bare `-review` matched `security-reviewer`, `pr-review`, `code-review`, `prompt-review` and
+        even `--reviewer` anywhere in prose. Each `ignored` payload below is asserted to have been
+        selected by the OLD anchors, so this is a list of things that genuinely left scope — not a
+        list of things that were never in it.
+        """
+        selected = (
+            b"/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>",
+            b"/unleashed-mail:review-synthesis --plan <plan>",
+            b"run gemini-review before implementing",
+            b"unleashed-mail:codex-review --ticket <T>",
+            b"$cmd # /unleashed-mail:gemini-review",
+        )
+        ignored = (
+            b"the security-reviewer subagent",
+            b"a pr-review checklist",
+            b"see the code-review skill",
+            b"prompt-review is the fifth reviewer",
+            b'"matcher": "(unleashed-mail:)?(security-reviewer|prompt-review)"',
+            b"--reviewer gemini=APPROVE:/path/to/transcript",
+        )
+        for payload in selected:
+            self.assertTrue(production.is_candidate("docs/x.md", payload), payload)
+            self.assertTrue(reference_is_candidate("docs/x.md", payload), payload)
+        for payload in ignored:
+            self.assertFalse(production.is_candidate("docs/x.md", payload), payload)
+            self.assertFalse(reference_is_candidate("docs/x.md", payload), payload)
+            self.assertTrue(
+                any(anchor in payload for anchor in (b"/unleashed-mail:", b"-review")),
+                b"this payload was never selected by the old anchors either: " + payload,
+            )
+
+    def test_M5_13_narrowing_is_a_strict_subset_that_keeps_every_real_invocation(self):
+        """Over the real tree: nothing newly selected, and no exact production dropped."""
+        files = load_final_tree()
+
+        def positions(predicate) -> set:
+            return {
+                (path, number)
+                for path in sorted(files)
+                if path != EXEMPTION_PATH
+                for number, payload in enumerate(reference_lines(files[path]), start=1)
+                if predicate(path, payload)
+            }
+
+        old = positions(
+            lambda _path, payload: any(
+                anchor in payload for anchor in (b"/unleashed-mail:", b"-review")
+            )
+        )
+        new = positions(production.is_candidate)
+        exact = positions(lambda _path, payload: reference_is_exact(payload))
+
+        self.assertTrue(exact, "no exact production in the tree — retention would be vacuous")
+        self.assertLess(new, old, "the narrowed set must be a STRICT subset of the old one")
+        self.assertLessEqual(exact, new, "a real invocation left the scanner's scope")
 
     def test_M5_13_manifest_parser_rejects_every_noncanonical_record(self):
         digest = b"a" * 64
@@ -567,7 +642,7 @@ class M513CallersScanTests(CallersScanProof):
 
     def test_M5_13_bound_manifest_rejects_add_remove_change_duplicate_and_line_move(self):
         baseline = {
-            "docs/a.md": b"plain\nresidual -review mention\n",
+            "docs/a.md": b"plain\nresidual codex-review mention\n",
             "docs/literal.md": (
                 b"/unleashed-mail:codex-review --ticket <T> --round <N> <plan>\n"
             ),
@@ -578,16 +653,16 @@ class M513CallersScanTests(CallersScanProof):
 
         mutations = []
         added = dict(baseline)
-        added["docs/new.md"] = b"new -review candidate\n"
+        added["docs/new.md"] = b"new codex-review candidate\n"
         mutations.append(added)
         removed = dict(baseline)
         removed["docs/a.md"] = b"plain\n"
         mutations.append(removed)
         changed = dict(baseline)
-        changed["docs/a.md"] = b"plain\nchanged -review mention\n"
+        changed["docs/a.md"] = b"plain\nchanged codex-review mention\n"
         mutations.append(changed)
         duplicated = dict(baseline)
-        duplicated["docs/a.md"] += b"residual -review mention\n"
+        duplicated["docs/a.md"] += b"residual codex-review mention\n"
         mutations.append(duplicated)
         shifted = dict(baseline)
         shifted["docs/a.md"] = b"inserted\n" + shifted["docs/a.md"]
@@ -598,7 +673,7 @@ class M513CallersScanTests(CallersScanProof):
                 self.assertFalse(production.scan_files(files, parsed).ok)
 
     def test_M5_13_blanket_exemption_is_not_a_wildcard(self):
-        payload = b"dynamic -review carrier"
+        payload = b"dynamic codex-review carrier"
         files = {"docs/dynamic.md": payload + b"\n"}
         wildcard = production.Exemption(
             "*", 1, hashlib.sha256(payload).hexdigest()
@@ -607,35 +682,81 @@ class M513CallersScanTests(CallersScanProof):
         self.assertEqual(1, len(report.rejected))
         self.assertEqual((wildcard,), report.unmatched_exemptions)
 
-    def test_M5_13_rewritten_synthesis_candidate_uses_its_final_payload_identity(self):
-        files = load_final_tree()
-        path = "skills/review-synthesis/SKILL.md"
-        lines = reference_lines(files[path])
-        # Constructed, not spelled: a bare transcript-path literal here would be a NEW
-        # unclassified site and M3.1 would (correctly) reject it as inventory drift.
-        source_token = b"--reviewer gemini=<GEMINI_STATUS>:" + b"/tmp/" + b"agy-out.txt"
-        destination_token = b'--reviewer "$GEMINI_PERSIST_SPEC"'
-        indexes = [index for index, line in enumerate(lines) if destination_token in line]
-        self.assertEqual(1, len(indexes))
-        index = indexes[0]
-        final_identity = identity_for(path, index, lines[index])
-        stale_payload = lines[index].replace(destination_token, source_token)
-        stale_identity = identity_for(path, index, stale_payload)
+    def test_M5_13_rewritten_candidates_use_their_final_payload_identity(self):
+        """A line COREDEV-2619 rewrote is in the manifest under its FINAL digest, never its old one.
 
+        Driven from the frozen M3.1 inventory instead of a hand-built token pair. The old fixture
+        rebuilt the pre-rewrite payload by substituting `--reviewer "$GEMINI_PERSIST_SPEC"` back to a
+        `/tmp` spelling in `skills/review-synthesis/SKILL.md`; a bare `--reviewer` flag is not an
+        invocation of a review skill and the narrowed anchors no longer select it, which would have
+        left the proof asserting things about a line outside the scanner's scope. The inventory is the
+        independent record of what each rewritten payload used to be, so it supplies the stale digest.
+        """
+        files = load_final_tree()
+        inventory = json.loads(
+            (REPO / "docs" / "planning" / "COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json").read_text(
+                encoding="utf-8"
+            )
+        )
         parsed = self.assert_manifest_is_exact_complement(files, reference_manifest(files))
         serialized = {item.serialize() for item in parsed}
-        self.assertIn(final_identity.serialize(), serialized)
-        self.assertNotIn(stale_identity.serialize(), serialized)
+
+        checked = 0
+        for site in inventory["sites"]:
+            if site.get("class") != "rewrite":
+                continue
+            destination = site["destination"]
+            lines = reference_lines(files[site["path"]])
+            for offset in range(len(destination["payloads"])):
+                line_number = destination["line"] + offset
+                payload = lines[line_number - 1]
+                if not reference_is_candidate(site["path"], payload):
+                    continue
+                if reference_is_exact(payload):
+                    continue
+                final_identity = identity_for(site["path"], line_number - 1, payload)
+                stale_identity = ReferenceIdentity(
+                    site["path"], line_number, site["sourceSha256"]
+                )
+                self.assertNotEqual(
+                    final_identity.payload_sha256,
+                    stale_identity.payload_sha256,
+                    "the rewrite left the payload unchanged, so this line proves nothing",
+                )
+                self.assertIn(final_identity.serialize(), serialized)
+                self.assertNotIn(stale_identity.serialize(), serialized)
+                checked += 1
+
+        self.assertGreater(
+            checked, 0, "no rewritten line is in the scanner's scope — the proof would be vacuous"
+        )
         self.assertTrue(production.scan_files(files, parsed).ok)
 
     def test_M5_13_whole_context_relocation_fails_at_every_other_line(self):
-        original = load_final_tree()["hooks/hooks.json"]
+        # Host file pinned, candidate line found by SEARCH. This was `hooks/hooks.json` with a frozen
+        # `source_start = 119`; the narrowed anchors stop selecting that file at all, and a proof that
+        # dies when an unrelated selection rule changes was pinned to the wrong thing. What it needs is
+        # any file long enough to offer >100 insertion points with a residual candidate that has a line
+        # of context either side — `scripts/pty-capture.py` has exactly one, so a failed relocation can
+        # only be that identity moving.
+        path = "scripts/pty-capture.py"
+        original = load_final_tree()[path]
         original_lines = reference_lines(original)
-        source_start = 119  # final physical lines 120-122, candidate at 121
+        residual = [
+            index
+            for index, line in enumerate(original_lines)
+            if 0 < index < len(original_lines) - 1
+            and reference_is_candidate(path, line)
+            and not reference_is_exact(line)
+        ]
+        self.assertEqual(
+            1, len(residual), "the host must carry exactly one relocatable residual candidate"
+        )
+        source_start = residual[0] - 1
         block = original_lines[source_start : source_start + 3]
-        files = {"hooks/hooks.json": original}
+        files = {path: original}
         parsed = production.parse_exemption_manifest(reference_manifest(files))
-        old_identity = identity_for("hooks/hooks.json", source_start + 1, block[1])
+        old_identity = identity_for(path, source_start + 1, block[1])
         self.assertTrue(production.scan_files(files, parsed).ok)
 
         tested = 0
@@ -646,7 +767,7 @@ class M513CallersScanTests(CallersScanProof):
             new_candidate_index = insertion + 1
             if new_candidate_index + 1 == old_identity.line_number:
                 continue
-            mutated = {"hooks/hooks.json": encode_lines(original, relocated)}
+            mutated = {path: encode_lines(original, relocated)}
             self.assertFalse(production.scan_files(mutated, parsed).ok)
             tested += 1
         self.assertGreater(tested, 100)
