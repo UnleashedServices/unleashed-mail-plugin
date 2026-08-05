@@ -640,6 +640,58 @@ class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
                 state_root.joinpath(*PurePosixPath(relative_path).parts).exists(), relative_path
             )
 
+    def test_apply_resumes_after_a_run_that_died_in_the_DIRECTORY_phase(self) -> None:
+        """The half the first resumability fix missed (found by Kimi K3-max).
+
+        `delete_leak_files` tolerated an already-deleted FILE, but `_preflight_directories` still
+        aborted on the first directory a previous run had already removed — so a run that died
+        during directory removal left the tool unrecoverable exactly as before, and the commit
+        claiming resumability did not achieve it. Reproduced: 0 files remaining, 4 of 9 directories
+        gone, `--apply` exited 1 and removed nothing.
+        """
+        state_root, _objects = self.make_state_tree()
+        for relative_path in EXPECTED_PATHS:
+            state_root.joinpath(*PurePosixPath(relative_path).parts).unlink()
+        for directory in EXPECTED_DIRECTORIES[:4]:
+            (state_root / directory).rmdir()
+
+        code = production.main(["--state-root", str(state_root), "--apply"])
+
+        self.assertEqual(0, code, "a run that died mid-directory-phase must be completable")
+        for directory in EXPECTED_DIRECTORIES:
+            self.assertFalse((state_root / directory).exists(), directory)
+
+    def test_directory_absence_tolerance_still_fails_closed_on_a_type_mismatch(self) -> None:
+        """Absence is satisfied; a DIRECTORY replaced by a FILE still aborts with nothing removed.
+
+        NAMED FOR WHAT IT PROVES. It does NOT isolate `_preflight_directories`' S_ISDIR check:
+        deleting that check keeps this green, because `_preflight_files` then aborts anyway —
+        `lstat` on a manifest file whose parent is now a regular file raises ENOTDIR, not
+        FileNotFoundError, so the absence tolerance does not swallow it. The S_ISDIR check is
+        defence-in-depth here, and this fixture cannot discriminate it. Claiming otherwise would
+        make this a proof of something it does not establish.
+        """
+        state_root, _objects = self.make_state_tree()
+        target = state_root / EXPECTED_DIRECTORIES[0]
+        shutil.rmtree(target)
+        target.write_text("not a directory", encoding="utf-8")
+
+        code = production.main(["--state-root", str(state_root), "--apply"])
+
+        self.assertEqual(1, code, "a manifest directory of the wrong type must still fail closed")
+        self.assertTrue(target.is_file(), "the mismatched object itself must be untouched")
+        # The load-bearing assertion is that NOTHING was removed — a rejected tree must be left
+        # exactly as found, whichever preflight rejected it.
+        # Only the files OUTSIDE the replaced directory — `rmtree` above necessarily removed the
+        # manifest files that lived inside it, so requiring all 39 would be unsatisfiable.
+        outside = [p for p in EXPECTED_PATHS if not p.startswith(EXPECTED_DIRECTORIES[0] + "/")]
+        self.assertTrue(outside, "fixture invalid: no files outside the replaced directory")
+        for relative_path in outside:
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
+                "preflight must reject the tree BEFORE the file phase runs: " + relative_path,
+            )
+
     def test_check_reports_without_removing_anything(self) -> None:
         state_root, _objects = self.make_state_tree()
 

@@ -201,16 +201,33 @@ def _preflight_directories(
     root: Path,
     relative_directories: Sequence[str],
     require_empty: bool,
+    allow_absent: bool = False,
 ) -> Dict[str, Path]:
+    """Resolve the manifest directories, optionally tolerating ones already removed.
+
+    `allow_absent` is what makes the DIRECTORY phase resumable, and it was the half missing from the
+    first resumability fix: `delete_leak_files` tolerated an already-deleted FILE, but a run that
+    died during directory removal still aborted here on the first directory it had already removed.
+    So the tool remained unrecoverable exactly as before — the fix did not achieve what it claimed.
+    Reproduced: 0 files, 4 of 9 directories gone, `--apply` exits 1 and removes nothing.
+
+    Fail-closed is unchanged: a manifest directory that exists but is the WRONG TYPE, or that
+    escapes the state root, still raises. Only genuine absence is treated as satisfied, because the
+    goal state for that entry is "does not exist", and it does not.
+    """
     resolved_directories = {}  # type: Dict[str, Path]
     nonempty = []  # type: List[str]
     for relative_path in relative_directories:
-        resolved = _resolve_beneath(root, relative_path)
         lexical = root.joinpath(*_pure_relative_path(relative_path).parts)
         try:
             metadata = os.lstat(str(lexical))
+        except FileNotFoundError:
+            if allow_absent:
+                continue
+            raise CleanupError("manifest directory is unavailable: " + relative_path)
         except OSError as error:
             raise CleanupError("manifest directory is unavailable: " + relative_path) from error
+        resolved = _resolve_beneath(root, relative_path)
         if not stat.S_ISDIR(metadata.st_mode):
             raise CleanupError(
                 "manifest directory type mismatch for "
@@ -301,7 +318,7 @@ def delete_leak_files(state_root: Path) -> FileDeletionReport:
 
     _validate_closed_manifests()
     root, root_identity = _canonical_state_root(state_root)
-    _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False)
+    _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
     # Resumable: entries already gone are satisfied, not failures. See _preflight_files.
     resolved_targets, already_absent = _preflight_files(root, allow_absent=True)
 
@@ -339,10 +356,14 @@ def _remove_empty_directories(
     ordered = tuple(sorted(tuple(relative_directories), key=_directory_sort_key))
     if len(ordered) != len(set(ordered)):
         raise CleanupError("empty-directory removal targets contain duplicates")
-    resolved = _preflight_directories(root, ordered, require_empty=False)
+    # Resumable, matching delete_leak_files: a directory already removed is SATISFIED.
+    resolved = _preflight_directories(root, ordered, require_empty=False, allow_absent=True)
 
     removed = []  # type: List[str]
     for relative_path in ordered:
+        if relative_path not in resolved:
+            removed.append(relative_path)   # already absent — the goal state is reached
+            continue
         try:
             with os.scandir(str(resolved[relative_path])) as children:
                 if next(children, None) is not None:
@@ -422,7 +443,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             _validate_closed_manifests()
             root, _identity_unused = _canonical_state_root(arguments.state_root)
-            _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False)
+            _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
             present, absent = _preflight_files(root, allow_absent=True)
         except (CleanupError, OSError) as error:
             print("cleanup check failed: " + str(error), file=sys.stderr)
