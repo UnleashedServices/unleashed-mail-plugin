@@ -1,8 +1,14 @@
 # COREDEV-2642 — PR #63 remediation handoff
 
 **PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main`
-**State at handoff:** 28 commits pushed, **500 tests green**, all 6 CI checks green
-**Last commit:** `427a916`
+**State at handoff:** 36 commits (8 unpushed), **529 tests green**, `callers_scan --root .` exits 0,
+full validator sweep clean
+**Last commit:** `54a0fa1`
+
+> **Second pass, 2026-08-05.** Everything §3 listed as open is now closed except **two capture
+> recipes** (§3.2) — see §2b. The two maintainer decisions were made: the gemini arm is to be
+> **replaced by Kimi K3** (planned in `KIMI_REVIEW_ARM_PLAN.md`, deliberately not implemented), and
+> the CHANGELOG's two false gate claims are corrected.
 
 ---
 
@@ -48,85 +54,37 @@ When a finding names two things, verify both halves before writing the commit me
 | Threads 1–3 | answered on the PR; **1 and 2 deliberately NOT applied** (see §5) |
 | 2nd round | bare `<reviewer>=MISSING`; allocated reservation preflight |
 
+## 2b. Closed in the second pass (2026-08-05)
+
+| was | closed by |
+|---|---|
+| **1. `review-verdict.py` TOCTOU** | `_regular_file_info` returns the digest read from the SAME `O_NOFOLLOW` descriptor it fstat'd; freshness hands back a `_VerifiedTranscript(path, sha256)` the caller records instead of re-resolving the name. Proved by swapping the leaf at the instant validation reads the descriptor's metadata — an fstat trigger, not a close trigger, so a re-open placed between fstat and return cannot sail past it. Both places the re-open can creep back are mutated. |
+| **3. `callers_scan` over-selection** | anchors narrowed to `/unleashed-mail:`, `gemini-review`, `codex-review`. 1409 candidates -> 294. Measured all four options first; the `/`-prefixed variant is smaller but stops selecting `unleashed-mail:gemini-review …` and bare `gemini-review --ticket …`, which ARE invocation spellings, so it narrows past the defect. Proved a STRICT SUBSET that retains every exact production. |
+| **4. classifier judgement call** | accepted as fail-closed, with the reasoning in the docstring: conditioning the filename branch on the directory would let an allocated transcript COPIED out of the layout skip the check entirely. |
+| **7. exemption manifest** | 280 records shipped, generated last. `scripts/review/generate-callers-exemptions.py` is a maintainer tool outside the module. CI ran only `--help`, which loads no manifest — it now runs `--root .`. |
+| **8. gemini arm** | maintainer decision: **replace with Kimi K3**. `docs/planning/KIMI_REVIEW_ARM_PLAN.md` — measured surface, verified CLI facts, ordered steps with a stop-gate before any rename. Not implemented; needs its own ticket and the plan gate. |
+| **9. gaps 18-19** | both CHANGELOG entries corrected to match their plans. |
+| **2. helper extraction** | **3 of 5 sites.** See below. |
+
 ## 3. Open — ranked
 
-**Needs a fresh session (delicate):**
+**1. The two CAPTURE recipes** (`skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`).
+Still compound blocks — `: "${TICKET:?…}"` guards, an `if`/`else` around the allocator, a `case` on the
+marker — so they match no `allowed-tools` grant and still prompt. The other three sites are done:
+`review-synthesis` and `brainstorm` call `persist-verdict.sh`; `implement`'s Phase 1 fence calls
+`resolve-plan-gate.sh`.
 
-1. **`review-verdict.py` TOCTOU.** `_transcript_freshness_problem` validates by path, then
-   `_sha256_bytes` **re-opens by path** — the leaf can be swapped between them, so the check
-   validates one file and the digest records another. A correct fix threads ONE `O_NOFOLLOW`
-   descriptor through `islink` → `realpath` → `_regular_file_info` → the hash. This is the
-   fail-closed gate's core with 30 freshness mutation proofs around it. Not attempted at depth.
-2. **Helper extraction — gaps 7–9, thread 7, AND the `implement` gate fence.** Now FIVE sites, not
-   four: scoping `implement`'s grant (gap 1) left its mandatory Phase 1 Design Gate fence — which
-   opens `ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'` and uses functions, `tr`, `ls` — matching no grant, so
-   the one block that must run before any implementation now prompts every time. That fence is the
-   HIGHEST-RISK extraction of the five: it carries the MAJ-9 quoted-heredoc argument binding and the
-   physical-containment guard that has already been bypassed four different ways. Preserve both
-   exactly. `scripts/review/persist-verdict.sh` EXISTS and its
-   fail-closed matrix is verified. Wiring it in broke 14 tests, because the M5 proofs
-   (`test_m5_path_contract.py`, `test_transcript_path_threading.py`) **extract and mutate the inline
-   shell** — anchors like `transcript="${rest#*:}"`. Moving the logic deletes their anchors. The
-   refactor is: recipe → one granted call, AND re-point all 14 anchors at the helper, in ONE commit.
-   Attempted and reverted once; the tree was left green.
+**Do the gemini one inside `KIMI_REVIEW_ARM_PLAN.md` step 1, not before it.** That plan replaces the
+whole arm, so extracting the recipe now and renaming it in step 3 is the same work twice. The codex
+one is independent and can be done on its own; it is the smaller half.
 
-**Nothing bounded remains.** Everything left needs a proof set or a core path redesigned ALONGSIDE
-the fix — attempting one without the other is how you get a half-fix with a confident commit message.
+The pattern to follow is in this branch already: move the logic to a script, then re-point the M5
+mutation anchors at the script via a staged plugin root (`stage_plugin_root` in
+`test_transcript_path_threading.py`), keeping recipe-level anchors for what the recipe still decides.
+Expect M5.1/M5.2/M5.7/M5.9 to move; M5.1 and M5.2 run the real allocator with observers, so they are
+the delicate ones.
 
-3. **`callers_scan.py:269` over-selection — MEASURED, attempted, reverted.** `ANCHORS` uses `any()`,
-   so the bare `-review` anchor matches `security-reviewer`, `pr-review`, `code-review` in prose.
-   Measured tree-wide:
-
-   | anchors | candidates | real invocations |
-   |---|---|---|
-   | current (`/unleashed-mail:`, `-review`) | **1407** | 14 |
-   | namespace only | 101 | 14 |
-   | namespace + `/gemini-review`, `/codex-review` | **193** | 14 |
-
-   **This is the blocker on item 7.** Narrowing keeps all 14 real invocations and takes the exemption
-   manifest from ~1393 entries to ~179 — from "generate an enormous artifact" to something a person
-   can review. Do NOT use `all()`: M5.13 mutates `any()`→`all()` and asserts the mutant is rejected,
-   because `/unleashed-mail:review-synthesis` contains no `-review`. Reverted because changing
-   `ANCHORS` fails **14 proof methods** across M5.13/14/15b — the whole S-CALLERS proof set, which
-   encodes the current anchor semantics via an independent reference implementation.
-
-4. **`review-verdict.py:385`** — the classifier widening means any basename ending `-<32 hex>.txt`
-   takes the per-run branch, so a custom or historical transcript outside the allocator directory is
-   now treated as per-run and must carry a `.launch`. Judgement call: acceptable fail-closed, or a
-   regression for legacy transcripts.
-
-**Must be LAST, before push:**
-
-7. **`callers-scan-exemptions.tsv` is not shipped** (thread 5, confirmed). Production
-   `callers_scan.py --root .` exits 2 before scanning. The manifest identity is
-   `(path, FINAL line, SHA-256(payload))` and is deliberately **not** shift-stable, so it must be
-   generated only after every other edit is final. An empty manifest yields **1368** rejects.
-   The module states production must never derive it automatically — any generator lives outside it.
-
-**Maintainer decision, not mine:**
-
-8. **The gemini arm runs the model its own comment says was abandoned.**
-   `scripts/review/isolated-agy-review.sh:40-46` reads:
-
-   > Switched from gemini-3.1-pro to **gemini-3.6-flash-high** after that arm failed to emit a
-   > parseable verdict in **5 of 6 rounds** (invented tokens REJECTED/PASS, two degenerations leaking
-   > system-prompt tokens, two runs that implemented the plan instead of reviewing it).
-
-   …and the next line is `MODEL="${MODEL:-gemini-3.1-pro-high}"`. Verified against ground truth:
-   `agy models` lists BOTH names, so neither is invalid — the code and its rationale simply
-   disagree, and every wrapper round has been running the arm documented as failing.
-
-   **Not changed here.** Which model gates plans is a capability decision with real consequences,
-   and this campaign has already shown how much model/effort choice matters (a controlled A/B on
-   Kimi K3 flipped `APPROVE_WITH_NOTES` → `REQUEST_CHANGES` on byte-identical input at a higher
-   effort). Either apply the documented switch, or delete the stale rationale — but decide it, do
-   not let the contradiction stand. Note the current state is WASTEFUL, not unsafe: an unparseable
-   verdict fails closed.
-
-9. **Gaps 18–19.** `CHANGELOG.md` claims COREDEV-2605 and COREDEV-2617 passed their gates; the
-   in-tree plans say otherwise (2605's last verdict on shipped bytes is `REQUEST_CHANGES` with the
-   second arm uncounted; 2617 claims 19 rounds where the plan records 18). Correcting a release
-   record to say a gate did **not** pass is a maintainer call. Left untouched.
+**Nothing else is open.** Everything below in §4-§6 still applies and has been extended.
 
 ## 4. Things that will bite you
 
@@ -170,3 +128,25 @@ Three of the reviewers' proposed remedies were not applied, deliberately:
   `bash -eo pipefail`; capture an expected failure with `|| status=$?`.
 - **`Ran 1 test in 0.000s`** for a multi-test class is a loader error, not a passing suite. A non-zero
   exit is not evidence the test discriminated.
+
+Added in the second pass:
+
+- **Check that a mutant is not a no-op.** Probing the shipped-manifest test, one of my three mutations
+  was `backup.replace(b"\t116\t", …)` on a file containing no `\t116\t`. It rewrote nothing, the test
+  passed, and I nearly recorded the test as blind. `assert mutated != backup` before drawing any
+  conclusion — a mutation proof and its own probe are both code, and the probe is not privileged.
+- **A frozen line number in a test asserts the file's layout, not the property.** Three broke here
+  when unrelated edits shifted lines (`assertEqual(169, …)`, `source_start = 119`, the §13 anchor).
+  Where the subject can be found by search, find it by search and assert the derivation against the
+  tree; keep the frozen form only where the freeze is itself the contract.
+- **`git add -A` is not safe in this repo.** It staged 17 untracked reviewer scratch files, and two
+  reached a generated manifest before anyone noticed. The `.gitignore` already recorded this happening
+  once before with different names — both times the globs had been narrowed by the second word
+  (`.agy-prompt*`), and both times a new suffix escaped. They are keyed by TOOL prefix now
+  (`.agy-*.md`, `.codex-*.md`, `.kimi-*.md`). The commit that staged them was rewritten out before the
+  branch was pushed, so no scratch file is in history — which is only cheap because it was caught
+  while the commits were still local. Past that point the choice is between a force-push and living
+  with it.
+- **When a check has a cheap mode and a real mode, CI must run the real one.** `callers_scan --help`
+  was green for the whole of PR #63 while `--root .` exited 2. A smoke test that loads no input
+  proves the file parses, nothing more.
