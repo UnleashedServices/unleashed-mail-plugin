@@ -124,6 +124,35 @@ def _signal_child(pid: int, sig: int) -> None:
 def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated: bool = False) -> int:
     if not cmd:
         raise SystemExit("no command given after `--`")
+    # PREFLIGHT the reservation BEFORE spawning anything. In allocated mode the reservation was
+    # previously enforced only by the final write, i.e. AFTER the wrapped command had already run —
+    # so a stale allocated path, or a leaf someone deleted, burned an entire review (up to 28
+    # minutes of `agy`) and only then failed on a missing file. The round is lost either way, but
+    # failing in milliseconds costs nothing and tells the caller to re-allocate immediately.
+    #
+    # This is a fail-FAST check, not a substitute for the write-time defences: the leaf can still be
+    # swapped while the command runs, so `_write_private` keeps O_NOFOLLOW, the S_ISREG check and
+    # the no-O_CREAT open. Checked with lstat, so a symlink planted at the reserved path is rejected
+    # here rather than silently resolving to its target.
+    if allocated:
+        # Reports and RETURNS like the write-failure path rather than raising: `main()`'s contract is
+        # "returns an exit code", and an existing test pins that for the unreserved case.
+        try:
+            reserved = os.lstat(out_path)
+        except OSError as error:
+            print(
+                f"pty-capture: allocated transcript is not reserved, refusing to run the command: "
+                f"{out_path}: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        if not stat.S_ISREG(reserved.st_mode):
+            print(
+                f"pty-capture: allocated transcript is not a regular file, refusing to run the "
+                f"command: {out_path}",
+                file=sys.stderr,
+            )
+            return 1
     # If the wrapper itself is asked to terminate — CI timeout, process manager,
     # or terminal hangup / SSH disconnect — turn the signal into a SystemExit so
     # the `finally` block still runs: it reaps the child and persists whatever we

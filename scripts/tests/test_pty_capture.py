@@ -137,6 +137,51 @@ class WritePrivateTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertTrue(os.path.isdir(parent), "non-allocated mode must still create its parents")
 
+    def test_allocated_mode_refuses_before_running_the_command(self):
+        """A stale/deleted reservation must fail FAST, not after the review has already run.
+
+        The reservation used to be enforced only by the final write — i.e. after the wrapped command
+        finished — so a stale allocated path burned an entire review (up to 28 minutes of `agy`) and
+        only then failed on a missing file. The round is lost either way; the cost was the wasted
+        wall-clock (PR #63 second-round review).
+
+        Asserts the command's SIDE EFFECT is absent rather than timing the failure: a timing
+        assertion would pass on a fast machine even if the command did run.
+        """
+        marker = os.path.join(self.d, "the-command-ran")
+        missing = os.path.join(self.d, "never-reserved.txt")
+
+        self.assertNotEqual(
+            0, self.mod.main(missing, ["/usr/bin/touch", marker], timeout=30, allocated=True)
+        )
+
+        self.assertFalse(
+            os.path.exists(marker), "the wrapped command must NOT run when the leaf is unreserved"
+        )
+        self.assertFalse(os.path.exists(missing), "and the leaf must still not be created")
+
+    def test_allocated_mode_refuses_a_symlink_at_the_reserved_path_before_running(self):
+        """A symlink planted at the reserved path is rejected at preflight, via lstat."""
+        marker = os.path.join(self.d, "symlink-command-ran")
+        target = os.path.join(self.d, "elsewhere.txt")
+        open(target, "w").close()
+        link = os.path.join(self.d, "reserved-link.txt")
+        os.symlink(target, link)
+
+        self.assertNotEqual(
+            0, self.mod.main(link, ["/usr/bin/touch", marker], timeout=30, allocated=True)
+        )
+
+        self.assertFalse(os.path.exists(marker), "a symlinked reservation must not run the command")
+
+    def test_allocated_mode_still_runs_for_a_properly_reserved_leaf(self):
+        """The deletion test: preflight must be conditional, not refuse every allocated run."""
+        leaf = os.path.join(self.d, "properly-reserved.txt")
+        os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+
+        self.assertEqual(0, self.mod.main(leaf, ["/bin/echo", "ok"], timeout=30, allocated=True))
+        self.assertIn(b"ok", Path(leaf).read_bytes())
+
     def test_allocated_mode_missing_leaf_is_a_hard_error_without_creating_retry(self):
         path = os.path.join(self.d, "missing.txt")
         real_open = os.open
@@ -261,6 +306,10 @@ class WritePrivateTests(unittest.TestCase):
 
     def test_main_applies_allocated_mode_only_to_the_reserved_transcript(self):
         path = os.path.join(self.d, "reserved.txt")
+        # Actually reserve the leaf. This test stubs `_write_private`, so it previously passed with no
+        # reservation at all — nothing checked. `main()` now preflights the reservation before spawning
+        # the command, which is the state a real allocated run is always in.
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         writes = []
         real_write_private = self.mod._write_private
 
