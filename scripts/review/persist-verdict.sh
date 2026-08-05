@@ -62,14 +62,21 @@ persist_reviewer_spec() {
     case "$spec" in *=*) ;; *) die "malformed reviewer specification" ;; esac
     name="${spec%%=*}"
     rest="${spec#*=}"
-    case "$rest" in *:*) ;; *) die "reviewer specification lacks a transcript path" ;; esac
-    status="${rest%%:*}"
-    transcript="${rest#*:}"
-    if [ "$name" != "$expected_name" ] || [ -z "$transcript" ]; then
-        die "invalid reviewer specification"
-    fi
+    # BARE `<name>=MISSING` is the DOCUMENTED form for a reviewer that never ran — there is no
+    # transcript path to give (review-synthesis/SKILL.md: "record <reviewer>=MISSING **without** a
+    # :transcript path"). Requiring a colon rejected precisely the unavailable-reviewer recovery
+    # path the gate depends on, which is the one case where the caller has nothing else to offer.
+    case "$rest" in
+        MISSING) status=MISSING; transcript="" ;;
+        *:*)     status="${rest%%:*}"; transcript="${rest#*:}" ;;
+        *)       die "reviewer specification lacks a transcript path" ;;
+    esac
+    [ "$name" = "$expected_name" ] || die "invalid reviewer specification"
     case "$status" in
-        APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES|MISSING) ;;
+        # A status that CLAIMS a review happened must name the transcript it happened in.
+        APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)
+            [ -n "$transcript" ] || die "invalid reviewer specification" ;;
+        MISSING) ;;
         *) die "invalid reviewer status" ;;
     esac
     if [ "$status" = MISSING ] || [ ! -s "$transcript" ]; then
