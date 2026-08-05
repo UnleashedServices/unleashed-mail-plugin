@@ -361,16 +361,33 @@ def _plan_identity(path: str) -> tuple[str, str]:
 
 
 def _is_per_run_transcript(path: str) -> bool:
-    """Return whether `path` has the allocator name or state-root-relative directory shape."""
-    repo_directory = os.path.dirname(path)
-    transcripts_directory = os.path.dirname(repo_directory)
+    """Return whether `path` has the allocator name or state-root-relative directory shape.
+
+    Classification decides whether the launch-record freshness check runs at all, so every way of
+    spelling an allocated path that still OPENS the allocated file must classify as per-run.
+    Two ways did not (PR #63 review):
+
+    * **Case.** The comparisons below were case-sensitive, but this gate runs on macOS, where APFS
+      is case-insensitive by default. `…/Unleashed-Mail/…` opens the identical file while failing
+      both branches, so the transcript was treated as legacy and the check never ran — readmitting
+      exactly the stale/foreign transcript acceptance the check exists to reject. Compare casefolded.
+    * **A sibling launch record is itself proof of per-run provenance.** Adding it as a third
+      branch closes the residual spellings without enumerating them. The direction is safe:
+      planting a `.launch` beside a genuinely legacy transcript only makes the gate STRICTER,
+      because the record must then validate rather than being skipped.
+
+    `hash_directory` is the per-run repo-hash component, not the repository root (Rovo thread 3).
+    """
+    hash_directory = os.path.dirname(path)
+    transcripts_directory = os.path.dirname(hash_directory)
     product_directory = os.path.dirname(transcripts_directory)
     return (
         _TRANSCRIPT_RUN_ID.search(os.path.basename(path)) is not None
         or (
-            os.path.basename(transcripts_directory) == "review-transcripts"
-            and os.path.basename(product_directory) == "unleashed-mail"
+            os.path.basename(transcripts_directory).casefold() == "review-transcripts"
+            and os.path.basename(product_directory).casefold() == "unleashed-mail"
         )
+        or os.path.lexists(path + ".launch")
     )
 
 
@@ -443,9 +460,19 @@ def _transcript_freshness_problem(transcript: str):
     Each call derives and opens its own sibling record; neither the other reviewer nor the reviewed-plan
     snapshot can become the anchor.
     """
-    transcript = os.path.realpath(transcript)
+    # Classify on the LEXICAL path, BEFORE resolving it. Resolving first was the defect: a symlink
+    # at an allocated path resolves out of the `unleashed-mail/review-transcripts/…` layout, so it
+    # classified as legacy and the entire freshness check was skipped. Reproduced by the reviewer —
+    # an allocated-looking symlink plus a matching `.launch` returned None and let `write` hash the
+    # symlink's target, reintroducing stale/foreign transcript acceptance for that per-run path.
     if not _is_per_run_transcript(transcript):
         return None
+    # Having classified it as per-run, refuse a symlink outright rather than validating the record
+    # against one file and hashing another. A reserved leaf is a regular file the allocator created;
+    # a symlink in its place is never legitimate, so this is fail-closed by construction.
+    if os.path.islink(transcript):
+        return "per-run transcript is a symbolic link: " + transcript
+    transcript = os.path.realpath(transcript)
 
     filename_match = _TRANSCRIPT_RUN_ID.search(os.path.basename(transcript))
     if filename_match is None:

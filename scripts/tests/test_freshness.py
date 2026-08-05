@@ -878,3 +878,71 @@ class SFreshAdditionalProofs(FreshnessFixture):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+def _rmtree_quiet(path: str) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+
+
+class ClassifierBypassProofs(unittest.TestCase):
+    """PR #63 review: two spellings that OPEN an allocated transcript but skipped the gate.
+
+    Both reached the same skip through different doors, so both are proved against the real
+    classifier rather than a fixture — the defect was that classification ran on the WRONG
+    string (post-realpath) and with the wrong comparison (case-sensitive on a case-insensitive
+    filesystem), and only the real function can witness that.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location(
+            "_rv_classifier", str(VERDICT_PATH)
+        )
+        cls.rv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.rv)
+
+    def setUp(self) -> None:
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(_rmtree_quiet, self.root)
+        self.layout = os.path.join(
+            self.root, "unleashed-mail", "review-transcripts", "abcdef123456"
+        )
+        os.makedirs(self.layout)
+
+    def test_case_mangled_layout_still_classifies_as_per_run(self) -> None:
+        """macOS APFS is case-insensitive, so this spelling opens the identical file."""
+        mangled = os.path.join(
+            self.root, "Unleashed-Mail", "Review-Transcripts", "abcdef123456", "out.TXT"
+        )
+        self.assertTrue(
+            self.rv._is_per_run_transcript(mangled),
+            "a case-mangled spelling opens the same file and must not be treated as legacy",
+        )
+
+    def test_sibling_launch_record_alone_classifies_as_per_run(self) -> None:
+        """The fail-closed branch: a `.launch` beside a file is proof of per-run provenance."""
+        odd = os.path.join(self.root, "not-the-usual-shape.txt")
+        open(odd, "w").close()
+        self.assertFalse(self.rv._is_per_run_transcript(odd))
+        open(odd + ".launch", "w").close()
+        self.assertTrue(
+            self.rv._is_per_run_transcript(odd),
+            "a sibling launch record must force the record to be validated, never skipped",
+        )
+
+    def test_symlinked_allocated_path_fails_closed_instead_of_skipping(self) -> None:
+        """Classifying after realpath let a symlink escape the layout and skip the whole check."""
+        foreign = os.path.join(self.root, "foreign.txt")
+        with open(foreign, "w") as handle:
+            handle.write("stale foreign content\n")
+        link = os.path.join(self.layout, "gemini-" + "f" * 32 + ".txt")
+        os.symlink(foreign, link)
+        open(link + ".launch", "w").close()
+
+        problem = self.rv._transcript_freshness_problem(link)
+        self.assertIsNotNone(
+            problem, "a symlinked per-run transcript must never return None (check skipped)"
+        )
+        self.assertIn("symbolic link", problem)
