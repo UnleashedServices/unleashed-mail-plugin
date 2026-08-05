@@ -155,10 +155,10 @@ fi
 ```
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
-  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it is model-invocable, so it can also be
+  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first to produce one, then gate it with:*
     /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
     /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
-  `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the
+  *and then `/unleashed-mail:review-synthesis`. Those review skills are model-invocable, but per the
   AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
 - **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
@@ -167,11 +167,11 @@ fi
     and self-ignored by a `*` `.gitignore` the tool writes inside that directory, so a fresh
     `git worktree add` or `git clone` contains only the plan. If you gated elsewhere, either re-run the
     gate in THIS worktree or copy `docs/planning/.verdicts/` across from the checkout that gated. To
-    avoid this entirely, create the worktree BEFORE the plan (`AGENT_CONTRACTS.md` §2 step 00).
+    avoid this entirely, create the worktree BEFORE the plan (§2 step 00). **ASK THE USER to run these — do NOT run the gate here: with no artifact, self-gating is indistinguishable from self-approving:**
     /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
     /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
-    `/unleashed-mail:review-synthesis` to convergence. If the gate never ran **because a reviewer CLI
-    was unavailable**, see **Unavailable reviewer** below.
+    then `/unleashed-mail:review-synthesis`, iterated to convergence.
+    If the gate never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
   - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason
     names a reviewer as `MISSING`, that reviewer produced **no usable verdict** (it never ran, *or* its
     transcript was empty/unparseable) — see **Unavailable reviewer** below. Read the
