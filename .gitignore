@@ -11,12 +11,19 @@ firebase-debug.log
 # (COREDEV-2486, audit critic.1: same accidental-commit class as the firebase-debug.log incident).
 .claude/settings.local.json
 
-# Transient review prompt files (per-invocation, not source of truth).
+# Transient reviewer artifacts (per-invocation, not source of truth).
 # GLOBS, not exact names: a multi-round gate writes `.agy-prompt-<ticket>r<n>.md`, and the
-# exact-name entries below matched none of those — so `git add -A` committed 16 of them into a
-# release commit (COREDEV-2597). Keep the trailing `*` on both.
-.agy-prompt*.md
-.codex-prompt*.md
+# exact-name entries here once matched none of those — so `git add -A` committed 16 of them into a
+# release commit (COREDEV-2597).
+#
+# Then it happened AGAIN (COREDEV-2642): `.agy-prompt*`/`.codex-prompt*` match neither
+# `.codex-impl-*.md` nor `.kimi-prompt-pr63.md`, and `git add -A` committed 17 more. Narrowing by
+# the second word is what failed twice — these are named after the TOOL, and each tool grows new
+# suffixes (`-prompt`, `-impl`, whatever a future round needs). Ignore by tool prefix instead, so a
+# new suffix is covered on the day it is invented rather than after it lands in a commit.
+.agy-*.md
+.codex-*.md
+.kimi-*.md
 .gate-*-prompt.md
 
 # Python bytecode (MCP review-synthesizer is stdlib Python)

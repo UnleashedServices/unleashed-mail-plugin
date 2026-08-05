@@ -620,6 +620,36 @@ class M513CallersScanTests(CallersScanProof):
         self.assertLess(new, old, "the narrowed set must be a STRICT subset of the old one")
         self.assertLessEqual(exact, new, "a real invocation left the scanner's scope")
 
+    def test_shipped_manifest_is_the_exact_complement_of_the_tracked_tree(self):
+        """The manifest that SHIPS, not one derived inside the test.
+
+        Every other cell here builds its manifest from `reference_manifest(...)`, so the file on disk
+        was never checked by anything — and it was absent for the whole of PR #63, which made
+        production `callers_scan.py --root .` exit 2 before it scanned a single line. A scanner whose
+        real invocation cannot run is not a fail-closed scanner.
+        """
+        shipped = REPO / EXEMPTION_PATH
+        self.assertTrue(shipped.is_file(), f"{EXEMPTION_PATH} is not shipped")
+        files = load_final_tree()
+        self.assertEqual(
+            reference_manifest(files).decode("utf-8").splitlines(),
+            shipped.read_bytes().decode("utf-8").splitlines(),
+            "the shipped manifest is not the exact complement — regenerate it with "
+            "scripts/review/generate-callers-exemptions.py, LAST, after every other edit",
+        )
+
+    def test_production_never_reaches_the_generator(self):
+        """`callers_scan` must not be able to widen its own exemptions.
+
+        The generator is a maintainer tool in the same directory; if production ever imported it, a
+        new REJECT could exempt itself and the default-DENY would be decorative.
+        """
+        source = PRODUCTION_PATH.read_text(encoding="utf-8")
+        for token in ("generate-callers-exemptions", "generate_callers_exemptions", "build_manifest"):
+            self.assertNotIn(
+                token, source, f"production references the generator via {token!r}"
+            )
+
     def test_M5_13_manifest_parser_rejects_every_noncanonical_record(self):
         digest = b"a" * 64
         canonical = b"a.md\t1\t" + digest + b"\n"
