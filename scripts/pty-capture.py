@@ -320,7 +320,16 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         # job, so record it and surface a non-zero exit below.
         try:
             out_dir = os.path.dirname(out_path)
-            if out_dir:
+            # ONLY the non-allocated path may create its parents. In allocated mode the ALLOCATOR owns
+            # the directory chain and builds it at 0700; this call used the process umask, so it would
+            # rebuild the private state tree at 0755. That is not merely untidy — the allocator VALIDATES
+            # the mode, so every later `--allocate` for that repo hash then fails with
+            # "has mode 0o0755, expected 0o0700", permanently, until someone chmods it by hand. The
+            # trigger is real: remove ~/.local/state mid-capture (a manual reset during an up-to-28-minute
+            # review) and the finishing capture recreates the ancestors at 0755, fails ENOENT on the leaf
+            # it never reserved, and bricks allocation for that repo — a self-inflicted fail-closed denial
+            # whose error blames the wrong thing (PR #63 review, gap 3).
+            if out_dir and not allocated:
                 os.makedirs(out_dir, exist_ok=True)
             # PTYs translate \n -> \r\n (ONLCR); normalize to Unix newlines.
             cleaned = ANSI_RE.sub(b'', bytes(raw)).replace(b'\r\n', b'\n')

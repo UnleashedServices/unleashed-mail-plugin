@@ -107,6 +107,36 @@ class WritePrivateTests(unittest.TestCase):
             self.mod._write_private(path, b"must-not-land", allocated=True)
         self.assertFalse(os.path.exists(path), "allocated mode must never create the leaf")
 
+    def test_allocated_mode_never_recreates_the_private_parent_chain(self):
+        """The allocator owns the directory chain at 0700; the capture must not rebuild it at umask.
+
+        `main()` created `dirname(out_path)` unconditionally, using the process umask. In allocated mode
+        that rebuilt the private state tree at 0755 — and the allocator VALIDATES the mode, so every
+        later `--allocate` for that repo hash failed "has mode 0o0755, expected 0o0700" permanently
+        (PR #63 review, gap 3). Assert on the filesystem, not on the flags: the parent must still be
+        absent afterwards, and the run must fail rather than silently write somewhere new.
+        """
+        parent = os.path.join(self.d, "state-root", "review-transcripts", "abcdef")
+        target = os.path.join(parent, "leaf.txt")
+        self.assertFalse(os.path.exists(parent))
+
+        code = self.mod.main(target, ["/bin/echo", "hi"], timeout=20, allocated=True)
+
+        self.assertNotEqual(0, code, "an allocated write into a missing chain must fail")
+        self.assertFalse(
+            os.path.isdir(parent), "allocated mode must never recreate the allocator's parent chain"
+        )
+
+    def test_nonallocated_mode_still_creates_its_parent_chain(self):
+        """The deletion test for the guard: it must be conditional, not a blanket removal."""
+        parent = os.path.join(self.d, "ordinary", "nested")
+        target = os.path.join(parent, "out.txt")
+
+        code = self.mod.main(target, ["/bin/echo", "hi"], timeout=20, allocated=False)
+
+        self.assertEqual(0, code)
+        self.assertTrue(os.path.isdir(parent), "non-allocated mode must still create its parents")
+
     def test_allocated_mode_missing_leaf_is_a_hard_error_without_creating_retry(self):
         path = os.path.join(self.d, "missing.txt")
         real_open = os.open
