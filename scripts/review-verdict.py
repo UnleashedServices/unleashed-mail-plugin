@@ -26,6 +26,7 @@ import os
 import re
 import stat
 import sys
+from typing import NamedTuple
 
 SCHEMA_VERSION = 3
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
@@ -218,6 +219,34 @@ def _sha256_bytes(path: str) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _sha256_descriptor(descriptor: int) -> str:
+    """Raw-byte SHA-256 of an ALREADY-OPEN descriptor — the same bytes `_sha256_bytes` would produce
+    for that file, but bound to the OPEN FILE rather than to a name that can be re-pointed.
+
+    `pread` rather than `read`: it takes an explicit offset, so the caller's descriptor offset is
+    untouched and this can never disturb a later `fstat`/read by whoever owns the descriptor.
+    """
+    h = hashlib.sha256()
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 65536, offset)
+        if not chunk:
+            return h.hexdigest()
+        offset += len(chunk)
+        h.update(chunk)
+
+
+class _VerifiedTranscript(NamedTuple):
+    """The canonical path and raw-byte digest of the descriptor the freshness check VALIDATED.
+
+    The gate's evidence must be the file that passed the check, so both fields are produced from the
+    one descriptor rather than re-derived from the name afterwards (see `_regular_file_info`).
+    """
+
+    path: str
+    sha256: str
 
 
 def _read_regular_file(path: str) -> str | None:
@@ -431,7 +460,15 @@ def _read_launch_record(launch_path: str):
 
 
 def _regular_file_info(path: str):
-    """Return (descriptor metadata, problem), refusing symlinks and non-regular files."""
+    """Return (descriptor metadata, raw-byte digest, problem), refusing symlinks and non-regular files.
+
+    The digest is read from the SAME descriptor the metadata came from, and that is the whole point of
+    returning it here. Returning only the metadata and letting the caller hash the PATH afterwards was a
+    TOCTOU (PR #63 review): `_transcript_freshness_problem` validated this descriptor, closed it, and
+    `_sha256_bytes` then re-opened the NAME — so a local attacker able to swap the leaf in that window
+    got a gate that checked file A and recorded file B's digest as the reviewed evidence. Everything the
+    caller is told about the transcript now comes from one O_NOFOLLOW open.
+    """
     descriptor = -1
     try:
         descriptor = os.open(
@@ -442,10 +479,10 @@ def _regular_file_info(path: str):
         )
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
-            return None, "transcript is unreadable or non-regular: " + path
-        return info, None
+            return None, None, "transcript is unreadable or non-regular: " + path
+        return info, _sha256_descriptor(descriptor), None
     except OSError:
-        return None, "transcript is unreadable or non-regular: " + path
+        return None, None, "transcript is unreadable or non-regular: " + path
     finally:
         if descriptor >= 0:
             try:
@@ -455,10 +492,16 @@ def _regular_file_info(path: str):
 
 
 def _transcript_freshness_problem(transcript: str):
-    """Return the per-run transcript freshness failure, or None when the record is valid.
+    """Return (failure, verified transcript) for one per-run transcript — (None, record) when the
+    record is valid, (reason, None) when it is not, and (None, None) for a legacy path the check
+    does not govern.
 
     Each call derives and opens its own sibling record; neither the other reviewer nor the reviewed-plan
     snapshot can become the anchor.
+
+    The second element exists so the CALLER never has to resolve or open `transcript` again. Handing
+    back only a reason meant the digest recorded as evidence came from a second, independent lookup of
+    the same name, which is a check-then-use race on the gate's own evidence (PR #63 review, item 1).
     """
     # Classify on the LEXICAL path, BEFORE resolving it. Resolving first was the defect: a symlink
     # at an allocated path resolves out of the `unleashed-mail/review-transcripts/…` layout, so it
@@ -466,29 +509,29 @@ def _transcript_freshness_problem(transcript: str):
     # an allocated-looking symlink plus a matching `.launch` returned None and let `write` hash the
     # symlink's target, reintroducing stale/foreign transcript acceptance for that per-run path.
     if not _is_per_run_transcript(transcript):
-        return None
+        return None, None
     # Having classified it as per-run, refuse a symlink outright rather than validating the record
     # against one file and hashing another. A reserved leaf is a regular file the allocator created;
     # a symlink in its place is never legitimate, so this is fail-closed by construction.
     if os.path.islink(transcript):
-        return "per-run transcript is a symbolic link: " + transcript
+        return "per-run transcript is a symbolic link: " + transcript, None
     transcript = os.path.realpath(transcript)
 
     filename_match = _TRANSCRIPT_RUN_ID.search(os.path.basename(transcript))
     if filename_match is None:
-        return "per-run transcript filename has no canonical run ID: " + transcript
+        return "per-run transcript filename has no canonical run ID: " + transcript, None
     filename_run_id = filename_match.group(1)
     launch_path = transcript + ".launch"
     record_run_id, launch_info, launch_problem = _read_launch_record(launch_path)
     if launch_problem is not None:
-        return launch_problem
+        return launch_problem, None
 
     if record_run_id != filename_run_id:
-        return "launch record run ID does not match transcript filename: " + launch_path
+        return "launch record run ID does not match transcript filename: " + launch_path, None
 
-    transcript_info, transcript_problem = _regular_file_info(transcript)
+    transcript_info, transcript_sha256, transcript_problem = _regular_file_info(transcript)
     if transcript_problem is not None:
-        return transcript_problem
+        return transcript_problem, None
 
     transcript_mtime_ns = transcript_info.st_mtime_ns
     launch_mtime_ns = launch_info.st_mtime_ns
@@ -497,8 +540,8 @@ def _transcript_freshness_problem(transcript: str):
             "transcript is OLDER than its launch record "
             + f"({transcript_mtime_ns} < {launch_mtime_ns}): "
             + transcript
-        )
-    return None
+        ), None
+    return None, _VerifiedTranscript(transcript, transcript_sha256)
 
 
 def _parse_reviewer(spec: str) -> dict:
@@ -523,20 +566,27 @@ def _parse_reviewer(spec: str) -> dict:
                 f"review-verdict: reviewer {name!r} transcript is EMPTY and therefore MISSING: "
                 + transcript
             )
-        freshness_problem = _transcript_freshness_problem(transcript)
+        freshness_problem, verified = _transcript_freshness_problem(transcript)
         if freshness_problem is not None:
             raise SystemExit(
                 f"review-verdict: reviewer {name!r} transcript failed freshness: "
                 + freshness_problem
             )
-        out["transcriptSha256"] = _sha256_bytes(transcript)
+        # A per-run transcript's evidence is read off the descriptor freshness VALIDATED — never by
+        # naming the file a second time. `verified` is None only for a legacy path the check does not
+        # govern, where there is no earlier validation for a second lookup to diverge from.
+        out["transcriptSha256"] = (
+            verified.sha256 if verified is not None else _sha256_bytes(transcript)
+        )
         # PROVENANCE beyond content-inequality (full review, #41). Record the canonical capture PATH,
         # and a wrapper-produced capture ID when `pty-capture.py` left one beside the transcript
         # (`<transcript>.captureid`). Content-inequality alone cannot tell two genuinely-separate
         # reviews that happen to be byte-identical from one file reused for both; a distinct path (the
         # common accidental case) and a distinct capture ID (a per-run token) can. Both optional and
         # auto-discovered — no caller/skill change needed; absent -> the digest floor still applies.
-        out["transcriptPath"] = os.path.realpath(transcript)
+        out["transcriptPath"] = (
+            verified.path if verified is not None else os.path.realpath(transcript)
+        )
         _cid = transcript + ".captureid"
         # Read the sidecar with O_NOFOLLOW so a SYMLINK is refused ATOMICALLY at open. A pre-seeded
         # `<transcript>.captureid` symlink (attacker-chosen value) would otherwise be trusted as

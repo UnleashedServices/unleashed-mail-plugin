@@ -555,12 +555,12 @@ class FreshnessFixture(unittest.TestCase):
         if kind == "mismatched":
             anchor = (
                 "        return \"launch record run ID does not match transcript filename: \" "
-                "+ launch_path\n"
+                "+ launch_path, None\n"
             )
             return [
                 (
                     "mismatch-accepted",
-                    _replace_once(source, anchor, "        return None\n"),
+                    _replace_once(source, anchor, "        return None, None\n"),
                 )
             ]
         if kind == "sidecar-varied":
@@ -821,16 +821,22 @@ class SFreshAdditionalProofs(FreshnessFixture):
             )
 
     def test_per_transcript_lookup_once_per_run_mutation_is_rejected(self) -> None:
+        # The mutation is confined to WHICH launch record is looked up. `verified` is dropped so the
+        # digest and path still come from this reviewer's own transcript: were the first transcript's
+        # evidence carried into the second reviewer's record, the artifact would be refused by the
+        # distinct-evidence check and this proof would witness that rejection instead of the
+        # once-per-run one it is named for.
         mutant = _replace_once(
             self.verdict_source,
-            "        freshness_problem = _transcript_freshness_problem(transcript)\n",
+            "        freshness_problem, verified = _transcript_freshness_problem(transcript)\n",
             "        global _first_freshness_transcript\n"
             "        try:\n"
             "            freshness_transcript = _first_freshness_transcript\n"
             "        except NameError:\n"
             "            _first_freshness_transcript = transcript\n"
             "            freshness_transcript = transcript\n"
-            "        freshness_problem = _transcript_freshness_problem(freshness_transcript)\n",
+            "        freshness_problem, _ = _transcript_freshness_problem(freshness_transcript)\n"
+            "        verified = None\n",
         )
         script = self.write_script(
             mutant,
@@ -1020,11 +1026,114 @@ class ClassifierBypassProofs(unittest.TestCase):
         os.symlink(foreign, link)
         open(link + ".launch", "w").close()
 
-        problem = self.rv._transcript_freshness_problem(link)
+        problem, verified = self.rv._transcript_freshness_problem(link)
         self.assertIsNotNone(
             problem, "a symlinked per-run transcript must never return None (check skipped)"
         )
         self.assertIn("symbolic link", problem)
+        self.assertIsNone(
+            verified, "a refused transcript must never hand back evidence to record"
+        )
+
+
+class SFreshDescriptorBindingProofs(FreshnessFixture):
+    """PR #63 remediation item 1 — the check validated one file and the digest recorded another.
+
+    `_transcript_freshness_problem` opened the transcript, validated it and closed it; `_parse_reviewer`
+    then hashed the PATH. Between those two the name can be re-pointed, so the artifact could record as
+    reviewed evidence the digest of a file that never passed the check.
+
+    The window opens the instant validation reads the descriptor's metadata, so that is where these
+    proofs swap the leaf: everything the gate says about the transcript afterwards must come from the
+    descriptor it already holds, not from the name. Triggering on `fstat` rather than on the closing of
+    the descriptor is deliberate — a re-open placed BETWEEN the fstat and the return would sit inside
+    the window but before any close, and a close-triggered swap would sail past it.
+    """
+
+    ORIGINAL = b"gemini distinct review body\nVERDICT: APPROVE\n"
+    SWAPPED = b"attacker substituted body\nVERDICT: APPROVE\n"
+
+    def assert_digest_binds_to_validated_descriptor(self, source: str, label: str) -> None:
+        case_root = self.next_case_root(label)
+        transcript = self.create_transcript(
+            case_root / "state" / "unleashed-mail" / "review-transcripts" / "RepoHash09",
+            "gemini",
+            RUN_IDS[0],
+            self.ORIGINAL,
+        )
+        swapped = case_root / "swapped.txt"
+        swapped.write_bytes(self.SWAPPED)
+        self.assertNotEqual(
+            hashlib.sha256(self.ORIGINAL).hexdigest(),
+            hashlib.sha256(self.SWAPPED).hexdigest(),
+            "the two bodies must differ, or a swap is unobservable and this proves nothing",
+        )
+
+        script = self.write_script(source, "descriptor-" + label, "review-verdict.py")
+        module = _load_module(script, "descriptor_" + label + "_" + str(self.case_number))
+
+        watched = set()  # type: set
+        real_open = os.open
+        real_fstat = os.fstat
+
+        def open_spy(path, flags, mode=0o777, *args, **kwargs):
+            descriptor = real_open(path, flags, mode, *args, **kwargs)
+            if os.fsdecode(path) == str(transcript):
+                watched.add(descriptor)
+            return descriptor
+
+        def fstat_spy(descriptor, *args, **kwargs):
+            info = real_fstat(descriptor, *args, **kwargs)
+            if descriptor in watched:
+                watched.discard(descriptor)
+                os.replace(str(swapped), str(transcript))
+            return info
+
+        with mock.patch.object(module.os, "open", open_spy), mock.patch.object(
+            module.os, "fstat", fstat_spy
+        ):
+            parsed = module._parse_reviewer("gemini=APPROVE:" + str(transcript))
+
+        self.assertEqual(
+            self.SWAPPED,
+            transcript.read_bytes(),
+            "the leaf was never actually swapped, so the window was never opened",
+        )
+        self.assertEqual(
+            hashlib.sha256(self.ORIGINAL).hexdigest(),
+            parsed["transcriptSha256"],
+            "the artifact recorded the digest of a file the freshness check never validated",
+        )
+
+    def test_digest_assertion_binds_to_the_descriptor_the_check_validated(self) -> None:
+        self.assert_digest_binds_to_validated_descriptor(self.verdict_source, "assertion")
+
+    def test_reopen_by_path_mutations_are_rejected(self) -> None:
+        """Both places the re-open can creep back: the caller, and the validator's own return."""
+        mutations = (
+            (
+                "caller-rehashes-the-path",
+                _replace_once(
+                    self.verdict_source,
+                    "        out[\"transcriptSha256\"] = (\n"
+                    "            verified.sha256 if verified is not None else _sha256_bytes(transcript)\n"
+                    "        )\n",
+                    "        out[\"transcriptSha256\"] = _sha256_bytes(transcript)\n",
+                ),
+            ),
+            (
+                "validator-rehashes-the-path",
+                _replace_once(
+                    self.verdict_source,
+                    "        return info, _sha256_descriptor(descriptor), None\n",
+                    "        return info, _sha256_bytes(path), None\n",
+                ),
+            ),
+        )
+        for label, mutant in mutations:
+            with self.subTest(mutation=label):
+                with self.assertRaises(AssertionError):
+                    self.assert_digest_binds_to_validated_descriptor(mutant, label)
 
 
 if __name__ == "__main__":  # pragma: no cover

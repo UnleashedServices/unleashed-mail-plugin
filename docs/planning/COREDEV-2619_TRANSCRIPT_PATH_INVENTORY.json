@@ -233,9 +233,9 @@
       "followingAnchorSha256": "87240623bef785d8db32948961ea48ab2bb43eccc792d113bf6f3a1e7784b26b"
     },
     {
-      "location": "scripts/review-verdict.py:129",
+      "location": "scripts/review-verdict.py:130",
       "path": "scripts/review-verdict.py",
-      "line": 129,
+      "line": 130,
       "class": "quote-keep",
       "reason": "Regression commentary intentionally quotes the duplicate-transcript incident.",
       "sourceSha256": "27fdb49bf4e90af135d80d728e214e48b975c0b558838a2a3f3129daddcc05e9"
