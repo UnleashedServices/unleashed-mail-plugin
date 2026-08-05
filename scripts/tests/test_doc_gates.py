@@ -167,7 +167,9 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "skills/brainstorm/SKILL.md": [
                 "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh"
             ],
-            "skills/implement/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            "skills/implement/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh"
+            ],
             "skills/codex-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
             "skills/gemini-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
         }

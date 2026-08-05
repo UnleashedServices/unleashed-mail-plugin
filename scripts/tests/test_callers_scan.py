@@ -445,7 +445,15 @@ class M513CallersScanTests(CallersScanProof):
         ]
         self.assertTrue(implement_candidates)
         shifted = min(implement_candidates, key=lambda item: item.line_number)
-        self.assertEqual(169, shifted.line_number)
+        # The line number is DERIVED, not frozen. It was pinned at 169 and broke the moment the Phase-1
+        # fence moved into a script — a frozen number here asserts the file's current layout, while the
+        # property under test is that the manifest binds the identity at the payload's ACTUAL line and
+        # not at the one before it. Confirm the derivation against the tree, then test that property.
+        self.assertEqual(
+            shifted.payload,
+            reference_lines(files[shifted.path])[shifted.line_number - 1],
+            "the derived line does not carry the payload it was derived from",
+        )
         stale = ReferenceIdentity(
             shifted.path, shifted.line_number - 1, shifted.identity.payload_sha256
         )

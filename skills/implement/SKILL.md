@@ -10,7 +10,7 @@ argument-hint: [feature name or docs/planning/PLAN.md path]
 # `allowed-tools` is a pre-approval grant, NOT a restriction — narrowing it does not disable
 # anything, it just means those calls need the normal user gesture. That is the correct posture for
 # a model-reachable workflow.
-allowed-tools: Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
+allowed-tools: Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
 ---
 
 # Implement: $ARGUMENTS
@@ -27,139 +27,22 @@ any code:
 # Resolve THE plan for the feature the user named — never let an unrelated approved plan satisfy the gate.
 # The argument is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
 #
+# ONE command, so the `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above covers it. The
+# resolution, the physical-containment guard and the verify all live in that script; this fence's only
+# job is to bind the argument safely. When this was ~135 lines of functions and branches inline it
+# matched NO grant, so the one block that must run before any implementation prompted every time.
+#
 # MAJ-9: bind the argument ONCE via a QUOTED heredoc so shell metacharacters in it (`"`, `$( )`, backticks)
 # are LITERAL data, never executed. The argument placeholder (dollar-prefixed when Claude Code renders it)
 # is substituted TEXTUALLY across this ENTIRE fence BEFORE the shell runs — so the ONLY place it may appear
 # is the quoted-heredoc body just below. It must NOT appear anywhere earlier, not even in a comment: a
 # multi-line/pasted value would break out of the comment and run its second line as a command BEFORE the
-# guard below fires (that was the original injection bug — splicing it into shell syntax also broke on a
-# feature name with a quote). The quoted delimiter disables all expansion of the heredoc body; everything
-# after this uses "$ARG", never the raw placeholder.
-ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'
+# script's guard fires (that was the original injection bug — splicing it into shell syntax also broke on
+# a feature name with a quote). The quoted delimiter disables all expansion of the heredoc body, and the
+# value reaches the script on STDIN rather than as an argv operand, so it is never in syntax position.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh" <<'UM_IMPLEMENT_ARG_EOF'
 $ARGUMENTS
 UM_IMPLEMENT_ARG_EOF
-)"
-# A slash argument is single-line; reject a multi-line value (only a crafted paste produces one, and it is
-# never a valid feature name or plan path) so a newline cannot smuggle a second line past the heredoc.
-if [ "$ARG" != "${ARG%%$'\n'*}" ]; then
-    echo "REFUSED: multi-line argument is not a valid plan name/path." >&2
-    exit 1
-fi
-
-# PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
-#
-# The plan's BYTES must live under <repo-root>/docs/planning. Everything else here is convenience; this
-# is the tracked-plan mandate (CLAUDE.md:68) and it has been bypassed four different ways, each time
-# because the previous guard checked a PROXY for containment instead of containment:
-#   /tmp/OUTSIDE_PLAN.md                        -> `-f` accepts any existing file      (textual fix)
-#   docs/planning/../../evil/OUTSIDE_PLAN.md    -> `..` wears the prefix               (added `..` case)
-#   docs/planning/EVIL_PLAN.md -> /tmp/...      -> a symlink wears the prefix          (added realpath)
-#   docs/planning -> /tmp/...                   -> a symlinked ROOT: realpath'ing the BASE resolved it
-#                                                  through the same link, so both sides matched
-# Resolve the plan, but anchor the base to the PHYSICAL repo root and do NOT resolve the base itself —
-# then a symlinked docs/planning cannot launder its own target. (codex, #41 review; all reproduced.)
-_contained() {
-    python3 - "$1" <<'PYEOF'
-import os, sys
-root = os.path.realpath(".")
-base = os.path.join(root, "docs", "planning")   # deliberately NOT realpath'd
-real = os.path.realpath(sys.argv[1])
-sys.exit(0 if real == base or real.startswith(base + os.sep) else 1)
-PYEOF
-}
-_refuse_uncontained() {
-    { echo "REFUSED: '$1' does not live under <repo-root>/docs/planning."
-      echo "A tracked plan's BYTES must be in the repo — a symlink, a ../ escape, or a symlinked"
-      echo "docs/planning is not a tracked plan (CLAUDE.md's Plan Review Gate)."; } >&2
-    exit 1
-}
-
-if [ -f "$ARG" ]; then
-    _p="${ARG#./}"
-    case "$_p" in
-        docs/planning/*PLAN*.md) ;;
-        *) { echo "REFUSED: '$ARG' is not a tracked plan."
-             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
-           exit 1 ;;
-    esac
-    _contained "$_p" || _refuse_uncontained "$ARG"
-    PLAN="$_p"
-else
-    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
-    # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
-    # space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
-    # the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
-    KEY=$(printf '%s' "$ARG" | tr '[:upper:] .-' '[:lower:]___')
-    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
-    # `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
-    # fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
-    # ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
-    # states the real property ("not composed solely of what tr just mapped to _") and is
-    # locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
-    # EXACT STEM matches are collected separately from mere SUBSTRING matches. A unique substring used
-    # to resolve silently as identity — `/implement mode` picked DARK_MODE_PLAN.md — so a coincidental
-    # fragment could satisfy the gate against a plan the user did not name (full review, #41). Now a
-    # full/exact feature name always wins, and a pure substring must be named explicitly.
-    #
-    # For each plan, three stems the arg may exactly equal:
-    #   full   — the basename minus the `_PLAN.md` suffix            (coredev_2328_reviewer_status_capture)
-    #   desc   — full minus a leading `coredev_<digits>_` ticket     (reviewer_status_capture)
-    #   ticket — the `coredev_<digits>` prefix alone                 (coredev_2328)
-    EXACT=(); SUBSTR=()
-    if [[ "$KEY" == *[!_]* ]]; then
-        for p in docs/planning/*PLAN*.md; do
-            [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
-            # THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
-            # `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
-            # branch refused that exact symlink while the glob branch happily took it (codex, #41
-            # review; reproduced). Filtering here so an out-of-tree symlink cannot even reach a match.
-            _contained "$p" || continue
-            # `b` is the NORMALIZED basename: tr already mapped ` `/`.`/`-` -> `_`, so `.md` is `_md`
-            # here and the suffix to strip is `_plan_md`, not `_plan.md`.
-            b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
-            full="${b%_plan_md}"
-            desc="$full"; ticket=""
-            case "$full" in
-                coredev_[0-9]*)
-                    rest="${full#coredev_}"      # 2328_reviewer_status_capture
-                    ticket="coredev_${rest%%_*}" # coredev_2328
-                    desc="${rest#*_}"            # reviewer_status_capture
-                    ;;
-            esac
-            if [ "$KEY" = "$full" ] || [ "$KEY" = "$desc" ] || [ "$KEY" = "$ticket" ]; then
-                EXACT+=("$p")
-            elif [[ "$b" == *"$KEY"* ]]; then
-                SUBSTR+=("$p")
-            fi
-        done
-    fi
-    # Prefer EXACT: a full name wins over any coincidental substring.
-    if [ "${#EXACT[@]}" -gt 1 ]; then
-        { echo "AMBIGUOUS: '$ARG' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
-        exit 2
-    elif [ "${#EXACT[@]}" -eq 1 ]; then
-        PLAN="${EXACT[0]}"
-    elif [ "${#SUBSTR[@]}" -ge 1 ]; then
-        # A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
-        # the user only partially named. Require an exact name (full review, #41).
-        { echo "No plan is named exactly '$ARG'. Did you mean one of these? Name it exactly:"
-          printf '%s\n' "${SUBSTR[@]}"; } >&2
-        exit 2
-    fi
-    # No EXACT and no SUBSTR -> empty PLAN -> the fail-closed branch below.
-fi
-if [ -z "$PLAN" ]; then
-    # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
-    # plan exists — so a FAILED resolution reported success.
-    { echo "No plan matches '$ARG'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
-    exit 1
-else
-    echo "Plan: $PLAN"
-    # Verify the persisted, digest-bound verdict for THAT plan. The bare `${CLAUDE_PLUGIN_ROOT}` token is
-    # substituted inline in the skill body -> the plugin install path; the `:-.` form is NOT recognized by
-    # that substitution (it would reach the shell literally and resolve to `.`) (COREDEV-2504).
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" verify --plan "$PLAN"
-fi
 ```
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
