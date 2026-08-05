@@ -92,6 +92,20 @@ BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 [ "$BYTES" -ge 1000 ] || { echo "assembled prompt is only ${BYTES} bytes — truncated" >&2; exit 1; }
 
 # --- run --------------------------------------------------------------------------------------
+# The reserved leaf must be EMPTY. It is created 0-byte by the allocator, and nothing but this
+# capture may write it. A non-empty leaf means it has already been used, and reusing it is how a
+# failed round gets reported as an approval: `--allocated` deliberately omits O_CREAT (to preserve
+# the reservation), so before PR #63 it also omitted truncation, and a shorter second write left the
+# first round's tail — including its `VERDICT:` line — for the `tail -1` below to find. Reproduced:
+# a 19-byte failed round left 55 bytes reading `VERDICT: APPROVE`. pty-capture.py now ftruncates, so
+# this is defence in depth; it also catches the case where the leaf was written by something else
+# entirely. Refuse rather than clean: deleting the leaf would destroy the reservation, and silently
+# overwriting would hide that the caller reused a path it should have re-allocated.
+if [ -s "$OUT" ]; then
+    echo "refusing to reuse a non-empty reserved leaf: $OUT" >&2
+    echo "(it already holds $(wc -c < "$OUT" | tr -d ' ') bytes — allocate a fresh leaf for this round)" >&2
+    exit 1
+fi
 # Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
     agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1

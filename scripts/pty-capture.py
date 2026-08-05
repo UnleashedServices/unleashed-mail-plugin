@@ -71,6 +71,14 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     The open() opener gives its file object fd ownership, avoiding manual bookkeeping and double-close
     (round 2: gemini). Only the opener still holds a raw fd; if a check fails, it closes before raising
     because open() never received it.
+
+    Allocated writes MUST still truncate to the payload length (PR #63 review, High). Omitting O_TRUNC
+    protects the reservation — the leaf must already exist — but it does not bound the file, so a
+    re-write that is SHORTER than a previous one leaves the earlier tail in place. That was reproduced
+    end-to-end: a 19-byte failed round left a 55-byte file whose surviving tail read `VERDICT: APPROVE`,
+    and the wrapper's `grep … | tail -1` then reported a failed review as an approval. ftruncate is the
+    right instrument because, unlike O_TRUNC, it can never CREATE the file, so the reservation invariant
+    is preserved exactly.
     """
     create_flags = 0 if allocated else os.O_CREAT | os.O_TRUNC
     flags = os.O_WRONLY | create_flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -88,6 +96,10 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
 
     with open(path, "wb", opener=_opener) as fh:
         fh.write(data)
+        # Bound the file to what THIS run produced. No-op for the O_TRUNC path; load-bearing for the
+        # allocated path, where a shorter re-write would otherwise resurrect the previous run's tail.
+        fh.flush()
+        os.ftruncate(fh.fileno(), len(data))
 
 
 def _signal_child(pid: int, sig: int) -> None:

@@ -71,6 +71,42 @@ class WritePrivateTests(unittest.TestCase):
         self.assertTrue(flags & os.O_NONBLOCK, "allocated mode must retain O_NONBLOCK")
         self.assertEqual(Path(path).read_bytes(), b"captured")
 
+    def test_allocated_rewrite_shorter_than_the_previous_run_leaves_no_stale_tail(self):
+        """A shorter second write must not resurrect the first run's VERDICT (PR #63 review, High).
+
+        `--allocated` omits O_TRUNC to protect the reservation, which also left the file unbounded:
+        a failed round that wrote fewer bytes than a previous successful one left that round's tail
+        in place, and the wrapper's `grep … | tail -1` reported the OLD approval for the NEW failed
+        review. The existing allocated-mode coverage all writes into a 0-byte leaf, so none of it
+        could observe this. Assert on the surviving bytes, not on the flags — the fix is ftruncate,
+        and a flags-only assertion would pass with the bug still present.
+        """
+        path = os.path.join(self.d, "reserved.txt")
+        Path(path).touch()
+
+        first = b"round 1 transcript, long and complete\nVERDICT: APPROVE\n"
+        self.mod._write_private(path, first, allocated=True)
+        self.assertEqual(Path(path).read_bytes(), first)
+
+        shorter = b"round 2 died early\n"
+        self.mod._write_private(path, shorter, allocated=True)
+
+        got = Path(path).read_bytes()
+        self.assertEqual(got, shorter, "the leaf must hold exactly what THIS run wrote")
+        self.assertNotIn(b"VERDICT:", got, "the previous run's verdict must not survive the rewrite")
+
+    def test_allocated_rewrite_still_refuses_to_create_an_unreserved_leaf(self):
+        """The truncation fix must not weaken the reservation invariant it sits next to.
+
+        ftruncate is used precisely because it cannot create a file; O_TRUNC would have. This is the
+        deletion test for that choice: if someone later "simplifies" the fix back to O_TRUNC, the
+        allocated write starts creating leaves it never reserved and this fails.
+        """
+        path = os.path.join(self.d, "never-reserved.txt")
+        with self.assertRaises(OSError):
+            self.mod._write_private(path, b"must-not-land", allocated=True)
+        self.assertFalse(os.path.exists(path), "allocated mode must never create the leaf")
+
     def test_allocated_mode_missing_leaf_is_a_hard_error_without_creating_retry(self):
         path = os.path.join(self.d, "missing.txt")
         real_open = os.open
