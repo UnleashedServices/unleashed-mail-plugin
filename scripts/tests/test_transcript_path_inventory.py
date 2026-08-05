@@ -9,6 +9,7 @@ import json
 import subprocess
 import unittest
 from collections import Counter
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,19 @@ REPO = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPO / "docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json"
 FROZEN_COMMIT = "78e28f26cb56572b22fe1635552dd10fa95bdb48"
 EXPECTED_LITERALS = ("/tmp/" + "agy-out.txt", "/tmp/" + "codex-out.txt")
+# The two literals above are a BLACKLIST, and blacklists re-open: a sibling spelling -- the same
+# tmp path with a digit appended before the extension -- matched none of them and sailed past
+# every guard here (PR #63 review, gap 24). The example is described rather than written out,
+# because writing it would trip this very check: that is the guard working, and it did.
+# This pattern closes that family. Verified against the tree: it matches EXACTLY the two literals
+# already classified and introduces no new site, so the frozen 31-site totals are unaffected.
+#
+# NOT the principled fix. The scanner's own lesson is to invert a blacklist into an ALLOWLIST -- deny
+# every hardcoded /tmp transcript path and let the quote-keep manifest be the only exemption. The tree
+# carries ten distinct `/tmp/*.txt` spellings (ping, packages, safe, copy, security, ...), so that
+# inversion means reclassifying all of them and re-deriving the frozen manifest. Tracked separately;
+# this closes the named sibling hazard without pretending to be the inversion.
+EXPECTED_LITERAL_PATTERN = re.compile(r"/tmp/(?:agy|codex)-out\d*\.txt")
 EXPECTED_TOTALS = {"sites": 31, "files": 13, "rewrite": 21, "quote-keep": 10}
 EXPECTED_SCAN_EXCLUSIONS = {
     "docs/planning/COREDEV-2619_PER_RUN_TRANSCRIPT_PATHS_PLAN.md",
@@ -277,13 +291,14 @@ def _manifest_problems(manifest: dict) -> list[str]:
 
 def _observed_literal_sites(manifest: dict, tree: dict[str, list[bytes]]) -> set[tuple[str, int]]:
     literals = tuple(literal.encode("utf-8") for literal in EXPECTED_LITERALS)
+    pattern = re.compile(EXPECTED_LITERAL_PATTERN.pattern.encode("ascii"))
     exclusions = set(manifest["scanExclusions"])
     return {
         (path, line_number)
         for path, lines in tree.items()
         if path not in exclusions
         for line_number, payload in enumerate(lines, 1)
-        if any(literal in payload for literal in literals)
+        if any(literal in payload for literal in literals) or pattern.search(payload)
     }
 
 

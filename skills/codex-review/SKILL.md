@@ -71,9 +71,15 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 --allocate
 # Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
 # matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
 
-# Skill-based audit through the wrapper:
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/security.txt -- \
+# Skill-based audit through the wrapper.
+# The output path is PER-RUN via mktemp, never a fixed shared one. A fixed /tmp path is the MAJ-10
+# hazard in miniature: an audit that dies before writing leaves the PREVIOUS audit's file in place,
+# and the next reader takes stale findings for fresh ones. This line kept a fixed path even though it
+# sits inside a fence the per-run sweep rewrote (PR #63 review, gap 27).
+AUDIT_OUT="$(mktemp -t codex-audit)"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
+echo "audit transcript: $AUDIT_OUT"
 ```
 
 Interface: `pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]`.
