@@ -1,12 +1,12 @@
 # COREDEV-2642 — PR #63 remediation handoff
 
 **PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main`
-**State at handoff:** 36 commits (8 unpushed), **529 tests green**, `callers_scan --root .` exits 0,
+**State at handoff:** 38 commits, **529 tests green**, `callers_scan --root .` exits 0,
 full validator sweep clean
-**Last commit:** `54a0fa1`
+**Last commit:** `9666d50`
 
-> **Second pass, 2026-08-05.** Everything §3 listed as open is now closed except **two capture
-> recipes** (§3.2) — see §2b. The two maintainer decisions were made: the gemini arm is to be
+> **Second pass, 2026-08-05.** Everything §3 listed as open is now closed except **the gemini
+> capture recipe** (§3) — see §2b. The two maintainer decisions were made: the gemini arm is to be
 > **replaced by Kimi K3** (planned in `KIMI_REVIEW_ARM_PLAN.md`, deliberately not implemented), and
 > the CHANGELOG's two false gate claims are corrected.
 
@@ -61,28 +61,38 @@ When a finding names two things, verify both halves before writing the commit me
 | **1. `review-verdict.py` TOCTOU** | `_regular_file_info` returns the digest read from the SAME `O_NOFOLLOW` descriptor it fstat'd; freshness hands back a `_VerifiedTranscript(path, sha256)` the caller records instead of re-resolving the name. Proved by swapping the leaf at the instant validation reads the descriptor's metadata — an fstat trigger, not a close trigger, so a re-open placed between fstat and return cannot sail past it. Both places the re-open can creep back are mutated. |
 | **3. `callers_scan` over-selection** | anchors narrowed to `/unleashed-mail:`, `gemini-review`, `codex-review`. 1409 candidates -> 294. Measured all four options first; the `/`-prefixed variant is smaller but stops selecting `unleashed-mail:gemini-review …` and bare `gemini-review --ticket …`, which ARE invocation spellings, so it narrows past the defect. Proved a STRICT SUBSET that retains every exact production. |
 | **4. classifier judgement call** | accepted as fail-closed, with the reasoning in the docstring: conditioning the filename branch on the directory would let an allocated transcript COPIED out of the layout skip the check entirely. |
-| **7. exemption manifest** | 280 records shipped, generated last. `scripts/review/generate-callers-exemptions.py` is a maintainer tool outside the module. CI ran only `--help`, which loads no manifest — it now runs `--root .`. |
+| **7. exemption manifest** | shipped, generated last (302 records at this writing; the count moves with any edit to a scanned file, which is the point). `scripts/review/generate-callers-exemptions.py` is a maintainer tool outside the module. CI ran only `--help`, which loads no manifest — it now runs `--root .`. |
 | **8. gemini arm** | maintainer decision: **replace with Kimi K3**. `docs/planning/KIMI_REVIEW_ARM_PLAN.md` — measured surface, verified CLI facts, ordered steps with a stop-gate before any rename. Not implemented; needs its own ticket and the plan gate. |
 | **9. gaps 18-19** | both CHANGELOG entries corrected to match their plans. |
-| **2. helper extraction** | **3 of 5 sites.** See below. |
+| **2. helper extraction** | **4 of 5 sites.** Only the gemini capture recipe is left — see below. |
 
 ## 3. Open — ranked
 
-**1. The two CAPTURE recipes** (`skills/gemini-review/SKILL.md`, `skills/codex-review/SKILL.md`).
-Still compound blocks — `: "${TICKET:?…}"` guards, an `if`/`else` around the allocator, a `case` on the
-marker — so they match no `allowed-tools` grant and still prompt. The other three sites are done:
-`review-synthesis` and `brainstorm` call `persist-verdict.sh`; `implement`'s Phase 1 fence calls
-`resolve-plan-gate.sh`.
+**1. The gemini CAPTURE recipe** (`skills/gemini-review/SKILL.md`) — the LAST of the five extraction
+sites. Still a compound block (`: "${TICKET:?…}"` guards, an `if`/`else` around the allocator, a `case`
+on the marker), so it matches no `allowed-tools` grant and still prompts. The other four are done:
+`review-synthesis` and `brainstorm` call `persist-verdict.sh`, `implement`'s Phase 1 fence calls
+`resolve-plan-gate.sh`, and codex's capture calls `capture-codex-review.sh`.
 
-**Do the gemini one inside `KIMI_REVIEW_ARM_PLAN.md` step 1, not before it.** That plan replaces the
-whole arm, so extracting the recipe now and renaming it in step 3 is the same work twice. The codex
-one is independent and can be done on its own; it is the smaller half.
+**Do it inside `KIMI_REVIEW_ARM_PLAN.md` step 1, not before.** That plan replaces the whole arm, so
+extracting the recipe now and renaming it in step 3 is the same work twice.
 
-The pattern to follow is in this branch already: move the logic to a script, then re-point the M5
-mutation anchors at the script via a staged plugin root (`stage_plugin_root` in
-`test_transcript_path_threading.py`), keeping recipe-level anchors for what the recipe still decides.
-Expect M5.1/M5.2/M5.7/M5.9 to move; M5.1 and M5.2 run the real allocator with observers, so they are
-the delicate ones.
+The pattern is in this branch twice over. Move the logic to a script; stage that script in the
+fixtures (`install_capture_helper` / `stage_plugin_root` in `test_transcript_path_threading.py`) and
+re-point each mutation anchor at whichever layer now owns its rule, naming the layer explicitly rather
+than inferring it from the reviewer. Expect M5.1/M5.2/M5.7/M5.9 to move, plus M5.14 in
+`test_callers_scan.py` and the M3.1 destinations.
+
+Two things the codex extraction learned that will recur:
+
+- **The M3.1 manifest now has an optional `destination.path`**, added because two codex destinations
+  moved to a different FILE and the schema had only one `path` serving as both source and destination.
+  Use it. The alternatives are pointing a destination at a line that merely MENTIONS the rule — a
+  contract check passing on prose — or deleting the site and editing the frozen counts, which loses the
+  record that the rewrite happened.
+- **S-PRECLEAN rejects a destination region containing `rm -f`, including inside a comment forbidding
+  it.** That is the guard working. Put the retry/re-allocate rule above the allocation rather than
+  beside the capture, and the region stays clean.
 
 **Nothing else is open.** Everything below in §4-§6 still applies and has been extended.
 
