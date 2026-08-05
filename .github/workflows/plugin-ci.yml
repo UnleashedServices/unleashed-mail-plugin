@@ -38,6 +38,21 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install zsh (the shell the agent fence runs)
+        # WITHOUT THIS NO CI JOB CAN EXECUTE ANY ZSH TEST. ubuntu-latest ships no zsh, so
+        # test_plugin_state_base.py::test_zsh_agrees_with_bash self-skips here -- and the macOS leg
+        # ran only the redactor suite. The exact regression that test exists to catch (a Bash-only
+        # construct failing silently under zsh) could therefore land green (PR #63 review, gap 15).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
+      - name: Assert zsh is present so the agreement test cannot silently skip
+        # A skip reads identically to a pass in the summary. Fail loudly if the install regressed.
+        run: |
+          command -v zsh || {
+            echo "zsh missing - the zsh-agreement test would SKIP, not fail"
+            exit 1
+          }
+
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
         run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py
@@ -171,9 +186,17 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py
       - name: callers_scan.py execution smoke on 3.9
         run: python3 scripts/review/callers_scan.py --help >/dev/null
+      - name: cleanup tool refuses without --apply on 3.9
+        # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
+        # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).
+        run: |
+          set -uo pipefail
+          python3 scripts/review/cleanup_coredev_2619_leaks.py --state-root /nonexistent-state-root >/dev/null 2>&1
+          status=$?
+          [ "$status" -eq 2 ] || { echo "expected refusal exit 2 without --apply, got $status"; exit 1; }
       - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
         # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
         # stock 3.9. A PEP-604 `X | None` in a def signature byte-compiles fine on 3.9 and only raises
@@ -263,6 +286,20 @@ jobs:
         run: python3 mcp/review-synthesizer/redactor_model.py --count 40000 --seed 20260729
       - name: Second seed (the same invariant, a disjoint corpus)
         run: python3 mcp/review-synthesizer/redactor_model.py --count 20000 --seed 31337
+
+      # macOS ONLY. The `validate` job already runs these on ubuntu; duplicating them here would just
+      # burn minutes. What macOS adds is the PLATFORM: the agent fence runs zsh on developer macOS,
+      # `sed`/`tr` are BSD rather than GNU, and the filesystem is case-INSENSITIVE by default -- so a
+      # shell or path-classification defect can be green on ubuntu and red here. Before this the macOS
+      # leg ran only the redactor suite, so nothing platform-specific in the scripts suite or the hook
+      # harness was ever exercised on the platform it targets (PR #63 review, gap 15).
+      - name: Run the scripts test suite (macOS platform coverage)
+        if: matrix.os == 'macos-latest'
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Run the hook stdin-contract harness (macOS platform coverage)
+        if: matrix.os == 'macos-latest'
+        run: bash scripts/test-hooks.sh
 
   secret-scan:
     # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the
