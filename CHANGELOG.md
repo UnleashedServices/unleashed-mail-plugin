@@ -22,6 +22,15 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   Per-run paths prevent accidental transcript collisions and stale reuse; they do not make the gate tamper-proof, establish operator provenance, or protect a host where an attacker controls a state-directory ancestor.
   The existing `${CLAUDE_PLUGIN_ROOT}` allowed-tools grants are retained because Claude Code 2.1.0 and later expand that placeholder.
 
+### Changed
+
+- **Effort is inherited, not pinned; three workflow skills became model-invocable** (`COREDEV-2639`): every agent and skill now **omits `effort:`** and follows the session level, and CI accepts exactly `absent | xhigh | max` — a blanket `effort: xhigh` had been silently *capping* `max` sessions, because frontmatter effort overrides the session in both directions. Separately, `disable-model-invocation` was removed from `brainstorm`, `implement` and `pr-review`, so those three workflows can now be opened by the model rather than only by an explicit human invocation.
+
+  **Read the permission consequence before upgrading.** Those three skills carry pre-approval grants (`implement` holds `Read, Write, Edit, Bash, Grep, Glob, Agent`), so making them model-invocable means those grants can activate without a user gesture. Scoping that surface is tracked in `COREDEV-2642`. Note also what the effort "floor" is **not**: it constrains what may be *written into an asset*, not runtime effort — no in-plugin mechanism raises a `low` session, and `CLAUDE_CODE_EFFORT_LEVEL` outranks frontmatter regardless (see AGENT_CONTRACTS §11).
+
+- **Plan-review verification hardening plan** (`COREDEV-2497`): documentation only — the plan and its review record. No shipped behaviour change; recorded here because the 2.6.7 entry previously omitted it entirely.
+
+
 ## [2.6.6] — 2026-07-31
 
 ### Changed

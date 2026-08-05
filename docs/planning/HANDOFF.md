@@ -48,7 +48,13 @@ Paste the **Prompt** section below into a new session. Everything after it is re
 
 ## Locked maintainer decisions — do not re-litigate, do not re-ask
 
-`effort: xhigh` everywhere (all 21 agents + 21 skills; cost accepted) · three model tiers
+~~`effort: xhigh` everywhere (all 21 agents + 21 skills; cost accepted)~~ — **SUPERSEDED by COREDEV-2639
+(2026-08-04).** Assets now **omit `effort:` and inherit** the session; CI accepts `absent | xhigh | max`
+and rejects lower pins. Obeying the struck text would restore `effort: xhigh` everywhere, which CI still
+accepts (an `xhigh` pin is legal), silently re-introducing the very `max`-capping defect 2639 fixed —
+a locked-decision list is exactly the kind of document that gets obeyed without checking (PR #63 review,
+gap 21). See AGENT_CONTRACTS §11 for the current policy and for what the "floor" does and does not
+guarantee. · three model tiers
 (`opus`/`inherit`/`sonnet`) · direct Anthropic API only · `opus[1m]` must stay legal in the validator ·
 CLI pin **2.1.220** · autonomous mode is user-invoked only and **PAUSED** · compaction design is the
 A+C hybrid (`journal.jsonl` + `live-state.json`), paused · **2497 is split three ways** (2026-07-30).

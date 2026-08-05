@@ -430,10 +430,24 @@ constraint the maintainer accepts): the tier is now set by **consequence of bein
 A maintainer who wants any agent to scale with the session flips its frontmatter and moves it between
 rows **in the same edit** — the validator keeps the two in sync and fails otherwise.
 
-**Effort policy: assets INHERIT the session effort — no agent or skill pins an effort below `xhigh`.** Omit `effort:` so a `max` session runs its subagents at `max`; frontmatter effort overrides the session in **both** directions, so a hard `effort: xhigh` pin silently capped a `max` session. A pin is permitted only at `xhigh` or `max`; anything lower fails CI. The
-floor is unconditional, so tier selection is a *capability* decision only. Note frontmatter `effort` is
-an override in both directions — it pulls a `low` session up and a `max` session down — and
-`CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor cannot be guaranteed from inside the plugin.
+**Effort policy: assets INHERIT the session effort. The "floor" constrains permitted PINS, not runtime
+effort.** Omit `effort:` so a `max` session runs its subagents at `max`. Frontmatter effort overrides the
+session in **both** directions, so a hard `effort: xhigh` pin silently *capped* a `max` session — which is
+why the policy is omit-to-inherit rather than pin-everywhere. CI accepts exactly `absent | xhigh | max`;
+any lower pin fails, so **no agent or skill pins an effort below `xhigh`**.
+
+**What this does NOT do — state it plainly, because the previous wording claimed the opposite in
+consecutive sentences.** There is **no in-plugin mechanism that raises a low session.** With `effort:`
+omitted, a `low` session runs its subagents at `low`; nothing pulls it up. `CLAUDE_CODE_EFFORT_LEVEL`
+outranks frontmatter regardless. So the floor is a **CI rule about what may be written into an asset**,
+not a runtime guarantee — it prevents the repo from shipping a cap, and that is all it can do. The
+earlier text asserted "the floor is unconditional" and then, three lines later, that it "cannot be
+guaranteed from inside the plugin"; §11 is the designated source of truth for disputes, so the
+contradiction is resolved here in favour of the mechanism that actually exists (PR #63 review, gap 20).
+
+Consequence for tier selection: it is a *capability* decision, made on the assumption that the session
+is run at an appropriate effort. If a maintainer needs a guaranteed minimum, it must be set on the
+session (or via `CLAUDE_CODE_EFFORT_LEVEL`), not requested from the plugin.
 
 Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
 updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this

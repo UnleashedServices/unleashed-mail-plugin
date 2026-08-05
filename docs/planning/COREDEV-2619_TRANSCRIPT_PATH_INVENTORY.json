@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:643",
+      "location": "CHANGELOG.md:652",
       "path": "CHANGELOG.md",
-      "line": 643,
+      "line": 652,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -151,9 +151,9 @@
       "sourceSha256": "720374b95a3a3b6357a6f0405c48ad69787a1cc0b58ac44b7deadb826b636d3b"
     },
     {
-      "location": "docs/planning/HANDOFF.md:90",
+      "location": "docs/planning/HANDOFF.md:96",
       "path": "docs/planning/HANDOFF.md",
-      "line": 90,
+      "line": 96,
       "class": "quote-keep",
       "reason": "The handoff preserves the cross-project transcript collision incident.",
       "sourceSha256": "44a3fa9f43a672ed7234ccf25d6e8888dc6c63ee2984131cbfaded0356ce0138"
