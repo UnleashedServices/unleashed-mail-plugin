@@ -78,7 +78,7 @@ A+C hybrid (`journal.jsonl` + `live-state.json`), paused · **2497 is split thre
 
 ## Invocation details that cost real rounds to learn
 
-- `agy -p` defaults to `--print-timeout 5m` and **dies** on long plan reviews → pass `--print-timeout 18m`
+- `agy -p` defaults to `--print-timeout 5m` and **dies** on long plan reviews → pass `--print-timeout 28m`
   (the wrapper does).
 - `codex` needs `-c model_reasoning_effort=xhigh` explicitly; it runs ~12 min, so give `pty-capture.py`
   `--timeout 900`+. Exit 124 means the *wrapper* timed out — **not** a reason to downgrade to `high`.

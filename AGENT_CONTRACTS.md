@@ -117,7 +117,7 @@ loop with no escape.
   codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
   is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
   A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
-  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 18m`; a tiny transcript
+  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 28m`; a tiny transcript
   (e.g. `Error: timeout waiting for response`) is a *failure*, never a verdict. Fix the invocation and
   re-run; that is not a reviewer-unavailable situation.
 - **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
