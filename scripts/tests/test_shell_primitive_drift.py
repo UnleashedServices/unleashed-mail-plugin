@@ -181,8 +181,6 @@ class BasePathExpansion(unittest.TestCase):
         self.assertEqual([], offenders, "single-dash default found: " + ", ".join(offenders))
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class WorkflowPinDrift(unittest.TestCase):
@@ -231,3 +229,7 @@ class WorkflowPinDrift(unittest.TestCase):
                          "cross-job env reference — CLAUDE_CODE_VERSION is step-scoped and expands empty")
         bare = re.findall(r"claude-code@\s*$", self.src, re.M)
         self.assertEqual([], bare, "unpinned claude-code install")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

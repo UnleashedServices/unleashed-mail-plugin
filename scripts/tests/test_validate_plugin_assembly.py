@@ -174,8 +174,6 @@ class McpServerPathTest(unittest.TestCase):
         self.assertEqual(p, [], f".mcp.json server targets must resolve on disk: {p}")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class COREDEV2583_ModelAliasTable(unittest.TestCase):
@@ -362,3 +360,7 @@ class COREDEV2583_EffortPolicyWiring(unittest.TestCase):
         self.assertGreater(call, skills_loop,
                            "check_effort_policy must run after the skills loop populates "
                            "asset_efforts — otherwise a missing SKILL pin passes silently")
+
+
+if __name__ == "__main__":
+    unittest.main()

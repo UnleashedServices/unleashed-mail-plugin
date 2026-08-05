@@ -843,8 +843,6 @@ class M515bFullInvocationShapeTests(CallersScanProof):
                 self.assert_mutation_reaches_destination_validation(files, identity)
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class EvasiveSelectionProofs(unittest.TestCase):
@@ -901,3 +899,7 @@ class EvasiveSelectionProofs(unittest.TestCase):
         self.assertFalse(
             production.is_candidate(production.EXEMPTION_PATH, b"/unleashed-mail:gemini-review")
         )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

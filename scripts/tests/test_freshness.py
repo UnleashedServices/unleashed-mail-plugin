@@ -919,8 +919,6 @@ class SFreshAdditionalProofs(FreshnessFixture):
             self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 def _rmtree_quiet(path: str) -> None:
@@ -989,3 +987,7 @@ class ClassifierBypassProofs(unittest.TestCase):
             problem, "a symlinked per-run transcript must never return None (check skipped)"
         )
         self.assertIn("symbolic link", problem)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

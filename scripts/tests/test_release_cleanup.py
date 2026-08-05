@@ -614,8 +614,6 @@ class ReleaseMetadataProofs(unittest.TestCase):
             _assert_release_metadata_contract(plugin, readme, mutant)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
@@ -686,3 +684,7 @@ class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
                 state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
                 "preflight must reject the tree BEFORE deleting anything: " + relative_path,
             )
+
+
+if __name__ == "__main__":
+    unittest.main()

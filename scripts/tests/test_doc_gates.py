@@ -231,8 +231,6 @@ class B7_CFRProtocolConsistency(unittest.TestCase):
             self.assertIn("dismiss", low, f"B7: {rel} must name the human-dismissal terminal")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class COREDEV2583_DocDefects(unittest.TestCase):
@@ -660,3 +658,7 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
             src = fh.read()
         self.assertIn("1000", src, "must refuse to launch on a truncated prompt")
         self.assertIn("read back empty", src, "must assert the prompt body was read before writing")
+
+
+if __name__ == "__main__":
+    unittest.main()

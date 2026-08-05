@@ -994,8 +994,6 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(len(g["transcriptSha256"]), 64)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class WriteTextNofollowTest(unittest.TestCase):
@@ -1185,3 +1183,7 @@ class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
             ident, _kind = rv._plan_identity(p)
             with self.subTest(plan=p):
                 self.assertFalse(ident.startswith(".."), f"identity escaped the root: {ident!r}")
+
+
+if __name__ == "__main__":
+    unittest.main()
