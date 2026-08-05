@@ -602,6 +602,49 @@ class M4ClosedMatrixProofs(FreshnessFixture):
         self.assertEqual(M4_TOTAL, len(M4_CASES))
         self.assert_closed_matrix(MUTATION_KINDS, M4_CASES)
 
+    def test_every_mutation_kind_is_actually_exercised_by_a_test(self) -> None:
+        """The matrix test above asserts ALGEBRA over constants and drives no execution.
+
+        `M4_TOTAL == len(M4_CASES)` and the cross-product equality hold no matter whether any cell
+        ever runs, so DELETING a kind's proof class — or letting it silently skip — leaves the
+        matrix green while its cells stop being exercised (PR #63 review, gap 22). Bind the
+        enumeration to the tests that consume it: every kind in MUTATION_KINDS must appear as an
+        argument to one of the kind-driving helpers somewhere in this module.
+
+        Read statically from this file's own AST rather than by running the suite, because the
+        failure mode being caught is a test that no longer runs — a dynamic probe would simply not
+        observe it.
+        """
+        import ast as _ast
+
+        source = Path(__file__).read_text(encoding="utf-8")
+        exercised = set()
+        for node in _ast.walk(_ast.parse(source)):
+            if not isinstance(node, _ast.Call):
+                continue
+            function = node.func
+            if not isinstance(function, _ast.Attribute):
+                continue
+            if function.attr not in (
+                "assert_real_kind",
+                "assert_verdict_mutations_rejected",
+                "verdict_mutations",
+            ):
+                continue
+            for argument in node.args:
+                if isinstance(argument, _ast.Constant) and isinstance(argument.value, str):
+                    exercised.add(argument.value)
+
+        self.assertEqual(
+            set(MUTATION_KINDS),
+            exercised & set(MUTATION_KINDS),
+            "a kind in MUTATION_KINDS is no longer exercised by any test in this module",
+        )
+        self.assertFalse(
+            exercised - set(MUTATION_KINDS),
+            "a test drives a kind that is not in MUTATION_KINDS, so the matrix understates coverage",
+        )
+
     def test_M4_matrix_missing_factor_mutation_is_rejected(self) -> None:
         kinds = MUTATION_KINDS[:-1]
         cases = tuple(itertools.product(kinds, DIGEST_PATHS, TRANSCRIPT_POSITIONS))
