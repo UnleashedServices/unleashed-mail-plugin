@@ -616,3 +616,73 @@ class ReleaseMetadataProofs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
+    """PR #63 review, gap 5 — the tool was all-or-abort with no dry run and no resume.
+
+    A single failed unlink (EACCES, I/O error, concurrent removal) left entries 1..n-1 deleted, and
+    every later invocation then aborted at preflight on "manifest target is unavailable" — so the
+    REMAINING leaks could never be removed by the sanctioned tool again, forcing exactly the ad-hoc
+    `rm` in a sensitive directory that the closed-manifest design exists to prevent.
+    """
+
+    maxDiff = None
+
+    def test_apply_resumes_after_a_partial_run(self) -> None:
+        state_root, _objects = self.make_state_tree()
+        for relative_path in EXPECTED_PATHS[:9]:
+            state_root.joinpath(*PurePosixPath(relative_path).parts).unlink()
+
+        code = production.main(["--state-root", str(state_root), "--apply"])
+
+        self.assertEqual(0, code, "a partially-cleaned tree must still be completable")
+        for relative_path in EXPECTED_PATHS:
+            self.assertFalse(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(), relative_path
+            )
+
+    def test_check_reports_without_removing_anything(self) -> None:
+        state_root, _objects = self.make_state_tree()
+
+        code = production.main(["--state-root", str(state_root), "--check"])
+
+        self.assertEqual(0, code)
+        self.assert_all_manifest_paths_exist(state_root)
+        for directory in EXPECTED_DIRECTORIES:
+            self.assertTrue((state_root / directory).is_dir(), directory)
+
+    def test_check_and_apply_together_are_refused(self) -> None:
+        state_root, _objects = self.make_state_tree()
+
+        code = production.main(["--state-root", str(state_root), "--check", "--apply"])
+
+        self.assertEqual(2, code, "an ambiguous destructive/read-only request must refuse")
+        self.assert_all_manifest_paths_exist(state_root)
+
+    def test_tolerating_absence_does_not_weaken_the_preflight_type_guard(self) -> None:
+        """Absence is satisfied, a WRONG TYPE still aborts — and aborts BEFORE any deletion.
+
+        The discriminating detail is that the mismatch is placed mid-manifest, not first. Asserting
+        only "exit 1, target intact" does NOT test the preflight guard: `unlink_regular_file` has its
+        own S_ISREG check, so removing the preflight guard entirely still yields exit 1 with the
+        directory intact. That version of this test passed under mutation — the outcome was preserved
+        by a different mechanism than the one named. With the mismatch at index 20, preflight rejecting
+        the whole tree means the first 20 files SURVIVE; without it, they are deleted before the
+        downstream guard trips. That difference is what makes this a proof rather than a coincidence.
+        """
+        state_root, _objects = self.make_state_tree()
+        mismatch_index = 20
+        target = state_root.joinpath(*PurePosixPath(EXPECTED_PATHS[mismatch_index]).parts)
+        target.unlink()
+        target.mkdir()
+
+        code = production.main(["--state-root", str(state_root), "--apply"])
+
+        self.assertEqual(1, code, "a manifest target of the wrong type must still fail closed")
+        self.assertTrue(target.is_dir(), "the mismatched object itself must be untouched")
+        for relative_path in EXPECTED_PATHS[:mismatch_index]:
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
+                "preflight must reject the tree BEFORE deleting anything: " + relative_path,
+            )

@@ -235,15 +235,39 @@ def _preflight_directories(
     return resolved_directories
 
 
-def _preflight_files(root: Path) -> Dict[str, Path]:
+def _preflight_files(root: Path, allow_absent: bool = False) -> Tuple[Dict[str, Path], List[str]]:
+    """Resolve every manifest target, optionally tolerating ones that are already gone.
+
+    `allow_absent` makes the run RESUMABLE. Without it a single failed unlink — EACCES, an I/O
+    error, a concurrent removal — was terminal for the tool: entries 1..n-1 were already deleted,
+    so every later invocation aborted here on "manifest target is unavailable", and the remaining
+    leaked transcripts could never be removed by the sanctioned tool again. That forces exactly the
+    ad-hoc `rm` in a sensitive directory that the closed-manifest design exists to prevent
+    (PR #63 review, gap 5).
+
+    An already-absent leaf is treated as SATISFIED, never as an error — the goal state is "this
+    file does not exist", and it does not. Everything else stays fail-closed: a type mismatch or a
+    path escaping the state root still raises, because those mean the tree is not what the frozen
+    manifest describes and deleting anything would be unsafe.
+
+    lstat is checked BEFORE resolution on purpose: `_resolve_beneath` uses `resolve(strict=True)`,
+    which also fails for a dangling symlink. Only a genuine ENOENT on the LEXICAL path counts as
+    absent; a symlink whose target is missing is still a type mismatch and must be reported.
+    """
     resolved_targets = {}  # type: Dict[str, Path]
+    already_absent = []  # type: List[str]
     for entry in LEAK_MANIFEST:
-        resolved = _resolve_beneath(root, entry.relative_path)
         lexical = root.joinpath(*_pure_relative_path(entry.relative_path).parts)
         try:
             metadata = os.lstat(str(lexical))
+        except FileNotFoundError:
+            if allow_absent:
+                already_absent.append(entry.relative_path)
+                continue
+            raise CleanupError("manifest target is unavailable: " + entry.relative_path)
         except OSError as error:
             raise CleanupError("manifest target is unavailable: " + entry.relative_path) from error
+        resolved = _resolve_beneath(root, entry.relative_path)
         actual_type = _describe_type(metadata.st_mode)
         if actual_type != entry.expected_type:
             raise CleanupError(
@@ -255,7 +279,7 @@ def _preflight_files(root: Path) -> Dict[str, Path]:
                 + actual_type
             )
         resolved_targets[entry.relative_path] = resolved
-    return resolved_targets
+    return resolved_targets, already_absent
 
 
 def unlink_regular_file(target: Path) -> None:
@@ -278,11 +302,14 @@ def delete_leak_files(state_root: Path) -> FileDeletionReport:
     _validate_closed_manifests()
     root, root_identity = _canonical_state_root(state_root)
     _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False)
-    resolved_targets = _preflight_files(root)
+    # Resumable: entries already gone are satisfied, not failures. See _preflight_files.
+    resolved_targets, already_absent = _preflight_files(root, allow_absent=True)
 
     attempted = []  # type: List[str]
     for entry in LEAK_MANIFEST:
         attempted.append(entry.relative_path)
+        if entry.relative_path not in resolved_targets:
+            continue  # already absent — the goal state for this entry is reached
         try:
             unlink_regular_file(resolved_targets[entry.relative_path])
         except CleanupError:
@@ -376,11 +403,42 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required acknowledgement that the closed manifest was verified first",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="read-only preflight: report what WOULD be removed and what is already gone; deletes nothing",
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = _build_parser().parse_args(None if argv is None else list(argv))
+    if arguments.check and arguments.apply:
+        print("cleanup refused: --check and --apply are mutually exclusive", file=sys.stderr)
+        return 2
+    if arguments.check:
+        # Read-only. The tool is destructive and one-shot, so there must be a way to SEE the state
+        # it would act on without acting (PR #63 review, gap 5). Nothing here mutates the tree.
+        try:
+            _validate_closed_manifests()
+            root, _identity_unused = _canonical_state_root(arguments.state_root)
+            _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False)
+            present, absent = _preflight_files(root, allow_absent=True)
+        except (CleanupError, OSError) as error:
+            print("cleanup check failed: " + str(error), file=sys.stderr)
+            return 1
+        print(
+            "check: "
+            + str(len(present))
+            + " of "
+            + str(len(LEAK_MANIFEST))
+            + " manifest files present and removable, "
+            + str(len(absent))
+            + " already absent"
+        )
+        for relative_path in sorted(absent):
+            print("  already absent: " + relative_path)
+        return 0
     if not arguments.apply:
         print("cleanup refused: pass --apply only after independent manifest verification", file=sys.stderr)
         return 2
