@@ -178,6 +178,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         recipe: str,
         bindings: Dict[str, str],
         label: str,
+        helper_source: Optional[str] = None,
     ) -> List[str]:
         fake_bin = self.root / (label + "-bin")
         fake_bin.mkdir()
@@ -186,12 +187,13 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         fake_python.chmod(0o755)
         log = self.root / (label + "-writer.args")
 
+        plugin_root = REPO if helper_source is None else self.stage_plugin_root(helper_source)
         env = dict(os.environ)
         env.update(
             {
                 "HOME": str(self.home),
                 "TMPDIR": str(self.tmpdir),
-                "CLAUDE_PLUGIN_ROOT": str(REPO),
+                "CLAUDE_PLUGIN_ROOT": str(plugin_root),
                 "M5_WRITER_LOG": str(log),
                 "PATH": str(fake_bin) + os.pathsep + env.get("PATH", ""),
             }
@@ -234,6 +236,16 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
             threading.BRAINSTORM_BEGIN,
             threading.BRAINSTORM_END,
         )
+
+    def persist_helper_source(self) -> str:
+        """The committed `persist-verdict.sh`.
+
+        Both persistence recipes now reduce to one call to this script, so the rules it enforces —
+        first-delimiter parsing, empty-leaf classification — are mutated HERE rather than in the
+        recipe strings. The recipes keep their own mutants for what they still decide: which spec
+        each reviewer flag is bound to.
+        """
+        return threading.PERSIST_HELPER.read_text(encoding="utf-8")
 
 
 class M51AndM52PropagationProofs(M5PathFixture):
@@ -340,7 +352,7 @@ class M56ConsumerProofs(M5PathFixture):
         self.write_transcript(derived, "derived gemini")
 
         synthesis_old = (
-            "    " + REVIEWER_FLAG + ' "$GEMINI_PERSIST_SPEC" \\\n'
+            "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
         )
         synthesis_new = (
             "    "
@@ -418,7 +430,9 @@ class M510SynthesisShapeProofs(M5PathFixture):
             "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
         }
 
-    def assert_synthesis_shape(self, recipe: str, label: str) -> None:
+    def assert_synthesis_shape(
+        self, recipe: str, label: str, helper_source: Optional[str] = None
+    ) -> None:
         base = self.root / (label + " delimiter:=base=more:still")
         base.mkdir()
         gemini_path = base / "gemini:=path=tail.txt"
@@ -426,7 +440,7 @@ class M510SynthesisShapeProofs(M5PathFixture):
         self.write_transcript(gemini_path, "gemini")
         self.write_transcript(codex_path, "codex")
         bindings = self.synthesis_bindings(gemini_path, codex_path, "APPROVE")
-        argv = self.fake_writer_arguments(recipe, bindings, label)
+        argv = self.fake_writer_arguments(recipe, bindings, label, helper_source=helper_source)
         self.assertEqual(
             [
                 bindings["GEMINI_REVIEWER_SPEC"],
@@ -439,13 +453,17 @@ class M510SynthesisShapeProofs(M5PathFixture):
         self.assert_synthesis_shape(self.synthesis_source(), "shape-positive")
 
     def test_M5_10_last_colon_split_mutation_is_rejected(self) -> None:
+        # The split now lives in `persist-verdict.sh`, so the mutant replaces the HELPER the shipped
+        # recipe calls rather than the recipe text. Same rule, same rejection, one copy of it.
         mutant = _replace_once(
-            self.synthesis_source(),
+            self.persist_helper_source(),
             'transcript="${rest#*:}"',
             'transcript="${rest##*:}"',
         )
         with self.assertRaises(AssertionError):
-            self.assert_synthesis_shape(mutant, "shape-last-colon")
+            self.assert_synthesis_shape(
+                self.synthesis_source(), "shape-last-colon", helper_source=mutant
+            )
 
 
 class M515ArtifactProofs(M5PathFixture):
@@ -513,7 +531,7 @@ class M515ArtifactProofs(M5PathFixture):
         )
         derived = self.root / "artifact-derived-gemini.txt"
         self.write_transcript(derived, "artifact derived gemini")
-        old = "    " + REVIEWER_FLAG + ' "$GEMINI_PERSIST_SPEC" \\\n'
+        old = "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
         new = (
             "    "
             + REVIEWER_FLAG
@@ -539,7 +557,9 @@ class M515ArtifactProofs(M5PathFixture):
 
 
 class M517EmptyTranscriptProofs(M5PathFixture):
-    def assert_empty_classification(self, recipe: str, label: str) -> None:
+    def assert_empty_classification(
+        self, recipe: str, label: str, helper_source: Optional[str] = None
+    ) -> None:
         base = self.root / (label + " empty base")
         base.mkdir()
         gemini_path = base / "gemini-empty.txt"
@@ -552,7 +572,7 @@ class M517EmptyTranscriptProofs(M5PathFixture):
             "GEMINI_REVIEWER_SPEC": "gemini=APPROVE:" + str(gemini_path),
             "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
         }
-        argv = self.fake_writer_arguments(recipe, bindings, label)
+        argv = self.fake_writer_arguments(recipe, bindings, label, helper_source=helper_source)
         self.assertEqual(
             ["gemini=MISSING", bindings["CODEX_REVIEWER_SPEC"]],
             self.reviewer_arguments(argv),
@@ -562,17 +582,71 @@ class M517EmptyTranscriptProofs(M5PathFixture):
         self.assert_empty_classification(self.synthesis_source(), "empty-positive")
 
     def test_M5_17_exists_instead_of_nonempty_mutation_is_rejected(self) -> None:
-        old = (
-            'if [ "$PARSED_REVIEWER_STATUS" = MISSING ] || '
-            '[ ! -s "$PARSED_TRANSCRIPT_PATH" ]; then'
-        )
-        new = (
-            'if [ "$PARSED_REVIEWER_STATUS" = MISSING ] || '
-            '[ ! -e "$PARSED_TRANSCRIPT_PATH" ]; then'
-        )
-        mutant = _replace_once(self.synthesis_source(), old, new)
+        # `-s` (non-empty) vs `-e` (exists) now lives in the helper: an allocated-but-EMPTY leaf is a
+        # FAILED review, and a mutant that only checks existence would count it as one that happened.
+        old = 'if [ "$status" = MISSING ] || [ ! -s "$transcript" ]; then'
+        new = 'if [ "$status" = MISSING ] || [ ! -e "$transcript" ]; then'
+        mutant = _replace_once(self.persist_helper_source(), old, new)
         with self.assertRaises(AssertionError):
-            self.assert_empty_classification(mutant, "empty-exists")
+            self.assert_empty_classification(
+                self.synthesis_source(), "empty-exists", helper_source=mutant
+            )
+
+
+class PersistedRecipeDriftProofs(M5PathFixture):
+    """The drift that four copies of one rule produced, and that collapsing them to one removes.
+
+    `review-synthesis/SKILL.md` documents `<reviewer>=MISSING` **without** a `:transcript` path as the
+    recovery form for a reviewer that never ran. Its own inline copy of the parser required a colon and
+    rejected exactly that form — the shipped recipe contradicted the shipped instructions two screens
+    below it. `persist-verdict.sh` had already been fixed; the inline copy had not, because there were
+    four of them.
+    """
+
+    def test_bare_missing_reviewer_is_the_documented_recovery_form(self) -> None:
+        base = self.root / "bare missing base"
+        base.mkdir()
+        codex_path = base / "codex-full.txt"
+        self.write_transcript(codex_path, "codex")
+        bindings = {
+            "PLAN_PATH": str(self.reviewed / "FEATURE_PLAN.md"),
+            # A reviewer that never ran cannot yield an approving COMBINED verdict, so the recovery
+            # form is only reachable on a non-approving one — asserting it on APPROVE would be
+            # asserting the fail-closed rule is broken.
+            "COMBINED_VERDICT": "DISAGREEMENT",
+            "GEMINI_REVIEWER_SPEC": "gemini=MISSING",
+            "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
+        }
+        argv = self.fake_writer_arguments(self.synthesis_source(), bindings, "bare-missing")
+        self.assertEqual(
+            ["gemini=MISSING", bindings["CODEX_REVIEWER_SPEC"]],
+            self.reviewer_arguments(argv),
+        )
+
+    def test_colon_requiring_parser_mutation_is_rejected(self) -> None:
+        """The inline copy's rule, restored into the helper, must fail this."""
+        mutant = _replace_once(
+            self.persist_helper_source(),
+            "        MISSING) status=MISSING; transcript=\"\" ;;\n",
+            "",
+        )
+        base = self.root / "bare missing mutant base"
+        base.mkdir()
+        codex_path = base / "codex-full.txt"
+        self.write_transcript(codex_path, "codex")
+        bindings = {
+            "PLAN_PATH": str(self.reviewed / "FEATURE_PLAN.md"),
+            "COMBINED_VERDICT": "DISAGREEMENT",
+            "GEMINI_REVIEWER_SPEC": "gemini=MISSING",
+            "CODEX_REVIEWER_SPEC": "codex=APPROVE:" + str(codex_path),
+        }
+        with self.assertRaises(AssertionError):
+            self.fake_writer_arguments(
+                self.synthesis_source(),
+                bindings,
+                "bare-missing-mutant",
+                helper_source=mutant,
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

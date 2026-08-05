@@ -258,7 +258,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 200,
+        "line": 194,
         "payloads": [
           "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
         ],
@@ -280,11 +280,11 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 201,
+        "line": 195,
         "payloads": [
-          "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\" \\"
+          "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\""
         ],
-        "payloadSha256": "039a529a6d32414ff1e2a9a2eadb976f634a8b221b24dbb1d8ed02df5c3bc9e4"
+        "payloadSha256": "474de13107de1dab084ef1704222256ec58ef6d51715f53194318a73f675d5d6"
       },
       "sourceSha256": "f7020818a7143be993c629ab484d841b97c6e6db8b37fbeaad6ec395d97afcc5",
       "precedingAnchorLine": 193,
@@ -623,11 +623,11 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 205,
+        "line": 151,
         "payloads": [
-          "    --reviewer \"$GEMINI_PERSIST_SPEC\" \\"
+          "    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"
         ],
-        "payloadSha256": "2dd8a9060b2f3b531aff69aa22148cce68dd6bf484c84f5fb142acd5d4e51b0f"
+        "payloadSha256": "48edb8ac7d02f796d072b85659f2ec5d86a689ada5266ec5795ff54423d8ac93"
       },
       "sourceSha256": "ca3f44a34edfa4cc64175b45c7ffffa7f65b4aee8a5381cd7f88f67230d1b1d7",
       "precedingAnchorLine": 136,
@@ -645,11 +645,11 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 206,
+        "line": 152,
         "payloads": [
-          "    --reviewer \"$CODEX_PERSIST_SPEC\" \\"
+          "    --reviewer \"$CODEX_REVIEWER_SPEC\""
         ],
-        "payloadSha256": "8fb1fedbb4ba971d6562c28c3f62489557375f695c686e440cbdd017c45343a6"
+        "payloadSha256": "516aa19b833ee82b1fdcf3c13ed1f6d00694ac6594ee8e5c833c3dd7eb44b6bb"
       },
       "sourceSha256": "833317d1cd59935e55540c732344b39897b17fb10d304aa7c81fae6f65447157",
       "precedingAnchorLine": 136,

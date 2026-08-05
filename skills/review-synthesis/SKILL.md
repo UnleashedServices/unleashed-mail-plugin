@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)
+allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
 ---
 
 # Plan-Review Synthesis
@@ -129,82 +129,27 @@ the exact plan the reviewers actually reviewed.
 
 Then persist — bind `PLAN_PATH`, `COMBINED_VERDICT`, `GEMINI_REVIEWER_SPEC`, and
 `CODEX_REVIEWER_SPEC` to the current synthesis inputs in one Bash invocation. Each reviewer spec must be
-the exact single argument supplied to this skill. The runnable recipe parses only the first delimiters,
-classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the original spec
-unchanged. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so no
-`--reviewed-sha256` argument is needed in the normal flow:
+the exact single argument supplied to this skill. `scripts/review/persist-verdict.sh` parses only the
+first delimiters, classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the
+original spec unchanged. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so
+no `--reviewed-sha256` argument is needed in the normal flow.
+
+This used to be the same logic pasted inline here, in `brainstorm`, and (in capture form) in the two
+review skills. Each copy defined functions and branched, so it matched none of those skills'
+`allowed-tools` Bash shapes — the one block every gate round must run prompted for permission every time,
+which is the reprompting problem `MIN-27` records as fixed and the pressure toward blanket `Bash` grants
+(PR #63 review, gaps 7-9 and bot thread 7). As one committed script it is covered by the
+`Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above, and the rule lives in one place rather
+than in copies that drift — the inline copy had already drifted, rejecting the bare `<reviewer>=MISSING`
+form this same file documents below as the unavailable-reviewer recovery path.
 
 ```bash
 # COREDEV2619_SYNTHESIS_PERSIST_BEGIN
-: "${PLAN_PATH:?bind PLAN_PATH to the reviewed plan}"
-: "${COMBINED_VERDICT:?bind COMBINED_VERDICT to the synthesis result}"
-: "${GEMINI_REVIEWER_SPEC:?bind the complete gemini reviewer argument}"
-: "${CODEX_REVIEWER_SPEC:?bind the complete codex reviewer argument}"
-
-parse_reviewer_spec() {
-    local spec="$1" expected_name="$2" name rest status transcript
-    case "$spec" in
-        *=*) ;;
-        *) printf 'review synthesis: malformed reviewer specification\n' >&2; return 1 ;;
-    esac
-    name="${spec%%=*}"
-    rest="${spec#*=}"
-    case "$rest" in
-        *:*) ;;
-        *) printf 'review synthesis: reviewer specification lacks a transcript path\n' >&2; return 1 ;;
-    esac
-    status="${rest%%:*}"
-    transcript="${rest#*:}"
-    if [ "$name" != "$expected_name" ] || [ -z "$transcript" ]; then
-        printf 'review synthesis: invalid reviewer specification\n' >&2
-        return 1
-    fi
-    case "$status" in
-        APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES|MISSING) ;;
-        *) printf 'review synthesis: invalid reviewer status\n' >&2; return 1 ;;
-    esac
-    PARSED_REVIEWER_NAME="$name"
-    PARSED_REVIEWER_STATUS="$status"
-    PARSED_TRANSCRIPT_PATH="$transcript"
-}
-
-persist_reviewer_spec() {
-    local spec="$1" expected_name="$2"
-    parse_reviewer_spec "$spec" "$expected_name" || return 1
-    if [ "$PARSED_REVIEWER_STATUS" = MISSING ] || [ ! -s "$PARSED_TRANSCRIPT_PATH" ]; then
-        printf '%s=MISSING' "$PARSED_REVIEWER_NAME"
-    else
-        printf '%s' "$spec"
-    fi
-}
-
-if GEMINI_PERSIST_SPEC="$(persist_reviewer_spec "$GEMINI_REVIEWER_SPEC" gemini)"; then
-    :
-else
-    status="$?"
-    exit "$status"
-fi
-if CODEX_PERSIST_SPEC="$(persist_reviewer_spec "$CODEX_REVIEWER_SPEC" codex)"; then
-    :
-else
-    status="$?"
-    exit "$status"
-fi
-if [ "$GEMINI_PERSIST_SPEC" = gemini=MISSING ] || [ "$CODEX_PERSIST_SPEC" = codex=MISSING ]; then
-    case "$COMBINED_VERDICT" in
-        APPROVE|APPROVE_WITH_NOTES)
-            printf 'review synthesis: a missing transcript cannot produce approval\n' >&2
-            exit 1
-            ;;
-    esac
-fi
-
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh" \
     --plan "$PLAN_PATH" \
     --verdict "$COMBINED_VERDICT" \
-    --reviewer "$GEMINI_PERSIST_SPEC" \
-    --reviewer "$CODEX_PERSIST_SPEC" \
-    --created-at "${CREATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+    --reviewer "$GEMINI_REVIEWER_SPEC" \
+    --reviewer "$CODEX_REVIEWER_SPEC"
 # COREDEV2619_SYNTHESIS_PERSIST_END
 ```
 

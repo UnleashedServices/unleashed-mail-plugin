@@ -21,6 +21,8 @@ ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
 PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
 REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
+PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
+
 GEMINI_SKILL = REPO / "skills" / "gemini-review" / "SKILL.md"
 CODEX_SKILL = REPO / "skills" / "codex-review" / "SKILL.md"
 BRAINSTORM_SKILL = REPO / "skills" / "brainstorm" / "SKILL.md"
@@ -266,7 +268,16 @@ class TranscriptThreadingFixture(unittest.TestCase):
         self,
         recipe: str,
         bindings: Dict[str, str],
+        helper_source: Optional[str] = None,
     ) -> Tuple[dict, List[str]]:
+        """Run a persistence recipe through the real `persist-verdict.sh`.
+
+        `helper_source` stages a MUTATED copy of that helper under a private plugin root and points
+        `CLAUDE_PLUGIN_ROOT` at it. The persistence rule used to be inline in each SKILL body, so the
+        M5 mutants edited the extracted recipe string; now that it lives in one committed script, a
+        mutant has to replace the script the recipe calls. The recipe under test is unchanged either
+        way — that is the point, since the recipe is what the skill actually ships.
+        """
         plan = self.reviewed / "FEATURE_PLAN.md"
 
         snapshot = run_checked(
@@ -276,14 +287,23 @@ class TranscriptThreadingFixture(unittest.TestCase):
         )
         self.assertEqual(0, snapshot.returncode, snapshot.stderr)
 
+        plugin_root = REPO
+        review_verdict = REVIEW_VERDICT
+        if helper_source is not None:
+            plugin_root = self.stage_plugin_root(helper_source)
+            review_verdict = plugin_root / "scripts" / "review-verdict.py"
+
         env = dict(os.environ)
         env.update(
             {
-                "CLAUDE_PLUGIN_ROOT": str(REPO),
+                "CLAUDE_PLUGIN_ROOT": str(plugin_root),
                 "PLAN_PATH": str(plan),
                 "CREATED_AT": "2026-08-03T12:00:00Z",
+                # The recipe now calls `bash …/persist-verdict.sh`, so it goes through the same bash
+                # shim as the capture arms; without this the shim raises KeyError on its own env.
+                "THREAD_REAL_BASH": str(self.real_bash),
                 "THREAD_REAL_PYTHON": str(self.real_python),
-                "THREAD_REVIEW_VERDICT": str(REVIEW_VERDICT),
+                "THREAD_REVIEW_VERDICT": str(review_verdict),
                 "THREAD_VERDICT_ARGV_LOG": str(self.verdict_argv_log),
                 "PATH": str(self.bin_dir) + os.pathsep + env.get("PATH", ""),
             }
@@ -298,11 +318,28 @@ class TranscriptThreadingFixture(unittest.TestCase):
         argv = self.verdict_argv_log.read_text(encoding="utf-8").splitlines()
         return payload, argv
 
+    def stage_plugin_root(self, helper_source: str) -> Path:
+        """A private plugin root whose `persist-verdict.sh` is `helper_source`.
+
+        Only the helper is staged: the recipe reaches `review-verdict.py` THROUGH it, and the shims on
+        PATH intercept `python3`, so nothing else in the tree has to be copied. The helper resolves the
+        writer relative to its own location, which is exactly what makes this substitution possible.
+        """
+        self.staged_roots = getattr(self, "staged_roots", 0) + 1
+        root = self.root / f"staged-plugin-root-{self.staged_roots}"
+        review = root / "scripts" / "review"
+        review.mkdir(parents=True)
+        helper = review / "persist-verdict.sh"
+        helper.write_text(helper_source, encoding="utf-8")
+        helper.chmod(0o755)
+        return root
+
     def run_synthesis(
         self,
         gemini_spec: str,
         codex_spec: str,
         combined_verdict: str,
+        helper_source: Optional[str] = None,
     ) -> Tuple[dict, List[str]]:
         return self.run_persistence_recipe(
             extract_recipe(SYNTHESIS_SKILL, SYNTHESIS_BEGIN, SYNTHESIS_END),
@@ -311,6 +348,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
                 "GEMINI_REVIEWER_SPEC": gemini_spec,
                 "CODEX_REVIEWER_SPEC": codex_spec,
             },
+            helper_source=helper_source,
         )
 
     def run_brainstorm_persistence(

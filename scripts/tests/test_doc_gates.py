@@ -158,8 +158,15 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                                          "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh",
                                          "${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"],
             "skills/create-feature-plan/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
-            "skills/review-synthesis/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
-            "skills/brainstorm/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            # The two persistence skills reach `review-verdict.py` THROUGH `persist-verdict.sh` now,
+            # so the bare-token reference to assert is the script they actually invoke. Asserting the
+            # old one would pass on a stale prose mention while the executed path went unchecked.
+            "skills/review-synthesis/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh"
+            ],
+            "skills/brainstorm/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh"
+            ],
             "skills/implement/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
             "skills/codex-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
             "skills/gemini-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],

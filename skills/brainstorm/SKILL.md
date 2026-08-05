@@ -2,7 +2,7 @@
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
+allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
 ---
 
 # Feature Brainstorm: $ARGUMENTS
@@ -188,18 +188,11 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
    # path; the `:-.` form is NOT substituted (it would resolve to `.`) and would fail to persist the
    # artifact, so /implement would report "no artifact" (COREDEV-2504). Matches implement.
    # COREDEV2619_BRAINSTORM_PERSIST_BEGIN
-   : "${PLAN_PATH:?bind PLAN_PATH to the reviewed plan}"
-   : "${COMBINED_VERDICT:?bind COMBINED_VERDICT to the synthesis result}"
-   : "${GEMINI_STATUS:?bind GEMINI_STATUS to the gemini result}"
-   : "${GEMINI_TRANSCRIPT:?bind GEMINI_TRANSCRIPT to its exact allocated path}"
-   : "${CODEX_STATUS:?bind CODEX_STATUS to the codex result}"
-   : "${CODEX_TRANSCRIPT:?bind CODEX_TRANSCRIPT to its exact allocated path}"
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh" \
        --plan "$PLAN_PATH" \
        --verdict "$COMBINED_VERDICT" \
        --reviewer "gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}" \
-       --reviewer "codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}" \
-       --created-at "${CREATED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+       --reviewer "codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}"
    # COREDEV2619_BRAINSTORM_PERSIST_END
    ```
 5. **Then** hand off: `/unleashed-mail:implement FEATURE_NAME`.

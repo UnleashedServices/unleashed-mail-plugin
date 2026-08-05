@@ -157,9 +157,14 @@ def _contract_problems(location: str, contracts: list[str], payloads: list[bytes
         for token in (b"--allocated", b"GEMINI_TRANSCRIPT", b"allocated", b"reserved")
     ):
         problems.append(f"{location}: destination lacks S-CAPTURE evidence")
+    # `REVIEWER_SPEC` replaces `PERSIST_SPEC`: the synthesis recipe no longer classifies the spec
+    # itself — `persist-verdict.sh` does — so what the destination binds is the opaque argument the
+    # skill received, which is the value that carries the allocated path. Same evidence, one name
+    # further upstream. Enumerated rather than a `_SPEC` pattern, so a new spelling has to be added
+    # deliberately instead of matching by accident.
     if "S-THREAD" in contracts and not any(
         token in joined
-        for token in (b"TRANSCRIPT", b"allocated", b"PERSIST_SPEC")
+        for token in (b"TRANSCRIPT", b"allocated", b"REVIEWER_SPEC")
     ):
         problems.append(f"{location}: destination lacks S-THREAD evidence")
     return problems

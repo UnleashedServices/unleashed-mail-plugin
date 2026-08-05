@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -167,6 +168,94 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
                         mutated,
                         "literal-runtime-" + reviewer,
                     )
+
+
+REPO = Path(__file__).resolve().parents[2]
+GRANT = re.compile(r"Bash\(([^)]*)\)")
+HELPER_PREFIX = "${CLAUDE_PLUGIN_ROOT}/scripts/review/"
+
+PERSISTENCE_RECIPES = (
+    (
+        "skills/review-synthesis/SKILL.md",
+        "# COREDEV2619_SYNTHESIS_PERSIST_BEGIN",
+        "# COREDEV2619_SYNTHESIS_PERSIST_END",
+    ),
+    (
+        "skills/brainstorm/SKILL.md",
+        "# COREDEV2619_BRAINSTORM_PERSIST_BEGIN",
+        "# COREDEV2619_BRAINSTORM_PERSIST_END",
+    ),
+)
+
+
+def _logical_commands(recipe: str) -> List[str]:
+    """Commands in a recipe, with line continuations joined and comments dropped."""
+    joined = re.sub(r"\\\n\s*", " ", recipe)
+    return [
+        line.strip()
+        for line in joined.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+
+class PersistenceRecipeGrantProofs(unittest.TestCase):
+    """Gaps 7-9 and bot thread 7: the block every gate round must run prompted every time.
+
+    Each persistence recipe used to define shell functions and branch, so it was a COMPOUND command.
+    Claude Code decomposes those and requires a rule per subcommand
+    (code.claude.com/docs/en/permissions), which is why no single `allowed-tools` Bash shape could
+    cover them and the operator was pushed toward a blanket `Bash` grant.
+
+    Asserted here: each recipe is ONE command, and it invokes a script under a directory the same
+    skill's own `allowed-tools` grants by prefix. This is the STRUCTURAL precondition, deliberately
+    not a reimplementation of the host's matcher — a test that guessed at quote handling would be
+    asserting my model of Claude Code rather than the property that made the recipe uncoverable.
+    """
+
+    def _grants(self, source: str) -> List[str]:
+        for line in source.splitlines():
+            if line.startswith("allowed-tools:"):
+                return GRANT.findall(line)
+        raise AssertionError("skill declares no allowed-tools line")
+
+    def test_each_persistence_recipe_is_one_granted_helper_call(self) -> None:
+        for relative, begin, end in PERSISTENCE_RECIPES:
+            with self.subTest(skill=relative):
+                path = REPO / relative
+                source = path.read_text(encoding="utf-8")
+                commands = _logical_commands(_extract_recipe(path, begin, end))
+
+                self.assertEqual(
+                    1, len(commands), f"{relative}: recipe is {len(commands)} commands, not one"
+                )
+                command = commands[0]
+                for operator in ("&&", "||", ";", "|"):
+                    self.assertNotIn(
+                        operator,
+                        command,
+                        f"{relative}: a shell operator makes this a compound command again",
+                    )
+                self.assertTrue(
+                    command.startswith('bash "' + HELPER_PREFIX),
+                    f"{relative}: recipe does not invoke a scripts/review helper by bare token: "
+                    f"{command!r}",
+                )
+
+                covering = [
+                    grant
+                    for grant in self._grants(source)
+                    if grant.endswith("*") and command.startswith("bash " + grant[: -len("*")])
+                    or grant.startswith("bash " + HELPER_PREFIX)
+                ]
+                self.assertTrue(
+                    covering,
+                    f"{relative}: allowed-tools has no Bash grant covering {HELPER_PREFIX}",
+                )
+
+    def test_the_helper_the_recipes_call_is_committed_and_executable(self) -> None:
+        helper = REPO / "scripts" / "review" / "persist-verdict.sh"
+        self.assertTrue(helper.is_file(), "the recipes call a script that is not in the repo")
+        self.assertTrue(os.access(helper, os.X_OK), "the shipped helper is not executable")
 
 
 if __name__ == "__main__":  # pragma: no cover

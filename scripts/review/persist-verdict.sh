@@ -99,9 +99,13 @@ fi
 
 # `${CLAUDE_PLUGIN_ROOT}` is unset in an ordinary Bash tool shell, so resolve relative to
 # this script instead (COREDEV-2619 round 14 — do not reintroduce the variable here).
+# Resolve the PARENT too rather than exec'ing a `…/review/../review-verdict.py` spelling: the writer
+# is named in diagnostics and matched by path, and a non-canonical spelling of it is a different
+# string to everything downstream even though it opens the same file.
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
-exec python3 "${SCRIPT_DIR}/../review-verdict.py" write \
+exec python3 "${SCRIPTS_DIR}/review-verdict.py" write \
     --plan "$PLAN_PATH" \
     --verdict "$COMBINED_VERDICT" \
     --reviewer "$GEMINI_PERSIST_SPEC" \
