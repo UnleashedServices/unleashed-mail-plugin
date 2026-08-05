@@ -100,7 +100,7 @@
       "destination": {
         "line": 187,
         "payloads": [
-          "- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two explicitly supplied per-run transcript paths and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each allocated path is carried as one opaque `--reviewer \"<name>=<STATUS>:<path>\"` argument; a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a."
+          "- **Plan-review synthesis skill** \u2014 new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two explicitly supplied per-run transcript paths and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each allocated path is carried as one opaque `--reviewer \"<name>=<STATUS>:<path>\"` argument; a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) \u00a72 as plan-review step 3a."
         ],
         "payloadSha256": "4c113e8aad72f7ccc1647fd8102aafa306f61e579d08430498f4b419bc017407"
       },
@@ -143,9 +143,9 @@
       "sourceSha256": "e1563fc84db030571e7158cd9ba06af097f55e59373248aab6ec0ec8eb01096e"
     },
     {
-      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:56",
+      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:57",
       "path": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md",
-      "line": 56,
+      "line": 57,
       "class": "quote-keep",
       "reason": "The predecessor plan preserves the measured stale-transcript incident.",
       "sourceSha256": "720374b95a3a3b6357a6f0405c48ad69787a1cc0b58ac44b7deadb826b636d3b"
@@ -414,7 +414,7 @@
       "destination": {
         "line": 200,
         "payloads": [
-          "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
+          "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
         "payloadSha256": "2fa4e7b2b3d16f2e54394bd0913718f32afe3dbbc1cd98c57f73c310d7638029"
       },
@@ -506,7 +506,7 @@
       "destination": {
         "line": 199,
         "payloads": [
-          "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
+          "6. **Capture output** \u2014 the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
         ],
         "payloadSha256": "981690c6089e9c0de60631c26d3b90da03436cc269a5c9dab3534615c8cea4cd"
@@ -529,7 +529,7 @@
       "destination": {
         "line": 202,
         "payloads": [
-          "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
+          "8. **Synthesize both reviews** \u2014 once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
           "   \"<name>=<STATUS>:<allocated-path>\"` argument. Make sure each review prompt asks the reviewer to finish",
           "   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the",
@@ -601,7 +601,7 @@
         "payloads": [
           "1. Parse the two explicit `--reviewer` arguments using only their first structural `=` and `:`",
           "   delimiters, then read those exact path remainders. Treat a **missing, empty, or 0-byte** allocated file",
-          "   as **\"reviewer did not return\" (`MISSING`)** — never as silent approval. Still confirm each transcript",
+          "   as **\"reviewer did not return\" (`MISSING`)** \u2014 never as silent approval. Still confirm each transcript",
           "   is **this round's** review (it names the current plan / matches the feedback you just sent); if you",
           "   cannot confirm it is fresh, treat it as MISSING and re-run the review."
         ],
