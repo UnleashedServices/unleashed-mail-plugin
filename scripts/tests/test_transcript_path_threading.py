@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -351,15 +352,18 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         self.assertTrue(codex_path.startswith(expected_prefix), codex_path)
         self.assertEqual([], codex_helpers)
         self.assertEqual(1, len(gemini_helpers), gemini_helpers)
+        # The first three operands are a fixed contract. The timeout is NOT asserted as a literal --
+        # see _assert_recipe_timeout_exceeds_print_timeout below for why.
         self.assertEqual(
             [
                 str(self.plugin / "scripts" / "review" / "isolated-agy-review.sh"),
                 ".agy-prompt.md",
                 gemini_path,
-                "1500",
             ],
-            gemini_helpers[0],
+            gemini_helpers[0][:3],
         )
+        self.assertEqual(4, len(gemini_helpers[0]), gemini_helpers[0])
+        self._assert_recipe_timeout_exceeds_print_timeout(gemini_helpers[0][3])
         for expected, record in ((gemini_path, gemini_capture), (codex_path, codex_capture)):
             with self.subTest(expected=expected):
                 argv = record["argv"]
@@ -494,6 +498,28 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         self.assertEqual(
             ["gemini=MISSING", f"codex=APPROVE:{codex_path}"],
             self.reviewer_values(argv),
+        )
+
+    def _assert_recipe_timeout_exceeds_print_timeout(self, recipe_timeout: str) -> None:
+        """Bind the recipe's timeout to the wrapper's `--print-timeout`, never to a literal.
+
+        This previously asserted `"1500"`, which pinned a DEFECTIVE value as the expected one: the
+        wrapper had moved to `--print-timeout 28m` (1680s), so 1500 SIGTERMs a live review at 25
+        minutes. Applying the correct fix turned CI red while leaving it green on the bug (PR #63
+        review, gap 12). Assert the INVARIANT that actually matters instead -- the wrapper's cap must
+        exceed the print-timeout it is wrapping -- so either value may be retuned without editing a
+        test, and no retuning can reintroduce the inversion.
+        """
+        wrapper = (self.plugin / "scripts" / "review" / "isolated-agy-review.sh").read_text()
+        match = re.search(r"--print-timeout\s+(\d+)m", wrapper)
+        self.assertIsNotNone(match, "wrapper must pass an explicit --print-timeout")
+        print_timeout_seconds = int(match.group(1)) * 60
+        self.assertGreater(
+            int(recipe_timeout),
+            print_timeout_seconds,
+            "the recipe's wrapper timeout must EXCEED agy's --print-timeout "
+            f"({print_timeout_seconds}s), or a live review is SIGTERMed before agy can "
+            "report its own diagnosable timeout",
         )
 
 

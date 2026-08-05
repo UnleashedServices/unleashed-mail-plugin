@@ -326,7 +326,7 @@
         "S-CAPTURE"
       ],
       "destination": {
-        "line": 47,
+        "line": 51,
         "payloads": [
           "# COREDEV2619_CODEX_CAPTURE_BEGIN",
           ": \"${TICKET:?bind TICKET to the --ticket operand}\"",
@@ -366,7 +366,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 64,
+        "line": 68,
         "payloads": [
           "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py\" --timeout 1200 --allocated \"$CODEX_TRANSCRIPT\" -- \\"
         ],
@@ -389,7 +389,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 67,
+        "line": 71,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -412,7 +412,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 200,
+        "line": 204,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -457,11 +457,11 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 72,
+        "line": 75,
         "payloads": [
-          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
+          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1800"
         ],
-        "payloadSha256": "9b09976bb2c59a329694ce545d72aa027dad5fd2085a58b449e8659902598a8a"
+        "payloadSha256": "fae091f453ed089f10e9f2fb4d7d1fa0e935c5264518fd57c108d99934b604f2"
       },
       "sourceSha256": "023d8ab2eb52d46c113492552938fc963f61b06013b013de4689daf63bbef35d",
       "precedingAnchorLine": 70,
@@ -480,12 +480,12 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 138,
+        "line": 155,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
-          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1500"
+          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1800"
         ],
-        "payloadSha256": "bd4e8d1581a114f8070f7d719de107b3631124cfaf8703503ca59a640886e8a7"
+        "payloadSha256": "125e2d2a0b4e20dee8e55b855cae6386b05879a9306517610634256d84608e8c"
       },
       "sourceSha256": "39c3aae64f0722977fcad2430f6ba7ade99d0a6a8855ba69a42873c173e9ab39",
       "precedingAnchorLine": 136,
@@ -504,7 +504,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 199,
+        "line": 216,
         "payloads": [
           "6. **Capture output** \u2014 the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -527,7 +527,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 202,
+        "line": 219,
         "payloads": [
           "8. **Synthesize both reviews** \u2014 once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

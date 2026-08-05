@@ -286,9 +286,12 @@ class M51AndM52PropagationProofs(M5PathFixture):
                 '--allocated "$CODEX_TRANSCRIPT" -- \\\n',
                 '--allocated "${XDG_STATE_HOME}/derived-codex.txt" -- \\\n',
             ),
+            # The timeout operand is deliberately NOT part of this anchor. The mutation under test
+            # is the re-derived transcript PATH; including the timeout pinned an unrelated literal,
+            # so retuning it broke this test for a reason it does not test (PR #63 review, gap 12).
             "gemini": (
-                '.agy-prompt.md "$GEMINI_TRANSCRIPT" 1500',
-                '.agy-prompt.md "${XDG_STATE_HOME}/derived-gemini.txt" 1500',
+                '.agy-prompt.md "$GEMINI_TRANSCRIPT"',
+                '.agy-prompt.md "${XDG_STATE_HOME}/derived-gemini.txt"',
             ),
         }
         for reviewer, (old, new) in mutations.items():

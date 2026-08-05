@@ -198,7 +198,7 @@ normalization table maps *missing / empty / **unparseable** transcript* → `MIS
 
 1. the reviewer **never ran** — install/authenticate the CLI, or capture the review elsewhere;
 2. it ran but the transcript was **empty or unparseable** — re-capture it (`agy` writes exactly 0 bytes
-   from a non-TTY on failure, and needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+   from a non-TTY on failure, and needs `--print-timeout 28m`; a tiny transcript is a failure, not a
    verdict).
 
 Check the transcript before assuming (1): the fix for (2) is a re-run, not an install. What they share —
@@ -212,7 +212,7 @@ and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …
 changes *and* recover the missing reviewer. Neither alone passes the gate.
 
 First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` that answers a **`pong`** means the CLI is healthy
-and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+and the review call was wrong (`agy` needs `--print-timeout 28m`; a tiny transcript is a failure, not a
 verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
 flag and re-run.
 
@@ -220,7 +220,7 @@ flag and re-run.
 > measured runs `agy` answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let
 > me know how I can help you today.` A `Pong!`-exact check reports a **healthy** CLI as unavailable
 > roughly one run in three — sending you down this recovery path (and escalating to the user) when the
-> only real problem was a missing `--print-timeout 18m`. That is the exact misdiagnosis this step exists
+> only real problem was a missing `--print-timeout 28m`. That is the exact misdiagnosis this step exists
 > to prevent.
 
 If it is genuinely unavailable, STOP and present the recovery choices to the **user** — install/authenticate

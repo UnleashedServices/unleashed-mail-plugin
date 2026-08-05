@@ -40,10 +40,14 @@ Docs: https://developers.openai.com/codex/cli/reference
 # SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
 # (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
 # otherwise kill the run before the wrapper's cap fires.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (codex absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
+# MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed one.
+# Each round allocates its own transcript leaf, so a wrapper that never starts (codex absent / auth
+# expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a STALE
 # previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
-# MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
+# MISSING -> the gate fails closed.
+# DO NOT `rm -f` THE RESERVED LEAF. The allocator creates it 0-byte and pty-capture.py --allocated opens
+# it WITHOUT O_CREAT, so deleting it makes the final write fail on a missing file AFTER the full review
+# has run — the round is lost (PR #63 review, gap 14). Retries must RE-ALLOCATE.
 # COREDEV2619_CODEX_CAPTURE_BEGIN
 : "${TICKET:?bind TICKET to the --ticket operand}"
 : "${ROUND:?bind ROUND to the --round operand}"
