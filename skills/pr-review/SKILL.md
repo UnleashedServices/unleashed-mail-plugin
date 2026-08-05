@@ -2,7 +2,9 @@
 name: pr-review
 description: Run a multi-agent code review on the current branch (security + concurrency + UX/perf + accessibility + AI-prompt-safety + parity)
 argument-hint: [PR number or branch (defaults to current branch)]
-allowed-tools: Read, Bash, Grep, Glob, Agent
+# COREDEV-2642 (PR #63 review, gap 1): model-invocable, so scope the Bash grant to what the body
+# actually runs (git fetch / merge / diff) instead of pre-approving every command.
+allowed-tools: Read, Grep, Glob, Agent, Bash(git *)
 ---
 
 # PR Review: $ARGUMENTS

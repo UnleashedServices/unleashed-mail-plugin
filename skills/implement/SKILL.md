@@ -2,7 +2,15 @@
 name: implement
 description: Implement a feature using specialized coding agents (db, logic, UI) with TDD and modern standards
 argument-hint: [feature name or docs/planning/PLAN.md path]
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
+# COREDEV-2642 (PR #63 review, gap 1): this skill is model-invocable, so every tool listed here
+# is PRE-APPROVED with no user gesture — including one the model opened by deciding a task "is an
+# implementation", a decision injected content in a reviewed file can steer. The body ORCHESTRATES:
+# it delegates all file writing to db-engineer / logic-engineer / ui-engineer via Agent, which carry
+# their own tools. So blanket Write/Edit/Bash were pre-approval this skill never exercises itself.
+# `allowed-tools` is a pre-approval grant, NOT a restriction — narrowing it does not disable
+# anything, it just means those calls need the normal user gesture. That is the correct posture for
+# a model-reachable workflow.
+allowed-tools: Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
 ---
 
 # Implement: $ARGUMENTS

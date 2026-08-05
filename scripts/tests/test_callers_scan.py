@@ -238,28 +238,28 @@ DESTINATIONS = (
     ),
     ReferenceDestination(
         "skills/implement/SKILL.md",
-        161,
+        169,
         "gemini",
         "6e9ac7efd288872063808b04a0a8e7a400f6bf1cdbed50790cecb0617fdda778",
         "fb16dd012eec99f71ec273b8b15784d63ad30ca115bd2cece2edf73684b88c66",
     ),
     ReferenceDestination(
         "skills/implement/SKILL.md",
-        161,
+        169,
         "codex",
         "6e9ac7efd288872063808b04a0a8e7a400f6bf1cdbed50790cecb0617fdda778",
         "fb16dd012eec99f71ec273b8b15784d63ad30ca115bd2cece2edf73684b88c66",
     ),
     ReferenceDestination(
         "skills/implement/SKILL.md",
-        172,
+        180,
         "gemini",
         "5b97f8b731626d15f40fa04ffe97fd1dc248f58513a4d0c8731b53c4834827b3",
         "0800c16ca0f8760d6663dda202a48545d4f616f94a3b14ae319e1a7754a0d09a",
     ),
     ReferenceDestination(
         "skills/implement/SKILL.md",
-        172,
+        180,
         "codex",
         "5b97f8b731626d15f40fa04ffe97fd1dc248f58513a4d0c8731b53c4834827b3",
         "0800c16ca0f8760d6663dda202a48545d4f616f94a3b14ae319e1a7754a0d09a",
@@ -429,7 +429,7 @@ class M513CallersScanTests(CallersScanProof):
         ]
         self.assertTrue(implement_candidates)
         shifted = min(implement_candidates, key=lambda item: item.line_number)
-        self.assertEqual(161, shifted.line_number)
+        self.assertEqual(169, shifted.line_number)
         stale = ReferenceIdentity(
             shifted.path, shifted.line_number - 1, shifted.identity.payload_sha256
         )
@@ -796,8 +796,8 @@ class M515bFullInvocationShapeTests(CallersScanProof):
         baseline = load_final_tree()
         positions = destination_positions(self, baseline)
         path = "skills/implement/SKILL.md"
-        first_key = (path, 161, "codex")
-        second_key = (path, 172, "codex")
+        first_key = (path, 169, "codex")
+        second_key = (path, 180, "codex")
         first = positions[first_key]
         second = positions[second_key]
         self.assertLess(first, second)
@@ -826,8 +826,8 @@ class M515bFullInvocationShapeTests(CallersScanProof):
         dual_sources = (
             ("skills/create-feature-plan/SKILL.md", 81),
             ("skills/brainstorm/SKILL.md", 178),
-            ("skills/implement/SKILL.md", 161),
-            ("skills/implement/SKILL.md", 172),
+            ("skills/implement/SKILL.md", 169),
+            ("skills/implement/SKILL.md", 180),
         )
         for path, source_line in dual_sources:
             with self.subTest(path=path, source_line=source_line):
