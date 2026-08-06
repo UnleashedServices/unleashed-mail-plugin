@@ -40,9 +40,12 @@ grep -rn "Bearer [A-Za-z0-9_-]" --include='*.swift' "Unleashed Mail/Sources/"
 grep -rn "secret\|token\|key\|password" .github/workflows/*.yml 2>/dev/null
 grep -rn "echo.*\$\{.*SECRET\|echo.*\$\{.*TOKEN" .github/workflows/*.yml 2>/dev/null
 
-# Verify .gitignore covers sensitive files
-cat .gitignore | grep -i "key\|secret\|token\|env\|credential"
 ```
+
+Verify `.gitignore` covers sensitive files with **Grep**, not `cat … | grep` — this agent has no
+`Bash`, and a pipeline it cannot run is an audit step that silently does not happen:
+
+- `Grep` pattern `(?i)key|secret|token|env|credential` in path `.gitignore`
 
 **Flag as 🔴 BLOCKER:**
 - Any secret or token value hardcoded in source
@@ -190,10 +193,11 @@ grep -rn "allowsContentJavaScript" --include='*.swift' "Unleashed Mail/Sources/"
 
 ### 10. Entitlements Audit
 
-```bash
-# Review entitlements
-cat *.entitlements 2>/dev/null || find . -name "*.entitlements" -exec cat {} \;
-```
+Locate and read the entitlements with **Glob** + **Read** — `cat`/`find` need `Bash`, which this
+agent does not have:
+
+- `Glob` pattern `**/*.entitlements`
+- `Read` each match
 
 - [ ] Only necessary entitlements are present
 - [ ] `com.apple.security.network.client` — required for API calls
@@ -289,6 +293,18 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
 ## Tooling note
 
 > **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
-> longer holds `Bash`. Every command in this body was a `grep -rn`, which `Grep` does natively, and
-> `pr-review` is model-invocable: injected PR content could otherwise steer a spawned reviewer to
-> arbitrary shell one level below the skill's own scoped grant (deep review, P1).
+> longer holds `Bash`, because `pr-review` is model-invocable and injected PR content could otherwise
+> steer a spawned reviewer to arbitrary shell one level below the skill's own scoped grant (deep
+> review, P1).
+>
+> **Correction (PR #63 recheck).** The first version of this note claimed every command in this body
+> "was a `grep -rn`". That was false, and the claim is what made it dangerous: `security-reviewer`
+> still called `cat .gitignore | grep …` and `cat *.entitlements || find …`, and
+> `concurrency-reviewer` still called `plutil`. `Grep` cannot execute `cat`, `find`, `plutil` or
+> pipeline semantics, so those audit sections would have silently produced nothing while this note
+> asserted they were covered — a reviewer that cannot run its own step is worse than one holding
+> Bash, because the gap is invisible. Those steps are now written as explicit `Glob`/`Read`/`Grep`
+> operations. I had checked the dominant pattern rather than the whole set.
+>
+> A CI check (`validate-plugin-assembly.py`) now fails if any agent without `Bash` carries a shell
+> fence line that is not a bare `grep`, so this cannot drift back.

@@ -518,8 +518,8 @@ unchanged and still mandatory.
 | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
 | `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:237` |
 | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |
-| `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:203` |
-| `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:264` |
+| `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:207` |
+| `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:265` |
 | `ux-perf-findings` | `ux-perf-reviewer` | `out` | `agents/ux-perf-reviewer.md:199` |
 | `accessibility-findings` | `accessibility-auditor` | `out` | `agents/accessibility-auditor.md:210` |
 | `prompt-safety-findings` | `prompt-review` | `out` | `agents/prompt-review.md:95` |

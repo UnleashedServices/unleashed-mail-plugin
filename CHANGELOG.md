@@ -106,6 +106,17 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Removing `Bash` from two reviewers broke audit steps their bodies still needed.** The tool-list
+  change was right; the justification was not. The note added beside it claimed every command in those
+  bodies "was a `grep -rn`" — measured against the dominant pattern, not the whole set.
+  `security-reviewer` still called `cat .gitignore | grep …` and `cat *.entitlements || find …`;
+  `concurrency-reviewer` still called `plutil`. `Grep` executes none of those, so **those audit
+  sections would have produced nothing while the reviewer reported a complete review** — a silent gap,
+  which is worse than the escalation path the removal closed, because nothing announces it. All three
+  are now explicit `Glob`/`Read`/`Grep` steps, the notes carry the correction, and
+  `validate-plugin-assembly.py` fails if any agent without `Bash` documents a command only a shell
+  could run.
+
 - **The Gemini arm reviewed the committed plan while its binding named the working-tree one.**
   `isolated-agy-review.sh` builds its review tree with `git worktree add --detach … $(git rev-parse
   HEAD)`, so `agy` read the **committed** plan; `bind-prompt.py` hashed the **working-tree** plan into

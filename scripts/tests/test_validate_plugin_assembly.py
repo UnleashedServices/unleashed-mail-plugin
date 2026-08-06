@@ -582,5 +582,73 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
         self.assertEqual([], self._run(root))
 
 
+class BashlessAgentsRunNoShell(unittest.TestCase):
+    """Removing `Bash` is only safe if the body stopped needing it.
+
+    Four reviewers had `Bash` removed; two bodies still called `cat`, `find` and `plutil`. `Grep`
+    cannot execute any of those, so those audit sections would have produced NOTHING while the agent
+    reported a complete review — and the note added beside the change asserted the opposite, because it
+    was checked against the dominant pattern rather than the whole set (PR #63 recheck).
+
+    A missing capability that announces itself is a bug. One that silently drops a section is a false
+    clean bill of health, which is strictly worse.
+    """
+
+    def _run(self, root):
+        problems: list[str] = []
+        vpa.check_bashless_agents_run_no_shell(root, problems)
+        return problems
+
+    def test_the_shipped_agents_are_consistent(self):
+        self.assertEqual([], self._run(Path(_MOD_PATH).resolve().parents[1]))
+
+    def test_a_shell_only_command_in_a_bashless_agent_is_caught(self):
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="bashless-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        (root / "agents" / "reader.md").write_text(
+            "---\nname: reader\ndescription: x\ntools: Read, Grep, Glob\n---\n"
+            "```bash\ncat *.entitlements\n```\n",
+            encoding="utf-8",
+        )
+        problems = self._run(root)
+        self.assertTrue(problems)
+        self.assertIn("cat", problems[0])
+
+    def test_grep_is_exempt_because_the_Grep_tool_does_it(self):
+        """The exemption is the entire basis for removing Bash — if grep were flagged too, the rule
+        would demand giving Bash back, which is the opposite of the fix."""
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="bashless-grep-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        (root / "agents" / "reader.md").write_text(
+            "---\nname: reader\ndescription: x\ntools: Read, Grep, Glob\n---\n"
+            '```bash\ngrep -rn "pattern" Sources/\n```\n',
+            encoding="utf-8",
+        )
+        self.assertEqual([], self._run(root))
+
+    def test_an_agent_that_still_holds_Bash_is_out_of_scope(self):
+        """`swift-reviewer` genuinely needs Bash; the rule must not push it to drop working recipes."""
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="bashful-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        (root / "agents" / "runner.md").write_text(
+            "---\nname: runner\ndescription: x\ntools: Read, Bash, Grep\n---\n"
+            "```bash\ncat *.entitlements\n```\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], self._run(root))
+
+
 if __name__ == "__main__":
     unittest.main()

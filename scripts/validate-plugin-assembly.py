@@ -286,6 +286,50 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
             "the exact command with no wildcard.")
 
 
+def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
+    """An agent without `Bash` must not document a command only `Bash` could run.
+
+    WHY THIS EXISTS (PR #63 recheck). Four reviewers had `Bash` removed because `pr-review` is
+    model-invocable and a spawned reviewer was a path to arbitrary shell. The removal was right for the
+    tool list and WRONG for two of the bodies: `security-reviewer` still called `cat … | grep` and
+    `cat *.entitlements || find …`, and `concurrency-reviewer` still called `plutil`. The note added
+    beside the change asserted every command "was a `grep -rn`" — checked against the dominant pattern
+    rather than the whole set.
+
+    That failure mode is worse than the one it replaced: `Grep` cannot execute `cat`, `find`, `plutil`
+    or a pipeline, so those audit sections produce NOTHING while the reviewer reports a complete review.
+    A missing capability that announces itself is a bug; one that silently drops a section is a false
+    clean bill of health.
+
+    `grep` alone is exempt because `Grep` does it natively, which is the whole basis for the removal.
+    """
+    for path in sorted((root / "agents").glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        frontmatter = parse_frontmatter(text) or {}
+        tools = frontmatter.get("tools")
+        if tools is None or "Bash" in tools:
+            continue  # inherits everything, or holds Bash — out of scope
+        offenders = []
+        for fence in re.findall(r"```(?:bash|sh|shell)\n(.*?)```", text, re.S):
+            for line in fence.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                # A continuation line of a multi-line grep pipeline is still that grep.
+                if stripped.startswith("|") or stripped.startswith("--"):
+                    continue
+                if not re.match(r"^grep\b", stripped):
+                    offenders.append(stripped[:70])
+        if offenders:
+            rel = path.relative_to(root).as_posix()
+            problems.append(
+                f"{rel}: has no `Bash` but documents {len(offenders)} command(s) only a shell could "
+                f"run, so those steps silently do nothing: {offenders[0]!r}"
+                + (f" (+{len(offenders) - 1} more)" if len(offenders) > 1 else "")
+                + ". Rewrite them as Read/Glob/Grep steps, or give the agent an audited wrapper."
+            )
+
+
 def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
     """An agent holding bare `Agent` must deny every file-writing agent BY NAME.
 
@@ -815,6 +859,8 @@ def main() -> int:
     check_model_tiering(root, agent_models, problems)
     # A bare `Agent` grant reaches every agent; recompute the writer set and require it denied.
     check_spawner_denies_every_writer(root, problems)
+    # A Bash-less agent must not document commands only a shell could run — those steps vanish.
+    check_bashless_agents_run_no_shell(root, problems)
     check_reviewer_roster(root, {p.stem for p in agents}, problems)
     check_mcp_server_paths(root, problems)
     for p in skills:

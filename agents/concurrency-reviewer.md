@@ -218,11 +218,12 @@ grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' 
 > `Package.swift` or `Package.resolved` at the root. Package dependencies are
 > managed inside Xcode (`.xcodeproj`). Inspect via:
 
-```bash
-# Resolved package versions live in the xcodeproj
-plutil -p "Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" 2>/dev/null \
-    | grep -B1 "version" || echo "(swiftpm/Package.resolved not present — open Xcode for resolved versions)"
-```
+Read it directly — `plutil` needs `Bash`, which this agent does not have, and `Package.resolved` is
+JSON, so `Read` shows the pinned versions without it:
+
+- `Read` `Unleashed Mail.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+- If that path is absent, say so and stop: the versions are only resolvable by opening Xcode, and
+  guessing them would be a fabricated finding.
 
 `concurrency-reviewer` does not have WebFetch / Context7 — it cannot independently
 verify that a pinned version is the "latest" without external lookup. Either
@@ -351,6 +352,18 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
 ## Tooling note
 
 > **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
-> longer holds `Bash`. Every command in this body was a `grep -rn`, which `Grep` does natively, and
-> `pr-review` is model-invocable: injected PR content could otherwise steer a spawned reviewer to
-> arbitrary shell one level below the skill's own scoped grant (deep review, P1).
+> longer holds `Bash`, because `pr-review` is model-invocable and injected PR content could otherwise
+> steer a spawned reviewer to arbitrary shell one level below the skill's own scoped grant (deep
+> review, P1).
+>
+> **Correction (PR #63 recheck).** The first version of this note claimed every command in this body
+> "was a `grep -rn`". That was false, and the claim is what made it dangerous: `security-reviewer`
+> still called `cat .gitignore | grep …` and `cat *.entitlements || find …`, and
+> `concurrency-reviewer` still called `plutil`. `Grep` cannot execute `cat`, `find`, `plutil` or
+> pipeline semantics, so those audit sections would have silently produced nothing while this note
+> asserted they were covered — a reviewer that cannot run its own step is worse than one holding
+> Bash, because the gap is invisible. Those steps are now written as explicit `Glob`/`Read`/`Grep`
+> operations. I had checked the dominant pattern rather than the whole set.
+>
+> A CI check (`validate-plugin-assembly.py`) now fails if any agent without `Bash` carries a shell
+> fence line that is not a bare `grep`, so this cannot drift back.
