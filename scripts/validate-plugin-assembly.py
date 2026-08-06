@@ -225,6 +225,67 @@ TRAMPOLINE_BASH_PREFIXES = {
 }
 
 
+_INTERPRETERS = ("bash", "sh", "zsh", "python3", "python", "perl", "ruby", "node")
+# `-c` code, `-m` module, `-` stdin: the shapes that turn an interpreter grant into arbitrary execution.
+_INTERPRETER_CODE_MODES = ("-c", "-m", "-i", "-e", "--command", "--eval")
+
+
+def _wildcard_bash_problem(specifier: str) -> str | None:
+    """DEFAULT-DENY. Return why this wildcard grant is refused, or None if it is on the allowlist.
+
+    THE POLICY THIS REPLACES WAS FAIL-OPEN, AND MEASURED SO (PR #63 recheck, P2).
+    The old rule deny-listed a fixed set of command names — git, gh, codex, agy, kimi, rm, sudo — and
+    let everything else through. Exact probes producing NO problem and NO warning included:
+
+        Bash(python3 -c *)   Bash(sh -c *)   Bash(cp *)   Bash(mv *)
+        Bash(tee *)          Bash(find *)    Bash(curl *) Bash(chmod *)
+
+    `python3 -c *` is arbitrary code execution; the interpreter special-case only looked for a wildcard
+    in the SCRIPT PATH, and `-c` is not a path, so it fell through the `continue`. A policy advertised
+    in the CHANGELOG as "a new, enforced capability" that accepts `sh -c *` enforces very little, and
+    the release notes leaned on that claim to justify a minor bump.
+
+    So the shape is inverted: a wildcard `Bash` grant on a model-reachable skill is REFUSED unless it
+    is an interpreter invoking an EXACT script beneath `${CLAUDE_PLUGIN_ROOT}`. Those wrappers are in
+    this repo, reviewed with it, and each one contains its own operands — which is the property that
+    makes the trailing `*` acceptable there and nowhere else. Adding a new allowed shape now requires
+    editing this function, which is the point: the list is the decision record.
+    """
+    head = _normalized_command_words(specifier)
+    if head is None:
+        return ("a flagged command wrapper cannot be analysed safely, so it is refused. "
+                "Name the command directly.")
+    if not head:
+        return "the grant has no command at all, so it pre-approves anything"
+
+    command = head[0]
+    if command in _INTERPRETERS:
+        if len(head) < 2:
+            return f"a bare `{command}` wildcard pre-approves any program it can be asked to run"
+        target = head[1]
+        # Code/module/stdin modes are the arbitrary-execution shapes. They are NOT script paths, and
+        # the previous rule's "is there a `*` in the path" question never applied to them.
+        if target in _INTERPRETER_CODE_MODES or target == "-" or target.startswith("-"):
+            return (f"`{command} {target}` is an interpreter code/module/stdin mode — that is "
+                    "arbitrary code execution, not a call to a reviewed script")
+        if "*" in target:
+            return ("the wildcard is in the SCRIPT PATH, so it pre-approves every script in that "
+                    "directory (including destructive ones). Name the exact entrypoint.")
+        if "${CLAUDE_PLUGIN_ROOT}/" not in target:
+            return (f"only an exact script beneath `${{CLAUDE_PLUGIN_ROOT}}` may carry a trailing "
+                    f"wildcard; `{target}` is outside the plugin and is not reviewed with it")
+        return None  # the allowlisted shape: exact plugin-root wrapper, operands bounded by the script
+
+    if command in BROAD_BASH_PREFIXES:
+        return f"that is {BROAD_BASH_PREFIXES[command]}"
+    if command in TRAMPOLINE_BASH_PREFIXES:
+        return f"that {TRAMPOLINE_BASH_PREFIXES[command]}"
+    # DEFAULT DENY. Everything not named above lands here — which is the whole correction.
+    return (f"wildcard `Bash({command} …)` is not an exact plugin-root wrapper. Model-reachable "
+            "grants are default-deny: call a reviewed script under `${CLAUDE_PLUGIN_ROOT}`, or write "
+            "the exact command with no wildcard.")
+
+
 def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[str],
                                  warnings: list[str] | None = None) -> None:
     """Reject broad write/VCS/agent grants on a skill the MODEL can invoke (deep review, P1).
@@ -255,36 +316,10 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
         # a model-invocable skill is a DIFFERENT policy and is deliberately not claimed here.
         if "*" not in specifier:
             continue
-        head = _normalized_command_words(specifier)
-        if head is None:
+        problem = _wildcard_bash_problem(specifier)
+        if problem is not None:
             problems.append(
-                f"{rel}: model-invocable skill grants `Bash({specifier})` — a flagged command "
-                f"wrapper cannot be analysed safely, so it is refused. Name the command directly."
-            )
-            continue
-        if not head:
-            continue
-        command = head[0]
-        # `bash <path> *` / `python3 <path> *` are fine when the PATH is exact; the danger is a
-        # wildcard in the path itself, which covers every script in a directory.
-        if command in ("bash", "sh", "python3", "python") and len(head) > 1:
-            target = head[1]
-            if "*" in target:
-                problems.append(
-                    f"{rel}: model-invocable skill grants `Bash({specifier})` — the wildcard is in the "
-                    f"SCRIPT PATH, so it pre-approves every script in that directory (including "
-                    f"destructive ones). Name the exact entrypoint."
-                )
-            continue
-        if command in BROAD_BASH_PREFIXES:
-            problems.append(
-                f"{rel}: model-invocable skill grants `Bash({specifier})` — that is "
-                f"{BROAD_BASH_PREFIXES[command]}"
-            )
-        elif command in TRAMPOLINE_BASH_PREFIXES and warnings is not None:
-            warnings.append(
-                f"{rel}: model-invocable skill grants `Bash({specifier})` (advisory) — "
-                f"{TRAMPOLINE_BASH_PREFIXES[command]}"
+                f"{rel}: model-invocable skill grants `Bash({specifier})` — {problem}"
             )
 
 

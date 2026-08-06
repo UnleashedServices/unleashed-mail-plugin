@@ -26,6 +26,7 @@ PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
 CAPTURE_CODEX = REPO / "scripts" / "review" / "capture-codex-review.sh"
 CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
 BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
+CONTAINMENT = REPO / "scripts" / "review" / "containment.py"
 
 # The recipes name a PER-ROUND prompt file, so the fixture repo must carry the ones the
 # fixture's TICKET/ROUND produce. A shared name was the cross-wiring hazard (deep review, P1).
@@ -166,7 +167,14 @@ class TranscriptThreadingFixture(unittest.TestCase):
 
     def _make_reviewed_repo(self) -> None:
         self.reviewed.mkdir()
-        prompt = "# Review fixture\n\n" + ("read-only fixture material\n" * 80)
+        # The prompt must NAME the plan it reviews. `bind-prompt.py` refuses a prompt that names a
+        # different `*_PLAN.md`, or none at all — a prompt saying `REVIEW TARGET: PLAN_B` bound cleanly
+        # to `--plan PLAN_A` and produced an APPROVE artifact for the wrong plan (PR #63 recheck, P1).
+        # A path-threading fixture still has to be a legitimate review request.
+        prompt = (
+            "# Review fixture\n\nREVIEW TARGET: FEATURE_PLAN.md\n\n"
+            + ("read-only fixture material\n" * 80)
+        )
         (self.reviewed / ".agy-prompt.md").write_text(prompt, encoding="utf-8")
         # The codex arm's prompt file was never created here. The old inline recipe passed
         # `$(cat .codex-prompt.md)`, which expands EMPTY on a missing file, so every codex capture
@@ -199,6 +207,11 @@ class TranscriptThreadingFixture(unittest.TestCase):
         shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
         shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
         shutil.copy2(BIND_PROMPT, review_dir / BIND_PROMPT.name)
+        # …and the module it imports. The containment rules were factored into `containment.py` so the
+        # SAME implementation guards `audit-codex.sh`, whose identical defect the recheck found. A
+        # relocated-copy fixture that lists files by hand does not learn about a new sibling on its own;
+        # this line exists because three such fixtures failed with `ModuleNotFoundError`.
+        shutil.copy2(CONTAINMENT, review_dir / CONTAINMENT.name)
         shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
 
@@ -441,10 +454,18 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         self.assertEqual(1, len(gemini_helpers), gemini_helpers)
         # The first three operands are a fixed contract. The timeout is NOT asserted as a literal --
         # see _assert_recipe_timeout_exceeds_print_timeout below for why.
+        #
+        # OPERAND 2 CHANGED, and the change is the point. It was the caller's prompt PATH; it is now
+        # `<transcript>.prompt`, the O_EXCL snapshot `bind-prompt.py` took of the validated bytes.
+        # Handing the path meant the wrapper reopened the NAME after the binder had blessed it, so a
+        # swap in between changed what the reviewer read while both sidecars still described the old
+        # bytes — and, because the prompt filename is only per-ROUND, two runs sharing a ticket and
+        # round shared that file outright (PR #63 recheck, P1). Asserting the snapshot rather than the
+        # name is what keeps the fix from being reverted silently.
         self.assertEqual(
             [
                 str(self.plugin / "scripts" / "review" / "isolated-agy-review.sh"),
-                f".agy-prompt-{FIXTURE_TICKET}r{FIXTURE_ROUND}.md",
+                gemini_path + ".prompt",
                 gemini_path,
             ],
             gemini_helpers[0][:3],

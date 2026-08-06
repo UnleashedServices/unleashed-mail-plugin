@@ -1276,4 +1276,3 @@ class PlanBindingProofs(FreshnessFixture):
             "binding-rejection", None, verdict="REQUEST_CHANGES"
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-

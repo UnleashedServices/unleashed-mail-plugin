@@ -40,7 +40,12 @@ VERDICT = REPO / "scripts" / "review-verdict.py"
 
 # The gemini arm's isolation harness refuses a prompt below a size floor, which a two-line probe trips.
 # A realistic prompt is part of the fixture, not an incidental detail.
+# The prompt NAMES its plan: `bind-prompt.py` refuses a prompt that names a different `*_PLAN.md`, or
+# none at all, because a prompt saying `REVIEW TARGET: PLAN_B` bound cleanly to `--plan PLAN_A` and
+# produced an APPROVE artifact for the wrong plan (PR #63 recheck, P1).
 PROMPT_BODY = (
+    "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n"
+) + (
     "Review the attached plan for correctness, security and completeness.\n"
     "State your verdict on the FIRST line as "
     "`VERDICT: APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES`.\n"
@@ -163,6 +168,24 @@ class EndToEndGate(unittest.TestCase):
                 expected,
                 transcript.with_name(transcript.name + ".plan").read_text(encoding="utf-8"),
             )
+
+    def test_two_runs_at_the_SAME_ticket_and_round_get_their_own_snapshot(self):
+        """Per-ROUND naming is not per-RUN — proved against the REAL allocator (PR #63 recheck, P1).
+
+        Both invocations name one prompt file, `.codex-prompt-COREDEV-9999r5.md`, because the prompt
+        name is derived from ticket and round only. The concurrency test in
+        `test_capture_prompt_binding.py` compares round 7 against round 8, so it structurally cannot
+        see this case. Each run must still end up bound to a snapshot of its own, which holds because
+        the snapshot is keyed by the transcript's unique run identity rather than by the prompt's name.
+        """
+        transcripts = []
+        for _attempt in range(2):
+            transcripts.append(Path(self.capture("codex", 5)))
+
+        self.assertNotEqual(transcripts[0], transcripts[1], "the allocator reused a leaf")
+        for transcript in transcripts:
+            snapshot = transcript.with_name(transcript.name + ".prompt")
+            self.assertTrue(snapshot.is_file(), f"{transcript.name} has no snapshot of its own")
 
     # ---- refusals: the capture arms ------------------------------------------------------------
 

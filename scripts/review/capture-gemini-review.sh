@@ -77,4 +77,11 @@ printf '%s\n' "$TRANSCRIPT_MARKER"
 python3 "${SCRIPT_DIR}/bind-prompt.py" \
     --prompt "$PROMPT" --transcript "${GEMINI_TRANSCRIPT}" --plan "$PLAN" \
     || die "refusing to review: the prompt/plan binding could not be established"
-exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "$PROMPT" "$GEMINI_TRANSCRIPT" "$TIMEOUT"
+
+# FEED THE SNAPSHOT, NOT THE CALLER'S PATH. `bind-prompt.py` copied the validated bytes to
+# `<transcript>.prompt` under O_EXCL. Re-reading "$PROMPT" here would reopen the name AFTER the binder
+# blessed it, so replacing the file in between changed what the reviewer saw while both sidecars still
+# described the old bytes; and because the prompt filename is only per-ROUND, two runs sharing a ticket
+# and round shared that file outright. The snapshot carries the transcript's unique run identity, so
+# neither is reachable (PR #63 recheck, P1).
+exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT"

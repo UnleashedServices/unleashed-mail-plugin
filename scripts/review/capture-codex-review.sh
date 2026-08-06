@@ -85,5 +85,12 @@ printf '%s\n' "$TRANSCRIPT_MARKER"
 python3 "${SCRIPT_DIR}/bind-prompt.py" \
     --prompt "$PROMPT" --transcript "${CODEX_TRANSCRIPT}" --plan "$PLAN" \
     || die "refusing to review: the prompt/plan binding could not be established"
+#
+# FEED THE SNAPSHOT, NOT THE CALLER'S PATH. `bind-prompt.py` copied the validated bytes to
+# `<transcript>.prompt` under O_EXCL. Re-reading "$PROMPT" here would reopen the name AFTER the binder
+# blessed it, so replacing the file in between changed what the reviewer saw while both sidecars still
+# described the old bytes; and because the prompt filename is only per-ROUND, two runs sharing a ticket
+# and round shared that file outright. The snapshot carries the transcript's unique run identity, so
+# neither is reachable (PR #63 recheck, P1).
 exec python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout "$TIMEOUT" --allocated "$CODEX_TRANSCRIPT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat "$PROMPT")"
+    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat "${CODEX_TRANSCRIPT}.prompt")"

@@ -220,4 +220,3 @@ PR level, where a reader decides whether to merge.
 - **None of the 24 review threads is marked resolved on GitHub**, including the ~14 verifiably fixed.
 - **Splitting 2605/2617 out of this PR** remains available and was not chosen; recording the exception
   was.
-

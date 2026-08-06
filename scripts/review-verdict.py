@@ -609,6 +609,29 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
             + " records " + bound_digest[:12] + "… (" + bound_plan + "), the plan being written is "
             + plan_digest[:12] + "…"
         )
+    # THE PROMPT SNAPSHOT, checked here because nothing else ever read `.promptsha256`.
+    # `bind-prompt.py` writes both the snapshot the reviewer was fed and its digest; until now the
+    # digest was recorded and never compared, which is the same "written and never read" shape as the
+    # other two sidecars. This is a WRITE-time check — `cmd_verify` is COREDEV-2497's territory and is
+    # deliberately untouched.
+    snapshot = transcript + ".prompt"
+    recorded = _read_regular_file_bytes(transcript + ".promptsha256")
+    if recorded is not None:
+        match = _PLAN_BINDING.fullmatch(recorded)
+        if match is None:
+            return "prompt binding is malformed: " + transcript + ".promptsha256"
+        snapshot_bytes = _read_regular_file_bytes(snapshot)
+        if snapshot_bytes is None:
+            return (
+                "the prompt snapshot the reviewer was fed is missing: " + snapshot
+                + " — re-capture the round rather than writing a verdict for evidence that is gone"
+            )
+        actual = hashlib.sha256(snapshot_bytes).hexdigest().encode("ascii")
+        if actual != match.group(1):
+            return (
+                "the prompt snapshot no longer matches the digest recorded when it was bound ("
+                + snapshot + ") — the bytes the reviewer saw are not the bytes on disk"
+            )
     return None
 
 

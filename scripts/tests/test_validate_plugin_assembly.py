@@ -433,11 +433,42 @@ class ModelReachableGrantPolicy(unittest.TestCase):
         )
         self.assertEqual([], problems)
 
-    def test_trampolines_warn_rather_than_fail(self):
-        """Advisory, deliberately: these are the build tools the knowledge skills exist to describe."""
-        problems, warnings = self._check("Bash(xcrun *), Bash(swift *), Bash(xcodebuild *)")
-        self.assertEqual([], problems)
-        self.assertEqual(3, len(warnings), warnings)
+    def test_wildcard_bash_is_default_deny(self):
+        """The measured fail-open, inverted (PR #63 recheck, P2).
+
+        The old rule deny-listed a fixed set of command NAMES and passed everything else. Each probe
+        below produced zero problems and zero warnings under it — including `python3 -c *`, which is
+        arbitrary code execution that slipped through the interpreter branch because `-c` is not a
+        script path and so never met the "wildcard in the path" test.
+
+        Trampolines moved from advisory to refused in the same change: the advisory tier existed for
+        knowledge skills whose grants have since been removed, so nothing shipped depends on it.
+        """
+        for granted in (
+            "Bash(python3 -c *)", "Bash(sh -c *)", "Bash(cp *)", "Bash(mv *)", "Bash(tee *)",
+            "Bash(find *)", "Bash(curl *)", "Bash(chmod *)", "Bash(node -e *)",
+            "Bash(python3 -m http.server *)", "Bash(swiftlint *)", "Bash(xcodebuild *)",
+            "Bash(xcrun *)", "Bash(swift *)", "Bash(bash /tmp/evil.sh *)", "Bash(*)",
+        ):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check("Read, " + granted)
+                self.assertTrue(problems, f"{granted} must be refused under default-deny")
+
+    def test_the_allowlisted_shapes_still_pass(self):
+        """Default-deny is worthless if it also refuses the wrappers the plugin actually ships.
+
+        An exact script beneath `${CLAUDE_PLUGIN_ROOT}` may carry a trailing wildcard because the
+        script bounds its own operands — that is the property being relied on, not the location alone.
+        """
+        for granted in (
+            "Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *)",
+            "Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py snapshot *)",
+            "Bash(command -v codex)",
+            "Bash(codex --version)",
+        ):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check("Read, " + granted)
+                self.assertEqual([], problems, granted)
 
     def test_every_shipped_skill_satisfies_the_policy(self):
         """The tree itself, so the policy cannot pass on fixtures while the shipped assets violate it."""
@@ -488,4 +519,3 @@ class ModelReachableGrantPolicy(unittest.TestCase):
         # different mechanism than the loop it is supposed to guard.
         self.assertEqual(SHIPPED_SKILL_COUNT, examined, "the shipped-skill walk found the wrong number")
         self.assertEqual([], advisories)
-

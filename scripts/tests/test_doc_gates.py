@@ -836,4 +836,3 @@ class DeepReviewP2Fixes(unittest.TestCase):
             skill,
             "settings.json cannot affect a wrapper round — the wrapper always passes --model",
         )
-

@@ -57,7 +57,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -119,6 +119,17 @@ jobs:
           # here so an unrecognized/stale manifest field fails CI (not just warns); (2) integrity-verify
           # the pinned @anthropic-ai/claude-code tarball (npm pack + sha512) like actionlint/gitleaks.
           claude plugin validate .claude-plugin/plugin.json
+
+      - name: Whitespace check (git diff --check)
+        # `git diff --check` exits 2 on trailing whitespace and new blank lines at EOF. Five had
+        # accumulated across this PR and nothing caught them: the pre-commit hook does not run it and
+        # neither did CI. Checked against the merge base rather than the whole tree so history is not
+        # re-litigated (PR #63 recheck, P3).
+        id: whitespace
+        run: |
+          set -euo pipefail
+          base="$(git merge-base origin/main HEAD)"
+          git diff --check "$base" HEAD
 
       - name: ShellCheck plugin scripts
         id: shellcheck_gate
@@ -188,15 +199,15 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py scripts/review/cleanup_coredev_2619_leaks.py
       - name: callers_scan.py execution smoke on 3.9
-        run: python3 scripts/review/callers_scan.py --help >/dev/null
+        run: python3 scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py --help >/dev/null
       - name: callers_scan.py real invocation on 3.9
         # `--help` never loads the manifest or reads the tree, so it stayed green for the whole of
         # PR #63 while the production invocation exited 2 on an ABSENT exemption manifest — the
         # scanner could not scan at all and nothing said so (PR #63 review, thread 5). Run the real
         # thing: this is the only step that would have caught it.
-        run: python3 scripts/review/callers_scan.py --root .
+        run: python3 scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py --root .
       - name: cleanup tool refuses without --apply on 3.9
         # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
         # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).

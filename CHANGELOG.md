@@ -86,6 +86,53 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `DerivedData/Unleashed_Mail-*`, with Xcode's own Clean Build Folder named as the route that needs no
   shell at all. The command was never granted — this is about what a model-reachable skill *teaches*.
 
+- **The prompt/plan binding now binds the bytes the reviewer actually consumed.** The first version
+  hashed the prompt and the plan *independently*, which is two correct digests of the wrong pairing: a
+  prompt reading `REVIEW TARGET: PLAN_B.md` bound cleanly against `--plan PLAN_A.md`, and
+  `review-verdict.py write` produced an `APPROVE` artifact for Plan A off a review of Plan B. Three
+  mechanisms, closed together because each one's failure is the others' silent success:
+  - **Agreement.** The prompt must name the plan it is bound to, and must not name a different
+    `*_PLAN.md`. The rule is symmetric on purpose — requiring only "does it name the right plan"
+    accepts a prompt that names both and asks about the other.
+  - **A per-run snapshot.** `bind-prompt.py` copies the validated bytes to `<transcript>.prompt` under
+    `O_EXCL`, and both capture arms feed *that* to the reviewer. Previously the wrapper re-`cat`ed the
+    caller's path **after** the binder had blessed it, so a swap in between changed what the reviewer
+    read while both sidecars still described the old bytes.
+  - **Per-run, not per-round.** The prompt *filename* derives from ticket and round only, so two
+    invocations sharing both shared one file — which the existing concurrency test could not see,
+    because it compares round 7 against round 8. The snapshot is keyed by the transcript's unique run
+    identity instead.
+
+  `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
+  ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
+
+- **`audit-codex.sh` accepted arbitrary model-controlled operands.** It allowlisted the reviewer name
+  and then folded everything after it into the external prompt with `$*`. Reproduced with an exact
+  stub: `/etc/passwd` was accepted, exit 0, and so was a plain `ignore prior instructions …` operand,
+  which is prompt injection rather than a filename. `-s read-only` prevents writes; it is not a
+  repository-read boundary and does nothing about disclosure to a third-party service. Operands must
+  now be non-symlink regular files beneath the physical repository root, and the prompt is built from
+  the *validated* output one path per line, so boundaries survive.
+
+  The containment rule moved into `scripts/review/containment.py`, shared with `bind-prompt.py`. That
+  sharing **is** the fix: the identical hole was closed on the prompt operand a day earlier and this
+  sibling — written in the same batch — did not inherit it, because the rule lived inside one script.
+
+- **The entrypoint-only grant policy was fail-open, and is now default-deny.** It deny-listed a fixed
+  set of command names and passed everything else. Measured probes producing zero problems *and* zero
+  warnings: `Bash(python3 -c *)`, `Bash(sh -c *)`, `Bash(cp *)`, `Bash(mv *)`, `Bash(tee *)`,
+  `Bash(find *)`, `Bash(curl *)`, `Bash(chmod *)`. `python3 -c *` is arbitrary code execution; the
+  interpreter branch only looked for a wildcard in the *script path*, and `-c` is not a path. A
+  wildcard `Bash` grant on a model-reachable skill is now refused unless it invokes an **exact** script
+  beneath `${CLAUDE_PLUGIN_ROOT}` — those wrappers ship in this repo, are reviewed with it, and bound
+  their own operands, which is the property that makes a trailing wildcard acceptable there and
+  nowhere else. Interpreter code/module/stdin modes are named explicitly. The trampoline advisory tier
+  became a hard refusal in the same change; nothing shipped depends on it. **This supersedes the
+  "advisory warning for toolchain trampolines" sentence above.**
+
+  One shipped grant this rejects: `swiftlint-config`'s `Bash(swiftlint *)` — its own body runs
+  `swiftlint --fix`, a source mutator, pre-approved on a model-invocable skill. Removed.
+
 - **The review prompt operand is contained to the repository.** The capture helpers are the exact
   entrypoints the bullets above introduced — and both are reached from model-invocable skills that
   pre-approve `capture-*-review.sh *`, so the *model* picks the operand. The helpers checked only

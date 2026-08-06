@@ -309,9 +309,13 @@ class M51AndM52PropagationProofs(M5PathFixture):
                 '--allocated "$CODEX_TRANSCRIPT" -- \\\n',
                 '--allocated "${XDG_STATE_HOME}/derived-codex.txt" -- \\\n',
             ),
+            # Re-anchored when the arm began handing the prompt SNAPSHOT instead of the caller's
+            # path: the operand is now `"${GEMINI_TRANSCRIPT}.prompt"`. The mutant is unchanged in
+            # spirit — it re-derives the TRANSCRIPT operand, which is what M5.2 forbids — and the
+            # snapshot operand is left intact so the mutation still isolates that one variable.
             "gemini": (
-                '"$PROMPT" "$GEMINI_TRANSCRIPT"',
-                '"$PROMPT" "${XDG_STATE_HOME}/derived-gemini.txt"',
+                '"${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT"',
+                '"${GEMINI_TRANSCRIPT}.prompt" "${XDG_STATE_HOME}/derived-gemini.txt"',
             ),
         }
         for reviewer, (old, new) in mutations.items():

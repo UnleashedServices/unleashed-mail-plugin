@@ -21,6 +21,9 @@ The `.plan` sidecar is what makes the binding ENFORCEABLE rather than merely for
 gated. Without it, `.promptsha256` was written and never read by anything, and transcripts captured
 for an unrelated ticket still produced `GATE OK — APPROVE` (deep review, P1).
 
+Containment itself lives in `containment.py`, shared with `audit-codex.sh` — the recheck found the
+same defect on that sibling entrypoint because this file's copy could not reach it.
+
 Usage:
   bind-prompt.py --prompt PATH --transcript PATH --plan PATH
 
@@ -32,62 +35,86 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
-import stat
+import re
 import sys
 
-
-def _refuse(reason: str) -> "NoReturn":  # noqa: F821
-    print("bind-prompt: " + reason, file=sys.stderr)
-    raise SystemExit(1)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def repository_root() -> str:
-    """The PHYSICAL directory the operands must live beneath.
+import containment  # noqa: E402
+from containment import contained_regular_file, refuse as _refuse, repository_root  # noqa: E402
 
-    `realpath` of the working directory, matching `resolve-plan-gate.sh`'s containment anchor. The
-    base is deliberately the resolved CWD rather than a resolved `docs/planning`-style subpath: a
-    symlinked subdirectory must not be able to launder its own target, which is the bypass that
-    guard was fixed for four times.
+# Own the diagnostic prefix: the shared module defaults to its own name, and a refusal that says
+# `containment:` sends the reader to the wrong file.
+containment.TOOL = "bind-prompt"
+
+
+def read_nofollow(path: str) -> bytes:
+    """Read the whole file through ONE O_NOFOLLOW descriptor and return the bytes.
+
+    Returning the BYTES rather than a digest is the point. The caller then checks, snapshots and hashes
+    the same in-memory copy, so there is no second open between the check and the use — which is
+    exactly the window the recheck found downstream, where the helper re-`cat`ed the prompt by name
+    after this program had already blessed it.
     """
-    return os.path.realpath(os.getcwd())
-
-
-def contained_regular_file(path: str, label: str) -> str:
-    """Return `path`'s realpath after proving it is a non-symlink regular file inside the repo."""
-    if os.path.islink(path):
-        _refuse(f"{label} is a symbolic link, which could point anywhere: {path}")
-    try:
-        metadata = os.lstat(path)
-    except OSError as error:
-        _refuse(f"{label} is unreadable: {path}: {error}")
-    if not stat.S_ISREG(metadata.st_mode):
-        _refuse(f"{label} is not a regular file: {path}")
-    if metadata.st_size == 0:
-        _refuse(f"{label} is EMPTY: {path}")
-
-    root = repository_root()
-    real = os.path.realpath(path)
-    if real != root and not real.startswith(root + os.sep):
-        _refuse(
-            f"{label} is outside the repository and will not be read: {path} "
-            f"(resolved to {real}, which is not beneath {root})"
-        )
-    return real
-
-
-def sha256_nofollow(path: str) -> str:
-    """Digest via an O_NOFOLLOW descriptor, so the bytes hashed are the file that was validated."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     descriptor = os.open(path, flags)
     try:
-        digest = hashlib.sha256()
+        chunks = []
         offset = 0
         while True:
             chunk = os.pread(descriptor, 65536, offset)
             if not chunk:
-                return digest.hexdigest()
+                return b"".join(chunks)
             offset += len(chunk)
-            digest.update(chunk)
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+
+
+_PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md")
+
+
+def prompt_disagreement(prompt_bytes: bytes, plan_relative: str) -> "str | None":
+    """Refuse a prompt that asks for a review of a plan OTHER than the one being bound.
+
+    THE DEFECT (PR #63 recheck, P1). The prompt and the plan were hashed INDEPENDENTLY. Nothing tied
+    the prompt's content to the `--plan` operand, so a prompt whose text said `REVIEW TARGET: PLAN_B.md`
+    bound cleanly to `--plan PLAN_A.md`, and `review-verdict.py write` produced an APPROVE artifact for
+    Plan A off a review of Plan B. Both digests were correct; they were digests of the wrong pairing.
+
+    The rule is symmetric on purpose: the prompt must name the plan it is bound to, AND must not name a
+    different `*_PLAN.md`. Requiring only the first would accept a prompt that mentions both and asks
+    about the other one.
+    """
+    referenced = {match.decode("utf-8", "replace") for match in _PLAN_REFERENCE.findall(prompt_bytes)}
+    if not referenced:
+        return (f"the prompt never names a plan, so nothing ties it to {plan_relative}. A review "
+                "prompt must state the plan path it is reviewing.")
+    plan_name = os.path.basename(plan_relative)
+    if not any(reference == plan_relative or os.path.basename(reference) == plan_name
+               for reference in referenced):
+        return (f"the prompt asks about {sorted(referenced)}, not about {plan_relative} — refusing to "
+                "bind a review of one plan to another")
+    others = sorted(reference for reference in referenced
+                    if os.path.basename(reference) != plan_name)
+    if others:
+        return (f"the prompt names other plans as well as {plan_relative}: {others}. A round reviews "
+                "exactly one plan; the binding cannot say which one this transcript is evidence for.")
+    return None
+
+
+def write_sidecar_bytes(path: str, payload: bytes) -> None:
+    """`write_sidecar` for raw bytes — the prompt snapshot must not be decoded and re-encoded."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError:
+        _refuse(f"binding sidecar already exists, refusing to overwrite: {path}")
+    except OSError as error:
+        _refuse(f"could not create binding sidecar: {path}: {error}")
+    try:
+        os.write(descriptor, payload)
     finally:
         os.close(descriptor)
 
@@ -123,13 +150,27 @@ def main(argv=None) -> int:
 
     root = repository_root()
     plan_relative = os.path.relpath(plan, root)
+
+    # ONE read. Everything below uses these bytes: the agreement check, the snapshot the reviewer will
+    # actually be fed, and the digest recorded for it.
+    prompt_bytes = read_nofollow(prompt)
+    disagreement = prompt_disagreement(prompt_bytes, plan_relative)
+    if disagreement is not None:
+        _refuse(disagreement)
+
+    # THE SNAPSHOT is what closes the other two halves of this finding. It is created O_EXCL beside the
+    # transcript, so it inherits the transcript's UNIQUE RUN identity — where the prompt FILENAME is
+    # only per-round, and two invocations sharing a ticket and round shared one file. And the capture
+    # helper now feeds these held bytes instead of re-`cat`ing the caller's path, so replacing the
+    # prompt after this program returns changes nothing the reviewer sees.
+    write_sidecar_bytes(arguments.transcript + ".prompt", prompt_bytes)
     write_sidecar(
         arguments.transcript + ".promptsha256",
-        f"{sha256_nofollow(prompt)}  {os.path.relpath(prompt, root)}\n",
+        f"{hashlib.sha256(prompt_bytes).hexdigest()}  {os.path.relpath(prompt, root)}\n",
     )
     write_sidecar(
         arguments.transcript + ".plan",
-        f"{sha256_nofollow(plan)}  {plan_relative}\n",
+        f"{hashlib.sha256(read_nofollow(plan)).hexdigest()}  {plan_relative}\n",
     )
     return 0
 
