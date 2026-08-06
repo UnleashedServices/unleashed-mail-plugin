@@ -106,6 +106,26 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The cleanup tool opened each parent 39 times while claiming it opened them once.**
+  `held_manifest_parents` looped over the 39 manifest entries, so the nine directories were opened up
+  to six times each at different instants — and a swap landing between two of those opens split the
+  run across two generations: five validated originals survived while five same-named files in the
+  replacement directory were deleted, and the function reported success. The docstring asserted the
+  property the loop did not implement. It now opens the nine unique parents once each, and the
+  occupant scan runs **through those held descriptors**, immediately before the first unlink, inside
+  one session that also spans the directory removal.
+
+  **Stated ceiling, because narrowing is not closing.** An occupant arriving *after* the final check
+  is unobservable at that check, by construction: the run still refuses, but the 39 files are already
+  gone, so the refusal reports rather than prevents. Eliminating that would require the whole
+  sequence to be atomic, which it cannot be. What is guaranteed — and proved — is that an occupant
+  present *before* the run costs nothing: 39 of 39 files survive the refusal. The ceiling is recorded
+  as an executable test so a reader cannot mistake it for covered.
+
+  The occupant refusal deliberately lives in the orchestrator, **not** in `delete_leak_files`, whose
+  contract is narrower on purpose: it deletes exactly the literal manifest and nothing of the same
+  filename family, and that is only provable on a tree that *has* such a neighbour.
+
 - **The prompt/plan agreement check compared basenames, and short sidecar writes went unnoticed.**
   Two defects in the binding shipped earlier the same day:
   - **Basename collision.** A prompt explicitly targeting `docs/planning/b/SAME_PLAN.md` was accepted

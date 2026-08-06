@@ -365,31 +365,47 @@ def parent_descriptor(root: Path, relative_path: str, root_identity: Tuple[int, 
 
 @contextlib.contextmanager
 def held_manifest_parents(root: Path, root_identity: Tuple[int, int]):
-    """Open every manifest entry's parent — and HOLD them all — for the entire removal phase.
+    """Open each UNIQUE parent directory exactly once, and hold them for the entire run.
 
-    Re-opening the chain per entry would not have closed anything: each open re-walks the same names
-    against the live filesystem, so a swap is just as effective one line later. What closes the
-    window is that these descriptors are acquired ONCE, before the type classification, and the same
-    descriptors carry out the unlink. Between those two steps the manifest's parent directories can
-    be renamed, replaced, or swapped for symlinks and it changes nothing: the kernel is holding the
-    original inodes and `dir_fd` removal never consults a path again.
+    THE FIRST VERSION SAID "once" AND OPENED 39 TIMES (PR #63 recheck, P2). It looped over
+    `LEAK_MANIFEST`, so the nine directories were opened once PER ENTRY — up to six opens of the same
+    parent, at six different instants. A swap landing between the first and the second split the run
+    across two generations: five validated originals survived while five same-named files in the
+    replacement directory were deleted, and the function reported success. Reproduced by the reviewer.
+    The comment claimed the property; the loop did not implement it.
+
+    So the unique parents are computed first and opened once each. Every entry beneath a parent shares
+    that one descriptor, which is what makes "the object inspected is the object removed" true for the
+    whole set rather than per entry.
+
+    ABSENCE IS SATISFIED. A parent removed by an earlier `--apply`'s directory phase cannot contain a
+    file, so the entries beneath it are already at their goal state. Only `FileNotFoundError` is
+    forgiven — `ENOTDIR` and `ELOOP` (a component swapped for a file or a symlink) still abort, which
+    is the entire point of descending with `O_NOFOLLOW`.
     """
+    unique_parents = sorted(
+        {_pure_relative_path(entry.relative_path).parent.as_posix() for entry in LEAK_MANIFEST}
+    )
     with contextlib.ExitStack() as stack:
-        holders = {}  # type: Dict[str, Tuple[int, str]]
-        for entry in LEAK_MANIFEST:
+        descriptors = {}  # type: Dict[str, int]
+        for parent in unique_parents:
             try:
-                holders[entry.relative_path] = stack.enter_context(
-                    parent_descriptor(root, entry.relative_path, root_identity)
+                descriptor, _name = stack.enter_context(
+                    parent_descriptor(root, parent + "/.keep", root_identity)
                 )
             except CleanupError as error:
-                # An ABSENT parent directory is satisfied, not a failure: the directory phase of an
-                # earlier `--apply` removed it, and a file cannot survive inside a directory that is
-                # gone. Refusing here made a resumable run unresumable. Only absence is forgiven —
-                # ENOTDIR and ELOOP (a component swapped for a file or a symlink) still abort, which
-                # is the whole point of descending with O_NOFOLLOW.
                 if not isinstance(error.__cause__, FileNotFoundError):
                     raise
-        yield holders
+                continue
+            descriptors[parent] = descriptor
+
+        holders = {}  # type: Dict[str, Tuple[int, str]]
+        for entry in LEAK_MANIFEST:
+            relative = _pure_relative_path(entry.relative_path)
+            parent = relative.parent.as_posix()
+            if parent in descriptors:
+                holders[entry.relative_path] = (descriptors[parent], relative.name)
+        yield descriptors, holders
 
 
 def _present_through_descriptors(holders: Dict[str, Tuple[int, str]]) -> Dict[str, None]:
@@ -440,6 +456,45 @@ def unlink_regular_file(descriptor: int, name: str, relative_path: str) -> None:
             + _describe_type(metadata.st_mode)
         )
     os.unlink(name, dir_fd=descriptor)
+
+
+def _occupants_through_descriptors(descriptors: Dict[str, int]) -> Dict[str, Tuple[str, ...]]:
+    """The same question as `unexpected_directory_occupants`, asked through the HELD descriptors.
+
+    The path-based scan runs before the unlink phase, and then `delete_leak_files` opened everything
+    again — so an occupant dropped between the two was still missed, and all 39 files were deleted
+    before the directory phase noticed it (PR #63 recheck, P2 — reproduced by injecting one occupant
+    after the clean scan). Asking through the descriptors already held for the removal closes that
+    window: it is the same directory object, and no name is re-resolved between the answer and the act.
+
+    `os.scandir` consumes the descriptor's position, so each one is duplicated — the original must stay
+    rewound and usable for the unlinks that follow.
+    """
+    manifest_children = {}  # type: Dict[str, set]
+    for entry in LEAK_MANIFEST:
+        relative = _pure_relative_path(entry.relative_path)
+        manifest_children.setdefault(relative.parent.as_posix(), set()).add(relative.name)
+
+    unexpected = {}  # type: Dict[str, Tuple[str, ...]]
+    for relative_path, descriptor in sorted(descriptors.items()):
+        accounted = manifest_children.get(relative_path, set())
+        nested = {
+            _pure_relative_path(other).name
+            for other in EMPTY_DIRECTORY_MANIFEST
+            if _pure_relative_path(other).parent.as_posix() == relative_path
+        }
+        duplicate = os.dup(descriptor)
+        try:
+            with os.scandir(duplicate) as children:
+                leftovers = tuple(sorted(
+                    child.name for child in children
+                    if child.name not in accounted and child.name not in nested
+                ))
+        except OSError as error:
+            raise CleanupError("could not inspect manifest directory: " + relative_path) from error
+        if leftovers:
+            unexpected[relative_path] = leftovers
+    return unexpected
 
 
 def unexpected_directory_occupants(root: Path) -> Dict[str, Tuple[str, ...]]:
@@ -495,7 +550,7 @@ def unexpected_directory_occupants(root: Path) -> Dict[str, Tuple[str, ...]]:
     return unexpected
 
 
-def delete_leak_files(state_root: Path) -> FileDeletionReport:
+def delete_leak_files(state_root: Path, holders=None) -> FileDeletionReport:
     """Delete the 39 literal manifest files and nothing else."""
 
     _validate_closed_manifests()
@@ -509,7 +564,19 @@ def delete_leak_files(state_root: Path) -> FileDeletionReport:
     # about PATHS and stays path-shaped. The descriptors below carry the removal, which is a decision
     # about OBJECTS. Both are needed: the first refuses a manifest that points outside the root, the
     # second refuses to let anything move under the first one's feet.
-    with held_manifest_parents(root, root_identity) as holders:
+    with contextlib.ExitStack() as stack:
+        # REUSE the caller's descriptors when it has them. The orchestrator holds one session across
+        # the occupant check, this deletion and the directory removal, so nothing can be swapped or
+        # dropped in between; called directly (as its own tests do) this opens its own.
+        #
+        # `delete_leak_files` deliberately does NOT check for unaccounted-for occupants: its contract
+        # is narrower — delete exactly the literal manifest and nothing of the same filename family —
+        # and that is only provable on a tree that HAS such a neighbour. Putting the occupant refusal
+        # here made that proof unrunnable, which is how this split got noticed.
+        if holders is None:
+            _descriptors, holders = stack.enter_context(
+                held_manifest_parents(root, root_identity)
+            )
         present = _present_through_descriptors(holders)
         for entry in LEAK_MANIFEST:
             attempted.append(entry.relative_path)
@@ -599,36 +666,42 @@ def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
     before this refusal.
     """
 
-    root, _identity_unused = _canonical_state_root(state_root)
-    unexpected = unexpected_directory_occupants(root)
-    if unexpected:
-        raise CleanupError(
-            "refusing to delete anything because these manifest directories hold files the manifest "
-            "does not account for: "
-            + "; ".join(
-                relative_path + " (" + ", ".join(names) + ")"
-                for relative_path, names in sorted(unexpected.items())
+    root, held_identity = _canonical_state_root(state_root)
+    # ONE HELD SESSION for all three phases. The occupant scan used to run on PATHS and
+    # `delete_leak_files` then re-opened everything, so an occupant arriving between the two was
+    # missed and all 39 files were deleted before the directory phase noticed (PR #63 recheck, P2 —
+    # reproduced). Holding the descriptors across the scan, the unlinks and the directory removal
+    # means the directories answering the question are the ones acted on.
+    with held_manifest_parents(root, held_identity) as (descriptors, holders):
+        unexpected = _occupants_through_descriptors(descriptors)
+        if unexpected:
+            raise CleanupError(
+                "refusing to delete anything because these manifest directories hold files the "
+                "manifest does not account for: "
+                + "; ".join(
+                    relative_path + " (" + ", ".join(names) + ")"
+                    for relative_path, names in sorted(unexpected.items())
+                )
             )
-        )
 
-    file_report = delete_leak_files(state_root)
-    removed_directories = _remove_empty_directories(
-        state_root,
-        EMPTY_DIRECTORY_MANIFEST,
-    )
-    expected_directories = tuple(
-        sorted(EMPTY_DIRECTORY_MANIFEST, key=_directory_sort_key)
-    )
-    if removed_directories != expected_directories or len(removed_directories) != 9:
-        raise CleanupError("removed directories do not equal the closed 9-entry manifest")
-    _root, root_identity = _canonical_state_root(state_root)
-    if root_identity != file_report.root_identity:
-        raise CleanupError("state-root identity changed across cleanup phases")
-    return CleanupReport(
-        file_report.attempted_relative_paths,
-        removed_directories,
-        root_identity,
-    )
+        file_report = delete_leak_files(state_root, holders=holders)
+        removed_directories = _remove_empty_directories(
+            state_root,
+            EMPTY_DIRECTORY_MANIFEST,
+        )
+        expected_directories = tuple(
+            sorted(EMPTY_DIRECTORY_MANIFEST, key=_directory_sort_key)
+        )
+        if removed_directories != expected_directories or len(removed_directories) != 9:
+            raise CleanupError("removed directories do not equal the closed 9-entry manifest")
+        _root, root_identity = _canonical_state_root(state_root)
+        if root_identity != file_report.root_identity:
+            raise CleanupError("state-root identity changed across cleanup phases")
+        return CleanupReport(
+            file_report.attempted_relative_paths,
+            removed_directories,
+            root_identity,
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:

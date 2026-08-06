@@ -929,5 +929,96 @@ class DescriptorStabilityProofs(SyntheticStateTreeMixin, unittest.TestCase):
         )
 
 
+
+class HeldDescriptorRaceProofs(SyntheticStateTreeMixin, unittest.TestCase):
+    """What the held-descriptor session guarantees — and, explicitly, what it cannot (PR #63 recheck).
+
+    Two defects were reported together. The first is fully closed: `held_manifest_parents` said it
+    opened each parent "once" and looped over `LEAK_MANIFEST`, so the nine directories were opened up
+    to six times each, at different instants, and a swap between two of them split the run across two
+    generations. It now opens the nine unique parents once each.
+
+    The second — an occupant arriving between the scan and the unlinks — is NARROWED, not eliminated,
+    and saying otherwise would be the same overclaim this release keeps correcting. The check now runs
+    through the held descriptors immediately before the first unlink, so it cannot be defeated by a
+    directory SWAP and there is no re-resolution between the answer and the act. But a file created
+    after the last possible observation is unobservable at that point, by construction. The test below
+    records that ceiling as an executable fact rather than leaving a reader to assume it is covered.
+    """
+
+    def _cleanup(self, root):
+        return production.cleanup_coredev_2619_leaks(root)
+
+    def _survivors(self, root):
+        return sum(1 for relative in EXPECTED_PATHS
+                   if root.joinpath(*PurePosixPath(relative).parts).exists())
+
+    def test_an_occupant_present_before_the_run_costs_nothing(self):
+        """THE GUARANTEE. This is the case an operator can actually rely on."""
+        state_root, _objects = self.make_state_tree()
+        (state_root / EXPECTED_DIRECTORIES[0] / "arrived.txt").write_bytes(b"concurrent run\n")
+
+        with self.assertRaises(production.CleanupError):
+            self._cleanup(state_root)
+        self.assertEqual(39, self._survivors(state_root),
+                         "a refusal must delete nothing — that is the whole point of checking first")
+
+    def test_the_nine_parents_are_opened_once_each_not_once_per_entry(self):
+        """The first defect, asserted on the mechanism rather than on a comment.
+
+        Counting opens is what distinguishes the fix from the version whose docstring already claimed
+        it: that one looped over the 39 entries while saying "once".
+        """
+        opened = []
+        real_open = os.open
+
+        def counting_open(path, flags, *args, **kwargs):
+            if flags & getattr(os, "O_DIRECTORY", 0):
+                opened.append(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        state_root, _objects = self.make_state_tree()
+        os.open = counting_open
+        try:
+            self._cleanup(state_root)
+        finally:
+            os.open = real_open
+
+        parents = {PurePosixPath(p).parent.as_posix() for p in EXPECTED_PATHS}
+        self.assertEqual(9, len(parents))
+        # One open per unique parent, plus the root each chain descends from. The bound that matters is
+        # simply that it is far below 39 — one per ENTRY is what the defect looked like.
+        self.assertLess(len(opened), 39,
+                        f"parents are still being opened per entry: {len(opened)} directory opens")
+
+    def test_an_occupant_arriving_after_the_final_check_is_NOT_caught(self):
+        """THE CEILING, recorded deliberately. This test passing is not a bug.
+
+        A file created after the last observation cannot be seen at that observation. The run still
+        refuses — the directory phase catches it — but the 39 files are already gone by then, so the
+        refusal is a report rather than a prevention. Narrowing the window is all a check can do here;
+        eliminating it would need the whole run to be atomic, which it cannot be.
+
+        If this ever starts FAILING, something made the sequence atomic and this test should be
+        replaced by the stronger guarantee, not deleted.
+        """
+        state_root, _objects = self.make_state_tree()
+        occupant = state_root / EXPECTED_DIRECTORIES[0] / "arrived-late.txt"
+        real_present = production._present_through_descriptors
+
+        def arrive_then_classify(holders):
+            occupant.write_bytes(b"raced the check\n")
+            return real_present(holders)
+
+        production._present_through_descriptors = arrive_then_classify
+        self.addCleanup(setattr, production, "_present_through_descriptors", real_present)
+
+        with self.assertRaises(production.CleanupError):
+            self._cleanup(state_root)
+        self.assertEqual(0, self._survivors(state_root),
+                         "documented ceiling: the unlinks complete before the directory phase refuses")
+        self.assertTrue(occupant.exists(), "the bystander itself is never touched")
+
+
 if __name__ == "__main__":
     unittest.main()
