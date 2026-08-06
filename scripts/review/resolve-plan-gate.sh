@@ -10,7 +10,8 @@
 # call — and the guards below become testable, which as inline shell they never were.
 #
 # Usage:
-#   resolve-plan-gate.sh            # the feature name or plan path arrives on STDIN
+#   resolve-plan-gate.sh <plan>     # the feature name or plan path, as ONE operand (documented form)
+#   resolve-plan-gate.sh            # ...or on STDIN, for callers that already bind a heredoc
 #
 # THE ARGUMENT ARRIVES ON STDIN, NEVER AS AN ARGV OPERAND. Callers bind it with a QUOTED heredoc, so
 # shell metacharacters in it (`"`, `$( )`, backticks) are LITERAL data that never reaches a shell in
@@ -23,9 +24,29 @@ set -uo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
-# `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaces did, so a
-# well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
-ARG="$(cat)"
+# ONE OPERAND, OR STDIN. The operand form is now the documented one and STDIN is kept for callers that
+# already bind a heredoc.
+#
+# WHY THE HEREDOC IS NO LONGER THE RECIPE (PR #63 recheck, P1). The STDIN design was chosen so shell
+# metacharacters in the argument stayed literal data, and it does that. What it could not defend was the
+# DELIMITER: `implement` spliced `$ARGUMENTS` into a `<<'"'"'UM_IMPLEMENT_ARG_EOF'"'"'` body, so an argument
+# containing a line exactly equal to that delimiter closed the heredoc early and every line after it was
+# parsed as a shell command — before this script existed to guard anything. A quoted delimiter disables
+# expansion inside the body; it does not stop the body from ending. No quoting fixes that, because the
+# fault is textual substitution of untrusted text into shell SYNTAX, one level above the quoting.
+#
+# The recipe therefore no longer substitutes the argument at all: the caller resolves the plan itself
+# and passes the concrete path here, where the containment below governs it exactly as before.
+if [ "$#" -gt 1 ]; then
+    echo "REFUSED: takes at most one operand — the plan name or path." >&2
+    exit 1
+elif [ "$#" -eq 1 ]; then
+    ARG="$1"
+else
+    # `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaced did, so a
+    # well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
+    ARG="$(cat)"
+fi
 
 # A slash argument is single-line; reject a multi-line value (only a crafted paste produces one, and it is
 # never a valid feature name or plan path) so a newline cannot smuggle a second line past the heredoc.

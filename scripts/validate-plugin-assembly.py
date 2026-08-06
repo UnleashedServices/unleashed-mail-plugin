@@ -286,6 +286,47 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
             "the exact command with no wildcard.")
 
 
+def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
+    """An agent holding bare `Agent` must deny every file-writing agent BY NAME.
+
+    WHY A COMPUTED CHECK AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
+    A sub-agent `tools:` list takes bare names, so `Agent` there reaches ALL agents — including the
+    twelve that hold `Write`/`Edit` or inherit everything. `swift-reviewer` is spawned from `pr-review`
+    while it processes untrusted PR content, so a prompt-injected finding could steer it into
+    `ui-engineer` or `db-engineer` and write to the tree with no user gesture. `Agent(type)` is ignored
+    inside a sub-agent definition, so the only lever is `disallowedTools`.
+
+    That makes it a deny-list, and a deny-list drifts the moment someone adds a writer agent — which is
+    precisely how blacklists re-open. So the set is RECOMPUTED here from the agents on disk and the
+    frontmatter must already contain it. The list in the file is generated policy that CI keeps honest,
+    not a list anyone has to remember to update.
+    """
+    writers, spawners = [], []
+    for path in sorted((root / "agents").glob("*.md")):
+        frontmatter = parse_frontmatter(path.read_text(encoding="utf-8")) or {}
+        if not frontmatter:
+            continue
+        tools = frontmatter.get("tools")
+        denied = frontmatter.get("disallowedTools", "")
+        # Inheriting everything counts as granting Write unless it is explicitly given back.
+        grants_write = tools is None or any(name in tools for name in ("Write", "Edit"))
+        if grants_write and not all(name in denied for name in ("Write", "Edit")):
+            writers.append(path.stem)
+        if tools is not None and re.search(r"(^|,)\s*Agent\s*(,|$)", tools):
+            spawners.append((path, frontmatter))
+
+    for path, frontmatter in spawners:
+        denied = frontmatter.get("disallowedTools", "")
+        missing = [w for w in writers if f"Agent({w})" not in denied]
+        if missing:
+            rel = path.relative_to(root).as_posix()
+            problems.append(
+                f"{rel}: holds bare `Agent`, so it can spawn every agent — but does not deny these "
+                f"file-writing ones: {', '.join(missing)}. Add `Agent(<name>)` (and the "
+                f"`unleashed-mail:`-namespaced spelling) to `disallowedTools`."
+            )
+
+
 def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[str],
                                  warnings: list[str] | None = None) -> None:
     """Reject broad write/VCS/agent grants on a skill the MODEL can invoke (deep review, P1).
@@ -772,6 +813,8 @@ def main() -> int:
     # §11 Model Tiering must equal the shipped frontmatter (MAJ-1); the reviewer roster must agree across
     # its six hardcoded copies (MIN-16); .mcp.json server paths must resolve on disk (MIN-23).
     check_model_tiering(root, agent_models, problems)
+    # A bare `Agent` grant reaches every agent; recompute the writer set and require it denied.
+    check_spawner_denies_every_writer(root, problems)
     check_reviewer_roster(root, {p.stem for p in agents}, problems)
     check_mcp_server_paths(root, problems)
     for p in skills:

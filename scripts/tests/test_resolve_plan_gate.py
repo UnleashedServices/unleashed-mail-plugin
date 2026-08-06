@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import re
 import subprocess
 import tempfile
 import unittest
@@ -310,6 +311,46 @@ class ResolutionProofs(ResolvePlanGateFixture):
         stub.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(1)\n", encoding="utf-8")
         result = self.run_gate("dark mode")
         self.assertEqual(1, result.returncode, "a rejecting verdict must not report success")
+
+
+class ArgumentIsNeverInShellSyntax(unittest.TestCase):
+    """The `implement` recipe must not substitute the user's argument into shell syntax at all.
+
+    THE FINDING (PR #63 recheck, P1). The fence bound the argument through a quoted heredoc, which kept
+    metacharacters literal — but the placeholder is substituted TEXTUALLY across the whole fence before
+    the shell runs, so an argument containing a line equal to the heredoc DELIMITER closed the body
+    early and every following line was parsed as a shell command. With the skill model-invocable that
+    needed no user gesture. A quoted delimiter stops expansion inside the body; it does not stop the
+    body from ending, and no quoting can, because the fault is one level above the quoting.
+    """
+
+    SKILL = Path(__file__).resolve().parents[2] / "skills" / "implement" / "SKILL.md"
+
+    def shell_fences(self):
+        return re.findall(r"```(?:bash|sh|shell)\n(.*?)```", self.SKILL.read_text(encoding="utf-8"), re.S)
+
+    def test_no_shell_fence_contains_the_argument_placeholder(self):
+        """Asserted on FENCES, not on the file. The placeholder is legitimate in prose and in the
+
+        title — what must never happen is it landing where a shell parses it.
+        """
+        offenders = [f for f in self.shell_fences() if "ARGUMENTS" in f]
+        self.assertEqual([], offenders, "the argument is back in shell syntax")
+
+    def test_the_skill_carries_no_heredoc_at_all(self):
+        """The delimiter cannot be injected if there is no delimiter.
+
+        Deliberately broader than the one delimiter that was exploitable: any `<<` in this recipe
+        re-creates the shape, and a differently-named delimiter would be just as matchable.
+        """
+        for fence in self.shell_fences():
+            self.assertNotIn("<<", fence, "a heredoc reappeared in the implement recipe")
+
+    def test_the_gate_accepts_the_documented_operand_form(self):
+        """Positive control: removing the heredoc is only a fix if the documented call still works."""
+        fences = [f for f in self.shell_fences() if "resolve-plan-gate.sh" in f]
+        self.assertEqual(1, len(fences), "expected exactly one gate invocation fence")
+        self.assertIn("resolve-plan-gate.sh\" docs/planning/", fences[0])
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -106,6 +106,30 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The `implement` recipe substituted the user's argument into shell syntax.** It bound the argument
+  through a quoted heredoc, which correctly kept metacharacters (`"`, `$( )`, backticks) as literal
+  data. What that could not defend was the **delimiter**: the placeholder is substituted *textually
+  across the whole fence before the shell runs*, so an argument containing a line equal to the heredoc
+  delimiter closed the body early and every following line was parsed as a shell command — and with the
+  skill model-invocable, that needed no user gesture. No quoting fixes it, because the fault sits one
+  level above the quoting. The recipe no longer substitutes the argument at all: the model resolves the
+  plan with `Glob`/`Read` and passes the concrete path as one operand, which `resolve-plan-gate.sh` now
+  accepts (STDIN is kept for callers already binding a heredoc, and both paths were verified to produce
+  identical output on four inputs). A test asserts no shell fence in the skill contains the placeholder,
+  and that no fence contains `<<` at all — a differently-named delimiter would be just as matchable.
+
+- **`swift-reviewer` could spawn every file-writing agent.** Its `tools:` lists bare `Agent`, because a
+  sub-agent tool list takes bare names — `Agent(type)` is silently ignored there — so it reached all
+  twelve agents holding `Write`/`Edit` or inheriting everything. Spawned from `pr-review` while that
+  skill processes untrusted PR content, a prompt-injected finding could have steered it into
+  `ui-engineer` or `db-engineer` and written to the tree with no user gesture. All twelve are now denied
+  by name.
+
+  That is a deny-list, and a deny-list re-opens the moment someone adds a writer agent. So
+  `validate-plugin-assembly.py` **recomputes** the writer set from the agents on disk and fails if any
+  is missing from the deny list — proved by adding a thirteenth writer and watching CI reject it. The
+  five read-only reviewers this agent actually spawns stay reachable.
+
 - **The gate's plan-state entrypoints wrote wherever they were pointed.** `brainstorm` is
   model-invocable and pre-approves both the snapshot and the persistence command, so the *model* picks
   `--plan`. Neither enforced containment: any existing file on disk was accepted, the snapshot sidecar

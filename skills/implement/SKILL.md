@@ -23,27 +23,29 @@ Implementation without a **reviewed** plan violates CLAUDE.md's mandatory Plan R
 plan **for this feature**, then **verify its Combined-verdict artifact deterministically**, before writing
 any code:
 
+**Do NOT paste the user's argument into a shell command.** Resolve the plan yourself first — with
+`Glob` over `docs/planning/*_PLAN.md` and `Read` — then invoke the gate with the concrete path you
+resolved, as a single operand:
+
 ```bash
-# Resolve THE plan for the feature the user named — never let an unrelated approved plan satisfy the gate.
-# The argument is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
-#
-# ONE command, so the `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above covers it. The
-# resolution, the physical-containment guard and the verify all live in that script; this fence's only
-# job is to bind the argument safely. When this was ~135 lines of functions and branches inline it
-# matched NO grant, so the one block that must run before any implementation prompted every time.
-#
-# MAJ-9: bind the argument ONCE via a QUOTED heredoc so shell metacharacters in it (`"`, `$( )`, backticks)
-# are LITERAL data, never executed. The argument placeholder (dollar-prefixed when Claude Code renders it)
-# is substituted TEXTUALLY across this ENTIRE fence BEFORE the shell runs — so the ONLY place it may appear
-# is the quoted-heredoc body just below. It must NOT appear anywhere earlier, not even in a comment: a
-# multi-line/pasted value would break out of the comment and run its second line as a command BEFORE the
-# script's guard fires (that was the original injection bug — splicing it into shell syntax also broke on
-# a feature name with a quote). The quoted delimiter disables all expansion of the heredoc body, and the
-# value reaches the script on STDIN rather than as an argv operand, so it is never in syntax position.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh" <<'UM_IMPLEMENT_ARG_EOF'
-$ARGUMENTS
-UM_IMPLEMENT_ARG_EOF
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh" docs/planning/FEATURE_NAME_PLAN.md
 ```
+
+The script owns the resolution fallback, the physical-containment guard (the plan's bytes must live
+under `<repo-root>/docs/planning`) and the deterministic verify. It is ONE command, so the scoped grant
+above covers it; when this was ~135 lines of inline functions and branches it matched no grant at all,
+so the one block that must run before any implementation prompted every time.
+
+> **Why the argument is no longer substituted here (PR #63 recheck, P1).** This fence used to bind the
+> argument through a quoted heredoc, which kept shell metacharacters (`"`, `$( )`, backticks) as literal
+> data. What that could not defend was the DELIMITER: the placeholder is substituted **textually across
+> this entire fence before the shell runs**, so an argument containing a line exactly equal to the
+> heredoc delimiter closed the body early and every following line was parsed as a shell command — with
+> the skill model-invocable, that needed no user gesture. A quoted delimiter stops expansion inside the
+> body; it does not stop the body from ending. No quoting fixes it, because the fault sits one level
+> above the quoting: untrusted text in shell *syntax*. The remedy is to keep it out of syntax entirely,
+> which is why you resolve the path and pass a real one.
+
 
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
   `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first to produce one, then gate it with:*

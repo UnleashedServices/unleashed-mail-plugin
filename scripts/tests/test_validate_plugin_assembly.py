@@ -519,3 +519,68 @@ class ModelReachableGrantPolicy(unittest.TestCase):
         # different mechanism than the loop it is supposed to guard.
         self.assertEqual(SHIPPED_SKILL_COUNT, examined, "the shipped-skill walk found the wrong number")
         self.assertEqual([], advisories)
+
+
+class SpawnerDeniesEveryWriter(unittest.TestCase):
+    """A bare `Agent` grant reaches every agent, so the writers must be denied by name — and STAY denied.
+
+    `swift-reviewer` is spawned from `pr-review` while it processes untrusted PR content. Its `tools:`
+    lists bare `Agent` because a sub-agent tool list takes bare names — `Agent(type)` is ignored there —
+    so it could reach all twelve file-writing agents, and a prompt-injected finding could have steered it
+    into `ui-engineer` or `db-engineer` with no user gesture (PR #63 recheck, P1).
+
+    The only lever is `disallowedTools`, which makes it a deny-list. The check below recomputes the
+    writer set from the agents on disk, so the list cannot silently fall behind — that is the property
+    under test, not the current contents.
+    """
+
+    def _run(self, root):
+        problems: list[str] = []
+        vpa.check_spawner_denies_every_writer(root, problems)
+        return problems
+
+    def test_the_shipped_tree_denies_every_writer(self):
+        self.assertEqual([], self._run(Path(_MOD_PATH).resolve().parents[1]))
+
+    def test_a_newly_added_writer_agent_is_caught(self):
+        """The discrimination that matters: this is how a deny-list normally re-opens.
+
+        Asserting only on the current contents would pass forever while the tree grew a thirteenth
+        writer nobody added to the list.
+        """
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="spawner-drift-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        shutil.copy2(Path(_MOD_PATH).resolve().parents[1] / "agents" / "swift-reviewer.md",
+                     root / "agents" / "swift-reviewer.md")
+        (root / "agents" / "rogue-writer.md").write_text(
+            "---\nname: rogue-writer\ndescription: x\ntools: Read, Write, Edit, Bash\n---\nbody\n",
+            encoding="utf-8",
+        )
+        problems = self._run(root)
+        self.assertTrue(problems, "a new writer agent must be caught")
+        self.assertIn("rogue-writer", problems[0])
+
+    def test_a_read_only_agent_does_not_have_to_be_denied(self):
+        """The rule must not demand denying agents that cannot write — that would be noise, and noise
+        is how a real finding gets skimmed past."""
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="spawner-readonly-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        shutil.copy2(Path(_MOD_PATH).resolve().parents[1] / "agents" / "swift-reviewer.md",
+                     root / "agents" / "swift-reviewer.md")
+        (root / "agents" / "harmless-reader.md").write_text(
+            "---\nname: harmless-reader\ndescription: x\ntools: Read, Grep, Glob\n---\nbody\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], self._run(root))
+
+
+if __name__ == "__main__":
+    unittest.main()

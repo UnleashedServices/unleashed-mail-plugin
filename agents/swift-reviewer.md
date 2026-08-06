@@ -14,7 +14,17 @@ tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesi
 # `Agent` is a bare allowlist entry because sub-agent `tools:` takes bare NAMES only — the
 # `Agent(type)` specifier form is ignored inside a sub-agent definition (verified against the
 # Claude Code sub-agents reference). The spawned set is constrained by `disallowedTools` instead.
-disallowedTools: Write, Edit, NotebookEdit
+# EVERY WRITER AGENT IS DENIED BY NAME. `Agent` above is bare because a sub-agent `tools:` list
+# takes bare names only — so it reached ALL 21 agents, including the file-writing ones. Spawned
+# from `pr-review` while processing untrusted PR content, a prompt-injected finding could have
+# steered this reviewer into `ui-engineer` or `db-engineer` and written to the tree, with no user
+# gesture (PR #63 recheck, P1). The five reviewers this body actually spawns are read-only and
+# stay reachable.
+#
+# A deny-list drifts the moment a new writer agent is added, which is exactly how blacklists
+# re-open. `validate-plugin-assembly.py` therefore recomputes this set from the agents on disk
+# and FAILS if any writer is missing here — the list is generated policy, not a hand-kept one.
+disallowedTools: Write, Edit, NotebookEdit, Agent(ai-engineer), Agent(unleashed-mail:ai-engineer), Agent(ci-engineer), Agent(unleashed-mail:ci-engineer), Agent(code-simplifier), Agent(unleashed-mail:code-simplifier), Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(docs-engineer), Agent(unleashed-mail:docs-engineer), Agent(graph-api-debugger), Agent(unleashed-mail:graph-api-debugger), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Agent(release-manager), Agent(unleashed-mail:release-manager), Agent(tester), Agent(unleashed-mail:tester), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(xcode-build-fixer), Agent(unleashed-mail:xcode-build-fixer)
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client

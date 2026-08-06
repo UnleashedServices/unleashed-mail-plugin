@@ -514,9 +514,9 @@ unchanged and still mandatory.
 
 | `surface_id` | `producer_id` | `scope` | `anchor` |
 |---|---|---|---|
-| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:599` |
+| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:609` |
 | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
-| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:235` |
+| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:237` |
 | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |
 | `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:203` |
 | `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:264` |
