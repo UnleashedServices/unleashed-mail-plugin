@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.7
+# UnleashedMail — Claude Code Plugin v2.7.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,11 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.7.0
+
+- **Model-invocable skill grants narrowed from wildcards to exact entrypoints (`COREDEV-2642`)** — remediation of four independent reviews over the permission surface v2.6.7 shipped. `Bash(python3 …/scripts/*)`, `Bash(codex *)`, `Bash(agy *)` and `Bash(git *)` are gone from every model-invocable skill, replaced by exact wrapper scripts (`audit-codex.sh`, `preflight-agy.sh`, `changeset.sh`, plus five extracted capture/persistence helpers); bare `Write`/`Agent` are now `Write(docs/planning/**)` and enumerated `Agent(<type>)`. `validate-plugin-assembly.py` now rejects broad write/VCS/agent grants on any model-reachable skill — it found 17 further instances across 8 knowledge skills. Several fail-open gaps in the transcript-freshness and cleanup gates were also closed.
+  **Breaking for direct callers:** `pty-capture.py` now requires an out-path (no more shared `/tmp/pty-out.txt` default); both review recipes require a per-round prompt file (`.codex-prompt-${TICKET}r${ROUND}.md` / `.agy-prompt-${TICKET}r${ROUND}.md`) instead of a shared `.codex-prompt.md` / `.agy-prompt.md`; the gemini arm's default model is now `gemini-3.6-flash-high`. See the CHANGELOG for the full breakdown, including which of the underlying tickets did and did not clear the mandatory plan-review gate.
 
 ### v2.6.7
 

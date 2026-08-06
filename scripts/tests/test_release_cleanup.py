@@ -222,14 +222,26 @@ def _assert_release_metadata_contract(plugin: str, readme: str, changelog: str) 
         plugin_version,
     ):
         raise AssertionError("release version fields are not synchronized")
-    if CEILING_SENTENCE not in newest_entry:
-        raise AssertionError("newest CHANGELOG entry is missing the exact ceiling sentence")
-    if RETAINED_GRANTS_SENTENCE not in newest_entry:
-        raise AssertionError("newest CHANGELOG entry is missing the retained-grants sentence")
+    # These two are COREDEV-2619 disclosures — the honest ceiling on what per-run paths buy, and why
+    # the `${CLAUDE_PLUGIN_ROOT}` grants were retained rather than removed. They are checked against the
+    # WHOLE changelog, not the newest entry.
+    #
+    # Newest-entry was wrong in both directions once a later release landed. It would force every
+    # future release to repeat 2619's ceiling verbatim whether or not it shipped anything related —
+    # and worse, the retained-grants sentence became FALSE at 2.7.0, where those grants were REPLACED
+    # by exact entrypoints rather than retained. A disclosure that must be restated to stay green is a
+    # disclosure that will eventually be restated untruthfully.
+    #
+    # What must hold permanently is that neither statement is ever DELETED from the record, and that
+    # nothing anywhere claims the grants were inert. That is what is asserted.
+    if CEILING_SENTENCE not in changelog:
+        raise AssertionError("CHANGELOG is missing the exact ceiling sentence")
+    if RETAINED_GRANTS_SENTENCE not in changelog:
+        raise AssertionError("CHANGELOG is missing the retained-grants sentence")
 
-    for paragraph in re.split(r"\n\s*\n", newest_entry):
+    for paragraph in re.split(r"\n\s*\n", changelog):
         if "${CLAUDE_PLUGIN_ROOT}" in paragraph and "inert" in paragraph.casefold():
-            raise AssertionError("newest CHANGELOG entry claims retained grants were inert")
+            raise AssertionError("CHANGELOG claims retained grants were inert")
 
 
 class SyntheticStateTreeMixin:

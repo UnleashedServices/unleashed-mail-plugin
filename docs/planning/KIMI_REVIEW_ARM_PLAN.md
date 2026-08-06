@@ -1,6 +1,6 @@
 # Replace the gemini review arm with Kimi K3
 
-**Status:** Planning — **not gated, not implemented.** Needs its own `COREDEV-XXXX` ticket before work
+**Status:** Planning — **not gated, not implemented.** Needs its own `COREDEV-2645` ticket before work
 starts; this document was written under `COREDEV-2642` as the resolution of PR #63 review item 8.
 **Last updated:** 2026-08-05
 
@@ -141,7 +141,7 @@ manifest must be regenerated as the **last** step — after the rename, not duri
 
 Each step ends green. Do not start the next until the previous one's suite passes.
 
-**Step 0 — ticket and worktree.** Create the `COREDEV-XXXX` ticket, associate it with the Epic, and
+**Step 0 — ticket and worktree.** Create the `COREDEV-2645` ticket, associate it with the Epic, and
 create the worktree FIRST, then this plan's gate artifacts inside it (`CLAUDE.md`'s ordering rule —
 `.verdicts/` is per-directory session state and does not follow a later `git worktree add`).
 

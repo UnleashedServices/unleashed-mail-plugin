@@ -213,7 +213,7 @@ PR level, where a reader decides whether to merge.
   acceptance also asks for one shared hook/standalone base, while the shipped D′ design deliberately
   makes an unset base unresolved; that contradiction needs resolving in Jira, not in the tree.
 - **The Kimi arm swap has no ticket.** `KIMI_REVIEW_ARM_PLAN.md` step 0 requires one; both it and this
-  handoff still say the literal `COREDEV-XXXX`.
+  handoff still say the literal `COREDEV-XXXX` (now **COREDEV-2645**).
 - **Two follow-ups were described on the PR as "filed" and are filed nowhere**: reading blob content
   from the index via `git show :path` for `callers_scan`, and documenting "pass the canonical path" in
   the cleanup tool's `--help`. They exist only in PR replies.

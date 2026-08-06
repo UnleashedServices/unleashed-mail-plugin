@@ -13,6 +13,140 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.7.0] — 2026-08-06
+
+`COREDEV-2642` — remediation of four independent reviews (a deep review, a 34-commit audit, and two
+PR #63 bot passes) run over the permission surface and transcript-handling code that shipped in
+2.6.7 (`COREDEV-2619`/`COREDEV-2639`/`COREDEV-2497`). **Minor bump, not patch:** the entrypoint-only
+grant policy is a new, enforced capability (`validate-plugin-assembly.py` now rejects a whole class
+of grant it previously allowed), and three of the changes below are caller-visible breaks in existing
+usage, not just internal hardening.
+
+**Gate disclosure.** This release is **not** gated by the mandatory pre-implementation plan-review
+process — it is post-implementation review of already-shipped code, which is evidence but not a
+substitute for the "before implementation" gate CLAUDE.md mandates. The three tickets 2.6.7 shipped
+under a passing gate (`COREDEV-2619`, `COREDEV-2639`, `COREDEV-2497`) are unaffected by that
+disclosure; it applies to `COREDEV-2642` itself. See
+`docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full per-ticket table.
+
+### Security
+
+- **Every model-invocable skill's grants replaced wildcards with exact entrypoints.** A
+  model-invocable skill can be entered by the model's own decision — one that content in a reviewed
+  file can steer — so everything a skill lists is pre-approved with **no user gesture**. Four
+  wildcards were broad enough to matter:
+  - `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)` had pre-approved the destructive cleanup tool's
+    `--apply` flag and `pty-capture.py <any path> -- <any command>` — arbitrary child execution
+    writing anywhere. Removed from `codex-review`, `gemini-review` and `review-synthesis`.
+  - `Bash(codex *)` allowed any codex invocation, including `-s danger-full-access`, outside every
+    wrapper. Replaced by `scripts/review/audit-codex.sh`, which hard-codes `-s read-only` and
+    `xhigh` and takes the reviewer from a closed allowlist.
+  - `Bash(agy *)` let `agy` run outside its isolation harness — `agy` has no read-only mode and has
+    already once implemented a plan instead of reviewing it (2.6.4, `COREDEV-2607`). Replaced by
+    `scripts/review/preflight-agy.sh`, which takes no caller input at all.
+  - `Bash(git *)` on `pr-review` was every git command, including `reset`/`clean`/`push`, on a skill
+    that reads untrusted PR content. Replaced by `scripts/review/changeset.sh`.
+
+  Bare `Write` became `Write(docs/planning/**)`, and bare `Agent` became the enumerated agent types
+  each skill body actually spawns (both the bare and the `unleashed-mail:`-namespaced spellings, since
+  a consumer install resolves either), in `brainstorm`, `implement` and `pr-review`.
+
+  **Supersedes the 2.6.7 record for `implement` and `pr-review`.** The 2.6.7 entry above is an
+  unedited historical record of what 2.6.7 shipped (`Bash(python3 …/review-verdict.py *)` on
+  `implement`, `Bash(git *)` on `pr-review`) — read this entry, not that one, for their current
+  grants: both now hold `Read, Grep, Glob, Agent(<enumerated types>)` plus one scoped `Bash` grant
+  onto `scripts/review/*` (`resolve-plan-gate.sh` for `implement`, `changeset.sh` for `pr-review`).
+  `implement` also dropped a dead `review-verdict.py *` grant left over after its verify moved into
+  `resolve-plan-gate.sh` — pre-approving the artifact writer inside the gate skill whose own prose
+  forbids running the gate there.
+
+- **`validate-plugin-assembly.py` now enforces the entrypoint-only policy** rather than merely
+  modeling it: hard failure for bare `Write`/`Edit`/`Agent`/`Bash`, VCS and reviewer-CLI wildcards, and
+  a wildcard in the *script path* of a `bash`/`python3` grant; advisory warning for toolchain
+  trampolines (`xcrun`, `swift`, `xcodebuild`), which are the real build tools the knowledge skills
+  describe rather than a reviewer-CLI escape hatch. The reviewer that opened this work named three
+  skills; the validator found **17 further instances across 8 knowledge skills** — this repo's own
+  rule ("don't grant unscoped `Bash`/`Write`/`Edit` on a pure-knowledge skill") being broken in the
+  tree that states it. All are reference skills, so the grants are simply gone.
+
+### Fixed
+
+- **Transcript-freshness gate no longer depends on how a path is spelled.** The layout comparison was
+  lexical, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`, and a symlinked *ancestor* directory each
+  opened the identical file while comparing unequal — the same bytes accepted or refused by
+  punctuation. Closed by `dirname`-only `realpath` resolution: the ancestry is resolved, the leaf
+  never is, so a symlinked *leaf* is still refused.
+- **A case-mangled path bypassed the same check.** The layout comparison was case-SENSITIVE while
+  this gate runs on default-case-insensitive APFS, so `…/Unleashed-Mail/…` opened the identical file
+  and classified as legacy. Closed separately, by comparing casefolded — not by the resolution change
+  above.
+- **TOCTOU: the gate validated one file and recorded another's digest.** Freshness opened the
+  transcript, validated it and closed it; the caller then hashed the PATH again. Between those two the
+  leaf can be re-pointed, so the artifact could record as reviewed evidence the digest of a file that
+  never passed the check. The digest is now read from the SAME `O_NOFOLLOW` descriptor the check
+  `fstat`'d, and freshness hands the caller back that path and digest rather than letting it re-resolve
+  the name.
+- **A symlinked allocator *parent* let a reserved leaf resolve outside its layout.** Separate fix,
+  separate mechanism: the allocator now checks the parent with `lstat`, not `stat`.
+- **`cleanup --check` reported green for a state `--apply` refuses only after deleting 39 files.**
+  `--check` never ran the emptiness scan that `--apply` used to decide whether to proceed, so a file
+  dropped between the two calls meant a green check followed by a destructive partial apply. Both
+  paths now share one predicate, and the orchestrator refuses **before** the unlink phase.
+- **A reused allocated transcript leaf could resurrect the previous round's verdict.** The allocator's
+  reservation mode preserved the file (no `O_CREAT`) but also left it untruncated (no `O_TRUNC`), so a
+  round that wrote fewer bytes than a prior one left the earlier tail in place — a failed review could
+  read back as `VERDICT: APPROVE`. Fixed with `ftruncate` after the write (preserving the reservation
+  invariant `O_TRUNC` would have broken), plus a wrapper-level refusal of any non-empty reserved leaf.
+- **Two concurrent review rounds could cross-wire prompt and transcript.** Both recipes wrote to a
+  fixed `.agy-prompt.md` / `.codex-prompt.md`; a second round overwriting the shared prompt before the
+  first wrapper read it made the first round's transcript describe the *other* plan under its own
+  ticket and round. Both recipes now derive the prompt filename from the round identity (see Changed,
+  below) and record `<transcript>.promptsha256` before capture starts, so a cross-wire is prevented
+  and, if it still occurred, detectable.
+- **`codex-review`'s audit recipe failed outright on Linux.** `mktemp -t codex-audit` is a BSD
+  shorthand GNU `mktemp` rejects; fixed with the portable full-path template form (the commonly
+  suggested `-t name.XXXXXX` only half-works — BSD treats the `X`s as literal and appends its own
+  suffix — so the proof checks the produced name, not just the exit code).
+
+### Changed
+
+- **Breaking: `pty-capture.py` requires an out-path.** The `/tmp/pty-out.txt` default is removed — a
+  run that died before writing left the *previous* run's bytes at that shared path for the next reader
+  to trust, and two concurrent captures overwrote each other. Every caller in the tree already passed
+  an explicit path; callers outside the tree must now do the same.
+- **Breaking: both review recipes require a per-round prompt file**, `.codex-prompt-${TICKET}r${ROUND}.md`
+  / `.agy-prompt-${TICKET}r${ROUND}.md`, in place of the shared `.codex-prompt.md` / `.agy-prompt.md`.
+  337 of 339 prompt files on disk were already per-round names before this change; the shared spelling
+  was the anomaly and is no longer accepted.
+- **Breaking: the gemini arm's default model is now `gemini-3.6-flash-high`**, replacing
+  `gemini-3.1-pro-high` — the model `isolated-agy-review.sh`'s own comment already claimed to run,
+  and the arm that `isolated-agy-review.sh`'s own comment records as failing to emit a parseable
+  verdict in 5 of 6 rounds — a rationale that had sat directly above the line still defaulting to
+  the model it rejected. A
+  fallback still reaches the old model via the wrapper's `MODEL` override (editing `settings.json` is
+  now inert, since the wrapper always passes `--model`).
+- **Five inline skill recipes extracted to granted helper scripts** — `capture-codex-review.sh`,
+  `capture-gemini-review.sh`, `resolve-plan-gate.sh` (`implement`'s Design Gate), and
+  `persist-verdict.sh` (shared by `review-synthesis` and `brainstorm`). Each inline recipe was a
+  *compound* shell command (functions, branches, loops), which Claude Code decomposes and wants a
+  grant per subcommand — so none of them matched a scoped `allowed-tools` shape and every gate round
+  re-prompted. As a side effect, `capture-codex-review.sh`'s new prompt-readable check caught a real
+  bug: `$(cat .codex-prompt.md)` expands empty on a missing file, so every codex capture proof had
+  been running against an empty prompt.
+- **The callers-scan exemption manifest now ships, and CI runs the scan that needs it.**
+  `scripts/review/callers-scan-exemptions.tsv` was previously unshipped, so
+  `callers_scan.py --root .` exited 2 before scanning a single line — and CI only ever invoked
+  `--help`, which loads no manifest, so nothing caught this. The manifest is generated by a separate
+  maintainer tool (`generate-callers-exemptions.py`, deliberately outside the scanned module: a
+  scanner that can derive or widen its own exemptions cannot fail closed) and validated against the
+  production parser before writing.
+- `mktemp` invocations made GNU/BSD-portable across the affected recipes (see Fixed).
+
+### Notes
+
+- Asset counts are unchanged: **21 agents · 21 skills · 0 commands · 1 MCP server**. No agent or
+  skill was added or removed in this release.
+
 ## [2.6.7] — 2026-08-03
 
 ### Fixed
