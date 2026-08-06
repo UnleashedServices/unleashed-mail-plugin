@@ -25,6 +25,7 @@ REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
 CAPTURE_CODEX = REPO / "scripts" / "review" / "capture-codex-review.sh"
 CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
+PLAN_RELATIVE = "docs/planning/FEATURE_PLAN.md"
 BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
 CONTAINMENT = REPO / "scripts" / "review" / "containment.py"
 
@@ -184,13 +185,19 @@ class TranscriptThreadingFixture(unittest.TestCase):
         agy_prompt = f".agy-prompt-{FIXTURE_TICKET}r{FIXTURE_ROUND}.md"
         (self.reviewed / codex_prompt).write_text(prompt, encoding="utf-8")
         (self.reviewed / agy_prompt).write_text(prompt, encoding="utf-8")
-        (self.reviewed / "FEATURE_PLAN.md").write_text("# Plan\nThread paths.\n", encoding="utf-8")
+        # UNDER docs/planning. The granted `snapshot-plan.sh` / `persist-verdict.sh` entrypoints now
+        # require it there (PR #63 recheck, P1): both accepted a plan anywhere on disk, and even a
+        # non-approving persist created a `.verdicts` directory beside it — reproduced against `/tmp`,
+        # walking past the skill's apparent `Write(docs/planning/**)` boundary with no user gesture.
+        # A fixture that keeps its plan at the repo root is modelling a layout the gate no longer allows.
+        (self.reviewed / "docs" / "planning").mkdir(parents=True, exist_ok=True)
+        (self.reviewed / PLAN_RELATIVE).write_text("# Plan\nThread paths.\n", encoding="utf-8")
         env = dict(os.environ)
         commands = (
             ["git", "init", "-q"],
             ["git", "config", "user.name", "Fixture"],
             ["git", "config", "user.email", "fixture@example.invalid"],
-            ["git", "add", ".agy-prompt.md", codex_prompt, agy_prompt, "FEATURE_PLAN.md"],
+            ["git", "add", ".agy-prompt.md", codex_prompt, agy_prompt, PLAN_RELATIVE],
             ["git", "commit", "-q", "-m", "fixture"],
         )
         for command in commands:
@@ -249,7 +256,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
                 "ROUND": "85",
                 # The capture helpers now bind the transcript to the plan it reviewed, so the recipe
                 # needs the plan operand and `bind-prompt.py` contains it to this repo.
-                "PLAN": "FEATURE_PLAN.md",
+                "PLAN": PLAN_RELATIVE,
                 "THREAD_CAPTURE_LOG": str(self.capture_log),
                 "THREAD_HELPER_LOG": str(self.helper_log),
                 "THREAD_REAL_ALLOCATOR": str(PTY_CAPTURE),
@@ -319,7 +326,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
         therefore supply the binding themselves, or they witness that refusal instead of the property
         they are named for.
         """
-        plan = self.reviewed / "FEATURE_PLAN.md"
+        plan = self.reviewed / PLAN_RELATIVE
         digest = hashlib.sha256(plan.read_bytes()).hexdigest()
         for transcript in transcripts:
             Path(str(transcript) + ".plan").write_text(
@@ -340,7 +347,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
         mutant has to replace the script the recipe calls. The recipe under test is unchanged either
         way — that is the point, since the recipe is what the skill actually ships.
         """
-        plan = self.reviewed / "FEATURE_PLAN.md"
+        plan = self.reviewed / PLAN_RELATIVE
 
         snapshot = run_checked(
             [sys.executable, str(REVIEW_VERDICT), "snapshot", "--plan", str(plan)],
@@ -374,7 +381,8 @@ class TranscriptThreadingFixture(unittest.TestCase):
         result = run_checked([str(self.real_bash), "-c", recipe], self.reviewed, env)
         self.assertEqual(0, result.returncode, result.stderr)
 
-        artifact = self.reviewed / ".verdicts" / "FEATURE_PLAN.md.verdict.json"
+        artifact = (self.reviewed / "docs" / "planning" / ".verdicts"
+                    / "FEATURE_PLAN.md.verdict.json")
         self.assertTrue(artifact.is_file(), result.stdout + result.stderr)
         payload = json.loads(artifact.read_text(encoding="utf-8"))
         argv = self.verdict_argv_log.read_text(encoding="utf-8").splitlines()

@@ -2,7 +2,7 @@
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Write(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py snapshot *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
+allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Write(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
 ---
 
 # Feature Brainstorm: $ARGUMENTS
@@ -169,8 +169,7 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
 1. **Snapshot the reviewed digest BEFORE dispatching the reviews** — this binds the eventual approval to
    the bytes the reviewers saw, and an **APPROVING** `write` now REQUIRES it (fails closed otherwise):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
-       --plan docs/planning/FEATURE_NAME_PLAN.md
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh" docs/planning/FEATURE_NAME_PLAN.md
    ```
 2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
    - /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>

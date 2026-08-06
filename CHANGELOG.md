@@ -106,6 +106,20 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The gate's plan-state entrypoints wrote wherever they were pointed.** `brainstorm` is
+  model-invocable and pre-approves both the snapshot and the persistence command, so the *model* picks
+  `--plan`. Neither enforced containment: any existing file on disk was accepted, the snapshot sidecar
+  landed beside it, and even a **non-approving** persist created and chmod'd a `.verdicts` directory
+  there — reproduced against `/tmp`, walking past the skill's apparent `Write(docs/planning/**)`
+  boundary with no user gesture. Both now require a non-symlink regular plan under `docs/planning` in
+  this repository, via the shared `containment.py` (which grew an `--under` subtree check), and the
+  snapshot step moved behind a new exact entrypoint, `scripts/review/snapshot-plan.sh`.
+
+  The containment is in the entrypoints, **not** in `review-verdict.py`: that tool has a designed and
+  tested behaviour for a plan outside any git repo, and it is also the maintainer's own CLI. What has
+  to be bounded is the pre-approved path the model can enter. This is the fourth entrypoint to need
+  the same rule, which is why it lives in one module.
+
 - **An approving verdict could rest on legacy transcripts that nothing checked.**
   `_is_per_run_transcript` is the switch deciding whether the freshness check **and** the plan binding
   run at all, so a transcript failing it was exempt from both — and the shapes it exempts are the fixed

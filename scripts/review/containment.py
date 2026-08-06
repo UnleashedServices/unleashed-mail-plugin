@@ -49,8 +49,12 @@ def _control_characters(value: str) -> bool:
     return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
-def contained_regular_file(path: str, label: str) -> str:
-    """Return `path`'s realpath after proving it is a non-symlink regular file inside the repo."""
+def contained_regular_file(path: str, label: str, under: str = "") -> str:
+    """Return `path`'s realpath after proving it is a non-symlink regular file inside the repo.
+
+    `under` narrows the containment to a subtree, e.g. `docs/planning` for plan operands. The subtree
+    is resolved through the same physical root, so a symlinked `docs/planning` cannot widen it.
+    """
     if _control_characters(path):
         refuse(f"{label} contains control characters: {path!r}")
     if os.path.islink(path):
@@ -71,6 +75,13 @@ def contained_regular_file(path: str, label: str) -> str:
             f"{label} is outside the repository and will not be read: {path} "
             f"(resolved to {real}, which is not beneath {root})"
         )
+    if under:
+        subtree = os.path.realpath(os.path.join(root, under))
+        if real != subtree and not real.startswith(subtree + os.sep):
+            refuse(
+                f"{label} must live under {under}/ in this repository: {path} "
+                f"(resolved to {real}, which is not beneath {subtree})"
+            )
     return real
 
 
@@ -83,6 +94,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", default="operand")
     parser.add_argument("--tool", default="containment")
+    parser.add_argument("--under", default="", help="require the operand beneath this subtree")
     parser.add_argument("operands", nargs="+")
     arguments = parser.parse_args(argv)
 
@@ -91,7 +103,7 @@ def main(argv=None) -> int:
 
     root = repository_root()
     for operand in arguments.operands:
-        real = contained_regular_file(operand, arguments.label)
+        real = contained_regular_file(operand, arguments.label, arguments.under)
         print(os.path.relpath(real, root))
     return 0
 

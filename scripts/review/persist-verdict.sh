@@ -50,6 +50,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$PLAN_PATH" ]        || die "bind --plan to the reviewed plan"
+
+# CONTAIN THE PLAN. This is a granted entrypoint on the model-invocable `brainstorm` and
+# `review-synthesis` skills, so the MODEL chooses `--plan`. Nothing enforced containment: a plan
+# anywhere on disk was accepted, and even a non-approving call created and chmod'd a `.verdicts`
+# directory beside it — reproduced against `/tmp`, which walked straight past the apparent
+# `Write(docs/planning/**)` boundary with no user gesture (PR #63 recheck, P1).
+#
+# The check lives HERE and not in `review-verdict.py`: that tool has a designed, tested behaviour for
+# a plan outside any git repo, and it is also the maintainer's own CLI. What must be bounded is the
+# pre-approved path the model can enter.
+SCRIPT_DIR_PV="$(cd -- "$(dirname -- "$0")" && pwd)"
+python3 "${SCRIPT_DIR_PV}/containment.py" --tool "persist-verdict" --label "plan" \
+    --under "docs/planning" -- "$PLAN_PATH" >/dev/null \
+    || die "refusing to persist: the plan is not an in-repo docs/planning file (see above)"
 [ -n "$COMBINED_VERDICT" ] || die "bind --verdict to the synthesis result"
 [ -n "$GEMINI_SPEC" ]      || die "bind the complete gemini reviewer argument"
 [ -n "$CODEX_SPEC" ]       || die "bind the complete codex reviewer argument"

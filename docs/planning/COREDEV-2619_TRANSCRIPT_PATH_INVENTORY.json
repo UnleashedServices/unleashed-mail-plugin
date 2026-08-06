@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:931",
+      "location": "CHANGELOG.md:945",
       "path": "CHANGELOG.md",
-      "line": 931,
+      "line": 945,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -258,7 +258,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 194,
+        "line": 193,
         "payloads": [
           "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
         ],
@@ -280,7 +280,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 195,
+        "line": 194,
         "payloads": [
           "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\""
         ],
