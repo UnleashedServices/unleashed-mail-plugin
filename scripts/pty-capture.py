@@ -480,7 +480,13 @@ def parse_pre_args(pre: list[str]) -> "tuple[float | None, str, bool]":
 ALLOCATION_MARKER = "UNLEASHED_TRANSCRIPT="
 ALLOCATION_ATTEMPTS = 8
 RUN_ID_BYTES = 16
-DERIVED_SIBLING_SUFFIXES = (".launch", ".captureid")
+# Every suffix a caller may append to the allocated leaf. `_basename_limit` reserves headroom for the
+# LONGEST of these, so a name that fits the leaf also fits all of its siblings. `.promptsha256` (13
+# chars) was added by the capture helpers and is longer than `.captureid` (10) — until it was listed
+# here, a ticket producing a basename near NAME_MAX allocated fine and then failed to record its
+# prompt binding with ENAMETOOLONG (deep review, codex inline). Anything appended to the leaf belongs
+# in this tuple; that is the whole contract.
+DERIVED_SIBLING_SUFFIXES = (".launch", ".captureid", ".promptsha256")
 _COMPONENT_RE = re.compile(r"[A-Za-z0-9._-]+")
 _ALLOCATE_OPTIONS = ("--repo-hash", "--ticket", "--round", "--reviewer")
 

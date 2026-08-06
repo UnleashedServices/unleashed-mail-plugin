@@ -71,5 +71,12 @@ _prompt_digest() {
     else python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
     fi
 }
-printf '%s  %s\n' "$(_prompt_digest "$PROMPT")" "$PROMPT" > "${GEMINI_TRANSCRIPT}.promptsha256"
+# A FAILED binding must abort BEFORE the reviewer launches. `set -uo pipefail` has no `-e`, so an
+# unchecked redirect would let the round run to completion with no record of which prompt it read —
+# reachable with a basename near NAME_MAX until `.promptsha256` was added to the allocator's reserved
+# sibling suffixes (deep review, codex inline).
+PROMPT_SHA256="$(_prompt_digest "$PROMPT")" || die "could not digest the prompt: $PROMPT"
+[ -n "$PROMPT_SHA256" ] || die "prompt digest came back empty: $PROMPT"
+printf '%s  %s\n' "$PROMPT_SHA256" "$PROMPT" > "${GEMINI_TRANSCRIPT}.promptsha256" \
+    || die "could not record the prompt binding: ${GEMINI_TRANSCRIPT}.promptsha256"
 exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "$PROMPT" "$GEMINI_TRANSCRIPT" "$TIMEOUT"

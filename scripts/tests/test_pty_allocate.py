@@ -318,13 +318,21 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
             fallback_path,
         )
 
-    def test_M1_19_basename_boundary_reserves_captureid_headroom_before_generation_per_input(self):
-        """Rejects PC_NAME_MAX without suffix headroom, a tighter cap, and late retry-loop checks."""
+    def test_M1_19_basename_boundary_reserves_sibling_headroom_before_generation_per_input(self):
+        """Rejects PC_NAME_MAX without suffix headroom, a tighter cap, and late retry-loop checks.
+
+        The reservation is read from production's own `DERIVED_SIBLING_SUFFIXES` rather than restated
+        as `.captureid`. It was restated, and when the capture helpers began writing a LONGER sibling
+        (`.promptsha256`) this cell kept passing while a basename at the boundary could allocate and
+        then fail to write that sibling (deep review, codex inline). A hardcoded copy cannot see the
+        tuple grow; the assertion below now exercises whichever suffix is currently longest.
+        """
         for field in ("ticket", "round_value", "reviewer"):
             with self.subTest(field=field):
                 positive_base = self.root / f"positive-{field}"
                 positive_parent = self.prepare_parent(positive_base)
-                limit = os.pathconf(positive_parent, "PC_NAME_MAX") - len(".captureid")
+                longest_sibling = max(self.mod.DERIVED_SIBLING_SUFFIXES, key=len)
+                limit = os.pathconf(positive_parent, "PC_NAME_MAX") - len(longest_sibling)
                 kwargs = {"ticket": "T", "round_value": "1", "reviewer": "c"}
                 fixed_length = len(
                     self.basename(self.mod, kwargs["ticket"], kwargs["round_value"], kwargs["reviewer"], RUN_A)
@@ -336,9 +344,13 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
                     allocated = self.allocate(base=positive_base, **kwargs)
                 self.assertEqual(limit, len(allocated.name))
                 self.assertTrue(Path(str(allocated) + ".launch").exists())
-                capture_id = Path(str(allocated) + ".captureid")
-                capture_id.write_text("capture\n", encoding="ascii")
-                self.assertTrue(capture_id.exists(), "longest derived sibling must fit at the positive boundary")
+                for suffix in self.mod.DERIVED_SIBLING_SUFFIXES:
+                    sibling = Path(str(allocated) + suffix)
+                    sibling.write_text("sibling\n", encoding="ascii")
+                    self.assertTrue(
+                        sibling.exists(),
+                        f"derived sibling {suffix} must fit at the positive boundary",
+                    )
                 positive_generator.assert_called_once()
 
                 negative_base = self.root / f"negative-{field}"

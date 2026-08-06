@@ -791,3 +791,33 @@ class DeepReviewP2Fixes(unittest.TestCase):
                     f"{rel} must pass and re-read the allocated path, not a re-derived name",
                 )
 
+    def test_gemini_skill_quotes_the_model_the_wrapper_actually_defaults_to(self):
+        """The skill QUOTES the wrapper's default line, so the two can drift silently.
+
+        They did: the script moved to `gemini-3.6-flash-high` while the skill still quoted
+        `gemini-3.1-pro-high` and told operators to fall back by editing `settings.json` — a route the
+        wrapper makes inert, because it always passes `--model` (deep review, codex inline). Bind the
+        quotation to the source rather than pinning either to a literal.
+        """
+        script = _read("scripts/review/isolated-agy-review.sh")
+        skill = _read("skills/gemini-review/SKILL.md")
+        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', script, re.M)
+        self.assertIsNotNone(match)
+        default = match.group(1)
+
+        self.assertIn(
+            'MODEL="${MODEL:-' + default + '}"',
+            skill,
+            "the skill quotes a different wrapper default than the wrapper has",
+        )
+        self.assertIn(
+            "(binary `agy`, model `" + default + "`)",
+            skill,
+            "the skill's frontmatter description names a different model than the wrapper runs",
+        )
+        self.assertNotIn(
+            "temporarily edit settings.json and restore after",
+            skill,
+            "settings.json cannot affect a wrapper round — the wrapper always passes --model",
+        )
+

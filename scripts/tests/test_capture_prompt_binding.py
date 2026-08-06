@@ -55,12 +55,14 @@ printf 'UNLEASHED_TRANSCRIPT=%s\\n' "$leaf"
 # The two arms hand off to different backends, so each needs a stub in its own language: codex execs
 # `python3 pty-capture.py`, gemini execs `bash isolated-agy-review.sh`.
 CAPTURE_STUB_SH = """#!/usr/bin/env bash
+: > "${M5_CAPTURE_RAN:?}"
 sleep "${M5_CAPTURE_DELAY:-0}"
 exit 0
 """
 
 CAPTURE_STUB_PY = """#!/usr/bin/env python3
 import os, sys, time
+open(os.environ["M5_CAPTURE_RAN"], "w").close()
 time.sleep(float(os.environ.get("M5_CAPTURE_DELAY", "0")))
 sys.exit(0)
 """
@@ -101,7 +103,12 @@ class CapturePromptBindingTests(unittest.TestCase):
 
     def _run(self, reviewer: str, round_value: str, prompt: Path, delay: str = "0"):
         env = dict(os.environ)
-        env.update({"M5_LEAF_DIR": str(self.leaves), "M5_CAPTURE_DELAY": delay})
+        self.capture_ran = self.root / f"capture-ran-{reviewer}-{round_value}"
+        env.update({
+            "M5_LEAF_DIR": str(self.leaves),
+            "M5_CAPTURE_DELAY": delay,
+            "M5_CAPTURE_RAN": str(self.capture_ran),
+        })
         return subprocess.run(
             [
                 "bash",
@@ -198,6 +205,46 @@ class CapturePromptBindingTests(unittest.TestCase):
                 )
                 for produced in (first, second):
                     self.assertNotIn("${", produced, "the operand did not expand")
+
+    def test_a_failed_prompt_binding_aborts_before_the_reviewer_launches(self):
+        """`set -uo pipefail` has no `-e`, so an unchecked redirect ran the whole review unbound.
+
+        Reachable for real: the allocator reserved headroom only for `.launch`/`.captureid`, so a
+        basename near NAME_MAX allocated fine and then failed to write `.promptsha256` with
+        ENAMETOOLONG — a round completing with exit 0 and no record of which prompt it read. The
+        reservation is fixed in `pty-capture.py`; this proves the helper ALSO refuses rather than
+        proceeding, because the two defences fail independently.
+        """
+        for reviewer in HELPERS:
+            with self.subTest(reviewer=reviewer):
+                prompt = self.root / f".{reviewer}-prompt-COREDEV-2619r9.md"
+                prompt.write_text("a prompt\n", encoding="utf-8")
+                # A leaf whose name leaves no room for the sidecar suffix.
+                limit = os.pathconf(str(self.leaves), "PC_NAME_MAX")
+                long_dir = self.root / f"long-{reviewer}"
+                long_dir.mkdir()
+                env = dict(os.environ)
+                env.update({
+                    "M5_LEAF_DIR": str(long_dir),
+                    "M5_CAPTURE_DELAY": "0",
+                    "M5_CAPTURE_RAN": str(self.root / f"ran-{reviewer}"),
+                })
+                # The stub names the leaf `<reviewer>-<round>.txt`; pad the round so the basename sits
+                # at the limit and any suffix overflows.
+                pad = limit - len(f"{reviewer}-.txt")
+                result = subprocess.run(
+                    ["bash", str(self.review / HELPERS[reviewer].name),
+                     "COREDEV-2619", "9" * pad, str(prompt), "60"],
+                    cwd=str(self.root), env=env, capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(
+                    0, result.returncode, "an unrecordable prompt binding must not run the review"
+                )
+                self.assertIn("prompt binding", result.stderr)
+                self.assertFalse(
+                    (self.root / f"ran-{reviewer}").exists(),
+                    "the reviewer launched despite an unrecordable prompt binding",
+                )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -350,11 +350,18 @@
           "    else python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],\"rb\").read()).hexdigest())' \"$1\"",
           "    fi",
           "}",
-          "printf '%s  %s\\n' \"$(_prompt_digest \"$PROMPT\")\" \"$PROMPT\" > \"${CODEX_TRANSCRIPT}.promptsha256\"",
+          "# A FAILED binding must abort BEFORE the reviewer launches. `set -uo pipefail` has no `-e`, so an",
+          "# unchecked redirect would let the round run to completion with no record of which prompt it read \u2014",
+          "# reachable with a basename near NAME_MAX until `.promptsha256` was added to the allocator's reserved",
+          "# sibling suffixes (deep review, codex inline).",
+          "PROMPT_SHA256=\"$(_prompt_digest \"$PROMPT\")\" || die \"could not digest the prompt: $PROMPT\"",
+          "[ -n \"$PROMPT_SHA256\" ] || die \"prompt digest came back empty: $PROMPT\"",
+          "printf '%s  %s\\n' \"$PROMPT_SHA256\" \"$PROMPT\" > \"${CODEX_TRANSCRIPT}.promptsha256\" \\",
+          "    || die \"could not record the prompt binding: ${CODEX_TRANSCRIPT}.promptsha256\"",
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
         ],
-        "payloadSha256": "cf536fe21571e9c152bf4afb2e19c5a486976372aa7dd7fa4761fb8ffe068137"
+        "payloadSha256": "d52ed88ac569d862fc559a2fcfee6cb9e80c371d8e00f38737e261c11df6fa99"
       },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
@@ -374,7 +381,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 84,
+        "line": 91,
         "payloads": [
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
