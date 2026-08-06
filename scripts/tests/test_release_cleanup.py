@@ -486,7 +486,11 @@ class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
         nested_canary.write_bytes(b"must survive\n")
         root_before = os.stat(str(state_root), follow_symlinks=False)
 
-        with self.assertRaisesRegex(production.CleanupError, "not empty"):
+        # The refusal now happens BEFORE the unlink phase, so its message is the pre-unlink one.
+        # This assertion used to read "not empty" and then require every manifest file to be GONE —
+        # it was pinning the defect: apply deleted all 39 files and only then refused, so a directory
+        # that could never be emptied still cost the whole tree (deep review, P2).
+        with self.assertRaisesRegex(production.CleanupError, "refusing to delete anything"):
             production.cleanup_coredev_2619_leaks(state_root)
 
         root_after = os.stat(str(state_root), follow_symlinks=False)
@@ -496,8 +500,9 @@ class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
         )
         self.assertEqual(b"must survive\n", nested_canary.read_bytes())
         for relative_path in EXPECTED_PATHS:
-            self.assertFalse(
-                state_root.joinpath(*PurePosixPath(relative_path).parts).exists()
+            self.assertTrue(
+                state_root.joinpath(*PurePosixPath(relative_path).parts).exists(),
+                f"{relative_path} was deleted by a run that then refused — refusal must cost nothing",
             )
         for relative_directory in EXPECTED_DIRECTORIES:
             self.assertTrue(
@@ -740,3 +745,63 @@ class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckApplyAgreementProofs(SyntheticStateTreeMixin, unittest.TestCase):
+    """`--check` must never report green for a state `--apply` refuses (deep review, P2).
+
+    `--check` never ran the emptiness scan; `--apply` deleted all 39 files and only THEN refused a
+    non-empty directory. A file dropped in between — a concurrent review run is enough — produced a
+    green check followed by a destructive partial apply. The check is the signal an operator uses to
+    decide the destructive half is safe, so a false green there is worse than no check at all.
+    """
+
+    def _run_cli(self, state_root: Path, *flags: str):
+        return subprocess.run(
+            [sys.executable, str(PRODUCTION_PATH), "--state-root", str(state_root), *flags],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_check_and_apply_agree_on_a_clean_tree(self):
+        state_root, _objects = self.make_state_tree()
+        check = self._run_cli(state_root, "--check")
+        self.assertEqual(0, check.returncode, check.stderr)
+
+        apply_result = self._run_cli(state_root, "--apply")
+        self.assertEqual(0, apply_result.returncode, apply_result.stderr)
+
+    def test_an_unaccounted_child_makes_check_refuse_too(self):
+        """The asymmetry itself: same tree, and the two halves must reach the same verdict."""
+        state_root, _objects = self.make_state_tree()
+        intruder = state_root / EXPECTED_DIRECTORIES[0] / "concurrent-review-run.txt"
+        intruder.write_bytes(b"a round that started between check and apply\n")
+
+        check = self._run_cli(state_root, "--check")
+        self.assertNotEqual(0, check.returncode, "check reported green for a state apply refuses")
+        self.assertIn("NOT SAFE TO APPLY", check.stderr)
+        self.assertIn("concurrent-review-run.txt", check.stderr)
+
+    def test_apply_refuses_before_deleting_anything(self):
+        """The load-bearing half: refusal must cost nothing.
+
+        Asserted on the FILES, not on the exit code — refusing after the unlink phase also exits
+        non-zero, which is exactly the behaviour being fixed.
+        """
+        state_root, _objects = self.make_state_tree()
+        intruder = state_root / EXPECTED_DIRECTORIES[0] / "concurrent-review-run.txt"
+        intruder.write_bytes(b"dropped in before apply\n")
+
+        result = self._run_cli(state_root, "--apply")
+        self.assertNotEqual(0, result.returncode)
+        self.assert_all_manifest_paths_exist(state_root)
+        self.assertTrue(intruder.exists(), "the intruder must not be touched either")
+
+    def test_manifest_subdirectories_do_not_count_as_unexpected(self):
+        """A parent holding only manifest CHILDREN still reaches empty — the directory phase is
+        deepest-first — so counting them as unexpected would refuse every legitimate run."""
+        state_root, _objects = self.make_state_tree()
+        unexpected = production.unexpected_directory_occupants(state_root)
+        self.assertEqual({}, unexpected, f"a clean manifest tree must have no unexpected children: {unexpected}")
+

@@ -313,6 +313,59 @@ def unlink_regular_file(target: Path) -> None:
     os.unlink(str(target))
 
 
+def unexpected_directory_occupants(root: Path) -> Dict[str, Tuple[str, ...]]:
+    """Per manifest directory, the children that the manifest does NOT account for.
+
+    A directory is only removable once it is empty, and it can only BECOME empty if every child is a
+    manifest file. So this answers the question both `--check` and `--apply` actually need: after the
+    39 files go, would anything be left?
+
+    It existed nowhere. `--check` ran `_preflight_directories(require_empty=False)` and never looked at
+    emptiness at all, while `--apply` deleted all 39 files FIRST and only then refused a non-empty
+    directory — so a file dropped into a manifest directory between the two (a concurrent review run is
+    enough) produced a green check followed by a destructive partial apply (deep review, P2). Reporting
+    it and checking it before the unlink phase are the same question asked twice, so it is one function.
+    """
+    # Canonicalize here rather than trusting the caller: `_resolve_beneath` compares against the root,
+    # and on macOS a `/var` vs `/private/var` mismatch makes every containment check fail.
+    root, _identity_unused = _canonical_state_root(root)
+
+    manifest_children = {}  # type: Dict[str, set]
+    for entry in LEAK_MANIFEST:
+        relative = _pure_relative_path(entry.relative_path)
+        parent = relative.parent.as_posix()
+        manifest_children.setdefault(parent, set()).add(relative.name)
+
+    unexpected = {}  # type: Dict[str, Tuple[str, ...]]
+    for relative_path in EMPTY_DIRECTORY_MANIFEST:
+        lexical = root.joinpath(*_pure_relative_path(relative_path).parts)
+        if not lexical.is_dir():
+            continue
+        resolved = _resolve_beneath(root, relative_path)
+        accounted = manifest_children.get(relative_path, set())
+        # A nested manifest DIRECTORY is accounted for too: the directory phase removes those, deepest
+        # first, so a parent holding only manifest subdirectories still reaches empty.
+        nested = {
+            _pure_relative_path(other).name
+            for other in EMPTY_DIRECTORY_MANIFEST
+            if _pure_relative_path(other).parent.as_posix() == relative_path
+        }
+        try:
+            with os.scandir(str(resolved)) as children:
+                leftovers = tuple(
+                    sorted(
+                        child.name
+                        for child in children
+                        if child.name not in accounted and child.name not in nested
+                    )
+                )
+        except OSError as error:
+            raise CleanupError("could not inspect manifest directory: " + relative_path) from error
+        if leftovers:
+            unexpected[relative_path] = leftovers
+    return unexpected
+
+
 def delete_leak_files(state_root: Path) -> FileDeletionReport:
     """Delete the 39 literal manifest files and nothing else."""
 
@@ -389,7 +442,28 @@ def _remove_empty_directories(
 
 
 def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
-    """Run the closed file cleanup, then remove exactly its nine empty parents."""
+    """Run the closed file cleanup, then remove exactly its nine empty parents.
+
+    The whole-run precondition lives HERE rather than in `delete_leak_files`, whose contract is
+    narrower and deliberately so: it deletes exactly the literal manifest and nothing of the same
+    filename family, which is provable only on a tree that HAS such a neighbour. What this function
+    owns is the two phases together — and the second requires each manifest directory to be empty, so
+    an unaccounted-for child means the run cannot succeed. Discovering that after the unlink phase
+    meant 39 files were already gone and the run still failed (deep review, P2). Nothing is deleted
+    before this refusal.
+    """
+
+    root, _identity_unused = _canonical_state_root(state_root)
+    unexpected = unexpected_directory_occupants(root)
+    if unexpected:
+        raise CleanupError(
+            "refusing to delete anything because these manifest directories hold files the manifest "
+            "does not account for: "
+            + "; ".join(
+                relative_path + " (" + ", ".join(names) + ")"
+                for relative_path, names in sorted(unexpected.items())
+            )
+        )
 
     file_report = delete_leak_files(state_root)
     removed_directories = _remove_empty_directories(
@@ -445,8 +519,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             root, _identity_unused = _canonical_state_root(arguments.state_root)
             _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
             present, absent = _preflight_files(root, allow_absent=True)
+            unexpected = unexpected_directory_occupants(root)
         except (CleanupError, OSError) as error:
             print("cleanup check failed: " + str(error), file=sys.stderr)
+            return 1
+        if unexpected:
+            # A check that says green for a state `--apply` refuses is worse than no check: it is the
+            # signal an operator uses to decide it is safe to run the destructive half.
+            print(
+                "check: NOT SAFE TO APPLY — these manifest directories hold files the manifest does "
+                "not account for, so the directory phase would refuse AFTER the files were deleted:",
+                file=sys.stderr,
+            )
+            for relative_path, names in sorted(unexpected.items()):
+                print("  " + relative_path + ": " + ", ".join(names), file=sys.stderr)
             return 1
         print(
             "check: "

@@ -1017,6 +1017,64 @@ class ClassifierBypassProofs(unittest.TestCase):
             "a sibling launch record must force the record to be validated, never skipped",
         )
 
+    def test_equivalent_spellings_of_one_file_all_reach_the_gate(self) -> None:
+        """The same bytes must not be accepted or rejected based on how the path was spelled.
+
+        The layout comparison used the LEXICAL parents, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`
+        and a symlinked ancestor each opened the identical file while failing the comparison — and a
+        layout-placed transcript with no allocator filename and no `.launch` therefore skipped the
+        freshness check entirely (deep review; all three reproduced).
+
+        Asserted on the FRESHNESS OUTCOME, not on the classifier alone: classification is a mechanism,
+        and the property that matters is that the gate runs.
+        """
+        foreign = os.path.join(self.layout, "foreign.txt")
+        with open(foreign, "w") as handle:
+            handle.write("stale foreign content\nVERDICT: APPROVE\n")
+        ancestor_link = os.path.join(self.root, "link-to-transcripts")
+        os.symlink(os.path.join(self.root, "unleashed-mail", "review-transcripts"), ancestor_link)
+
+        spellings = {
+            "canonical": foreign,
+            "dot segment": os.path.join(self.layout, ".", "foreign.txt"),
+            "dotdot round-trip": os.path.join(
+                self.layout, "..", os.path.basename(self.layout), "foreign.txt"
+            ),
+            "symlinked ancestor": os.path.join(
+                ancestor_link, os.path.basename(self.layout), "foreign.txt"
+            ),
+        }
+        for label, spelling in spellings.items():
+            with self.subTest(spelling=label):
+                self.assertTrue(
+                    os.path.samefile(spelling, foreign),
+                    "the fixture must name the SAME file, or this proves nothing",
+                )
+                problem, verified = self.rv._transcript_freshness_problem(spelling)
+                self.assertIsNotNone(
+                    problem,
+                    f"the {label} spelling skipped the freshness gate for a file the canonical "
+                    "spelling rejects",
+                )
+                self.assertIsNone(verified)
+
+    def test_resolving_the_ancestry_does_not_resolve_the_leaf(self) -> None:
+        """The deletion test for the fix: it must not become the defect it replaced.
+
+        Resolving the WHOLE path is what walked a symlinked LEAF out of the layout and skipped the
+        check. Only `dirname` is resolved, so the leaf's own link-ness is still visible.
+        """
+        outside = os.path.join(self.root, "outside.txt")
+        with open(outside, "w") as handle:
+            handle.write("foreign\n")
+        link = os.path.join(self.layout, "gemini-" + "f" * 32 + ".txt")
+        os.symlink(outside, link)
+        open(link + ".launch", "w").close()
+
+        problem, _ = self.rv._transcript_freshness_problem(link)
+        self.assertIsNotNone(problem)
+        self.assertIn("symbolic link", problem)
+
     def test_symlinked_allocated_path_fails_closed_instead_of_skipping(self) -> None:
         """Classifying after realpath let a symlink escape the layout and skip the whole check."""
         foreign = os.path.join(self.root, "foreign.txt")

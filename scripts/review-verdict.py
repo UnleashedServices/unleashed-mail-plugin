@@ -419,9 +419,20 @@ def _is_per_run_transcript(path: str) -> bool:
     recovery is to rename the file, never to plant a `.launch` beside it, since a hand-written record
     would forge exactly the provenance this check verifies.
 
+    **The ANCESTRY is resolved; the leaf never is.** The layout comparison used the lexical parents, so
+    the same file classified differently depending only on how its path was spelled: `…/HASH/./f.txt`,
+    `…/HASH/../HASH/f.txt` and a symlinked ancestor all opened the identical bytes while failing the
+    comparison, and a layout-placed transcript with no allocator filename and no `.launch` therefore
+    skipped the freshness check entirely (deep review; reproduced for all three spellings).
+
+    Resolving `dirname(path)` fixes all three at once — `realpath` both normalizes `.`/`..` and follows
+    a symlinked ancestor. It is NOT the defect this function's history warns about: that one resolved
+    the WHOLE path, which walked a symlinked LEAF out of the layout and skipped the check. The leaf's
+    own name and link-ness are untouched here, so the `islink` refusal below still sees it.
+
     `hash_directory` is the per-run repo-hash component, not the repository root (Rovo thread 3).
     """
-    hash_directory = os.path.dirname(path)
+    hash_directory = os.path.realpath(os.path.dirname(path))
     transcripts_directory = os.path.dirname(hash_directory)
     product_directory = os.path.dirname(transcripts_directory)
     return (
