@@ -9,7 +9,7 @@ description: >
   publishers, ValueObservation callbacks, DispatchQueue usage, token refresh logic,
   WKWebView calls from background threads, or any code crossing isolation boundaries.
 model: opus
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -28,6 +28,7 @@ punt. Leave security, performance, and pure presentation/style to the other revi
 > its direct callers and callees (one hop), including files outside the diff. A structural
 > change can break correctness or threading invariants far from the changed lines. Tag
 > any finding you surface outside the diff with `scope: "structural-pipeline"`.
+
 
 ## Concurrency Audit
 
@@ -346,3 +347,10 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`. Every command in this body was a `grep -rn`, which `Grep` does natively, and
+> `pr-review` is model-invocable: injected PR content could otherwise steer a spawned reviewer to
+> arbitrary shell one level below the skill's own scoped grant (deep review, P1).

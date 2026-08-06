@@ -88,6 +88,13 @@ class CapturePromptBindingTests(unittest.TestCase):
         for path in HELPERS.values():
             shutil.copy2(path, self.review / path.name)
             (self.review / path.name).chmod(0o755)
+        binder = REPO / "scripts" / "review" / "bind-prompt.py"
+        shutil.copy2(binder, self.review / binder.name)
+        (self.review / binder.name).chmod(0o755)
+        # The helpers bind each transcript to the plan it reviewed, and `bind-prompt.py` requires both
+        # operands to be non-symlink regular files INSIDE the repository (deep review, P1).
+        self.plan = self.root / "FIXTURE_PLAN.md"
+        self.plan.write_text("# fixture plan\n", encoding="utf-8")
         for name, payload in (
             ("allocate-transcript.sh", ALLOCATOR_STUB),
             ("isolated-agy-review.sh", CAPTURE_STUB_SH),
@@ -116,6 +123,7 @@ class CapturePromptBindingTests(unittest.TestCase):
                 "COREDEV-2619",
                 round_value,
                 str(prompt),
+                str(self.plan),
                 "60",
             ],
             cwd=str(self.root),
@@ -168,7 +176,9 @@ class CapturePromptBindingTests(unittest.TestCase):
                         digest,
                         f"round {round_value} recorded another round's prompt",
                     )
-                    self.assertEqual(str(prompts[round_value]), named)
+                    # `bind-prompt.py` records the REPO-RELATIVE path: it is what a human reads in the
+                    # sidecar, and an absolute path from another machine would be noise.
+                    self.assertEqual(prompts[round_value].name, named)
 
     def test_each_recipe_names_its_prompt_from_ticket_and_round(self):
         """Structural half: two rounds cannot name one prompt file.
@@ -234,17 +244,57 @@ class CapturePromptBindingTests(unittest.TestCase):
                 pad = limit - len(f"{reviewer}-.txt")
                 result = subprocess.run(
                     ["bash", str(self.review / HELPERS[reviewer].name),
-                     "COREDEV-2619", "9" * pad, str(prompt), "60"],
+                     "COREDEV-2619", "9" * pad, str(prompt), str(self.plan), "60"],
                     cwd=str(self.root), env=env, capture_output=True, text=True, check=False,
                 )
                 self.assertNotEqual(
                     0, result.returncode, "an unrecordable prompt binding must not run the review"
                 )
-                self.assertIn("prompt binding", result.stderr)
+                self.assertIn("binding could not be established", result.stderr)
                 self.assertFalse(
                     (self.root / f"ran-{reviewer}").exists(),
                     "the reviewer launched despite an unrecordable prompt binding",
                 )
+
+    def test_an_out_of_repo_prompt_is_refused_before_the_reviewer_sees_it(self):
+        """The exfiltration path: a pre-approved entrypoint reading anything the model names.
+
+        `codex-review` is model-invocable and grants `capture-codex-review.sh *`, so the model chooses
+        this operand. The old `-r`/`-s` pair accepted `../secret`, and `$(cat "$PROMPT")` then shipped
+        those bytes to the reviewer CLI verbatim — reproduced by the deep review with a Codex stub.
+
+        Asserted on the reviewer never launching, not merely on the exit code: a refusal that happens
+        after the CLI has already received the bytes is not a refusal.
+        """
+        outside = self.root.parent / f"outside-secret-{self.root.name}.txt"
+        outside.write_text("SECRET MATERIAL\n", encoding="utf-8")
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        link = self.root / ".codex-prompt-COREDEV-2619r9.md"
+        link.symlink_to(outside)
+
+        for reviewer, operand in (("codex", str(outside)), ("codex", str(link))):
+            with self.subTest(operand=operand):
+                ran = self.root / f"ran-{reviewer}-exfil"
+                env = dict(os.environ)
+                env.update({
+                    "M5_LEAF_DIR": str(self.leaves), "M5_CAPTURE_DELAY": "0",
+                    "M5_CAPTURE_RAN": str(ran),
+                })
+                result = subprocess.run(
+                    ["bash", str(self.review / HELPERS[reviewer].name),
+                     "COREDEV-2619", "9", operand, str(self.plan), "60"],
+                    cwd=str(self.root), env=env, capture_output=True, text=True, check=False,
+                )
+                self.assertNotEqual(0, result.returncode, result.stdout)
+                self.assertFalse(ran.exists(), "the reviewer received an out-of-repo prompt")
+
+    def test_a_prompt_inside_the_repo_is_still_accepted(self):
+        """The positive control — containment must not be refusing everything."""
+        prompt = self.root / ".codex-prompt-COREDEV-2619r11.md"
+        prompt.write_text("a legitimate in-repo prompt\n", encoding="utf-8")
+        result = self._run("codex", "11", prompt)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue((self.leaves / "codex-11.txt.plan").is_file())
 
 
 if __name__ == "__main__":  # pragma: no cover

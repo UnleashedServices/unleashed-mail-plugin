@@ -10,6 +10,7 @@ state root explicitly with ``--state-root ... --apply``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import stat
 import sys
@@ -299,18 +300,146 @@ def _preflight_files(root: Path, allow_absent: bool = False) -> Tuple[Dict[str, 
     return resolved_targets, already_absent
 
 
-def unlink_regular_file(target: Path) -> None:
-    """Unlink one already-resolved regular file; never remove a directory."""
+def _open_parent_chain(
+    root: Path,
+    relative: PurePosixPath,
+    root_identity: Tuple[int, int],
+    relative_path: str,
+) -> List[int]:
+    """Open every directory from `root` down to `relative`'s parent, following no symlink.
 
-    metadata = os.lstat(str(target))
+    Each `os.open` carries `O_DIRECTORY | O_NOFOLLOW` and is resolved RELATIVE to the descriptor
+    above it, so no component is ever re-resolved from a name. The root descriptor is `fstat`ed
+    against the identity the preflight recorded, which is the only way to know the chain starts at
+    the directory that was validated rather than at whatever now answers to its path.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = []  # type: List[int]
+    try:
+        descriptors.append(os.open(str(root), flags))
+        metadata = os.fstat(descriptors[0])
+        if (metadata.st_dev, metadata.st_ino) != root_identity:
+            raise CleanupError("state-root identity changed before removal: " + relative_path)
+        for component in relative.parts[:-1]:
+            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+    return descriptors
+
+
+@contextlib.contextmanager
+def parent_descriptor(root: Path, relative_path: str, root_identity: Tuple[int, int]):
+    """Yield `(descriptor, leaf_name)` for one manifest entry's parent directory.
+
+    WHY A DESCRIPTOR AND NOT A PATH
+    The preflight resolves each target, checks its type and proves it is beneath the state root —
+    and then the removal phase used the resolved STRING, re-walking every component against the live
+    filesystem. Between those two walks a same-account process can rename a parent directory and put
+    a symlink in its place, so the name the preflight blessed and the name the unlink follows are
+    two different objects. `--apply` runs 39 unlinks in a loop, which is 39 chances (deep review,
+    P2). Descending once through descriptors closes the window: `os.unlink(name, dir_fd=...)` acts
+    on a directory the kernel is holding open, and a rename of that directory's PATH cannot retarget
+    it.
+
+    Containment survives too — a descriptor obtained by walking down from the root without following
+    a symlink cannot address anything outside the root, which is the same property `_resolve_beneath`
+    asserts lexically.
+    """
+    relative = _pure_relative_path(relative_path)
+    try:
+        descriptors = _open_parent_chain(root, relative, root_identity, relative_path)
+    except CleanupError:
+        raise
+    except OSError as error:
+        raise CleanupError(
+            "could not open the manifest parent directory: " + relative_path
+        ) from error
+    try:
+        yield descriptors[-1], relative.parts[-1]
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+@contextlib.contextmanager
+def held_manifest_parents(root: Path, root_identity: Tuple[int, int]):
+    """Open every manifest entry's parent — and HOLD them all — for the entire removal phase.
+
+    Re-opening the chain per entry would not have closed anything: each open re-walks the same names
+    against the live filesystem, so a swap is just as effective one line later. What closes the
+    window is that these descriptors are acquired ONCE, before the type classification, and the same
+    descriptors carry out the unlink. Between those two steps the manifest's parent directories can
+    be renamed, replaced, or swapped for symlinks and it changes nothing: the kernel is holding the
+    original inodes and `dir_fd` removal never consults a path again.
+    """
+    with contextlib.ExitStack() as stack:
+        holders = {}  # type: Dict[str, Tuple[int, str]]
+        for entry in LEAK_MANIFEST:
+            try:
+                holders[entry.relative_path] = stack.enter_context(
+                    parent_descriptor(root, entry.relative_path, root_identity)
+                )
+            except CleanupError as error:
+                # An ABSENT parent directory is satisfied, not a failure: the directory phase of an
+                # earlier `--apply` removed it, and a file cannot survive inside a directory that is
+                # gone. Refusing here made a resumable run unresumable. Only absence is forgiven —
+                # ENOTDIR and ELOOP (a component swapped for a file or a symlink) still abort, which
+                # is the whole point of descending with O_NOFOLLOW.
+                if not isinstance(error.__cause__, FileNotFoundError):
+                    raise
+        yield holders
+
+
+def _present_through_descriptors(holders: Dict[str, Tuple[int, str]]) -> Dict[str, None]:
+    """Classify every entry through its HELD descriptor, refusing before a single unlink.
+
+    A wrong type must abort the whole tree, not the tail of it — `unlink_regular_file`'s own guard
+    fires mid-loop, by which point earlier entries are already gone. Absence stays satisfiable, which
+    is what makes `--apply` resumable.
+    """
+    present = {}  # type: Dict[str, None]
+    for entry in LEAK_MANIFEST:
+        if entry.relative_path not in holders:
+            continue  # the parent directory is gone; so is the file
+        descriptor, name = holders[entry.relative_path]
+        try:
+            metadata = os.lstat(name, dir_fd=descriptor)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise CleanupError(
+                "could not inspect manifest target: " + entry.relative_path
+            ) from error
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CleanupError(
+                "manifest target is not a regular file: "
+                + entry.relative_path
+                + " is "
+                + _describe_type(metadata.st_mode)
+            )
+        present[entry.relative_path] = None
+    return present
+
+
+def unlink_regular_file(descriptor: int, name: str, relative_path: str) -> None:
+    """Unlink one manifest file through its parent's descriptor; never remove a directory.
+
+    The `lstat` and the `unlink` are BOTH relative to `descriptor`, so the object typed-checked here
+    is the object removed — a swap between the two would have to replace that one directory entry,
+    which the check is positioned to catch.
+    """
+
+    metadata = os.lstat(name, dir_fd=descriptor)
     if not stat.S_ISREG(metadata.st_mode):
         raise CleanupError(
             "target changed type before unlink: "
-            + str(target)
+            + relative_path
             + " is "
             + _describe_type(metadata.st_mode)
         )
-    os.unlink(str(target))
+    os.unlink(name, dir_fd=descriptor)
 
 
 def unexpected_directory_occupants(root: Path) -> Dict[str, Tuple[str, ...]]:
@@ -376,16 +505,25 @@ def delete_leak_files(state_root: Path) -> FileDeletionReport:
     resolved_targets, already_absent = _preflight_files(root, allow_absent=True)
 
     attempted = []  # type: List[str]
-    for entry in LEAK_MANIFEST:
-        attempted.append(entry.relative_path)
-        if entry.relative_path not in resolved_targets:
-            continue  # already absent — the goal state for this entry is reached
-        try:
-            unlink_regular_file(resolved_targets[entry.relative_path])
-        except CleanupError:
-            raise
-        except OSError as error:
-            raise CleanupError("could not unlink manifest target: " + entry.relative_path) from error
+    # `resolved_targets` carries the containment verdict (no escape, no symlink), which is a decision
+    # about PATHS and stays path-shaped. The descriptors below carry the removal, which is a decision
+    # about OBJECTS. Both are needed: the first refuses a manifest that points outside the root, the
+    # second refuses to let anything move under the first one's feet.
+    with held_manifest_parents(root, root_identity) as holders:
+        present = _present_through_descriptors(holders)
+        for entry in LEAK_MANIFEST:
+            attempted.append(entry.relative_path)
+            if entry.relative_path not in resolved_targets or entry.relative_path not in present:
+                continue  # already absent — the goal state for this entry is reached
+            descriptor, name = holders[entry.relative_path]
+            try:
+                unlink_regular_file(descriptor, name, entry.relative_path)
+            except CleanupError:
+                raise
+            except OSError as error:
+                raise CleanupError(
+                    "could not unlink manifest target: " + entry.relative_path
+                ) from error
 
     expected = tuple(entry.relative_path for entry in LEAK_MANIFEST)
     if Counter(attempted) != Counter(expected) or set(attempted) != set(expected):
@@ -395,10 +533,15 @@ def delete_leak_files(state_root: Path) -> FileDeletionReport:
     return FileDeletionReport(tuple(attempted), root_identity)
 
 
-def remove_empty_directory(target: Path) -> None:
-    """Remove one preflighted empty directory without recursion."""
+def remove_empty_directory(descriptor: int, name: str) -> None:
+    """Remove one preflighted empty directory, through its parent's descriptor, without recursion.
 
-    os.rmdir(str(target))
+    Same reasoning as `unlink_regular_file`: the emptiness scan immediately above and the `rmdir`
+    must name the same object, and a path-based `rmdir` re-resolves every component after the scan
+    has already looked.
+    """
+
+    os.rmdir(name, dir_fd=descriptor)
 
 
 def _remove_empty_directories(
@@ -418,20 +561,23 @@ def _remove_empty_directories(
             removed.append(relative_path)   # already absent — the goal state is reached
             continue
         try:
-            with os.scandir(str(resolved[relative_path])) as children:
-                if next(children, None) is not None:
-                    raise CleanupError(
-                        "refusing directory removal because the manifest directory is not empty: "
-                        + relative_path
-                    )
+            # One descriptor spans BOTH the emptiness scan and the removal. Scanning a path and then
+            # removing that path asks the filesystem the same question twice and accepts two answers.
+            with parent_descriptor(root, relative_path, root_identity) as (holder, name):
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                inspected = os.open(name, flags, dir_fd=holder)
+                try:
+                    with os.scandir(inspected) as children:
+                        if next(children, None) is not None:
+                            raise CleanupError(
+                                "refusing directory removal because the manifest directory is not "
+                                "empty: " + relative_path
+                            )
+                finally:
+                    os.close(inspected)
+                remove_empty_directory(holder, name)
         except CleanupError:
             raise
-        except OSError as error:
-            raise CleanupError(
-                "could not inspect manifest directory: " + relative_path
-            ) from error
-        try:
-            remove_empty_directory(resolved[relative_path])
         except OSError as error:
             raise CleanupError("could not remove empty manifest directory: " + relative_path) from error
         removed.append(relative_path)

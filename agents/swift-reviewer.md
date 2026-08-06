@@ -11,6 +11,10 @@ description: >
   to merge", or after any significant code change is complete.
 model: inherit
 tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
+# `Agent` is a bare allowlist entry because sub-agent `tools:` takes bare NAMES only — the
+# `Agent(type)` specifier form is ignored inside a sub-agent definition (verified against the
+# Claude Code sub-agents reference). The spawned set is constrained by `disallowedTools` instead.
+disallowedTools: Write, Edit, NotebookEdit
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client

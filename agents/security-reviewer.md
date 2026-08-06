@@ -9,7 +9,7 @@ description: >
   handling, WKWebView HTML loading, evaluateJavaScript calls, CI/CD workflows,
   entitlements files, or any code that handles secrets or user credentials.
 model: opus
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -25,6 +25,7 @@ logic/correctness to `concurrency-reviewer` (the correctness & concurrency owner
 > pipeline** — trace its direct callers and callees (one hop), including files outside the
 > diff. A structural change can break invariants far from the changed lines. Tag any
 > finding you surface outside the diff with `scope: "structural-pipeline"`.
+
 
 ## Audit Scope
 
@@ -284,3 +285,10 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`. Every command in this body was a `grep -rn`, which `Grep` does natively, and
+> `pr-review` is model-invocable: injected PR content could otherwise steer a spawned reviewer to
+> arbitrary shell one level below the skill's own scoped grant (deep review, P1).

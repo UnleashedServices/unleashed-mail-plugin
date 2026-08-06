@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:786",
+      "location": "CHANGELOG.md:831",
       "path": "CHANGELOG.md",
-      "line": 786,
+      "line": 831,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -304,9 +304,9 @@
       "destination": {
         "line": 6,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version)"
         ],
-        "payloadSha256": "5f511bb7ea9843358b98c29568fd95ae1588252da72a09dadd37aa4d4ee80d47"
+        "payloadSha256": "af961aa158d1b4520e5904e9a20d10cb20a1b9671cebf8af32ac6a37130c2eb2"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -327,7 +327,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 62,
+        "line": 67,
         "payloads": [
           "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
           "    :",
@@ -341,27 +341,19 @@
           "esac",
           "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
           "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
-          "# Bind the prompt to THIS transcript, BEFORE the capture runs: a round that later times out still",
-          "# leaves the record of which prompt it was reviewing. `shasum -a 256` is on macOS, `sha256sum` on",
-          "# GNU \u2014 take whichever exists, and record the prompt's own path alongside its digest.",
-          "_prompt_digest() {",
-          "    if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | cut -d' ' -f1",
-          "    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | cut -d' ' -f1",
-          "    else python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],\"rb\").read()).hexdigest())' \"$1\"",
-          "    fi",
-          "}",
-          "# A FAILED binding must abort BEFORE the reviewer launches. `set -uo pipefail` has no `-e`, so an",
-          "# unchecked redirect would let the round run to completion with no record of which prompt it read \u2014",
-          "# reachable with a basename near NAME_MAX until `.promptsha256` was added to the allocator's reserved",
-          "# sibling suffixes (deep review, codex inline).",
-          "PROMPT_SHA256=\"$(_prompt_digest \"$PROMPT\")\" || die \"could not digest the prompt: $PROMPT\"",
-          "[ -n \"$PROMPT_SHA256\" ] || die \"prompt digest came back empty: $PROMPT\"",
-          "printf '%s  %s\\n' \"$PROMPT_SHA256\" \"$PROMPT\" > \"${CODEX_TRANSCRIPT}.promptsha256\" \\",
-          "    || die \"could not record the prompt binding: ${CODEX_TRANSCRIPT}.promptsha256\"",
+          "# Bind the prompt AND the plan to THIS transcript, BEFORE the capture runs. `bind-prompt.py` also",
+          "# CONTAINS the operands: the `-r`/`-s` pair this replaced accepted any readable path, including",
+          "# `../secret`, whose bytes the capture below would then have sent to the reviewer CLI verbatim \u2014 and",
+          "# this entrypoint is pre-approved on a model-invocable skill, so the model chooses that operand",
+          "# (deep review, P1). It writes both sidecars with O_NOFOLLOW|O_EXCL, which the shell redirect it",
+          "# replaced did not. A failed binding aborts here, before the reviewer launches.",
+          "python3 \"${SCRIPT_DIR}/bind-prompt.py\" \\",
+          "    --prompt \"$PROMPT\" --transcript \"${CODEX_TRANSCRIPT}\" --plan \"$PLAN\" \\",
+          "    || die \"refusing to review: the prompt/plan binding could not be established\"",
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
         ],
-        "payloadSha256": "d52ed88ac569d862fc559a2fcfee6cb9e80c371d8e00f38737e261c11df6fa99"
+        "payloadSha256": "7238638f94d2b18be7d42ba2f18f4a3eab7e502c3abfda9b1c1d99b970476669"
       },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
@@ -381,7 +373,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 91,
+        "line": 88,
         "payloads": [
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""

@@ -11,7 +11,7 @@
 # `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant.
 #
 # Usage:
-#   capture-codex-review.sh <ticket> <round> <prompt-file> [timeout-seconds]
+#   capture-codex-review.sh <ticket> <round> <prompt-file> <plan> [timeout-seconds]
 #
 # Prints the allocator's `UNLEASHED_TRANSCRIPT=<path>` marker on stdout, byte-for-byte, BEFORE the
 # capture starts: synthesis binds that exact path, and it must survive a capture that later times out.
@@ -23,8 +23,11 @@
 # the evidence association this whole ticket exists to establish (deep review, P1). The tree already
 # worked this way in practice: 337 of the 339 prompt files on disk are per-round names.
 #
-# The prompt's digest is recorded beside the transcript as `<transcript>.promptsha256`, so a
-# cross-wire is not only prevented but DETECTABLE after the fact.
+# `bind-prompt.py` records BOTH the prompt digest (`<transcript>.promptsha256`) and the plan this
+# round reviews (`<transcript>.plan`). The plan binding is the ENFORCED one: `review-verdict.py
+# write` refuses an approving verdict whose transcript reviewed different bytes. The earlier
+# sidecar was written and read by nothing, so transcripts from an unrelated ticket still produced
+# `GATE OK — APPROVE` (deep review, P1) — 'detectable' is only true if something looks.
 #
 # Exit: the allocator's own status if allocation fails · 1 on a missing operand, an unreadable or
 #       empty prompt, or a malformed marker · otherwise pty-capture's status, which matches codex's.
@@ -33,7 +36,8 @@ set -uo pipefail
 TICKET="${1-}"
 ROUND="${2-}"
 PROMPT="${3-}"
-TIMEOUT="${4-1200}"   # xhigh reasoning survives this; 600 SIGTERMs it mid-review
+PLAN="${4-}"
+TIMEOUT="${5-1200}"   # xhigh reasoning survives this; 600 SIGTERMs it mid-review
 
 die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 
@@ -41,6 +45,7 @@ die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 [ -n "$TICKET" ] || die "bind TICKET to the --ticket operand"
 [ -n "$ROUND" ]  || die "bind ROUND to the --round operand"
 [ -n "$PROMPT" ] || die "name the PER-ROUND prompt file — there is no shared default"
+[ -n "$PLAN" ]   || die "name the plan this round reviews — the transcript is bound to it"
 # Parity with the other arm, which has always checked this (`isolated-agy-review.sh`). `$(cat …)` on a
 # missing file expands EMPTY, so without this codex would be handed an empty prompt and would review
 # nothing — and whatever it said about nothing would be parsed for a verdict.
@@ -71,22 +76,14 @@ case "$TRANSCRIPT_MARKER" in
 esac
 CODEX_TRANSCRIPT="${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}"
 printf '%s\n' "$TRANSCRIPT_MARKER"
-# Bind the prompt to THIS transcript, BEFORE the capture runs: a round that later times out still
-# leaves the record of which prompt it was reviewing. `shasum -a 256` is on macOS, `sha256sum` on
-# GNU — take whichever exists, and record the prompt's own path alongside its digest.
-_prompt_digest() {
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
-    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
-    else python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
-    fi
-}
-# A FAILED binding must abort BEFORE the reviewer launches. `set -uo pipefail` has no `-e`, so an
-# unchecked redirect would let the round run to completion with no record of which prompt it read —
-# reachable with a basename near NAME_MAX until `.promptsha256` was added to the allocator's reserved
-# sibling suffixes (deep review, codex inline).
-PROMPT_SHA256="$(_prompt_digest "$PROMPT")" || die "could not digest the prompt: $PROMPT"
-[ -n "$PROMPT_SHA256" ] || die "prompt digest came back empty: $PROMPT"
-printf '%s  %s\n' "$PROMPT_SHA256" "$PROMPT" > "${CODEX_TRANSCRIPT}.promptsha256" \
-    || die "could not record the prompt binding: ${CODEX_TRANSCRIPT}.promptsha256"
+# Bind the prompt AND the plan to THIS transcript, BEFORE the capture runs. `bind-prompt.py` also
+# CONTAINS the operands: the `-r`/`-s` pair this replaced accepted any readable path, including
+# `../secret`, whose bytes the capture below would then have sent to the reviewer CLI verbatim — and
+# this entrypoint is pre-approved on a model-invocable skill, so the model chooses that operand
+# (deep review, P1). It writes both sidecars with O_NOFOLLOW|O_EXCL, which the shell redirect it
+# replaced did not. A failed binding aborts here, before the reviewer launches.
+python3 "${SCRIPT_DIR}/bind-prompt.py" \
+    --prompt "$PROMPT" --transcript "${CODEX_TRANSCRIPT}" --plan "$PLAN" \
+    || die "refusing to review: the prompt/plan binding could not be established"
 exec python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout "$TIMEOUT" --allocated "$CODEX_TRANSCRIPT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat "$PROMPT")"

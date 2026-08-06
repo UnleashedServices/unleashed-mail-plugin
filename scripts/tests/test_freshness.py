@@ -351,6 +351,15 @@ class FreshnessFixture(unittest.TestCase):
                 )
             transcripts.append(transcript)
 
+        # Every per-run transcript now carries a `.plan` binding — the capture helpers write it, and
+        # `write` refuses an APPROVING verdict without one. These cells are about the LAUNCH record,
+        # so give each transcript a valid binding and let the kind under test be the only variable.
+        plan_digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        for transcript in transcripts:
+            Path(str(transcript) + ".plan").write_text(
+                f"{plan_digest}  {plan.name}\n", encoding="utf-8"
+            )
+
         self.configure_kind(
             kind,
             transcripts[target_index],
@@ -928,6 +937,10 @@ class SFreshAdditionalProofs(FreshnessFixture):
             b"one review cannot back two approvals\nVERDICT: APPROVE\n",
         )
         digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        # A valid plan binding, so the quorum check is the only thing this cell can fail on. Without
+        # it the bypass mutant is refused by the binding instead, and the proof would witness the
+        # wrong rejection.
+        Path(str(shared) + ".plan").write_text(f"{digest}  {plan.name}\n", encoding="utf-8")
         return self.invoke(
             script,
             [
@@ -1196,3 +1209,71 @@ class SFreshDescriptorBindingProofs(FreshnessFixture):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class PlanBindingProofs(FreshnessFixture):
+    """A fresh review of ANOTHER target must not satisfy this plan's gate (deep review, P1).
+
+    `.promptsha256` was written by the capture helpers and read by NOTHING. The reviewer reproduced
+    `GATE OK — APPROVE` for plan A using two freshly allocated transcripts from an unrelated ticket:
+    freshness proved both were real recent runs, the snapshot proved plan A was unedited, and no check
+    connected the two. Freshness answers "is this a real run"; this answers "a run of WHAT".
+    """
+
+    def write_with_binding(self, label: str, bound_digest, verdict: str = "APPROVE",
+                           bind_to_this_plan: bool = False):
+        case_root = self.next_case_root(label)
+        plan = case_root / "PLAN.md"
+        plan.write_text("# Plan\nthe bytes being approved\n", encoding="utf-8")
+        plan_digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        parent = case_root / "state" / "unleashed-mail" / "review-transcripts" / "RepoHash09"
+
+        transcripts = []
+        for index, reviewer in enumerate(("gemini", "codex")):
+            transcript = self.create_transcript(
+                parent, reviewer, RUN_IDS[index],
+                (reviewer + " review\nVERDICT: APPROVE\n").encode("utf-8"),
+            )
+            recorded = plan_digest if bind_to_this_plan else bound_digest
+            if recorded is not None:
+                Path(str(transcript) + ".plan").write_text(
+                    f"{recorded}  some-plan.md\n", encoding="utf-8"
+                )
+            transcripts.append(transcript)
+
+        arguments = ["write", "--plan", str(plan), "--verdict", verdict]
+        for reviewer, transcript in zip(("gemini", "codex"), transcripts):
+            arguments += ["--reviewer", reviewer + "=APPROVE:" + str(transcript)]
+        arguments += ["--reviewed-sha256", plan_digest]
+        return self.invoke(VERDICT_PATH, arguments), plan_digest
+
+    def test_a_transcript_bound_to_this_plan_is_accepted(self):
+        """The positive control. Without it the refusals below could be refusing everything.
+
+        This asserts a SUCCESSFUL approving write — the first version of this cell asserted a
+        refusal, which made it a duplicate of the negative case wearing the positive case's name.
+        """
+        result, _ = self.write_with_binding("binding-positive", None, bind_to_this_plan=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_a_transcript_reviewing_another_plan_cannot_approve_this_one(self):
+        other = hashlib.sha256(b"a completely different plan\n").hexdigest()
+        result, _ = self.write_with_binding("binding-other-plan", other)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("different bytes than this verdict approves", output)
+
+    def test_an_absent_binding_is_refused_rather_than_skipped(self):
+        result, _ = self.write_with_binding("binding-absent", None)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("no plan binding", output)
+
+    def test_a_nonapproving_verdict_is_still_recordable_without_a_binding(self):
+        """Refusing REQUEST_CHANGES on a binding problem would block the gate from recording a
+        rejection — the one verdict that must always be writable."""
+        result, _ = self.write_with_binding(
+            "binding-rejection", None, verdict="REQUEST_CHANGES"
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+

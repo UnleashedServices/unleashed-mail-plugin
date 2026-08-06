@@ -370,31 +370,39 @@ class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
             self.assert_file_deletion_contract(recursive_root_mutant)
 
     def test_M2_25_forbidden_primitive_source_mutations_are_rejected(self) -> None:
+        # Indented one level deeper than it used to be: the removal loop now runs inside the
+        # `held_manifest_parents` block. A stale anchor here is not a cosmetic miss — it would make
+        # every mutation below a no-op, and four mutants that change nothing all "fail" the contract
+        # for free. `_replace_once` raising on a zero-hit anchor is what surfaced it.
         loop_anchor = (
-            "    for entry in LEAK_MANIFEST:\n"
-            "        attempted.append(entry.relative_path)\n"
+            "        for entry in LEAK_MANIFEST:\n"
+            "            attempted.append(entry.relative_path)\n"
         )
         mutations = {
             "filename-glob": _replace_once(
                 PRODUCTION_SOURCE,
                 loop_anchor,
-                "    for entry in root.rglob(\"*.txt*\"):\n"
-                "        attempted.append(str(entry))\n",
+                "        for entry in root.rglob(\"*.txt*\"):\n"
+                "            attempted.append(str(entry))\n",
             ),
+            # Re-anchored when the removal phase moved onto parent descriptors: the primitive is now
+            # `os.unlink(name, dir_fd=...)`, so the pre-descriptor anchor matched nothing and
+            # `_replace_once` refused rather than silently mutating no bytes — which is exactly why
+            # it raises on a zero-hit anchor instead of returning the source unchanged.
             "directory-removal": _replace_once(
                 PRODUCTION_SOURCE,
-                "    os.unlink(str(target))\n",
-                "    os.rmdir(str(target))\n",
+                "    os.unlink(name, dir_fd=descriptor)\n",
+                "    os.rmdir(name, dir_fd=descriptor)\n",
             ),
             "root-replacement": _replace_once(
                 PRODUCTION_SOURCE,
-                "    os.unlink(str(target))\n",
-                "    os.replace(str(target), str(target.parent))\n",
+                "    os.unlink(name, dir_fd=descriptor)\n",
+                "    os.replace(name, \"..\", src_dir_fd=descriptor)\n",
             ),
             "shell": _replace_once(
                 PRODUCTION_SOURCE,
-                "    os.unlink(str(target))\n",
-                "    os.system(\"rm -f -- \" + str(target))\n",
+                "    os.unlink(name, dir_fd=descriptor)\n",
+                "    os.system(\"rm -f -- \" + name)\n",
             ),
         }
         for label, mutant in mutations.items():
@@ -755,10 +763,6 @@ class ResumeAndCheckProofs(SyntheticStateTreeMixin, unittest.TestCase):
             )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CheckApplyAgreementProofs(SyntheticStateTreeMixin, unittest.TestCase):
     """`--check` must never report green for a state `--apply` refuses (deep review, P2).
 
@@ -816,4 +820,115 @@ class CheckApplyAgreementProofs(SyntheticStateTreeMixin, unittest.TestCase):
         state_root, _objects = self.make_state_tree()
         unexpected = production.unexpected_directory_occupants(state_root)
         self.assertEqual({}, unexpected, f"a clean manifest tree must have no unexpected children: {unexpected}")
+
+
+def _path_based_removal_mutant() -> ModuleType:
+    """The pre-fix removal primitive: validate and unlink the RESOLVED PATH STRING.
+
+    Faithful rather than convenient — the descriptors are still opened and held, exactly as the
+    fixed code does; only the two syscalls that actually touch the filesystem go back to naming a
+    path. So any divergence this mutant shows is attributable to the `dir_fd` removal and to nothing
+    else that changed in this commit.
+    """
+    source = _replace_once(
+        PRODUCTION_SOURCE,
+        "            descriptor, name = holders[entry.relative_path]\n",
+        "            descriptor, name = -1, str(resolved_targets[entry.relative_path])\n",
+    )
+    source = _replace_once(
+        source,
+        "    metadata = os.lstat(name, dir_fd=descriptor)\n    if not stat.S_ISREG",
+        "    metadata = os.lstat(name)\n    if not stat.S_ISREG",
+    )
+    source = _replace_once(source, "    os.unlink(name, dir_fd=descriptor)\n", "    os.unlink(name)\n")
+
+    mutant_path = Path(tempfile.mkdtemp(prefix="coredev-2619-mutant-")) / "path_based_removal.py"
+    mutant_path.write_text(source, encoding="utf-8")
+    return _load_module(mutant_path, "coredev2619_path_based_removal")
+
+
+class DescriptorStabilityProofs(SyntheticStateTreeMixin, unittest.TestCase):
+    """The removal phase must act on the objects it validated, not on their names (deep review, P2).
+
+    `_preflight_files` resolves each target, proves it is a regular file and proves it is beneath the
+    state root — and the removal loop then re-walked the resolved STRING. Every component gets looked
+    up again, so a rename of one parent directory between the two walks silently retargets all 39
+    unlinks. The transcript state root lives under `~/.local/state`, a same-account-writable tree, so
+    the swap needs no privilege; and `--apply` gives 39 consecutive chances to land it.
+    """
+
+    def _swap_the_parent_aside(self, state_root: Path, directory: str):
+        """Move one manifest directory away and stand a fresh one, full of decoys, in its place.
+
+        The decoys stand in for a CONCURRENT review run's transcripts: files that are validly named,
+        that the manifest names too, and that this cleanup has no business deleting because they are
+        not the objects it inspected.
+        """
+        original = state_root / directory
+        moved = state_root / (directory + ".moved")
+        original.rename(moved)
+        original.mkdir()
+        under = [path for path in EXPECTED_PATHS if PurePosixPath(path).parent.as_posix() == directory]
+        decoys = {}
+        for relative_path in under:
+            decoy = original / PurePosixPath(relative_path).name
+            decoy.write_bytes(b"a concurrent run's transcript - must survive\n")
+            decoys[relative_path] = decoy
+        survivors = {path: moved / PurePosixPath(path).name for path in under}
+        return survivors, decoys
+
+    def _delete_with_a_swap_mid_phase(self, module: ModuleType, directory: str):
+        state_root, _objects = self.make_state_tree()
+        real_classifier = module._present_through_descriptors
+        swapped = {}
+
+        def classify_then_swap(holders):
+            present = real_classifier(holders)
+            # The exact window the finding names: preflight has spoken, nothing is deleted yet.
+            swapped.update(zip(("originals", "decoys"), self._swap_the_parent_aside(state_root, directory)))
+            return present
+
+        module._present_through_descriptors = classify_then_swap
+        self.addCleanup(setattr, module, "_present_through_descriptors", real_classifier)
+        try:
+            module.delete_leak_files(state_root)
+            refused = None
+        except module.CleanupError as error:
+            refused = str(error)
+        return swapped["originals"], swapped["decoys"], refused
+
+    def test_a_parent_swapped_mid_phase_cannot_retarget_the_unlinks(self):
+        directory = EXPECTED_DIRECTORIES[0]
+        originals, decoys, refused = self._delete_with_a_swap_mid_phase(production, directory)
+
+        self.assertIsNone(refused, "the validated objects are still there to remove")
+        for relative_path, decoy in decoys.items():
+            self.assertTrue(decoy.is_file(), "a bystander file was deleted: " + relative_path)
+        for relative_path, original in originals.items():
+            self.assertFalse(original.exists(), "the validated object survived: " + relative_path)
+
+    def test_the_path_based_primitive_deletes_the_bystanders_instead(self):
+        """The discrimination. Without this the test above passes on a filesystem that never raced.
+
+        Same tree, same swap, same instant — only the two syscalls differ. The mutant destroys every
+        decoy and leaves every object it actually inspected untouched, which is the failure inverted
+        exactly: it deleted 39 files belonging to somebody else and reported success.
+        """
+        directory = EXPECTED_DIRECTORIES[0]
+        mutant = _path_based_removal_mutant()
+        originals, decoys, refused = self._delete_with_a_swap_mid_phase(mutant, directory)
+
+        self.assertIsNone(refused, "the mutant reports success — that is the defect")
+        self.assertTrue(
+            all(not decoy.exists() for decoy in decoys.values()),
+            "the path-based primitive must delete the bystanders (else this proves nothing)",
+        )
+        self.assertTrue(
+            all(original.is_file() for original in originals.values()),
+            "the path-based primitive must leave the validated objects behind",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
 

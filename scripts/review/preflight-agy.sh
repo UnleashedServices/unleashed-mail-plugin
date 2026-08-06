@@ -30,7 +30,15 @@ SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 PING="$(mktemp "${TMPDIR:-/tmp}/agy-ping.XXXXXX")" || die "could not allocate a ping path"
 printf '%s\n' "$PING"
 
-python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping"
+# CHECK THE CAPTURE'S STATUS, not just its output. An `agy` that prints text containing `pong` and
+# then exits non-zero — or a wrapper that times out after emitting it — left this unguarded and the
+# grep below reported `healthy` with exit 0. Reproduced with a stub printing `Pong` and exiting 23
+# (deep review, P2). A preflight is what decides whether the mandatory gate may run; it fails closed.
+if ! python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping"; then
+    printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
+    printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
+    exit 1
+fi
 
 # Case-INSENSITIVE, and the `!` is not required: across 3 measured runs agy answered `Pong! How can I
 # help you today?`, a bare lowercase `pong`, and `Pong! Let me know…`. A `Pong!`-exact check calls a

@@ -192,12 +192,13 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "the audit wrapper must keep the 1200s cap",
         )
         self.assertIn(
-            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" 1200', src,
+            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1200', src,
             "the capture recipe must pass the 1200s cap to the helper",
         )
-        self.assertIn(
-            'TIMEOUT="${4-1200}"', helper,
-            "the helper's default cap must be 1200s",
+        self.assertRegex(
+            helper, r'TIMEOUT="\$\{\d+-1200\}"',
+            "the helper's default cap must be 1200s (the operand INDEX is not pinned — it moved when "
+            "the plan operand was added, and pinning it made this cell fail for an unrelated reason)",
         )
         self.assertIn(
             '--timeout "$TIMEOUT"', helper,

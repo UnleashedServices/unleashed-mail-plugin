@@ -69,6 +69,30 @@ disclosure; it applies to `COREDEV-2642` itself. See
   rule ("don't grant unscoped `Bash`/`Write`/`Edit` on a pure-knowledge skill") being broken in the
   tree that states it. All are reference skills, so the grants are simply gone.
 
+- **The review prompt operand is contained to the repository.** The capture helpers are the exact
+  entrypoints the bullets above introduced — and both are reached from model-invocable skills that
+  pre-approve `capture-*-review.sh *`, so the *model* picks the operand. The helpers checked only
+  that the file was readable, then fed `$(cat "$PROMPT")` to the reviewer CLI verbatim: `../secret`,
+  or a symlink to one, was exfiltrated to a third-party service by a skill the model can enter on its
+  own. `scripts/review/bind-prompt.py` now refuses any operand that is a symlink, is not a regular
+  file, is empty, or resolves outside the repository — **before** the CLI is launched, which is the
+  only point at which refusing still means anything.
+
+- **The reviewer sub-agents no longer inherit `Bash`.** `security-reviewer`, `concurrency-reviewer`,
+  `ux-perf-reviewer` and `accessibility-auditor` are read-only by contract and by prose, and all four
+  only ever ran `grep -rn` — but `tools:` listed `Bash`, which is unscoped by construction: a sub-agent
+  tool list takes bare names, so `Bash` there is *every* command. Since `swift-reviewer` spawns all
+  four, a prompt-injected finding in a reviewed file reached arbitrary execution through an agent whose
+  own description says it audits for exactly that. The four now list `Read, Grep, Glob`;
+  `swift-reviewer` keeps `Bash` (it genuinely needs it) and gained `disallowedTools: Write, Edit,
+  NotebookEdit`.
+
+- **The binding sidecars are written with `O_NOFOLLOW | O_EXCL`.** The shell wrote
+  `<transcript>.promptsha256` with a plain `>` redirect, in a file whose neighbours use `O_NOFOLLOW`
+  against precisely this threat: a same-account process that plants a symlink there first has the
+  target truncated with the gate's privileges. `O_EXCL` as well, because a sidecar that already exists
+  belongs to another run and silently overwriting it destroys that run's binding.
+
 ### Fixed
 
 - **Transcript-freshness gate no longer depends on how a path is spelled.** The layout comparison was
@@ -101,8 +125,29 @@ disclosure; it applies to `COREDEV-2642` itself. See
   fixed `.agy-prompt.md` / `.codex-prompt.md`; a second round overwriting the shared prompt before the
   first wrapper read it made the first round's transcript describe the *other* plan under its own
   ticket and round. Both recipes now derive the prompt filename from the round identity (see Changed,
-  below) and record `<transcript>.promptsha256` before capture starts, so a cross-wire is prevented
-  and, if it still occurred, detectable.
+  below) and bind the run to its plan before capture starts: `<transcript>.plan` records the plan's
+  digest, and `review-verdict.py write` **refuses** an approving verdict whose per-run transcript is
+  bound to a different plan. The `.promptsha256` sidecar alone did not do this — nothing ever read it,
+  so transcripts captured against an unrelated ticket still produced `GATE OK — APPROVE`. "Detectable"
+  is only true if something looks; the plan sidecar is the half that looks.
+- **The cleanup tool removed files by name after validating them by descriptor.** `_preflight_files`
+  resolves each of the 39 targets, proves each is a regular file and proves each is beneath the state
+  root — and the removal loop then re-walked the resolved *string*, so every component was looked up
+  again. Renaming one parent directory between the two walks retargets all 39 unlinks, and the state
+  root lives under `~/.local/state`, which needs no privilege to write. Both phases now open the
+  parent chain once with `O_DIRECTORY | O_NOFOLLOW`, hold those descriptors for the whole phase, and
+  remove through `dir_fd` — so the object inspected is the object removed. The proof runs the swap
+  against the fixed code and against the pre-fix primitive in the same instant: the old one deletes 39
+  bystander files and reports success.
+- **The `agy` preflight graded the CLI on its output without checking its exit status.** An `agy` that
+  printed text containing `pong` and then exited non-zero — or a wrapper that timed out after emitting
+  it — was reported `healthy`. The preflight is what decides whether the mandatory gate may run at
+  all, so it fails closed on a non-zero capture regardless of what landed in the file.
+- **The grant validator's command normalization could be walked around with a wrapper.** It reduced a
+  `Bash(...)` specifier to a basename to catch `env git push` and friends, but unwrapped only a fixed
+  list — so `sudo -u nobody git *` normalized to `sudo` and passed. Any wrapper outside the known list
+  now rejects rather than normalizes, and the check is scoped to specifiers containing `*`, since the
+  policy is about unbounded breadth (`Bash(codex --version)` is exact and fine).
 - **`codex-review`'s audit recipe failed outright on Linux.** `mktemp -t codex-audit` is a BSD
   shorthand GNU `mktemp` rejects; fixed with the portable full-path template form (the commonly
   suggested `-t name.XXXXXX` only half-works — BSD treats the `X`s as literal and appends its own

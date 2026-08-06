@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,7 @@ REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
 CAPTURE_CODEX = REPO / "scripts" / "review" / "capture-codex-review.sh"
 CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
+BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
 
 # The recipes name a PER-ROUND prompt file, so the fixture repo must carry the ones the
 # fixture's TICKET/ROUND produce. A shared name was the cross-wiring hazard (deep review, P1).
@@ -196,6 +198,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
         shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
         shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
         shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
+        shutil.copy2(BIND_PROMPT, review_dir / BIND_PROMPT.name)
         shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
 
@@ -231,6 +234,9 @@ class TranscriptThreadingFixture(unittest.TestCase):
                 "TMPDIR": str(self.tmpdir),
                 "TICKET": "COREDEV-2619",
                 "ROUND": "85",
+                # The capture helpers now bind the transcript to the plan it reviewed, so the recipe
+                # needs the plan operand and `bind-prompt.py` contains it to this repo.
+                "PLAN": "FEATURE_PLAN.md",
                 "THREAD_CAPTURE_LOG": str(self.capture_log),
                 "THREAD_HELPER_LOG": str(self.helper_log),
                 "THREAD_REAL_ALLOCATOR": str(PTY_CAPTURE),
@@ -290,6 +296,22 @@ class TranscriptThreadingFixture(unittest.TestCase):
         prefix = "UNLEASHED_TRANSCRIPT="
         self.assertTrue(result.stdout.startswith(prefix), result.stdout)
         return result.stdout[len(prefix):].rstrip("\n")
+
+    def bind_transcript_to_plan(self, *transcripts: str) -> None:
+        """Write the `.plan` sidecar the capture helper would have written.
+
+        `write` refuses an APPROVING verdict whose per-run transcript is not bound to the plan being
+        approved (deep review, P1) — transcripts allocated for an unrelated ticket used to satisfy
+        this gate. Cells that hand-build a transcript rather than running the capture helper must
+        therefore supply the binding themselves, or they witness that refusal instead of the property
+        they are named for.
+        """
+        plan = self.reviewed / "FEATURE_PLAN.md"
+        digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        for transcript in transcripts:
+            Path(str(transcript) + ".plan").write_text(
+                f"{digest}  {plan.name}\n", encoding="utf-8"
+            )
 
     def run_persistence_recipe(
         self,
@@ -478,6 +500,7 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
                     index = record["argv"].index("--allocated")
                     self.assertEqual(allocated, record["argv"][index + 1])
 
+                self.bind_transcript_to_plan(gemini_path, codex_path)
                 artifact, _argv = self.run_synthesis(
                     f"gemini=APPROVE:{gemini_path}",
                     f"codex=APPROVE:{codex_path}",
@@ -521,6 +544,7 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
                 self.assertNotIn(str(xdg_link if use_xdg else fallback_link), gemini_path)
                 self.assertNotIn(str(xdg_link if use_xdg else fallback_link), codex_path)
 
+                self.bind_transcript_to_plan(gemini_path, codex_path)
                 artifact, _argv = self.run_synthesis(
                     f"gemini=APPROVE:{gemini_path}",
                     f"codex=APPROVE:{codex_path}",
@@ -536,6 +560,7 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         Path(gemini_path).write_text("gemini review\nVERDICT: APPROVE\n", encoding="utf-8")
         Path(codex_path).write_text("codex review\nVERDICT: APPROVE\n", encoding="utf-8")
 
+        self.bind_transcript_to_plan(gemini_path, codex_path)
         gemini_spec = f"gemini=APPROVE:{gemini_path}"
         codex_spec = f"codex=APPROVE:{codex_path}"
         artifact, argv = self.run_synthesis(gemini_spec, codex_spec, "APPROVE")

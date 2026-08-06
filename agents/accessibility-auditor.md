@@ -9,7 +9,7 @@ description: >
   UI component change, when adding buttons/controls/images, when modifying
   navigation or layout, or when touching WKWebView rendering code.
 model: sonnet
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -23,6 +23,7 @@ part of every UI change — this is stated in the project's CLAUDE.md and is non
 > across both dual-implementation variants, including files outside the diff. A
 > structural change can break a11y or dual-impl parity far from the changed lines. Tag
 > any finding you surface outside the diff with `scope: "structural-pipeline"`.
+
 
 ## macOS 15+ (Sequoia) Accessibility APIs
 
@@ -292,3 +293,10 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`. Every command in this body was a `grep -rn`, which `Grep` does natively, and
+> `pr-review` is model-invocable: injected PR content could otherwise steer a spawned reviewer to
+> arbitrary shell one level below the skill's own scoped grant (deep review, P1).

@@ -101,6 +101,15 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
             prompt = self.root / f"{prefix}{ticket or ''}r{round_value or ''}.md"
             if not prompt.exists():
                 prompt.write_text("# recipe fixture prompt\n", encoding="utf-8")
+        # The helpers now bind the transcript to the plan it reviewed, so the recipe carries a plan
+        # operand. These cells are about the OPERAND guards and the literal reviewer identity, both
+        # of which are checked before the binding runs — supply a valid plan so they stay the variable.
+        plan = self.root / "FIXTURE_PLAN.md"
+        if not plan.exists():
+            plan.write_text("# fixture plan\n", encoding="utf-8")
+        bind = review_dir / "bind-prompt.py"
+        bind.write_text(CAPTURE_HELPERS["codex"].parent.joinpath("bind-prompt.py").read_text(encoding="utf-8"), encoding="utf-8")
+        bind.chmod(0o755)
         recipe_log = self.root / (label + "-recipe.args")
 
         env = dict(os.environ)
@@ -113,6 +122,7 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
                 "CLAUDE_PLUGIN_ROOT": str(plugin),
                 "M5_RECIPE_LOG": str(recipe_log),
                 "REVIEWER": reviewer_value,
+                "PLAN": "FIXTURE_PLAN.md",
             }
         )
         if ticket is not None:

@@ -229,8 +229,8 @@ Do not skip to save time. Do not treat as a rubber stamp.
 /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
 
 Ticket and round are required operands received from that invocation; never infer either from the plan,
-branch, or prior transcript. If either is absent, stop before allocation. Bind the two received operands
-to `TICKET` and `ROUND` in the same Bash invocation, then run this complete recipe. The marker remainder
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run this complete recipe. The marker remainder
 is copied with shell prefix removal only; every later expansion is quoted so the path remains one opaque
 argument.
 
@@ -241,7 +241,7 @@ argument.
 # wrapper reads it, so the first round records a fresh, valid transcript OF THE OTHER PLAN under its
 # own ticket and round. The helper records the prompt's digest beside the transcript.
 # COREDEV2619_GEMINI_CAPTURE_BEGIN
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" 1800
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
 # COREDEV2619_GEMINI_CAPTURE_END
 ```
 

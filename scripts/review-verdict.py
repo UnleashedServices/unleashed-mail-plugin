@@ -569,6 +569,70 @@ def _transcript_freshness_problem(transcript: str):
     return None, _VerifiedTranscript(transcript, transcript_sha256)
 
 
+_PLAN_BINDING = re.compile(rb"\A([0-9a-f]{64})  (.+)\n\Z")
+
+
+def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
+    """Refuse a per-run transcript that reviewed a DIFFERENT plan.
+
+    The capture helpers write `<transcript>.promptsha256` and `<transcript>.plan`. The first was
+    written and never read by anything — so transcripts allocated for an unrelated ticket, with
+    sidecars naming unrelated prompts, still produced `GATE OK — APPROVE` for this plan: freshness
+    proved the transcript was fresh, and the snapshot proved the PLAN was unedited, but nothing
+    connected the two (deep review, P1). Freshness answers "is this transcript from a real, recent
+    run"; this answers "a run of WHAT".
+
+    Absent binding is refused rather than skipped, for per-run transcripts only — a legacy transcript
+    the freshness check does not govern has no binding to check and never had one.
+    """
+    binding_path = transcript + ".plan"
+    record = _read_regular_file_bytes(binding_path)
+    if record is None:
+        return (
+            "per-run transcript has no plan binding: " + binding_path
+            + " — re-capture it with the current capture helper, which records what it reviewed"
+        )
+    match = _PLAN_BINDING.fullmatch(record)
+    if match is None:
+        return "plan binding is malformed: " + binding_path
+    bound_digest = match.group(1).decode("ascii")
+    bound_plan = match.group(2).decode("utf-8", "replace")
+
+    # The DIGEST is the binding; the recorded path is diagnostic only. Comparing paths as well would
+    # make the check depend on the working directory the capture and the write happened to run from,
+    # and a path that merely LOOKS right proves nothing about the bytes anyway. Digest equality is
+    # what answers "did this review read what is being approved" — and it composes exactly with the
+    # snapshot check next to it, which answers "is the plan still those bytes".
+    if bound_digest != plan_digest:
+        return (
+            "transcript reviewed different bytes than this verdict approves: " + binding_path
+            + " records " + bound_digest[:12] + "… (" + bound_plan + "), the plan being written is "
+            + plan_digest[:12] + "…"
+        )
+    return None
+
+
+def _read_regular_file_bytes(path: str):
+    """Raw bytes of a regular file, refusing a symlink or non-regular target. None on any of those."""
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        return os.pread(descriptor, _MAX_TRUSTED_READ_BYTES + 1, 0)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _parse_reviewer(spec: str) -> dict:
     """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?, transcriptPath?, captureId?}."""
     if "=" not in spec:
@@ -734,6 +798,22 @@ def cmd_write(args: argparse.Namespace) -> int:
                 f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
                 f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
+    # WHAT did each transcript review? Freshness proves a transcript is a real, recent run; the
+    # snapshot proves the PLAN is unedited. Neither connects the two, so transcripts captured for an
+    # unrelated ticket satisfied this plan's gate (deep review, P1). Applies to APPROVING verdicts:
+    # a non-approving one blocks `implement` regardless, and refusing it on a binding problem would
+    # stop a legitimate REQUEST_CHANGES from being recorded.
+    if verdict in APPROVING:
+        for reviewer in reviewers:
+            transcript = reviewer.get("transcriptPath")
+            if not transcript or not _is_per_run_transcript(transcript):
+                continue
+            binding_problem = _plan_binding_problem(transcript, plan, plan_sha)
+            if binding_problem is not None:
+                raise SystemExit(
+                    f"review-verdict: reviewer {reviewer['name']!r} transcript is not bound to this "
+                    "plan: " + binding_problem
+                )
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
         raise SystemExit("review-verdict: at least two reviewers (gemini + codex) are required")

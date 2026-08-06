@@ -172,6 +172,43 @@ BROAD_BASH_PREFIXES = {
 }
 
 
+def _normalized_command_words(specifier: str) -> list[str]:
+    """The specifier's words with shell wrappers stripped and the executable reduced to a basename.
+
+    The deny-list compared the FIRST token literally, so every one of `Bash(env git *)`,
+    `Bash(command git *)`, `Bash(GIT_DIR=/tmp git *)` and `Bash(/usr/bin/git *)` spelled an unbounded
+    git grant that validation accepted — `command` is not `git` (deep review, P2). All four were
+    exercised against the checker and produced no problem.
+
+    Deliberately conservative: it unwraps only the prefixes that are themselves command runners or
+    assignments, and stops at the first real word. It is not a shell parser, and a grant that needs
+    one is a grant that should not be written.
+    """
+    words = specifier.strip().split()
+    # `sudo`/`doas` are deliberately NOT unwrapped — they are themselves in the deny-list, so leaving
+    # them as the resolved command rejects them outright.
+    wrappers = {"env", "command", "builtin", "exec", "nohup", "time", "nice", "xargs"}
+    index = 0
+    while index < len(words):
+        word = words[index]
+        # `VAR=value` assignments precede the command they run.
+        if "=" in word and not word.startswith("-") and word.split("=", 1)[0].isidentifier():
+            index += 1
+            continue
+        base = word.rsplit("/", 1)[-1]
+        if base in wrappers:
+            # A FLAGGED wrapper is not analysable without knowing which flags take arguments — my
+            # first version skipped `-u` but not its operand, so `sudo -u x git *` resolved to `x`
+            # and was accepted. Refuse rather than guess: `None` means "cannot normalize", and the
+            # caller rejects. A grant that needs a shell parser is a grant not worth writing.
+            if index + 1 < len(words) and words[index + 1].startswith("-"):
+                return None
+            index += 1
+            continue
+        return [base] + words[index + 1:]
+    return []
+
+
 def _bash_specifiers(value: str) -> list[str]:
     """Every `Bash(...)` specifier in an `allowed-tools` value."""
     return re.findall(r"Bash\(([^)]*)\)", value)
@@ -211,7 +248,20 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
             )
 
     for specifier in _bash_specifiers(granted):
-        head = specifier.strip().split()
+        # Only UNBOUNDED grants are in scope. A specifier with no wildcard pre-approves exactly one
+        # command string — `Bash(command -v codex)`, `Bash(codex --version)` — which is bounded by
+        # construction and visible in review. Analysing those rejected both of the shipped preflight
+        # probes. Whether a bounded-but-dangerous exact command (`Bash(git reset --hard)`) belongs on
+        # a model-invocable skill is a DIFFERENT policy and is deliberately not claimed here.
+        if "*" not in specifier:
+            continue
+        head = _normalized_command_words(specifier)
+        if head is None:
+            problems.append(
+                f"{rel}: model-invocable skill grants `Bash({specifier})` — a flagged command "
+                f"wrapper cannot be analysed safely, so it is refused. Name the command directly."
+            )
+            continue
         if not head:
             continue
         command = head[0]

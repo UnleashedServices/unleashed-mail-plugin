@@ -3,7 +3,7 @@ name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version)
 ---
 
 # Codex CLI Review
@@ -37,7 +37,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 ```bash
 # Write this round's prompt to a PER-ROUND file first — `.codex-prompt-${TICKET}r${ROUND}.md`,
 # never a shared `.codex-prompt.md`: two concurrent rounds would otherwise cross-wire prompt and
-# transcript (deep review, P1). Bind TICKET and ROUND, then run this ONE command. It allocates
+# transcript (deep review, P1). Bind TICKET, ROUND and PLAN (the plan being reviewed), then run this ONE command. It allocates
 # the per-run transcript leaf, prints the `UNLEASHED_TRANSCRIPT=` marker for synthesis to bind, and
 # captures the review into that exact leaf through the PTY wrapper.
 #
@@ -60,7 +60,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 #   * DO NOT `rm -f` the reserved leaf on a retry; retries must RE-ALLOCATE (gap 14). The script says
 #     why at the line that would tempt you.
 # COREDEV2619_CODEX_CAPTURE_BEGIN
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" 1200
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1200
 # COREDEV2619_CODEX_CAPTURE_END
 # Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
 # matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
@@ -210,8 +210,8 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 
 Ticket and round are required operands received from that invocation; never infer either from the plan,
-branch, or prior transcript. If either is absent, stop before allocation. Bind the two received operands
-to `TICKET` and `ROUND` in the same Bash invocation, then run the complete allocation-and-capture recipe
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run the complete allocation-and-capture recipe
 above. It passes the hard-coded reviewer literal `codex`, removes only the marker prefix, and quotes every
 later expansion of `CODEX_TRANSCRIPT` so the allocated path remains one opaque argument.
 
