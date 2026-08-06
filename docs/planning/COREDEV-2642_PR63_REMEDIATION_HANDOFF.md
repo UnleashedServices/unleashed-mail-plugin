@@ -1,14 +1,18 @@
 # COREDEV-2642 — PR #63 remediation handoff
 
 **PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main`
-**State at handoff:** 38 commits, **529 tests green**, `callers_scan --root .` exits 0,
-full validator sweep clean
-**Last commit:** `9666d50`
+**State at handoff:** 189 commits over base `ff83f02` (0 unpushed), **551 scripts tests / 304 hook
+tests / 227 MCP tests green**, `callers_scan --root .` exits 0, full validator sweep clean
+**Last commit:** `7f91843`
 
-> **Second pass, 2026-08-05.** Everything §3 listed as open is now closed except **the gemini
-> capture recipe** (§3) — see §2b. The two maintainer decisions were made: the gemini arm is to be
-> **replaced by Kimi K3** (planned in `KIMI_REVIEW_ARM_PLAN.md`, deliberately not implemented), and
-> the CHANGELOG's two false gate claims are corrected.
+> **Every count in this file is measured at the commit named above, not carried forward.** The header
+> previously named `54a0fa1` — a commit the scratch-file history rewrite removed, so it existed
+> nowhere — and reported counts from several commits earlier. A handoff whose figures are stale is the
+> same defect class this PR keeps finding in its own commit messages, so: re-measure, do not copy.
+
+> **Third pass, 2026-08-06.** A deep review at exact head filed 9 findings (4×P1, 4×P2, 1×P3) and a
+> 34-commit audit filed 4 open threads plus 9 new gaps. Seven of the nine deep-review findings are
+> closed below; the two codex bot reviews of those fixes are closed too. See §2c.
 
 ---
 
@@ -61,10 +65,31 @@ When a finding names two things, verify both halves before writing the commit me
 | **1. `review-verdict.py` TOCTOU** | `_regular_file_info` returns the digest read from the SAME `O_NOFOLLOW` descriptor it fstat'd; freshness hands back a `_VerifiedTranscript(path, sha256)` the caller records instead of re-resolving the name. Proved by swapping the leaf at the instant validation reads the descriptor's metadata — an fstat trigger, not a close trigger, so a re-open placed between fstat and return cannot sail past it. Both places the re-open can creep back are mutated. |
 | **3. `callers_scan` over-selection** | anchors narrowed to `/unleashed-mail:`, `gemini-review`, `codex-review`. 1409 candidates -> 294. Measured all four options first; the `/`-prefixed variant is smaller but stops selecting `unleashed-mail:gemini-review …` and bare `gemini-review --ticket …`, which ARE invocation spellings, so it narrows past the defect. Proved a STRICT SUBSET that retains every exact production. |
 | **4. classifier judgement call** | accepted as fail-closed, with the reasoning in the docstring: conditioning the filename branch on the directory would let an allocated transcript COPIED out of the layout skip the check entirely. |
-| **7. exemption manifest** | shipped, generated last (302 records at this writing; the count moves with any edit to a scanned file, which is the point). `scripts/review/generate-callers-exemptions.py` is a maintainer tool outside the module. CI ran only `--help`, which loads no manifest — it now runs `--root .`. |
+| **7. exemption manifest** | shipped, generated last. The record count moves with any edit to a scanned file — that is the point of a non-shift-stable identity — so it is deliberately not restated here; run `generate-callers-exemptions.py --check` for the current figure. `scripts/review/generate-callers-exemptions.py` is a maintainer tool outside the module. CI ran only `--help`, which loads no manifest — it now runs `--root .`. |
 | **8. gemini arm** | maintainer decision: **replace with Kimi K3**. `docs/planning/KIMI_REVIEW_ARM_PLAN.md` — measured surface, verified CLI facts, ordered steps with a stop-gate before any rename. Not implemented; needs its own ticket and the plan gate. |
 | **9. gaps 18-19** | both CHANGELOG entries corrected to match their plans. |
 | **2. helper extraction** | **4 of 5 sites.** Only the gemini capture recipe is left — see below. |
+
+## 2c. Third pass — the deep review and the audit (2026-08-06)
+
+| finding | outcome |
+|---|---|
+| **P1** model-invocable permission boundary | grants tightened, autonomy kept. Bare `Write`/`Agent` scoped; `Bash(git *)` replaced by `changeset.sh`. `validate-plugin-assembly.py` now REJECTS broad write/VCS/agent grants on model-reachable skills — it found 17 more instances across 8 knowledge skills that the review had only sampled, all of them CLAUDE.md's own rule being broken in the tree that states it. |
+| **P1** review-skill wildcards | `Bash(python3 …/scripts/*)`, `Bash(codex *)` and `Bash(agy *)` replaced by exact entrypoints: `audit-codex.sh` and `preflight-agy.sh` allocate their own output and hard-code the safe flags. |
+| **P1** prompt/transcript cross-wire | both recipes name the prompt from `${TICKET}r${ROUND}`; both helpers require the operand and bind `<transcript>.promptsha256` before capture. The concurrency proof runs the interleaving for real. |
+| **P2** capture recipes outside their grants | both closed — `capture-gemini-review.sh` was the fifth and last extraction site. |
+| **P2** fixed-path migration incomplete | `pty-capture.py` REQUIRES an out-path; the agy preflight allocates per run. |
+| **P2** gemini arm default | now `gemini-3.6-flash-high`, bound by a proof to the rationale that names it. |
+| **P2** GNU-incompatible `mktemp` | full-path template. The review's own suggested form (`-t name.XXXXXX`) only half-works — BSD leaves the X's literal — and the proof fails on it too. |
+| **audit** cleanup `--check` false green | `--check` and the orchestrator now share one predicate; the orchestrator refuses BEFORE deleting. M2.25 had asserted the files were GONE after a refusal — it was pinning the defect. |
+| **audit** lexical classifier fail-open | the ancestry is resolved, the leaf never is; three spellings of one file now all reach the gate. |
+| **audit** stale fallback prose, dead grants, stale timeout cross-reference | closed with the grant work. |
+| **P1-4** two unlisted implementations | disclosed — see §7. |
+| **P3** stale records | this header, re-measured. |
+
+**Not carried forward, deliberately:** the `callers_scan` anchors do not match a bare `kimi-review`
+spelling. That arm does not exist yet; the anchor addition belongs in `KIMI_REVIEW_ARM_PLAN.md` step 3
+alongside the rename, not as a speculative entry now.
 
 ## 3. Open — ranked
 
@@ -160,3 +185,39 @@ Added in the second pass:
 - **When a check has a cheap mode and a real mode, CI must run the real one.** `callers_scan --help`
   was green for the whole of PR #63 while `--root .` exited 2. A smoke test that loads no input
   proves the file parses, nothing more.
+
+## 7. Ticket table and gate outcomes — the maintainer exceptions, stated
+
+The PR body listed three tickets. Base→head ships six. Two of them shipped **without a passing plan
+review gate**, which this repo's own mandatory process requires. That is a maintainer exception, and
+the point of writing it here is that an exception recorded is a decision, while an exception omitted
+is an accident that looks like compliance.
+
+| Ticket | What shipped | Gate outcome on the shipped bytes |
+|---|---|---|
+| `COREDEV-2619` | per-run transcript paths | gated; the PR body already discloses its exception |
+| `COREDEV-2639` | effort floor | gated |
+| `COREDEV-2497` | citation re-anchor | gated |
+| `COREDEV-2605` | `AGENT_CONTRACTS.md` §13 narrowed to client-facing output (v2.6.6, `51f6050`) | **NO PASSING GATE.** The plan's own status line records round 19 as codex `REQUEST_CHANGES` (3 High + 1 Medium), with the gemini arm emitting no parseable verdict. Nineteen rounds happened; an approving one did not. |
+| `COREDEV-2617` | plugin state split across two base directories (v2.6.5, `f4ad405`, `ecf1b9f`) | **NO REPRODUCING GATE.** Round 18's double approval FAILED reproduction at the byte-identical digest, and the re-run found a real fail-open→fail-closed regression. The plan records 18 rounds, not the 19 the CHANGELOG claimed. |
+| `COREDEV-2642` | this remediation | **NOT GATED — it is post-implementation review.** Four independent reviews plus two bot passes have run over these bytes, which is evidence, but it is not the "before implementation" gate CLAUDE.md mandates. Do not present it as one. |
+
+`CHANGELOG.md` was corrected for 2605 and 2617 in `a43652c`; this table is the same disclosure at the
+PR level, where a reader decides whether to merge.
+
+**Still the maintainer's, not mine:**
+
+- **Jira.** All six tickets are `To Do`. COREDEV-2642's description stops at "Gap 2 DONE / Gap 1 open
+  decision" with zero comments, 189 commits later — a direct violation of this repo's Jira-hygiene
+  mandate ("update it with notes through implementation, not just at the end"). COREDEV-2617's Jira
+  acceptance also asks for one shared hook/standalone base, while the shipped D′ design deliberately
+  makes an unset base unresolved; that contradiction needs resolving in Jira, not in the tree.
+- **The Kimi arm swap has no ticket.** `KIMI_REVIEW_ARM_PLAN.md` step 0 requires one; both it and this
+  handoff still say the literal `COREDEV-XXXX`.
+- **Two follow-ups were described on the PR as "filed" and are filed nowhere**: reading blob content
+  from the index via `git show :path` for `callers_scan`, and documenting "pass the canonical path" in
+  the cleanup tool's `--help`. They exist only in PR replies.
+- **None of the 24 review threads is marked resolved on GitHub**, including the ~14 verifiably fixed.
+- **Splitting 2605/2617 out of this PR** remains available and was not chosen; recording the exception
+  was.
+
