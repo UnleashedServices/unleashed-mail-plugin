@@ -763,3 +763,31 @@ class DeepReviewP2Fixes(unittest.TestCase):
             "this is the model the comment says failed to emit a parseable verdict in 5 of 6 rounds",
         )
 
+    def test_agy_preflight_ping_is_allocated_per_run(self):
+        """A shared `/tmp/agy-ping.txt` lets a dead CLI read as healthy.
+
+        The preflight decides whether the mandatory gate can run at all. With one shared path, a
+        preflight that dies before writing leaves the PREVIOUS run's `pong` in place and the next
+        reader calls the CLI available; two concurrent preflights also overwrite each other
+        (deep review, P2). Both surfaces that document it must allocate per run AND re-read the path
+        they allocated, never a re-derived name.
+        """
+        for rel in ("skills/gemini-review/SKILL.md", "AGENT_CONTRACTS.md"):
+            with self.subTest(file=rel):
+                source = _read(rel)
+                self.assertNotIn(
+                    "/tmp/agy-ping.txt",
+                    source,
+                    f"{rel} still documents a fixed shared preflight path",
+                )
+                self.assertRegex(
+                    source,
+                    r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"',
+                    f"{rel} must allocate the ping path per run with a portable template",
+                )
+                self.assertIn(
+                    '"$PING"',
+                    source,
+                    f"{rel} must pass and re-read the allocated path, not a re-derived name",
+                )
+

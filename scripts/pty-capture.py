@@ -32,7 +32,9 @@ Examples
         agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
-= failure). Captured output is written to <out-path> (default /tmp/pty-out.txt).
+= failure). Captured output is written to <out-path>, which is REQUIRED — there
+is no shared default, because a fixed path lets a run that died before writing
+leave stale bytes for the next reader to trust.
 """
 # REQUIRED for macOS's stock /usr/bin/python3 (3.9.6): `main()`'s `timeout: float | None` is a PEP-604
 # union evaluated AT IMPORT in a module-level def, so 3.9 raises `TypeError: unsupported operand type(s)
@@ -457,10 +459,22 @@ def parse_pre_args(pre: list[str]) -> "tuple[float | None, str, bool]":
             i += 1
     if len(positional) > 1:
         raise SystemExit(
-            "usage: pty-capture.py [--timeout SECONDS] [--allocated] [out-path] -- <command> [args...]\n"
+            "usage: pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]\n"
             f"error: too many arguments before '--': {positional}"
         )
-    return timeout, (positional[0] if positional else "/tmp/pty-out.txt"), allocated
+    if not positional:
+        # The out-path is REQUIRED. This used to default to a fixed `/tmp` file, which is the MAJ-10
+        # staleness hazard this whole ticket exists to remove: a run that dies before writing leaves the
+        # PREVIOUS run's bytes at the shared path, and the next reader takes a stale transcript for a
+        # fresh one. Two concurrent captures also silently overwrote each other. Every caller in the tree
+        # already passes a path, so the default only ever served the caller who FORGOT one — which is
+        # exactly the caller who must not silently get a shared file (deep review, P2).
+        raise SystemExit(
+            "usage: pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]\n"
+            "error: an explicit out-path is required — there is no shared default, because a fixed "
+            "path lets a dead run leave stale bytes for the next reader to trust"
+        )
+    return timeout, positional[0], allocated
 
 
 ALLOCATION_MARKER = "UNLEASHED_TRANSCRIPT="

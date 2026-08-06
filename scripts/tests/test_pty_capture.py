@@ -7,6 +7,7 @@ import importlib.util
 import os
 import stat
 import sys
+import pathlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -419,6 +420,48 @@ class CaptureArgumentParsingTests(unittest.TestCase):
         # before B1 `--timeout=600` became the out-path (unbounded run + a 'too many arguments' error)
         t, out, allocated = self.mod.parse_pre_args(["--timeout=600", "/real/out.txt"])
         self.assertEqual((t, out, allocated), (600.0, "/real/out.txt", False))
+
+    def test_missing_out_path_is_refused_rather_than_defaulted(self):
+        """The out-path used to default to a fixed `/tmp/pty-out.txt` (deep review, P2).
+
+        That is MAJ-10 in miniature: a run that dies before writing leaves the PREVIOUS run's bytes at
+        the shared path for the next reader to trust, and two concurrent captures overwrite each other.
+        The caller who forgets a path is exactly the caller who must not silently get a shared file.
+        """
+        with self.assertRaises(SystemExit) as raised:
+            self.mod.parse_pre_args(["--timeout=5"])
+        self.assertIn("out-path is required", str(raised.exception))
+
+        source = pathlib.Path(_PTY).read_text(encoding="utf-8")
+        self.assertNotIn(
+            '"/tmp/pty-out.txt"',
+            source,
+            "a fixed default out-path is back in the parser",
+        )
+
+    def test_restoring_the_default_out_path_is_what_the_guard_prevents(self):
+        """Mutation: put the default back and the same call succeeds, handing back the shared path."""
+        mutant_source = pathlib.Path(_PTY).read_text(encoding="utf-8").replace(
+            "    if not positional:", "    if False:", 1
+        )
+        self.assertNotIn("    if not positional:", mutant_source)
+        mutant_source = mutant_source.replace(
+            "    return timeout, positional[0], allocated",
+            '    return timeout, (positional[0] if positional else "/tmp/pty-out.txt"), allocated',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "pty_capture_mutant.py"
+            path.write_text(mutant_source, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("_pty_default_mutant", path)
+            mutant = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mutant
+            try:
+                spec.loader.exec_module(mutant)
+                _timeout, out, _allocated = mutant.parse_pre_args(["--timeout=5"])
+                self.assertEqual("/tmp/pty-out.txt", out)
+            finally:
+                sys.modules.pop(spec.name, None)
 
     def test_allocated_flag_is_forwarded_to_main(self):
         observed = []

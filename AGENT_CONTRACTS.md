@@ -109,8 +109,10 @@ machine or in CI they may be absent — the gate must NOT silently pass, and mus
 loop with no escape.
 
 - **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
-  isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
+  isn't misread as unavailable, and allocate the ping path PER RUN — a shared one lets a preflight that
+  died before writing leave the previous `pong` for the next reader, so a dead CLI reads as healthy —
+  `command -v agy && PING="$(mktemp "${TMPDIR:-/tmp}/agy-ping.XXXXXX")" && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
+  --timeout 60 "$PING" -- agy -p "ping"`, then check that same `"$PING"` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
   only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
   unavailable and sends you down the recovery path for no reason (bare
   `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
