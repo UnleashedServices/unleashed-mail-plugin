@@ -327,7 +327,11 @@ class CapturePromptBindingTests(unittest.TestCase):
 
         result = self._run("codex", "21", prompt)
         self.assertNotEqual(0, result.returncode, result.stdout)
-        self.assertIn("not about", result.stderr)
+        # Asserted on the message NAMING both plans, not on a phrase. The wording changed when the
+        # comparison moved from basenames to full identities, and a test that pins prose fails on a
+        # correct fix — which is noise that trains you to edit assertions without reading them.
+        self.assertIn("OTHER_PLAN.md", result.stderr)
+        self.assertIn("FIXTURE_PLAN.md", result.stderr)
 
     def test_a_prompt_naming_two_plans_is_refused(self):
         """Asymmetric checks are how this class survives: naming the right plan is not enough.
@@ -341,7 +345,7 @@ class CapturePromptBindingTests(unittest.TestCase):
         )
         result = self._run("codex", "22", prompt)
         self.assertNotEqual(0, result.returncode, result.stdout)
-        self.assertIn("other plans", result.stderr)
+        self.assertIn("OTHER_PLAN.md", result.stderr)
 
     def test_replacing_the_prompt_after_binding_cannot_change_what_the_reviewer_reads(self):
         """The post-bind TOCTOU. The binder validated a NAME the wrapper then reopened.
@@ -430,6 +434,82 @@ class CapturePromptBindingTests(unittest.TestCase):
                     '"$PROMPT" "$', body,
                     f"the {reviewer} arm hands the caller's prompt path to its backend",
                 )
+
+    def test_two_plans_sharing_a_basename_cannot_be_confused(self):
+        """A name is not an identity — the same shortcut PR #41 fixed in the artifact, repeated here.
+
+        The first version of the agreement check compared BASENAMES, so a prompt explicitly targeting
+        `docs/planning/b/SAME_PLAN.md` bound cleanly against `--plan docs/planning/a/SAME_PLAN.md` and
+        the review of B could support an approval of A (PR #63 recheck, reproduced).
+        """
+        for directory in ("a", "b"):
+            (self.root / "docs" / "planning" / directory).mkdir(parents=True, exist_ok=True)
+        plan_a = self.root / "docs" / "planning" / "a" / "SAME_PLAN.md"
+        plan_b = self.root / "docs" / "planning" / "b" / "SAME_PLAN.md"
+        plan_a.write_text("# Plan A\n", encoding="utf-8")
+        plan_b.write_text("# Plan B — different bytes\n", encoding="utf-8")
+
+        prompt = self.root / ".codex-prompt-COREDEV-2619r40.md"
+        prompt.write_text("REVIEW TARGET: docs/planning/b/SAME_PLAN.md\nreview it\n", encoding="utf-8")
+
+        binder = self.review / "bind-prompt.py"
+        crossed = subprocess.run(
+            ["python3", str(binder), "--prompt", prompt.name,
+             "--transcript", str(self.leaves / "crossed.txt"),
+             "--plan", "docs/planning/a/SAME_PLAN.md"],
+            cwd=str(self.root), capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, crossed.returncode, crossed.stdout)
+
+        matched = subprocess.run(
+            ["python3", str(binder), "--prompt", prompt.name,
+             "--transcript", str(self.leaves / "matched.txt"),
+             "--plan", "docs/planning/b/SAME_PLAN.md"],
+            cwd=str(self.root), capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, matched.returncode, matched.stderr)
+
+    def test_a_basename_only_reference_is_refused_when_it_is_ambiguous(self):
+        """Refused rather than guessed. With two candidates there is no correct answer to pick."""
+        for directory in ("a", "b"):
+            (self.root / "docs" / "planning" / directory).mkdir(parents=True, exist_ok=True)
+            (self.root / "docs" / "planning" / directory / "SAME_PLAN.md").write_text(
+                f"# Plan {directory}\n", encoding="utf-8")
+        prompt = self.root / ".codex-prompt-COREDEV-2619r41.md"
+        prompt.write_text("REVIEW TARGET: SAME_PLAN.md\nreview it\n", encoding="utf-8")
+
+        result = subprocess.run(
+            ["python3", str(self.review / "bind-prompt.py"), "--prompt", prompt.name,
+             "--transcript", str(self.leaves / "ambiguous.txt"),
+             "--plan", "docs/planning/a/SAME_PLAN.md"],
+            cwd=str(self.root), capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("basename", result.stderr)
+
+    def test_a_sidecar_that_cannot_be_written_in_full_is_removed(self):
+        """A truncated snapshot is worse than none: it clears the Gemini arm's 1,000-byte floor.
+
+        The reviewer hit this as a SHORT COUNT from `os.write`; macOS raises `EFBIG` instead. Both
+        leave a partial file, so the guard covers both shapes and unlinks what it wrote — a binding
+        naming bytes nobody stored would send a reviewer at a cut-off prompt and cost a full round
+        before the digest check noticed.
+        """
+        import resource
+
+        prompt = self.root / ".codex-prompt-COREDEV-2619r42.md"
+        prompt.write_text(FIXTURE_PROMPT + ("padding to exceed the limit\n" * 150), encoding="utf-8")
+        transcript = self.leaves / "short-write.txt"
+
+        result = subprocess.run(
+            ["python3", str(self.review / "bind-prompt.py"), "--prompt", prompt.name,
+             "--transcript", str(transcript), "--plan", self.plan.name],
+            cwd=str(self.root), capture_output=True, text=True, check=False,
+            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (2048, 2048)),
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        leftovers = sorted(p.name for p in self.leaves.glob("short-write.txt*"))
+        self.assertEqual([], leftovers, f"a partial sidecar survived: {leftovers}")
 
 
 if __name__ == "__main__":  # pragma: no cover

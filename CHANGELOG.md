@@ -106,6 +106,21 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The prompt/plan agreement check compared basenames, and short sidecar writes went unnoticed.**
+  Two defects in the binding shipped earlier the same day:
+  - **Basename collision.** A prompt explicitly targeting `docs/planning/b/SAME_PLAN.md` was accepted
+    while `--plan` named `docs/planning/a/SAME_PLAN.md`, because both acceptance and conflict detection
+    reduced references to the basename — the same shortcut the *artifact's* plan identity was fixed for
+    in PR #41, repeated one layer up. References are now compared as full normalized repo-relative
+    paths, and a basename-only reference is refused as ambiguous when more than one plan answers to it
+    rather than guessed.
+  - **Short writes.** `os.write` can return a partial count without raising, and a file-size limit
+    raises `EFBIG` on macOS. Either way a truncated `.prompt` snapshot was left on disk while
+    `bind-prompt.py` exited 0 — and a truncated snapshot still clears the Gemini arm's 1,000-byte
+    floor, so a reviewer would consume a cut-off prompt and only the digest check would notice, a full
+    round later. Both shapes now refuse **and unlink the partial**, reproduced under a 2 KiB
+    `RLIMIT_FSIZE`.
+
 - **Removing `Bash` from two reviewers broke audit steps their bodies still needed.** The tool-list
   change was right; the justification was not. The note added beside it claimed every command in those
   bodies "was a `grep -rn`" — measured against the dominant pattern, not the whole set.

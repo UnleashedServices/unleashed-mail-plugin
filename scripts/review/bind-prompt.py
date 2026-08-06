@@ -75,52 +75,104 @@ def read_nofollow(path: str) -> bytes:
 _PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md")
 
 
-def prompt_disagreement(prompt_bytes: bytes, plan_relative: str) -> "str | None":
+def _plan_candidates(root: str, basename: str) -> "list[str]":
+    """Every `*_PLAN.md` in the repo with this basename, repo-relative and sorted."""
+    found = []
+    for directory, _subdirs, files in os.walk(root):
+        if ".git" in directory.split(os.sep):
+            continue
+        if basename in files:
+            found.append(os.path.relpath(os.path.join(directory, basename), root))
+    return sorted(found)
+
+
+def prompt_disagreement(prompt_bytes: bytes, plan_relative: str, root: str) -> "str | None":
     """Refuse a prompt that asks for a review of a plan OTHER than the one being bound.
 
-    THE DEFECT (PR #63 recheck, P1). The prompt and the plan were hashed INDEPENDENTLY. Nothing tied
-    the prompt's content to the `--plan` operand, so a prompt whose text said `REVIEW TARGET: PLAN_B.md`
-    bound cleanly to `--plan PLAN_A.md`, and `review-verdict.py write` produced an APPROVE artifact for
-    Plan A off a review of Plan B. Both digests were correct; they were digests of the wrong pairing.
+    THE FIRST DEFECT (PR #63 recheck, P1). The prompt and the plan were hashed INDEPENDENTLY, so a
+    prompt whose text said `REVIEW TARGET: PLAN_B.md` bound cleanly to `--plan PLAN_A.md` and produced
+    an APPROVE artifact for Plan A off a review of Plan B.
 
-    The rule is symmetric on purpose: the prompt must name the plan it is bound to, AND must not name a
-    different `*_PLAN.md`. Requiring only the first would accept a prompt that mentions both and asks
-    about the other one.
+    THE SECOND (PR #63 recheck, same file). The first fix compared BASENAMES, so two plans sharing a
+    name in different directories collided: a prompt explicitly targeting `docs/planning/b/SAME_PLAN.md`
+    was accepted while `--plan` named `docs/planning/a/SAME_PLAN.md`. Reproduced. Comparing basenames
+    is the same shortcut the artifact's own plan identity was fixed for in PR #41 — a name is not an
+    identity, and this repo already had a plan-pair proving it.
+
+    So references are compared as FULL normalized repo-relative paths. A bare basename carries no
+    directory, so it is accepted only when exactly one plan in the repo answers to it AND that plan is
+    the one being bound; otherwise it is ambiguous and refused rather than guessed.
     """
-    referenced = {match.decode("utf-8", "replace") for match in _PLAN_REFERENCE.findall(prompt_bytes)}
+    referenced = {
+        os.path.normpath(match.decode("utf-8", "replace"))
+        for match in _PLAN_REFERENCE.findall(prompt_bytes)
+    }
     if not referenced:
         return (f"the prompt never names a plan, so nothing ties it to {plan_relative}. A review "
                 "prompt must state the plan path it is reviewing.")
-    plan_name = os.path.basename(plan_relative)
-    if not any(reference == plan_relative or os.path.basename(reference) == plan_name
-               for reference in referenced):
-        return (f"the prompt asks about {sorted(referenced)}, not about {plan_relative} — refusing to "
-                "bind a review of one plan to another")
-    others = sorted(reference for reference in referenced
-                    if os.path.basename(reference) != plan_name)
-    if others:
-        return (f"the prompt names other plans as well as {plan_relative}: {others}. A round reviews "
-                "exactly one plan; the binding cannot say which one this transcript is evidence for.")
+
+    plan_normalized = os.path.normpath(plan_relative)
+    bare = {r for r in referenced if os.sep not in r}
+    qualified = referenced - bare
+
+    wrong = sorted(r for r in qualified if r != plan_normalized)
+    if wrong:
+        return (f"the prompt names {wrong}, not {plan_normalized} — refusing to bind a review of one "
+                "plan to another")
+
+    for basename in sorted(bare):
+        candidates = _plan_candidates(root, basename)
+        if len(candidates) > 1:
+            return (f"the prompt refers to {basename!r} by name only, and this repository has "
+                    f"{len(candidates)} plans with that basename ({candidates}). A basename is not an "
+                    "identity — state the full repo-relative path.")
+        if candidates and candidates[0] != plan_normalized:
+            return (f"the prompt refers to {basename!r}, which resolves to {candidates[0]}, not to "
+                    f"{plan_normalized}")
+        if not candidates and basename != os.path.basename(plan_normalized):
+            return f"the prompt refers to {basename!r}, which is not {plan_normalized}"
+
+    if plan_normalized not in qualified and os.path.basename(plan_normalized) not in bare:
+        return (f"the prompt names {sorted(referenced)}, not {plan_normalized} — refusing to bind a "
+                "review of one plan to another")
     return None
 
 
-def write_sidecar_bytes(path: str, payload: bytes) -> None:
-    """`write_sidecar` for raw bytes — the prompt snapshot must not be decoded and re-encoded."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+def _write_all(descriptor: int, payload: bytes, path: str) -> None:
+    """Write EVERY byte, or refuse.
+
+    `os.write` may return a short count without raising — a filesystem quota or an `RLIMIT_FSIZE` is
+    enough. The previous code ignored the count and reported a successful binding, so a 5,023-byte
+    prompt produced a 2,048-byte `.prompt` snapshot under a 2 KiB limit and `bind-prompt.py` exited 0
+    (PR #63 recheck, reproduced). That truncated snapshot still clears the Gemini arm's 1,000-byte
+    floor, so a reviewer consumes a cut-off prompt and only the digest check downstream notices —
+    after a full review round has been spent. `allocate-transcript.sh` already loops for its launch
+    records; this is the same discipline, applied where it was missing.
+    """
+    written = 0
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError:
-        _refuse(f"binding sidecar already exists, refusing to overwrite: {path}")
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                raise OSError(f"wrote {count} bytes")
+            written += count
     except OSError as error:
-        _refuse(f"could not create binding sidecar: {path}: {error}")
-    try:
-        os.write(descriptor, payload)
-    finally:
-        os.close(descriptor)
+        # BOTH shapes, because the platforms differ and the outcome must not. A quota can surface as a
+        # SHORT COUNT (the reviewer's reproduction) or as `EFBIG` (macOS, reproduced here under a 2 KiB
+        # `RLIMIT_FSIZE`). Either way a partial sidecar is left on disk, and a truncated `.prompt` still
+        # clears the Gemini arm's 1,000-byte floor — so a reviewer would consume a cut-off prompt and
+        # only the digest check would notice, a full round later. Remove it: a binding that names bytes
+        # nobody stored is worse than no binding, which fails closed.
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        _refuse(f"could not write {path} in full ({written} of {len(payload)} bytes: {error}) — the "
+                "partial sidecar was removed rather than left to describe bytes that were never stored")
 
 
-def write_sidecar(path: str, text: str) -> None:
-    """Create `path` 0600, refusing to follow a symlink and refusing to overwrite.
+def write_sidecar_bytes(path: str, payload: bytes) -> None:
+    """Create `path` 0600 with raw bytes, refusing to follow a symlink and refusing to overwrite.
 
     `O_EXCL` as well as `O_NOFOLLOW`: a sidecar that already exists belongs to another run, and
     silently overwriting it would destroy that run's binding.
@@ -133,9 +185,14 @@ def write_sidecar(path: str, text: str) -> None:
     except OSError as error:
         _refuse(f"could not create binding sidecar: {path}: {error}")
     try:
-        os.write(descriptor, text.encode("utf-8"))
+        _write_all(descriptor, payload, path)
     finally:
         os.close(descriptor)
+
+
+def write_sidecar(path: str, text: str) -> None:
+    """`write_sidecar_bytes` for text — one encoding, one writer, one short-write guard."""
+    write_sidecar_bytes(path, text.encode("utf-8"))
 
 
 def main(argv=None) -> int:
@@ -154,7 +211,7 @@ def main(argv=None) -> int:
     # ONE read. Everything below uses these bytes: the agreement check, the snapshot the reviewer will
     # actually be fed, and the digest recorded for it.
     prompt_bytes = read_nofollow(prompt)
-    disagreement = prompt_disagreement(prompt_bytes, plan_relative)
+    disagreement = prompt_disagreement(prompt_bytes, plan_relative, root)
     if disagreement is not None:
         _refuse(disagreement)
 
