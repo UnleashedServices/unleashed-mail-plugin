@@ -34,6 +34,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the whitespace gate resolves origin/main to compute a merge base.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -128,6 +131,13 @@ jobs:
         id: whitespace
         run: |
           set -euo pipefail
+          # `git merge-base origin/main HEAD` needs origin/main, and actions/checkout fetches only the
+          # triggering commit by default — so on a pull_request run the substitution aborted the whole
+          # job under `set -e` before the check ran. `fetch-depth: 0` on this job's checkout is what
+          # makes the base resolvable; asserting it here means a future checkout change fails loudly
+          # rather than silently skipping the gate.
+          git rev-parse --verify origin/main >/dev/null 2>&1 \
+            || { echo "origin/main is unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
           base="$(git merge-base origin/main HEAD)"
           git diff --check "$base" HEAD
 
@@ -201,13 +211,13 @@ jobs:
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
         run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py scripts/review/cleanup_coredev_2619_leaks.py
       - name: callers_scan.py execution smoke on 3.9
-        run: python3 scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py --help >/dev/null
+        run: python3 scripts/review/callers_scan.py --help >/dev/null
       - name: callers_scan.py real invocation on 3.9
         # `--help` never loads the manifest or reads the tree, so it stayed green for the whole of
         # PR #63 while the production invocation exited 2 on an ABSENT exemption manifest — the
         # scanner could not scan at all and nothing said so (PR #63 review, thread 5). Run the real
         # thing: this is the only step that would have caught it.
-        run: python3 scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py --root .
+        run: python3 scripts/review/callers_scan.py --root .
       - name: cleanup tool refuses without --apply on 3.9
         # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
         # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).
