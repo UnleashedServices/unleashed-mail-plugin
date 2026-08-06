@@ -33,11 +33,19 @@ PRECLEAN_COMMANDS = {
     ISOLATED_HELPER: GEMINI_PRECLEAN,
 }
 
-PYTHON_GRANT = "Bash(python3 " + PLUGIN_ROOT_TOKEN + "/scripts/*)"
-BASH_REVIEW_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/*)"
+# M2.6/M2.7's property is that each review skill GRANTS the plugin-root scripts it invokes, so the
+# pre-clean removal cannot leave a capture ungranted. It was pinned to the DIRECTORY WILDCARDS
+# (`/scripts/*`, `/scripts/review/*`), which satisfied that property by covering everything — including
+# the destructive cleanup tool with `--apply` and `pty-capture.py <any path> -- <any command>`
+# (deep review, P1). The wildcards are gone; the property is now pinned to the exact entrypoints, which
+# is what it always meant.
+CAPTURE_CODEX_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-codex-review.sh *)"
+AUDIT_CODEX_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/audit-codex.sh *)"
+CAPTURE_GEMINI_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/capture-gemini-review.sh *)"
+PREFLIGHT_AGY_GRANT = "Bash(bash " + PLUGIN_ROOT_TOKEN + "/scripts/review/preflight-agy.sh)"
 REQUIRED_GRANTS = {
-    CODEX_SKILL: (PYTHON_GRANT, BASH_REVIEW_GRANT),
-    GEMINI_SKILL: (PYTHON_GRANT, BASH_REVIEW_GRANT),
+    CODEX_SKILL: (CAPTURE_CODEX_GRANT, AUDIT_CODEX_GRANT),
+    GEMINI_SKILL: (CAPTURE_GEMINI_GRANT, PREFLIGHT_AGY_GRANT),
 }
 
 RM_GRANT = re.compile(r"Bash\([ \t]*rm[ \t]+-f(?:[ \t]+|(?=\)))")

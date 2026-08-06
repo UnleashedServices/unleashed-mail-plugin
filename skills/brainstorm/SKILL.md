@@ -2,7 +2,7 @@
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
+allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Write(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py snapshot *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
 ---
 
 # Feature Brainstorm: $ARGUMENTS

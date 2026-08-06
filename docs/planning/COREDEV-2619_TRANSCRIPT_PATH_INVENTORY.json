@@ -304,9 +304,9 @@
       "destination": {
         "line": 6,
         "payloads": [
-          "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex)"
         ],
-        "payloadSha256": "2a8437077ff515d4438d797941cd09e3b16cd69f398ff7fc5c966eb9962e725d"
+        "payloadSha256": "5f511bb7ea9843358b98c29568fd95ae1588252da72a09dadd37aa4d4ee80d47"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -405,7 +405,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 63,
+        "line": 65,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -428,7 +428,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 208,
+        "line": 202,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -452,9 +452,9 @@
       "destination": {
         "line": 7,
         "payloads": [
-          "allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy)"
         ],
-        "payloadSha256": "ab65a9247b188fee9bb0e9296baaaef0e4858f9f9a715bc615b84ac47e102438"
+        "payloadSha256": "e95fcd9fd1187c1934b73467cd2dcaac9279418d3fea7a76712957ec22f14729"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,

@@ -10,7 +10,7 @@ argument-hint: [feature name or docs/planning/PLAN.md path]
 # `allowed-tools` is a pre-approval grant, NOT a restriction — narrowing it does not disable
 # anything, it just means those calls need the normal user gesture. That is the correct posture for
 # a model-reachable workflow.
-allowed-tools: Read, Grep, Glob, Agent, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
+allowed-tools: Read, Grep, Glob, Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(tester), Agent(unleashed-mail:tester), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(security-reviewer), Agent(unleashed-mail:security-reviewer), Agent(concurrency-reviewer), Agent(unleashed-mail:concurrency-reviewer), Agent(ux-perf-reviewer), Agent(unleashed-mail:ux-perf-reviewer), Agent(accessibility-auditor), Agent(unleashed-mail:accessibility-auditor), Agent(prompt-review), Agent(unleashed-mail:prompt-review), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh *)
 ---
 
 # Implement: $ARGUMENTS
@@ -127,7 +127,9 @@ so it catches a stale/edited/absent/unrelated approval a prose check would miss.
 **workflow-level** fail-closed — `implement` declines to proceed; a skill cannot mechanically enforce a
 tool boundary on its own (the gate deliberately drops the heavier PreToolUse-token approach as
 over-engineering for this cooperative workflow). If `${CLAUDE_PLUGIN_ROOT}` is unset, use the
-repo-relative `scripts/review-verdict.py`.
+repo-relative `scripts/review/resolve-plan-gate.sh` — **not** `review-verdict.py` directly. Calling the
+writer skips this gate's name resolution and its physical-containment guard, which is the whole point
+of the fence (deep review, P2).
 
 ## Phase 2: Implementation Plan
 

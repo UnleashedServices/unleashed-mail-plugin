@@ -1,7 +1,7 @@
 ---
 name: review-synthesis
 description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
-allowed-tools: Read, Grep, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)
+allowed-tools: Read, Grep, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
 ---
 
 # Plan-Review Synthesis
@@ -166,7 +166,10 @@ For a reviewer that did not return, record `<reviewer>=MISSING` **without** a `:
 This records the plan's **raw-byte SHA-256** (+ the two transcript digests) in a private `.verdicts/`
 dir beside the plan (git-ignored session state). It writes the artifact for ANY combined verdict —
 `implement` is what refuses to proceed on a non-approving one, so the audit trail is complete either
-way. If `${CLAUDE_PLUGIN_ROOT}` is unset, use the repo-relative `scripts/review-verdict.py`.
+way. If `${CLAUDE_PLUGIN_ROOT}` is unset, use the repo-relative
+`scripts/review/persist-verdict.sh` — **not** `review-verdict.py write` directly. Calling the writer
+skips the MISSING classification that makes an absent or empty transcript fail closed, which is the
+whole reason this step goes through the helper (deep review, P2).
 
 ## Guardrails
 

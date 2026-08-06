@@ -516,8 +516,8 @@ unchanged and still mandatory.
 |---|---|---|---|
 | `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:595` |
 | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
-| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:233` |
-| `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:133` |
+| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:235` |
+| `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |
 | `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:202` |
 | `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:263` |
 | `ux-perf-findings` | `ux-perf-reviewer` | `out` | `agents/ux-perf-reviewer.md:198` |

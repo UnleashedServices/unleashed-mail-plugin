@@ -124,6 +124,8 @@ def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
     a hard reject would block a legitimate new key in CI — the same trade §4.5 settled for
     `KNOWN_TOOLS`. Only the one key proven inert gets a hard error.
     """
+    check_model_reachable_grants(rel, fm, problems, warnings)
+
     for key in fm:
         if key in KNOWN_SKILL_KEYS:
             continue
@@ -135,6 +137,105 @@ def check_skill_fields(rel: Path, fm: dict[str, str], problems: list[str],
             continue
         warnings.append(f"{rel}: unknown skill frontmatter key `{key}` (advisory — the skill "
                         f"schema moves between CLI releases; verify against the pinned version)")
+
+
+# Grants that must never appear on a MODEL-REACHABLE skill. Every tool a skill lists is pre-approved
+# with no user gesture, and a model-invocable skill can be entered by the model's own decision — one
+# that content in a reviewed file can steer. So a broad grant here is not "convenience", it is a
+# capability handed to an attacker-influenceable path (deep review, P1).
+#
+# An ALLOWLIST of shapes would be wrong here: the danger is unbounded breadth, and breadth has many
+# spellings. This is a deny-list of the specific unbounded forms, each with the reason it is unbounded.
+BROAD_MODEL_REACHABLE_GRANTS = {
+    "Write": "bare `Write` pre-approves writing ANY path — scope it, e.g. `Write(docs/planning/**)`",
+    "Edit": "bare `Edit` pre-approves editing ANY path — scope it",
+    "NotebookEdit": "bare `NotebookEdit` pre-approves editing any notebook — scope it",
+    "Bash": "bare `Bash` pre-approves EVERY command",
+    "Agent": (
+        "bare `Agent` pre-approves spawning ANY subagent, including ones that write files — "
+        "enumerate the types this body actually spawns, e.g. `Agent(db-engineer)`"
+    ),
+}
+
+# Command prefixes that are unbounded even when written as `Bash(... *)`. A VCS wildcard is the worst
+# of these: `Bash(git *)` is every git command, including `reset --hard`, `clean` and `push`, plus the
+# git-to-shell trampolines (aliases, `-c core.pager=…`). A bare interpreter or reviewer-CLI wildcard is
+# the same problem one layer down.
+BROAD_BASH_PREFIXES = {
+    "git": "every git command, including reset/clean/push — call an audited read-only wrapper instead",
+    "gh": "every GitHub CLI command, including merges and releases",
+    "codex": "any codex invocation, including `-s danger-full-access`, outside every wrapper",
+    "agy": "any agy invocation outside the isolation harness — agy has NO read-only mode",
+    "kimi": "any kimi invocation outside a harness",
+    "rm": "unbounded deletion",
+    "sudo": "privilege escalation",
+}
+
+
+def _bash_specifiers(value: str) -> list[str]:
+    """Every `Bash(...)` specifier in an `allowed-tools` value."""
+    return re.findall(r"Bash\(([^)]*)\)", value)
+
+
+# Trampolines: a wildcard on these runs arbitrary code one layer down (`xcrun python3 …`, `swift run`,
+# an xcodebuild Run-Script phase). They are ADVISORY rather than hard failures because they are the
+# build tooling these skills exist to describe, and failing them would trade a real workflow for a
+# theoretical one. Surfaced so the breadth is a decision rather than an oversight.
+TRAMPOLINE_BASH_PREFIXES = {
+    "xcrun": "runs any tool in the toolchain, e.g. `xcrun python3 -c …`",
+    "swift": "`swift run` executes arbitrary package code",
+    "xcodebuild": "build phases execute arbitrary Run-Script code",
+}
+
+
+def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[str],
+                                 warnings: list[str] | None = None) -> None:
+    """Reject broad write/VCS/agent grants on a skill the MODEL can invoke (deep review, P1).
+
+    `disable-model-invocation: true` opts a skill out — a user-invoked-only skill still pre-approves
+    its tools, but only after a human typed its name, which is the gesture the model-reachable case
+    lacks. Scoped forms are accepted: the check is on unbounded BREADTH, not on the tool.
+    """
+    if str(fm.get("disable-model-invocation", "")).strip().lower() == "true":
+        return
+    granted = fm.get("allowed-tools")
+    if not granted:
+        return
+
+    entries = [entry.strip() for entry in re.split(r",(?![^(]*\))", granted) if entry.strip()]
+    for entry in entries:
+        if entry in BROAD_MODEL_REACHABLE_GRANTS:
+            problems.append(
+                f"{rel}: model-invocable skill grants bare `{entry}` — "
+                f"{BROAD_MODEL_REACHABLE_GRANTS[entry]}"
+            )
+
+    for specifier in _bash_specifiers(granted):
+        head = specifier.strip().split()
+        if not head:
+            continue
+        command = head[0]
+        # `bash <path> *` / `python3 <path> *` are fine when the PATH is exact; the danger is a
+        # wildcard in the path itself, which covers every script in a directory.
+        if command in ("bash", "sh", "python3", "python") and len(head) > 1:
+            target = head[1]
+            if "*" in target:
+                problems.append(
+                    f"{rel}: model-invocable skill grants `Bash({specifier})` — the wildcard is in the "
+                    f"SCRIPT PATH, so it pre-approves every script in that directory (including "
+                    f"destructive ones). Name the exact entrypoint."
+                )
+            continue
+        if command in BROAD_BASH_PREFIXES:
+            problems.append(
+                f"{rel}: model-invocable skill grants `Bash({specifier})` — that is "
+                f"{BROAD_BASH_PREFIXES[command]}"
+            )
+        elif command in TRAMPOLINE_BASH_PREFIXES and warnings is not None:
+            warnings.append(
+                f"{rel}: model-invocable skill grants `Bash({specifier})` (advisory) — "
+                f"{TRAMPOLINE_BASH_PREFIXES[command]}"
+            )
 
 
 def skill_preload_list(fm: dict[str, str]) -> list[str]:

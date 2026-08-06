@@ -186,9 +186,10 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
         # the cap that actually governs a gate round went unchecked. Assert BOTH homes.
         src = _read("skills/codex-review/SKILL.md")
         helper = _read("scripts/review/capture-codex-review.sh")
-        self.assertEqual(
-            src.count("--timeout 1200"), 1,
-            "codex-review's audit capture must still use --timeout 1200",
+        audit = _read("scripts/review/audit-codex.sh")
+        self.assertIn(
+            "--timeout 1200", audit,
+            "the audit wrapper must keep the 1200s cap",
         )
         self.assertIn(
             'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" 1200', src,
@@ -202,7 +203,7 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             '--timeout "$TIMEOUT"', helper,
             "the helper must pass its cap through to pty-capture",
         )
-        for label, text in (("skill", src), ("helper", helper)):
+        for label, text in (("skill", src), ("helper", helper), ("audit wrapper", audit)):
             self.assertNotIn(
                 "--timeout 600", text,
                 f"codex-review {label} must not keep the 600s cap that SIGTERMs xhigh",
@@ -712,9 +713,11 @@ class DeepReviewP2Fixes(unittest.TestCase):
         LITERAL and appends its own suffix, so the assertion below is on the produced NAME, not just on
         the template: a form that only half-works produces a path still containing `XXXXXX`.
         """
+        # The allocator moved into `audit-codex.sh` when the audit recipe became one granted command
+        # (deep review, P1) — read it where it now lives, not where it used to.
         line = [
             item
-            for item in _read("skills/codex-review/SKILL.md").splitlines()
+            for item in _read("scripts/review/audit-codex.sh").splitlines()
             if item.startswith("AUDIT_OUT=")
         ]
         self.assertEqual(1, len(line), "expected exactly one audit allocator line")
@@ -780,16 +783,28 @@ class DeepReviewP2Fixes(unittest.TestCase):
                     source,
                     f"{rel} still documents a fixed shared preflight path",
                 )
-                self.assertRegex(
-                    source,
-                    r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"',
-                    f"{rel} must allocate the ping path per run with a portable template",
-                )
-                self.assertIn(
-                    '"$PING"',
-                    source,
-                    f"{rel} must pass and re-read the allocated path, not a re-derived name",
-                )
+                if rel.startswith("skills/"):
+                    # The skill now calls the wrapper, which allocates and re-reads the path itself.
+                    self.assertIn(
+                        "scripts/review/preflight-agy.sh",
+                        source,
+                        f"{rel} must route the preflight through the granted wrapper",
+                    )
+                else:
+                    self.assertRegex(
+                        source,
+                        r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"',
+                        f"{rel} must allocate the ping path per run with a portable template",
+                    )
+                    self.assertIn(
+                        '"$PING"',
+                        source,
+                        f"{rel} must pass and re-read the allocated path, not a re-derived name",
+                    )
+        # And the wrapper itself must do the allocating it now owns.
+        wrapper = _read("scripts/review/preflight-agy.sh")
+        self.assertRegex(wrapper, r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"')
+        self.assertIn('grep -qi pong "$PING"', wrapper)
 
     def test_gemini_skill_quotes_the_model_the_wrapper_actually_defaults_to(self):
         """The skill QUOTES the wrapper's default line, so the two can drift silently.

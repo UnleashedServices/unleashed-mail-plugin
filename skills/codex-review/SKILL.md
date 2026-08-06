@@ -3,7 +3,7 @@ name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(codex *)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex)
 ---
 
 # Codex CLI Review
@@ -48,7 +48,9 @@ Docs: https://developers.openai.com/codex/cli/reference
 # The rules it carries, which now live in one place instead of in a skill body:
 #   * timeout 1200s — mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
 #     SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
-#     (COREDEV-2504). Keep the Monitor pattern below: an outer runner timeout could otherwise kill the
+#     (COREDEV-2504). This is NOT the same cap as gemini-review, which is 1800s because `agy` needs a
+#     longer `--print-timeout`; an earlier note here claimed they matched (deep review, P2). Keep
+#     the Monitor pattern below: an outer runner timeout could otherwise kill the
 #     run before the wrapper's cap fires.
 #   * MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
 #     one. Each round allocates its own leaf, so a wrapper that never starts (codex absent / auth
@@ -63,21 +65,13 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$
 # Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
 # matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
 
-# Skill-based audit through the wrapper.
-# The output path is PER-RUN via mktemp, never a fixed shared one. A fixed /tmp path is the MAJ-10
-# hazard in miniature: an audit that dies before writing leaves the PREVIOUS audit's file in place,
-# and the next reader takes stale findings for fresh ones. This line kept a fixed path even though it
-# sits inside a fence the per-run sweep rewrote (PR #63 review, gap 27).
-#
-# The TEMPLATE form, not `-t`. `mktemp -t codex-audit` is a BSD shorthand that GNU mktemp REJECTS
-# ("too few X's in template"), so this recipe exited 1 on Linux — and the Linux CI job never runs it,
-# so nothing said so (deep review, P2). `-t codex-audit.XXXXXX` satisfies GNU but BSD then treats the
-# X's as literal and appends its own suffix, producing `codex-audit.XXXXXX.65azoo`. Passing a full
-# path template substitutes the X's on BOTH.
-AUDIT_OUT="$(mktemp "${TMPDIR:-/tmp}/codex-audit.XXXXXX")"
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
-echo "audit transcript: $AUDIT_OUT"
+# Skill-based audit through the wrapper, as ONE granted command.
+# `audit-codex.sh` ALLOCATES its own per-run output and HARD-CODES `-s read-only` and
+# `model_reasoning_effort=xhigh`. The old form needed `Bash(codex *)` and
+# `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)`, which between them pre-approved any codex
+# invocation (including `-s danger-full-access`) and `pty-capture.py <any path> -- <any command>`
+# — arbitrary child execution writing anywhere (deep review, P1). It prints the transcript path.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh" /security-reviewer [FILES]
 ```
 
 Interface: `pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]`.

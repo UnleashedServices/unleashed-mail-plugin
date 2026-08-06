@@ -364,3 +364,88 @@ class COREDEV2583_EffortPolicyWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModelReachableGrantPolicy(unittest.TestCase):
+    """Deep review P1: a model-invocable skill pre-approves every tool it lists, with no user gesture.
+
+    The reviewer named three skills; the check found the same class in eight. Each case below is a
+    PAIR — the broad form is rejected and a scoped form of the SAME tool is accepted — because a check
+    that rejected the tool outright would just push authors to `disable-model-invocation`.
+    """
+
+    def _check(self, granted, extra=None):
+        problems, warnings = [], []
+        frontmatter = {"allowed-tools": granted}
+        frontmatter.update(extra or {})
+        vpa.check_model_reachable_grants(
+            Path("skills/x/SKILL.md"), frontmatter, problems, warnings
+        )
+        return problems, warnings
+
+    def test_bare_write_edit_and_agent_are_rejected(self):
+        for granted in ("Read, Write", "Read, Edit", "Read, Agent", "Read, Bash", "Read, NotebookEdit"):
+            with self.subTest(granted=granted):
+                problems, _ = self._check(granted)
+                self.assertTrue(problems, f"{granted!r} must be rejected on a model-invocable skill")
+
+    def test_scoped_forms_of_the_same_tools_are_accepted(self):
+        for granted in (
+            "Read, Write(docs/planning/**)",
+            "Read, Edit(src/**)",
+            "Read, Agent(db-engineer), Agent(unleashed-mail:db-engineer)",
+            "Read, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)",
+        ):
+            with self.subTest(granted=granted):
+                problems, _ = self._check(granted)
+                self.assertEqual([], problems, f"{granted!r} is scoped and must be accepted")
+
+    def test_vcs_and_reviewer_cli_wildcards_are_rejected(self):
+        for granted in ("Bash(git *)", "Bash(gh *)", "Bash(codex *)", "Bash(agy *)", "Bash(rm *)"):
+            with self.subTest(granted=granted):
+                problems, _ = self._check(granted)
+                self.assertTrue(problems, f"{granted!r} is an unbounded CLI wildcard")
+
+    def test_a_wildcard_in_the_script_path_is_rejected(self):
+        """`Bash(python3 …/scripts/*)` pre-approves EVERY script in the directory.
+
+        That is the form that pre-approved the destructive cleanup tool with `--apply` and
+        `pty-capture.py <any path> -- <any command>` — arbitrary child execution.
+        """
+        problems, _ = self._check("Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)")
+        self.assertTrue(problems)
+        self.assertIn("SCRIPT PATH", problems[0])
+
+        problems, _ = self._check("Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)")
+        self.assertTrue(problems, "a directory wildcard is unbounded for `bash` too")
+
+    def test_disable_model_invocation_opts_out(self):
+        """A user must type the name of a non-model-invocable skill, which is the missing gesture."""
+        problems, _ = self._check("Read, Write, Bash(git *)")
+        self.assertTrue(problems)
+        problems, _ = self._check(
+            "Read, Write, Bash(git *)", extra={"disable-model-invocation": "true"}
+        )
+        self.assertEqual([], problems)
+
+    def test_trampolines_warn_rather_than_fail(self):
+        """Advisory, deliberately: these are the build tools the knowledge skills exist to describe."""
+        problems, warnings = self._check("Bash(xcrun *), Bash(swift *), Bash(xcodebuild *)")
+        self.assertEqual([], problems)
+        self.assertEqual(3, len(warnings), warnings)
+
+    def test_every_shipped_skill_satisfies_the_policy(self):
+        """The tree itself, so the policy cannot pass on fixtures while the shipped assets violate it."""
+        root = Path(_MOD_PATH).resolve().parents[1]
+        offenders = []
+        for skill in sorted((root / "skills").glob("*/SKILL.md")):
+            frontmatter = vpa.parse_frontmatter(skill.read_text(encoding="utf-8"))
+            if not frontmatter:
+                continue
+            problems: list[str] = []
+            vpa.check_model_reachable_grants(
+                Path(skill.relative_to(root).as_posix()), frontmatter, problems, []
+            )
+            offenders.extend(problems)
+        self.assertEqual([], offenders)
+

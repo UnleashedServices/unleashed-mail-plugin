@@ -4,7 +4,7 @@ description: >
   Test-driven development workflow for Swift/XCTest. Activates when implementing
   new features, writing tests, or refactoring existing code in UnleashedMail.
   Enforces red-green-refactor discipline with GRDB-aware test patterns.
-allowed-tools: Read, Write, Edit, Bash(xcodebuild *), Bash(xcrun *), Grep, Glob, Agent
+allowed-tools: Read, Bash(xcodebuild *), Bash(xcrun *), Grep, Glob
 ---
 
 # Swift TDD — Red/Green/Refactor for UnleashedMail
