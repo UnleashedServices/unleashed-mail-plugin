@@ -43,6 +43,9 @@ except ImportError:  # Direct execution from scripts/tests.
 
 
 CAPTURE_CODEX = WRAPPER_PATH.parent / "capture-codex-review.sh"
+CAPTURE_GEMINI = WRAPPER_PATH.parent / "capture-gemini-review.sh"
+CAPTURE_HELPERS = {"codex": CAPTURE_CODEX, "gemini": CAPTURE_GEMINI}
+PROMPT_PREFIX = {"codex": ".codex-prompt-", "gemini": ".agy-prompt-"}
 
 
 class M57AndM59RecipeProofs(M5WrapperFixture):
@@ -61,8 +64,8 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         }
 
     @staticmethod
-    def capture_helper_source() -> str:
-        return CAPTURE_CODEX.read_text(encoding="utf-8")
+    def capture_helper_source(reviewer: str = "codex") -> str:
+        return CAPTURE_HELPERS[reviewer].read_text(encoding="utf-8")
 
     def run_recipe(
         self,
@@ -72,6 +75,7 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         round_value: Optional[str],
         reviewer_value: str = "runtime-agent-value",
         helper_source: Optional[str] = None,
+        helper_reviewer: str = "codex",
     ) -> Tuple[subprocess.CompletedProcess, Path]:
         plugin = self.root / (label + "-plugin")
         review_dir = plugin / "scripts" / REVIEW
@@ -79,19 +83,24 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         wrapper = review_dir / WRAPPER_PATH.name
         wrapper.write_text(RECIPE_WRAPPER_STUB, encoding="utf-8")
         wrapper.chmod(0o755)
-        # The codex recipe reaches the allocator THROUGH this helper, so it has to be staged beside the
-        # stub — real by default, mutated when a cell is proving one of the rules it carries.
-        helper = review_dir / CAPTURE_CODEX.name
-        helper.write_text(
-            self.capture_helper_source() if helper_source is None else helper_source,
-            encoding="utf-8",
-        )
-        helper.chmod(0o755)
-        # The helper refuses an unreadable or empty prompt, which is a guard the inline recipe never
-        # had; these cells are about operands and identity, so give it a valid prompt to get past it.
-        prompt = self.root / ".codex-prompt.md"
-        if not prompt.exists():
-            prompt.write_text("# recipe fixture prompt\n", encoding="utf-8")
+        # BOTH recipes reach the allocator THROUGH their helper, so both are staged beside the stub —
+        # real by default, mutated when a cell is proving one of the rules a helper carries.
+        for name, path in CAPTURE_HELPERS.items():
+            helper = review_dir / path.name
+            helper.write_text(
+                self.capture_helper_source(name)
+                if (helper_source is None or name != helper_reviewer)
+                else helper_source,
+                encoding="utf-8",
+            )
+            helper.chmod(0o755)
+        # Each recipe names a PER-ROUND prompt (deep review, P1), and the helpers refuse an unreadable
+        # or empty one. These cells are about operands and identity, so provide the exact files the
+        # recipes will name for this case's ticket/round.
+        for prefix in PROMPT_PREFIX.values():
+            prompt = self.root / f"{prefix}{ticket or ''}r{round_value or ''}.md"
+            if not prompt.exists():
+                prompt.write_text("# recipe fixture prompt\n", encoding="utf-8")
         recipe_log = self.root / (label + "-recipe.args")
 
         env = dict(os.environ)
@@ -148,6 +157,7 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
                     ticket,
                     round_value,
                     helper_source=helpers.get(reviewer),
+                    helper_reviewer=reviewer,
                 )
                 self.assertNotEqual(0, result.returncode)
                 self.assertEqual("", result.stdout)
@@ -168,6 +178,7 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
                 "TicketLiteral",
                 "RoundLiteral",
                 helper_source=helpers.get(reviewer),
+                helper_reviewer=reviewer,
             )
             self.assertEqual(73, result.returncode, result.stderr)
             self.assertEqual(
@@ -180,34 +191,24 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
 
     def test_M5_7_each_missing_input_guard_removal_is_rejected(self) -> None:
         recipes = self.recipe_sources()
-        # Same guard, two homes: gemini still declares it inline with `:`/`:?`, codex declares it in
-        # the helper with an explicit test so it can report which operand is missing.
+        # Both arms now declare their operand guards in their own committed helper, in the same form,
+        # so the mutation is the same edit applied to whichever helper the recipe under test calls.
         guards = {
-            "gemini": {
-                "ticket": ': "${TICKET:?bind TICKET to the --ticket operand}"\n',
-                "round": ': "${ROUND:?bind ROUND to the --round operand}"\n',
-            },
-            "codex": {
-                "ticket": '[ -n "$TICKET" ] || die "bind TICKET to the --ticket operand"\n',
-                "round": '[ -n "$ROUND" ]  || die "bind ROUND to the --round operand"\n',
-            },
+            "ticket": '[ -n "$TICKET" ] || die "bind TICKET to the --ticket operand"\n',
+            "round": '[ -n "$ROUND" ]  || die "bind ROUND to the --round operand"\n',
         }
-        for reviewer, recipe in recipes.items():
-            for field, guard in guards[reviewer].items():
+        for reviewer in recipes:
+            for field, guard in guards.items():
                 with self.subTest(reviewer=reviewer, field=field):
-                    mutated = dict(recipes)
-                    helpers = {}
-                    if reviewer == "codex":
-                        helpers[reviewer] = _replace_once(
-                            self.capture_helper_source(), guard, ""
-                        )
-                    else:
-                        mutated[reviewer] = _replace_once(recipe, guard, "")
                     with self.assertRaises(AssertionError):
                         self.assert_required_inputs(
-                            mutated,
+                            recipes,
                             "required-" + reviewer + "-" + field,
-                            helpers=helpers,
+                            helpers={
+                                reviewer: _replace_once(
+                                    self.capture_helper_source(reviewer), guard, ""
+                                )
+                            },
                         )
 
     def test_M5_9_assertion_each_recipe_passes_its_literal_identity(self) -> None:
@@ -219,23 +220,19 @@ class M57AndM59RecipeProofs(M5WrapperFixture):
         # identity is compiled into the committed helper now, which is strictly stronger than a skill
         # body, but the property is the same: the allocator must receive the name as a literal, or one
         # arm could allocate under the other's and a single review would satisfy both halves.
-        for reviewer, recipe in recipes.items():
-            old = '"$TICKET" "$ROUND" ' + reviewer
-            new = '"$TICKET" "$ROUND" "$REVIEWER"'
+        for reviewer in recipes:
+            anchor = '"$TICKET" "$ROUND" ' + reviewer
+            derived = '"$TICKET" "$ROUND" "$REVIEWER"'
             with self.subTest(reviewer=reviewer):
-                mutated = dict(recipes)
-                helpers = {}
-                if reviewer == "codex":
-                    helpers[reviewer] = _replace_once(
-                        self.capture_helper_source(), old, new
-                    )
-                else:
-                    mutated[reviewer] = _replace_once(recipe, old, new)
                 with self.assertRaises(AssertionError):
                     self.assert_literal_reviewers(
-                        mutated,
+                        recipes,
                         "literal-runtime-" + reviewer,
-                        helpers=helpers,
+                        helpers={
+                            reviewer: _replace_once(
+                                self.capture_helper_source(reviewer), anchor, derived
+                            )
+                        },
                     )
 
 

@@ -871,10 +871,10 @@ class M514InvocationSyntaxTests(CallersScanProof):
         recipes = {
             "gemini": {
                 "skill": "skills/gemini-review/SKILL.md",
-                "allocates_in": "skills/gemini-review/SKILL.md",
+                "allocates_in": "scripts/review/capture-gemini-review.sh",
                 "wrapper_call": (
-                    b'bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/allocate-transcript.sh" '
-                    b'"$TICKET" "$ROUND" gemini'
+                    b'if TRANSCRIPT_MARKER="$(bash "${SCRIPT_DIR}/allocate-transcript.sh" '
+                    b'"$TICKET" "$ROUND" gemini)"; then'
                 ),
             },
             "codex": {

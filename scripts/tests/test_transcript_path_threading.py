@@ -23,6 +23,12 @@ REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
 PERSIST_HELPER = REPO / "scripts" / "review" / "persist-verdict.sh"
 CAPTURE_CODEX = REPO / "scripts" / "review" / "capture-codex-review.sh"
+CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
+
+# The recipes name a PER-ROUND prompt file, so the fixture repo must carry the ones the
+# fixture's TICKET/ROUND produce. A shared name was the cross-wiring hazard (deep review, P1).
+FIXTURE_TICKET = "COREDEV-2619"
+FIXTURE_ROUND = "85"
 
 GEMINI_SKILL = REPO / "skills" / "gemini-review" / "SKILL.md"
 CODEX_SKILL = REPO / "skills" / "codex-review" / "SKILL.md"
@@ -164,14 +170,17 @@ class TranscriptThreadingFixture(unittest.TestCase):
         # `$(cat .codex-prompt.md)`, which expands EMPTY on a missing file, so every codex capture
         # proof had been running against an empty prompt without failing — `capture-codex-review.sh`
         # checks the prompt is readable and non-empty, and that is what surfaced it.
-        (self.reviewed / ".codex-prompt.md").write_text(prompt, encoding="utf-8")
+        codex_prompt = f".codex-prompt-{FIXTURE_TICKET}r{FIXTURE_ROUND}.md"
+        agy_prompt = f".agy-prompt-{FIXTURE_TICKET}r{FIXTURE_ROUND}.md"
+        (self.reviewed / codex_prompt).write_text(prompt, encoding="utf-8")
+        (self.reviewed / agy_prompt).write_text(prompt, encoding="utf-8")
         (self.reviewed / "FEATURE_PLAN.md").write_text("# Plan\nThread paths.\n", encoding="utf-8")
         env = dict(os.environ)
         commands = (
             ["git", "init", "-q"],
             ["git", "config", "user.name", "Fixture"],
             ["git", "config", "user.email", "fixture@example.invalid"],
-            ["git", "add", ".agy-prompt.md", ".codex-prompt.md", "FEATURE_PLAN.md"],
+            ["git", "add", ".agy-prompt.md", codex_prompt, agy_prompt, "FEATURE_PLAN.md"],
             ["git", "commit", "-q", "-m", "fixture"],
         )
         for command in commands:
@@ -186,19 +195,19 @@ class TranscriptThreadingFixture(unittest.TestCase):
         shutil.copy2(ALLOCATE, review_dir / ALLOCATE.name)
         shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
         shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
+        shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
         shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
 
-    def install_capture_helper(self, source: str) -> None:
+    def install_capture_helper(self, source: str, reviewer: str = "codex") -> None:
         """Replace the staged `capture-codex-review.sh` with `source`.
 
         The codex capture rules moved out of the skill body into that script, so an M5 mutant now has
         to replace the script the recipe calls rather than edit the recipe text. The recipe under test
         stays the shipped one, which is the point.
         """
-        self._write_executable(
-            self.plugin / "scripts" / "review" / CAPTURE_CODEX.name, source
-        )
+        name = CAPTURE_CODEX.name if reviewer == "codex" else CAPTURE_GEMINI.name
+        self._write_executable(self.plugin / "scripts" / "review" / name, source)
 
     def environment(
         self,
@@ -413,7 +422,7 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         self.assertEqual(
             [
                 str(self.plugin / "scripts" / "review" / "isolated-agy-review.sh"),
-                ".agy-prompt.md",
+                f".agy-prompt-{FIXTURE_TICKET}r{FIXTURE_ROUND}.md",
                 gemini_path,
             ],
             gemini_helpers[0][:3],

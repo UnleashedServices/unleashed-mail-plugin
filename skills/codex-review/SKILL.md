@@ -35,7 +35,9 @@ Docs: https://developers.openai.com/codex/cli/reference
 **Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
 
 ```bash
-# Put the prompt in `.codex-prompt.md`, bind TICKET and ROUND, then run this ONE command. It allocates
+# Write this round's prompt to a PER-ROUND file first — `.codex-prompt-${TICKET}r${ROUND}.md`,
+# never a shared `.codex-prompt.md`: two concurrent rounds would otherwise cross-wire prompt and
+# transcript (deep review, P1). Bind TICKET and ROUND, then run this ONE command. It allocates
 # the per-run transcript leaf, prints the `UNLEASHED_TRANSCRIPT=` marker for synthesis to bind, and
 # captures the review into that exact leaf through the PTY wrapper.
 #
@@ -56,7 +58,7 @@ Docs: https://developers.openai.com/codex/cli/reference
 #   * DO NOT `rm -f` the reserved leaf on a retry; retries must RE-ALLOCATE (gap 14). The script says
 #     why at the line that would tempt you.
 # COREDEV2619_CODEX_CAPTURE_BEGIN
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" .codex-prompt.md 1200
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" 1200
 # COREDEV2619_CODEX_CAPTURE_END
 # Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
 # matches codex's. Preserve the marker remainder byte-for-byte for synthesis.

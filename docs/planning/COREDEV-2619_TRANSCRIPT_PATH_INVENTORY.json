@@ -327,7 +327,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 51,
+        "line": 62,
         "payloads": [
           "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
           "    :",
@@ -341,10 +341,20 @@
           "esac",
           "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
           "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
+          "# Bind the prompt to THIS transcript, BEFORE the capture runs: a round that later times out still",
+          "# leaves the record of which prompt it was reviewing. `shasum -a 256` is on macOS, `sha256sum` on",
+          "# GNU \u2014 take whichever exists, and record the prompt's own path alongside its digest.",
+          "_prompt_digest() {",
+          "    if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | cut -d' ' -f1",
+          "    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | cut -d' ' -f1",
+          "    else python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],\"rb\").read()).hexdigest())' \"$1\"",
+          "    fi",
+          "}",
+          "printf '%s  %s\\n' \"$(_prompt_digest \"$PROMPT\")\" \"$PROMPT\" > \"${CODEX_TRANSCRIPT}.promptsha256\"",
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
         ],
-        "payloadSha256": "55cdb5015fcf9ed3dea5150e2fa39bc65528c4a43abee730209c2f1d30f17732"
+        "payloadSha256": "cf536fe21571e9c152bf4afb2e19c5a486976372aa7dd7fa4761fb8ffe068137"
       },
       "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
       "precedingAnchorLine": 47,
@@ -364,7 +374,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 63,
+        "line": 84,
         "payloads": [
           "exec python3 \"${SCRIPTS_DIR}/pty-capture.py\" --timeout \"$TIMEOUT\" --allocated \"$CODEX_TRANSCRIPT\" -- \\",
           "    codex exec -c model_reasoning_effort=xhigh -s read-only \"$(cat \"$PROMPT\")\""
@@ -388,7 +398,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 61,
+        "line": 63,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -411,7 +421,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 206,
+        "line": 208,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -458,9 +468,9 @@
       "destination": {
         "line": 75,
         "payloads": [
-          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1800"
+          "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
         ],
-        "payloadSha256": "fae091f453ed089f10e9f2fb4d7d1fa0e935c5264518fd57c108d99934b604f2"
+        "payloadSha256": "4bae418e9b29e0682ff1f48650cde51f9e846de1c5b32e1120c97065c8bd0f7d"
       },
       "sourceSha256": "023d8ab2eb52d46c113492552938fc963f61b06013b013de4689daf63bbef35d",
       "precedingAnchorLine": 70,
@@ -482,9 +492,9 @@
         "line": 155,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
-          "    .agy-prompt.md \"$GEMINI_TRANSCRIPT\" 1800"
+          "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
         ],
-        "payloadSha256": "125e2d2a0b4e20dee8e55b855cae6386b05879a9306517610634256d84608e8c"
+        "payloadSha256": "0352f68d78cdff8c9651f8652d3a3fc9758c67c7d6dd2b7e11831dc253dc05b7"
       },
       "sourceSha256": "39c3aae64f0722977fcad2430f6ba7ade99d0a6a8855ba69a42873c173e9ab39",
       "precedingAnchorLine": 136,

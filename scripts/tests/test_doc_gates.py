@@ -191,7 +191,7 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "codex-review's audit capture must still use --timeout 1200",
         )
         self.assertIn(
-            'capture-codex-review.sh" "$TICKET" "$ROUND" .codex-prompt.md 1200', src,
+            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" 1200', src,
             "the capture recipe must pass the 1200s cap to the helper",
         )
         self.assertIn(

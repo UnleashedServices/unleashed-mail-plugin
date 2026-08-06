@@ -25,11 +25,11 @@ Examples
     # Codex review — capture is guaranteed, no -o flag needed. Always force xhigh effort
     # (the config default is fragile — see skills/codex-review/SKILL.md).
     python3 pty-capture.py --allocated "$CODEX_TRANSCRIPT" -- \
-        codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
+        codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt-$TICKET-r$ROUND.md)"
 
     # Antigravity (agy) review.
     python3 pty-capture.py --allocated "$GEMINI_TRANSCRIPT" -- \
-        agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt.md"
+        agy --add-dir "$(pwd)" -p "Read and follow .agy-prompt-$TICKET-r$ROUND.md"
 
 Exit codes: the wrapped command's exit code propagates (0 = success; non-zero
 = failure). Captured output is written to <out-path>, which is REQUIRED — there
