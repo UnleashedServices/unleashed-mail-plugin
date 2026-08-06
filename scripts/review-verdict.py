@@ -1065,61 +1065,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if current != art.get("planSha256"):
         return _fail("plan has CHANGED since approval (digest mismatch) — re-run the gate on the "
                      "current plan (approve-then-edit is blocked)")
-    # The EVIDENCE, not just the plan. Checked last so the cheaper, more common failures above keep
-    # their own messages rather than being reported as an evidence problem.
-    evidence_problem = _recorded_transcript_problem(reviewers)
-    if evidence_problem is not None:
-        return _fail("approval evidence no longer matches what was reviewed — " + evidence_problem)
     who = ", ".join(f"{r.get('name')}={r.get('status')}" for r in reviewers)
     print(f"review-verdict: GATE OK — {art['verdict']} on {plan} [{who}]")
     return 0
-
-
-def _recorded_transcript_problem(reviewers):
-    """Re-read each recorded transcript and refuse if it no longer hashes to what was approved.
-
-    WHY THIS EXISTS
-    Every transcript check the gate performs — freshness, layout, the O_NOFOLLOW descriptor digest,
-    and the prompt/plan binding — ran at WRITE and was never re-run. `cmd_verify` re-read exactly one
-    thing, the plan. So `transcriptSha256` was recorded in the artifact and no code path ever compared
-    it back: after a passing gate, overwriting a transcript with `VERDICT: REQUEST_CHANGES` still
-    produced `GATE OK — APPROVE` (end-to-end run, 2026-08-06). That is the third instance in this
-    codebase of a digest written and never read — the other two were `.promptsha256` and the pre-TOCTOU
-    freshness digest, both closed in this same release.
-
-    The exposed window is write->verify, which is the whole implementation phase: `implement` verifies
-    the gate at its Phase 1, potentially long after the review ran.
-
-    ABSENCE IS TOLERATED, ALTERATION IS NOT. Transcripts live in an XDG state directory that is
-    legitimately purgeable — macOS has already destroyed 105 of this project's transcripts under disk
-    pressure in one sweep. Failing the gate on a purged transcript would invalidate a real approval and
-    force a re-review for a reason that is not evidence tampering. A transcript that is still THERE and
-    no longer matches is a different claim, and that one is refused.
-
-    Reuses `_regular_file_info` rather than hashing the path, so verify reads the evidence through the
-    same single O_NOFOLLOW descriptor the write path validated it through.
-    """
-    for reviewer in reviewers:
-        if not isinstance(reviewer, dict):
-            continue
-        transcript = reviewer.get("transcriptPath")
-        recorded = str(reviewer.get("transcriptSha256", "")).strip().lower()
-        if not isinstance(transcript, str) or not transcript or not recorded:
-            continue
-        if not os.path.lexists(transcript):
-            continue  # purged, not altered — see the docstring
-        _info, digest, problem = _regular_file_info(transcript)
-        if problem is not None:
-            # It exists but cannot be read as a regular file: a symlink or a directory now stands
-            # where the evidence was. That is not absence, and it is not a match either.
-            return str(reviewer.get("name")) + ": " + problem
-        if digest != recorded:
-            return (
-                str(reviewer.get("name")) + "'s transcript has CHANGED since approval ("
-                + transcript + "): recorded " + recorded[:12] + "…, now " + str(digest)[:12]
-                + "… — the approval's evidence no longer matches, so re-run the review"
-            )
-    return None
 
 
 def main(argv: list[str]) -> int:

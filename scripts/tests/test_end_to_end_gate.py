@@ -3,10 +3,15 @@
 
 WHY THIS FILE EXISTS
 Every other suite here tests one script. Nothing spanned the chain — snapshot, allocate, bind, capture,
-write, verify, resolve — and the chain is where the gate's guarantees actually live. Running it by hand
-on 2026-08-06 found a defect no unit test could see: `verify` re-read the plan and nothing else, so a
-transcript could be rewritten after approval and the gate still printed `GATE OK`. That is the
-class of bug a per-script suite is structurally blind to, because each script was individually correct.
+write, verify, resolve — and the chain is where the gate's guarantees actually live.
+
+Running it end to end on 2026-08-06 independently reproduced `COREDEV-2497` §4.1: `verify` re-reads the
+plan and nothing else, so a transcript can be rewritten after approval and the gate still prints
+`GATE OK`. That defect was already known and planned — this suite did not discover it, and the claim
+that it did was corrected. What the run DID establish is that the defect is reachable through the real
+chain with no hand-built fixture, which a per-script suite cannot show because each script is
+individually correct. It is pinned by
+`test_the_gate_still_accepts_altered_evidence_COREDEV_2497` until that plan passes its gate.
 
 WHAT IS REAL AND WHAT IS STUBBED
 Real: the git repository, `allocate-transcript.sh` (and through it `pty-capture.py --allocate`),
@@ -217,52 +222,34 @@ class EndToEndGate(unittest.TestCase):
                                stdin="docs/planning/FEATURE_PLAN.md\n")
         self.assertNotEqual(0, gate.returncode, "the gate skill must refuse what verify refuses")
 
-    def test_rewriting_a_transcript_after_approval_fails_the_gate(self):
-        """The defect this whole file was written to catch.
+    def test_the_gate_still_accepts_altered_evidence_COREDEV_2497(self):
+        """PINS A KNOWN, OPEN DEFECT — this test passing is the bug, not the fix.
 
-        Every transcript check — freshness, layout, the O_NOFOLLOW digest, the plan binding — ran at
-        WRITE and was never re-run, so `transcriptSha256` was recorded and nothing compared it back.
-        Overwriting an approved transcript with `REQUEST_CHANGES` still produced `GATE OK — APPROVE`.
-        The exposed window is write->verify, which is the entire implementation phase.
+        `verify` re-reads the plan and nothing else. Every transcript check — freshness, layout, the
+        O_NOFOLLOW descriptor digest, the plan binding — runs at WRITE and is never re-run, so
+        `transcriptSha256` is recorded in the artifact and no code path compares it back. Overwriting an
+        approved transcript with `REQUEST_CHANGES` still yields `GATE OK — APPROVE`.
+
+        This is `docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md` §4.1 (High), whose plan has NOT
+        passed its gate — the last recorded round is `Both arms REQUEST_CHANGES`. That plan specifies
+        behaviour this test deliberately does not anticipate: a missing transcript must FAIL with a
+        distinct `MISSING` cause, the recorded path must be resolved exactly once (no `os.path.exists`
+        before the open, on any branch), and the work must land behind the named `_open_regular_fd` /
+        `_digest_transcript_fd` seams. An ad-hoc fix was written here on 2026-08-06 and reverted for
+        exactly that reason: it tolerated absence and pre-checked the path with `lexists`.
+
+        Asserting the defect rather than omitting it means this file records what the gate ACTUALLY
+        does. When COREDEV-2497 lands, this test fails — and that failure is the signal to delete it.
         """
         codex, _gemini, _artifact = self.passing_gate()
         self.assertEqual(0, self.verdict("verify", "--plan", self.plan).returncode, "control")
 
-        original = codex.read_bytes()
         codex.write_text("VERDICT: REQUEST_CHANGES\nthis is not what was approved\n", encoding="utf-8")
-        failed = self.verdict("verify", "--plan", self.plan)
-        self.assertNotEqual(0, failed.returncode)
-        self.assertIn("evidence", failed.stdout + failed.stderr)
-
-        codex.write_bytes(original)
-        self.assertEqual(0, self.verdict("verify", "--plan", self.plan).returncode,
-                         "restoring the exact bytes must restore the gate — the check is on content")
-
-    def test_altering_the_recorded_digest_fails_the_gate(self):
-        """The other direction: same transcript, artifact re-stamped. Both sides must be load-bearing."""
-        _codex, _gemini, artifact = self.passing_gate()
-        self.edit_artifact(artifact, lambda d: d["reviewers"][0].update(transcriptSha256="0" * 64))
-        self.assertNotEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
-
-    def test_a_purged_transcript_is_tolerated(self):
-        """Deliberate, and the reason the check is not simply "present and matching".
-
-        Transcripts live in an XDG state directory that is legitimately purgeable — macOS has already
-        destroyed 105 of this project's transcripts in one sweep under disk pressure. Failing a real
-        approval because its evidence aged out is a false GATE FAILED, which is its own outage.
-        """
-        codex, _gemini, _artifact = self.passing_gate()
-        codex.unlink()
-        self.assertEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
-
-    def test_a_transcript_replaced_by_a_symlink_is_not_treated_as_purged(self):
-        """Absence is forgiven; a different KIND of object standing in its place is not."""
-        codex, _gemini, _artifact = self.passing_gate()
-        elsewhere = self.root / "decoy-transcript.txt"
-        elsewhere.write_bytes(codex.read_bytes())
-        codex.unlink()
-        codex.symlink_to(elsewhere)
-        self.assertNotEqual(0, self.verdict("verify", "--plan", self.plan).returncode)
+        self.assertEqual(
+            0,
+            self.verdict("verify", "--plan", self.plan).returncode,
+            "COREDEV-2497 §4.1 has landed — the gate now catches altered evidence. Delete this test.",
+        )
 
     def test_a_hand_edited_reviewer_status_fails_the_gate(self):
         _codex, _gemini, artifact = self.passing_gate()

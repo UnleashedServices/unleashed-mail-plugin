@@ -147,20 +147,6 @@ disclosure; it applies to `COREDEV-2642` itself. See
   bound to a different plan. The `.promptsha256` sidecar alone did not do this — nothing ever read it,
   so transcripts captured against an unrelated ticket still produced `GATE OK — APPROVE`. "Detectable"
   is only true if something looks; the plan sidecar is the half that looks.
-- **The gate verified the plan and never re-checked the evidence.** Every transcript check —
-  freshness, layout, the `O_NOFOLLOW` descriptor digest, and the plan binding above — ran at **write**
-  and was never re-run. `verify` re-read exactly one thing, the plan. So `transcriptSha256` was
-  recorded in the artifact and no code path ever compared it back: after a passing gate, overwriting an
-  approved transcript with `VERDICT: REQUEST_CHANGES` still produced `GATE OK — APPROVE`. The exposed
-  window is write→verify, which is the entire implementation phase, since `implement` checks the gate
-  at its Phase 1. `verify` now re-reads each recorded transcript through the same single `O_NOFOLLOW`
-  descriptor the write path used and refuses on a mismatch. **Absence stays tolerated** — transcripts
-  live in a purgeable XDG state directory, and macOS has already destroyed 105 of this project's
-  transcripts in one sweep; failing a real approval because its evidence aged out is a false
-  `GATE FAILED`, which is its own outage. A transcript that is still there and no longer matches is a
-  different claim, and that one is refused. Found by running the chain end to end rather than by
-  reading it: this is the third digest in this codebase that was written and never read (the other two,
-  `.promptsha256` and the pre-TOCTOU freshness digest, are also closed in this release).
 - **The cleanup tool removed files by name after validating them by descriptor.** `_preflight_files`
   resolves each of the 39 targets, proves each is a regular file and proves each is beneath the state
   root — and the removal loop then re-walked the resolved *string*, so every component was looked up
@@ -209,14 +195,24 @@ disclosure; it applies to `COREDEV-2642` itself. See
   re-prompted. As a side effect, `capture-codex-review.sh`'s new prompt-readable check caught a real
   bug: `$(cat .codex-prompt.md)` expands empty on a missing file, so every codex capture proof had
   been running against an empty prompt.
-- **The Plan Review Gate now has an end-to-end suite** (`scripts/tests/test_end_to_end_gate.py`, 13
+- **The Plan Review Gate now has an end-to-end suite** (`scripts/tests/test_end_to_end_gate.py`, 10
   scenarios). Every other suite here tests one script; nothing spanned snapshot → allocate → bind →
   capture → write → verify → resolve, which is where the gate's guarantees actually live. It runs the
   real allocator, `bind-prompt.py`, `pty-capture.py`, `review-verdict.py` and `resolve-plan-gate.sh`
   against a real git repository, stubbing only `codex` and `agy` — the two things that leave the
   machine — by putting them earlier on `PATH` rather than patching the helpers, so the helpers run
-  their real argv. It found the verify-time evidence gap above, which no per-script test could see
-  because each script was individually correct.
+  their real argv. Each scenario gets its own repository, because the hand run that produced the file
+  reported a FALSE failure when one scenario inherited another's tampering.
+
+  It **independently reproduced `COREDEV-2497` §4.1** — `verify` re-reads the plan and nothing else, so
+  an approved transcript can be rewritten and the gate still prints `GATE OK`. That defect was already
+  known and planned; the suite did not discover it. It is **not fixed here**: that plan has not passed
+  its gate (last round: both arms `REQUEST_CHANGES`), and it specifies behaviour an ad-hoc fix would
+  get wrong — a missing transcript must fail with a distinct `MISSING` cause, and the recorded path
+  must be resolved exactly once, behind named seams. An ad-hoc fix was written during this work and
+  **reverted** for exactly those reasons. The defect is pinned by
+  `test_the_gate_still_accepts_altered_evidence_COREDEV_2497`, which asserts the current, defective
+  behaviour and fails — deliberately — the day `COREDEV-2497` lands.
 - **The callers-scan exemption manifest now ships, and CI runs the scan that needs it.**
   `scripts/review/callers-scan-exemptions.tsv` was previously unshipped, so
   `callers_scan.py --root .` exited 2 before scanning a single line — and CI only ever invoked
