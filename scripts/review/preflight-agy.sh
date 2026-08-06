@@ -34,7 +34,23 @@ printf '%s\n' "$PING"
 # then exits non-zero — or a wrapper that times out after emitting it — left this unguarded and the
 # grep below reported `healthy` with exit 0. Reproduced with a stub printing `Pong` and exiting 23
 # (deep review, P2). A preflight is what decides whether the mandatory gate may run; it fails closed.
-if ! python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping"; then
+# RUN IT SOMEWHERE DISPOSABLE. This launched `agy` in the CALLER'S WORKING DIRECTORY — the reviewed
+# checkout — while the same skill documents that agy has no read-only mode and has already once
+# implemented a plan instead of reviewing it. A stub that touched a file in its cwd left that file in
+# the checkout and this script still printed `healthy` (PR #63 recheck, P2 — reproduced). A ping needs
+# no repository, so it gets an empty directory and the checkout is never exposed to it.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/agy-preflight.XXXXXX")" || die "could not allocate a scratch dir"
+cleanup_scratch() { rm -rf "$SCRATCH"; }
+trap cleanup_scratch EXIT
+
+# Fingerprint the checkout so a violation is DETECTED, not merely made unlikely. `isolated-agy-review.sh`
+# earns its keep with exactly this assertion; the preflight had no equivalent.
+BEFORE=""
+if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    BEFORE="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
+fi
+
+if ! ( cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping" ); then
     printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
     printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
     exit 1
@@ -43,6 +59,20 @@ fi
 # Case-INSENSITIVE, and the `!` is not required: across 3 measured runs agy answered `Pong! How can I
 # help you today?`, a bare lowercase `pong`, and `Pong! Let me know…`. A `Pong!`-exact check calls a
 # healthy CLI unavailable about one run in three.
+# THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
+# healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
+if [ -n "$BEFORE" ] || [ -n "${REPO_ROOT:-}" ]; then
+    AFTER="$(git -C "${REPO_ROOT:-.}" status --porcelain 2>/dev/null)"
+    if [ "$BEFORE" != "$AFTER" ]; then
+        printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\n' >&2
+        # Only what CHANGED. Printing the whole status buries the one new line among whatever was
+        # already dirty, and the operator has to diff two blobs by eye to find it.
+        printf '%s\n' "$AFTER" | grep -vxF -- "$BEFORE" >&2 || printf '%s\n' "$AFTER" >&2
+        printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\n' >&2
+        exit 1
+    fi
+fi
+
 if grep -qi pong "$PING"; then
     printf 'agy preflight: healthy\n'
     exit 0

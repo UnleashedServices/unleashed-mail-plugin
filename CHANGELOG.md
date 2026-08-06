@@ -106,6 +106,17 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The `agy` preflight ran a mutation-capable agent in the reviewed checkout.** It launched
+  `agy -p "ping"` in the caller's working directory — the tree under review — while the same skill
+  documents that `agy` has no read-only mode and has already once implemented a plan instead of
+  reviewing it (2.6.4, `COREDEV-2607`). A stub touching a file in its working directory left that file
+  in the checkout and the preflight still printed `healthy`. Two fixes, because they fail separately:
+  the ping now runs in a fresh empty scratch directory (it needs no repository at all), **and** the
+  checkout is fingerprinted with `git status --porcelain` around the capture, so a build that writes by
+  absolute path is *detected* rather than merely made unlikely — isolation alone would have left that
+  case silent. The failure report names only what changed, since the whole status buries one new entry
+  in whatever was already dirty.
+
 - **The cleanup tool opened each parent 39 times while claiming it opened them once.**
   `held_manifest_parents` looped over the 39 manifest entries, so the nine directories were opened up
   to six times each at different instants — and a swap landing between two of those opens split the
