@@ -478,8 +478,14 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
             ],
             gemini_helpers[0][:3],
         )
-        self.assertEqual(4, len(gemini_helpers[0]), gemini_helpers[0])
+        # FIVE operands now: the PLAN travels as the fifth. The harness reviews a detached checkout of
+        # HEAD, so without it `agy` reads the COMMITTED plan while `<transcript>.plan` describes the
+        # working-tree one — and with uncommitted edits, the normal state during review iteration, the
+        # transcript approved one version while the artifact recorded it as evidence for another
+        # (PR #63 recheck, P1). Asserting the count keeps the operand from being quietly dropped.
+        self.assertEqual(5, len(gemini_helpers[0]), gemini_helpers[0])
         self._assert_recipe_timeout_exceeds_print_timeout(gemini_helpers[0][3])
+        self.assertEqual(PLAN_RELATIVE, gemini_helpers[0][4], "the bound plan is not handed to the harness")
         for expected, record in ((gemini_path, gemini_capture), (codex_path, codex_capture)):
             with self.subTest(expected=expected):
                 argv = record["argv"]

@@ -25,7 +25,7 @@
 # the round rather than being cleaned up silently — the same rule `AGENT_CONTRACTS.md` §2 step 0b
 # applies to the author, applied to the reviewer.
 #
-# Usage: isolated-agy-review.sh <prompt-file> <allocated-path> [timeout-seconds]
+# Usage: isolated-agy-review.sh <prompt-file> <allocated-path> [timeout-seconds] [plan-file]
 #   <prompt-file>  path to the review prompt, RELATIVE TO THE REPO ROOT (e.g. .agy-prompt-2597r4.md)
 #   <allocated-path>  exact reserved transcript leaf received from allocate-transcript.sh
 # Exit: 0 review captured · 1 setup/prompt failure · 3 the reviewer MUTATED the working tree (round void)
@@ -37,6 +37,7 @@ PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 PROMPT_REL="$1"
 OUT="$2"
 TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
+PLAN_REL="${4-}"       # optional: the plan the run is BOUND to (see the copy below)
 # Reviewer model. Switched from gemini-3.1-pro to gemini-3.6-flash-high after that arm failed to emit a
 # parseable verdict in 5 of 6 rounds (invented tokens REJECTED/PASS, two degenerations leaking
 # system-prompt tokens, two runs that implemented the plan instead of reviewing it). Those are token-level
@@ -70,6 +71,24 @@ SHA="$(git rev-parse HEAD)"
 git worktree add --detach "$SCR/tree" "$SHA" >/dev/null 2>&1 \
     || { echo "could not create the review checkout" >&2; exit 1; }
 TREE="$SCR/tree"
+
+# COPY THE BOUND PLAN INTO THE CHECKOUT. The tree above is detached at HEAD, so `agy` reads the
+# COMMITTED plan — while `bind-prompt.py` hashed the WORKING-TREE plan into `<transcript>.plan`. With
+# uncommitted edits, which is the normal state during the documented review iteration, the transcript
+# approved the committed version and the artifact recorded it as evidence for the edited one: two
+# correct digests describing different bytes (PR #63 recheck, P1).
+#
+# Copying rather than refusing keeps the iterate-then-review loop working, and it makes the binding
+# TRUE rather than merely checkable — the reviewer now reads exactly the bytes the sidecar attests to.
+if [ -n "$PLAN_REL" ]; then
+    [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
+    mkdir -p "$(dirname "$TREE/$PLAN_REL")"
+    cp "$PLAN_REL" "$TREE/$PLAN_REL" \
+        || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
+    if ! cmp -s "$PLAN_REL" "$TREE/$PLAN_REL"; then
+        echo "the review checkout's plan does not match the bound plan" >&2; exit 1
+    fi
+fi
 
 # --- rewrite absolute paths, then prepend the read-only guard ---------------------------------
 mkdir -p "$(dirname "$TREE/$PROMPT_REL")"

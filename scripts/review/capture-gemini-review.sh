@@ -84,4 +84,6 @@ python3 "${SCRIPT_DIR}/bind-prompt.py" \
 # described the old bytes; and because the prompt filename is only per-ROUND, two runs sharing a ticket
 # and round shared that file outright. The snapshot carries the transcript's unique run identity, so
 # neither is reachable (PR #63 recheck, P1).
-exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT"
+# The PLAN travels too: the harness reviews a detached checkout of HEAD, so without this `agy`
+# reads the committed plan while the `.plan` sidecar describes the working-tree one.
+exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"

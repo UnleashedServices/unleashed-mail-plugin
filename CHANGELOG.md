@@ -106,6 +106,16 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The Gemini arm reviewed the committed plan while its binding named the working-tree one.**
+  `isolated-agy-review.sh` builds its review tree with `git worktree add --detach … $(git rev-parse
+  HEAD)`, so `agy` read the **committed** plan; `bind-prompt.py` hashed the **working-tree** plan into
+  `<transcript>.plan`. With uncommitted edits — the normal state during the documented review
+  iteration — the transcript approved one version while the artifact recorded it as evidence for
+  another. Two correct digests describing different bytes, the same pairing failure as the prompt/plan
+  binding one layer down. The bound plan is now copied into the review checkout and verified with
+  `cmp`, so the reviewer reads exactly what the sidecar attests to. Copying rather than refusing keeps
+  the iterate-then-review loop working, and makes the binding *true* rather than merely checkable.
+
 - **The `implement` recipe substituted the user's argument into shell syntax.** It bound the argument
   through a quoted heredoc, which correctly kept metacharacters (`"`, `$( )`, backticks) as literal
   data. What that could not defend was the **delimiter**: the placeholder is substituted *textually
