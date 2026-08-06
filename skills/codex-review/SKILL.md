@@ -66,7 +66,13 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$
 # hazard in miniature: an audit that dies before writing leaves the PREVIOUS audit's file in place,
 # and the next reader takes stale findings for fresh ones. This line kept a fixed path even though it
 # sits inside a fence the per-run sweep rewrote (PR #63 review, gap 27).
-AUDIT_OUT="$(mktemp -t codex-audit)"
+#
+# The TEMPLATE form, not `-t`. `mktemp -t codex-audit` is a BSD shorthand that GNU mktemp REJECTS
+# ("too few X's in template"), so this recipe exited 1 on Linux — and the Linux CI job never runs it,
+# so nothing said so (deep review, P2). `-t codex-audit.XXXXXX` satisfies GNU but BSD then treats the
+# X's as literal and appends its own suffix, producing `codex-audit.XXXXXX.65azoo`. Passing a full
+# path template substitutes the X's on BOTH.
+AUDIT_OUT="$(mktemp "${TMPDIR:-/tmp}/codex-audit.XXXXXX")"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
 echo "audit transcript: $AUDIT_OUT"

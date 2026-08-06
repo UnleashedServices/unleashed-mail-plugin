@@ -43,7 +43,13 @@ TIMEOUT="${3:-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrap
 # and agent-mode failures, not reasoning failures — but they void rounds either way. `agy models` lists the
 # valid names; the isolation harness and the $HOME leak monitor stay regardless of model, because the
 # implement-instead-of-review failure comes from agy's agent mode, not from the model.
-MODEL="${MODEL:-gemini-3.1-pro-high}"
+#
+# For three months this comment described that switch while the line below still read
+# `gemini-3.1-pro-high`, so every wrapper round ran the arm documented as failing (PR #63 review, item
+# 8; deep review, P2). The default now matches the rationale, and `test_doc_gates` pins the two to each
+# other so they cannot drift apart again. Replacing this arm entirely is planned separately
+# (`docs/planning/KIMI_REVIEW_ARM_PLAN.md`) — a future plan is not a fix for the arm shipping today.
+MODEL="${MODEL:-gemini-3.6-flash-high}"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
 cd "$REPO" || exit 1

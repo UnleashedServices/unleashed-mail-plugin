@@ -3,6 +3,7 @@ contradictions), F9 (provider-parity gate drift), B7 (CFR protocol consistency a
 assertion flips if the corresponding doc fix is reverted."""
 import os
 import re
+import subprocess
 import unittest
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -698,3 +699,67 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeepReviewP2Fixes(unittest.TestCase):
+    """Two findings from the exact-head deep review, each executed rather than eyeballed."""
+
+    def test_codex_audit_allocator_is_portable_and_substitutes_its_template(self):
+        """`mktemp -t codex-audit` exits 1 on GNU: "too few X's in template".
+
+        The Linux CI job never executes this documentation recipe, so it stayed green while the recipe
+        could not run on the platform CI uses. `-t name.XXXXXX` satisfies GNU but BSD leaves the X's
+        LITERAL and appends its own suffix, so the assertion below is on the produced NAME, not just on
+        the template: a form that only half-works produces a path still containing `XXXXXX`.
+        """
+        line = [
+            item
+            for item in _read("skills/codex-review/SKILL.md").splitlines()
+            if item.startswith("AUDIT_OUT=")
+        ]
+        self.assertEqual(1, len(line), "expected exactly one audit allocator line")
+        allocator = line[0]
+        self.assertNotIn(
+            " -t ", allocator, "the BSD `-t` shorthand without a template is rejected by GNU mktemp"
+        )
+        self.assertRegex(allocator, r"X{6,}", "GNU mktemp requires at least six trailing X's")
+
+        result = subprocess.run(
+            ["bash", "-c", allocator + '\nprintf "%s" "$AUDIT_OUT"'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        produced = result.stdout.strip()
+        try:
+            self.assertTrue(os.path.isfile(produced), f"allocator produced no file: {produced!r}")
+            self.assertNotIn(
+                "XXXXXX",
+                os.path.basename(produced),
+                "the template was not substituted — this is the BSD `-t name.XXXXXX` half-fix",
+            )
+        finally:
+            if os.path.isfile(produced):
+                os.remove(produced)
+
+    def test_agy_arm_default_is_the_model_its_own_comment_names(self):
+        """The comment described a switch the code never made, for every round this branch ran.
+
+        Binding the two to each other is the point: either can be edited, but they cannot disagree.
+        """
+        source = _read("scripts/review/isolated-agy-review.sh")
+        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', source, re.M)
+        self.assertIsNotNone(match, "isolated-agy-review.sh has no MODEL default line")
+        default = match.group(1)
+        self.assertIn(
+            "Switched from gemini-3.1-pro to " + default,
+            source,
+            f"the default is {default!r} but the rationale above it names a different model",
+        )
+        self.assertNotEqual(
+            "gemini-3.1-pro-high",
+            default,
+            "this is the model the comment says failed to emit a parseable verdict in 5 of 6 rounds",
+        )
+
