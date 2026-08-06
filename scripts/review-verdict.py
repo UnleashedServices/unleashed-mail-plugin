@@ -846,6 +846,31 @@ def cmd_write(args: argparse.Namespace) -> int:
     problem = _quorum_problem(verdict, reviewers)
     if problem:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
+    # ALLOCATOR-SHAPED OR NOTHING, for an approving verdict — and deliberately LAST.
+    #
+    # `_is_per_run_transcript` is the switch deciding whether freshness AND the plan binding run at
+    # all, so a transcript failing it was exempt from BOTH. The shapes it exempts are the fixed
+    # the fixed shared-`/tmp` reviewer outputs an older plugin version left behind, so two stale
+    # legacy files could be labelled APPROVE, combined with a fresh snapshot of the current plan, and
+    # produce a gate-passing artifact for a plan nobody reviewed (PR #63 recheck, P1 — reproduced).
+    #
+    # Legacy paths stay readable for NON-approving records: those block `implement` anyway, and
+    # refusing them would discard a legitimate REQUEST_CHANGES captured before the migration.
+    #
+    # ORDER: after the quorum and identity rules, which own "no transcript for this reviewer",
+    # "duplicate capture ID" and "empty transcript". Placed before them this answered all three with
+    # "not allocator-shaped" — true, but it tells the operator to re-capture when the real fault was a
+    # missing operand. Two existing tests caught that regression.
+    if verdict in APPROVING:
+        for reviewer in reviewers:
+            transcript = reviewer.get("transcriptPath")
+            if not _is_per_run_transcript(str(transcript)):
+                raise SystemExit(
+                    "review-verdict: an APPROVING verdict requires ALLOCATED evidence, but "
+                    f"{reviewer.get('name')}'s transcript is not allocator-shaped: {transcript!r}. "
+                    "A legacy/fixed transcript path is exempt from BOTH the freshness check and the "
+                    "plan binding, so an approval backed by one attests to nothing. Re-capture the "
+                    "round through `capture-codex-review.sh` / `capture-gemini-review.sh`.")
     artifact = {
         "schemaVersion": SCHEMA_VERSION,
         # REPO-RELATIVE when the plan is inside a git repo, absolute otherwise (COREDEV-2603).

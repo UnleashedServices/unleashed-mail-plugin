@@ -168,10 +168,24 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
 
     @staticmethod
     def write_transcript(path: Path, reviewer: str) -> None:
+        """Write a transcript AND the sidecars an allocated one carries.
+
+        An approving write now requires allocator-shaped evidence, and an allocator-shaped NAME
+        without a `.launch` is refused by design — that combination is how a digest-suffixed file
+        outside the allocator directory is kept from passing for allocated. Cells here hand-build
+        their transcripts, so they must supply what the allocator and capture helper would have:
+        otherwise a re-derivation mutant is rejected by the evidence rule before the M5 assertion can
+        observe the wrong path, and the mutation stops isolating its own variable.
+        """
         path.write_text(
             reviewer + " result\nVERDICT: APPROVE\n",
             encoding="utf-8",
         )
+        run_id = path.stem.rsplit("-", 1)[-1]
+        launch = Path(str(path) + ".launch")
+        launch.write_text(run_id + "\n", encoding="utf-8")
+        stamp = path.stat().st_mtime_ns
+        os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
 
     def fake_writer_arguments(
         self,
@@ -367,8 +381,14 @@ class M56ConsumerProofs(M5PathFixture):
         gemini_path, codex_path = self.captured_pair(
             self.root / "consumer mutation base:="
         )
-        derived = self.root / "consumer-derived-gemini.txt"
+        # ALLOCATOR-SHAPED derived name. An approving write now refuses any transcript that is not
+        # (PR #63 recheck, P1), so a plain `derived-*.txt` made the recipe exit non-zero and the
+        # mutation stopped isolating its own variable — the rejection came from the evidence rule
+        # rather than from the path re-derivation this cell exists to detect. The name is what makes
+        # it allocator-shaped; it is still the WRONG path, which is the property under test.
+        derived = self.root / ("COREDEV-2619r9-gemini-" + "c" * 32 + ".txt")
         self.write_transcript(derived, "derived gemini")
+        self.bind_transcript_to_plan(str(derived))
 
         synthesis_old = (
             "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
@@ -548,8 +568,14 @@ class M515ArtifactProofs(M5PathFixture):
         gemini_path, codex_path = self.captured_pair(
             self.root / "artifact mutation base:="
         )
-        derived = self.root / "artifact-derived-gemini.txt"
+        # ALLOCATOR-SHAPED derived name. An approving write now refuses any transcript that is not
+        # (PR #63 recheck, P1), so a plain `derived-*.txt` made the recipe exit non-zero and the
+        # mutation stopped isolating its own variable — the rejection came from the evidence rule
+        # rather than from the path re-derivation this cell exists to detect. The name is what makes
+        # it allocator-shaped; it is still the WRONG path, which is the property under test.
+        derived = self.root / ("COREDEV-2619r9-gemini-" + "a" * 32 + ".txt")
         self.write_transcript(derived, "artifact derived gemini")
+        self.bind_transcript_to_plan(str(derived))
         old = "    " + REVIEWER_FLAG + ' "$GEMINI_REVIEWER_SPEC" \\\n'
         new = (
             "    "

@@ -106,6 +106,24 @@ disclosure; it applies to `COREDEV-2642` itself. See
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **An approving verdict could rest on legacy transcripts that nothing checked.**
+  `_is_per_run_transcript` is the switch deciding whether the freshness check **and** the plan binding
+  run at all, so a transcript failing it was exempt from both — and the shapes it exempts are the fixed
+  shared-`/tmp` reviewer outputs an older plugin version left behind. Two stale files could therefore be
+  labelled `APPROVE`, combined with a fresh snapshot of the current plan, and produce a gate-passing
+  artifact for a plan nobody reviewed. An approving write now requires allocator-shaped evidence for
+  every reviewer. Legacy paths remain readable for **non-approving** records, which block `implement`
+  regardless and would otherwise be discarded for no security benefit.
+
+  The check runs **after** the quorum and identity rules, which own "no transcript for this reviewer",
+  "duplicate capture ID" and "empty transcript". Placed before them it answered all three with "not
+  allocator-shaped" — true, but it tells the operator to re-capture when the real fault was a missing
+  operand; two existing tests caught that regression.
+
+  Every fixture in `test_review_verdict.py` used bare `transcript.txt`-style names, which is precisely
+  why no test caught the hole: the suite only ever exercised the exempt path. They now build allocated
+  transcripts through one shared helper, with launch records and plan bindings.
+
 - **`audit-codex.sh` accepted arbitrary model-controlled operands.** It allowlisted the reviewer name
   and then folded everything after it into the external prompt with `$*`. Reproduced with an exact
   stub: `/etc/passwd` was accepted, exit 0, and so was a plain `ignore prior instructions …` operand,
