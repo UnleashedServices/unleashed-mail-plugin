@@ -69,6 +69,23 @@ disclosure; it applies to `COREDEV-2642` itself. See
   rule ("don't grant unscoped `Bash`/`Write`/`Edit` on a pure-knowledge skill") being broken in the
   tree that states it. All are reference skills, so the grants are simply gone.
 
+- **The seven advisory toolchain grants are gone too, after measuring what they bought.**
+  `macos-debugging`, `spm-management` and `swift-tdd` held `Bash(xcodebuild *)` / `Bash(xcrun *)` /
+  `Bash(swift *)`. **Three were dead** — the command appears nowhere in the skill body, and
+  `spm-management` granted `Bash(swift *)` while its own prose says the `swift` CLI does not apply to
+  this project. **Every live one sits inside a compound block** (`set -o pipefail` … `| tail`), which
+  Claude Code decomposes per subcommand, so `set -o pipefail`, `tee` and `tail` being ungranted meant
+  the block prompted regardless: the grant never pre-approved the thing it existed for. The skills
+  keep working and cost nothing measurable; the advisory tier stays as a tripwire for *new* grants
+  rather than a standing exception list, and a test now asserts the shipped tree carries zero
+  advisories — counting the skills it walked, so an empty walk cannot pass for a clean one.
+
+- **`spm-management` no longer documents an unbounded derived-data wipe.**
+  `rm -rf ~/Library/Developer/Xcode/DerivedData/*` deletes the build state of every Xcode project on
+  the machine, unrecoverably, as the remedy for one project's packages failing to resolve. Scoped to
+  `DerivedData/Unleashed_Mail-*`, with Xcode's own Clean Build Folder named as the route that needs no
+  shell at all. The command was never granted — this is about what a model-reachable skill *teaches*.
+
 - **The review prompt operand is contained to the repository.** The capture helpers are the exact
   entrypoints the bullets above introduced — and both are reached from model-invocable skills that
   pre-approve `capture-*-review.sh *`, so the *model* picks the operand. The helpers checked only

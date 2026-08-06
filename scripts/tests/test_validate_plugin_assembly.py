@@ -366,6 +366,11 @@ if __name__ == "__main__":
     unittest.main()
 
 
+# The count `validate-version-sync.sh` enforces against `plugin.json` and the README. Pinned here so
+# a tree walk that silently visits nothing cannot pass for a clean one.
+SHIPPED_SKILL_COUNT = 21
+
+
 class ModelReachableGrantPolicy(unittest.TestCase):
     """Deep review P1: a model-invocable skill pre-approves every tool it lists, with no user gesture.
 
@@ -448,4 +453,39 @@ class ModelReachableGrantPolicy(unittest.TestCase):
             )
             offenders.extend(problems)
         self.assertEqual([], offenders)
+
+    def test_no_shipped_skill_carries_a_trampoline_grant_either(self):
+        """The advisory tier is a tripwire for NEW grants, not a standing exception list.
+
+        Seven of these warnings sat on `macos-debugging`, `spm-management` and `swift-tdd` and were
+        measured before being removed rather than after: three were dead (the command never appeared
+        in the body — `spm-management` granted `Bash(swift *)` while its own prose says the swift CLI
+        does not apply to this project), and every live one was inside a COMPOUND block
+        (`set -o pipefail` … `| tail`), which Claude Code decomposes per-subcommand — so the grant
+        never pre-approved the block it existed for. They cost a standing toolchain pre-approval on
+        model-reachable skills and bought nothing measurable, so they are gone.
+
+        This asserts the *warning* channel, which the problem-level test above discards. Without it
+        the tree can drift back to seven warnings while every hard check still reports green.
+        """
+        root = Path(_MOD_PATH).resolve().parents[1]
+        advisories = []
+        examined = 0
+        for skill in sorted((root / "skills").glob("*/SKILL.md")):
+            frontmatter = vpa.parse_frontmatter(skill.read_text(encoding="utf-8"))
+            if not frontmatter:
+                continue
+            examined += 1
+            warnings: list[str] = []
+            vpa.check_model_reachable_grants(
+                Path(skill.relative_to(root).as_posix()), frontmatter, [], warnings
+            )
+            advisories.extend(warnings)
+        # Counted, not assumed. `skills/*/SKILL.md` is a glob and `parse_frontmatter` can return
+        # nothing: either would walk zero skills and certify a tree this never looked at, and an
+        # empty loop's `assertEqual([], advisories)` is indistinguishable from a clean one. A fixture
+        # asserting the checker warns on `Bash(xcodebuild *)` does NOT cover this — it exercises a
+        # different mechanism than the loop it is supposed to guard.
+        self.assertEqual(SHIPPED_SKILL_COUNT, examined, "the shipped-skill walk found the wrong number")
+        self.assertEqual([], advisories)
 

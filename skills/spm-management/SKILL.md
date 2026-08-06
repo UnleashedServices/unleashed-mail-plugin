@@ -5,7 +5,7 @@ description: >
   resolution via Xcode, security auditing, version pinning in the project file, and
   CI integration. Activates when adding dependencies, updating packages, or managing
   package security.
-allowed-tools: Read, Bash(swift *), Bash(xcodebuild *), Bash(xcrun *), Grep, Glob
+allowed-tools: Read, Grep, Glob
 ---
 
 # Xcode Package Dependency Management — UnleashedMail
@@ -169,9 +169,16 @@ xcodebuild -resolvePackageDependencies -scheme "Unleashed Mail" \
 
 ### Stale derived data
 
+Target **this project's** derived data, not every project's. The glob form
+(`.../DerivedData/*`) deletes the build state of every Xcode project on the machine, which is
+rarely what "my packages won't resolve" calls for and is not recoverable:
+
 ```bash
-rm -rf ~/Library/Developer/Xcode/DerivedData/*
+rm -rf ~/Library/Developer/Xcode/DerivedData/Unleashed_Mail-*
 ```
+
+If the resolution failure survives that, Xcode's own **Product ▸ Clean Build Folder** (⇧⌘K) is the
+supported route and needs no shell at all.
 
 ### Version conflicts between dependencies
 
