@@ -45,9 +45,23 @@ trap cleanup_scratch EXIT
 
 # Fingerprint the checkout so a violation is DETECTED, not merely made unlikely. `isolated-agy-review.sh`
 # earns its keep with exactly this assertion; the preflight had no equivalent.
+#
+# CONTENT, NOT JUST STATUS CATEGORY (PR #63 recheck, P2). `git status --porcelain` reports one line per
+# path — ` M file` — so an edit to an ALREADY-DIRTY tracked file leaves that line byte-identical and the
+# before/after status compared equal while the bytes changed. Pairing the status with `git diff HEAD`
+# folds the actual content of every tracked change into the fingerprint, so re-modifying a file that was
+# already modified now differs. (A new or removed path still moves the status line; the diff covers the
+# case the status line cannot see.)
+_fingerprint() {
+    git -C "$1" status --porcelain 2>/dev/null
+    printf '\036\n'   # a record separator so status and diff cannot alias across the boundary
+    git -C "$1" diff HEAD 2>/dev/null
+}
 BEFORE=""
+BEFORE_STATUS=""
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    BEFORE="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
+    BEFORE="$(_fingerprint "$REPO_ROOT")"
+    BEFORE_STATUS="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
 fi
 
 if ! ( cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping" ); then
@@ -62,12 +76,19 @@ fi
 # THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [ -n "$BEFORE" ] || [ -n "${REPO_ROOT:-}" ]; then
-    AFTER="$(git -C "${REPO_ROOT:-.}" status --porcelain 2>/dev/null)"
+    AFTER="$(_fingerprint "${REPO_ROOT:-.}")"
     if [ "$BEFORE" != "$AFTER" ]; then
         printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\n' >&2
-        # Only what CHANGED. Printing the whole status buries the one new line among whatever was
-        # already dirty, and the operator has to diff two blobs by eye to find it.
-        printf '%s\n' "$AFTER" | grep -vxF -- "$BEFORE" >&2 || printf '%s\n' "$AFTER" >&2
+        # Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or
+        # the whole diff) buries the one new line. A content-only edit to an already-dirty file shows no
+        # new status line, so say so rather than printing nothing.
+        AFTER_STATUS="$(git -C "${REPO_ROOT:-.}" status --porcelain 2>/dev/null)"
+        NEW_LINES="$(printf '%s\n' "$AFTER_STATUS" | grep -vxF -- "$BEFORE_STATUS" || true)"
+        if [ -n "$NEW_LINES" ]; then
+            printf '%s\n' "$NEW_LINES" >&2
+        else
+            printf '(no new status line — the CONTENT of an already-modified tracked file changed)\n' >&2
+        fi
         printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\n' >&2
         exit 1
     fi

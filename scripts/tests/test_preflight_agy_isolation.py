@@ -108,6 +108,25 @@ class PreflightAgyIsolation(unittest.TestCase):
         reported = [line for line in result.stderr.splitlines() if line.startswith("??")]
         self.assertEqual(["?? SNEAKED_IN.txt"], reported, result.stderr)
 
+    def test_a_content_edit_to_an_already_dirty_tracked_file_is_caught(self):
+        """The status line alone could not see this (PR #63 recheck, P2).
+
+        `git status --porcelain` emits ` M tracked.txt` whether the file was modified once or twice, so
+        an agy build that edits an ALREADY-MODIFIED tracked file left the before/after status equal and
+        the preflight reported `healthy`. Folding `git diff HEAD` into the fingerprint catches the
+        content change; the report says a content edit occurred, since there is no new status line.
+        """
+        tracked = self.root / "tracked.txt"
+        tracked.write_text("dirty edit\n", encoding="utf-8")  # already ` M` before the ping
+        self.install(f'#!/usr/bin/env bash\nprintf "more dirt\\n" > "{tracked}"\nprintf "Pong!\\n"\n')
+
+        result = self.run_preflight()
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("MUTATED", result.stderr)
+        self.assertIn("content", result.stderr.lower())
+        # No forged new status line — the whole point is that the status was unchanged.
+        self.assertEqual([], [line for line in result.stderr.splitlines() if line.startswith("??")])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
