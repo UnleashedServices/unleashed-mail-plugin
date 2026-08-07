@@ -54,6 +54,10 @@ class ResolvePlanGateFixture(unittest.TestCase):
         self.repo = self.root / "repo"
         (self.repo / "docs" / "planning").mkdir(parents=True)
         (self.repo / "scripts" / "review").mkdir(parents=True)
+        # A real worktree, because the gate now anchors at `git rev-parse --show-toplevel` and FAILS
+        # CLOSED outside one (PR #63 recheck, P2) — a fixture that models a repository must be one.
+        # No commit is needed; --show-toplevel answers in an empty repository.
+        subprocess.run(["git", "init", "-q", "."], cwd=self.repo, check=True)
         self.gate_source = GATE.read_text(encoding="utf-8")
         self.install_gate(self.gate_source)
 
@@ -122,12 +126,16 @@ class PhysicalContainmentProofs(ResolvePlanGateFixture):
     def test_dotdot_escape_wearing_the_prefix_is_refused(self) -> None:
         # `docs/planning/../../evil/` resolves to `<repo>/evil` — outside docs/planning, which is what
         # the guard is about. `case` globs match `/`, so the `docs/planning/*PLAN*.md` pattern accepts
-        # this spelling and the containment check is the only thing that refuses it.
+        # the RAW spelling — but since the caller-anchor fix (PR #63 recheck, P2), `resolve_in_repo`
+        # collapses the `..` physically FIRST, so the guard classifies the file's true identity
+        # (`evil/OUTSIDE_PLAN.md`) and refuses it as what it is: not a tracked plan. The prefix cannot
+        # be worn at all any more; the refusal family changed from "uncontained" to "not tracked", and
+        # both fail closed with the verdict tool never invoked.
         evil = self.repo / "evil"
         evil.mkdir()
         (evil / "OUTSIDE_PLAN.md").write_text("# not tracked\n", encoding="utf-8")
         self.assert_refused(
-            "docs/planning/../../evil/OUTSIDE_PLAN.md", "does not live under"
+            "docs/planning/../../evil/OUTSIDE_PLAN.md", "is not a tracked plan"
         )
 
     def test_symlinked_plan_wearing_the_prefix_is_refused(self) -> None:
@@ -159,7 +167,7 @@ class PhysicalContainmentProofs(ResolvePlanGateFixture):
         (self.repo / "docs" / "planning" / "EVIL_PLAN.md").symlink_to(target)
 
         direct_mutant = _replace_once(
-            self.gate_source, '    _contained "$_p" || _refuse_uncontained "$ARG"\n', ""
+            self.gate_source, '    _contained "$REL" || _refuse_uncontained "$ARG"\n', ""
         )
         result = self.run_gate("docs/planning/EVIL_PLAN.md", direct_mutant)
         self.assertEqual(
@@ -182,16 +190,46 @@ class PhysicalContainmentProofs(ResolvePlanGateFixture):
         (target / "OUTSIDE_PLAN.md").write_text("# not tracked\n", encoding="utf-8")
         (self.repo / "docs" / "planning").symlink_to(target, target_is_directory=True)
 
-        mutant = _replace_once(
+        # TWO mechanisms now refuse a symlinked planning root: `resolve_in_repo` physicalizes the
+        # PARENT before containment (the PR #63 recheck caller-anchor fix), and `_contained` keeps its
+        # base unresolved. A single mutant no longer discriminates — each mechanism alone still
+        # refuses — so defence in depth is asserted on the singles and the PAIR is proved by the
+        # double mutant admitting. (The earlier single-mutant version of this proof stopped failing
+        # the moment the second mechanism landed; two independent mechanisms defeat single mutants.)
+        base_mutant = _replace_once(
             self.gate_source,
             'base = os.path.join(root, "docs", "planning")   # deliberately NOT realpath\'d',
             'base = os.path.realpath(os.path.join(root, "docs", "planning"))',
         )
-        result = self.run_gate("docs/planning/OUTSIDE_PLAN.md", mutant)
+        result = self.run_gate("docs/planning/OUTSIDE_PLAN.md", base_mutant)
+        self.assertNotEqual(
+            0, result.returncode,
+            "with the base realpath'd, resolve_in_repo alone no longer refuses the symlinked root",
+        )
+        self.assertFalse(self.verdict_argv.exists(), "the single mutant reached the verdict tool")
+
+        resolver_mutant = _replace_once(
+            self.gate_source,
+            '        *) return 1 ;;\n',
+            '        *) printf \'%s\\n\' "$1" ;;\n',
+        )
+        result = self.run_gate("docs/planning/OUTSIDE_PLAN.md", resolver_mutant)
+        self.assertNotEqual(
+            0, result.returncode,
+            "with resolve_in_repo bypassed, the unresolved base alone no longer refuses",
+        )
+        self.assertFalse(self.verdict_argv.exists(), "the single mutant reached the verdict tool")
+
+        double_mutant = _replace_once(
+            base_mutant,
+            '        *) return 1 ;;\n',
+            '        *) printf \'%s\\n\' "$1" ;;\n',
+        )
+        result = self.run_gate("docs/planning/OUTSIDE_PLAN.md", double_mutant)
         self.assertEqual(
-            0,
-            result.returncode,
-            "leaving the base unresolved is not what refuses a symlinked planning root",
+            0, result.returncode,
+            "disabling BOTH mechanisms was expected to admit the symlinked planning root — "
+            "if it still refuses, a third mechanism exists and this proof understates the design",
         )
 
 
@@ -351,6 +389,100 @@ class ArgumentIsNeverInShellSyntax(unittest.TestCase):
         fences = [f for f in self.shell_fences() if "resolve-plan-gate.sh" in f]
         self.assertEqual(1, len(fences), "expected exactly one gate invocation fence")
         self.assertIn("resolve-plan-gate.sh\" docs/planning/", fences[0])
+
+
+class CallerAnchorProofs(ResolvePlanGateFixture):
+    """The gate anchors at the worktree root and honors the CALLER'S spelling (PR #63 recheck, P2).
+
+    Everything used to be evaluated against the caller's working directory: from a repository
+    subdirectory the documented root-relative operand existed nowhere, fell through to name
+    resolution, and the glob — evaluated in the same wrong place — matched nothing, so a valid, gated
+    plan was reported as "No plan matches". The absolute in-repo spelling was likewise refused as
+    "not a tracked plan" purely for how it was spelled. Both are false refusals, and a guard that
+    refuses correct work is one an operator switches off.
+    """
+
+    def run_gate_operand(self, argument: str, cwd) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [self.bash, str(self.repo / "scripts" / "review" / "resolve-plan-gate.sh"), argument],
+            cwd=str(cwd), input="", capture_output=True, text=True, check=False,
+        )
+
+    def assert_resolves(self, result) -> None:
+        self.assertIn("Plan: docs/planning/DARK_MODE_PLAN.md", result.stdout,
+                      result.stdout + result.stderr)
+        self.assertEqual(
+            "verify\n--plan\ndocs/planning/DARK_MODE_PLAN.md",
+            self.verdict_argv.read_text(encoding="utf-8"),
+            "the verdict tool must receive the repo-relative identity",
+        )
+
+    def test_root_relative_operand_resolves_from_a_subdirectory(self):
+        self.write_plan("DARK_MODE_PLAN.md")
+        sub = self.repo / "sub"
+        sub.mkdir()
+        self.assert_resolves(self.run_gate_operand("docs/planning/DARK_MODE_PLAN.md", sub))
+
+    def test_caller_relative_operand_resolves_from_a_subdirectory(self):
+        self.write_plan("DARK_MODE_PLAN.md")
+        sub = self.repo / "sub"
+        sub.mkdir()
+        self.assert_resolves(self.run_gate_operand("../docs/planning/DARK_MODE_PLAN.md", sub))
+
+    def test_a_feature_name_resolves_from_a_subdirectory(self):
+        """The name branch's glob is the exact place the original defect fell through."""
+        self.write_plan("DARK_MODE_PLAN.md")
+        sub = self.repo / "sub"
+        sub.mkdir()
+        self.assert_resolves(self.run_gate_operand("dark mode", sub))
+
+    def test_absolute_in_repo_operand_resolves(self):
+        """The old prefix test refused this spelling outright — same file, wrong refusal."""
+        self.write_plan("DARK_MODE_PLAN.md")
+        absolute = str(self.repo / "docs" / "planning" / "DARK_MODE_PLAN.md")
+        self.assert_resolves(self.run_gate_operand(absolute, self.repo))
+
+    def test_an_operand_meaning_two_files_is_refused_as_ambiguous(self):
+        """Branch order must not silently decide which of two real files the gate verifies."""
+        self.write_plan("DARK_MODE_PLAN.md")
+        sub = self.repo / "sub"
+        (sub / "docs" / "planning").mkdir(parents=True)
+        (sub / "docs" / "planning" / "DARK_MODE_PLAN.md").write_text("# impostor\n",
+                                                                     encoding="utf-8")
+        result = self.run_gate_operand("docs/planning/DARK_MODE_PLAN.md", sub)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("AMBIGUOUS", result.stderr)
+        self.assertFalse(self.verdict_argv.exists(), "ambiguity must not reach the verdict tool")
+
+    def test_outside_a_worktree_the_gate_fails_closed(self):
+        """No repository -> no docs/planning to contain plans to. Falling back to the working
+        directory would restore the exact bug the anchor fixes."""
+        result = self.run_gate_operand("docs/planning/DARK_MODE_PLAN.md", self.root)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("not inside a Git worktree", result.stderr)
+
+    def test_removing_the_root_anchor_breaks_subdirectory_resolution(self):
+        """The revert-proof: without the `cd`, a feature NAME from a subdirectory finds nothing.
+
+        A PATH operand survives this mutant — `resolve_in_repo` carries its own bases, so the direct
+        branch is cwd-independent by construction — which is itself worth knowing: the first version
+        of this proof probed a path and concluded the anchor was decorative. The discriminating probe
+        is the NAME branch, whose glob runs wherever the process stands, and which is also the branch
+        the original defect fell through to.
+        """
+        self.write_plan("DARK_MODE_PLAN.md")
+        sub = self.repo / "sub"
+        sub.mkdir()
+        mutant = _replace_once(self.gate_source, 'cd "$TOP" || exit 1\n', "")
+        self.install_gate(mutant)
+        try:
+            result = self.run_gate_operand("dark mode", sub)
+        finally:
+            self.install_gate(self.gate_source)
+        self.assertNotEqual(0, result.returncode,
+                            "without the root anchor the name branch was expected to find nothing")
+        self.assertIn("No plan matches", result.stderr)
+        self.assertFalse(self.verdict_argv.exists())
 
 
 if __name__ == "__main__":  # pragma: no cover

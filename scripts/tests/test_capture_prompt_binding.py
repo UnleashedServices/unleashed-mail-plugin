@@ -28,6 +28,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
+BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
 
 # Every fixture prompt must NAME the plan it reviews. `bind-prompt.py` refuses a prompt that names a
 # different `*_PLAN.md`, or none at all: a prompt reading `REVIEW TARGET: PLAN_B` bound cleanly to
@@ -541,6 +542,81 @@ class CapturePromptBindingTests(unittest.TestCase):
         prompt.write_text(FIXTURE_PROMPT, encoding="utf-8")
         result = self._run("codex", "51", prompt)
         self.assertEqual(0, result.returncode, result.stderr)
+
+
+class SpacedRepositoryPathReferences(unittest.TestCase):
+    """A space in the repository's own path must not truncate a plan reference (PR #63 recheck, P1).
+
+    `_PLAN_REFERENCE` matches a character allowlist without the space, so an absolute reference under
+    `/tmp/my repo.X/` was captured from AFTER the space, and the disagreement check compared the
+    fragment (`repo.X/docs/planning/X_PLAN.md`) against the bound plan — refusing the documented
+    capture flow before either reviewer launched. The gemini skill REQUIRES the generated prompt to
+    name the plan by its absolute path, so any operator whose checkout path contains a space hit this
+    on every round. Reproduced, then fixed by matching root-anchored absolutes WHOLE and masking them
+    out before the conservative token sweep.
+    """
+
+    def setUp(self) -> None:
+        base = tempfile.mkdtemp(prefix="my repo.")
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        # realpath'd because macOS spells tempdirs through /tmp -> /private/tmp, and the anchor is the
+        # PHYSICAL root — the fixture must reference the same spelling the binder resolves.
+        self.repo = Path(os.path.realpath(base))
+        (self.repo / "docs" / "planning").mkdir(parents=True)
+        (self.repo / "docs" / "planning" / "X_PLAN.md").write_text("# plan\n", encoding="utf-8")
+        (self.repo / "docs" / "planning" / "OTHER_PLAN.md").write_text("# other\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", "."], cwd=self.repo, check=True)
+        self.transcripts = Path(tempfile.mkdtemp(prefix="spaced-transcripts-"))
+        self.addCleanup(shutil.rmtree, self.transcripts, ignore_errors=True)
+
+    def bind(self, script, target_name: str, leaf: str):
+        prompt = self.repo / ".prompt.md"
+        prompt.write_text(
+            f"Review carefully.\nREVIEW TARGET: {self.repo}/docs/planning/{target_name}\nEnd.\n",
+            encoding="utf-8",
+        )
+        return subprocess.run(
+            ["python3", str(script), "--prompt", ".prompt.md",
+             "--transcript", str(self.transcripts / leaf), "--plan", "docs/planning/X_PLAN.md"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+
+    def test_an_absolute_reference_with_a_space_in_the_root_binds(self):
+        result = self.bind(BIND_PROMPT, "X_PLAN.md", "a.txt")
+        self.assertEqual(0, result.returncode, result.stderr)
+        recorded = (self.transcripts / "a.txt.plan").read_text(encoding="utf-8")
+        self.assertIn("docs/planning/X_PLAN.md", recorded)
+
+    def test_a_spaced_reference_to_a_DIFFERENT_plan_refuses_with_its_full_identity(self):
+        """The fix must not weaken the disagreement check — it must SHARPEN it.
+
+        Before it, this refusal named the truncated fragment; now it names the full repo-relative
+        identity of the plan the prompt actually targets.
+        """
+        result = self.bind(BIND_PROMPT, "OTHER_PLAN.md", "b.txt")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("docs/planning/OTHER_PLAN.md", result.stderr,
+                      "the refusal must name the FULL identity, not a truncated fragment")
+
+    def test_reverting_to_the_bare_token_regex_refuses_the_valid_binding(self):
+        """The permanent revert-proof: the old extraction fails this fixture.
+
+        The mutant lives in a CLONE — the worktree is never edited mid-test — and the clone carries
+        `containment.py` beside it because `bind-prompt.py` imports its neighbour by path.
+        """
+        clone = Path(tempfile.mkdtemp(prefix="bind-mutant-"))
+        self.addCleanup(shutil.rmtree, clone, ignore_errors=True)
+        source = BIND_PROMPT.read_text(encoding="utf-8")
+        anchor = "for match in _plan_references(prompt_bytes, root):"
+        self.assertEqual(1, source.count(anchor), "mutation anchor must occur exactly once")
+        (clone / "bind-prompt.py").write_text(
+            source.replace(anchor, "for match in _PLAN_REFERENCE.findall(prompt_bytes):"),
+            encoding="utf-8",
+        )
+        shutil.copy2(REPO / "scripts" / "review" / "containment.py", clone / "containment.py")
+        result = self.bind(clone / "bind-prompt.py", "X_PLAN.md", "c.txt")
+        self.assertNotEqual(0, result.returncode,
+                            "the reverted extraction bound a spaced reference — the fix is decorative")
 
 
 if __name__ == "__main__":  # pragma: no cover

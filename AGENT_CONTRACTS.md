@@ -374,7 +374,7 @@ Each agent type has minimum tool requirements:
 | Diagnostic | + WebFetch (look up vendor docs mid-debug) |
 | Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
 | Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github` blocks file edits, subagent dispatch, and the github MCP write surface. It is **not** fully non-mutating: Bash is retained for `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design |
+| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` blocks every checkout-write vector — file editors, shell, subagent dispatch — and the github MCP write surface. `Bash` is denied (PR #63 recheck, P1): `swift-reviewer` spawns this agent while processing untrusted review content, and a sub-agent `Bash` cannot be scoped to one command — so the caller passes the PR URL instead of the agent running `gh pr view`. It mutates JIRA via the Atlassian MCP by design, and nothing else. (This row previously listed a `MultiEdit` deny the agent file never carried — Claude Code removed that tool, and the stale-name rule rejects denying it.) |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
@@ -514,7 +514,7 @@ unchanged and still mandatory.
 
 | `surface_id` | `producer_id` | `scope` | `anchor` |
 |---|---|---|---|
-| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:609` |
+| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:613` |
 | `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
 | `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:237` |
 | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |

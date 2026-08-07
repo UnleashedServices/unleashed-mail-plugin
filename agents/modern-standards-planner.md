@@ -16,7 +16,11 @@ model: inherit
 # able to mutate the repo: deny the whole github MCP write surface. Bash is intentionally RETAINED — the
 # preloaded create-feature-plan skill runs `review-verdict.py snapshot` (a Bash command) as part of the
 # plan-review gate (COREDEV-2525 MIN-6; see AGENT_CONTRACTS §9).
-disallowedTools: mcp__github
+# `Agent` is DENIED: omitting `tools:` inherits it exactly as it inherits the MCP prefix, and this body
+# spawns nobody — an unused capability on an agent reading untrusted content is pure downside. The
+# spawner check in validate-plugin-assembly.py now counts inherit-all agents, which is what surfaced
+# this (PR #63 recheck, P1).
+disallowedTools: Agent, mcp__github
 skills:
   - create-feature-plan
 ---

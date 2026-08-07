@@ -55,6 +55,40 @@ if [ "$ARG" != "${ARG%%$'\n'*}" ]; then
     exit 1
 fi
 
+# ANCHOR AT THE WORKTREE ROOT, REMEMBERING WHERE THE CALLER STOOD (PR #63 recheck, P2).
+# Everything below — the direct file test, the glob fallback, the `ls` in the no-match diagnostic, and
+# the `.verdicts` lookup inside `review-verdict.py verify` — used to be evaluated against the CALLER'S
+# working directory. From a repository subdirectory the documented root-relative operand
+# `docs/planning/X_PLAN.md` therefore existed nowhere, fell through to name resolution, and the glob
+# (evaluated in the same wrong place) matched nothing: a valid, gated plan reported as "No plan
+# matches". Reproduced from a `sub/` directory. A guard that refuses correct work is one an operator
+# switches off. FAILS CLOSED outside a worktree: with no repository there is no docs/planning to
+# contain plans to, and falling back to the working directory is the exact bug being fixed.
+CALLER_PWD="$PWD"
+TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || TOP=""
+if [ -z "$TOP" ]; then
+    echo "REFUSED: not inside a Git worktree — the Plan Review Gate anchors at the repository root." >&2
+    exit 1
+fi
+TOP="$(CDPATH='' cd -- "$TOP" && pwd -P)" || exit 1
+cd "$TOP" || exit 1
+
+# Repo-relative identity of $1 interpreted against base $2, or non-zero. Only the PARENT is resolved
+# physically — a symlinked LEAF must still reach `_contained` below, which refuses it with the specific
+# uncontained diagnostic rather than a generic miss. Same helper shape as `isolated-agy-review.sh`,
+# for the same reason: an operand's meaning must not depend on where the caller happened to stand.
+resolve_in_repo() {
+    local candidate="$1" base="$2" parent leaf
+    case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
+    [ -f "$candidate" ] || return 1
+    parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
+    leaf="$parent/$(basename -- "$candidate")"
+    case "$leaf" in
+        "$TOP"/*) printf '%s\n' "${leaf#"$TOP"/}" ;;
+        *) return 1 ;;
+    esac
+}
+
 # PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
 #
 # The plan's BYTES must live under <repo-root>/docs/planning. Everything else here is convenience; this
@@ -84,16 +118,39 @@ _refuse_uncontained() {
 }
 
 PLAN=""
-if [ -f "$ARG" ]; then
-    _p="${ARG#./}"
-    case "$_p" in
+# The operand is tried against the CALLER'S directory first — the invoker is the authority on what it
+# meant — then against the root, so the documented root-relative spelling works from anywhere. Both
+# resolving to DIFFERENT files is refused rather than silently decided by branch order. This also
+# accepts an absolute in-repo path, which the old prefix test refused as "not a tracked plan" purely
+# for its spelling — the same absolute-spelling false refusal already fixed in the capture harness.
+FROM_CALLER="$(resolve_in_repo "$ARG" "$CALLER_PWD")" || FROM_CALLER=""
+FROM_ROOT="$(resolve_in_repo "$ARG" "$TOP")" || FROM_ROOT=""
+if [ -n "$FROM_CALLER" ] && [ -n "$FROM_ROOT" ] && [ "$FROM_CALLER" != "$FROM_ROOT" ]; then
+    { echo "AMBIGUOUS: '$ARG' names $FROM_CALLER from the invoking directory and $FROM_ROOT from the"
+      echo "repository root — name one of them unambiguously."; } >&2
+    exit 2
+fi
+REL="${FROM_CALLER:-$FROM_ROOT}"
+if [ -n "$REL" ]; then
+    case "$REL" in
         docs/planning/*PLAN*.md) ;;
         *) { echo "REFUSED: '$ARG' is not a tracked plan."
              echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
            exit 1 ;;
     esac
-    _contained "$_p" || _refuse_uncontained "$ARG"
-    PLAN="$_p"
+    _contained "$REL" || _refuse_uncontained "$ARG"
+    PLAN="$REL"
+elif [ -f "$ARG" ]; then
+    # It EXISTS by the root/absolute interpretation but does not resolve into this repository — a
+    # /tmp plan, or a `..` spelling that escapes. Keep the explicit refusals these spellings have
+    # always produced, rather than letting an out-of-tree file fall through to fuzzy name matching.
+    _p="${ARG#./}"
+    case "$_p" in
+        docs/planning/*PLAN*.md) _refuse_uncontained "$ARG" ;;
+        *) { echo "REFUSED: '$ARG' is not a tracked plan."
+             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
+           exit 1 ;;
+    esac
 else
     # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
     # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant

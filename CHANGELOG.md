@@ -445,6 +445,43 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **Plan references survive a space in the repository's own path.** `bind-prompt.py`'s token regex
+  matched a character allowlist without the space, so an absolute reference under
+  `/Users/me/My Projects/repo/…` was captured from AFTER the space and the disagreement check refused
+  the documented capture flow — the gemini skill *requires* absolute plan paths in generated prompts —
+  before either reviewer launched. Absolute references under the repository are now matched WHOLE,
+  anchored on the known root (the one string that makes an embedded space unambiguous), and masked
+  before the conservative token sweep handles relative and prose references. The refusal for a
+  genuinely different plan now names its full identity instead of a truncated fragment. Ships with a
+  permanent revert-proof: the suite runs the old extraction against the spaced fixture and asserts it
+  still fails.
+- **The Plan Review Gate anchors at the worktree root and honors the caller's spelling.**
+  `resolve-plan-gate.sh` evaluated everything — the direct file test, the name-branch glob, the `ls`
+  diagnostic, and the `verify` exec — against the caller's working directory, so from a repository
+  subdirectory the documented root-relative operand fell through to name resolution and a valid,
+  gated plan was reported as "No plan matches". Now: `cd` to `git rev-parse --show-toplevel`
+  (fail-closed outside a worktree), with the operand interpreted against the caller's directory
+  first, the root second, and refused as AMBIGUOUS (exit 2) when the two name different files. An
+  absolute in-repo operand — previously refused as "not a tracked plan" purely for its spelling — now
+  resolves, and a `..`-wearing spelling is collapsed physically first, so it is classified by its
+  true identity rather than caught wearing the prefix. The symlinked-planning-root proof became a
+  double-mutant: two independent mechanisms now refuse it, so single mutants are asserted as defence
+  in depth and the pair is proved by the double admitting.
+- **The spawner check's writer predicate now means "can modify the checkout".** It tested only
+  `Write`/`Edit` — by substring, so a `NotebookEdit` deny satisfied an `Edit` probe — and its spawner
+  detection skipped omitted-`tools:` agents entirely. Three shapes escaped: `jira-manager` (denies the
+  file editors, inherits unrestricted `Bash`), any `memory:` agent (auto-enabled Write never appears
+  in `tools:`), and `modern-standards-planner` as an undetected inherit-all *spawner*. The predicate
+  is now token-exact over live tools (grants-or-everything minus denies) against
+  `{Write, Edit, NotebookEdit, Bash}`; `memory:` counts as Write; inherit-all agents count as holding
+  `Agent`. Agent changes to match the honest policy: `jira-manager` **denies `Bash`** (the caller now
+  passes the PR URL; its Atlassian-MCP mutation of Jira is unchanged and by design),
+  `modern-standards-planner` denies the `Agent` tool it never used, and `swift-reviewer` denies
+  spawning itself. `check_bashless_agents_run_no_shell` now scopes by live Bash too, so a
+  bashless-BY-DENIAL agent's shell recipes are swept like any other — which is what caught
+  `jira-manager`'s own `gh pr view` instruction. `AGENT_CONTRACTS.md`'s capability row is updated,
+  dropping a `MultiEdit` deny it claimed while the agent file never carried it (Claude Code removed
+  that tool; the stale-name rule rejects denying it).
 - **The staged plan snapshot is authenticated against its own record before the reviewer sees it.**
   `isolated-agy-review.sh` copied `<transcript>.planbytes` into the review checkout and then `cmp`'d
   the copy against its source — a comparison between two reads of the same mutable file. A same-account

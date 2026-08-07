@@ -3,6 +3,8 @@
 loaded via importlib rather than imported."""
 import importlib.util
 import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -685,6 +687,107 @@ class BashlessAgentsRunNoShell(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual([], self._run(root))
+
+
+class WriterPredicateAndSpawnerDetection(unittest.TestCase):
+    """PR #63 recheck, P1: writer means "can modify the checkout", and inherit-all agents spawn too.
+
+    The first predicate tested only `Write`/`Edit` — by SUBSTRING — so three distinct agents escaped:
+    an inherit-all agent denying the two file editors while keeping unrestricted `Bash` (the
+    jira-manager shape), an agent whose `NotebookEdit` deny satisfied the `Edit` probe with `Edit`
+    still live, and a `memory:` agent whose auto-enabled Write never appeared in its `tools:` list.
+    Spawner detection had the matching blind spot: `tools:` omitted inherits `Agent` exactly as it
+    inherits `Bash`, and the explicit-list-only detection skipped every such agent.
+    """
+
+    def _root(self, agents: "dict[str, str]") -> Path:
+        base = Path(tempfile.mkdtemp(prefix="vpa-writers-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        (base / "agents").mkdir()
+        for name, frontmatter_tail in agents.items():
+            (base / "agents" / f"{name}.md").write_text(
+                f"---\nname: {name}\ndescription: x\n{frontmatter_tail}---\nbody\n",
+                encoding="utf-8",
+            )
+        return base
+
+    def _spawner_problems(self, agents: "dict[str, str]") -> "list[str]":
+        problems: "list[str]" = []
+        vpa.check_spawner_denies_every_writer(self._root(agents), problems)
+        return problems
+
+    SPAWNER = "tools: Read, Agent\n"
+
+    def test_unrestricted_bash_makes_an_inherit_all_agent_a_writer(self):
+        problems = self._spawner_problems({
+            "shelly": "disallowedTools: Write, Edit, NotebookEdit, Agent\n",
+            "spawny": self.SPAWNER,
+        })
+        self.assertTrue(any("spawny" in p and "shelly" in p for p in problems),
+                        f"a live-Bash inherit-all agent must be a writer: {problems}")
+
+    def test_denying_every_write_vector_clears_it(self):
+        problems = self._spawner_problems({
+            "shelly": "disallowedTools: Write, Edit, NotebookEdit, Bash, Agent\n",
+            "spawny": self.SPAWNER,
+        })
+        self.assertEqual([], problems,
+                         "an agent with every write vector denied must be freely spawnable")
+
+    def test_edit_denial_is_not_satisfied_by_a_NotebookEdit_substring(self):
+        """`"Edit" in "Write, NotebookEdit, …"` is True — the substring hole, now closed by tokens."""
+        problems = self._spawner_problems({
+            "eddy": "disallowedTools: Write, NotebookEdit, Bash, Agent\n",
+            "spawny": self.SPAWNER,
+        })
+        self.assertTrue(any("eddy" in p for p in problems),
+                        f"`Edit` is live on eddy and must classify it a writer: {problems}")
+
+    def test_an_inherit_all_agent_holds_Agent_and_is_a_spawner(self):
+        problems = self._spawner_problems({
+            "planner": "\n",
+            "wrx": "tools: Read, Write\n",
+        })
+        self.assertTrue(any("planner.md" in p and "wrx" in p for p in problems),
+                        f"an inherit-all agent holds bare Agent and must be checked: {problems}")
+        self.assertEqual([], self._spawner_problems({
+            "planner": "disallowedTools: Agent\n",
+            # wrx alone: a writer with no spawner in sight is not a finding.
+            "wrx": "tools: Read, Write\n",
+        }))
+
+    def test_memory_auto_enables_write_capability(self):
+        problems = self._spawner_problems({
+            "memo": "tools: Read, Grep, Glob\nmemory: project\n",
+            "spawny": self.SPAWNER,
+        })
+        self.assertTrue(any("memo" in p for p in problems),
+                        f"`memory:` re-grants Write/Edit and must classify a writer: {problems}")
+
+    def test_bashless_by_denial_bodies_are_swept_for_shell(self):
+        """`jira-manager` becomes bashless BY DENY — its recipes must be checked like any other."""
+        base = Path(tempfile.mkdtemp(prefix="vpa-bashless-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        (base / "agents").mkdir()
+        (base / "agents" / "quiet.md").write_text(
+            "---\nname: quiet\ndescription: x\ndisallowedTools: Bash\n---\n"
+            "```bash\nplutil -p Info.plist\n```\n",
+            encoding="utf-8",
+        )
+        problems: "list[str]" = []
+        vpa.check_bashless_agents_run_no_shell(base, problems)
+        self.assertTrue(any("quiet" in p and "plutil" in p for p in problems),
+                        f"a deny-based bashless agent's shell recipe must be flagged: {problems}")
+
+        (base / "agents" / "quiet.md").write_text(
+            "---\nname: quiet\ndescription: x\ndisallowedTools: Bash\n---\n"
+            "```bash\ngrep -rn pattern Sources/\n```\n",
+            encoding="utf-8",
+        )
+        problems = []
+        vpa.check_bashless_agents_run_no_shell(base, problems)
+        self.assertEqual([], problems, "grep alone is native to Grep and stays exempt")
+
 
 if __name__ == "__main__":
     unittest.main()

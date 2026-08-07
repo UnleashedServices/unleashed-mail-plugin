@@ -24,7 +24,7 @@ tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesi
 # A deny-list drifts the moment a new writer agent is added, which is exactly how blacklists
 # re-open. `validate-plugin-assembly.py` therefore recomputes this set from the agents on disk
 # and FAILS if any writer is missing here — the list is generated policy, not a hand-kept one.
-disallowedTools: Write, Edit, NotebookEdit, Agent(ai-engineer), Agent(unleashed-mail:ai-engineer), Agent(ci-engineer), Agent(unleashed-mail:ci-engineer), Agent(code-simplifier), Agent(unleashed-mail:code-simplifier), Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(docs-engineer), Agent(unleashed-mail:docs-engineer), Agent(graph-api-debugger), Agent(unleashed-mail:graph-api-debugger), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Agent(release-manager), Agent(unleashed-mail:release-manager), Agent(tester), Agent(unleashed-mail:tester), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(xcode-build-fixer), Agent(unleashed-mail:xcode-build-fixer)
+disallowedTools: Write, Edit, NotebookEdit, Agent(ai-engineer), Agent(unleashed-mail:ai-engineer), Agent(ci-engineer), Agent(unleashed-mail:ci-engineer), Agent(code-simplifier), Agent(unleashed-mail:code-simplifier), Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(docs-engineer), Agent(unleashed-mail:docs-engineer), Agent(graph-api-debugger), Agent(unleashed-mail:graph-api-debugger), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Agent(release-manager), Agent(unleashed-mail:release-manager), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(tester), Agent(unleashed-mail:tester), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(xcode-build-fixer), Agent(unleashed-mail:xcode-build-fixer)
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client
@@ -319,6 +319,10 @@ changed files and a brief summary.
 **Agent 6: `jira-manager`** (parallel with all reviewers)
 > Log the review in progress on the corresponding Jira ticket. Note which
 > review agents are running and update when the review concludes.
+> **Pass it everything it needs from git/GitHub in the spawn prompt** — the ticket key,
+> the branch, and the PR URL when one exists (`gh pr view --json url -q .url`).
+> `jira-manager` has no shell (PR #63 recheck: `Bash` is denied so a spawned logger
+> cannot modify the checkout), so context you do not pass, it cannot fetch.
 
 > **Handoff format:** every reviewer ends its report with a fenced ```json findings
 > array (schema in Step 5). JSON — not the prose — is what you collect and pass to the

@@ -75,6 +75,31 @@ def read_nofollow(path: str) -> bytes:
 _PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md")
 
 
+def _plan_references(prompt_bytes: bytes, root: str) -> "list[bytes]":
+    """Every plan reference in the prompt, with root-anchored absolute paths matched WHOLE.
+
+    THE TOKEN REGEX ALONE TRUNCATED AN ABSOLUTE PATH AT ANY CHARACTER OUTSIDE ITS ALLOWLIST — most
+    plainly a SPACE in the repository's own path (`/Users/me/My Projects/repo/…`). The match began
+    after the space, `prompt_disagreement` compared `Projects/repo/docs/…` against `docs/…`, and the
+    documented capture flow was refused before either reviewer launched (PR #63 recheck, P1). The
+    absolute normalization downstream never received a complete path to normalize — it works only on
+    what this extraction hands it.
+
+    So absolute references under THIS repository are matched first, anchored on the known root — the
+    one string that makes an embedded space unambiguous — and masked out before the conservative token
+    regex sweeps the remainder for relative and prose references. Masked with a SPACE rather than
+    deleted, so the neighbouring bytes cannot fuse into a token nobody wrote.
+
+    Residual, accepted: a reference that both spells the root DIFFERENTLY (e.g. through a symlink) and
+    contains a space matches neither pattern. Space-free alternate spellings keep working exactly as
+    before, via `realpath` in the caller.
+    """
+    anchored = re.compile(re.escape(os.fsencode(root)) + rb"/[^\n]*?_PLAN\.md")
+    references = anchored.findall(prompt_bytes)
+    references += _PLAN_REFERENCE.findall(anchored.sub(b" ", prompt_bytes))
+    return references
+
+
 def _plan_candidates(root: str, basename: str) -> "list[str]":
     """Every `*_PLAN.md` in the repo with this basename, repo-relative and sorted."""
     found = []
@@ -110,7 +135,7 @@ def prompt_disagreement(prompt_bytes: bytes, plan_relative: str, root: str) -> "
     # ever launched (PR #63 recheck). A false refusal is not the safe direction here: it breaks the
     # gate for correct input, which is how guards get switched off.
     referenced = set()
-    for match in _PLAN_REFERENCE.findall(prompt_bytes):
+    for match in _plan_references(prompt_bytes, root):
         reference = os.path.normpath(match.decode("utf-8", "replace"))
         if os.path.isabs(reference):
             resolved = os.path.realpath(reference)

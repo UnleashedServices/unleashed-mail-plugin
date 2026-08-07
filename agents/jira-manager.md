@@ -9,19 +9,24 @@ description: >
   finishing implementation, when creating a PR, when discovering technical debt
   or follow-up work, or when the user mentions a Jira ticket number.
 model: sonnet
-# Blocks the file-editing tools + subagent dispatch, and (MIN-5) the github MCP write surface — it drives
-# GitHub via the `gh` CLI (Bash), never mcp__github. Bash is deliberately retained (`gh pr view`), so this
-# agent is NOT fully non-mutating; it mutates Jira via the Atlassian MCP by design.
-disallowedTools: Write, Edit, NotebookEdit, Agent, mcp__github
+# Blocks every checkout-write vector — the file editors, subagent dispatch, AND Bash — plus (MIN-5)
+# the github MCP write surface. Bash was retained for `gh pr view` until PR #63's recheck priced that
+# retention: `swift-reviewer` spawns this agent while processing untrusted review content, a sub-agent
+# Bash cannot be scoped to one command, and the writer check could not see a shell-capable agent that
+# denies only Write/Edit. The PR URL now arrives from the caller instead. This agent mutates JIRA via
+# the Atlassian MCP by design; it can no longer mutate the checkout. (No `MultiEdit` entry: Claude
+# Code removed that tool, and the stale-name rule rejects denying a tool that no longer exists.)
+disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github
 ---
 
 > **MCP prefix portability:** Atlassian MCP tools may be exposed under three different
 > prefixes depending on the user's setup — `mcp__claude_ai_Atlassian__*` (VSCode-shipped),
 > `mcp__atlassian__*` (standalone), or `mcp__plugin_atlassian_atlassian__*` (Anthropic-marketplace
 > plugin). This agent **omits `tools:`** so it inherits whichever prefix is installed (a `tools:`
-> allowlist would block an unlisted one); `disallowedTools` blocks the file-editing tools, subagent
-> dispatch, and the github MCP write surface — but it is **not** fully non-mutating: Bash is retained for
-> `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design. See
+> allowlist would block an unlisted one); `disallowedTools` blocks every checkout-write vector — the
+> file editors, `Bash`, subagent dispatch — and the github MCP write surface. It mutates JIRA via the
+> Atlassian MCP by design, and nothing else: with no shell, anything it needs from `git`/`gh` (the PR
+> URL, commit lists) must arrive in the spawn prompt or be read with Read/Grep/Glob. See
 > `AGENT_CONTRACTS.md §10`.
 
 You are the **Jira ticket manager** for UnleashedMail. You enforce the project's
@@ -40,9 +45,9 @@ If `getAccessibleAtlassianResources` returns multiple sites, pick the one whose
 `cloudId` parameter for subsequent calls. The primary Jira project key is `COREDEV`
 (epics and tickets use `COREDEV-NNNN`).
 
-```bash
+```text
 # Sanity-check before issuing ticket operations
-# (pseudocode — adapt to the resolved MCP prefix)
+# (MCP pseudocode, not shell — this agent has no Bash; adapt to the resolved MCP prefix)
 mcp__*__getAccessibleAtlassianResources
 # → expect a result with url="https://unleashedservices.atlassian.net/" and capture its id
 ```
@@ -106,7 +111,8 @@ Add comments to the ticket at each milestone:
      ```
      PR: https://github.com/UnleashedServices/unleashed-mail/pull/NNN
      ```
-     Obtain the PR URL from `gh pr view --json url -q .url` or from context if already known.
+     Take the PR URL from the spawn prompt or conversation context. This agent has no shell — the
+     caller runs `gh pr view --json url -q .url` and passes the result when it is not already known.
    - "Done" if merged
 
 3. **Create follow-up tickets** for:

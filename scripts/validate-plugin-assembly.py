@@ -307,8 +307,44 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
             "the exact command with no wildcard.")
 
 
+def _tool_tokens(value: str) -> "set[str]":
+    """Comma-separated frontmatter tool list -> exact token set.
+
+    MEMBERSHIP USED TO BE TESTED BY SUBSTRING (`"Edit" in tools`), so `NotebookEdit` satisfied an
+    `Edit` probe: an agent denying `Write, NotebookEdit` — but not `Edit` — passed the two-token
+    denial check with `Edit` still live (PR #63 recheck). Scoped entries like `Agent(name)` survive as
+    single tokens because the separator is the comma, not whitespace.
+    """
+    return {token.strip() for token in value.split(",") if token.strip()}
+
+
+# Everything that lets an agent MODIFY THE CHECKOUT. `Bash` belongs here because a sub-agent tool list
+# cannot scope it to safe commands — bare names only — so any live `Bash` is arbitrary shell.
+# `MultiEdit` is deliberately ABSENT: Claude Code removed that tool (COREDEV-2583 §4.5), and a vector
+# that no longer exists must not force inherit-all agents into stale denies that the stale-name rule
+# in this same file rejects.
+_WRITE_VECTORS = frozenset({"Write", "Edit", "NotebookEdit", "Bash"})
+
+
+def _live_tools(frontmatter: dict) -> "set[str]":
+    """The tools an agent can actually use: grants (or everything) minus denies, plus `memory:`.
+
+    `tools:` omitted inherits ALL tools, so for classification it grants every write vector AND
+    `Agent`. `memory:` auto-enables Read/Write/Edit regardless of the `tools:` list — the bite
+    CLAUDE.md documents from when it silently re-granted write access to a read-only agent.
+    """
+    tools = frontmatter.get("tools")
+    if tools is None:
+        granted = set(_WRITE_VECTORS) | {"Agent"}
+    else:
+        granted = _tool_tokens(tools)
+    if "memory" in frontmatter:
+        granted |= {"Read", "Write", "Edit"}
+    return granted - _tool_tokens(frontmatter.get("disallowedTools", ""))
+
+
 def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
-    """An agent without `Bash` must not document a command only `Bash` could run.
+    """An agent without live `Bash` must not document a command only `Bash` could run.
 
     WHY THIS EXISTS (PR #63 recheck). Four reviewers had `Bash` removed because `pr-review` is
     model-invocable and a spawned reviewer was a path to arbitrary shell. The removal was right for the
@@ -322,14 +358,18 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
     A missing capability that announces itself is a bug; one that silently drops a section is a false
     clean bill of health.
 
+    SCOPE IS LIVE `Bash`, NOT THE SPELLING OF THE GRANT (same recheck, follow-on). The first version
+    skipped every omitted-`tools:` agent, so an agent that becomes bashless BY DENIAL — `jira-manager`
+    denies `Bash` precisely so reviewers processing untrusted content can spawn it — kept its shell
+    recipes unchecked, and they would silently do nothing.
+
     `grep` alone is exempt because `Grep` does it natively, which is the whole basis for the removal.
     """
     for path in sorted((root / "agents").glob("*.md")):
         text = path.read_text(encoding="utf-8")
         frontmatter = parse_frontmatter(text) or {}
-        tools = frontmatter.get("tools")
-        if tools is None or "Bash" in tools:
-            continue  # inherits everything, or holds Bash — out of scope
+        if not frontmatter or "Bash" in _live_tools(frontmatter):
+            continue  # holds live Bash — out of scope
         offenders = []
         for fence in re.findall(r"```(?:bash|sh|shell)\n(.*?)```", text, re.S):
             for line in fence.splitlines():
@@ -352,7 +392,7 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
 
 
 def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
-    """An agent holding bare `Agent` must deny every file-writing agent BY NAME.
+    """An agent holding bare `Agent` must deny every checkout-modifying agent BY NAME.
 
     WHY A COMPUTED CHECK AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
     A sub-agent `tools:` list takes bare names, so `Agent` there reaches ALL agents — including the
@@ -365,23 +405,32 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
     precisely how blacklists re-open. So the set is RECOMPUTED here from the agents on disk and the
     frontmatter must already contain it. The list in the file is generated policy that CI keeps honest,
     not a list anyone has to remember to update.
+
+    WRITER MEANS "CAN MODIFY THE CHECKOUT", NOT "HOLDS `Write`" (PR #63 recheck, P1, second pass).
+    The first predicate tested only `Write`/`Edit`, so `jira-manager` — denying both while inheriting
+    everything else by omitting `tools:`, unrestricted `Bash` included — was never classified, and CI
+    accepted a `swift-reviewer` deny-list with neither spelling of it while its own frontmatter said it
+    could run commands. A sub-agent `Bash` cannot be scoped to safe commands, so
+    live shell IS write capability. `memory:` counts for the same reason: it auto-enables Write/Edit
+    regardless of the `tools:` list.
+
+    SPAWNERS ARE DETECTED BY THE SAME RULE. `tools:` omitted inherits `Agent` exactly as it inherits
+    `Bash`, so the previous explicit-list-only detection skipped every inherit-all agent — a spawner
+    nobody had to declare was a spawner nobody checked.
     """
     writers, spawners = [], []
     for path in sorted((root / "agents").glob("*.md")):
         frontmatter = parse_frontmatter(path.read_text(encoding="utf-8")) or {}
         if not frontmatter:
             continue
-        tools = frontmatter.get("tools")
-        denied = frontmatter.get("disallowedTools", "")
-        # Inheriting everything counts as granting Write unless it is explicitly given back.
-        grants_write = tools is None or any(name in tools for name in ("Write", "Edit"))
-        if grants_write and not all(name in denied for name in ("Write", "Edit")):
+        live = _live_tools(frontmatter)
+        if live & _WRITE_VECTORS:
             writers.append(path.stem)
-        if tools is not None and re.search(r"(^|,)\s*Agent\s*(,|$)", tools):
+        if "Agent" in live:
             spawners.append((path, frontmatter))
 
     for path, frontmatter in spawners:
-        denied = frontmatter.get("disallowedTools", "")
+        denied = _tool_tokens(frontmatter.get("disallowedTools", ""))
         # BOTH SPELLINGS. A consumer install resolves `unleashed-mail:<name>` as well as the bare name,
         # so denying only one leaves the other reachable — the same both-spellings rule the skills'
         # `Agent(...)` grants already follow. Measured: a bare-only denial passed this check.
