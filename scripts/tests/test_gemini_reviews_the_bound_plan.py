@@ -30,6 +30,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CAPTURE = REPO / "scripts" / "review" / "capture-gemini-review.sh"
+HARNESS = REPO / "scripts" / "review" / "isolated-agy-review.sh"
 
 COMMITTED = "COMMITTED VERSION"
 EDITED = "EDITED VERSION - not committed"
@@ -86,6 +87,38 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_PROBE_OUT"] = str(self.probe)
+
+    def allocated_transcript(self, name: str, plan_bytes: bytes, recorded: bytes):
+        """A reserved leaf with the sidecars `isolated-agy-review.sh` reads, built by hand.
+
+        `plan_bytes` is what `.planbytes` holds; `recorded` is what `.plan`'s digest attests to. Passing
+        two different values is the substitution scenario; passing the same value is the control.
+
+        The `.launch` record is written for BOTH, even though only the honest run reaches `pty-capture`.
+        Without it the refusal in the tampering test could be the launch-record preflight rather than
+        the digest check, and the test would pass while proving nothing — which is how it first failed.
+        """
+        import hashlib
+
+        base = Path(tempfile.mkdtemp(prefix="agy-alloc-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        out = base / name
+        out.touch()
+        Path(str(out) + ".launch").write_text("run=probe\n", encoding="utf-8")
+        Path(str(out) + ".plan").write_text(
+            f"{hashlib.sha256(recorded).hexdigest()}  docs/planning/FEATURE_PLAN.md\n",
+            encoding="utf-8")
+        Path(str(out) + ".planbytes").write_bytes(plan_bytes)
+        prompt = base / "prompt.md"
+        prompt.write_text(PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
+                          encoding="utf-8")
+        return out, prompt
+
+    def run_harness(self, out, prompt):
+        return subprocess.run(
+            ["bash", str(HARNESS), str(prompt), str(out), "90", "docs/planning/FEATURE_PLAN.md"],
+            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+        )
 
     def capture(self, round_value: str):
         return subprocess.run(
@@ -157,6 +190,71 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         stub.chmod(0o755)
         result = self.capture("7")
         self.assertEqual(23, result.returncode, result.stdout + result.stderr)
+
+    def test_a_tampered_plan_snapshot_is_refused_BEFORE_the_reviewer_runs(self):
+        """`cp` then `cmp` compared the snapshot only against its own copy (PR #63 recheck, P1).
+
+        A same-account process rewriting `<transcript>.planbytes` between `bind-prompt.py` returning and
+        the staging copy was read by BOTH operations, so they agreed and `agy` reviewed substituted
+        bytes. Nothing downstream caught it: `review-verdict.py` validates the `.plan` RECORD against the
+        live plan and never hashes `.planbytes`, so the resulting transcript could approve the ORIGINAL
+        plan while the reviewer had read something else.
+
+        The record held the honest digest the entire time and nothing read it — the fifth
+        "recorded and never compared" on this branch.
+
+        The assertion that matters is the LAST one. Exiting non-zero after the reviewer has already
+        consumed the substituted bytes would be a report, not a refusal.
+        """
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r9-gemini.txt",
+            plan_bytes=b"# Plan\nSUBSTITUTED BYTES\n",
+            recorded=self.plan.read_bytes(),
+        )
+        result = self.run_harness(out, prompt)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("does not match its recorded digest", result.stderr)
+        self.assertFalse(
+            self.probe.is_file(),
+            "the reviewer RAN on substituted bytes — the refusal came after the damage",
+        )
+
+    def test_an_honest_snapshot_still_stages(self):
+        """Positive control for the digest check — it must refuse tampering, not refuse everything.
+
+        Without this, deleting the `with open(destination…)` write would leave the tampering test green
+        while every real round silently lost its staged plan.
+        """
+        honest = self.plan.read_bytes()
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r10-gemini.txt", plan_bytes=honest, recorded=honest)
+        result = self.run_harness(out, prompt)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(EDITED, self.probe.read_text(encoding="utf-8").strip(),
+                         "an authentic snapshot did not reach the reviewer")
+
+    def test_a_plan_relative_to_the_CALLERS_directory_reaches_the_reviewer(self):
+        """The harness `cd`'d to the repository root and re-read the operand there (PR #63 recheck, P2).
+
+        `bind-prompt.py` accepts the plan relative to the CALLER'S directory, so
+        `../docs/planning/FEATURE_PLAN.md` from a subdirectory bound successfully and then died here as
+        `plan not readable` — a round refused for a spelling the binder had just accepted, before the
+        reviewer ever launched. That is the fifth false refusal this recheck surfaced, and they matter
+        as much as fail-opens: a guard that rejects correct work is one an operator switches off.
+        """
+        sub = self.root / "sub"
+        sub.mkdir()
+        result = subprocess.run(
+            ["bash", str(CAPTURE), "COREDEV-9999", "4",
+             "../.agy-prompt-COREDEV-9999r1.md", "../docs/planning/FEATURE_PLAN.md", "90"],
+            cwd=sub, env=self.env, capture_output=True, text=True, check=False, input="",
+        )
+        self.assertTrue(
+            self.probe.is_file(),
+            f"a caller-relative plan was refused: {result.stdout}{result.stderr}",
+        )
+        self.assertEqual(EDITED, self.probe.read_text(encoding="utf-8").strip())
 
     def test_the_harness_own_staging_is_not_reported_as_a_reviewer_mutation(self):
         """The plan copy deliberately dirties the checkout — that IS the detached-HEAD fix.

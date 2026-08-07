@@ -339,5 +339,67 @@ class GrantedRecipeShapeProofs(unittest.TestCase):
         self.assertTrue(os.access(helper, os.X_OK), "the shipped helper is not executable")
 
 
+class EveryExecutableRecipeInvokesAGrantedScript(unittest.TestCase):
+    """The CLASS, because checking an enumerated list of recipes missed a live instance.
+
+    `GrantedRecipeShapeProofs` above validates the recipes named in `GRANTED_RECIPES`. Four executable
+    lines in `gemini-review` were not on that list and told the model to run
+    `scripts/review/isolated-agy-review.sh`, which that skill does not grant — so the documented flow
+    prompted or was denied, and the three-argument shape they used also omitted the plan operand, making
+    `agy` review the COMMITTED plan (PR #63 recheck, P2). An enumeration cannot fail on the entry nobody
+    added; this sweeps every skill instead.
+
+    ASSERTED ON SCRIPT IDENTITY, NOT ON STRING PREFIX. The grants are written unquoted
+    (`Bash(bash ${CLAUDE_PLUGIN_ROOT}/x.sh *)`) and the recipes quote the path, so a `startswith`
+    comparison fails on the quote alone and reports every correct recipe as a violation — which is
+    exactly what a first draft of this check did. Whether a given quoting is matched by the host is
+    Claude Code's business; whether the skill grants the script AT ALL is this repo's, and no defensible
+    matcher grants a script the skill never names.
+    """
+
+    SCRIPT = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/(\S+?\.(?:sh|py))")
+    INVOCATION = re.compile(r'^(?:bash|sh|python3)\s+"?\$\{CLAUDE_PLUGIN_ROOT\}')
+
+    def _executable_lines(self, source: str):
+        inside = False
+        for number, line in enumerate(source.splitlines(), 1):
+            if line.startswith("```"):
+                inside = line.startswith("```bash") or line.startswith("```sh")
+                continue
+            if inside and self.INVOCATION.match(line.strip()):
+                yield number, line.strip()
+
+    def test_no_skill_documents_running_a_script_it_does_not_grant(self) -> None:
+        checked = 0
+        for skill in sorted((REPO / "skills").glob("*/SKILL.md")):
+            source = skill.read_text(encoding="utf-8")
+            grants = next(
+                (GRANT.findall(line) for line in source.splitlines()
+                 if line.startswith("allowed-tools:")),
+                [],
+            )
+            granted = {
+                match.group(1)
+                for grant in grants
+                for match in [self.SCRIPT.search(grant)]
+                if match
+            }
+            for number, command in self._executable_lines(source):
+                match = self.SCRIPT.search(command)
+                if not match:
+                    continue
+                checked += 1
+                with self.subTest(skill=skill.parent.name, line=number):
+                    self.assertIn(
+                        match.group(1),
+                        granted,
+                        f"{skill.parent.name}/SKILL.md:{number} documents running "
+                        f"{match.group(1)}, which this skill's allowed-tools does not grant "
+                        f"(granted: {sorted(granted) or 'none'})",
+                    )
+        # A sweep that matched nothing would pass silently forever.
+        self.assertGreater(checked, 5, "the sweep found almost no recipes — the extractor is broken")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

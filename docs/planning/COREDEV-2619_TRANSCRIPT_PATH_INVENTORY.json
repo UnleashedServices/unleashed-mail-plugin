@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1199",
+      "location": "CHANGELOG.md:1223",
       "path": "CHANGELOG.md",
-      "line": 1199,
+      "line": 1223,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -472,11 +472,13 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 79,
+        "line": 86,
         "payloads": [
-          "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
+          "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
+          "# -> UNLEASHED_TRANSCRIPT=<the allocated leaf>  (printed BEFORE the capture starts, so a timeout keeps it)"
         ],
-        "payloadSha256": "4bae418e9b29e0682ff1f48650cde51f9e846de1c5b32e1120c97065c8bd0f7d"
+        "payloadSha256": "b148306e83cbcaf717a03a0658a3cc046d8b7a986d527fde7449d4c3075d9b11"
       },
       "sourceSha256": "023d8ab2eb52d46c113492552938fc963f61b06013b013de4689daf63bbef35d",
       "precedingAnchorLine": 70,
@@ -495,12 +497,13 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 159,
+        "line": 171,
         "payloads": [
-          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
-          "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
+          "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
+          "# -> the same UNLEASHED_TRANSCRIPT= marker; the capture lands in that allocated leaf and nowhere else."
         ],
-        "payloadSha256": "0352f68d78cdff8c9651f8652d3a3fc9758c67c7d6dd2b7e11831dc253dc05b7"
+        "payloadSha256": "1ce5c541f7b49cba88cbb747cbc2c8342496cb126becbab50b36a68503707abc"
       },
       "sourceSha256": "39c3aae64f0722977fcad2430f6ba7ade99d0a6a8855ba69a42873c173e9ab39",
       "precedingAnchorLine": 136,
@@ -519,7 +522,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 220,
+        "line": 233,
         "payloads": [
           "6. **Capture output** \u2014 the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -542,7 +545,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 223,
+        "line": 236,
         "payloads": [
           "8. **Synthesize both reviews** \u2014 once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

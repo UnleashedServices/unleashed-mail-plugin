@@ -58,14 +58,22 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 > [`codex-review`](../codex-review/SKILL.md), which already runs `-s read-only`. **Isolate instead of
 > constraining** — that is what the wrapper below does.
 
-Interface: `isolated-agy-review.sh <prompt-file> <allocated-path> [timeout]`. The prompt path is
-**relative to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable
-copy. Use the complete allocation-and-capture recipe under "Required invocation inputs" below; never
-derive or normalize the allocated path.
+Interface: `capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [timeout] [model]`.
+
+**`isolated-agy-review.sh` is the harness that entrypoint calls, not a command to run directly.** This
+skill's `allowed-tools` grants the capture wrapper and not the harness, so invoking the harness yourself
+prompts or is denied; and the plan is its *fourth* operand, so a hand-written three-argument call skips
+plan staging entirely and `agy` reviews the COMMITTED plan instead of the uncommitted edits that are the
+normal state during review iteration (PR #63 recheck, P2). Two recipes here documented that stale
+three-argument shape. Use the complete recipe under "Required invocation inputs" below; never derive or
+normalize the allocated path.
 
 ```bash
-# Creates a disposable DETACHED worktree at the reviewed commit, rewrites the prompt's absolute paths
-# to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
+# capture-gemini-review.sh allocates the per-run leaf, binds the prompt AND the plan to it, and hands
+# off to scripts/review/isolated-agy-review.sh, which creates a disposable DETACHED worktree at the
+# reviewed commit, stages the bound plan snapshot into it — authenticated against the `.plan` digest, so
+# bytes substituted after binding are refused rather than reviewed — rewrites the prompt's absolute
+# paths to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
 # working tree is byte-identical before/after. A tree mutation exits 3 and VOIDS the round rather than
 # being cleaned up silently.
 #
@@ -75,9 +83,10 @@ derive or normalize the allocated path.
 # anything. The wrapper additionally REFUSES a non-empty reserved leaf, so a retry is forced to
 # re-allocate rather than overwrite a previous round's bytes. It extracts the verdict with an ANCHORED
 # grep — a loose `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
-    ".agy-prompt-${TICKET}r${ROUND}.md" "$GEMINI_TRANSCRIPT" 1800
-# -> EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> UNLEASHED_TRANSCRIPT=<the allocated leaf>  (printed BEFORE the capture starts, so a timeout keeps it)
+#    EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
 # Exit 3 = the reviewer mutated the tree. Exit 1 = setup/prompt failure (e.g. a truncated prompt,
 # which the wrapper refuses to launch on rather than burning 20 minutes).
 ```
@@ -154,10 +163,14 @@ EOF
 # review has already run, losing the round (PR #63 review, gaps 13-14). Retries must RE-ALLOCATE, which
 # the wrapper now enforces by refusing a non-empty reserved leaf.
 # SUPERSEDED — this raw form points agy at the WORKING TREE, which it can write to (COREDEV-2607).
-# Use scripts/review/isolated-agy-review.sh instead; it wraps exactly this pipeline, but against a
-# disposable detached checkout, and asserts the real tree is unchanged afterwards.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
-    ".agy-prompt-${TICKET}r${ROUND}.md" "$GEMINI_TRANSCRIPT" 1800
+# Use the GRANTED capture wrapper instead. It wraps exactly this pipeline, but binds the prompt and plan
+# to the leaf, runs against a disposable detached checkout, and asserts the real tree is unchanged
+# afterwards. Calling scripts/review/isolated-agy-review.sh directly — as this line used to — is neither
+# granted by this skill nor complete: its plan operand is the fourth, and omitting it makes agy review
+# the COMMITTED plan rather than the working-tree edits under review (PR #63 recheck, P2).
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> the same UNLEASHED_TRANSCRIPT= marker; the capture lands in that allocated leaf and nowhere else.
 ```
 
 ### From an interactive terminal (no wrapper needed)

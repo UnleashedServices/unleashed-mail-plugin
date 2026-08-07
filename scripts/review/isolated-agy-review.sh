@@ -53,8 +53,28 @@ PLAN_REL="${4-}"       # optional: the plan the run is BOUND to (see the copy be
 MODEL="${MODEL:-gemini-3.6-flash-high}"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || REPO="$PWD"
+# CAPTURED BEFORE THE `cd`. `bind-prompt.py` accepted the plan operand relative to the CALLER'S
+# directory; this script then changed to the repository root and reinterpreted the same string there,
+# so a plan the binder had just accepted became unreadable here (PR #63 recheck, P2 — see the
+# resolution below).
+CALLER_PWD="$PWD"
 cd "$REPO" || exit 1
 [ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
+
+# Repo-relative identity of $1 interpreted against base $2, or non-zero if it does not exist there or
+# resolves outside the repository. Only the PARENT is resolved through `pwd -P`: a symlinked leaf must
+# still reach the readability check rather than be laundered into a clean-looking relative path here.
+resolve_in_repo() {
+    local candidate="$1" base="$2" parent leaf
+    case "$candidate" in /*) ;; *) candidate="$base/$candidate" ;; esac
+    [ -e "$candidate" ] || return 1
+    parent="$(CDPATH='' cd -- "$(dirname -- "$candidate")" 2>/dev/null && pwd -P)" || return 1
+    leaf="$parent/$(basename -- "$candidate")"
+    case "$leaf" in
+        "$REPO"/*) printf '%s\n' "${leaf#"$REPO"/}" ;;
+        *) return 1 ;;
+    esac
+}
 
 SCR="$(mktemp -d)"
 cleanup() {
@@ -81,21 +101,32 @@ TREE="$SCR/tree"
 # Copying rather than refusing keeps the iterate-then-review loop working, and it makes the binding
 # TRUE rather than merely checkable — the reviewer now reads exactly the bytes the sidecar attests to.
 if [ -n "$PLAN_REL" ]; then
+    # NORMALIZE AGAINST THE CALLER, THEN THE ROOT. Two spellings reached this line and each broke a
+    # different way:
+    #   * an ABSOLUTE in-repo path pasted into "$TREE/$PLAN_REL" built a nested destination like
+    #     `$TREE/Users/…/docs/planning/X.md` while the rewritten prompt still pointed `agy` at
+    #     `$TREE/docs/planning/X.md`, so the copy landed where the reviewer never looks and it read the
+    #     COMMITTED plan again — the very defect the copy was added to fix; and
+    #   * a CALLER-RELATIVE path such as `../docs/planning/X_PLAN.md` passed from `scripts/`, which
+    #     `bind-prompt.py` had already accepted, died here as "plan not readable" because this script had
+    #     `cd`'d to the root first. Reproduced from `scripts/` (PR #63 recheck, P2).
+    #
+    # Caller-relative is tried FIRST because the binder is the authority on what was bound. Root-relative
+    # stays as a fallback so callers that pass a root-relative path from a subdirectory keep working, and
+    # the ambiguous case — both exist and name DIFFERENT files — is refused rather than silently resolved
+    # to whichever branch happens to be tested first.
+    PLAN_OPERAND="$PLAN_REL"
+    FROM_CALLER="$(resolve_in_repo "$PLAN_OPERAND" "$CALLER_PWD")" || FROM_CALLER=""
+    FROM_ROOT="$(resolve_in_repo "$PLAN_OPERAND" "$REPO")" || FROM_ROOT=""
+    if [ -n "$FROM_CALLER" ] && [ -n "$FROM_ROOT" ] && [ "$FROM_CALLER" != "$FROM_ROOT" ]; then
+        echo "ambiguous plan operand: '$PLAN_OPERAND' names $FROM_CALLER from the caller's directory" >&2
+        echo "and $FROM_ROOT from the repository root — pass an absolute path" >&2
+        exit 1
+    fi
+    PLAN_REL="${FROM_CALLER:-$FROM_ROOT}"
+    [ -n "$PLAN_REL" ] \
+        || { echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2; exit 1; }
     [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
-    # NORMALIZE FIRST. `bind-prompt.py` accepts an ABSOLUTE in-repo plan path, and pasting one into
-    # "$TREE/$PLAN_REL" builds a nested destination like `$TREE/Users/…/docs/planning/X.md` while the
-    # rewritten prompt still points `agy` at `$TREE/docs/planning/X.md`. The copy then lands somewhere
-    # the reviewer never looks, so it reads the COMMITTED plan again — the exact defect this copy was
-    # added to fix, surviving for the absolute spelling (PR #63 recheck).
-    case "$PLAN_REL" in
-        /*)
-            PLAN_ABS="$(cd -- "$(dirname -- "$PLAN_REL")" && pwd -P)/$(basename -- "$PLAN_REL")"
-            case "$PLAN_ABS" in
-                "$REPO"/*) PLAN_REL="${PLAN_ABS#"$REPO"/}" ;;
-                *) echo "plan is outside the repository: $PLAN_REL" >&2; exit 1 ;;
-            esac
-            ;;
-    esac
     mkdir -p "$(dirname "$TREE/$PLAN_REL")"
     # STAGE THE BINDER'S SNAPSHOT, not the live path. `bind-prompt.py` kept the exact bytes it hashed
     # in `<transcript>.planbytes`; copying the working-tree path instead re-read a mutable source, so a
@@ -104,10 +135,58 @@ if [ -n "$PLAN_REL" ]; then
     # and so proved only that two reads agreed at copy time (PR #63 recheck, P1).
     PLAN_SNAPSHOT="${OUT}.planbytes"
     if [ -r "$PLAN_SNAPSHOT" ]; then
-        cp "$PLAN_SNAPSHOT" "$TREE/$PLAN_REL" \
-            || { echo "could not stage the bound plan snapshot" >&2; exit 1; }
-        cmp -s "$PLAN_SNAPSHOT" "$TREE/$PLAN_REL" \
-            || { echo "the staged plan does not match the bound snapshot" >&2; exit 1; }
+        # AUTHENTICATE THE SNAPSHOT AGAINST ITS RECORD, and deliver the bytes that were authenticated.
+        # `cp` followed by `cmp` compared the snapshot only with its own copy: a same-account process
+        # rewriting `.planbytes` between the binder returning and this staging was read by BOTH, so the
+        # comparison passed and `agy` reviewed substituted bytes. Nothing downstream caught it either —
+        # `review-verdict.py` validates the `.plan` RECORD against the live plan and never hashes
+        # `.planbytes` — so that review could approve the original plan (PR #63 recheck, P1).
+        #
+        # This is the fifth "recorded and never compared" on this branch: `.plan` carried the digest of
+        # these exact bytes the whole time and nothing read it. One descriptor, read once, hashed and
+        # written — so the bytes the reviewer receives are provably the bytes the record attests to,
+        # with no second open to race.
+        python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE/$PLAN_REL" <<'PY' || exit 1
+import hashlib
+import os
+import stat
+import sys
+
+snapshot, record, destination = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def read_nofollow(path: str, label: str) -> bytes:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        sys.exit(f"cannot read the {label}: {path}: {error}")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            sys.exit(f"the {label} is not a regular file: {path}")
+        parts = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            parts.append(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(parts)
+
+
+payload = read_nofollow(snapshot, "bound plan snapshot")
+fields = read_nofollow(record, "plan binding record").decode("utf-8", "replace").split()
+if not fields:
+    sys.exit(f"the plan binding record is empty, so the snapshot cannot be authenticated: {record}")
+expected, actual = fields[0], hashlib.sha256(payload).hexdigest()
+if actual != expected:
+    sys.exit(
+        "the bound plan snapshot does not match its recorded digest — refusing to review substituted "
+        f"bytes: {snapshot} hashes {actual[:12]}…, {record} records {expected[:12]}…"
+    )
+with open(destination, "wb") as handle:
+    handle.write(payload)
+PY
     else
         # No snapshot: an older capture, or a direct call. Fall back to the path and SAY SO, rather than
         # silently accepting the weaker guarantee.

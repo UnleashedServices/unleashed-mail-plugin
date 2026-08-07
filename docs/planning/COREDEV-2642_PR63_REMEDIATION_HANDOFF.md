@@ -93,33 +93,39 @@ alongside the rename, not as a speculative entry now.
 
 ## 3. Open — ranked
 
-**1. The gemini CAPTURE recipe** (`skills/gemini-review/SKILL.md`) — the LAST of the five extraction
-sites. Still a compound block (`: "${TICKET:?…}"` guards, an `if`/`else` around the allocator, a `case`
-on the marker), so it matches no `allowed-tools` grant and still prompts. The other four are done:
-`review-synthesis` and `brainstorm` call `persist-verdict.sh`, `implement`'s Phase 1 fence calls
-`resolve-plan-gate.sh`, and codex's capture calls `capture-codex-review.sh`.
+**All five extraction sites are DONE.** `review-synthesis` and `brainstorm` call `persist-verdict.sh`,
+`implement`'s Phase 1 fence calls `resolve-plan-gate.sh`, codex's capture calls
+`capture-codex-review.sh`, and the gemini capture calls `capture-gemini-review.sh` (`53cffe8`,
+committed and executable). No compound guard, branch or `case` remains in `skills/gemini-review/SKILL.md`.
 
-**Do it inside `KIMI_REVIEW_ARM_PLAN.md` step 1, not before.** That plan replaces the whole arm, so
-extracting the recipe now and renaming it in step 3 is the same work twice.
+> This section previously said the gemini recipe was "still a compound block … and still prompts", and
+> deferred it into `KIMI_REVIEW_ARM_PLAN.md` step 1. Both statements outlived the commit that fixed
+> them. A handoff that describes work already done is the same defect class as a commit message
+> overstating its diff — check the claim against the tree before carrying it forward.
 
-The pattern is in this branch twice over. Move the logic to a script; stage that script in the
-fixtures (`install_capture_helper` / `stage_plugin_root` in `test_transcript_path_threading.py`) and
-re-point each mutation anchor at whichever layer now owns its rule, naming the layer explicitly rather
-than inferring it from the reviewer. Expect M5.1/M5.2/M5.7/M5.9 to move, plus M5.14 in
-`test_callers_scan.py` and the M3.1 destinations.
+Two things the extractions learned that will recur:
 
-Two things the codex extraction learned that will recur:
-
-- **The M3.1 manifest now has an optional `destination.path`**, added because two codex destinations
-  moved to a different FILE and the schema had only one `path` serving as both source and destination.
-  Use it. The alternatives are pointing a destination at a line that merely MENTIONS the rule — a
-  contract check passing on prose — or deleting the site and editing the frozen counts, which loses the
-  record that the rewrite happened.
+- **The M3.1 manifest has an optional `destination.path`**, added because two codex destinations moved
+  to a different FILE and the schema had only one `path` serving as both source and destination. Use it.
+  The alternatives are pointing a destination at a line that merely MENTIONS the rule — a contract check
+  passing on prose — or deleting the site and editing the frozen counts, which loses the record that the
+  rewrite happened.
+- **Destination identity is `(path, line, payloadSha256)` and must be UNIQUE.** When two stale recipes
+  collapse onto one replacement, they cannot share a destination: give each the block it actually lives
+  in rather than pointing both at the helper they now call.
 - **S-PRECLEAN rejects a destination region containing `rm -f`, including inside a comment forbidding
   it.** That is the guard working. Put the retry/re-allocate rule above the allocation rather than
   beside the capture, and the region stays clean.
 
-**Nothing else is open.** Everything below in §4-§6 still applies and has been extended.
+**Genuinely open, both by decision rather than omission:**
+
+1. **COREDEV-2645 — the Kimi K3 arm swap.** Planned in `KIMI_REVIEW_ARM_PLAN.md`; deliberately not
+   implemented and not gated on this branch.
+2. **COREDEV-2497 §4.1 — the `verify` transcript re-check.** Owned by its own plan, which has not passed
+   its gate. An ad-hoc fix attempted here contradicted that plan twice and was reverted; it stays with
+   2497.
+
+Everything below in §4-§6 still applies and has been extended.
 
 ## 4. Things that will bite you
 

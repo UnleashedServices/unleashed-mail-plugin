@@ -445,6 +445,30 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **The staged plan snapshot is authenticated against its own record before the reviewer sees it.**
+  `isolated-agy-review.sh` copied `<transcript>.planbytes` into the review checkout and then `cmp`'d
+  the copy against its source — a comparison between two reads of the same mutable file. A same-account
+  process rewriting `.planbytes` between `bind-prompt.py` returning and the staging copy was read by
+  both, so they agreed and `agy` reviewed substituted bytes; nothing downstream noticed, because
+  `review-verdict.py` validates the `.plan` RECORD against the live plan and never hashes `.planbytes`.
+  The resulting transcript could approve the ORIGINAL plan. The record held the honest digest the whole
+  time and nothing read it — the fifth "recorded and never compared" in this release. Now one
+  `O_NOFOLLOW` descriptor is read once, hashed, compared to `.plan`, and those same bytes are written,
+  so there is no second open to race.
+- **A plan path relative to the CALLER's directory no longer refuses the round.** `bind-prompt.py`
+  resolves the plan operand against the caller's working directory; `isolated-agy-review.sh` had already
+  `cd`'d to the repository root and reinterpreted the same string there, so
+  `../docs/planning/X_PLAN.md` passed from a subdirectory bound successfully and then died with
+  `plan not readable` before the reviewer launched. Resolved against the caller first, the root second,
+  and refused only when the two name genuinely different files. **A guard that rejects correct work is
+  one an operator switches off** — the fifth false refusal this recheck surfaced.
+- **`gemini-review` no longer documents running a script it does not grant.** Four executable lines told
+  the model to invoke `scripts/review/isolated-agy-review.sh` directly, which the skill's
+  `allowed-tools` does not cover, so the documented flow prompted or was denied; and the
+  three-argument shape they used omitted the plan operand, which skips snapshot staging and makes `agy`
+  review the COMMITTED plan instead of the uncommitted edits under review. All now route through the
+  granted `capture-gemini-review.sh`. A new sweep asserts the property for **every** skill: the previous
+  check enumerated specific recipes, and an enumeration cannot fail on the entry nobody added.
 - **Transcript-freshness gate no longer depends on how a path is spelled.** The layout comparison was
   lexical, so `…/HASH/./f.txt`, `…/HASH/../HASH/f.txt`, and a symlinked *ancestor* directory each
   opened the identical file while comparing unequal — the same bytes accepted or refused by
