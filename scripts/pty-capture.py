@@ -82,7 +82,18 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     right instrument because, unlike O_TRUNC, it can never CREATE the file, so the reservation invariant
     is preserved exactly.
     """
-    create_flags = 0 if allocated else os.O_CREAT | os.O_TRUNC
+    # NO O_TRUNC ON THE NON-ALLOCATED PATH (PR #63 recheck, P2). O_TRUNC empties a pre-existing file AT
+    # open(), before any fstat can look — so a hard link planted at the predictable fresh/`.captureid`
+    # path was already truncated to zero by the time the `nlink` guard (itself wrongly gated on
+    # `allocated`) would have fired. The victim's bytes were destroyed on the way in; reproduced with a
+    # hard-linked `PRECIOUS OUTSIDE DATA` becoming the capture. Dropping O_TRUNC means a pre-existing
+    # file is OPENED but not emptied: the unconditional `nlink != 1` check below then refuses a
+    # hard-linked victim before a single byte is written, and the `ftruncate` after the write (which
+    # was already there for the allocated path) bounds an honest single-linked overwrite to this run's
+    # length. This preserves the legitimate "overwrite a stale non-allocated capture" behaviour while
+    # closing the victim-rewrite hole — strictly better than O_EXCL, which would have refused the honest
+    # overwrite too.
+    create_flags = 0 if allocated else os.O_CREAT
     flags = os.O_WRONLY | create_flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
     def _opener(p, _flags):
@@ -96,9 +107,12 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
             # owns turns the `fchmod`/write/`ftruncate` below into a rewrite of THAT file — reproduced
             # by linking an 18-byte file at the reserved path and watching it become the capture, mode
             # 0600 (PR #63 recheck, P2). The allocator creates its leaf with exactly one link, so a
-            # second one is never legitimate here; a fresh capture is `O_CREAT|O_EXCL`-shaped and also
-            # single-linked.
-            if allocated and info.st_nlink != 1:
+            # second one is never legitimate here. UNCONDITIONAL, not `allocated`-gated: this is the guard
+            # that now stands in for O_TRUNC's removed truncation on the fresh path — it must run there,
+            # and it never fires falsely because an honestly fresh or honestly stale single-linked file
+            # has exactly one link. It executes BEFORE the write below, so a hard-linked victim is
+            # refused with its bytes intact.
+            if info.st_nlink != 1:
                 raise NonRegularCaptureTargetError(
                     errno.EMLINK,
                     f"refusing a hard-linked capture target ({info.st_nlink} links) — writing it would "
@@ -113,8 +127,10 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
 
     with open(path, "wb", opener=_opener) as fh:
         fh.write(data)
-        # Bound the file to what THIS run produced. No-op for the O_TRUNC path; load-bearing for the
-        # allocated path, where a shorter re-write would otherwise resurrect the previous run's tail.
+        # Bound the file to what THIS run produced. Load-bearing for BOTH paths now: the allocated path
+        # never truncates (reservation), and the non-allocated path no longer uses O_TRUNC (so an
+        # overwrite of a longer stale file would otherwise leave a tail). A shorter re-write must not
+        # resurrect the previous content's tail.
         fh.flush()
         os.ftruncate(fh.fileno(), len(data))
 

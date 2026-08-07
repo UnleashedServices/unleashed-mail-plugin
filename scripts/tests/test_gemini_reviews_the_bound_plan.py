@@ -287,6 +287,32 @@ printf 'VERDICT: APPROVE\\n'
         stub.write_text(body, encoding="utf-8")
         stub.chmod(0o755)
 
+    def test_staging_never_writes_through_a_symlink_leaf_from_committed_HEAD(self):
+        """PR #63 recheck, P1 — reproduced: an outside victim was overwritten.
+
+        `git worktree add --detach` materializes committed tree entries, so if HEAD records the plan
+        path as a SYMLINK to a file outside the tree, the disposable checkout recreates that link and
+        the old `open(destination, "wb")` staging wrote THROUGH it. Here HEAD carries the symlink, the
+        live worktree replaces it with a real uncommitted plan (the normal review state), and staging
+        must refuse to traverse the recreated link.
+        """
+        victim = Path(tempfile.mkdtemp(prefix="agy-victim-")) / "PRECIOUS.txt"
+        self.addCleanup(shutil.rmtree, victim.parent, ignore_errors=True)
+        victim.write_text("PRECIOUS OUTSIDE DATA\n", encoding="utf-8")
+
+        # Commit the plan path AS A SYMLINK to the outside victim.
+        self.plan.unlink()
+        self.plan.symlink_to(victim)
+        subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-qm", "plan-as-symlink"], cwd=self.root, check=True)
+        # Live worktree: a real, uncommitted plan at that path (what the reviewer should read).
+        self.plan.unlink()
+        self.plan.write_text(f"# Plan\n{EDITED}\n", encoding="utf-8")
+
+        result = self.capture("9")
+        self.assertEqual("PRECIOUS OUTSIDE DATA\n", victim.read_text(encoding="utf-8"),
+                         "staging wrote through the materialized symlink leaf to the outside victim")
+
     def test_a_reviewer_that_rewrites_the_staged_plan_voids_the_round(self):
         """PR #63 recheck, P1 — reproduced: rc was 0 with NO note at all.
 

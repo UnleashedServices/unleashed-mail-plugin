@@ -131,7 +131,13 @@ if [ -n "$PLAN_REL" ]; then
     [ -n "$PLAN_REL" ] \
         || { echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2; exit 1; }
     [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
-    mkdir -p "$(dirname "$TREE/$PLAN_REL")"
+    # The staging destination is built by a DESCRIPTOR WALK inside the python below, not a `mkdir -p` +
+    # `open("$TREE/$PLAN_REL")`. `git worktree add --detach` MATERIALIZES committed tree entries — so if
+    # HEAD records the plan path as a SYMLINK (or any parent as one), the checkout recreates that link,
+    # and a plain open followed it to overwrite an outside victim. Reproduced: HEAD carries
+    # `docs/planning/X_PLAN.md -> /outside/victim`, the live worktree replaces it with a real plan, and
+    # staging clobbered the victim (PR #63 recheck, P1). Every component is now opened O_NOFOLLOW and
+    # the leaf is unlinked-then-O_EXCL-created, so no symlink is ever traversed.
     # STAGE THE BINDER'S SNAPSHOT, not the live path. `bind-prompt.py` kept the exact bytes it hashed
     # in `<transcript>.planbytes`; copying the working-tree path instead re-read a mutable source, so a
     # plan edited after binding and restored before synthesis could reach the reviewer while both the
@@ -154,14 +160,14 @@ if [ -n "$PLAN_REL" ]; then
         # The authenticated digest is CAPTURED, because the round is not done with it: the post-run
         # basis check below re-verifies the staged copy against this value, which is what catches a
         # reviewer that rewrites the plan mid-review (PR #63 recheck, P1 — see below).
-        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE/$PLAN_REL" <<'PY'
+        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE" "$PLAN_REL" <<'PY'
 
 import hashlib
 import os
 import stat
 import sys
 
-snapshot, record, destination = sys.argv[1], sys.argv[2], sys.argv[3]
+snapshot, record, tree_root, rel = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 
 def read_nofollow(path: str, label: str) -> bytes:
@@ -183,6 +189,44 @@ def read_nofollow(path: str, label: str) -> bytes:
     return b"".join(parts)
 
 
+def stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
+    """Write `payload` to tree_root/rel, refusing to traverse ANY symlink component.
+
+    `git worktree add --detach` recreates committed symlinks, so neither the leaf nor a parent can be
+    trusted to be a real path just because we made the tree. Every directory is opened
+    O_DIRECTORY|O_NOFOLLOW relative to the previous one (a symlinked parent fails ELOOP), and the leaf
+    is unlinked-without-following then created O_CREAT|O_EXCL|O_NOFOLLOW — so a materialized symlink
+    leaf is removed as a link, never written through.
+    """
+    components = [c for c in rel.split("/") if c and c != "."]
+    if not components or ".." in components:
+        sys.exit(f"refusing an unsafe staging path: {rel}")
+    dir_fd = os.open(tree_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for comp in components[:-1]:
+            try:
+                os.mkdir(comp, 0o755, dir_fd=dir_fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = next_fd
+        leaf = components[-1]
+        try:
+            os.unlink(leaf, dir_fd=dir_fd)   # never follows; removes a materialized symlink as a link
+        except FileNotFoundError:
+            pass
+        fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
+        try:
+            written = 0
+            while written < len(payload):
+                written += os.write(fd, payload[written:])
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+
+
 payload = read_nofollow(snapshot, "bound plan snapshot")
 fields = read_nofollow(record, "plan binding record").decode("utf-8", "replace").split()
 if not fields:
@@ -193,19 +237,76 @@ if actual != expected:
         "the bound plan snapshot does not match its recorded digest — refusing to review substituted "
         f"bytes: {snapshot} hashes {actual[:12]}…, {record} records {expected[:12]}…"
     )
-with open(destination, "wb") as handle:
-    handle.write(payload)
+stage_no_follow(tree_root, rel, payload)
 print(actual)
 PY
 )" || exit 1
     else
-        # No snapshot: an older capture, or a direct call. Fall back to the path and SAY SO, rather than
-        # silently accepting the weaker guarantee. The digest of what was ACTUALLY staged still anchors
-        # the post-run basis check — weaker provenance, same mid-review integrity.
+        # No snapshot: an older capture, or a direct call. Fall back to the live path and SAY SO, rather
+        # than silently accepting the weaker guarantee. Still staged through the SAME no-follow descriptor
+        # walk — the symlink-leaf escape does not depend on where the bytes came from. The digest of what
+        # was ACTUALLY staged anchors the post-run basis check — weaker provenance, same integrity.
         echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
-        cp "$PLAN_REL" "$TREE/$PLAN_REL" \
-            || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
-        EXPECTED_PLAN_SHA="$(_sha256 "$TREE/$PLAN_REL")" || exit 1
+        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_REL" "$TREE" "$PLAN_REL" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+live, tree_root, rel = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def read_nofollow(path: str) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            sys.exit(f"the plan is not a regular file: {path}")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(chunks)
+
+
+def stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
+    components = [c for c in rel.split("/") if c and c != "."]
+    if not components or ".." in components:
+        sys.exit(f"refusing an unsafe staging path: {rel}")
+    dir_fd = os.open(tree_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for comp in components[:-1]:
+            try:
+                os.mkdir(comp, 0o755, dir_fd=dir_fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = next_fd
+        leaf = components[-1]
+        try:
+            os.unlink(leaf, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
+        try:
+            written = 0
+            while written < len(payload):
+                written += os.write(fd, payload[written:])
+        finally:
+            os.close(fd)
+    finally:
+        os.close(dir_fd)
+
+
+payload = read_nofollow(live)
+stage_no_follow(tree_root, rel, payload)
+print(hashlib.sha256(payload).hexdigest())
+PY
+)" || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
     fi
 fi
 

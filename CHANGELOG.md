@@ -445,6 +445,24 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **Gemini plan staging can no longer be tricked into writing outside its disposable checkout.**
+  `git worktree add --detach` materializes committed tree entries, so a plan path recorded in HEAD as a
+  **symlink** (or under a symlinked parent) was recreated in the throwaway checkout, and the staging
+  `open(destination, "wb")` wrote *through* it — a same-account attacker whose HEAD carried
+  `docs/planning/X_PLAN.md -> /outside/victim` had the victim overwritten with the staged bytes
+  (PR #63 recheck, P1, reproduced). Staging is now a descriptor walk: every directory component is
+  opened `O_DIRECTORY|O_NOFOLLOW` (a symlinked parent fails `ELOOP`), and the leaf is
+  unlink-without-following then created `O_CREAT|O_EXCL|O_NOFOLLOW`, so a materialized symlink is
+  removed as a link and never traversed. Both the authenticated-snapshot and live-plan fallback paths
+  go through it.
+- **`pty-capture.py` no longer rewrites a hard-linked victim on the non-allocated path.** The fresh
+  path opened `O_CREAT|O_TRUNC` while the `nlink != 1` guard was gated on `allocated` — and `O_TRUNC`
+  empties a pre-existing file at `open()`, before any `fstat`, so a hard link planted at the
+  predictable capture/`.captureid` path was truncated to zero on the way in and the guard never ran
+  (PR #63 recheck, P2, reproduced: `PRECIOUS OUTSIDE DATA` became the capture). The path now opens
+  without `O_TRUNC`, the `nlink != 1` refusal is unconditional and runs before any write, and the
+  existing `ftruncate` bounds an honest single-linked overwrite — closing the hole while keeping the
+  legitimate stale-file overwrite behaviour that `O_EXCL` would have broken.
 - **A reviewer that mutates its disposable checkout VOIDS the round — including the invisible case.**
   `isolated-agy-review.sh` printed an informational note when the reviewer wrote inside the disposable
   copy and returned success; worse, the note's baseline diff is *status-line* based, so a reviewer that

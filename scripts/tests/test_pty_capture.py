@@ -4,6 +4,7 @@ Covers the allocated/non-allocated write modes, their descriptor-based security 
 round-1 double-close fix: once open() owns the fd, the except path must not close it again (a second close
 can clobber a concurrently reused fd number)."""
 import importlib.util
+import errno
 import shutil
 import os
 import stat
@@ -47,6 +48,26 @@ class WritePrivateTests(unittest.TestCase):
         self.mod._write_private(path, b"new")
         self.assertEqual(Path(path).read_bytes(), b"new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_nonallocated_mode_refuses_a_hardlinked_victim_without_touching_it(self):
+        """PR #63 recheck, P2 — reproduced: the victim was rewritten.
+
+        The non-allocated path used `O_CREAT|O_TRUNC`, which empties a pre-existing file AT open(),
+        before any fstat — so a hard link planted at the predictable capture/`.captureid` path was
+        truncated to zero on the way in, and the `nlink != 1` guard that would have caught it was
+        skipped entirely on this path (`if allocated and …`). Now the path opens without O_TRUNC and the
+        guard is unconditional, so the victim is refused with its bytes intact.
+        """
+        victim = os.path.join(self.d, "PRECIOUS")
+        Path(victim).write_bytes(b"PRECIOUS OUTSIDE DATA\n")
+        target = os.path.join(self.d, "capture.txt")
+        os.link(victim, target)  # a hard link IS a regular file — O_NOFOLLOW/S_ISREG both accept it
+
+        with self.assertRaises(OSError) as caught:
+            self.mod._write_private(target, b"attacker capture bytes\n")  # non-allocated (default)
+        self.assertEqual(caught.exception.errno, errno.EMLINK)
+        self.assertEqual(Path(victim).read_bytes(), b"PRECIOUS OUTSIDE DATA\n",
+                         "the hard-linked victim was modified — the refusal came too late")
 
     def test_allocated_mode_omits_create_and_truncate_but_retains_open_defences(self):
         path = os.path.join(self.d, "reserved.txt")
