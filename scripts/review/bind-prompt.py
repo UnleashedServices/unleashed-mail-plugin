@@ -103,10 +103,20 @@ def prompt_disagreement(prompt_bytes: bytes, plan_relative: str, root: str) -> "
     directory, so it is accepted only when exactly one plan in the repo answers to it AND that plan is
     the one being bound; otherwise it is ambiguous and refused rather than guessed.
     """
-    referenced = {
-        os.path.normpath(match.decode("utf-8", "replace"))
-        for match in _PLAN_REFERENCE.findall(prompt_bytes)
-    }
+    # ABSOLUTE IN-REPO REFERENCES NORMALIZE TO THE SAME IDENTITY. `skills/gemini-review/SKILL.md`
+    # requires the generated prompt to name the plan by its ABSOLUTE path, and an absolute string can
+    # never equal the repo-relative `plan_normalized` — so this check refused the repository's own plan
+    # while accepting its relative spelling, aborting the documented capture flow before the reviewer
+    # ever launched (PR #63 recheck). A false refusal is not the safe direction here: it breaks the
+    # gate for correct input, which is how guards get switched off.
+    referenced = set()
+    for match in _PLAN_REFERENCE.findall(prompt_bytes):
+        reference = os.path.normpath(match.decode("utf-8", "replace"))
+        if os.path.isabs(reference):
+            resolved = os.path.realpath(reference)
+            if resolved == root or resolved.startswith(root + os.sep):
+                reference = os.path.relpath(resolved, root)
+        referenced.add(reference)
     if not referenced:
         return (f"the prompt never names a plan, so nothing ties it to {plan_relative}. A review "
                 "prompt must state the plan path it is reviewing.")

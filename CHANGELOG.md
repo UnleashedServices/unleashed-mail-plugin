@@ -117,6 +117,23 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Absolute paths defeated two fixes from earlier the same day, and broke a third flow.** All three
+  are the same omission: a fix written for the relative spelling of an operand that is also accepted
+  absolute.
+  - `bind-prompt.py`'s plan-agreement check compared an absolute reference against a repo-relative
+    identity, so it **refused the repository's own plan** when the prompt named it absolutely — which
+    is exactly what `skills/gemini-review/SKILL.md` requires the generated prompt to do. That aborted
+    the documented capture flow before the reviewer launched. A false refusal is not the safe
+    direction: it breaks the gate for correct input, which is how guards get switched off.
+  - `isolated-agy-review.sh` pasted the operand into `"$TREE/$PLAN_REL"`, so an absolute path built a
+    nested destination like `$TREE/Users/…/docs/planning/X.md` while the rewritten prompt still pointed
+    `agy` at `$TREE/docs/planning/X.md`. The copy landed where the reviewer never looks and it read the
+    committed plan again — the defect the copy was added to fix, alive for one spelling.
+  - The CI whitespace gate hard-coded `origin/main`. This repo has an `alpha` integration branch, so an
+    alpha-targeting PR would have diffed the whole `main..alpha` history and failed every unrelated
+    alpha change on one pre-existing issue — the re-litigation its own comment disclaimed. It now uses
+    the workflow's real base ref.
+
 - **Three holes in fixes shipped earlier in this same release.** Each was found by the PR's own
   recheck, reproduced, and closed:
   - **The prompt binding was skipped when its sidecar was absent**, so deleting `.promptsha256` turned

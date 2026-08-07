@@ -114,6 +114,30 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.plan.read_bytes()).hexdigest(), bound)
         self.assertEqual(EDITED, self.probe.read_text(encoding="utf-8").strip())
 
+    def test_an_ABSOLUTE_plan_operand_still_reaches_the_reviewer(self):
+        """The copy fix survived for the relative spelling only (PR #63 recheck).
+
+        `bind-prompt.py` accepts an absolute in-repository plan path — the Gemini skill's own generated
+        prompt uses one — and pasting it into `"$TREE/$PLAN_REL"` built a nested destination like
+        `$TREE/Users/…/docs/planning/X.md`, while the rewritten prompt still pointed `agy` at
+        `$TREE/docs/planning/X.md`. The copy landed where the reviewer never looks, so it read the
+        COMMITTED plan again: the exact defect the copy was added to fix, alive for one spelling of
+        the same operand.
+        """
+        result = subprocess.run(
+            ["bash", str(CAPTURE), "COREDEV-9999", "3",
+             ".agy-prompt-COREDEV-9999r1.md", str(self.plan), "90"],
+            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+        )
+        self.assertTrue(
+            self.probe.is_file(),
+            f"the stub never ran — the harness refused an absolute operand: {result.stdout}{result.stderr}",
+        )
+        self.assertEqual(
+            EDITED, self.probe.read_text(encoding="utf-8").strip(),
+            "an absolute plan operand still leaves the reviewer reading the COMMITTED plan",
+        )
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

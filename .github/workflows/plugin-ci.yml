@@ -136,9 +136,15 @@ jobs:
           # job under `set -e` before the check ran. `fetch-depth: 0` on this job's checkout is what
           # makes the base resolvable; asserting it here means a future checkout change fails loudly
           # rather than silently skipping the gate.
-          git rev-parse --verify origin/main >/dev/null 2>&1 \
-            || { echo "origin/main is unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
-          base="$(git merge-base origin/main HEAD)"
+          # THE WORKFLOW'S ACTUAL BASE, not a hard-coded `main`. This repo has an `alpha` integration
+          # branch, and on an alpha-targeting PR a `main` merge base re-checks the whole accumulated
+          # `main..alpha` history — so one pre-existing whitespace issue on alpha would fail every
+          # unrelated alpha PR, which is exactly the re-litigation the comment above disclaims
+          # (PR #63 recheck).
+          base_ref="${GITHUB_BASE_REF:-main}"
+          git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1 \
+            || { echo "origin/${base_ref} is unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+          base="$(git merge-base "origin/${base_ref}" HEAD)"
           git diff --check "$base" HEAD
 
       - name: ShellCheck plugin scripts

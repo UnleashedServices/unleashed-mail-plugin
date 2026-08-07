@@ -82,6 +82,20 @@ TREE="$SCR/tree"
 # TRUE rather than merely checkable — the reviewer now reads exactly the bytes the sidecar attests to.
 if [ -n "$PLAN_REL" ]; then
     [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
+    # NORMALIZE FIRST. `bind-prompt.py` accepts an ABSOLUTE in-repo plan path, and pasting one into
+    # "$TREE/$PLAN_REL" builds a nested destination like `$TREE/Users/…/docs/planning/X.md` while the
+    # rewritten prompt still points `agy` at `$TREE/docs/planning/X.md`. The copy then lands somewhere
+    # the reviewer never looks, so it reads the COMMITTED plan again — the exact defect this copy was
+    # added to fix, surviving for the absolute spelling (PR #63 recheck).
+    case "$PLAN_REL" in
+        /*)
+            PLAN_ABS="$(cd -- "$(dirname -- "$PLAN_REL")" && pwd -P)/$(basename -- "$PLAN_REL")"
+            case "$PLAN_ABS" in
+                "$REPO"/*) PLAN_REL="${PLAN_ABS#"$REPO"/}" ;;
+                *) echo "plan is outside the repository: $PLAN_REL" >&2; exit 1 ;;
+            esac
+            ;;
+    esac
     mkdir -p "$(dirname "$TREE/$PLAN_REL")"
     cp "$PLAN_REL" "$TREE/$PLAN_REL" \
         || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
