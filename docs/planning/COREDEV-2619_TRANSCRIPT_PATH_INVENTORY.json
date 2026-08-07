@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1098",
+      "location": "CHANGELOG.md:1112",
       "path": "CHANGELOG.md",
-      "line": 1098,
+      "line": 1112,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -241,9 +241,9 @@
       "sourceSha256": "27fdb49bf4e90af135d80d728e214e48b975c0b558838a2a3f3129daddcc05e9"
     },
     {
-      "location": "scripts/tests/test_review_verdict.py:202",
+      "location": "scripts/tests/test_review_verdict.py:205",
       "path": "scripts/tests/test_review_verdict.py",
-      "line": 202,
+      "line": 205,
       "class": "quote-keep",
       "reason": "Regression-test documentation intentionally quotes the duplicate-transcript command.",
       "sourceSha256": "4ee436c99b8105a87a8a84527f364f2a5647a01c529493a6fb5f6b24e38a212b"

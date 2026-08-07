@@ -603,6 +603,27 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     # and a path that merely LOOKS right proves nothing about the bytes anyway. Digest equality is
     # what answers "did this review read what is being approved" — and it composes exactly with the
     # snapshot check next to it, which answers "is the plan still those bytes".
+    # THE IDENTITY TOO, not only the digest. Two distinct plans with byte-identical contents share a
+    # digest, so a transcript captured for plan A satisfied an approval for plan B while this check
+    # recorded — and ignored — the full repo-relative identity that distinguishes them. Same lesson as
+    # PR #41's artifact fix and this morning's basename collision: equal bytes are not one plan.
+    # ONLY WHEN THE RECORDED VALUE CAN DISCRIMINATE. The comment below is right that the digest is the
+    # binding and that comparing paths in general would make this depend on the directory each step ran
+    # from — that decision stands. What it missed is the case where the digest CANNOT discriminate: two
+    # distinct plans with byte-identical contents share one, so a transcript captured for plan A
+    # satisfied an approval for plan B (PR #63 recheck).
+    #
+    # A recorded value carrying a DIRECTORY is exactly what tells those two apart, and `bind-prompt.py`
+    # always writes one (`os.path.relpath(plan, repo_root)`). A bare basename is under-specified — it
+    # cannot distinguish them either way — so it is left alone rather than guessed at, which also keeps
+    # pre-binding captures readable.
+    if bound_plan and os.sep in bound_plan.strip():
+        plan_identity, _kind = _plan_identity(plan)
+        if os.path.normpath(bound_plan.strip()) != os.path.normpath(plan_identity):
+            return (
+                "transcript is bound to a different plan: " + binding_path + " records "
+                + bound_plan.strip() + ", the verdict is being written for " + plan_identity
+            )
     if bound_digest != plan_digest:
         return (
             "transcript reviewed different bytes than this verdict approves: " + binding_path
@@ -628,19 +649,48 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     match = _PLAN_BINDING.fullmatch(recorded)
     if match is None:
         return "prompt binding is malformed: " + transcript + ".promptsha256"
-    snapshot_bytes = _read_regular_file_bytes(snapshot)
-    if snapshot_bytes is None:
+    # STREAM IT. `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1`, so a legitimate
+    # prompt above that cap hashed only its prefix and this reported the snapshot as modified —
+    # an otherwise valid approving review could never be persisted (PR #63 recheck). The cap exists to
+    # bound TRUSTED PARSING of small sidecars; a digest reads every byte and holds none of them, so it
+    # is not the thing the cap protects against.
+    actual_digest = _sha256_regular_file(snapshot)
+    if actual_digest is None:
         return (
             "the prompt snapshot the reviewer was fed is missing: " + snapshot
             + " — re-capture the round rather than writing a verdict for evidence that is gone"
         )
-    actual = hashlib.sha256(snapshot_bytes).hexdigest().encode("ascii")
+    actual = actual_digest.encode("ascii")
     if actual != match.group(1):
         return (
             "the prompt snapshot no longer matches the digest recorded when it was bound ("
             + snapshot + ") — the bytes the reviewer saw are not the bytes on disk"
         )
     return None
+
+
+def _sha256_regular_file(path: str):
+    """SHA-256 of a whole regular file through one O_NOFOLLOW descriptor, or None if unreadable.
+
+    Separate from `_read_regular_file_bytes` on purpose: that one bounds how much UNTRUSTED text is
+    parsed, which a digest never does — it consumes every byte and keeps none.
+    """
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        return _sha256_descriptor(descriptor)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _read_regular_file_bytes(path: str):

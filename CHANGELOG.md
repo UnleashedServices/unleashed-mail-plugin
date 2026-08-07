@@ -117,6 +117,20 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **The plan binding compared digests only, and hashed a truncated snapshot.** Two more defects in
+  the write path:
+  - **Byte-identical plans crossed.** Two distinct plans with the same contents share a digest, so a
+    transcript captured for plan A satisfied an approval for plan B while the binding *recorded* — and
+    ignored — the repo-relative identity that tells them apart. The identity is now compared **when it
+    carries a directory**, which is what `bind-prompt.py` always writes; a bare basename cannot
+    discriminate either way and is left alone, preserving the documented reason the check was
+    digest-only (it must not depend on the directory each step ran from).
+  - **A prompt over 64 KiB could never be approved.** The snapshot was hashed through the capped
+    trusted-read helper, so an oversized-but-valid prompt hashed only its prefix and the write reported
+    the snapshot as modified. The cap bounds untrusted *parsing*; a digest reads every byte and keeps
+    none, so it is not what the cap protects. Now streamed. A guard that refuses correct work is a
+    guard someone switches off.
+
 - **Three narrowing side-effects of this release's own grant tightening.** Scoping the review skills'
   permissions made two documented flows *less* usable, and a base-resolution fallback hid a narrowed
   review:

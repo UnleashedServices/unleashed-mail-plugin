@@ -1,5 +1,6 @@
 """Tests for scripts/review-verdict.py — the plan-digest-bound Combined-verdict artifact."""
 import hashlib
+import shutil
 import json
 import os
 import stat
@@ -11,9 +12,11 @@ import unittest
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "review-verdict.py")
 
 
-def run(*args):
+def run(*args, cwd=None):
+    """`cwd` matters for plan IDENTITY: `_plan_identity` is repo-relative inside a git repo and
+    absolute outside one, so a case about two same-named plans has to run from that repo's root."""
     return subprocess.run([sys.executable, SCRIPT, *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, cwd=cwd)
 
 
 def allocated_transcript(directory, plan, reviewer, body, salt=""):
@@ -1301,6 +1304,82 @@ class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
             ident, _kind = rv._plan_identity(p)
             with self.subTest(plan=p):
                 self.assertFalse(ident.startswith(".."), f"identity escaped the root: {ident!r}")
+
+
+class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
+    """Two write-path defects the recheck found in the binding (PR #63 recheck).
+
+    Both are the same shape as defects already fixed one layer away, which is why they are worth
+    pinning: the digest-only comparison repeats PR #41's basename shortcut, and the capped read repeats
+    the "a guard that refuses valid work" failure the absolute-path fix corrected.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=self.d, check=True)
+        for sub in ("a", "b"):
+            os.makedirs(os.path.join(self.d, "docs", "planning", sub))
+            with open(os.path.join(self.d, "docs", "planning", sub, "SAME_PLAN.md"), "w") as fh:
+                fh.write("# Identical bytes\n")
+
+    def _allocated(self, reviewer, bound_relative):
+        run_id = hashlib.sha256((reviewer + bound_relative).encode()).hexdigest()[:32]
+        path = os.path.join(self.d, f"COREDEV-2619r9-{reviewer}-{run_id}.txt")
+        with open(path, "w") as fh:
+            fh.write(reviewer + "\nVERDICT: APPROVE\n")
+        with open(path + ".launch", "w") as fh:
+            fh.write(run_id + "\n")
+        stamp = os.stat(path).st_mtime_ns
+        os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
+        with open(os.path.join(self.d, bound_relative), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        with open(path + ".plan", "w") as fh:
+            fh.write(f"{digest}  {bound_relative}\n")
+        return path
+
+    def _bind_prompt(self, path, payload=b"review prompt\n"):
+        with open(path + ".prompt", "wb") as fh:
+            fh.write(payload)
+        with open(path + ".promptsha256", "w") as fh:
+            fh.write(hashlib.sha256(payload).hexdigest() + "  prompt.md\n")
+
+    def _write(self, plan_relative, transcripts):
+        run("snapshot", "--plan", plan_relative, cwd=self.d)
+        return run("write", "--plan", plan_relative, "--verdict", "APPROVE",
+                   "--reviewer", f"gemini=APPROVE:{transcripts[0]}",
+                   "--reviewer", f"codex=APPROVE:{transcripts[1]}", cwd=self.d)
+
+    def test_identical_bytes_in_two_plans_cannot_be_crossed(self):
+        """The digest cannot discriminate here, so the recorded identity has to."""
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+
+        crossed = self._write("docs/planning/b/SAME_PLAN.md", transcripts)
+        self.assertNotEqual(0, crossed.returncode, crossed.stdout)
+        self.assertIn("bound to a different plan", crossed.stderr)
+
+        matched = self._write(a, transcripts)
+        self.assertEqual(0, matched.returncode, matched.stderr)
+
+    def test_a_prompt_larger_than_the_trusted_read_cap_still_persists(self):
+        """A guard that refuses valid work is a guard someone switches off.
+
+        `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1`, so a legitimate prompt above
+        that hashed only its prefix and the write reported the snapshot as modified — an otherwise
+        valid approving review could never be recorded. The cap bounds untrusted PARSING; a digest
+        reads every byte and keeps none, so it is not what the cap protects.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        oversized = b"x" * (65537 + 4096)
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path, oversized)
+
+        result = self._write(a, transcripts)
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 if __name__ == "__main__":
