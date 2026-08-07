@@ -711,13 +711,30 @@ def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, st
     # between allocation and capture (PR #63 recheck, P2). Root is accepted because a root-owned
     # ancestor like `/tmp` or `/` is the normal case and is not attacker-controlled.
     try:
-        owner = os.stat(probe).st_uid
+        probe_info = os.stat(probe)
     except OSError as error:
         return None, f"nearest existing directory {probe!r} is unreadable: {error}"
+    owner = probe_info.st_uid
     if owner not in (os.getuid(), 0):
         return None, (
             f"nearest existing directory {probe!r} is owned by uid {owner}, not by this user — its "
             "owner could replace the allocated subtree between allocation and capture"
+        )
+    # OWNERSHIP IS NOT ENOUGH: THE ANCESTOR MUST NOT BE WRITABLE BY OTHERS WITHOUT THE STICKY BIT
+    # (PR #63 recheck, P2). Rename and unlink permission is governed by the PARENT directory, not the
+    # child — so a self-owned but group/world-writable ancestor lets any local user with write access
+    # rename or replace the allocator's mode-0700 `unleashed-mail` child, and every private mode
+    # validated below it then protects a subtree that is no longer the one we created. Reproduced with
+    # a self-owned mode-0777 `XDG_STATE_HOME`, which this check accepted.
+    #
+    # The sticky bit is the exception that makes `/tmp` usable: with `S_ISVTX` set, only the owner of an
+    # entry (or of the directory) may rename or delete it, which is exactly the property being demanded.
+    mode = probe_info.st_mode
+    if (mode & (stat.S_IWGRP | stat.S_IWOTH)) and not (mode & stat.S_ISVTX):
+        return None, (
+            f"nearest existing directory {probe!r} is writable by others (mode {stat.S_IMODE(mode):04o}) "
+            "without the sticky bit — another local user could rename or replace the allocated subtree, "
+            "and rename permission comes from the parent, not from the 0700 child"
         )
     if os.path.exists(canonical) and not os.path.isdir(canonical):
         return None, "value is not a directory"

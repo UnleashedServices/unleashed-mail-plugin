@@ -69,6 +69,11 @@ def _replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new, 1)
 
 
+def _verdict_module():
+    """The SHIPPED `review-verdict.py`, so fixtures derive a plan identity instead of restating one."""
+    return _load_module(VERDICT_PATH, "verdict-identity")
+
+
 def _load_module(path: Path, label: str):
     module_name = "m4_" + "".join(
         character if character.isalnum() else "_" for character in label
@@ -372,9 +377,16 @@ class FreshnessFixture(unittest.TestCase):
         # `write` refuses an APPROVING verdict without one. These cells are about the LAUNCH record,
         # so give each transcript a valid binding and let the kind under test be the only variable.
         plan_digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        # The identity is DERIVED from the module under test, never restated as `plan.name`. The bare
+        # basename used to be accepted because the binding comparison exempted separator-free records —
+        # an exemption that also let a transcript bound to one root-level plan approve another with the
+        # same bytes, so it was removed (PR #63 recheck). Restating the identity here would make these
+        # cells fail on the BINDING instead of on the launch record they exist to test, which is the
+        # "a new check steals a more specific rule's diagnostic" trap this file has hit before.
+        plan_identity, _kind = _verdict_module()._plan_identity(str(plan))
         for transcript in transcripts:
             Path(str(transcript) + ".plan").write_text(
-                f"{plan_digest}  {plan.name}\n", encoding="utf-8"
+                f"{plan_digest}  {plan_identity}\n", encoding="utf-8"
             )
             write_prompt_binding(transcript)
 
@@ -958,7 +970,11 @@ class SFreshAdditionalProofs(FreshnessFixture):
         # A valid plan binding, so the quorum check is the only thing this cell can fail on. Without
         # it the bypass mutant is refused by the binding instead, and the proof would witness the
         # wrong rejection.
-        Path(str(shared) + ".plan").write_text(f"{digest}  {plan.name}\n", encoding="utf-8")
+        # A VALID binding, derived rather than restated: this cell isolates the QUORUM rule, so the
+        # plan binding must not be a second reason to refuse. `plan.name` was accepted only while the
+        # binding comparison exempted separator-free records (PR #63 recheck).
+        shared_identity, _kind = _verdict_module()._plan_identity(str(plan))
+        Path(str(shared) + ".plan").write_text(f"{digest}  {shared_identity}\n", encoding="utf-8")
         write_prompt_binding(shared)
         return self.invoke(
             script,
@@ -1254,12 +1270,21 @@ class PlanBindingProofs(FreshnessFixture):
     """
 
     def write_with_binding(self, label: str, bound_digest, verdict: str = "APPROVE",
-                           bind_to_this_plan: bool = False):
+                           bind_to_this_plan: bool = False, bound_identity: str = None):
         case_root = self.next_case_root(label)
         plan = case_root / "PLAN.md"
         plan.write_text("# Plan\nthe bytes being approved\n", encoding="utf-8")
         plan_digest = hashlib.sha256(plan.read_bytes()).hexdigest()
         parent = case_root / "state" / "unleashed-mail" / "review-transcripts" / "RepoHash09"
+
+        # THE IDENTITY DEFAULTS TO THIS PLAN'S, so each cell varies ONE thing. Every case used to record
+        # the placeholder `some-plan.md`, which only passed because the binding comparison exempted
+        # separator-free records — the same exemption that let a transcript bound to one root-level plan
+        # approve another with identical bytes (PR #63 recheck). With the exemption gone, a placeholder
+        # identity would make every cell fail on the identity rather than on the variable it isolates.
+        identity = bound_identity
+        if identity is None:
+            identity, _kind = _verdict_module()._plan_identity(str(plan))
 
         transcripts = []
         for index, reviewer in enumerate(("gemini", "codex")):
@@ -1270,7 +1295,7 @@ class PlanBindingProofs(FreshnessFixture):
             recorded = plan_digest if bind_to_this_plan else bound_digest
             if recorded is not None:
                 Path(str(transcript) + ".plan").write_text(
-                    f"{recorded}  some-plan.md\n", encoding="utf-8"
+                    f"{recorded}  {identity}\n", encoding="utf-8"
                 )
                 write_prompt_binding(transcript)
             transcripts.append(transcript)
@@ -1296,6 +1321,23 @@ class PlanBindingProofs(FreshnessFixture):
         output = result.stdout + result.stderr
         self.assertNotEqual(0, result.returncode, output)
         self.assertIn("different bytes than this verdict approves", output)
+
+    def test_a_transcript_bound_to_a_DIFFERENT_plan_identity_is_refused(self):
+        """The separator-free exemption is gone (PR #63 recheck).
+
+        `bind-prompt.py` records `relpath(plan, root)`, which for a plan at the repository ROOT is a
+        bare basename. The old `os.sep in bound_plan` guard therefore skipped exactly the bindings the
+        current binder produces for root-level plans — so two such plans with IDENTICAL bytes both
+        passed the digest check and a transcript bound to `A_PLAN.md` approved `B_PLAN.md`. Here the
+        digest matches and only the identity differs, so nothing but the identity rule can refuse it.
+        """
+        result, _ = self.write_with_binding(
+            "binding-other-identity", None, bind_to_this_plan=True,
+            bound_identity="A_PLAN.md",
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("bound to a different plan", output)
 
     def test_an_absent_binding_is_refused_rather_than_skipped(self):
         result, _ = self.write_with_binding("binding-absent", None)

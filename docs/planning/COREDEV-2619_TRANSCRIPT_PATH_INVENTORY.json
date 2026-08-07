@@ -241,9 +241,9 @@
       "sourceSha256": "27fdb49bf4e90af135d80d728e214e48b975c0b558838a2a3f3129daddcc05e9"
     },
     {
-      "location": "scripts/tests/test_review_verdict.py:206",
+      "location": "scripts/tests/test_review_verdict.py:214",
       "path": "scripts/tests/test_review_verdict.py",
-      "line": 206,
+      "line": 214,
       "class": "quote-keep",
       "reason": "Regression-test documentation intentionally quotes the duplicate-transcript command.",
       "sourceSha256": "4ee436c99b8105a87a8a84527f364f2a5647a01c529493a6fb5f6b24e38a212b"

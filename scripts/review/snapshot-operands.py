@@ -28,14 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import containment  # noqa: E402
 
 
-def _read_nofollow(path: str) -> bytes:
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as error:
-        containment.refuse(f"operand could not be read without following a link: {path}: {error}")
+def _read_leaf_nofollow(fd: int) -> bytes:
+    """Drain an already-opened descriptor, refusing anything that is not a regular file."""
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            containment.refuse(f"operand is not a regular file at read time: {path}")
+            containment.refuse("target is not a regular file at read time")
         chunks = []
         while True:
             chunk = os.read(fd, 1 << 20)
@@ -45,6 +42,54 @@ def _read_nofollow(path: str) -> bytes:
     finally:
         os.close(fd)
     return b"".join(chunks)
+
+
+def _read_snapshot(path: str) -> bytes:
+    """Read one of OUR OWN snapshot copies (they live in a private dir, not in the repository)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        containment.refuse(f"snapshot could not be read without following a link: {path}: {error}")
+    return _read_leaf_nofollow(fd)
+
+
+def _read_nofollow(path: str) -> bytes:
+    """Read `path` with no symlink traversal at ANY component, walking down from the repository root.
+
+    `O_NOFOLLOW` PROTECTS ONLY THE LEAF (PR #63 recheck). `containment.contained_regular_file()`
+    validates by pathname and this function then re-opened that pathname, so a same-account process
+    could rename an accepted operand's parent and put a symlink in its place between the two: the leaf
+    flag says nothing about ancestors, and the substituted parent was traversed happily — inlining or
+    snapshotting an outside file. Descending component by component with `O_DIRECTORY|O_NOFOLLOW`,
+    rooted at the validated repository, makes the ancestors part of the same no-follow guarantee, so
+    the object opened is the one containment approved.
+    """
+    root = containment.repository_root()
+    relative = os.path.relpath(path, root)
+    components = [c for c in relative.split(os.sep) if c and c != "."]
+    if not components or ".." in components:
+        containment.refuse(f"operand is not inside the repository: {path}")
+
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in components[:-1]:
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            except OSError as error:
+                containment.refuse(
+                    f"operand's parent {component!r} could not be traversed without following a link: "
+                    f"{path}: {error}"
+                )
+            os.close(dir_fd)
+            dir_fd = next_fd
+        try:
+            fd = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        except OSError as error:
+            containment.refuse(f"operand could not be read without following a link: {path}: {error}")
+    finally:
+        os.close(dir_fd)
+
+    return _read_leaf_nofollow(fd)
 
 
 #: Written beside the snapshots so the caller can re-verify the exact bytes just before launching.
@@ -75,7 +120,7 @@ def _verify(dest: str) -> int:
     except OSError as error:
         containment.refuse(f"snapshot digest manifest is unreadable: {manifest}: {error}")
     for expected, path in records:
-        payload = _read_nofollow(path)
+        payload = _read_snapshot(path)
         actual = hashlib.sha256(payload).hexdigest()
         if actual != expected:
             containment.refuse(

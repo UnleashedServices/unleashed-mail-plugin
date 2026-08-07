@@ -360,9 +360,13 @@ class TranscriptThreadingFixture(unittest.TestCase):
         """
         plan = self.reviewed / PLAN_RELATIVE
         digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        # The REPO-RELATIVE identity, not the basename: `bind-prompt.py` records
+        # `relpath(plan, root)`, and the verdict writer compares every recorded identity now that the
+        # separator-free exemption is gone (PR #63 recheck). `plan.name` would drop `docs/planning/`
+        # and make these cells fail on the binding rather than on the path threading they test.
         for transcript in transcripts:
             Path(str(transcript) + ".plan").write_text(
-                f"{digest}  {plan.name}\n", encoding="utf-8"
+                f"{digest}  {PLAN_RELATIVE}\n", encoding="utf-8"
             )
             write_prompt_binding(transcript)
 

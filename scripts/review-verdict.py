@@ -640,12 +640,24 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     # always writes one (`os.path.relpath(plan, repo_root)`). A bare basename is under-specified — it
     # cannot distinguish them either way — so it is left alone rather than guessed at, which also keeps
     # pre-binding captures readable.
-    if bound_plan and os.sep in bound_plan.strip():
+    # EVERY recorded identity is compared — there is no separator exemption (PR #63 recheck).
+    # The `os.sep in bound_plan` guard was meant to leave under-specified legacy bindings alone, but
+    # `bind-prompt.py` writes `os.path.relpath(plan, root)`, and for a plan at the REPOSITORY ROOT that
+    # is a bare basename with no separator. So the exemption covered bindings the CURRENT binder
+    # produces: two root-level plans with identical bytes both skipped this check, the equal digest
+    # passed, and a transcript bound to `A_PLAN.md` approved `B_PLAN.md`. Reproduced.
+    #
+    # Comparing unconditionally is also the right direction for the legacy case the guard was written
+    # for: a transcript whose recorded identity does not match the plan being written is refused rather
+    # than accepted on a digest alone, and the operator re-captures. A transcript with NO binding at all
+    # is a different branch above, which still names it explicitly.
+    bound_identity = bound_plan.strip() if bound_plan else ""
+    if bound_identity:
         plan_identity, _kind = _plan_identity(plan)
-        if os.path.normpath(bound_plan.strip()) != os.path.normpath(plan_identity):
+        if os.path.normpath(bound_identity) != os.path.normpath(plan_identity):
             return (
                 "transcript is bound to a different plan: " + binding_path + " records "
-                + bound_plan.strip() + ", the verdict is being written for " + plan_identity
+                + bound_identity + ", the verdict is being written for " + plan_identity
             )
     if bound_digest != plan_digest:
         return (

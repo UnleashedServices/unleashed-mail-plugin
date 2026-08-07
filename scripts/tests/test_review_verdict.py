@@ -41,8 +41,16 @@ def allocated_transcript(directory, plan, reviewer, body, salt=""):
     os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
     with open(plan, "rb") as fh:
         digest = hashlib.sha256(fh.read()).hexdigest()
+    # The identity is DERIVED from the module under test, not restated as a basename. A bare basename
+    # was accepted only while the binding comparison exempted separator-free records — the exemption
+    # that also let a transcript bound to one root-level plan approve another with identical bytes
+    # (PR #63 recheck). Restating it here would make unrelated cells fail on the binding.
+    fh_spec = importlib.util.spec_from_file_location("rv_identity", SCRIPT)
+    _rv_identity = importlib.util.module_from_spec(fh_spec)
+    fh_spec.loader.exec_module(_rv_identity)
+    _identity, _kind = _rv_identity._plan_identity(str(plan))
     with open(path + ".plan", "w", encoding="utf-8") as fh:
-        fh.write(digest + "  " + os.path.basename(str(plan)) + "\n")
+        fh.write(digest + "  " + _identity + "\n")
         # `.promptsha256` and `.prompt` too. `bind-prompt.py` writes all three together, so a per-run
     # transcript carrying only `.plan` was never produced by the capture helper — and `write` now
     # REQUIRES the prompt binding rather than skipping when it is absent, which was the same
