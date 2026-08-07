@@ -111,6 +111,27 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
   zero-removal run cannot be distinguished from a wrong state root.
 
+### Fixed — third recheck pass
+
+- **A validated pathname is not a pin across an `exec`.** The granted wrappers hand `review-verdict.py`
+  the path `containment.py` resolved, but resolution happens again in that second process — so a
+  same-account swap of `docs/planning` for a symlink in the window between them sent every state write
+  through the new ancestor. Reproduced: `snapshot-plan.sh` returned 0 having created `.verdicts/` and
+  the digest sidecar in an outside directory. Both state writes now go through one descriptor walk
+  from the repository root, so a symlinked component fails whenever it was planted. (Passing the
+  resolved path, earlier in this release, removed the "validated one string, opened another" half and
+  could not remove this half.)
+- **`TMPDIR` inside the checkout made the prompt rewriter reject its own substitution.** Both harnesses
+  build their scratch worktree with `mktemp -d`, so a `TMPDIR` under the repository puts the tree at
+  `<repo>/tmp.x/tree` — and the replacement value then contains the repository path, which the
+  "no unreplaced references remain" check found and refused, after the transcript had been allocated.
+  The check inspects the residue now. Its reachability is stated honestly in the code: with a total
+  `bytes.replace`, it can no longer fire for its stated cause and is kept as a cheap invariant, with
+  no test claiming to exercise it.
+- **The shell-operator lexer flagged what a trailing `#` comment said** — self-found by cross-checking
+  it against `shlex` over the 398 fenced command lines this repo ships. A comment now ends the line;
+  process substitution (`<(`, `>(`) is counted, since it is not a redirect.
+
 ### Removed
 
 - Five scratch probes at the repository root (`test_capture{,2,3,4,5}.py`), committed by accident in

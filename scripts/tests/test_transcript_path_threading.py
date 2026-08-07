@@ -721,3 +721,49 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class NestedScratchWorktreeStillStages(unittest.TestCase):
+    """`TMPDIR` inside the checkout made the rewrite guard reject its own substitution.
+
+    THE FINDING (PR #63 recheck, P2). Both harnesses build their scratch worktree with `mktemp -d`,
+    which honours `TMPDIR` — so pointing it inside the repository puts the tree at `<repo>/tmp.x/tree`
+    and the REPLACEMENT VALUE then contains the repository path. `stage-prompt.py` scanned the
+    rewritten payload for `repo` and found the bytes it had just inserted, aborting every otherwise
+    valid review AFTER its transcript had been allocated. A false refusal, and an expensive one.
+
+    The guard now inspects the RESIDUE — the payload with the inserted `tree` occurrences removed —
+    which is exactly the set of references the substitution failed to reach.
+
+    NO NEGATIVE CELL ACCOMPANIES THIS ONE, deliberately. `bytes.replace` is total, so with the inserted
+    occurrences discounted the guard cannot fire for its stated cause: a reference the substitution
+    missed is one spelled differently, and such a reference contains no literal `repo` for either form
+    of the check to see. I wrote the negative cell first and it passed against the fixed code — which
+    is the tell. The guard is kept as a cheap invariant against a future non-total rewrite; claiming a
+    proof for it would be claiming a test that cannot fail.
+    """
+
+    def stage(self, repo: str, tree: str, body: str):
+        root = Path(tempfile.mkdtemp(prefix="nested-stage-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        snapshot = root / "prompt.md"
+        snapshot.write_text(body, encoding="utf-8")
+        record = root / "prompt.sha256"
+        record.write_text(
+            hashlib.sha256(snapshot.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
+        tree_root = Path(tree)
+        tree_root.mkdir(parents=True, exist_ok=True)
+        return subprocess.run(
+            [sys.executable, str(STAGE_PROMPT), "--snapshot", str(snapshot), "--record", str(record),
+             "--tree", str(tree_root), "--rel", "prompt.md", "--repo", repo, "--min-bytes", "1"],
+            capture_output=True, text=True, check=False,
+        ), tree_root
+
+    def test_a_scratch_tree_BENEATH_the_repository_still_stages(self):
+        repo = tempfile.mkdtemp(prefix="nested-repo-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        tree = os.path.join(repo, "tmp.scratch", "tree")      # TMPDIR inside the checkout
+        result, tree_root = self.stage(repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20)
+        self.assertEqual(0, result.returncode, result.stderr)
+        staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged)

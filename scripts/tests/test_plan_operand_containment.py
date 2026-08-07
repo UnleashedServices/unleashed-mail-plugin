@@ -229,6 +229,63 @@ class PlanOperandContainment(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout)
 
 
+class StateWritesArePinnedToTheContainedDirectory(unittest.TestCase):
+    """A pathname handed across an exec is not a pin (PR #63 recheck, P1 — reproduced).
+
+    The granted wrappers validate the plan with `containment.py` and pass `review-verdict.py` the
+    resolved path. Resolution then happens AGAIN, in a second process, so a same-account swap of
+    `docs/planning` for a symlink in that window sent every state write through the new ancestor:
+    `snapshot-plan.sh` returned 0 having created `.verdicts/` and the digest sidecar in an outside
+    directory. Passing the realpath — the earlier fix — removed the "validated one string, opened
+    another" half and could not remove this half, because a string cannot pin an inode across an exec.
+
+    State is now created and written through a descriptor walk from the repository root, so a symlinked
+    component fails whenever it was planted. The post-swap STATE is built directly, for the reason it
+    always is here: a race cannot be staged deterministically, and the attacker's leftovers are what
+    the guard has to refuse.
+    """
+
+    def setUp(self) -> None:
+        self.base = Path(tempfile.mkdtemp(prefix="state-pin-")).resolve()
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        self.repo = self.base / "repo"
+        self.outside = self.base / "outside"
+        (self.repo / "docs" / "planning").mkdir(parents=True)
+        self.outside.mkdir()
+        subprocess.run(["git", "init", "-q", "."], cwd=self.repo, check=True)
+        self.plan = self.repo / "docs" / "planning" / "FEATURE_PLAN.md"
+        self.plan.write_text("# Plan\nbody\n", encoding="utf-8")
+
+    def snapshot(self, operand: str):
+        return subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "review-verdict.py"),
+             "snapshot", "--plan", operand],
+            cwd=str(self.repo), capture_output=True, text=True, check=False,
+        )
+
+    def test_a_planning_directory_SWAPPED_for_a_symlink_creates_no_outside_state(self):
+        resolved = str(self.plan.resolve())          # what containment.py --absolute emits
+        shutil.move(str(self.repo / "docs" / "planning"), str(self.outside / "planning"))
+        (self.repo / "docs" / "planning").symlink_to(self.outside / "planning")
+
+        result = self.snapshot(resolved)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("symlinked path component", result.stderr)
+        self.assertFalse((self.outside / "planning" / ".verdicts").exists(),
+                         "state was created outside the repository through the swapped ancestor")
+
+    def test_an_ordinary_plan_still_gets_its_private_state(self):
+        """Positive control: the walk must refuse a substituted ancestor, not every write."""
+        result = self.snapshot("docs/planning/FEATURE_PLAN.md")
+        self.assertEqual(0, result.returncode, result.stderr)
+        verdicts = self.repo / "docs" / "planning" / ".verdicts"
+        self.assertEqual(0o700, verdicts.stat().st_mode & 0o777)
+        self.assertEqual({".gitignore", "FEATURE_PLAN.md.reviewed-sha256"},
+                         {entry.name for entry in verdicts.iterdir()})
+        self.assertEqual("*\n", (verdicts / ".gitignore").read_text(encoding="utf-8"))
+
+
 class ContainedReadWalksEveryComponent(unittest.TestCase):
     """`contained_regular_file()` validates a NAME; the read must open the object it approved.
 

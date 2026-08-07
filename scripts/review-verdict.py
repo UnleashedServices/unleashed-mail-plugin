@@ -339,10 +339,171 @@ def _write_text_nofollow(path: str, text: str) -> None:
         fh.write(text)
 
 
+#: The private per-plan state directory. Named once so the descriptor writer and the two path helpers
+#: cannot disagree about which directory they are creating.
+VERDICT_DIR_NAME = ".verdicts"
+
+
+def _plan_directory_fd(plan: str) -> "int | None":
+    """A descriptor for the plan's directory, reached WITHOUT following a symlink at any component.
+
+    THE PATHNAME IS NOT A PIN (PR #63 recheck, P1 — reproduced). The granted wrappers validate the
+    plan with `containment.py` and hand this program the resolved path, but resolution happens again
+    HERE, in a second process: a same-account swap of `docs/planning` for a symlink in that window made
+    every state write follow the new ancestor. Reproduced end to end — `snapshot-plan.sh` returned 0
+    having created `.verdicts/` and the digest sidecar inside an outside directory. Passing the
+    realpath removed the "two different strings" half of that finding and could not remove this half,
+    because a string cannot pin an inode across an exec.
+
+    Walking down from the repository root with `O_DIRECTORY|O_NOFOLLOW` does pin it: a symlinked
+    component fails ELOOP whenever it was planted, and every write below goes through the descriptor
+    rather than through the name.
+
+    Returns None when the plan is not inside a git worktree. That is `review-verdict.py`'s designed,
+    tested behaviour for a plan outside any repository — it is the maintainer's own CLI as well as the
+    gate's — and the granted wrappers, which are what the model can reach, refuse that case before
+    calling it.
+    """
+    absolute = os.path.abspath(plan)
+    root = _repo_root(absolute)
+    if root is None:
+        return None
+    directory = os.path.dirname(absolute)
+    relative = os.path.relpath(directory, root)
+    components = [c for c in relative.split(os.sep) if c and c != os.curdir]
+    if os.pardir in components:
+        return None
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        for component in components:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=dir_fd,
+            )
+            os.close(dir_fd)
+            dir_fd = next_fd
+    except OSError as error:
+        os.close(dir_fd)
+        raise SystemExit(
+            f"review-verdict: refusing to write state through a symlinked path component: "
+            f"{directory}: {error}"
+        )
+    return dir_fd
+
+
+def _write_state_file(plan: str, name: str, text: str) -> str:
+    """Create `<plan dir>/.verdicts/` and write `name` into it, never following a symlink.
+
+    Both state writes had the same shape — `_ensure_secure_dir` on a NAME, then a path-based temp
+    write and `os.replace` — so both followed a substituted ancestor. They share this one descriptor
+    walk now, which is also why a third state file cannot quietly opt out.
+    """
+    parent_fd = _plan_directory_fd(plan)
+    verdict_dir = os.path.join(os.path.dirname(os.path.abspath(plan)), VERDICT_DIR_NAME)
+    if parent_fd is None:
+        # No repository: the documented path-based behaviour, unchanged.
+        _ensure_secure_dir(verdict_dir)
+        dest = os.path.join(verdict_dir, name)
+        if os.path.islink(dest):
+            raise SystemExit(f"review-verdict: refusing to overwrite a symlinked state file: {dest}")
+        tmp = f"{dest}.tmp.{os.getpid()}"
+        old_umask = os.umask(0o077)
+        try:
+            _write_text_nofollow(tmp, text)
+            os.replace(tmp, dest)
+        finally:
+            os.umask(old_umask)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return dest
+
+    old_umask = os.umask(0o077)
+    try:
+        try:
+            os.mkdir(VERDICT_DIR_NAME, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        info = os.stat(VERDICT_DIR_NAME, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise SystemExit(
+                f"review-verdict: refusing a symlinked or non-directory verdict dir: {verdict_dir}"
+            )
+        state_fd = os.open(
+            VERDICT_DIR_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+    finally:
+        os.umask(old_umask)
+        os.close(parent_fd)
+
+    old_umask = os.umask(0o077)
+    tmp_name = f"{name}.tmp.{os.getpid()}"
+    try:
+        os.fchmod(state_fd, 0o700)
+        _write_self_ignore(state_fd)
+        _write_text_at(state_fd, tmp_name, text)
+        os.replace(tmp_name, name, src_dir_fd=state_fd, dst_dir_fd=state_fd)
+    finally:
+        os.umask(old_umask)
+        try:
+            os.unlink(tmp_name, dir_fd=state_fd)
+        except OSError:
+            pass
+        os.close(state_fd)
+    return os.path.join(verdict_dir, name)
+
+
+def _write_self_ignore(state_fd: int) -> None:
+    """`.gitignore` holding `*`, created through the descriptor, never through a dangling link."""
+    try:
+        descriptor = os.open(
+            ".gitignore",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=state_fd,
+        )
+    except OSError:
+        return                                   # already present, or a link we must not write through
+    try:
+        os.write(descriptor, b"*\n")
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _write_text_at(state_fd: int, name: str, text: str) -> None:
+    """Write `text` to `name` under `state_fd` at 0600, refusing a symlink or a hard-linked victim."""
+    descriptor = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=state_fd,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.ENOTSUP, "refusing a non-regular state target", name)
+        if info.st_nlink != 1:
+            raise OSError(errno.EMLINK, "refusing a hard-linked state target", name)
+        os.ftruncate(descriptor, 0)
+        os.fchmod(descriptor, 0o600)
+        payload = text.encode("utf-8")
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+    finally:
+        os.close(descriptor)
+
+
 def _verdict_path(plan_path: str) -> str:
     """`<plan-dir>/.verdicts/<plan-basename>.verdict.json` — co-located with the plan it binds."""
     plan_path = os.path.abspath(plan_path)
-    return os.path.join(os.path.dirname(plan_path), ".verdicts",
+    return os.path.join(os.path.dirname(plan_path), VERDICT_DIR_NAME,
                         os.path.basename(plan_path) + ".verdict.json")
 
 
@@ -353,7 +514,7 @@ def _reviewed_sha_sidecar(plan_path: str) -> str:
     tool invocations, so the earlier `REVIEWED_PLAN_SHA256=…` shell-local expanded EMPTY at write time
     (round 4: codex). Session state, git-ignored beside the artifact."""
     plan_path = os.path.abspath(plan_path)
-    return os.path.join(os.path.dirname(plan_path), ".verdicts",
+    return os.path.join(os.path.dirname(plan_path), VERDICT_DIR_NAME,
                         os.path.basename(plan_path) + ".reviewed-sha256")
 
 
@@ -988,21 +1149,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         raise SystemExit(f"review-verdict: plan not found: {plan}")
     digest = _sha256_bytes(plan)
-    dest = _reviewed_sha_sidecar(plan)
-    _ensure_secure_dir(os.path.dirname(dest))
-    if os.path.islink(dest):
-        raise SystemExit(f"review-verdict: refusing to overwrite a symlinked snapshot: {dest}")
-    tmp = f"{dest}.tmp.{os.getpid()}"
-    old_umask = os.umask(0o077)
-    try:
-        _write_text_nofollow(tmp, digest + "\n")
-        os.replace(tmp, dest)
-    finally:
-        os.umask(old_umask)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+    dest = _write_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)), digest + "\n")
     print(f"review-verdict: snapshotted reviewed plan digest {digest[:12]}… for {plan}")
     return 0
 
@@ -1162,21 +1309,11 @@ def cmd_write(args: argparse.Namespace) -> int:
         "round": args.round,
         "createdAt": args.created_at or "",   # caller passes an ISO stamp; scripts can't read the clock
     }
-    dest = _verdict_path(plan)
-    _ensure_secure_dir(os.path.dirname(dest))
-    if os.path.islink(dest):
-        raise SystemExit(f"review-verdict: refusing to overwrite a symlinked artifact: {dest}")
-    tmp = f"{dest}.tmp.{os.getpid()}"
-    old_umask = os.umask(0o077)
-    try:
-        _write_text_nofollow(tmp, json.dumps(artifact, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, dest)
-    finally:
-        os.umask(old_umask)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+    dest = _write_state_file(
+        plan,
+        os.path.basename(_verdict_path(plan)),
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+    )
     print(f"review-verdict: wrote {verdict} artifact bound to {plan} ({artifact['planSha256'][:12]}…)")
     return 0
 

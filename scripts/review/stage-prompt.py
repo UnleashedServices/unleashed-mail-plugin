@@ -145,7 +145,25 @@ def main(argv=None) -> int:
     tree = os.fsencode(arguments.tree)
     if repo:
         payload = payload.replace(repo, tree)
-        if repo in payload:
+        # THE CHECK LOOKS AT THE RESIDUE, NOT THE WHOLE PAYLOAD (PR #63 recheck, P2). When `TMPDIR`
+        # points inside the checkout — which both harnesses honour, so it is a configuration, not an
+        # exotic state — the scratch worktree lands beneath the repository and the REPLACEMENT value
+        # itself contains the repository path (`<repo>/tmp.x/tree`). Scanning the rewritten payload for
+        # `repo` then found the bytes this substitution had just INSERTED and aborted every otherwise
+        # valid review, after its transcript had already been allocated. Reproduced.
+        #
+        # Removing the inserted `tree` occurrences leaves exactly the references the substitution did
+        # not reach; `repo` surviving THERE is the failure this guard names.
+        #
+        # HONEST ABOUT REACHABILITY: `bytes.replace` is TOTAL, so with the inserted occurrences
+        # discounted this can no longer fire for its stated cause — a reference the substitution missed
+        # is one spelled differently (through a symlink, `..`, a trailing slash), and such a reference
+        # does not contain `repo` literally, so neither form of the check ever saw it. The whole-payload
+        # version could therefore only ever fire on its own substitution, which is exactly the false
+        # refusal that was reported. It is kept as a cheap invariant against a future non-total
+        # rewrite, NOT presented as an active defence, and no test claims to exercise it — a test that
+        # cannot fail is not evidence.
+        if repo in payload.replace(tree, b""):
             _refuse("the prompt still references the real worktree after rewriting")
 
     if arguments.guard:
