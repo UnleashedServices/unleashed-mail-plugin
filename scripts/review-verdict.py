@@ -208,6 +208,20 @@ _RUN_ID_HEX_LENGTH = 16 * 2
 _TRANSCRIPT_RUN_ID = re.compile(
     r"-([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH) + r"})\.txt\Z"
 )
+# The FULL allocator basename, used for CLASSIFICATION. `_TRANSCRIPT_RUN_ID` matches any name ending
+# `-<32 hex>.txt`, which the docstring below names as colliding with digest-suffixed files like
+# `review-<md5>.txt` — MD5 hex being exactly 32 characters. Such a file was then REQUIRED to carry a
+# `.launch` and rejected without one, so a legitimate custom or historical transcript became
+# unusable (PR #63 recheck, P2).
+#
+# Narrowing to the whole allocator shape — `<ticket>r<round>-<reviewer>-<32 hex>.txt` — removes that
+# collision WITHOUT the fail-open the docstring rightly refuses: the basename travels with the file,
+# so an allocated transcript that was copied or moved still classifies as per-run. That is exactly the
+# property conditioning on the DIRECTORY would have lost.
+_ALLOCATOR_BASENAME = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-[A-Za-z0-9][A-Za-z0-9-]*-[0-9a-f]{"
+    + str(_RUN_ID_HEX_LENGTH) + r"}\.txt\Z"
+)
 _LAUNCH_RECORD = re.compile(
     rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z"
 )
@@ -436,7 +450,7 @@ def _is_per_run_transcript(path: str) -> bool:
     transcripts_directory = os.path.dirname(hash_directory)
     product_directory = os.path.dirname(transcripts_directory)
     return (
-        _TRANSCRIPT_RUN_ID.search(os.path.basename(path)) is not None
+        _ALLOCATOR_BASENAME.match(os.path.basename(path)) is not None
         or (
             os.path.basename(transcripts_directory).casefold() == "review-transcripts"
             and os.path.basename(product_directory).casefold() == "unleashed-mail"

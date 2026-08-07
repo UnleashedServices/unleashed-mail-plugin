@@ -117,6 +117,21 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **An allocation base owned by another user was accepted.** `os.access` answers "may I write here",
+  never "is this mine" — so an attacker-created mode-0777 directory under `/tmp` passed, and the
+  allocator then placed its 0700 subtree beneath a parent whose owner could rename or replace it
+  between allocation and capture. The nearest existing ancestor must now be owned by this user or by
+  root; root-owned ancestors like `/tmp` are the normal case and are not attacker-controlled.
+
+- **A digest-suffixed legacy transcript was mistaken for an allocation.** Classification keyed on any
+  basename ending `-<32 hex>.txt` — and the classifier's own docstring names the realistic collision,
+  `review-<md5>.txt`, MD5 hex being exactly 32 characters. Such a file was then required to carry a
+  `.launch` and rejected without one, making a legitimate custom or historical transcript unusable.
+  Narrowed to the whole allocator shape, `<ticket>r<round>-<reviewer>-<32 hex>.txt`. This keeps the
+  property that docstring refuses to give up — the basename travels with the file, so an allocated
+  transcript that was copied or moved still classifies as per-run, which conditioning on the
+  *directory* would have lost.
+
 - **Four hardening gaps in the allocated-capture path.** All reproduced:
   - **A hard link at the reserved leaf rewrote whatever shared the inode.** A hard link *is* a regular
     file, so `O_NOFOLLOW` and the `S_ISREG` check both accepted one; the `fchmod`/write/`ftruncate`

@@ -1,5 +1,6 @@
 """Tests for scripts/review-verdict.py — the plan-digest-bound Combined-verdict artifact."""
 import hashlib
+import importlib.util
 import shutil
 import json
 import os
@@ -1380,6 +1381,55 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
 
         result = self._write(a, transcripts)
         self.assertEqual(0, result.returncode, result.stderr)
+
+
+class LegacyNamesAreNotMistakenForAllocations(unittest.TestCase):
+    """Classification must key on the WHOLE allocator basename, not just its hex suffix.
+
+    `_TRANSCRIPT_RUN_ID` matches any name ending `-<32 hex>.txt`, and the classifier's own docstring
+    names the realistic collision: a digest-suffixed file like `review-<md5>.txt`, MD5 hex being exactly
+    32 characters. Such a file was then treated as per-run, REQUIRED to carry a `.launch`, and rejected
+    without one — so a legitimate custom or historical transcript became unusable (PR #63 recheck, P2).
+
+    The narrowing keeps the property the docstring refuses to give up: the basename travels with the
+    file, so an allocated transcript that was copied or moved still classifies as per-run. Conditioning
+    on the DIRECTORY would have lost exactly that, which is the fail-open the docstring rejects — and
+    this is why the fix is on the name, not the location.
+    """
+
+    def _module(self):
+        spec = importlib.util.spec_from_file_location("rv_names", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["rv_names"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_allocator_shape_classifies_as_per_run(self):
+        module = self._module()
+        for name in ("COREDEV-2619r9-codex-" + "a" * 32 + ".txt",
+                     "COREDEV-2619r12-gemini-" + "b" * 32 + ".txt"):
+            with self.subTest(name=name):
+                self.assertTrue(module._is_per_run_transcript("/anywhere/" + name),
+                                "a real allocated name must stay per-run wherever it lives")
+
+    def test_a_digest_suffixed_legacy_name_does_not(self):
+        """The named collision. Before the narrowing this demanded a `.launch` and failed without one."""
+        module = self._module()
+        for name in ("review-" + "c" * 32 + ".txt", "backup-" + "d" * 32 + ".txt"):
+            with self.subTest(name=name):
+                self.assertFalse(module._is_per_run_transcript("/anywhere/" + name),
+                                 "a digest-suffixed legacy file was classified as an allocation")
+
+    def test_a_launch_record_still_forces_the_per_run_branch(self):
+        """The narrowing must not weaken the third branch: a sibling record is proof of provenance,
+        and planting one only makes the gate STRICTER, never laxer."""
+        module = self._module()
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        odd = os.path.join(directory, "review-" + "c" * 32 + ".txt")
+        open(odd, "w").close()
+        open(odd + ".launch", "w").close()
+        self.assertTrue(module._is_per_run_transcript(odd))
 
 
 if __name__ == "__main__":

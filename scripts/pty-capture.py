@@ -622,6 +622,20 @@ def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, st
         return None, f"nearest existing path {probe!r} is not a directory"
     if not os.access(probe, os.W_OK | os.X_OK):
         return None, f"nearest existing directory {probe!r} is not writable and searchable"
+    # WRITABLE IS NOT OURS. `os.access` says the mode bits permit us; it says nothing about who owns
+    # the directory. An attacker-created mode-0777 directory under `/tmp` passes, and the allocator
+    # then puts its 0700 subtree beneath a parent whose owner can rename or replace that subtree
+    # between allocation and capture (PR #63 recheck, P2). Root is accepted because a root-owned
+    # ancestor like `/tmp` or `/` is the normal case and is not attacker-controlled.
+    try:
+        owner = os.stat(probe).st_uid
+    except OSError as error:
+        return None, f"nearest existing directory {probe!r} is unreadable: {error}"
+    if owner not in (os.getuid(), 0):
+        return None, (
+            f"nearest existing directory {probe!r} is owned by uid {owner}, not by this user — its "
+            "owner could replace the allocated subtree between allocation and capture"
+        )
     if os.path.exists(canonical) and not os.path.isdir(canonical):
         return None, "value is not a directory"
     return canonical, None

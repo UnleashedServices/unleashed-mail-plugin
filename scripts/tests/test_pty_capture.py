@@ -596,6 +596,50 @@ class AllocatedTargetHardening(unittest.TestCase):
         os.makedirs(elsewhere)
         canonical, reason = self.mod._validate_base_candidate(elsewhere, home)
         self.assertIsNotNone(canonical, reason)
+    def test_a_base_owned_by_another_user_is_rejected(self):
+        """`os.access` answers "may I write here", never "is this mine".
+
+        An attacker-created mode-0777 directory under `/tmp` passed, and the allocator then placed its
+        0700 subtree beneath a parent whose owner can rename or replace that subtree between allocation
+        and capture (PR #63 recheck, P2). The uid is stubbed because creating a foreign-owned directory
+        needs root — the check under test is the comparison, not the kernel's bookkeeping.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        foreign = os.path.join(home, "attacker")
+        os.makedirs(foreign, mode=0o777)
+
+        real_stat = os.stat
+
+        class _Foreign:
+            def __init__(self, base): self._base = base
+            def __getattr__(self, name): return getattr(self._base, name)
+            @property
+            def st_uid(self): return 4242      # neither this user nor root
+
+        def stub(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            same = os.path.realpath(str(path)) == os.path.realpath(foreign)
+            return _Foreign(info) if same else info
+
+        self.mod.os.stat = stub
+        self.addCleanup(setattr, self.mod.os, "stat", real_stat)
+        canonical, reason = self.mod._validate_base_candidate(foreign, home)
+        self.assertIsNone(canonical, "a foreign-owned base was accepted")
+        self.assertIn("owned by uid", reason)
+
+    def test_a_root_owned_ancestor_is_still_accepted(self):
+        """Control, and the reason the check is not simply "must be mine".
+
+        `/tmp` and `/` are root-owned and are the normal case; rejecting them would refuse every
+        default configuration, which is a false positive nobody would tolerate for long.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        canonical, reason = self.mod._validate_base_candidate(
+            os.path.join(tempfile.gettempdir(), "um-ownership-probe"), home
+        )
+        self.assertIsNotNone(canonical, reason)
 
 
 if __name__ == "__main__":
