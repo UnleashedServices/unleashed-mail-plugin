@@ -445,6 +445,20 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **A reviewer that mutates its disposable checkout VOIDS the round — including the invisible case.**
+  `isolated-agy-review.sh` printed an informational note when the reviewer wrote inside the disposable
+  copy and returned success; worse, the note's baseline diff is *status-line* based, so a reviewer that
+  rewrote the already-`M` **staged plan** and then emitted `VERDICT: APPROVE` produced a valid-looking
+  capture with **no note at all** — a review of substituted bytes approving the original plan, which
+  synthesis cannot catch because it validates the `.plan` record against the untouched live plan
+  (PR #63 recheck, P1; both shapes reproduced). Now the round's **basis is content-verified**: the
+  staged plan must still hash to the digest its `.plan` record attests to, the assembled prompt must
+  still hash to what the harness wrote (the old diff *excluded* the prompt's basename, hiding prompt
+  tampering by construction), and **any** other post-baseline write voids the round with exit 3 —
+  writing files is the COREDEV-2607 agent-mode signature, and a review produced that way is
+  untrustworthy whether or not the copy is discarded. The harness's own staged inputs stay exempt via
+  the post-staging baseline, so clean rounds are unaffected. Revert-proof: the pre-fix harness fails
+  exactly the three new tests.
 - **Plan references survive a space in the repository's own path.** `bind-prompt.py`'s token regex
   matched a character allowlist without the space, so an absolute reference under
   `/Users/me/My Projects/repo/…` was captured from AFTER the space and the disagreement check refused

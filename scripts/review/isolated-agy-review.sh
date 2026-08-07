@@ -28,8 +28,12 @@
 # Usage: isolated-agy-review.sh <prompt-file> <allocated-path> [timeout-seconds] [plan-file]
 #   <prompt-file>  path to the review prompt, RELATIVE TO THE REPO ROOT (e.g. .agy-prompt-2597r4.md)
 #   <allocated-path>  exact reserved transcript leaf received from allocate-transcript.sh
-# Exit: 0 review captured · 1 setup/prompt failure · 3 the reviewer MUTATED the working tree (round void)
+# Exit: 0 review captured · 1 setup/prompt failure · 3 round VOID — the reviewer mutated the working
+#       tree, modified the round's staged basis (plan or prompt) inside the disposable checkout, or
+#       wrote anything else there (a reviewer in agent mode is the COREDEV-2607 signature)
 set -uo pipefail
+
+_sha256() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
 
 [ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout]" >&2; exit 1; }
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
@@ -146,7 +150,12 @@ if [ -n "$PLAN_REL" ]; then
         # these exact bytes the whole time and nothing read it. One descriptor, read once, hashed and
         # written — so the bytes the reviewer receives are provably the bytes the record attests to,
         # with no second open to race.
-        python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE/$PLAN_REL" <<'PY' || exit 1
+        #
+        # The authenticated digest is CAPTURED, because the round is not done with it: the post-run
+        # basis check below re-verifies the staged copy against this value, which is what catches a
+        # reviewer that rewrites the plan mid-review (PR #63 recheck, P1 — see below).
+        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE/$PLAN_REL" <<'PY'
+
 import hashlib
 import os
 import stat
@@ -186,13 +195,17 @@ if actual != expected:
     )
 with open(destination, "wb") as handle:
     handle.write(payload)
+print(actual)
 PY
+)" || exit 1
     else
         # No snapshot: an older capture, or a direct call. Fall back to the path and SAY SO, rather than
-        # silently accepting the weaker guarantee.
+        # silently accepting the weaker guarantee. The digest of what was ACTUALLY staged still anchors
+        # the post-run basis check — weaker provenance, same mid-review integrity.
         echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
         cp "$PLAN_REL" "$TREE/$PLAN_REL" \
             || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
+        EXPECTED_PLAN_SHA="$(_sha256 "$TREE/$PLAN_REL")" || exit 1
     fi
 fi
 
@@ -221,6 +234,8 @@ PY
 # Fail in a second rather than after a 20-minute review on a truncated prompt.
 BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
 [ "$BYTES" -ge 1000 ] || { echo "assembled prompt is only ${BYTES} bytes — truncated" >&2; exit 1; }
+# The assembled prompt is basis too: verified after the run exactly like the staged plan.
+PROMPT_TREE_SHA="$(_sha256 "$TREE/$PROMPT_REL")" || exit 1
 
 # --- run --------------------------------------------------------------------------------------
 # The reserved leaf must be EMPTY. It is created 0-byte by the allocator, and nothing but this
@@ -255,15 +270,45 @@ if [ "$BEFORE" != "$AFTER" ]; then
     exit 3
 fi
 
-# Informational: what it wrote inside the disposable copy, which is discarded.
-# COMPARED AGAINST THE POST-STAGING BASELINE, not against HEAD. The plan copy above deliberately makes
-# the checkout dirty — that is the fix for the detached-HEAD binding — so comparing to HEAD reported the
-# HARNESS'S OWN staged input as "reviewer wrote inside the checkout", with the plan listed. A detector
-# that cries wolf on its own inputs is one nobody reads, which matters because this is the COREDEV-2607
-# detector (PR #63 recheck, P2).
+# THE ROUND'S BASIS MUST SURVIVE THE ROUND (PR #63 recheck, P1). A reviewer that rewrote the staged
+# plan and then emitted `VERDICT: APPROVE` produced a valid-looking capture of a review of DIFFERENT
+# bytes, while synthesis validates only the `.plan` record against the live plan — which nobody
+# touched. And the status diff below could not even SEE it: `git status --porcelain` is STATUS-line
+# based, and the staged plan is already `M` in the baseline, so re-modifying its content changes
+# nothing the diff compares. Reproduced both ways. So the basis files are verified by CONTENT against
+# the digests recorded before launch — the same digest the `.plan` record attests to, now checked at a
+# third point in the round's life.
+if [ -n "$PLAN_REL" ]; then
+    ACTUAL_PLAN_SHA="$(_sha256 "$TREE/$PLAN_REL" 2>/dev/null)" || ACTUAL_PLAN_SHA="unreadable"
+    if [ "$ACTUAL_PLAN_SHA" != "$EXPECTED_PLAN_SHA" ]; then
+        { echo "GATE FAILED — the STAGED PLAN was modified during the review (round void):"
+          echo "(staged ${EXPECTED_PLAN_SHA}, post-run ${ACTUAL_PLAN_SHA} — the transcript reviewed"
+          echo "bytes the binding does not attest to; see COREDEV-2607 for why this voids the round)"; } >&2
+        exit 3
+    fi
+fi
+ACTUAL_PROMPT_SHA="$(_sha256 "$TREE/$PROMPT_REL" 2>/dev/null)" || ACTUAL_PROMPT_SHA="unreadable"
+if [ "$ACTUAL_PROMPT_SHA" != "$PROMPT_TREE_SHA" ]; then
+    echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
+    exit 3
+fi
+# ANY other write inside the disposable copy voids the round too — no longer a note. Writing files is
+# the COREDEV-2607 signature (a reviewer in agent mode, implementing instead of reviewing), and a
+# review produced that way is untrustworthy whether or not the copy is discarded afterwards. The
+# earlier informational form existed because comparing against HEAD reported the HARNESS'S OWN staged
+# input as a reviewer write — a detector that cries wolf on its own inputs is one nobody reads. That
+# concern is solved by the POST-STAGING BASELINE, not by softening the verdict: everything the harness
+# placed is in the baseline, so anything beyond it is the reviewer's doing, and it fails the round.
+# (The old form also excluded the prompt's basename from the diff — which would have HIDDEN a reviewer
+# tampering with any file sharing that name. The content checks above cover the prompt now.)
 TREE_AFTER="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
-DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" | grep -v "$(basename "$PROMPT_REL")" || true)"
-[ -n "$DIRTY" ] && { echo "NOTE: reviewer wrote inside the disposable checkout (discarded):"; printf '%s\n' "$DIRTY"; }
+DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" || true)"
+if [ -n "$DIRTY" ]; then
+    { echo "GATE FAILED — the reviewer WROTE inside the disposable checkout (round void — agent-mode"
+      echo "behaviour, the COREDEV-2607 signature):"
+      printf '%s\n' "$DIRTY"; } >&2
+    exit 3
+fi
 
 BYTES_OUT="$(wc -c < "$OUT" 2>/dev/null | tr -d ' ')"
 # Anchored, never a loose `grep VERDICT:` — that matches the prompt's own echoed template in a

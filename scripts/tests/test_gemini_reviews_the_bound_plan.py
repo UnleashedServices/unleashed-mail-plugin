@@ -259,14 +259,66 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
     def test_the_harness_own_staging_is_not_reported_as_a_reviewer_mutation(self):
         """The plan copy deliberately dirties the checkout — that IS the detached-HEAD fix.
 
-        Comparing the final tree to `HEAD` therefore reported the harness's own staged input as
-        `NOTE: reviewer wrote inside the disposable checkout`, with the plan listed. A detector that
-        cries wolf on its own inputs is one nobody reads, and this is the COREDEV-2607 detector.
+        Comparing the final tree to `HEAD` therefore reported the harness's own staged input as a
+        reviewer write, with the plan listed. A detector that cries wolf on its own inputs is one
+        nobody reads, and this is the COREDEV-2607 detector — doubly load-bearing now that a reviewer
+        write VOIDS the round (PR #63 recheck, P1) instead of printing a note: a false positive here
+        would fail every clean round, which is how a gate gets switched off.
         """
         result = self.capture("8")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertNotIn("reviewer wrote inside the disposable checkout",
-                         result.stdout + result.stderr)
+        self.assertNotIn("GATE FAILED", result.stdout + result.stderr)
+
+    MUTATING_STUB = """#!/usr/bin/env bash
+tree=""; prompt=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --add-dir) tree="$2"; shift 2 ;;
+    -p) prompt="${2#Read and follow }"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+%s
+printf 'VERDICT: APPROVE\\n'
+"""
+
+    def install_stub(self, body: str) -> None:
+        stub = self.root / ".stubs" / "agy"
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+
+    def test_a_reviewer_that_rewrites_the_staged_plan_voids_the_round(self):
+        """PR #63 recheck, P1 — reproduced: rc was 0 with NO note at all.
+
+        The status diff is STATUS-line based and the staged plan is already `M` in the baseline, so
+        re-modifying its content changed nothing the diff compared: the reviewer substituted the plan,
+        approved, and the capture succeeded while synthesis validated only the untouched live plan.
+        The basis is now verified by CONTENT against the digest the `.plan` record attests to.
+        """
+        self.install_stub(self.MUTATING_STUB
+                     % 'printf "# Plan\\nSUBSTITUTED\\n" > "$tree/docs/planning/FEATURE_PLAN.md"')
+        result = self.capture("11")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("STAGED PLAN was modified", result.stdout + result.stderr)
+
+    def test_a_reviewer_that_writes_scratch_inside_the_checkout_voids_the_round(self):
+        """Writing files is the COREDEV-2607 signature — agent mode, implementing instead of
+        reviewing. A review produced that way is untrustworthy whether or not the copy is discarded,
+        so the round is VOID, not annotated."""
+        self.install_stub(self.MUTATING_STUB % ': > "$tree/IMPLEMENTATION_NOTES.txt"')
+        result = self.capture("12")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        combined = result.stdout + result.stderr
+        self.assertIn("WROTE inside the disposable checkout", combined)
+        self.assertIn("IMPLEMENTATION_NOTES.txt", combined)
+
+    def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
+        """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by
+        construction. The prompt is basis exactly like the plan; content-verified the same way."""
+        self.install_stub(self.MUTATING_STUB % 'printf "sneaky addendum\\n" >> "$prompt"')
+        result = self.capture("13")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("PROMPT was modified", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover
