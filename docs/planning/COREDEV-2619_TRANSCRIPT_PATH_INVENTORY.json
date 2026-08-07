@@ -327,7 +327,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 66,
+        "line": 78,
         "payloads": [
           "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
           "    :",
@@ -381,7 +381,7 @@
       ],
       "destination": {
         "path": "scripts/review/capture-codex-review.sh",
-        "line": 95,
+        "line": 107,
         "payloads": [
           "exec bash \"${SCRIPT_DIR}/isolated-codex-review.sh\" \\",
           "    \"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""

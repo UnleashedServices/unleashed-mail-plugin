@@ -113,6 +113,8 @@ def main(argv=None) -> int:
     parser.add_argument("--repo", required=True, help="repository path to replace (literal bytes)")
     parser.add_argument("--guard", action="store_true", help="prepend the read-only guard")
     parser.add_argument("--min-bytes", type=int, default=0, help="refuse an assembled prompt below this")
+    parser.add_argument("--max-bytes", type=int, default=0,
+                        help="refuse an assembled prompt above this (the codex arm's argv cap)")
     arguments = parser.parse_args(argv)
 
     payload = _read_nofollow(arguments.snapshot, "bound prompt snapshot")
@@ -152,6 +154,15 @@ def main(argv=None) -> int:
 
     if arguments.min_bytes and len(payload) < arguments.min_bytes:
         _refuse(f"assembled prompt is only {len(payload)} bytes — truncated")
+    # The codex arm hands the assembled prompt to `codex exec` as ONE argv element, and Linux caps a
+    # single argument at `MAX_ARG_STRLEN` (128 KiB) whatever `ARG_MAX` says. Without this the `execvp`
+    # fails with E2BIG after a leaf has been reserved and a worktree built (PR #63 recheck).
+    if arguments.max_bytes and len(payload) > arguments.max_bytes:
+        _refuse(
+            f"assembled prompt is {len(payload)} bytes, over the {arguments.max_bytes}-byte limit — "
+            "the reviewer receives it as a single argument, which Linux caps at 128 KiB. Shorten the "
+            "prompt or reference files instead of inlining them."
+        )
 
     _stage_no_follow(arguments.tree, arguments.rel, payload)
     print(hashlib.sha256(payload).hexdigest())

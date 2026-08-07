@@ -75,6 +75,30 @@ class PlanOperandContainment(unittest.TestCase):
         self.assertNotIn("src/EVIL_PLAN.md", result.stdout,
                          "the symlinked subtree laundered a file outside docs/planning")
 
+    def test_a_checkout_whose_path_ends_in_a_space_still_works(self):
+        """`strip()` on `git rev-parse` output ate a legal path character (PR #63 recheck).
+
+        A space is valid in a path, so a checkout ending in one had that byte removed from the computed
+        root — which then named a DIFFERENT directory, so every operand resolved outside it and was
+        refused. That breaks the capture, audit, snapshot and persistence wrappers at once, since they
+        all share this helper. Git terminates the path with exactly one newline; only that is stripped.
+        """
+        spaced = Path(tempfile.mkdtemp()) / "trailing space "
+        spaced.mkdir()
+        self.addCleanup(shutil.rmtree, spaced.parent, ignore_errors=True)
+        (spaced / "docs" / "planning").mkdir(parents=True)
+        (spaced / "docs" / "planning" / "X_PLAN.md").write_text("# plan\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", "."], cwd=spaced, check=True)
+
+        result = subprocess.run(
+            ["python3", str(REPO / "scripts" / "review" / "containment.py"),
+             "--tool", "probe", "--label", "plan", "--under", "docs/planning",
+             "--", "docs/planning/X_PLAN.md"],
+            cwd=spaced, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("docs/planning/X_PLAN.md", result.stdout.strip())
+
     def test_a_real_planning_subtree_is_still_accepted(self):
         """Positive control — the boundary must refuse a symlinked subtree, not every subtree."""
         result = subprocess.run(

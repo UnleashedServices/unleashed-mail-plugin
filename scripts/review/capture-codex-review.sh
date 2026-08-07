@@ -51,6 +51,18 @@ die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 # nothing — and whatever it said about nothing would be parsed for a verdict.
 [ -r "$PROMPT" ] || die "prompt file is not readable: $PROMPT"
 [ -s "$PROMPT" ] || die "prompt file is EMPTY: $PROMPT"
+# THE PROMPT BECOMES ONE argv ELEMENT, and Linux caps a single argument at `MAX_ARG_STRLEN`
+# (32 x PAGE_SIZE = 128 KiB) regardless of the far larger `ARG_MAX` (PR #63 recheck). `codex exec`
+# takes the whole prompt as an argument, so an oversized bound prompt made the `execvp` inside
+# `pty-capture.py` fail with E2BIG — AFTER a transcript leaf had been reserved and a disposable
+# worktree built. Checked HERE, before allocation, so nothing is consumed by a round that cannot run.
+# The gemini arm is unaffected: it passes `-p "Read and follow <path>"` and the reviewer opens the file.
+PROMPT_BYTES="$(wc -c < "$PROMPT" | tr -d ' ')"
+if [ "$PROMPT_BYTES" -gt 122880 ]; then
+    die "prompt is ${PROMPT_BYTES} bytes; codex receives it as ONE argument and Linux caps that at
+128 KiB, so the reviewer would fail to start after allocating a leaf. Shorten the prompt or point it
+at files instead of inlining them: $PROMPT"
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 

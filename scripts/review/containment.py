@@ -57,12 +57,19 @@ def repository_root() -> str:
         )
     except OSError as error:
         refuse(f"could not run git to locate the repository root: {error}")
-    if top.returncode != 0 or not top.stdout.strip():
+    # `rstrip("\n")`, NOT `strip()` (PR #63 recheck). A space is a legal path character, so a checkout
+    # whose final component ends in one — `…/trailing space /` — had that character removed from
+    # `git rev-parse`'s output, and the root then named a DIFFERENT directory. Every operand resolved
+    # outside it and was refused, breaking the capture, audit, snapshot and persistence wrappers that
+    # all share this helper. Reproduced. Git terminates the path with exactly one newline; that is the
+    # only byte to remove.
+    root = top.stdout.rstrip("\n")
+    if top.returncode != 0 or not root:
         refuse(
             "not inside a Git worktree, so there is no repository to contain operands to — "
             "run this from the checkout"
         )
-    return os.path.realpath(top.stdout.strip())
+    return os.path.realpath(root)
 
 
 def _control_characters(value: str) -> bool:

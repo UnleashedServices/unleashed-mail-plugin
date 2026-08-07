@@ -96,6 +96,30 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.assertEqual(EDITED, plan_line.strip(),
                          "codex did not read the authenticated bound plan in its checkout")
 
+    def test_an_oversized_prompt_is_refused_BEFORE_a_leaf_is_allocated(self):
+        """codex receives the prompt as ONE argv element (PR #63 recheck).
+
+        Linux caps a single argument at `MAX_ARG_STRLEN` (32 x PAGE_SIZE = 128 KiB) regardless of the
+        far larger `ARG_MAX`, so an oversized bound prompt made the `execvp` inside `pty-capture.py`
+        fail with E2BIG — after a transcript leaf had been reserved and a disposable worktree built.
+        The check runs before allocation, so a round that cannot run consumes nothing. The gemini arm is
+        unaffected: it passes `-p "Read and follow <path>"` and the reviewer opens the file itself.
+        """
+        big = self.root / ".codex-prompt-COREDEV-9999r5.md"
+        big.write_text("x" * 130_000 + "\nREVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
+                       encoding="utf-8")
+        result = subprocess.run(
+            ["bash", str(CAPTURE), "COREDEV-9999", "5",
+             ".codex-prompt-COREDEV-9999r5.md", "docs/planning/FEATURE_PLAN.md", "30"],
+            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("ONE argument", result.stdout + result.stderr)
+        # Nothing consumed: no reserved leaf anywhere under the state root.
+        state = self.root / "state"
+        allocated = list(state.rglob("*.txt")) if state.exists() else []
+        self.assertEqual([], allocated, f"a leaf was reserved for a round that cannot run: {allocated}")
+
     def test_a_live_plan_diverging_from_the_staged_bytes_does_not_reach_codex(self):
         """The A->B->A property, made DETERMINISTIC (PR #63 recheck, P1).
 

@@ -98,15 +98,18 @@ fi
 # read-only instruction the gemini guard supplies is enforced by the sandbox instead of by prose.
 # Two explicit calls rather than an array splice: under `set -u`, bash 3.2 — the macOS stock shell this
 # runs on — treats `"${EMPTY[@]}"` as an unbound variable and aborts the capture.
+# `--max-bytes` is defence in depth for the argv cap the capture wrapper already checks: this harness
+# can also be driven directly, and the assembled prompt is what actually reaches `codex exec` as a
+# single argument (PR #63 recheck). 120 KiB leaves headroom under Linux's 128 KiB `MAX_ARG_STRLEN`.
 if [ -r "${OUT}.promptsha256" ]; then
     PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
         --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1)" || exit 1
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
 else
     echo "note: no prompt digest beside the transcript; staging the snapshot unauthenticated" >&2
     PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
         --snapshot "$PROMPT_REL" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1)" || exit 1
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
 fi
 
 # The reserved leaf must be EMPTY (see the gemini harness for the shorter-second-write hazard).
