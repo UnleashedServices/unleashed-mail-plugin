@@ -3,7 +3,11 @@ name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version)
+# The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
+# step prompted for permission (or was denied) before the newly narrowed capture grant could run —
+# so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
+# per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)
 ---
 
 # Codex CLI Review

@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1080",
+      "location": "CHANGELOG.md:1098",
       "path": "CHANGELOG.md",
-      "line": 1080,
+      "line": 1098,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -302,11 +302,11 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 6,
+        "line": 10,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)"
         ],
-        "payloadSha256": "af961aa158d1b4520e5904e9a20d10cb20a1b9671cebf8af32ac6a37130c2eb2"
+        "payloadSha256": "4f823cd491422129775226420675695c2632c146202d603a71cd9c9fa5ce62f7"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -404,7 +404,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 65,
+        "line": 69,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -427,7 +427,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 202,
+        "line": 206,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` \u2014 **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -449,11 +449,11 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 7,
+        "line": 11,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Write(.agy-prompt-*.md)"
         ],
-        "payloadSha256": "e95fcd9fd1187c1934b73467cd2dcaac9279418d3fea7a76712957ec22f14729"
+        "payloadSha256": "7ebd82d12f3ea56c27ab79bfc84d0545dcf4ee126b56996360f9e8253c7e69b5"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
@@ -472,7 +472,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 75,
+        "line": 79,
         "payloads": [
           "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
         ],
@@ -495,7 +495,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 155,
+        "line": 159,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh\" \\",
           "    \".agy-prompt-${TICKET}r${ROUND}.md\" \"$GEMINI_TRANSCRIPT\" 1800"
@@ -519,7 +519,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 216,
+        "line": 220,
         "payloads": [
           "6. **Capture output** \u2014 the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -542,7 +542,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 219,
+        "line": 223,
         "payloads": [
           "8. **Synthesize both reviews** \u2014 once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

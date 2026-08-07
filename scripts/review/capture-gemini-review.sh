@@ -9,7 +9,7 @@
 # to a single command covered by an exact-entrypoint grant.
 #
 # Usage:
-#   capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [timeout-seconds]
+#   capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [timeout-seconds] [model]
 #
 # Prints the allocator's `UNLEASHED_TRANSCRIPT=<path>` marker on stdout, byte-for-byte, BEFORE the
 # capture starts: synthesis binds that exact path, and it must survive a capture that later times out.
@@ -35,6 +35,12 @@ ROUND="${2-}"
 PROMPT="${3-}"
 PLAN="${4-}"
 TIMEOUT="${5-1800}"   # must EXCEED agy --print-timeout (28m=1680s) or the wrapper kills a live run
+# MODEL AS AN OPERAND, not an assignment prefix. The documented one-run fallback read
+# `MODEL=gemini-2.5-pro bash …/capture-gemini-review.sh …`, and an assignment-prefixed command does not
+# match a `Bash(bash …/capture-gemini-review.sh *)` grant — so on this model-invocable skill the
+# fallback reintroduced exactly the permission prompt these narrowed grants exist to remove (PR #63
+# recheck, P2). Passing it as operand 6 keeps the fallback inside the one granted command shape.
+MODEL_OVERRIDE="${6-}"
 
 die() { printf 'gemini-review: %s\n' "$1" >&2; exit 1; }
 
@@ -86,4 +92,8 @@ python3 "${SCRIPT_DIR}/bind-prompt.py" \
 # neither is reachable (PR #63 recheck, P1).
 # The PLAN travels too: the harness reviews a detached checkout of HEAD, so without this `agy`
 # reads the committed plan while the `.plan` sidecar describes the working-tree one.
+if [ -n "$MODEL_OVERRIDE" ]; then
+    MODEL="$MODEL_OVERRIDE" exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" \
+        "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"
+fi
 exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"

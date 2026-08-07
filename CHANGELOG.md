@@ -117,6 +117,24 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Three narrowing side-effects of this release's own grant tightening.** Scoping the review skills'
+  permissions made two documented flows *less* usable, and a base-resolution fallback hid a narrowed
+  review:
+  - **`changeset.sh` invented a base.** When neither `origin/main` nor a local `main` resolved, it
+    returned the literal string `main` as though resolution had succeeded; `files`/`stat` then fell
+    through to `HEAD~1` and reviewed only the last commit of a multi-commit branch, while `untested`
+    emitted nothing and exited 0. Reproduced on a two-commit branch with no remote. It now fails
+    explicitly — silently narrowing a review's scope is worse than refusing it, because the reviewer
+    reports a clean pass over work it never saw.
+  - **The documented Gemini model fallback did not match its own grant.**
+    `MODEL=gemini-2.5-pro bash …` is an assignment-prefixed command shape, which
+    `Bash(bash …/capture-gemini-review.sh *)` does not cover — so the fallback reintroduced the very
+    prompt the narrowed grants removed. The model is now operand 6.
+  - **Neither review skill could write the prompt file it requires.** Both bodies mandate creating
+    `.codex-prompt-*` / `.agy-prompt-*` before invoking the capture helper, and neither granted a
+    `Write`. The mandatory first step therefore prompted or was denied *before* the pre-approved
+    capture command could run. Added narrowly, as the exact per-round filename shape.
+
 - **Absolute paths defeated two fixes from earlier the same day, and broke a third flow.** All three
   are the same omission: a fix written for the relative spelling of an operand that is also accepted
   absolute.

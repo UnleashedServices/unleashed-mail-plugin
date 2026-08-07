@@ -327,9 +327,14 @@ class M51AndM52PropagationProofs(M5PathFixture):
             # path: the operand is now `"${GEMINI_TRANSCRIPT}.prompt"`. The mutant is unchanged in
             # spirit — it re-derives the TRANSCRIPT operand, which is what M5.2 forbids — and the
             # snapshot operand is left intact so the mutation still isolates that one variable.
+            # Anchored on the FINAL exec, which is unique. The helper grew a `MODEL_OVERRIDE` branch
+            # that repeats the operand pair, so the bare pair now occurs twice and `_replace_once`
+            # refused rather than mutating an arbitrary one — the zero/two-hit guard doing its job.
             "gemini": (
-                '"${GEMINI_TRANSCRIPT}.prompt" "$GEMINI_TRANSCRIPT"',
-                '"${GEMINI_TRANSCRIPT}.prompt" "${XDG_STATE_HOME}/derived-gemini.txt"',
+                'exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
+                '"$GEMINI_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
+                'exec bash "${SCRIPT_DIR}/isolated-agy-review.sh" "${GEMINI_TRANSCRIPT}.prompt" '
+                '"${XDG_STATE_HOME}/derived-gemini.txt" "$TIMEOUT" "$PLAN"',
             ),
         }
         for reviewer, (old, new) in mutations.items():

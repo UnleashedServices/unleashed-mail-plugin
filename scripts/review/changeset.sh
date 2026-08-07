@@ -56,13 +56,31 @@ detect_base() {
         refs/heads/main:refs/remotes/origin/main 2>/dev/null || true
     if git merge-base "$current" origin/main >/dev/null 2>&1; then
         git merge-base "$current" origin/main
-    else
-        printf '%s' "main"
+        return
     fi
+    # A LOCAL main is still a real base — use it before giving up.
+    if git merge-base "$current" main >/dev/null 2>&1; then
+        git merge-base "$current" main
+        return
+    fi
+    # FAIL, do not invent one. This returned the literal string `main` as though resolution had
+    # succeeded; with no remote and no local `main`, `files`/`stat` then fell through to `HEAD~1` and
+    # reviewed ONLY THE LAST COMMIT of a multi-commit branch, while `untested` emitted nothing and
+    # exited 0. Silently narrowing a review's scope is worse than refusing it: the reviewer reports a
+    # clean pass over work it never saw (PR #63 recheck, P2 — reproduced on a two-commit branch with
+    # no remote).
+    printf '%s' ""
 }
 
 BASE_BRANCH="$(detect_base)"
-[ -n "$BASE_BRANCH" ] || die "could not resolve a base branch"
+[ -n "$BASE_BRANCH" ] || die "could not resolve a base branch — refusing to review a narrowed range.
+No remote-tracking or local base was found, so any diff here would silently cover only part of the
+branch. Fetch the base (\`git fetch origin main\`) or name one explicitly, then re-run."
+
+# A resolved base must also be a REAL commit. `detect_base` can only return refs it verified, but a
+# name that stopped resolving between then and now would otherwise reach `git diff` as an operand.
+git rev-parse --verify "${BASE_BRANCH}^{commit}" >/dev/null 2>&1 \
+    || die "resolved base is not a commit: ${BASE_BRANCH}"
 
 if [ "$MODE" = "base" ]; then
     printf '%s\n' "$BASE_BRANCH"
