@@ -39,6 +39,15 @@ def allocated_transcript(directory, plan, reviewer, body, salt=""):
         digest = hashlib.sha256(fh.read()).hexdigest()
     with open(path + ".plan", "w", encoding="utf-8") as fh:
         fh.write(digest + "  " + os.path.basename(str(plan)) + "\n")
+        # `.promptsha256` and `.prompt` too. `bind-prompt.py` writes all three together, so a per-run
+    # transcript carrying only `.plan` was never produced by the capture helper — and `write` now
+    # REQUIRES the prompt binding rather than skipping when it is absent, which was the same
+    # "absent means unchecked" fail-open the plan binding exists to close (PR #63 recheck).
+    prompt_bytes = ("review prompt for " + os.path.basename(str(plan)) + "\n").encode("utf-8")
+    with open(path + ".prompt", "wb") as fh:
+        fh.write(prompt_bytes)
+    with open(path + ".promptsha256", "w", encoding="utf-8") as fh:
+        fh.write(hashlib.sha256(prompt_bytes).hexdigest() + "  prompt.md\n")
     return path
 
 

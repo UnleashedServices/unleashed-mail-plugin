@@ -81,6 +81,23 @@ def _load_module(path: Path, label: str):
     return module
 
 
+
+def write_prompt_binding(transcript) -> None:
+    """Write the `.prompt` snapshot and `.promptsha256` that `bind-prompt.py` produces alongside `.plan`.
+
+    `write` REQUIRES the prompt binding for a per-run transcript rather than skipping when it is
+    absent — skipping meant deleting the sidecar turned the check off, the same "absent means
+    unchecked" fail-open the plan binding exists to close (PR #63 recheck). All three sidecars are
+    written together by the capture helper, so a fixture producing only `.plan` models a transcript no
+    helper ever made.
+    """
+    payload = b"review prompt\n"
+    Path(str(transcript) + ".prompt").write_bytes(payload)
+    Path(str(transcript) + ".promptsha256").write_text(
+        hashlib.sha256(payload).hexdigest() + "  prompt.md\n", encoding="utf-8"
+    )
+
+
 class _MarkerObserver(io.StringIO):
     def __init__(self, test: unittest.TestCase, expected_run_id: str) -> None:
         super().__init__()
@@ -359,6 +376,7 @@ class FreshnessFixture(unittest.TestCase):
             Path(str(transcript) + ".plan").write_text(
                 f"{plan_digest}  {plan.name}\n", encoding="utf-8"
             )
+            write_prompt_binding(transcript)
 
         self.configure_kind(
             kind,
@@ -941,6 +959,7 @@ class SFreshAdditionalProofs(FreshnessFixture):
         # it the bypass mutant is refused by the binding instead, and the proof would witness the
         # wrong rejection.
         Path(str(shared) + ".plan").write_text(f"{digest}  {plan.name}\n", encoding="utf-8")
+        write_prompt_binding(shared)
         return self.invoke(
             script,
             [
@@ -1239,6 +1258,7 @@ class PlanBindingProofs(FreshnessFixture):
                 Path(str(transcript) + ".plan").write_text(
                     f"{recorded}  some-plan.md\n", encoding="utf-8"
                 )
+                write_prompt_binding(transcript)
             transcripts.append(transcript)
 
         arguments = ["write", "--plan", str(plan), "--verdict", verdict]

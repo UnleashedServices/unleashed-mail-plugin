@@ -132,6 +132,23 @@ def run_checked(argv: List[str], cwd: Path, env: Dict[str, str]) -> subprocess.C
     )
 
 
+
+def write_prompt_binding(transcript) -> None:
+    """Write the `.prompt` snapshot and `.promptsha256` that `bind-prompt.py` produces alongside `.plan`.
+
+    `write` REQUIRES the prompt binding for a per-run transcript rather than skipping when it is
+    absent — skipping meant deleting the sidecar turned the check off, the same "absent means
+    unchecked" fail-open the plan binding exists to close (PR #63 recheck). All three sidecars are
+    written together by the capture helper, so a fixture producing only `.plan` models a transcript no
+    helper ever made.
+    """
+    payload = b"review prompt\n"
+    Path(str(transcript) + ".prompt").write_bytes(payload)
+    Path(str(transcript) + ".promptsha256").write_text(
+        hashlib.sha256(payload).hexdigest() + "  prompt.md\n", encoding="utf-8"
+    )
+
+
 class TranscriptThreadingFixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix=".thread-proof-", dir=str(REPO))
@@ -332,6 +349,7 @@ class TranscriptThreadingFixture(unittest.TestCase):
             Path(str(transcript) + ".plan").write_text(
                 f"{digest}  {plan.name}\n", encoding="utf-8"
             )
+            write_prompt_binding(transcript)
 
     def run_persistence_recipe(
         self,

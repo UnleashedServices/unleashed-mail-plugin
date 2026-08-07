@@ -117,6 +117,22 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Three holes in fixes shipped earlier in this same release.** Each was found by the PR's own
+  recheck, reproduced, and closed:
+  - **The prompt binding was skipped when its sidecar was absent**, so deleting `.promptsha256` turned
+    the check off — the identical "absent means unchecked" fail-open the plan binding beside it exists
+    to close, reintroduced one field over. It is now required for a per-run transcript; both sidecars
+    are written together by `bind-prompt.py`, so a transcript carrying only `.plan` was never produced
+    by the capture helper.
+  - **The entrypoint allowlist matched `${CLAUDE_PLUGIN_ROOT}/` as a substring**, so
+    `${CLAUDE_PLUGIN_ROOT}/../evil.sh`, a `..` chain deeper in the path, and even
+    `/tmp/x/${CLAUDE_PLUGIN_ROOT}/evil.sh` all passed. The allowlist's justification is that these
+    scripts ship in this repo and are reviewed with it; a path leaving the plugin root has neither
+    property. Now anchored at the start and `..`-free.
+  - **The writer-agent deny-list required only the bare spelling.** A consumer install resolves
+    `unleashed-mail:<name>` too, so denying one left the other reachable — the same both-spellings
+    rule the skills' own `Agent(...)` grants already follow.
+
 - **The `agy` preflight ran a mutation-capable agent in the reviewed checkout.** It launched
   `agy -p "ping"` in the caller's working directory — the tree under review — while the same skill
   documents that `agy` has no read-only mode and has already once implemented a plan instead of

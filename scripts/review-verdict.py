@@ -615,23 +615,31 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     # other two sidecars. This is a WRITE-time check — `cmd_verify` is COREDEV-2497's territory and is
     # deliberately untouched.
     snapshot = transcript + ".prompt"
+    # REQUIRED, not optional. Skipping when the sidecar is absent meant deleting `.promptsha256` turned
+    # the check off — the same "absent means unchecked" fail-open the plan binding above was written to
+    # close, reintroduced one field over (PR #63 recheck). Both sidecars are written together by
+    # `bind-prompt.py`, so a per-run transcript missing this one was not captured by the current helper.
     recorded = _read_regular_file_bytes(transcript + ".promptsha256")
-    if recorded is not None:
-        match = _PLAN_BINDING.fullmatch(recorded)
-        if match is None:
-            return "prompt binding is malformed: " + transcript + ".promptsha256"
-        snapshot_bytes = _read_regular_file_bytes(snapshot)
-        if snapshot_bytes is None:
-            return (
-                "the prompt snapshot the reviewer was fed is missing: " + snapshot
-                + " — re-capture the round rather than writing a verdict for evidence that is gone"
-            )
-        actual = hashlib.sha256(snapshot_bytes).hexdigest().encode("ascii")
-        if actual != match.group(1):
-            return (
-                "the prompt snapshot no longer matches the digest recorded when it was bound ("
-                + snapshot + ") — the bytes the reviewer saw are not the bytes on disk"
-            )
+    if recorded is None:
+        return (
+            "per-run transcript has no prompt binding: " + transcript + ".promptsha256"
+            + " — re-capture it with the current capture helper, which records the prompt it fed"
+        )
+    match = _PLAN_BINDING.fullmatch(recorded)
+    if match is None:
+        return "prompt binding is malformed: " + transcript + ".promptsha256"
+    snapshot_bytes = _read_regular_file_bytes(snapshot)
+    if snapshot_bytes is None:
+        return (
+            "the prompt snapshot the reviewer was fed is missing: " + snapshot
+            + " — re-capture the round rather than writing a verdict for evidence that is gone"
+        )
+    actual = hashlib.sha256(snapshot_bytes).hexdigest().encode("ascii")
+    if actual != match.group(1):
+        return (
+            "the prompt snapshot no longer matches the digest recorded when it was bound ("
+            + snapshot + ") — the bytes the reviewer saw are not the bytes on disk"
+        )
     return None
 
 

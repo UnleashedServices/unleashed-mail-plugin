@@ -271,9 +271,17 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
         if "*" in target:
             return ("the wildcard is in the SCRIPT PATH, so it pre-approves every script in that "
                     "directory (including destructive ones). Name the exact entrypoint.")
-        if "${CLAUDE_PLUGIN_ROOT}/" not in target:
+        # BENEATH, not merely CONTAINING. Substring matching accepted three escapes, all measured:
+        # `${CLAUDE_PLUGIN_ROOT}/../evil.sh`, a `..` chain deeper in the path, and
+        # `/tmp/x/${CLAUDE_PLUGIN_ROOT}/evil.sh` — where the variable is not even the prefix. The
+        # allowlist's whole justification is that these scripts ship in this repo and are reviewed
+        # with it; a path that leaves the plugin root has neither property (PR #63 recheck).
+        if not target.startswith("${CLAUDE_PLUGIN_ROOT}/"):
             return (f"only an exact script beneath `${{CLAUDE_PLUGIN_ROOT}}` may carry a trailing "
-                    f"wildcard; `{target}` is outside the plugin and is not reviewed with it")
+                    f"wildcard; `{target}` does not start there and is not reviewed with the plugin")
+        if any(segment == ".." for segment in target.split("/")):
+            return (f"`{target}` walks out of the plugin root with `..`; a wrapper that can leave the "
+                    "reviewed tree is not an exact plugin-root entrypoint")
         return None  # the allowlisted shape: exact plugin-root wrapper, operands bounded by the script
 
     if command in BROAD_BASH_PREFIXES:
@@ -361,7 +369,11 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
 
     for path, frontmatter in spawners:
         denied = frontmatter.get("disallowedTools", "")
-        missing = [w for w in writers if f"Agent({w})" not in denied]
+        # BOTH SPELLINGS. A consumer install resolves `unleashed-mail:<name>` as well as the bare name,
+        # so denying only one leaves the other reachable — the same both-spellings rule the skills'
+        # `Agent(...)` grants already follow. Measured: a bare-only denial passed this check.
+        missing = [w for w in writers
+                   if f"Agent({w})" not in denied or f"Agent(unleashed-mail:{w})" not in denied]
         if missing:
             rel = path.relative_to(root).as_posix()
             problems.append(

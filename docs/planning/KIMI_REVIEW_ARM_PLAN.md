@@ -1,8 +1,14 @@
 # Replace the gemini review arm with Kimi K3
 
-**Status:** Planning — **not gated, not implemented.** Needs its own `COREDEV-2645` ticket before work
-starts; this document was written under `COREDEV-2642` as the resolution of PR #63 review item 8.
-**Last updated:** 2026-08-05
+**Status:** Planning — **not gated, not implemented.** `COREDEV-2645` **exists** (created 2026-08-06,
+`To Do`); this document was written under `COREDEV-2642` as the resolution of PR #63 review item 8.
+**Last updated:** 2026-08-06 — re-baselined against the tree after `COREDEV-2642` landed changes this
+plan had described as pending. Everything below now states the CURRENT tree, not the tree as it was
+when the plan was drafted (PR #63 recheck, P3).
+
+> **This plan is not part of the 2.7.0 release.** It ships as a plan only — no `COREDEV-2645` code is
+> in this PR. The PR's six-ticket table covers the code; this document is the seventh entry and is
+> explicitly *plan-only, not gated, not implemented*.
 
 ---
 
@@ -18,10 +24,15 @@ This supersedes the contradiction PR #63 found and item 8 recorded.
 > verdict in **5 of 6 rounds** (invented tokens REJECTED/PASS, two degenerations leaking system-prompt
 > tokens, two runs that implemented the plan instead of reviewing it).
 
-…while the next line still reads `MODEL="${MODEL:-gemini-3.1-pro-high}"`. Both names are valid (`agy
-models` lists both), so this was never a broken build — the code and its rationale simply disagreed,
-and every wrapper round ran the arm documented as failing. Rather than pick one of the two, the arm
-goes.
+**That contradiction is now RESOLVED, and this paragraph is kept as the origin rather than the current
+state.** When this plan was drafted the next line still read `MODEL="${MODEL:-gemini-3.1-pro-high}"`,
+so every wrapper round ran the arm its own comment documented as failing. `COREDEV-2642` applied the
+documented switch: the wrapper now reads `MODEL="${MODEL:-gemini-3.6-flash-high}"`.
+
+So the case for replacing the arm no longer rests on a code/comment disagreement — that is fixed. It
+rests on the measured failure record above (5 of 6 rounds unparseable, two runs that *implemented* the
+plan) and on the two-review-family evidence in §2. A reader who checked the wrapper today and found
+3.6 would otherwise conclude this plan's premise had evaporated.
 
 **The current state is wasteful, not unsafe.** An unparseable verdict fails closed. That is why this
 is a planned change rather than a hotfix, and why the contradiction can stand in the tree until this
@@ -215,11 +226,12 @@ opt-in third arm. Decide explicitly; do not leave both wired.
   erase the evidence this plan rests on. §1 above is now the resolution of record. If this plan is
   **not** gated, the fallback is the original item-8 choice: apply the documented switch, or delete
   the rationale — but do not let the contradiction stand indefinitely.
-* **The two capture recipes** in `skills/gemini-review/SKILL.md` and `skills/codex-review/SKILL.md`
-  are still compound blocks that match no `allowed-tools` grant (PR #63 gaps 7-9 / thread 7; the
-  other three sites are done). **Fold the gemini one into step 1 of this plan** — extracting it now
-  and renaming it in step 3 would be the same work twice. The codex one can be done independently
-  and does not block this plan.
+* ~~**The two capture recipes** are still compound blocks that match no `allowed-tools` grant.~~
+  **DONE in `COREDEV-2642`** — both extracted: `scripts/review/capture-gemini-review.sh` and
+  `scripts/review/capture-codex-review.sh` ship, each a single granted call. The advice to "fold the
+  gemini one into step 1 to avoid doing the work twice" is therefore spent: step 3's rename now
+  operates on an existing helper rather than on an inline block, which is strictly less work than the
+  plan assumed. Step 1's scope shrinks accordingly.
 
 ---
 
