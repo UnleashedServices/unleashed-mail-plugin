@@ -540,7 +540,16 @@ def _transcript_freshness_problem(transcript: str):
     # a symlink in its place is never legitimate, so this is fail-closed by construction.
     if os.path.islink(transcript):
         return "per-run transcript is a symbolic link: " + transcript, None
-    transcript = os.path.realpath(transcript)
+    # DO NOT RESOLVE THE LEAF. `islink()` then `realpath()` is a lookup-then-lookup pair: a same-account
+    # process that plants a symlink between the two has it FOLLOWED, and every check below then runs
+    # against the attacker's target instead of the allocated path — a foreign transcript with a matching
+    # `.launch` and `.plan` passed as valid evidence (PR #63 recheck, P2). Keeping the allocated name is
+    # also what the freshness TOCTOU fix already established: `_regular_file_info` opens it with
+    # `O_NOFOLLOW` and everything downstream comes from that one descriptor, so a symlink planted later
+    # fails the open rather than being resolved through.
+    #
+    # The ANCESTRY is still resolved (in `_is_per_run_transcript`) — that is the layout question, and it
+    # is a different one from "which file is the leaf".
 
     filename_match = _TRANSCRIPT_RUN_ID.search(os.path.basename(transcript))
     if filename_match is None:

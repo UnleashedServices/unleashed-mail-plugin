@@ -4,6 +4,7 @@ Covers the allocated/non-allocated write modes, their descriptor-based security 
 round-1 double-close fix: once open() owns the fd, the except path must not close it again (a second close
 can clobber a concurrently reused fd number)."""
 import importlib.util
+import shutil
 import os
 import stat
 import sys
@@ -179,6 +180,12 @@ class WritePrivateTests(unittest.TestCase):
         """The deletion test: preflight must be conditional, not refuse every allocated run."""
         leaf = os.path.join(self.d, "properly-reserved.txt")
         os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        # …and its `.launch` record. The allocator writes both, and the preflight now refuses an
+        # allocation without one — a deleted or corrupted record used to let a 20-30 minute review
+        # run to completion and exit 0, only for the verdict writer to discard it (PR #63 recheck).
+        # A fixture reserving a leaf alone models an allocation the allocator never produces.
+        with open(leaf + ".launch", "w", encoding="utf-8") as fh:
+            fh.write("a" * 32 + "\n")
 
         self.assertEqual(0, self.mod.main(leaf, ["/bin/echo", "ok"], timeout=30, allocated=True))
         self.assertIn(b"ok", Path(leaf).read_bytes())
@@ -311,6 +318,8 @@ class WritePrivateTests(unittest.TestCase):
         # reservation at all — nothing checked. `main()` now preflights the reservation before spawning
         # the command, which is the state a real allocated run is always in.
         os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        with open(path + ".launch", "w", encoding="utf-8") as fh:
+            fh.write("a" * 32 + "\n")
         writes = []
         real_write_private = self.mod._write_private
 
@@ -489,6 +498,104 @@ class CaptureArgumentParsingTests(unittest.TestCase):
             observed,
             [("/reserved/transcript.txt", ["reviewer", "--arg"], 5.0, True)],
         )
+
+
+class AllocatedTargetHardening(unittest.TestCase):
+    """Four allocated-capture defects the recheck reproduced (PR #63 recheck, P2)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        spec = importlib.util.spec_from_file_location("ptycap_h", _PTY)
+        self.mod = importlib.util.module_from_spec(spec)
+        sys.modules["ptycap_h"] = self.mod
+        spec.loader.exec_module(self.mod)
+
+    def _reserve(self, name="leaf.txt", launch=True):
+        leaf = os.path.join(self.d, name)
+        os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        if launch:
+            with open(leaf + ".launch", "w", encoding="utf-8") as fh:
+                fh.write("a" * 32 + "\n")
+        return leaf
+
+    def test_a_hard_linked_target_is_refused_before_it_is_rewritten(self):
+        """A hard link IS a regular file, so `O_NOFOLLOW` and `S_ISREG` both accept one.
+
+        Reproduced: linking an 18-byte file at the reserved path made `_write_private` rewrite that
+        file's contents and set it 0600 — corrupting an arbitrary same-user file. Asserted on the
+        victim's bytes, not on the exception: an exception raised after the write would be no defence.
+        """
+        victim = os.path.join(self.d, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS DATA\n")
+        leaf = os.path.join(self.d, "linked.txt")
+        os.link(victim, leaf)
+
+        with self.assertRaises(Exception):
+            self.mod._write_private(leaf, b"REVIEW OUTPUT\n", allocated=True)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS DATA\n", fh.read())
+
+    def test_an_unlinked_reservation_is_still_accepted(self):
+        """The positive control: the guard must reject SHARING, not every allocated write."""
+        leaf = self._reserve()
+        self.mod._write_private(leaf, b"REVIEW OUTPUT\n", allocated=True)
+        with open(leaf, encoding="utf-8") as fh:
+            self.assertEqual("REVIEW OUTPUT\n", fh.read())
+
+    def test_a_missing_launch_record_refuses_BEFORE_running_the_command(self):
+        """Asserted on the child never running, which is the whole point of moving the check earlier.
+
+        `review-verdict.py` already rejected such a transcript — but only at WRITE time, so a 20-30
+        minute review completed and exited 0 before being discarded. A refusal after the cost is paid
+        is a report, not a preflight.
+        """
+        leaf = self._reserve("no-record.txt", launch=False)
+        marker = os.path.join(self.d, "child-ran")
+        code = self.mod.main(leaf, ["/bin/sh", "-c", f"touch {marker}"], timeout=30, allocated=True)
+        self.assertEqual(1, code)
+        self.assertFalse(os.path.exists(marker), "the reviewer ran despite an unusable allocation")
+
+    def test_an_empty_launch_record_is_also_refused(self):
+        """Present-but-useless is the same outcome as absent, and was equally invisible until now."""
+        leaf = self._reserve("empty-record.txt", launch=False)
+        open(leaf + ".launch", "w").close()
+        marker = os.path.join(self.d, "child-ran-2")
+        code = self.mod.main(leaf, ["/bin/sh", "-c", f"touch {marker}"], timeout=30, allocated=True)
+        self.assertEqual(1, code)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_case_mangled_protected_root_is_rejected(self):
+        """`commonpath` is case-SENSITIVE; APFS is not, by default.
+
+        `$HOME/.CLAUDE/x` opens the same directory as `$HOME/.claude/x` while comparing unequal, so a
+        case-mangled `XDG_STATE_HOME` was accepted as outside the protected root. `realpath` does not
+        help: it resolves symlinks but preserves the caller's spelling.
+
+        MUTATION NOTE — the containment has TWO independent mechanisms, the inode walk and the
+        casefolded lexical fallback, and either alone rejects this. So disabling one changes nothing
+        and a single-mutant run reports no failures; only disabling BOTH reopens the hole, which this
+        test then catches. Recorded because "the mutant passed" would otherwise read as "the guard is
+        inert" — it means the redundancy is real, not that the check is decorative.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        os.makedirs(os.path.join(home, ".claude", "review-state"))
+        for spelling in (".claude", ".CLAUDE", ".Claude"):
+            with self.subTest(spelling=spelling):
+                candidate = os.path.join(home, spelling, "review-state")
+                canonical, reason = self.mod._validate_base_candidate(candidate, home)
+                self.assertIsNone(canonical, f"{spelling} was accepted: {reason}")
+
+    def test_a_base_outside_the_protected_root_is_still_accepted(self):
+        """Control — the containment must not have become "reject everything"."""
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        elsewhere = os.path.join(home, "elsewhere")
+        os.makedirs(elsewhere)
+        canonical, reason = self.mod._validate_base_candidate(elsewhere, home)
+        self.assertIsNotNone(canonical, reason)
 
 
 if __name__ == "__main__":

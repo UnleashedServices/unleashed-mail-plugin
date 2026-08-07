@@ -88,8 +88,23 @@ def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     def _opener(p, _flags):
         fd = os.open(p, flags, 0o600)   # our flags (incl. O_NOFOLLOW/O_NONBLOCK), not open()'s default
         try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
                 raise NonRegularCaptureTargetError(errno.ENOTSUP, "refusing a non-regular capture target", p)
+            # A HARD LINK IS A REGULAR FILE, so `O_NOFOLLOW` and `S_ISREG` both accept one. A
+            # same-account process that replaces the reserved leaf with a link to any other file it
+            # owns turns the `fchmod`/write/`ftruncate` below into a rewrite of THAT file — reproduced
+            # by linking an 18-byte file at the reserved path and watching it become the capture, mode
+            # 0600 (PR #63 recheck, P2). The allocator creates its leaf with exactly one link, so a
+            # second one is never legitimate here; a fresh capture is `O_CREAT|O_EXCL`-shaped and also
+            # single-linked.
+            if allocated and info.st_nlink != 1:
+                raise NonRegularCaptureTargetError(
+                    errno.EMLINK,
+                    f"refusing a hard-linked capture target ({info.st_nlink} links) — writing it would "
+                    "rewrite whatever else shares the inode",
+                    p,
+                )
             os.fchmod(fd, 0o600)        # tighten an already-existing 0644 file (O_CREAT mode is create-only)
         except BaseException:
             os.close(fd)                # open() hasn't taken ownership yet, so we must close it here
@@ -152,6 +167,36 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             print(
                 f"pty-capture: allocated transcript is not a regular file, refusing to run the "
                 f"command: {out_path}",
+                file=sys.stderr,
+            )
+            return 1
+        if reserved.st_nlink != 1:
+            print(
+                f"pty-capture: allocated transcript is hard-linked ({reserved.st_nlink} links), "
+                f"refusing to run the command: {out_path}",
+                file=sys.stderr,
+            )
+            return 1
+        # THE LAUNCH RECORD, BEFORE THE REVIEWER RUNS. `review-verdict.py` rejects a transcript whose
+        # `.launch` sibling is absent or malformed — but only at WRITE time, so a deleted or corrupted
+        # record meant a 20-30 minute review completed, exited 0, and was then thrown away. Checking
+        # the same precondition here costs a stat and turns a wasted round into an immediate refusal
+        # (PR #63 recheck, P2). Deliberately a shape check, not a re-derivation: the authority stays
+        # with the verdict writer, and duplicating its rules here would create two of them.
+        launch_path = out_path + ".launch"
+        try:
+            launch_info = os.lstat(launch_path)
+        except OSError as error:
+            print(
+                f"pty-capture: allocated transcript has no launch record, refusing to run the "
+                f"command: {launch_path}: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        if not stat.S_ISREG(launch_info.st_mode) or launch_info.st_size == 0:
+            print(
+                f"pty-capture: allocated transcript's launch record is unusable, refusing to run the "
+                f"command: {launch_path}",
                 file=sys.stderr,
             )
             return 1
@@ -500,9 +545,50 @@ def is_valid_transcript_component(value: str) -> bool:
     return value not in ("", ".", "..") and _COMPONENT_RE.fullmatch(value) is not None
 
 
-def _path_is_within(path: str, root: str) -> bool:
+def _identity(path: str):
+    """(st_dev, st_ino) for an existing path, else None. Case- and spelling-independent by construction."""
     try:
-        return os.path.commonpath((path, root)) == root
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino)
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    """Is `path` inside `root`? Answered by INODE where both exist, lexically otherwise.
+
+    `commonpath` is case-SENSITIVE, and this runs on default case-insensitive APFS: `$HOME/.CLAUDE/x`
+    opens the same directory as `$HOME/.claude/x` while comparing unequal, so a case-mangled
+    `XDG_STATE_HOME` was accepted as outside the protected root. `realpath` does not help — it resolves
+    symlinks but preserves the caller's component spelling (PR #63 recheck, P2).
+
+    Walking the ancestry by inode is the spelling-independent answer: it cannot be defeated by case,
+    by `.`/`..`, or by a symlinked ancestor. The lexical comparison stays as the fallback for paths
+    that do not exist yet, where there is no inode to compare — and it is casefolded there, since a
+    not-yet-created `.CLAUDE` directory would still be created inside the protected root.
+    """
+    root_identity = _identity(root)
+    if root_identity is not None:
+        probe = os.path.abspath(path)
+        seen = set()
+        while probe not in seen:
+            seen.add(probe)
+            probe_identity = _identity(probe)
+            if probe_identity is not None and probe_identity == root_identity:
+                return True
+            parent = os.path.dirname(probe)
+            if parent == probe:
+                break
+            probe = parent
+
+    try:
+        common = os.path.commonpath((path, root))
+    except ValueError:
+        return False
+    if common == root:
+        return True
+    try:
+        return os.path.commonpath((path.casefold(), root.casefold())) == root.casefold()
     except ValueError:
         return False
 

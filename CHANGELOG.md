@@ -117,6 +117,25 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Four hardening gaps in the allocated-capture path.** All reproduced:
+  - **A hard link at the reserved leaf rewrote whatever shared the inode.** A hard link *is* a regular
+    file, so `O_NOFOLLOW` and the `S_ISREG` check both accepted one; the `fchmod`/write/`ftruncate`
+    then operated on the linked target. Reproduced by linking an 18-byte file at the reserved path and
+    watching it become the capture at mode 0600. The allocator creates its leaf with exactly one link,
+    so a second is never legitimate — now refused, with the victim's bytes asserted intact.
+  - **A missing or empty launch record wasted a whole review.** `review-verdict.py` already rejected
+    such a transcript, but only at *write* time — so a 20–30 minute review ran to completion, exited 0,
+    and was then discarded. The same precondition is now checked before the reviewer launches, asserted
+    on the child never running.
+  - **A case-mangled protected root slipped past containment.** `commonpath` is case-sensitive and APFS
+    is not, so `$HOME/.CLAUDE/…` compared unequal while opening the same directory; `realpath` doesn't
+    help because it preserves the caller's spelling. Containment is now answered by **inode** where the
+    paths exist, with a casefolded lexical fallback where they don't.
+  - **The allocated leaf was `realpath`'d after its symlink check.** `islink()` then `realpath()` is a
+    lookup-then-lookup pair, so a symlink planted between them was followed and every check ran against
+    the attacker's target. The leaf name is now kept and opened `O_NOFOLLOW` — the same discipline the
+    freshness TOCTOU fix established. The *ancestry* is still resolved; that is a different question.
+
 - **The plan binding compared digests only, and hashed a truncated snapshot.** Two more defects in
   the write path:
   - **Byte-identical plans crossed.** Two distinct plans with the same contents share a digest, so a
