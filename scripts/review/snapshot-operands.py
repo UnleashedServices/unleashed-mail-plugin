@@ -19,6 +19,7 @@ Prints one snapshot absolute path per line, in the operand order, for the caller
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import stat
 import sys
@@ -46,58 +47,60 @@ def _read_nofollow(path: str) -> bytes:
     return b"".join(chunks)
 
 
-# A prompt is an argv string, so an unbounded embed would blow past the reviewer CLI's limits with a
-# confusing failure. Refuse loudly instead, and say what to do about it.
-_MAX_EMBED_BYTES = 256 * 1024
+#: Written beside the snapshots so the caller can re-verify the exact bytes just before launching.
+DIGEST_MANIFEST = "digests.tsv"
+
+
+def _verify(dest: str) -> int:
+    """Re-check every snapshot against the digest recorded when it was taken.
+
+    WHY NOT INLINE THE BYTES INSTEAD (the first attempt, reverted). Embedding the operand contents in
+    the prompt removes the pathname entirely and so closes the same-UID window completely — but a
+    prompt is an argv string, and Linux caps a SINGLE argument at `MAX_ARG_STRLEN` (32 x PAGE_SIZE =
+    128 KiB) regardless of the much larger total `ARG_MAX`. macOS has no such per-argument cap, so the
+    local suite passed while CI failed with exit 126 on an ordinary two-file audit (README.md +
+    CHANGELOG.md = 175 KB). Embedding therefore caps audits at roughly one medium file — a capability
+    regression worse than the narrow race it closed.
+
+    SO THE HONEST SCOPE IS STATED RATHER THAN OVERCLAIMED. Path transport is kept, the window between
+    validation and the reviewer's open is narrowed to the microseconds between this check and `exec`,
+    and the residual is documented: a same-UID writer that wins that race is NOT defended against here,
+    and cannot be — the same attacker can rewrite this script. What this does defend is everything the
+    original finding was about: a stale, swapped or symlinked operand from BEFORE the run.
+    """
+    manifest = os.path.join(dest, DIGEST_MANIFEST)
+    try:
+        with open(manifest, "r", encoding="utf-8") as stream:
+            records = [line.rstrip("\n").split("\t") for line in stream if line.strip()]
+    except OSError as error:
+        containment.refuse(f"snapshot digest manifest is unreadable: {manifest}: {error}")
+    for expected, path in records:
+        payload = _read_nofollow(path)
+        actual = hashlib.sha256(payload).hexdigest()
+        if actual != expected:
+            containment.refuse(
+                f"a snapshot changed after it was taken, refusing to launch the reviewer: {path} "
+                f"hashes {actual[:12]}…, recorded {expected[:12]}…"
+            )
+    return 0
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", default="snapshot-operands")
-    parser.add_argument("--dest", help="private directory to snapshot into (path-transport mode)")
-    parser.add_argument(
-        "--embed",
-        action="store_true",
-        help="emit the retained BYTES inline instead of snapshot paths (no later pathname lookup)",
-    )
-    parser.add_argument("operands", nargs="+")
+    parser.add_argument("--dest", required=True, help="private directory to snapshot into")
+    parser.add_argument("--verify", action="store_true",
+                        help="re-check existing snapshots in --dest against their recorded digests")
+    parser.add_argument("operands", nargs="*")
     arguments = parser.parse_args(argv)
 
     containment.TOOL = arguments.tool
+    if arguments.verify:
+        return _verify(os.path.realpath(arguments.dest))
+    if not arguments.operands:
+        containment.refuse("name at least one operand to snapshot")
+
     root = containment.repository_root()
-
-    # EMBED: TRANSPORT THE BYTES, NOT A PATHNAME (PR #63 recheck, P2). Snapshotting to a private
-    # directory closed the validate-then-open race against the LIVE tree, but it left a second window:
-    # the reviewer still opened the snapshot by NAME, and a same-account process watching for
-    # `codex-audit-src.*` could overwrite a copy — or replace its leaf with a symlink — between this
-    # helper exiting and that open. A private mode excludes other users, not another process under the
-    # same UID, so "immutable copies" overstated what a directory could promise.
-    #
-    # There is no filesystem defence against a same-UID writer once a pathname is involved, so the
-    # pathname is removed: the authenticated bytes are placed directly in the prompt the reviewer
-    # receives as an argument. Nothing is opened after validation, so there is no window at all.
-    if arguments.embed:
-        sections = []
-        total = 0
-        for operand in arguments.operands:
-            real = containment.contained_regular_file(operand, "audit operand")
-            payload = _read_nofollow(real)
-            relative = os.path.relpath(real, root)
-            total += len(payload)
-            if total > _MAX_EMBED_BYTES:
-                containment.refuse(
-                    f"the operands exceed {_MAX_EMBED_BYTES} bytes once inlined, which would overflow "
-                    "the reviewer's argument. Audit fewer files per run."
-                )
-            # A delimiter that cannot be forged from inside a source file: the operand list was already
-            # contained (no control characters), and the fence carries the repo-relative identity.
-            text = payload.decode("utf-8", "replace")
-            sections.append(f"===== BEGIN {relative} =====\n{text}\n===== END {relative} =====")
-        print("\n".join(sections))
-        return 0
-
-    if not arguments.dest:
-        containment.refuse("pass --dest for path transport, or --embed to inline the bytes")
     dest = os.path.realpath(arguments.dest)
 
     snapshots = []
@@ -118,10 +121,18 @@ def main(argv=None) -> int:
                 written += os.write(fd, payload[written:])
         finally:
             os.close(fd)
-        snapshots.append(target)
+        snapshots.append((target, hashlib.sha256(payload).hexdigest()))
 
-    for path in snapshots:
-        print(path)
+    # The digests the caller re-verifies immediately before launching the reviewer, narrowing the
+    # window between "these are the bytes we validated" and "the reviewer opens them".
+    manifest = os.path.join(dest, DIGEST_MANIFEST)
+    fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        for target, digest in snapshots:
+            stream.write(f"{digest}\t{target}\n")
+
+    for target, _digest in snapshots:
+        print(target)
     return 0
 
 

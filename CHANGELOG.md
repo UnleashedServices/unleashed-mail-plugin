@@ -455,13 +455,18 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `stage-prompt.py` authenticates the snapshot against its digest, substitutes the repository path as
   literal bytes, prepends the guard, enforces the size floor, and writes through a no-follow descriptor
   walk — one implementation, so the two arms cannot drift again.
-- **`audit-codex.sh` hands codex the operand BYTES, never a pathname.** Snapshotting into a private
-  directory closed the race against the live tree but left a narrower one of the same shape: codex
-  still opened the snapshot by name, and a same-account process watching for `codex-audit-src.*` could
-  overwrite it between the helper exiting and that open. A 0700 directory excludes other users, not
-  another process under the same UID, so "immutable copies" claimed more than a directory can promise.
-  The pathname is gone: the authenticated bytes are inlined into the prompt (bounded, with a loud
-  refusal above the limit), so nothing is opened after validation.
+- **`audit-codex.sh` re-verifies its operand snapshots immediately before launching the reviewer.**
+  Snapshotting into a private directory closed the validate-then-open race against the live tree, but
+  left a narrower one of the same shape: codex still opens the snapshot by name, and a same-UID process
+  could overwrite it between the helper exiting and that open. Each snapshot's digest is now re-checked
+  in the instruction before `exec`. **Scope stated rather than overclaimed:** that narrows the window to
+  microseconds, it does not eliminate it, and a same-UID writer who wins the race is not defended
+  against here — the same attacker can rewrite the wrapper. Inlining the bytes to remove the pathname
+  entirely *was* implemented and then reverted: Linux caps a single argv string at 128 KiB
+  (`MAX_ARG_STRLEN`) regardless of the much larger `ARG_MAX`, and macOS does not — so the local suite
+  passed while CI failed with exit 126 on an ordinary two-file audit (`README.md` + `CHANGELOG.md` =
+  175 KB). Embedding would have capped audits at roughly one medium file, a worse regression than the
+  narrow race it closed.
 - **The allocator refuses a non-numeric round before spending a review.** The generic component grammar
   accepted `round-1`, so a leaf named `…rround-1-…` was allocated, a full 12–28 minute review ran, and
   `review-verdict.py` then refused the transcript because its grammar requires `r[0-9]+`. Now a named
