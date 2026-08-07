@@ -128,6 +128,73 @@ def contained_regular_file(path: str, label: str, under: str = "") -> str:
     return real
 
 
+def read_leaf(fd: int, label: str = "operand") -> bytes:
+    """Drain an already-opened descriptor, refusing anything that is not a regular file.
+
+    The S_ISREG check is made against THE DESCRIPTOR, not the name it came from, so it describes the
+    object actually being read. Always closes `fd`.
+    """
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            refuse(f"{label} is not a regular file at read time")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(chunks)
+
+
+def read_contained(path: str, label: str = "operand") -> bytes:
+    """Read a repo-contained file with no symlink traversal at ANY component.
+
+    `O_NOFOLLOW` PROTECTS ONLY THE LEAF (PR #63 recheck, P1). `contained_regular_file()` validates by
+    PATHNAME, and every caller then re-opened that pathname — so a same-account process could rename an
+    accepted operand's parent and put a symlink in its place between the two calls. The leaf flag says
+    nothing about ancestors, and the substituted parent was traversed happily, feeding an outside file
+    to whatever the caller does next: inlining it into an audit, snapshotting it, or binding it as the
+    plan under review.
+
+    Descending component by component with `O_DIRECTORY|O_NOFOLLOW`, rooted at the validated repository,
+    makes the ancestors part of the same no-follow guarantee, so the object opened is the one
+    containment approved.
+
+    THIS LIVES HERE, BESIDE THE VALIDATOR, for the reason the module docstring gives: it was written for
+    `snapshot-operands.py` alone, and `bind-prompt.py` — the entrypoint that binds the PLAN, the single
+    most load-bearing operand in the gate — kept a leaf-only reader and the identical window. A rule
+    that lives in one script is a rule the next entrypoint will not have.
+    """
+    root = repository_root()
+    relative = os.path.relpath(path, root)
+    components = [c for c in relative.split(os.sep) if c and c != "."]
+    if not components or ".." in components:
+        refuse(f"{label} is not inside the repository: {path}")
+
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in components[:-1]:
+            try:
+                next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            except OSError as error:
+                refuse(
+                    f"{label}'s parent {component!r} could not be traversed without following a link: "
+                    f"{path}: {error}"
+                )
+            os.close(dir_fd)
+            dir_fd = next_fd
+        try:
+            fd = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        except OSError as error:
+            refuse(f"{label} could not be read without following a link: {path}: {error}")
+    finally:
+        os.close(dir_fd)
+
+    return read_leaf(fd, label)
+
+
 def main(argv=None) -> int:
     """`containment.py --label L OPERAND...` -> one repo-relative path per line, or exit 1.
 
@@ -138,6 +205,16 @@ def main(argv=None) -> int:
     parser.add_argument("--label", default="operand")
     parser.add_argument("--tool", default="containment")
     parser.add_argument("--under", default="", help="require the operand beneath this subtree")
+    # ABSOLUTE, FULLY RESOLVED output for callers that hand the operand to another program (PR #63
+    # recheck, P1). Repo-relative is right when the consumer runs at the root — `audit-codex.sh` builds
+    # a prompt from it — but `snapshot-plan.sh` and `persist-verdict.sh` `exec` `review-verdict.py`,
+    # which resolves and OPENS the name it is given. Handing it the caller's original operand meant the
+    # path that was validated and the path that was opened were two different strings: an alternate
+    # spelling, or a `docs/planning` swapped for a symlink after the check, reached a different object
+    # than the one containment approved. The realpath is what `contained_regular_file()` proved things
+    # about, so that is what gets passed on.
+    parser.add_argument("--absolute", action="store_true",
+                        help="emit the resolved absolute path instead of the repo-relative one")
     parser.add_argument("operands", nargs="+")
     arguments = parser.parse_args(argv)
 
@@ -147,7 +224,7 @@ def main(argv=None) -> int:
     root = repository_root()
     for operand in arguments.operands:
         real = contained_regular_file(operand, arguments.label, arguments.under)
-        print(os.path.relpath(real, root))
+        print(real if arguments.absolute else os.path.relpath(real, root))
     return 0
 
 

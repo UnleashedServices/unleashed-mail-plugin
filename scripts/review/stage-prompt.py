@@ -107,7 +107,11 @@ def _stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", required=True, help="the bound <transcript>.prompt snapshot")
-    parser.add_argument("--record", help="<transcript>.promptsha256 to authenticate the snapshot against")
+    # REQUIRED. The comment below claimed a missing record was refused; the code merely skipped the
+    # check, so the caller could authenticate or not by omitting a flag — and both harnesses did
+    # exactly that when the sidecar was absent (PR #63 recheck, P1).
+    parser.add_argument("--record", required=True,
+                        help="<transcript>.promptsha256 to authenticate the snapshot against")
     parser.add_argument("--tree", required=True, help="the disposable checkout root")
     parser.add_argument("--rel", required=True, help="path under the tree to stage the prompt at")
     parser.add_argument("--repo", required=True, help="repository path to replace (literal bytes)")
@@ -122,18 +126,17 @@ def main(argv=None) -> int:
     # AUTHENTICATE BEFORE TRANSFORMING. The digest names the bytes the binder validated; everything
     # below operates on those bytes or refuses. A missing record is refused rather than skipped —
     # "absent means unchecked" is the fail-open this whole family of bindings exists to close.
-    if arguments.record:
-        fields = _read_nofollow(arguments.record, "prompt binding record").decode("utf-8", "replace").split()
-        if not fields:
-            _refuse(f"the prompt binding record is empty: {arguments.record}")
-        expected = fields[0]
-        actual = hashlib.sha256(payload).hexdigest()
-        if actual != expected:
-            _refuse(
-                "the bound prompt snapshot does not match its recorded digest — refusing to review "
-                f"substituted instructions: {arguments.snapshot} hashes {actual[:12]}…, "
-                f"{arguments.record} records {expected[:12]}…"
-            )
+    fields = _read_nofollow(arguments.record, "prompt binding record").decode("utf-8", "replace").split()
+    if not fields:
+        _refuse(f"the prompt binding record is empty: {arguments.record}")
+    expected = fields[0]
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected:
+        _refuse(
+            "the bound prompt snapshot does not match its recorded digest — refusing to review "
+            f"substituted instructions: {arguments.snapshot} hashes {actual[:12]}…, "
+            f"{arguments.record} records {expected[:12]}…"
+        )
 
     # LITERAL BYTES, NOT A `sed` EXPRESSION. `bytes.replace` has no delimiter to collide with and no
     # metacharacters to escape, so a repository path containing `#`, a backslash or a regex character

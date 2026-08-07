@@ -42,34 +42,34 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 import containment  # noqa: E402
-from containment import contained_regular_file, refuse as _refuse, repository_root  # noqa: E402
+from containment import (  # noqa: E402
+    contained_regular_file,
+    read_contained,
+    refuse as _refuse,
+    repository_root,
+)
 
 # Own the diagnostic prefix: the shared module defaults to its own name, and a refusal that says
 # `containment:` sends the reader to the wrong file.
 containment.TOOL = "bind-prompt"
 
 
-def read_nofollow(path: str) -> bytes:
-    """Read the whole file through ONE O_NOFOLLOW descriptor and return the bytes.
+def read_nofollow(path: str, label: str = "operand") -> bytes:
+    """Read the whole file through `containment.read_contained` and return the bytes.
 
     Returning the BYTES rather than a digest is the point. The caller then checks, snapshots and hashes
     the same in-memory copy, so there is no second open between the check and the use — which is
     exactly the window the recheck found downstream, where the helper re-`cat`ed the prompt by name
     after this program had already blessed it.
+
+    This USED TO BE its own leaf-only `O_NOFOLLOW` open, and that left the window one level up: the
+    flag protects the leaf and says nothing about ancestors, so a same-account process could replace a
+    validated operand's PARENT with a symlink between `contained_regular_file()` and this read and have
+    the plan bound from outside the repository. The descriptor walk that closes it already existed in
+    `snapshot-operands.py`; it now lives in `containment.py` beside the validator, so the two halves of
+    the same check cannot be applied to two different objects (PR #63 recheck, P1).
     """
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    descriptor = os.open(path, flags)
-    try:
-        chunks = []
-        offset = 0
-        while True:
-            chunk = os.pread(descriptor, 65536, offset)
-            if not chunk:
-                return b"".join(chunks)
-            offset += len(chunk)
-            chunks.append(chunk)
-    finally:
-        os.close(descriptor)
+    return read_contained(path, label)
 
 
 _PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md")
@@ -103,9 +103,12 @@ def _plan_references(prompt_bytes: bytes, root: str) -> "list[bytes]":
 def _plan_candidates(root: str, basename: str) -> "list[str]":
     """Every `*_PLAN.md` in the repo with this basename, repo-relative and sorted."""
     found = []
-    for directory, _subdirs, files in os.walk(root):
-        if ".git" in directory.split(os.sep):
-            continue
+    for directory, subdirectories, files in os.walk(root):
+        # PRUNED, not merely skipped (PR #63 recheck, P3). The old form filtered `.git` out of the
+        # RESULTS but still descended into every object, ref and log inside it — thousands of entries
+        # on this repo — on a path that runs during every prompt binding. Emptying `subdirectories`
+        # tells `os.walk` not to enter them at all.
+        subdirectories[:] = [name for name in subdirectories if name != ".git"]
         if basename in files:
             found.append(os.path.relpath(os.path.join(directory, basename), root))
     return sorted(found)
@@ -245,7 +248,7 @@ def main(argv=None) -> int:
 
     # ONE read. Everything below uses these bytes: the agreement check, the snapshot the reviewer will
     # actually be fed, and the digest recorded for it.
-    prompt_bytes = read_nofollow(prompt)
+    prompt_bytes = read_nofollow(prompt, "prompt file")
     # NO NUL BYTES. The capture helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash
     # command substitution SILENTLY DELETES NULs — so the bytes validated here and the bytes the
     # reviewer receives are different strings. Reproduced: a prompt naming `A_PLAN.md` normally while
@@ -282,7 +285,7 @@ def main(argv=None) -> int:
     #
     # `<transcript>.planbytes` is the plan exactly as hashed. The harness stages THAT, so the bytes the
     # reviewer reads and the bytes the binding attests to are the same object, not two reads of a name.
-    plan_bytes = read_nofollow(plan)
+    plan_bytes = read_nofollow(plan, "plan file")
     write_sidecar_bytes(arguments.transcript + ".planbytes", plan_bytes)
     write_sidecar(
         arguments.transcript + ".plan",

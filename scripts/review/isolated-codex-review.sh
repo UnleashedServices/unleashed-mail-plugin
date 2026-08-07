@@ -25,6 +25,7 @@ _sha256() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[
 
 [ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout] [plan]" >&2; exit 1; }
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/tree-fingerprint.sh"
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 PROMPT_REL="$1"
 OUT="$2"
@@ -58,7 +59,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-BEFORE="$(git status --porcelain)"
+# CONTENT-AWARE, NOT STATUS-CATEGORY-ONLY (PR #63 recheck, P1). `git status --porcelain` emits one
+# line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the line byte-identical
+# and this comparison — the gate-bearing COREDEV-2607 detector, whose failure VOIDS the round —
+# saw nothing. The same defect was found and fixed in `preflight-agy.sh` first; the fix did not
+# reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
+BEFORE_STATUS="$(git status --porcelain)"
+BEFORE="$(tree_fingerprint "$REPO")"
 
 SHA="$(git rev-parse HEAD)"
 git worktree add --detach "$SCR/tree" "$SHA" >/dev/null 2>&1 \
@@ -79,16 +86,25 @@ if [ -n "$PLAN_REL" ]; then
     [ -n "$PLAN_REL" ] || { echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2; exit 1; }
     [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
     PLAN_SNAPSHOT="${OUT}.planbytes"
-    if [ -r "$PLAN_SNAPSHOT" ]; then
-        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
-            --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
-            || exit 1
-    else
-        echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
-        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
-            --tree "$TREE" --rel "$PLAN_REL" --live "$PLAN_REL")" \
-            || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
+    # THE BOUND SNAPSHOT IS MANDATORY (PR #63 recheck, P1). `bind-prompt.py` writes `.planbytes` and
+    # `.plan` together, so absence is tampering, not legacy — and the fallback it used to take quietly
+    # re-read the LIVE, mutable plan. That made `rm` the cheapest attack on the strongest binding in the
+    # chain: bind plan A, delete the snapshot, point the live plan at B, and the reviewer read B while
+    # `review-verdict` (which requires `.plan` and never reads `.planbytes`) approved A.
+    #
+    # The requirement is UNCONDITIONAL. It was first scoped to captures carrying a `.launch` record, on
+    # the theory that a direct or legacy call had no binder run — but this harness only ever invokes
+    # `pty-capture --allocated`, which itself refuses a leaf whose `.launch` is absent or malformed. The
+    # scoped condition was therefore true in every run that could complete, and the live-plan fallback
+    # was unreachable: a weaker path nobody could take, waiting for an edit to re-expose it.
+    if [ ! -r "$PLAN_SNAPSHOT" ]; then
+        echo "GATE FAILED — no bound plan snapshot beside the transcript: ${PLAN_SNAPSHOT}" >&2
+        echo "(the binder writes it with .plan; absence means it was removed. Re-capture the round.)" >&2
+        exit 1
     fi
+    EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
+        --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
+        || exit 1
 fi
 
 # --- authenticate the bound prompt, rewrite paths, stage it ------------------------------------
@@ -96,21 +112,23 @@ fi
 # unauthenticated snapshot re-read, and the `sed` expression assembled from a path that aborted every
 # capture on a checkout containing `#`). No `--guard` here: codex runs `-s read-only`, so the
 # read-only instruction the gemini guard supplies is enforced by the sandbox instead of by prose.
-# Two explicit calls rather than an array splice: under `set -u`, bash 3.2 — the macOS stock shell this
-# runs on — treats `"${EMPTY[@]}"` as an unbound variable and aborts the capture.
-# `--max-bytes` is defence in depth for the argv cap the capture wrapper already checks: this harness
-# can also be driven directly, and the assembled prompt is what actually reaches `codex exec` as a
-# single argument (PR #63 recheck). 120 KiB leaves headroom under Linux's 128 KiB `MAX_ARG_STRLEN`.
-if [ -r "${OUT}.promptsha256" ]; then
-    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
-        --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
-else
-    echo "note: no prompt digest beside the transcript; staging the snapshot unauthenticated" >&2
-    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
-        --snapshot "$PROMPT_REL" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
+# `--max-bytes` is the AUTHORITATIVE argv-cap check: the capture wrapper's pre-allocation check measures
+# the RAW prompt, and path substitution grows it, so this — measuring the assembled bytes that actually
+# reach `codex exec` as a single argument — is what must hold. 120 KiB leaves headroom under Linux's
+# 128 KiB `MAX_ARG_STRLEN` (PR #63 recheck).
+# THE PROMPT BINDING IS MANDATORY, exactly as the plan snapshot is (PR #63 recheck, P1). This branched
+# on the sidecar's presence and staged the snapshot UNAUTHENTICATED when it was absent — the same
+# "absent means unchecked" fail-open, reachable by one `rm`. `bind-prompt.py` writes `.prompt` and
+# `.promptsha256` together and `pty-capture --allocated` refuses a leaf without a `.launch`, so no run
+# that could complete ever needed the fallback.
+if [ ! -r "${OUT}.promptsha256" ]; then
+    echo "GATE FAILED — no prompt binding beside the transcript: ${OUT}.promptsha256" >&2
+    echo "(the binder writes it with .prompt; absence means it was removed. Re-capture the round.)" >&2
+    exit 1
 fi
+PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+    --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
+    --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1 --max-bytes 122880)" || exit 1
 
 # The reserved leaf must be EMPTY (see the gemini harness for the shorter-second-write hazard).
 if [ -s "$OUT" ]; then
@@ -128,10 +146,10 @@ TREE_BASELINE="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
 RC=$?
 
 # --- basis check: the plan and prompt codex read must be unchanged; nothing new may appear -------
-AFTER="$(git status --porcelain)"
+AFTER="$(tree_fingerprint "$REPO")"
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "GATE FAILED — the reviewer MUTATED the real working tree during the review:" >&2
-    diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") >&2
+    tree_fingerprint_report "$REPO" "$BEFORE_STATUS"
     exit 3
 fi
 if [ -n "$PLAN_REL" ]; then

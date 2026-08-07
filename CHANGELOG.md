@@ -13,6 +13,73 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+`COREDEV-2642` — remediation of two further PR #63 review passes over the 2.7.0 bytes. Twenty-one
+findings; every fix carries a proof that fails when the fix is reverted. Suite 701 → 731.
+
+### Fixed
+
+- **The reviewer identity is now allocator-ATTESTED, not parsed from the filename.** The `.launch`
+  record carries `<run id> <reviewer>`, and `review-verdict` reads the identity from it. A rename
+  defeated the two-arm quorum in both directions before: a name outside the allocator grammar made the
+  identity check `continue` (it was the only reader), and a canonical name with the reviewer field
+  swapped was satisfied by a record that bound the run id alone. `pty-capture` refuses a record whose
+  reviewer disagrees with the leaf before spawning, so the mismatch costs milliseconds, not a review.
+- **Deleting `<transcript>.planbytes` no longer downgrades either arm to the live plan.** Both
+  isolation harnesses required the bound snapshot only when it happened to exist, so `rm` was the
+  cheapest attack on the strongest binding in the chain. The requirement is now unconditional and the
+  live-plan fallback is deleted, along with `stage-bound-plan.py --live`: both harnesses run
+  `pty-capture --allocated`, which refuses a leaf without a valid `.launch`, so no run that could
+  complete ever reached it. The same fallback existed for the PROMPT binding and is closed the same
+  way; `stage-prompt.py --record` is now required rather than optional-with-a-comment-claiming-otherwise.
+- **Validation and the read are one operation for every contained operand.** `contained_regular_file()`
+  validates a NAME and every consumer re-opened that name with a leaf-only `O_NOFOLLOW`, which says
+  nothing about ancestors — so a same-account process could swap a validated operand's PARENT for a
+  symlink in between. The descriptor walk that closes it moved from `snapshot-operands.py` into
+  `containment.py` beside the validator, and `bind-prompt.py` (which binds the plan) now uses it.
+  `snapshot-plan.sh` and `persist-verdict.sh` pass on the resolved path containment returned instead of
+  discarding it and handing `review-verdict.py` the caller's original spelling.
+- **The grant validator reads every YAML list spelling.** Quoted items (`["Bash"]`, `- "Bash"`) and
+  multi-line flow lists kept their quotes or brackets, so the exact-token comparison every consumer
+  makes matched nothing and a model-invocable `allowed-tools` deny-list was disarmed by two characters.
+  Thirteen spellings of one list are now asserted to reach one verdict.
+- **The COREDEV-2607 reviewer-mutation detector is content-aware in both harnesses.** `git status
+  --porcelain` emits one line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the
+  line byte-identical and the gate-bearing before/after comparison saw nothing. The fix existed in
+  `preflight-agy.sh` and had not reached either harness; the rule now lives in `tree-fingerprint.sh`
+  and all three source it.
+- **The allocator's private chain enforces ownership and mode on ancestors it did not create.** The
+  anchor and the `FileExistsError` race branch checked only "is it a directory", so a component raced
+  into place as a mode-0777 directory was adopted and the private subtree built inside it — rename
+  permission comes from the parent, which is what the base candidate's check already knew.
+- **Both `review-verdict` writers refuse a planted target.** The predictable `<dest>.tmp.<pid>` staging
+  path accepted a HARD LINK (a link is a regular file, so `O_NOFOLLOW` allows it) and `O_TRUNC` emptied
+  the victim at open, before any check; and the self-ignoring `.gitignore` used `os.path.exists`, which
+  is FALSE for a DANGLING symlink, so a planted link was written through.
+- **A blank recorded plan identity is refused, not treated as absent.** `.strip()` made a
+  whitespace-only field indistinguishable from no field, which switched off the identity comparison
+  that exists because two distinct plans with identical bytes share a digest.
+- **`callers_scan` treats the whole invisible class as invisible.** General category `Cf` misses the
+  rest of `Default_Ignorable_Code_Point` — including U+3164 HANGUL FILLER, category `Lo` and zero
+  width — any of which splits an ASCII anchor while rendering identically.
+- **`pty-capture` bounds captured output at 64 MiB (exit 125).** `--timeout` bounded wall-clock and
+  nothing bounded bytes, so a reviewer stuck in an output loop accumulated everything it printed for
+  the whole budget.
+- **`changeset.sh` no longer silently narrows to `HEAD~1`.** Two modes fell back to the last commit
+  when the authoritative diff failed — the exact narrowing `detect_base` dies to prevent — and the
+  third read its diff through a process substitution, where `die` exits only the subshell and the loop
+  reports "no untested files" for a diff that never ran.
+
+### Changed
+
+- `parse_frontmatter` normalizes every list-valued key to one comma form, whatever its YAML spelling.
+- `review-verdict.py` parses the launch record in exactly one place (it briefly had a copy per field),
+  and the allocated-evidence rule runs before the identity check so a legacy transcript is diagnosed
+  as legacy rather than as unattestable.
+- Both `py_compile` CI invocations are identical and cover every tracked non-test script; a doc gate
+  derives that set rather than restating it (`stage-prompt.py` had been missing).
+- The unanchored `.agy-*`/`.codex-*`/`.kimi-*` gitignore globs are documented as a reviewed, declined
+  narrowing: narrowing is what failed here twice, at a cost of 33 accidentally committed files.
+
 ## [2.7.0] — 2026-08-06
 
 `COREDEV-2642` — remediation of four independent reviews (a deep review, a 34-commit audit, and two

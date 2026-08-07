@@ -108,7 +108,7 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         # grammar (and its equality to the run id in the filename) BEFORE spawning, because "regular and
         # nonempty" let a `not-a-run-id` record burn a full review that the verdict writer then discarded
         # (PR #63 recheck, P2). A fixture record has to be one a real allocator could have written.
-        Path(str(out) + ".launch").write_text("a" * 32 + "\n", encoding="utf-8")
+        Path(str(out) + ".launch").write_text("a" * 32 + " gemini\n", encoding="utf-8")
         Path(str(out) + ".plan").write_text(
             f"{hashlib.sha256(recorded).hexdigest()}  docs/planning/FEATURE_PLAN.md\n",
             encoding="utf-8")
@@ -116,6 +116,11 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         prompt = base / "prompt.md"
         prompt.write_text(PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
                           encoding="utf-8")
+        # The prompt binding is MANDATORY for the same reason the plan snapshot is: staging an
+        # unauthenticated snapshot when the sidecar was absent was "absent means unchecked", reachable
+        # by one `rm` (PR #63 recheck, P1). A hand-built capture must carry what the binder writes.
+        Path(str(out) + ".promptsha256").write_text(
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
         return out, prompt
 
     def run_harness(self, out, prompt):
@@ -222,6 +227,59 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.assertFalse(
             self.probe.is_file(),
             "the reviewer RAN on substituted bytes — the refusal came after the damage",
+        )
+
+    def test_DELETING_the_bound_snapshot_from_an_allocated_capture_is_refused(self):
+        """Absence downgraded the arm to the live, mutable plan (PR #63 recheck, P1).
+
+        The staging guard authenticates `.planbytes` against `.plan` — but only when `.planbytes`
+        EXISTS. Removing it took the `else` branch, which re-read the working-tree plan, so the cheapest
+        attack on the strongest binding in the chain was `rm` rather than any substitution: bind plan A,
+        delete the snapshot, point the live plan at B, and the reviewer read B while `review-verdict`
+        (which requires `.plan` and never reads `.planbytes`) approved A.
+
+        This is "absent means unchecked" — the same fail-open shape as a missing `.launch`, a missing
+        prompt binding and a missing plan binding, all closed on this branch. The binder writes
+        `.planbytes` and `.plan` together, so for an allocator-shaped capture absence is tampering.
+        """
+        honest = self.plan.read_bytes()
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r14-gemini.txt", plan_bytes=honest, recorded=honest)
+        Path(str(out) + ".planbytes").unlink()
+        # The live plan diverges to B — what the fallback would have staged.
+        self.plan.write_text("# Plan\nVERSION B (LIVE, UNBOUND)\n", encoding="utf-8")
+
+        result = self.run_harness(out, prompt)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("no bound plan snapshot", result.stderr)
+        self.assertFalse(
+            self.probe.is_file(),
+            "the reviewer RAN on the live plan — deleting the snapshot still downgrades the arm",
+        )
+
+    def test_the_snapshot_requirement_is_UNCONDITIONAL_not_scoped_to_a_launch_record(self):
+        """The first fix scoped the requirement to captures carrying a `.launch`, and that was dead.
+
+        The theory was that a direct or legacy call had no binder run and so no snapshot to lose. But
+        this harness only ever invokes `pty-capture --allocated`, which refuses a leaf whose `.launch`
+        is absent — so the scoped condition held in every run that could complete, and the live-plan
+        fallback behind it was unreachable. A weaker path nobody can take is one an edit re-exposes, so
+        it was deleted rather than left as a guarded branch. Removing the record must not resurrect it.
+        """
+        honest = self.plan.read_bytes()
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r15-gemini.txt", plan_bytes=honest, recorded=honest)
+        Path(str(out) + ".planbytes").unlink()
+        Path(str(out) + ".launch").unlink()
+        self.plan.write_text("# Plan\nVERSION B (LIVE, UNBOUND)\n", encoding="utf-8")
+
+        result = self.run_harness(out, prompt)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertFalse(
+            self.probe.is_file(),
+            "dropping the launch record re-opened the live-plan fallback",
         )
 
     def test_an_honest_snapshot_still_stages(self):
@@ -341,6 +399,44 @@ printf 'VERDICT: APPROVE\\n'
         combined = result.stdout + result.stderr
         self.assertIn("WROTE inside the disposable checkout", combined)
         self.assertIn("IMPLEMENTATION_NOTES.txt", combined)
+
+    def test_a_reviewer_editing_an_ALREADY_DIRTY_tracked_file_voids_the_round(self):
+        """The live-tree detector was STATUS-CATEGORY-only (PR #63 recheck, P1).
+
+        `git status --porcelain` emits one line per path — ` M docs/…` — so a reviewer that rewrote a
+        file ALREADY modified in the working tree left that line byte-identical, and `BEFORE != AFTER`
+        compared equal. The detector is the COREDEV-2607 gate whose failure VOIDS the round, and it saw
+        nothing. The same defect had already been found and fixed in `preflight-agy.sh`; the fix did not
+        reach either harness, which is why the rule now lives in one sourced file.
+
+        The fixture arranges the exact blind spot: a tracked file is committed, then modified (so it is
+        ` M` before the run), and the stub modifies it AGAIN by absolute path. No status line moves.
+        """
+        tracked = self.root / "NOTES.md"
+        tracked.write_text("committed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-qm", "notes"], cwd=self.root, check=True)
+        tracked.write_text("uncommitted edit\n", encoding="utf-8")   # ` M` before the run
+
+        def status_line_for(name: str) -> str:
+            lines = subprocess.run(["git", "status", "--porcelain"], cwd=self.root,
+                                   capture_output=True, text=True, check=True).stdout.splitlines()
+            return next(line for line in lines if line.endswith(name))
+
+        before_line = status_line_for("NOTES.md")
+        self.install_stub(self.MUTATING_STUB
+                          % f'printf "REVIEWER WROTE HERE\\n" > {tracked}')
+        result = self.capture("14")
+
+        # The blind spot is real: the file was rewritten and its status line did not move.
+        self.assertEqual("REVIEWER WROTE HERE\n", tracked.read_text(encoding="utf-8"))
+        self.assertEqual(before_line, status_line_for("NOTES.md"),
+                         "the fixture no longer reproduces the blind spot — the status line moved")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("MUTATED the working tree", result.stdout + result.stderr)
+        # Emitted only when the new-status-lines diff is EMPTY, which is the harness's own evidence
+        # that a status-only comparison had nothing to report. That is the deletion test for the fix.
+        self.assertIn("no new status line", result.stdout + result.stderr)
 
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by

@@ -59,6 +59,14 @@ ANSI_RE = re.compile(rb'\x1b\[[0-9;?]*[a-zA-Z]')
 SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
 POLL_INTERVAL_SEC = 0.1
 SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
+# THE CAPTURE BUFFER IS BOUNDED (PR #63 recheck, P2). `--timeout` bounds wall-clock and nothing bounded
+# BYTES: a reviewer stuck in an output loop accumulated everything it printed in memory for the whole
+# 28-minute budget, which is tens of gigabytes at PTY speeds and takes the machine down rather than the
+# round. 64 MiB is ~1000x the largest real transcript (a few tens of KiB) and ~500x the codex argv cap,
+# so nothing legitimate approaches it. Hitting it is treated like the timeout: terminate the child
+# through the same ladder, persist what was captured, and exit non-zero — a runaway must fail the round
+# loudly, never be silently truncated into a transcript someone then greps for a verdict.
+MAX_CAPTURE_BYTES = 64 * 1024 * 1024
 
 # The allocator's run identity, and the two grammars that must agree with `review-verdict.py`.
 # `_RUN_ID_HEX_LENGTH` is 16 random bytes rendered as hex; `_LAUNCH_RECORD_RE` mirrors that file's
@@ -66,7 +74,10 @@ SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
 # rather than imported because this module runs on the blocking hook path and imports nothing local —
 # `test_doc_gates` asserts the pairs are identical so the copies cannot drift.
 _RUN_ID_HEX_LENGTH = 16 * 2
-_LAUNCH_RECORD_RE = re.compile(rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z")
+_LAUNCH_RECORD_RE = re.compile(
+    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii")
+    + rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"
+)
 _ALLOCATED_LEAF_RE = re.compile(
     r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-"
     r"(?P<run_id>[0-9a-f]{" + str(_RUN_ID_HEX_LENGTH) + r"})\.txt\Z"
@@ -246,7 +257,8 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             return 1
         try:
             with open(launch_path, "rb") as launch_stream:
-                launch_bytes = launch_stream.read(_RUN_ID_HEX_LENGTH + 2)
+                # Run id + a space + the reviewer name + newline; 128 is ample and bounds a planted file.
+                launch_bytes = launch_stream.read(128)
         except OSError as error:
             print(
                 f"pty-capture: allocated transcript's launch record is unreadable, refusing to run "
@@ -258,18 +270,30 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         if launch_match is None:
             print(
                 f"pty-capture: allocated transcript's launch record is malformed, refusing to run the "
-                f"command (expected {_RUN_ID_HEX_LENGTH} hex digits and a newline): {launch_path}",
+                f"command (expected {_RUN_ID_HEX_LENGTH} hex digits, a space and the reviewer): "
+                f"{launch_path}",
                 file=sys.stderr,
             )
             return 1
         leaf_match = _ALLOCATED_LEAF_RE.fullmatch(os.path.basename(out_path))
-        if leaf_match is not None and leaf_match.group("run_id") != launch_match.group(1).decode("ascii"):
-            print(
-                f"pty-capture: allocated transcript's launch record names a DIFFERENT run than its "
-                f"filename, refusing to run the command: {launch_path}",
-                file=sys.stderr,
-            )
-            return 1
+        if leaf_match is not None:
+            if leaf_match.group("run_id") != launch_match.group(1).decode("ascii"):
+                print(
+                    f"pty-capture: allocated transcript's launch record names a DIFFERENT run than its "
+                    f"filename, refusing to run the command: {launch_path}",
+                    file=sys.stderr,
+                )
+                return 1
+            # A renamed leaf is caught here too: the record is the allocator's attestation, the
+            # filename is the caller's spelling, and a mismatch means one of them was rewritten.
+            if leaf_match.group("reviewer").casefold() != launch_match.group(2).decode("ascii").casefold():
+                print(
+                    f"pty-capture: allocated transcript's launch record names reviewer "
+                    f"{launch_match.group(2).decode('ascii')!r} but its filename says "
+                    f"{leaf_match.group('reviewer')!r}, refusing to run the command: {launch_path}",
+                    file=sys.stderr,
+                )
+                return 1
     # If the wrapper itself is asked to terminate — CI timeout, process manager,
     # or terminal hangup / SSH disconnect — turn the signal into a SystemExit so
     # the `finally` block still runs: it reaps the child and persists whatever we
@@ -322,6 +346,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
     status = None  # raw wait-status; only assigned when we actually reap the child
     capture_error = None  # set if persisting the transcript fails (surfaced below)
     timed_out = False  # set if the wall-clock --timeout elapses before the child exits
+    overflowed = False  # set if the child printed more than MAX_CAPTURE_BYTES
     start = time.monotonic()
     try:
         while True:
@@ -353,6 +378,17 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                     if not chunk:
                         break  # EOF on PTY; child likely exited — finally reaps
                     raw.extend(chunk)
+                    if len(raw) > MAX_CAPTURE_BYTES:
+                        overflowed = True
+                        try:
+                            sys.stderr.write(
+                                f"pty-capture: child produced more than {MAX_CAPTURE_BYTES} bytes; "
+                                "terminating child\n"
+                            )
+                            sys.stderr.flush()
+                        except OSError:
+                            pass
+                        break
                 except InterruptedError:
                     continue
                 except OSError:
@@ -522,7 +558,11 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
     # report success — that would silently reintroduce the missing-output bug.
     if capture_error is not None and exit_status == 0:
         exit_status = 1
-    if timed_out:
+    if overflowed:
+        # Distinct from 124 so a runaway is not read as a slow reviewer. The transcript on disk holds
+        # the first MAX_CAPTURE_BYTES, which is evidence of what happened, not a reviewable capture.
+        exit_status = 125
+    elif timed_out:
         exit_status = 124  # conventional timeout exit code; partial transcript already written
     return exit_status
 
@@ -676,6 +716,48 @@ def _path_is_within(path: str, root: str) -> bool:
         return False
 
 
+def _unsafe_ancestor_reason(path: str, info) -> "str | None":
+    """Why `path` may not stand above the allocator's private subtree, or None if it may.
+
+    TWO PROPERTIES, ONE RULE, ONE IMPLEMENTATION.
+
+      * OWNERSHIP. `os.access` says the mode bits permit us; it says nothing about WHO OWNS the
+        directory. An attacker-created mode-0777 directory under `/tmp` passes an access check, and the
+        allocator then puts its 0700 subtree beneath a parent whose owner can rename or replace that
+        subtree between allocation and capture. Root is accepted because a root-owned ancestor like
+        `/tmp` or `/` is the normal case and is not attacker-controlled.
+      * RENAME PERMISSION COMES FROM THE PARENT. A self-owned but group/world-writable ancestor lets any
+        local user rename or replace the allocator's mode-0700 child, and every private mode validated
+        below it then protects a subtree that is no longer the one we created. The sticky bit is the
+        exception that makes `/tmp` usable: with `S_ISVTX`, only the owner of an entry may rename or
+        delete it, which is exactly the property being demanded.
+
+    Both were enforced on the base candidate's NEAREST EXISTING ancestor and nowhere else, so the
+    components `_mkdir_private_chain` creates between that ancestor and the base were exempt — and its
+    `FileExistsError` branch, which exists precisely because another process can win that race, adopted
+    whatever it found as long as it was a directory. Under a sticky world-writable anchor another user
+    may create entries, so they could pre-create the base as their own 0777 directory in that window and
+    the allocator would build inside it (PR #63 recheck, P2). The rule lives here so the probe and the
+    race branch cannot answer differently.
+    """
+    if not stat.S_ISDIR(info.st_mode):
+        return f"{path!r} is not a directory (a symlink or other object occupies it)"
+    owner = info.st_uid
+    if owner not in (os.getuid(), 0):
+        return (
+            f"{path!r} is owned by uid {owner}, not by this user — its owner could replace the "
+            "allocated subtree between allocation and capture"
+        )
+    mode = info.st_mode
+    if (mode & (stat.S_IWGRP | stat.S_IWOTH)) and not (mode & stat.S_ISVTX):
+        return (
+            f"{path!r} is writable by others (mode {stat.S_IMODE(mode):04o}) without the sticky bit — "
+            "another local user could rename or replace the allocated subtree, and rename permission "
+            "comes from the parent, not from the 0700 child"
+        )
+    return None
+
+
 def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, str | None]":
     """Return (canonical candidate, None), or (None, rejection reason)."""
     if not candidate:
@@ -705,37 +787,13 @@ def _validate_base_candidate(candidate: str, home: str) -> "tuple[str | None, st
         return None, f"nearest existing path {probe!r} is not a directory"
     if not os.access(probe, os.W_OK | os.X_OK):
         return None, f"nearest existing directory {probe!r} is not writable and searchable"
-    # WRITABLE IS NOT OURS. `os.access` says the mode bits permit us; it says nothing about who owns
-    # the directory. An attacker-created mode-0777 directory under `/tmp` passes, and the allocator
-    # then puts its 0700 subtree beneath a parent whose owner can rename or replace that subtree
-    # between allocation and capture (PR #63 recheck, P2). Root is accepted because a root-owned
-    # ancestor like `/tmp` or `/` is the normal case and is not attacker-controlled.
     try:
         probe_info = os.stat(probe)
     except OSError as error:
         return None, f"nearest existing directory {probe!r} is unreadable: {error}"
-    owner = probe_info.st_uid
-    if owner not in (os.getuid(), 0):
-        return None, (
-            f"nearest existing directory {probe!r} is owned by uid {owner}, not by this user — its "
-            "owner could replace the allocated subtree between allocation and capture"
-        )
-    # OWNERSHIP IS NOT ENOUGH: THE ANCESTOR MUST NOT BE WRITABLE BY OTHERS WITHOUT THE STICKY BIT
-    # (PR #63 recheck, P2). Rename and unlink permission is governed by the PARENT directory, not the
-    # child — so a self-owned but group/world-writable ancestor lets any local user with write access
-    # rename or replace the allocator's mode-0700 `unleashed-mail` child, and every private mode
-    # validated below it then protects a subtree that is no longer the one we created. Reproduced with
-    # a self-owned mode-0777 `XDG_STATE_HOME`, which this check accepted.
-    #
-    # The sticky bit is the exception that makes `/tmp` usable: with `S_ISVTX` set, only the owner of an
-    # entry (or of the directory) may rename or delete it, which is exactly the property being demanded.
-    mode = probe_info.st_mode
-    if (mode & (stat.S_IWGRP | stat.S_IWOTH)) and not (mode & stat.S_ISVTX):
-        return None, (
-            f"nearest existing directory {probe!r} is writable by others (mode {stat.S_IMODE(mode):04o}) "
-            "without the sticky bit — another local user could rename or replace the allocated subtree, "
-            "and rename permission comes from the parent, not from the 0700 child"
-        )
+    unsafe = _unsafe_ancestor_reason(probe, probe_info)
+    if unsafe is not None:
+        return None, "nearest existing directory " + unsafe
     if os.path.exists(canonical) and not os.path.isdir(canonical):
         return None, "value is not a directory"
     return canonical, None
@@ -792,10 +850,9 @@ def _mkdir_private_chain(path: str) -> None:
         anchor = os.lstat(cursor)
     except OSError as error:
         raise AllocationError(f"existing ancestor {cursor!r} is unreadable: {error}")
-    if not stat.S_ISDIR(anchor.st_mode):
-        raise AllocationError(
-            f"existing ancestor {cursor!r} is not a directory (a symlink or other object occupies it)"
-        )
+    unsafe = _unsafe_ancestor_reason(cursor, anchor)
+    if unsafe is not None:
+        raise AllocationError("existing ancestor " + unsafe)
 
     for directory in reversed(missing):
         try:
@@ -813,10 +870,15 @@ def _mkdir_private_chain(path: str) -> None:
                 raise AllocationError(
                     f"concurrent path {directory!r} vanished during allocation: {error}"
                 )
-            if not stat.S_ISDIR(raced.st_mode):
+            # THE SAME RULE AS THE ANCHOR, not merely "is it a directory" (PR #63 recheck, P2). This
+            # branch exists because another process can win the race; requiring only S_ISDIR meant a
+            # racer under a sticky world-writable anchor could pre-create this component as their own
+            # 0777 directory and have the whole private subtree built inside it. `_unsafe_ancestor_reason`
+            # answers here exactly as it answers for the base probe.
+            unsafe = _unsafe_ancestor_reason(directory, raced)
+            if unsafe is not None:
                 raise AllocationError(
-                    f"concurrent path {directory!r} is not a directory (a symlink or other object was "
-                    "created there mid-allocation)"
+                    "concurrent path " + unsafe + " (created there mid-allocation)"
                 )
 
 
@@ -891,8 +953,14 @@ def _write_all(fd: int, payload: bytes) -> None:
         view = view[written:]
 
 
-def _create_launch_record(path: str, run_id: str) -> bool:
-    """Create and owner-reopen a launch record; return False on an exclusive-name collision."""
+def _create_launch_record(path: str, run_id: str, reviewer: str) -> bool:
+    """Create and owner-reopen a launch record; return False on an exclusive-name collision.
+
+    RECORD FORMAT: `<32 hex run id> <reviewer>\\n`. The reviewer field was added because the identity
+    the gate checks must come from the allocator, not from a filename the caller can rewrite
+    (PR #63 recheck, P1). `review-verdict.py`'s `_LAUNCH_RECORD` parses the same two fields, and
+    `test_doc_gates` pins the two grammars to each other.
+    """
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags, 0o600)
@@ -902,7 +970,7 @@ def _create_launch_record(path: str, run_id: str) -> bool:
     try:
         try:
             os.fchmod(fd, 0o600)
-            _write_all(fd, (run_id + "\n").encode("ascii"))
+            _write_all(fd, (run_id + " " + reviewer + "\n").encode("ascii"))
         finally:
             os.close(fd)
     except BaseException:
@@ -952,8 +1020,19 @@ def _reserve_transcript(parent: str, ticket: str, round_value: str, reviewer: st
             _unlink_reservation(path)
             raise
 
+        # THE REVIEWER GOES IN THE RECORD, not only in the filename (PR #63 recheck, P1). The reviewer
+        # identity was parsed out of the basename and nothing else carried it, so a rename defeated the
+        # two-arm quorum in BOTH directions: a name outside the allocator grammar made the identity
+        # check `continue` (it was the only reader), and a canonical name with the reviewer field
+        # swapped was satisfied by a `.launch` that bound the run id alone. The allocator already knows
+        # the reviewer here — recording it makes the identity allocator-ATTESTED instead of
+        # caller-spelled, and a rename can no longer change the answer.
+        #
+        # The record is created BEFORE the allocation marker is written, and the two statements are
+        # kept adjacent: `test_freshness`'s marker-before-record mutant anchors on exactly this
+        # `try:`/create pair to prove the ordering is what rejects a dispatched-then-recorded run.
         try:
-            launch_created = _create_launch_record(path + ".launch", run_id)
+            launch_created = _create_launch_record(path + ".launch", run_id, reviewer)
         except BaseException:
             _unlink_reservation(path)
             raise

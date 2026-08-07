@@ -19,6 +19,11 @@ except ImportError:  # Direct execution from scripts/tests.
 
 
 REPO = Path(__file__).resolve().parents[2]
+# The gate's OWN leaf grammar, so a hand-built proof leaf carries what the allocator would have
+# written rather than a second, drifting spelling of the same layout.
+_verdict = threading.verdict_module()
+_ALLOCATOR_BASENAME = _verdict._ALLOCATOR_BASENAME
+_TRANSCRIPT_RUN_ID = _verdict._TRANSCRIPT_RUN_ID
 REVIEW = "review"
 REVIEWER_FLAG = "--" + REVIEW + "er"
 
@@ -168,7 +173,7 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         )
 
     @staticmethod
-    def write_transcript(path: Path, reviewer: str) -> None:
+    def write_transcript(path: Path, body_label: str) -> None:
         """Write a transcript AND the sidecars an allocated one carries.
 
         An approving write now requires allocator-shaped evidence, and an allocator-shaped NAME
@@ -179,12 +184,31 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         observe the wrong path, and the mutation stops isolating its own variable.
         """
         path.write_text(
-            reviewer + " result\nVERDICT: APPROVE\n",
+            body_label + " result\nVERDICT: APPROVE\n",
             encoding="utf-8",
         )
-        run_id = path.stem.rsplit("-", 1)[-1]
+        # `<run id> <reviewer>` — the record attests WHO reviewed, so the gate reads an identity the
+        # caller did not spell (PR #63 recheck, P1). Omitting the field makes the record malformed, and
+        # these cells would then be rejected on the launch grammar instead of isolating their own M5
+        # variable, which is exactly what this helper's docstring exists to prevent.
+        #
+        # BOTH fields come from the leaf name via the gate's OWN grammars, not from `body_label`: the
+        # label is prose that distinguishes one cell's bytes from another's ("derived gemini"), and
+        # writing it into the record produced a MALFORMED one — which rejected two cells on the launch
+        # grammar instead of on the M5 variable they isolate.
+        #
+        # Cells that exercise the shell recipe's argument SPLITTING deliberately use exotic leaf names
+        # ("gemini:=path=tail.txt", "codex-full.txt") and run against a fake writer, so no allocator
+        # record exists to mirror and none is invented: a record is written only for a leaf the
+        # allocator could actually have produced.
+        leaf = _ALLOCATOR_BASENAME.match(path.name)
+        run_id = _TRANSCRIPT_RUN_ID.search(path.name)
+        if leaf is None or run_id is None:
+            return
         launch = Path(str(path) + ".launch")
-        launch.write_text(run_id + "\n", encoding="utf-8")
+        launch.write_text(
+            run_id.group(1) + " " + leaf.group("reviewer") + "\n", encoding="utf-8"
+        )
         stamp = path.stat().st_mtime_ns
         os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
 

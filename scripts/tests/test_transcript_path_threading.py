@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +32,22 @@ CAPTURE_GEMINI = REPO / "scripts" / "review" / "capture-gemini-review.sh"
 PLAN_RELATIVE = "docs/planning/FEATURE_PLAN.md"
 BIND_PROMPT = REPO / "scripts" / "review" / "bind-prompt.py"
 CONTAINMENT = REPO / "scripts" / "review" / "containment.py"
+
+def verdict_module():
+    """The SHIPPED `review-verdict.py`, loaded as a module.
+
+    Proof cells that hand-build evidence read the gate's own compiled grammars from here instead of
+    respelling them, so a fixture fails on the rule it names rather than on a layout it restated.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "review_verdict_under_proof", str(REVIEW_VERDICT)
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load " + str(REVIEW_VERDICT))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 # The recipes name a PER-ROUND prompt file, so the fixture repo must carry the ones the
 # fixture's TICKET/ROUND produce. A shared name was the cross-wiring hazard (deep review, P1).

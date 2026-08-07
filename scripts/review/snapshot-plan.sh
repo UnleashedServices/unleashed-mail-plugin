@@ -31,8 +31,14 @@ SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
 # The SAME module `bind-prompt.py` and `audit-codex.sh` use. Sharing it is the point: the identical
 # hole has now been found on four separate entrypoints, each time because the rule lived in one script.
-python3 "${SCRIPT_DIR}/containment.py" --tool "snapshot-plan" --label "plan" \
-    --under "docs/planning" -- "$PLAN" >/dev/null \
+# THE VALIDATED PATH IS THE ONE THAT GETS OPENED (PR #63 recheck, P1). This discarded containment's
+# output and passed the caller's original operand on, so the string that was proved contained and the
+# string `review-verdict.py` resolved and opened were two different things — an alternate spelling, or
+# a `docs/planning` replaced by a symlink after the check, reached an object containment never saw.
+# `--absolute` emits the realpath the check was made against; `audit-codex.sh` established the pattern
+# ("from the SNAPSHOT output rather than from the caller's argv").
+PLAN_CONTAINED="$(python3 "${SCRIPT_DIR}/containment.py" --tool "snapshot-plan" --label "plan" \
+    --under "docs/planning" --absolute -- "$PLAN")" \
     || die "refusing to snapshot: the plan is not an in-repo docs/planning file (see above)"
 
-exec python3 "${SCRIPTS_DIR}/review-verdict.py" snapshot --plan "$PLAN"
+exec python3 "${SCRIPTS_DIR}/review-verdict.py" snapshot --plan "$PLAN_CONTAINED"

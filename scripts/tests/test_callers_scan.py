@@ -1142,3 +1142,53 @@ class EvasiveSelectionProofs(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class DefaultIgnorableIsTheWholeInvisibleClass(unittest.TestCase):
+    """`Cf` alone left four other general categories able to split an anchor (PR #63 recheck, P2).
+
+    The property that means "renders as nothing" is `Default_Ignorable_Code_Point`, and it reaches into
+    `Mn`, `Lo` and unassigned `Cn` blocks that `Cf` does not contain. U+3164 HANGUL FILLER is the
+    classic case: category `Lo`, zero width, and it was passed through untouched.
+
+    The table in the module is the RESIDUE — the DI code points not already covered by `Cf` or the
+    variation selectors. This cell recomputes that difference from the DI ranges instead of restating
+    the table, so a table that drifts from the property fails here rather than silently narrowing.
+    """
+
+    #: DerivedCoreProperties.txt, `Default_Ignorable_Code_Point`.
+    RANGES = (
+        (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+        (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+        (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+        (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+        (0xE0000, 0xE0FFF),
+    )
+
+    def test_every_default_ignorable_code_point_is_treated_as_invisible(self):
+        for low, high in self.RANGES:
+            for code_point in range(low, high + 1):
+                with self.subTest(code_point=hex(code_point)):
+                    self.assertTrue(production._is_invisible(chr(code_point)))
+
+    def test_an_anchor_split_by_a_HANGUL_FILLER_is_still_found(self):
+        """The end-to-end consequence, in the category `Cf` does not reach.
+
+        `Lo` and zero width: an invocation spelled with one between two characters of the anchor
+        renders identically to the plain one and was not selected as a candidate.
+        """
+        anchor = sorted(production.ANCHORS)[0]
+        split = anchor[:1] + "ㅤ".encode("utf-8") + anchor[1:]
+        self.assertNotIn(anchor, split, "the fixture did not actually split the anchor")
+        self.assertIn(anchor, production.strip_invisible(split))
+        self.assertTrue(production.is_candidate("scripts/probe.sh", split),
+                        "an invocation hidden behind a HANGUL FILLER was not selected")
+
+    def test_ordinary_text_is_untouched(self):
+        """Discrimination: the normalisation must remove the invisible class, not mangle content.
+
+        A combining ACUTE ACCENT is `Mn` like the Khmer inherent vowels, and it is NOT default-ignorable
+        — stripping by category would have taken it too.
+        """
+        payload = "café́ — ordinary prose".encode("utf-8")
+        self.assertEqual(payload, production.strip_invisible(payload))

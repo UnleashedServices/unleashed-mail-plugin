@@ -145,7 +145,7 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         # A CANONICAL launch record: 32 hex digits and a newline. `pty-capture` validates the record's
         # grammar before spawning, because "regular and nonempty" let a `not-a-run-id` record burn a
         # full review the verdict writer then discarded (PR #63 recheck, P2).
-        (allocated / (out.name + ".launch")).write_text("a" * 32 + "\n", encoding="utf-8")
+        (allocated / (out.name + ".launch")).write_text("a" * 32 + " codex\n", encoding="utf-8")
         edited = f"# Plan\n{EDITED}\n".encode("utf-8")
         (allocated / (out.name + ".plan")).write_text(
             f"{hashlib.sha256(edited).hexdigest()}  docs/planning/FEATURE_PLAN.md\n", encoding="utf-8")
@@ -154,6 +154,11 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         prompt.write_text(PROMPT_BODY + "REVIEW TARGET: docs/planning/FEATURE_PLAN.md\n",
                           encoding="utf-8")
         (allocated / (out.name + ".prompt")).write_bytes(prompt.read_bytes())
+        # The binder writes `.promptsha256` beside `.prompt`, and staging now REQUIRES it — the
+        # "no digest, stage it unauthenticated" fallback was the same fail-open as a missing
+        # `.planbytes` (PR #63 recheck, P1).
+        (allocated / (out.name + ".promptsha256")).write_text(
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "  prompt.md\n", encoding="utf-8")
 
         # The live plan now diverges to B; the authenticated staged bytes are EDITED.
         self.plan.write_text("# Plan\nVERSION B (SUBSTITUTED)\n", encoding="utf-8")

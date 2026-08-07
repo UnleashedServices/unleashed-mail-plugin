@@ -61,8 +61,11 @@ done
 # a plan outside any git repo, and it is also the maintainer's own CLI. What must be bounded is the
 # pre-approved path the model can enter.
 SCRIPT_DIR_PV="$(cd -- "$(dirname -- "$0")" && pwd)"
-python3 "${SCRIPT_DIR_PV}/containment.py" --tool "persist-verdict" --label "plan" \
-    --under "docs/planning" -- "$PLAN_PATH" >/dev/null \
+# THE VALIDATED PATH IS THE ONE THAT GETS OPENED (PR #63 recheck, P1) — see `snapshot-plan.sh` for the
+# same change and the reason. `PLAN_PATH` is REPLACED, not shadowed, so no later line can reach for the
+# unvalidated spelling.
+PLAN_PATH="$(python3 "${SCRIPT_DIR_PV}/containment.py" --tool "persist-verdict" --label "plan" \
+    --under "docs/planning" --absolute -- "$PLAN_PATH")" \
     || die "refusing to persist: the plan is not an in-repo docs/planning file (see above)"
 [ -n "$COMBINED_VERDICT" ] || die "bind --verdict to the synthesis result"
 [ -n "$GEMINI_SPEC" ]      || die "bind the complete gemini reviewer argument"

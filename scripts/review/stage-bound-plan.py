@@ -11,11 +11,13 @@ keeps hitting — so the staging lives HERE, called identically by `isolated-agy
 `isolated-codex-review.sh`. A cross-arm test drives the same attack through both.
 
 WHAT IT GUARANTEES
-  * AUTHENTICATION: with `--snapshot`/`--record`, the bound `.planbytes` are read once through an
-    O_NOFOLLOW descriptor and refused unless they hash to the digest the `.plan` record attests to — so
-    a same-account process rewriting `.planbytes` between binding and staging cannot substitute bytes.
-    With `--live`, the working-tree plan is staged (weaker provenance, used only when no snapshot
-    exists) but through the identical no-follow write.
+  * AUTHENTICATION: the bound `.planbytes` are read once through an O_NOFOLLOW descriptor and refused
+    unless they hash to the digest the `.plan` record attests to — so a same-account process rewriting
+    `.planbytes` between binding and staging cannot substitute bytes. There is NO live-plan fallback:
+    a `--live` mode existed for "an older capture or a direct call", but both harnesses invoke
+    `pty-capture --allocated`, which refuses a leaf without a valid `.launch` record, so no run that
+    could complete ever reached it. Deleting `.planbytes` therefore used to downgrade the arm to the
+    mutable plan; now both arms refuse (PR #63 recheck, P1).
   * NO SYMLINK TRAVERSAL: `git worktree add --detach` recreates committed tree entries, so the plan
     path — or any parent — may materialize as a symlink pointing outside the checkout. Every directory
     component is opened O_DIRECTORY|O_NOFOLLOW (a symlinked parent fails ELOOP) and the leaf is
@@ -87,31 +89,27 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tree", required=True, help="the disposable detached checkout root")
     parser.add_argument("--rel", required=True, help="repo-relative plan path to stage into the tree")
-    parser.add_argument("--snapshot", help="the bound <transcript>.planbytes to authenticate and stage")
-    parser.add_argument("--record", help="the <transcript>.plan digest record to authenticate against")
-    parser.add_argument("--live", help="fall back to staging this working-tree plan (weaker provenance)")
+    # BOTH REQUIRED. They were optional so a `--live` fallback could stand in; with that mode gone,
+    # optional would mean an omitted `--record` staged unauthenticated bytes — the same fail-open,
+    # re-created by an argument default rather than a branch.
+    parser.add_argument("--snapshot", required=True,
+                        help="the bound <transcript>.planbytes to authenticate and stage")
+    parser.add_argument("--record", required=True,
+                        help="the <transcript>.plan digest record to authenticate against")
     arguments = parser.parse_args(argv)
 
-    if arguments.snapshot:
-        if not arguments.record:
-            sys.exit("stage-bound-plan: --snapshot requires --record")
-        payload = _read_nofollow(arguments.snapshot, "bound plan snapshot")
-        fields = _read_nofollow(arguments.record, "plan binding record").decode("utf-8", "replace").split()
-        if not fields:
-            sys.exit(f"stage-bound-plan: the plan binding record is empty: {arguments.record}")
-        expected = fields[0]
-        actual = hashlib.sha256(payload).hexdigest()
-        if actual != expected:
-            sys.exit(
-                "stage-bound-plan: the bound plan snapshot does not match its recorded digest — "
-                f"refusing to stage substituted bytes: {arguments.snapshot} hashes {actual[:12]}…, "
-                f"{arguments.record} records {expected[:12]}…"
-            )
-    elif arguments.live:
-        payload = _read_nofollow(arguments.live, "working-tree plan")
-        actual = hashlib.sha256(payload).hexdigest()
-    else:
-        sys.exit("stage-bound-plan: pass either --snapshot/--record or --live")
+    payload = _read_nofollow(arguments.snapshot, "bound plan snapshot")
+    fields = _read_nofollow(arguments.record, "plan binding record").decode("utf-8", "replace").split()
+    if not fields:
+        sys.exit(f"stage-bound-plan: the plan binding record is empty: {arguments.record}")
+    expected = fields[0]
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected:
+        sys.exit(
+            "stage-bound-plan: the bound plan snapshot does not match its recorded digest — "
+            f"refusing to stage substituted bytes: {arguments.snapshot} hashes {actual[:12]}…, "
+            f"{arguments.record} records {expected[:12]}…"
+        )
 
     _stage_no_follow(arguments.tree, arguments.rel, payload)
     print(actual)

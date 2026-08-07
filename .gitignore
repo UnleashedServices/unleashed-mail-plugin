@@ -21,6 +21,14 @@ firebase-debug.log
 # the second word is what failed twice — these are named after the TOOL, and each tool grows new
 # suffixes (`-prompt`, `-impl`, whatever a future round needs). Ignore by tool prefix instead, so a
 # new suffix is covered on the day it is invented rather than after it lands in a commit.
+#
+# DELIBERATELY UNANCHORED (PR #63 recheck, P3 — reviewed and declined). A leading `/` would confine
+# these to the repository root, which is where both incidents happened; the reviewer's concern is that
+# an unanchored glob also hides a same-named file anywhere in the tree. Narrowing is what failed here
+# TWICE, at a measured cost of 33 accidentally committed files, and the capture helpers accept a plan
+# and prompt relative to the CALLER'S directory — so a round driven from a subdirectory writes its
+# prompt there. The hypothetical hidden file is a smaller cost than the repeat this repo has already
+# paid, and `.agy-`/`.codex-`/`.kimi-`/`.gate-` are not names a source file takes.
 .agy-*.md
 .codex-*.md
 .kimi-*.md

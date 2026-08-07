@@ -57,6 +57,14 @@ die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 # `pty-capture.py` fail with E2BIG — AFTER a transcript leaf had been reserved and a disposable
 # worktree built. Checked HERE, before allocation, so nothing is consumed by a round that cannot run.
 # The gemini arm is unaffected: it passes `-p "Read and follow <path>"` and the reviewer opens the file.
+#
+# THIS MEASURES THE RAW PROMPT, NOT THE ASSEMBLED ONE (PR #63 recheck, P2 — scope stated rather than
+# silently assumed). `stage-prompt.py` substitutes the repository path for the disposable checkout
+# path, which GROWS the bytes that actually reach `codex exec`, and that checkout does not exist
+# until after allocation — so an exact pre-allocation check is not possible. This is a cheap
+# fast-fail on the obviously-oversized case; the AUTHORITATIVE check is `--max-bytes` in
+# `isolated-codex-review.sh`, which measures the assembled bytes. A prompt that passes here and
+# fails there costs one allocation — that is the residual, not an `execvp` dying with E2BIG.
 PROMPT_BYTES="$(wc -c < "$PROMPT" | tr -d ' ')"
 if [ "$PROMPT_BYTES" -gt 122880 ]; then
     die "prompt is ${PROMPT_BYTES} bytes; codex receives it as ONE argument and Linux caps that at

@@ -37,6 +37,7 @@ _sha256() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[
 
 [ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout]" >&2; exit 1; }
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+. "${SCRIPT_DIR}/tree-fingerprint.sh"
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 PROMPT_REL="$1"
 OUT="$2"
@@ -88,7 +89,13 @@ cleanup() {
 trap cleanup EXIT
 
 # --- before: fingerprint the real tree --------------------------------------------------------
-BEFORE="$(git status --porcelain)"
+# CONTENT-AWARE, NOT STATUS-CATEGORY-ONLY (PR #63 recheck, P1). `git status --porcelain` emits one
+# line per path, so a reviewer editing an ALREADY-DIRTY tracked file left the line byte-identical
+# and this comparison — the gate-bearing COREDEV-2607 detector, whose failure VOIDS the round —
+# saw nothing. The same defect was found and fixed in `preflight-agy.sh` first; the fix did not
+# reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
+BEFORE_STATUS="$(git status --porcelain)"
+BEFORE="$(tree_fingerprint "$REPO")"
 
 # --- disposable detached checkout at the exact reviewed commit --------------------------------
 SHA="$(git rev-parse HEAD)"
@@ -150,19 +157,25 @@ if [ -n "$PLAN_REL" ]; then
     # an O_NOFOLLOW descriptor, and writes it through a no-follow descriptor walk (a materialized symlink
     # leaf or parent is refused). It prints the digest of what it staged, which anchors the post-run
     # basis check below (PR #63 recheck, P1).
-    if [ -r "$PLAN_SNAPSHOT" ]; then
-        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
-            --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
-            || exit 1
-    else
-        # No snapshot: an older capture, or a direct call. Fall back to the live path and SAY SO, rather
-        # than silently accepting the weaker guarantee. Same no-follow staging — the symlink-leaf escape
-        # does not depend on where the bytes came from.
-        echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
-        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
-            --tree "$TREE" --rel "$PLAN_REL" --live "$PLAN_REL")" \
-            || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
+    # THE BOUND SNAPSHOT IS MANDATORY (PR #63 recheck, P1). `bind-prompt.py` writes `.planbytes` and
+    # `.plan` together, so absence is tampering, not legacy — and the fallback it used to take quietly
+    # re-read the LIVE, mutable plan. That made `rm` the cheapest attack on the strongest binding in the
+    # chain: bind plan A, delete the snapshot, point the live plan at B, and the reviewer read B while
+    # `review-verdict` (which requires `.plan` and never reads `.planbytes`) approved A.
+    #
+    # The requirement is UNCONDITIONAL. It was first scoped to captures carrying a `.launch` record, on
+    # the theory that a direct or legacy call had no binder run — but this harness only ever invokes
+    # `pty-capture --allocated`, which itself refuses a leaf whose `.launch` is absent or malformed. The
+    # scoped condition was therefore true in every run that could complete, and the live-plan fallback
+    # was unreachable: a weaker path nobody could take, waiting for an edit to re-expose it.
+    if [ ! -r "$PLAN_SNAPSHOT" ]; then
+        echo "GATE FAILED — no bound plan snapshot beside the transcript: ${PLAN_SNAPSHOT}" >&2
+        echo "(the binder writes it with .plan; absence means it was removed. Re-capture the round.)" >&2
+        exit 1
     fi
+    EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
+        --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
+        || exit 1
 fi
 
 # --- authenticate the bound prompt, rewrite paths, prepend the guard, stage it ------------------
@@ -174,20 +187,19 @@ fi
 # assembled from a path, so a checkout containing `#` aborted every capture), prepends the read-only
 # guard, enforces the size floor, and writes through a no-follow descriptor walk (PR #63 recheck, P1+P2).
 #
-# `${OUT}.promptsha256` may be absent for an older capture or a direct call; the record flag is then
-# omitted and the staging still happens, exactly as the plan path degrades.
-# Two explicit calls rather than an array splice: under `set -u`, bash 3.2 — the macOS stock shell this
-# runs on — treats `"${EMPTY[@]}"` as an unbound variable and aborts the capture.
-if [ -r "${OUT}.promptsha256" ]; then
-    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
-        --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --guard --min-bytes 1000)" || exit 1
-else
-    echo "note: no prompt digest beside the transcript; staging the snapshot unauthenticated" >&2
-    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
-        --snapshot "$PROMPT_REL" \
-        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --guard --min-bytes 1000)" || exit 1
+# THE PROMPT BINDING IS MANDATORY, exactly as the plan snapshot is (PR #63 recheck, P1). This branched
+# on the sidecar's presence and staged the snapshot UNAUTHENTICATED when it was absent — the same
+# "absent means unchecked" fail-open, reachable by one `rm`. `bind-prompt.py` writes `.prompt` and
+# `.promptsha256` together and `pty-capture --allocated` refuses a leaf without a `.launch`, so no run
+# that could complete ever needed the fallback.
+if [ ! -r "${OUT}.promptsha256" ]; then
+    echo "GATE FAILED — no prompt binding beside the transcript: ${OUT}.promptsha256" >&2
+    echo "(the binder writes it with .prompt; absence means it was removed. Re-capture the round.)" >&2
+    exit 1
 fi
+PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+    --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
+    --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --guard --min-bytes 1000)" || exit 1
 
 # --- run --------------------------------------------------------------------------------------
 # The reserved leaf must be EMPTY. It is created 0-byte by the allocator, and nothing but this
@@ -214,10 +226,10 @@ TREE_BASELINE="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
 RC=$?
 
 # --- after: the assertion that would have caught COREDEV-2607 --------------------------------
-AFTER="$(git status --porcelain)"
+AFTER="$(tree_fingerprint "$REPO")"
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "GATE FAILED — the reviewer MUTATED the working tree during the review:" >&2
-    diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER") >&2
+    tree_fingerprint_report "$REPO" "$BEFORE_STATUS"
     echo "(round is void — see COREDEV-2607)" >&2
     exit 3
 fi

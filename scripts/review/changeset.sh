@@ -93,17 +93,37 @@ fi
 
 printf 'Base: %s\n' "$BASE_BRANCH"
 
+# NO `HEAD~1` FALLBACK (PR #63 recheck, P2). `files` and `stat` ended in `|| git diff HEAD~1`, which
+# silently narrowed the review to the LAST COMMIT whenever the authoritative diff failed — the exact
+# narrowing `detect_base`'s own `die` above refuses to allow, reintroduced two lines later as an error
+# handler. By this point the base is resolved AND verified to be a commit, so a failure here is a real
+# git error and the honest answer is to report it, not to review a fraction of the branch and print the
+# result under the same heading. `untested` never had the fallback, and its silent `2>/dev/null` had
+# the same effect: an unreadable diff produced an EMPTY loop and a clean "no untested files" report.
+_diff_or_die() {
+    git diff "$BASE_BRANCH"...HEAD "$@" \
+        || die "could not diff ${BASE_BRANCH}...HEAD — refusing to report a narrowed range"
+}
+
 case "$MODE" in
     files)
         printf '\n=== Changed files ===\n'
-        git diff "$BASE_BRANCH"...HEAD --name-only 2>/dev/null || git diff HEAD~1 --name-only
+        _diff_or_die --name-only
         ;;
     stat)
         printf '\n=== Diff stats ===\n'
-        git diff "$BASE_BRANCH"...HEAD --stat 2>/dev/null || git diff HEAD~1 --stat
+        _diff_or_die --stat
         ;;
     untested)
         printf '\n=== Changed source files without test coverage ===\n'
+        # THE DIFF RUNS IN THIS SHELL, not in a process substitution. `done < <(_diff_or_die …)` looks
+        # like it fails closed, but the substitution is a SUBSHELL: `die` there exits only the subshell,
+        # the loop reads zero bytes, and the report prints "no untested files" for a diff that never
+        # ran. Writing to a file first puts the failure in the shell that can actually stop.
+        CHANGED_LIST="$(mktemp "${TMPDIR:-/tmp}/changeset.XXXXXX")" \
+            || die "could not allocate a scratch file for the changed-file list"
+        trap 'rm -f "$CHANGED_LIST"' EXIT
+        _diff_or_die -z --name-only > "$CHANGED_LIST"
         while IFS= read -r -d '' changed; do
             case "$changed" in
                 "Unleashed Mail/Sources/"*.swift) ;;
@@ -112,6 +132,6 @@ case "$MODE" in
             test_path="${changed#Unleashed Mail/Sources/}"
             test_path="Unleashed MailTests/${test_path%.swift}Tests.swift"
             [ -f "$test_path" ] || printf '⚠️  %s → missing %s\n' "$changed" "$test_path"
-        done < <(git diff -z "$BASE_BRANCH"...HEAD --name-only 2>/dev/null)
+        done < "$CHANGED_LIST"
         ;;
 esac

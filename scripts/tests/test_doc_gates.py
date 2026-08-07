@@ -881,13 +881,39 @@ class DuplicatedGrammarsAgree(unittest.TestCase):
             self.assertIn("_RUN_ID_HEX_LENGTH = 16 * 2", source,
                           f"{label} changed the run-id length; the other file must change with it")
 
-        # The launch-record grammar: 32 hex digits and a newline, anchored.
+        # The launch-record grammar: 32 hex digits, a space, the reviewer, a newline. The reviewer
+        # field is what makes the gate's identity check read ALLOCATOR-ATTESTED evidence instead of a
+        # filename the caller supplies — a rename defeated the two-arm quorum in both directions
+        # without it (PR #63 recheck, P1). Both files must parse the same two fields.
         for source, name in ((capture, "_LAUNCH_RECORD_RE"), (verdict, "_LAUNCH_RECORD")):
-            self.assertIn(
-                r'rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z"',
-                source,
-                f"{name} no longer matches the shared launch-record grammar",
-            )
+            self.assertIn(r'rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"', source,
+                          f"{name} no longer records/parses the reviewer field")
+            self.assertIn(r'rb"\A([0-9a-f]{"', source,
+                          f"{name} no longer anchors the run id")
+
+    def test_the_allocator_writes_the_reviewer_into_the_launch_record(self):
+        """The record is the evidence the identity check reads, so it must actually contain it."""
+        capture = _read("scripts/pty-capture.py")
+        self.assertIn('_write_all(fd, (run_id + " " + reviewer + "\\n").encode("ascii"))', capture,
+                      "the allocator no longer records the reviewer beside the run id")
+        verdict = _read("scripts/review-verdict.py")
+        self.assertIn(
+            '_run_id, attested, _info, problem = _read_launch_record(transcript + ".launch")',
+            verdict,
+            "the identity check no longer reads the allocator's record",
+        )
+        # ONE parser for the record, not one per field. The freshness check reads the run id and the
+        # identity check reads the reviewer, and they briefly had a copy each — so the grammar had to
+        # be tightened twice, which is the divergence-between-arms defect the shared staging helpers
+        # exist to prevent, in the file that adjudicates them.
+        self.assertEqual(1, verdict.count("_LAUNCH_RECORD.fullmatch("),
+                         "review-verdict.py must parse the launch record in exactly one place")
+        self.assertNotIn(
+            'match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))\n        if match is None:\n            continue',
+            verdict,
+            "the identity check still skips a transcript whose FILENAME is not allocator-shaped — "
+            "that is the rename bypass",
+        )
 
         # The allocator leaf grammar: the round is `r[0-9]+` in BOTH, which is the precondition the
         # allocator's numeric-round check exists to guarantee.
@@ -907,3 +933,101 @@ class DuplicatedGrammarsAgree(unittest.TestCase):
                       "the numeric-round rule must be a named shared validator, not inline logic")
         self.assertIn("is_valid_round_component if label == \"round\"", capture,
                       "the round validator is defined but the allocator never applies it")
+
+
+class ContainedOperandsAreTheOnesUsed(unittest.TestCase):
+    """Every entrypoint that validates an operand must pass ON what the validator returned.
+
+    THE FINDING (PR #63 recheck, P1). `containment.py` emits the resolved path precisely so the caller
+    builds from THAT — its own docstring says so, and `audit-codex.sh` follows it ("from the SNAPSHOT
+    output rather than from the caller's argv"). The two plan-state wrappers instead sent the output to
+    `/dev/null` and passed the caller's original operand to `review-verdict.py`, which resolves and
+    OPENS it: the string that was proved contained and the string that was opened were two different
+    things, so an alternate spelling — or a `docs/planning` swapped for a symlink after the check —
+    reached an object containment never saw.
+
+    Asserted structurally because the divergence has no single-process observable: with the `--under`
+    base left physical, every accepted alternate spelling resolves to the same file, and what remains is
+    a post-validation swap, which cannot be staged deterministically. The reproducible half of this
+    finding — a symlinked ANCESTOR between validation and the read — is proven end-to-end in
+    `test_plan_operand_containment.ContainedReadWalksEveryComponent`.
+    """
+
+    WRAPPERS = (
+        ("scripts/review/snapshot-plan.sh", "PLAN_CONTAINED", "$PLAN"),
+        ("scripts/review/persist-verdict.sh", "PLAN_PATH", "$PLAN_PATH"),
+    )
+
+    def test_neither_plan_wrapper_discards_the_containment_result(self):
+        for path, captured, _raw in self.WRAPPERS:
+            source = _read(path)
+            self.assertIn("--absolute", source,
+                          f"{path} no longer asks containment for the resolved path")
+            self.assertNotIn('-- "$PLAN" >/dev/null', source,
+                             f"{path} discards the containment result again")
+            self.assertNotIn('-- "$PLAN_PATH" >/dev/null', source,
+                             f"{path} discards the containment result again")
+            self.assertIn(f'{captured}="$(python3', source,
+                          f"{path} does not capture the validated path")
+
+    def test_the_captured_path_is_what_reaches_review_verdict(self):
+        snapshot = _read("scripts/review/snapshot-plan.sh")
+        self.assertIn('review-verdict.py" snapshot --plan "$PLAN_CONTAINED"', snapshot,
+                      "snapshot-plan.sh passes an operand other than the validated one")
+        # `persist-verdict.sh` REPLACES `PLAN_PATH` rather than capturing into a new name, so there is
+        # no unvalidated spelling left in scope for a later line to reach for. Assert the absence, which
+        # is the property — a second variable would let both survive.
+        persist = _read("scripts/review/persist-verdict.sh")
+        self.assertNotIn("PLAN_CONTAINED", persist,
+                         "persist-verdict.sh kept a second name, so the raw operand is still in scope")
+
+    def test_the_shared_reader_is_the_only_descriptor_walk(self):
+        """The walk lived in `snapshot-operands.py` alone while `bind-prompt.py` kept a leaf-only read.
+
+        One implementation, in `containment.py` beside the validator — the same "a rule that lives in
+        one script is a rule the next entrypoint will not have" failure this module keeps recording.
+        """
+        self.assertIn("def read_contained(", _read("scripts/review/containment.py"),
+                      "the shared descriptor walk is gone from containment.py")
+        for path in ("scripts/review/snapshot-operands.py", "scripts/review/bind-prompt.py"):
+            source = _read(path)
+            self.assertNotIn("O_DIRECTORY", source,
+                             f"{path} grew its own descriptor walk again")
+            self.assertIn("read_contained(", source,
+                          f"{path} no longer reads through the shared walk")
+
+
+class EveryShippedPythonIsByteCompiledOn39(unittest.TestCase):
+    """The 3.9 compile job protects an ENUMERATED list, so a new script joins it only if remembered.
+
+    `stage-prompt.py` did not (PR #63 recheck, P3), and the two py_compile invocations had drifted from
+    each other as well — the 3.9 job covered `cleanup_coredev_2619_leaks.py` and the default-Python job
+    did not. macOS ships 3.9.6 as `/usr/bin/python3` and the review CLIs run these scripts under it, so
+    an unlisted script is one whose 3.9 syntax nothing checks.
+
+    Enumeration is not the class. This derives the class — every tracked non-test `.py` under `scripts/`
+    — and requires both invocations to name all of it.
+    """
+
+    def _compile_lines(self) -> "list[str]":
+        lines = [line.strip() for line in _read(".github/workflows/plugin-ci.yml").splitlines()
+                 if line.strip().startswith("run: python3 -m py_compile")]
+        self.assertEqual(2, len(lines), "the two py_compile invocations moved or multiplied")
+        return lines
+
+    def test_both_invocations_cover_every_shipped_script(self):
+        import subprocess
+
+        tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=str(_ROOT),
+                                 capture_output=True, text=True, check=True).stdout.split()
+        shipped = sorted(path for path in tracked
+                         if path.startswith("scripts/") and "/tests/" not in path)
+        self.assertTrue(shipped, "the tracked-script query found nothing — the derivation is broken")
+        for line in self._compile_lines():
+            for path in shipped:
+                self.assertIn(path, line, f"{path} is not byte-compiled by: {line[:80]}…")
+
+    def test_the_two_invocations_are_identical(self):
+        first, second = self._compile_lines()
+        self.assertEqual(first, second,
+                         "the default-Python and 3.9 compile jobs check different sets of files")

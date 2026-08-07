@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import errno
 import stat
 import sys
 from typing import NamedTuple
@@ -222,8 +223,12 @@ _ALLOCATOR_BASENAME = re.compile(
     r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-[0-9a-f]{"
     + str(_RUN_ID_HEX_LENGTH) + r"}\.txt\Z"
 )
+# `<32 hex run id> <reviewer>\n`. The reviewer field is what makes the identity ALLOCATOR-ATTESTED
+# rather than parsed out of a filename the caller supplies (PR #63 recheck, P1). `pty-capture.py`
+# writes it and carries a matching `_LAUNCH_RECORD_RE`; `test_doc_gates` pins the two together.
 _LAUNCH_RECORD = re.compile(
-    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z"
+    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii")
+    + rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"
 )
 
 def _sha256_bytes(path: str) -> str:
@@ -302,11 +307,28 @@ def _write_text_nofollow(path: str, text: str) -> None:
     `.tmp.<pid>` staging name is predictable, so a same-account attacker could pre-plant it as a symlink;
     `open(path, "w")` would then write THROUGH it to the link target with the gate process's privileges
     (round 8: codex). The `opener` keeps single-close ownership."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    # NO O_TRUNC, and an EXPLICIT link-count check (PR #63 recheck, P2). A HARD LINK is a regular file,
+    # so `O_NOFOLLOW` accepts one — and `O_TRUNC` empties the target AT open(), before any `fstat` can
+    # look. A same-account attacker who pre-planted `<dest>.tmp.<pid>` as a hard link to a file they
+    # wanted destroyed got it emptied on the way in, whatever this function decided afterwards. The same
+    # pair of mistakes was found and fixed in `pty-capture.py`'s non-allocated write; this writer kept
+    # them. Opening without O_TRUNC lets the `st_nlink` check refuse a linked victim with its bytes
+    # intact, and the explicit `ftruncate` below bounds an honest overwrite exactly as O_TRUNC would.
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
 
     def _op(p, _f):
         fd = os.open(p, flags, 0o600)
         try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(errno.ENOTSUP, "refusing a non-regular verdict target", p)
+            if info.st_nlink != 1:
+                raise OSError(
+                    errno.EMLINK,
+                    f"refusing to write through a hard-linked path ({info.st_nlink} links)",
+                    p,
+                )
+            os.ftruncate(fd, 0)
             os.fchmod(fd, 0o600)
         except BaseException:
             os.close(fd)
@@ -350,13 +372,27 @@ def _ensure_secure_dir(d: str) -> None:
     # repo — the plugin's own .gitignore does not apply where the plugin is loaded from the cache (e.g.
     # the app repo's docs/planning/.verdicts/), where a routine `git add docs/` would otherwise commit an
     # approving artifact and satisfy `implement`'s verify in every clone (PR #39 review).
+    # `lexists` + O_EXCL, NOT `exists` + `open(…, "w")` (PR #63 recheck, P2). `os.path.exists` is FALSE
+    # for a DANGLING symlink, so a pre-planted `.verdicts/.gitignore -> /somewhere/victim` took the
+    # write branch and `open(…, "w")` created and wrote THROUGH the link with this process's privileges.
+    # `lexists` sees the link itself so the branch is not taken, and O_CREAT|O_EXCL|O_NOFOLLOW makes the
+    # create-or-refuse atomic rather than a check followed by an unprotected open.
     gi = os.path.join(d, ".gitignore")
-    if not os.path.exists(gi):
+    if not os.path.lexists(gi):
         try:
-            with open(gi, "w", encoding="utf-8") as fh:
-                fh.write("*\n")
+            descriptor = os.open(
+                gi,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except OSError:
+            return
+        try:
+            os.write(descriptor, b"*\n")
         except OSError:
             pass
+        finally:
+            os.close(descriptor)
 
 
 def _repo_root(path: str) -> str | None:
@@ -460,7 +496,13 @@ def _is_per_run_transcript(path: str) -> bool:
 
 
 def _read_launch_record(launch_path: str):
-    """Return (run ID, descriptor metadata, problem) for one exact launch-record line."""
+    """Return (run ID, attested reviewer, descriptor metadata, problem) for one launch-record line.
+
+    ONE parser returns BOTH fields. The freshness check needs the run id and the identity check needs
+    the reviewer, and giving each its own copy of this reader meant the record grammar had to be
+    tightened twice — the same divergence-between-two-arms defect the shared staging helpers exist to
+    prevent, in the file that adjudicates them (PR #63 recheck).
+    """
     launch_fd = -1
     try:
         launch_fd = os.open(
@@ -470,24 +512,25 @@ def _read_launch_record(launch_path: str):
             | getattr(os, "O_NONBLOCK", 0),
         )
     except FileNotFoundError:
-        return None, None, "launch record is absent: " + launch_path
+        return None, None, None, "launch record is absent: " + launch_path
     except OSError:
-        return None, None, "launch record is unreadable or non-regular: " + launch_path
+        return None, None, None, "launch record is unreadable or non-regular: " + launch_path
 
     try:
         launch_info = os.fstat(launch_fd)
         if not stat.S_ISREG(launch_info.st_mode):
-            return None, None, "launch record is unreadable or non-regular: " + launch_path
+            return None, None, None, "launch record is unreadable or non-regular: " + launch_path
         with os.fdopen(launch_fd, "rb") as stream:
             launch_fd = -1
-            record = stream.read(_RUN_ID_HEX_LENGTH + 2)
+            # Run id + space + reviewer + newline; 128 bounds a planted file while fitting any name.
+            record = stream.read(128)
             if record == b"":
-                return None, None, "launch record is EMPTY: " + launch_path
+                return None, None, None, "launch record is EMPTY: " + launch_path
             record_match = _LAUNCH_RECORD.fullmatch(record)
             if record_match is None:
-                return None, None, "launch record is malformed: " + launch_path
+                return None, None, None, "launch record is malformed: " + launch_path
     except OSError:
-        return None, None, "launch record is unreadable or non-regular: " + launch_path
+        return None, None, None, "launch record is unreadable or non-regular: " + launch_path
     finally:
         if launch_fd >= 0:
             try:
@@ -495,7 +538,12 @@ def _read_launch_record(launch_path: str):
             except OSError:
                 pass
 
-    return record_match.group(1).decode("ascii"), launch_info, None
+    return (
+        record_match.group(1).decode("ascii"),
+        record_match.group(2).decode("ascii"),
+        launch_info,
+        None,
+    )
 
 
 def _regular_file_info(path: str):
@@ -570,7 +618,7 @@ def _transcript_freshness_problem(transcript: str):
         return "per-run transcript filename has no canonical run ID: " + transcript, None
     filename_run_id = filename_match.group(1)
     launch_path = transcript + ".launch"
-    record_run_id, launch_info, launch_problem = _read_launch_record(launch_path)
+    record_run_id, _attested, launch_info, launch_problem = _read_launch_record(launch_path)
     if launch_problem is not None:
         return launch_problem, None
 
@@ -651,6 +699,18 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     # for: a transcript whose recorded identity does not match the plan being written is refused rather
     # than accepted on a digest alone, and the operator re-captures. A transcript with NO binding at all
     # is a different branch above, which still names it explicitly.
+    # A WHITESPACE-ONLY RECORDED IDENTITY IS NOT AN ABSENT ONE (PR #63 recheck, P2). `.strip()` turned
+    # `<digest>   \n` into `""`, and the empty string then took the "no identity recorded" branch — so
+    # the identity comparison this block exists for could be switched off by writing a blank path into
+    # the record. That is the same "absent means unchecked" shape as a deleted sidecar, spelled with a
+    # space, and it reopens exactly the byte-identical-plans bypass the comparison was added to close.
+    # The binding grammar requires a non-empty field, so a blank one is malformed, not legacy.
+    if bound_plan is not None and bound_plan != "" and not bound_plan.strip():
+        return (
+            "transcript binding records a BLANK plan identity: " + binding_path
+            + " — the field is present but empty, which cannot be compared against the plan being "
+            "written. Re-capture the round through the capture helpers."
+        )
     bound_identity = bound_plan.strip() if bound_plan else ""
     if bound_identity:
         plan_identity, _kind = _plan_identity(plan)
@@ -717,8 +777,24 @@ def _reviewer_identity_mismatch(reviewers) -> "str | None":
     the evidence — it just was not read. That is the same "recorded and never compared" shape as the
     prompt digest and the bound plan identity, both closed earlier in this release.
 
-    Legacy-shaped transcripts have no encoded identity and are skipped; an APPROVING verdict already
-    requires allocator-shaped evidence, so nothing approving reaches this with an unreadable name.
+    THE FILENAME WAS THE ONLY WITNESS, AND A RENAME DEFEATED IT IN BOTH DIRECTIONS (PR #63 recheck,
+    P1 — both reproduced end to end, yielding `GATE OK — APPROVE [gemini, codex]` from two genuine
+    GEMINI captures with Codex never running):
+
+      * OUT OF THE GRAMMAR. This function was the only reader of the reviewer, and it `continue`d when
+        `_ALLOCATOR_BASENAME` did not match — while the approving-evidence gate admitted the file on the
+        looser `_is_per_run_transcript` (name OR directory layout OR a `.launch` sibling) and freshness
+        keyed off a bare run-id suffix search. Three checks, three definitions of "allocated". The old
+        docstring's premise — that approving evidence is always allocator-shaped, so no approving
+        transcript reaches here unreadable — is exactly what failed.
+      * INSIDE THE GRAMMAR. A canonical name with the reviewer field swapped satisfied everything,
+        because the `.launch` record bound the run id and nothing else. Tightening this function to
+        require the grammar would have closed the first and left the second untouched.
+
+    So the identity is read from the ALLOCATOR'S RECORD, which the caller does not write: `.launch` now
+    carries `<run id> <reviewer>`, and a rename cannot change it. A transcript whose record is absent or
+    unparseable is REFUSED rather than skipped — "absent means unchecked" is the fail-open shape this
+    whole family of bindings exists to close, and this function is only reached for approving verdicts.
     """
     for reviewer in reviewers:
         if not isinstance(reviewer, dict):
@@ -727,14 +803,25 @@ def _reviewer_identity_mismatch(reviewers) -> "str | None":
         transcript = reviewer.get("transcriptPath")
         if not declared or not isinstance(transcript, str) or not transcript:
             continue
-        match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))
-        if match is None:
-            continue
-        allocated = match.group("reviewer").casefold()
-        if allocated != declared:
+
+        _run_id, attested, _info, problem = _read_launch_record(transcript + ".launch")
+        if problem is not None:
             return (
-                f"transcript allocated for {allocated!r} is declared as {declared!r}: {transcript}"
+                f"{declared!r}'s transcript carries no usable allocator record, so its identity cannot "
+                f"be attested: {problem}. Re-capture the round through the capture helpers."
+            )
+        if attested.casefold() != declared:
+            return (
+                f"transcript allocated for {attested!r} is declared as {declared!r}: {transcript}"
                 " — one arm cannot stand in for the other, which is the whole point of a dual review"
+            )
+        # The filename is the caller's spelling; when it is allocator-shaped it must AGREE with the
+        # record. A mismatch means one of the two was rewritten, which is the rename attack itself.
+        match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))
+        if match is not None and match.group("reviewer").casefold() != attested.casefold():
+            return (
+                f"transcript filename says {match.group('reviewer')!r} but its allocator record "
+                f"attests {attested!r}: {transcript} — the leaf was renamed"
             )
     return None
 
@@ -1002,11 +1089,12 @@ def cmd_write(args: argparse.Namespace) -> int:
         # APPROVAL — a non-approving record blocks `implement` whatever its labels say, so refusing one
         # would discard a legitimate REQUEST_CHANGES for no gain. Two tests that pin the non-approving
         # asymmetry caught this scope error.
-        mismatch = _reviewer_identity_mismatch(reviewers)
-        if mismatch:
-            raise SystemExit(
-                "review-verdict: refusing to write a mislabelled artifact — " + mismatch
-            )
+        # ORDER, for the THIRD time in this function. The allocated-evidence rule runs BEFORE the
+        # identity check because the identity check now REFUSES a transcript whose `.launch` is absent
+        # (PR #63 recheck, P1) — which is every legacy path. Run second, it answered "this is a legacy
+        # transcript" with "its identity cannot be attested": true, but it names the wrong rule and
+        # leaves the coarser one unreachable, so a later relaxation of the identity check would silently
+        # change what legacy paths are allowed to do. The test that pins the legacy rule caught this.
         for reviewer in reviewers:
             transcript = reviewer.get("transcriptPath")
             if not _is_per_run_transcript(str(transcript)):
@@ -1016,6 +1104,11 @@ def cmd_write(args: argparse.Namespace) -> int:
                     "A legacy/fixed transcript path is exempt from BOTH the freshness check and the "
                     "plan binding, so an approval backed by one attests to nothing. Re-capture the "
                     "round through `capture-codex-review.sh` / `capture-gemini-review.sh`.")
+        mismatch = _reviewer_identity_mismatch(reviewers)
+        if mismatch:
+            raise SystemExit(
+                "review-verdict: refusing to write a mislabelled artifact — " + mismatch
+            )
     artifact = {
         "schemaVersion": SCHEMA_VERSION,
         # REPO-RELATIVE when the plan is inside a git repo, absolute otherwise (COREDEV-2603).

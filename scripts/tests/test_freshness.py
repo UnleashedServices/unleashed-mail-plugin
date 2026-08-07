@@ -54,12 +54,12 @@ RUN_IDS = (
 )
 BASE_MTIME_NS = 1_700_000_000_000_000_000
 MALFORMED_RECORDS = (
-    RUN_IDS[0].upper().encode("ascii") + b"\n",
-    RUN_IDS[0].encode("ascii"),
-    RUN_IDS[0].encode("ascii") + b"\ntrailing",
-    RUN_IDS[0].encode("ascii") + b"\n" + RUN_IDS[0].encode("ascii") + b"\n",
+    RUN_IDS[0].upper().encode("ascii") + b" gemini\n",
+    RUN_IDS[0].encode("ascii") + b" gemini",
+    RUN_IDS[0].encode("ascii") + b" gemini\ntrailing",
+    RUN_IDS[0].encode("ascii") + b" gemini\n" + RUN_IDS[0].encode("ascii") + b" gemini\n",
     b"abc\n",
-    b"g" * len(RUN_IDS[0]) + b"\n",
+    b"g" * len(RUN_IDS[0]) + b" gemini\n",
 )
 
 
@@ -104,10 +104,26 @@ def write_prompt_binding(transcript) -> None:
 
 
 class _MarkerObserver(io.StringIO):
-    def __init__(self, test: unittest.TestCase, expected_run_id: str) -> None:
+    """Asserts the reopened record before the marker, using the ALLOCATOR'S OWN grammar.
+
+    The expected bytes are not spelled out here: the record is matched with the module's compiled
+    `_LAUNCH_RECORD_RE` and its groups compared to the run id and reviewer this allocation was asked
+    for. Restating the layout would make this observer fail on a grammar change instead of on the
+    ordering property it exists to prove.
+    """
+
+    def __init__(
+        self,
+        test: unittest.TestCase,
+        expected_run_id: str,
+        expected_reviewer: str,
+        record_grammar,
+    ) -> None:
         super().__init__()
         self.test = test
         self.expected_run_id = expected_run_id
+        self.expected_reviewer = expected_reviewer
+        self.record_grammar = record_grammar
         self.marker_paths = []  # type: List[Path]
         self.events = []  # type: List[str]
         self.real_open = os.open
@@ -128,13 +144,19 @@ class _MarkerObserver(io.StringIO):
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
             )
             try:
-                payload = os.read(descriptor, len(self.expected_run_id) + 2)
+                payload = os.read(descriptor, 128)
             finally:
                 self.real_close(descriptor)
+            match = self.record_grammar.fullmatch(payload)
+            self.test.assertIsNotNone(
+                match,
+                "the owner must be able to reopen the closed, run-bound record before dispatch; "
+                "what it read does not satisfy the allocator's own grammar: " + repr(payload),
+            )
             self.test.assertEqual(
-                (self.expected_run_id + "\n").encode("ascii"),
-                payload,
-                "the owner must be able to reopen the closed, run-bound record before dispatch",
+                (self.expected_run_id, self.expected_reviewer),
+                (match.group(1).decode("ascii"), match.group(2).decode("ascii")),
+                "the reopened record must bind THIS run and THIS reviewer",
             )
             self.marker_paths.append(transcript)
         return super().write(value)
@@ -210,7 +232,9 @@ class FreshnessFixture(unittest.TestCase):
         path = parent / ("COREDEV-2619r9-" + reviewer + "-" + run_id + ".txt")
         path.write_bytes(content)
         launch = Path(str(path) + ".launch")
-        launch.write_bytes((run_id + "\n").encode("ascii"))
+        # `<run id> <reviewer>` — the allocator records the reviewer so the gate reads the identity
+        # from evidence the caller did not write (PR #63 recheck, P1).
+        launch.write_bytes((run_id + " " + reviewer + "\n").encode("ascii"))
         os.chmod(path, 0o600)
         os.chmod(launch, 0o600)
         # Equality is the neutral valid baseline: comparator-polarity mutants aimed at the selected
@@ -238,7 +262,7 @@ class FreshnessFixture(unittest.TestCase):
             "HOME": str(home),
             "XDG_STATE_HOME": str(state),
         }
-        observer = _MarkerObserver(self, run_id)
+        observer = _MarkerObserver(self, run_id, reviewer, module._LAUNCH_RECORD_RE)
         events = observer.events
         launch_descriptors = set()
         launch_create_flags = []  # type: List[int]
@@ -310,7 +334,9 @@ class FreshnessFixture(unittest.TestCase):
             launch.unlink()
         elif kind == "mismatched":
             other = RUN_IDS[1] if run_id == RUN_IDS[0] else RUN_IDS[0]
-            launch.write_bytes((other + "\n").encode("ascii"))
+            # Reviewer field retained: this cell isolates a mismatched RUN ID, and dropping the
+            # field would make it a malformed-record case testing a different rule.
+            launch.write_bytes((other + " " + transcript.name.split("-")[2] + "\n").encode("ascii"))
             self.set_mtime_ns(launch, BASE_MTIME_NS + 100_000_000)
         elif kind == "empty":
             launch.write_bytes(b"")
@@ -559,21 +585,25 @@ class FreshnessFixture(unittest.TestCase):
             ]
         record_error_anchor = {
             "absent": (
-                "        return None, None, \"launch record is absent: \" + launch_path\n",
+                "        return None, None, None, \"launch record is absent: \" + launch_path\n",
                 "absent-accepted",
             ),
             "empty": (
-                "                return None, None, \"launch record is EMPTY: \" + launch_path\n",
+                "                return None, None, None, \"launch record is EMPTY: \" + launch_path\n",
                 "empty-record-accepted",
             ),
             "malformed": (
-                "                return None, None, \"launch record is malformed: \" + launch_path\n",
+                "                return None, None, None, \"launch record is malformed: \" + launch_path\n",
                 "malformed-record-accepted",
             ),
         }
         if kind in record_error_anchor:
             anchor, label = record_error_anchor[kind]
             indentation = anchor[: len(anchor) - len(anchor.lstrip())]
+            # The mutant synthesises BOTH record fields from the FILENAME — which is precisely the
+            # defect the reviewer field exists to close, and is what makes this a fail-open rather
+            # than a crash. Synthesising only the run id would leave the reviewer `None`, and the
+            # identity check downstream would kill the mutant on a rule this cell is not testing.
             fake_success = (
                 indentation
                 + "return (\n"
@@ -583,6 +613,12 @@ class FreshnessFixture(unittest.TestCase):
                 + "        os.path.basename(launch_path[:-len(\".launch\")])\n"
                 + indentation
                 + "    ).group(1),\n"
+                + indentation
+                + "    _ALLOCATOR_BASENAME.match(\n"
+                + indentation
+                + "        os.path.basename(launch_path[:-len(\".launch\")])\n"
+                + indentation
+                + "    ).group(\"reviewer\"),\n"
                 + indentation
                 + "    os.stat(launch_path[:-len(\".launch\")]),\n"
                 + indentation
@@ -807,11 +843,11 @@ class M4RecordPrecedesDispatchProofs(FreshnessFixture):
         marker_before_record = _replace_once(
             self.allocator_source,
             "        try:\n"
-            "            launch_created = _create_launch_record(path + \".launch\", run_id)\n",
+            "            launch_created = _create_launch_record(path + \".launch\", run_id, reviewer)\n",
             "        sys.stdout.write(ALLOCATION_MARKER + path + \"\\n\")\n"
             "        sys.stdout.flush()\n"
             "        try:\n"
-            "            launch_created = _create_launch_record(path + \".launch\", run_id)\n",
+            "            launch_created = _create_launch_record(path + \".launch\", run_id, reviewer)\n",
         )
         nonexclusive_create = _replace_once(
             self.allocator_source,

@@ -1,5 +1,6 @@
 """Tests for scripts/review-verdict.py — the plan-digest-bound Combined-verdict artifact."""
 import hashlib
+import errno
 import importlib.util
 import shutil
 import json
@@ -35,7 +36,9 @@ def allocated_transcript(directory, plan, reviewer, body, salt=""):
         fh.write(body)
     launch = path + ".launch"
     with open(launch, "w", encoding="utf-8") as fh:
-        fh.write(run_id + "\n")
+        # `<run id> <reviewer>` — the allocator records the reviewer so the gate reads the
+        # identity from evidence the caller did not write (PR #63 recheck, P1).
+        fh.write(run_id + " " + reviewer + "\n")
     stamp = os.stat(path).st_mtime_ns
     # BEFORE the transcript: a record written after it is the stale-dispatch shape freshness rejects.
     os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
@@ -61,6 +64,15 @@ def allocated_transcript(directory, plan, reviewer, body, salt=""):
     with open(path + ".promptsha256", "w", encoding="utf-8") as fh:
         fh.write(hashlib.sha256(prompt_bytes).hexdigest() + "  prompt.md\n")
     return path
+
+
+def _load_verdict_module(name):
+    """The SHIPPED `review-verdict.py`, loaded as a module."""
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class ReviewVerdictTest(unittest.TestCase):
@@ -1338,7 +1350,7 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
         with open(path, "w") as fh:
             fh.write(reviewer + "\nVERDICT: APPROVE\n")
         with open(path + ".launch", "w") as fh:
-            fh.write(run_id + "\n")
+            fh.write(run_id + " " + reviewer + "\n")
         stamp = os.stat(path).st_mtime_ns
         os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
         with open(os.path.join(self.d, bound_relative), "rb") as fh:
@@ -1373,6 +1385,31 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
         matched = self._write(a, transcripts)
         self.assertEqual(0, matched.returncode, matched.stderr)
 
+    def test_a_BLANK_recorded_identity_is_refused_not_treated_as_absent(self):
+        """`.strip()` made a whitespace-only field indistinguishable from no field (PR #63 recheck, P2).
+
+        The identity comparison exists because two distinct plans with identical bytes share a digest.
+        Writing spaces into the record's path field made `bound_identity` empty, which took the "nothing
+        recorded" branch — so the comparison could be switched OFF by a blank, and the byte-identical
+        crossing it was added to stop worked again. Same "absent means unchecked" shape as a deleted
+        sidecar, spelled with a space.
+
+        The plan under test is one half of the identical-bytes pair above, so the digest cannot
+        discriminate and only the identity can — if the blank were tolerated, this write would succeed.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+            with open(os.path.join(self.d, a), "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            with open(path + ".plan", "w") as fh:
+                fh.write(f"{digest}   \n")          # present, non-empty by the grammar, and blank
+
+        blanked = self._write("docs/planning/b/SAME_PLAN.md", transcripts)
+        self.assertNotEqual(0, blanked.returncode, blanked.stdout)
+        self.assertIn("BLANK plan identity", blanked.stderr)
+
     def test_a_prompt_larger_than_the_trusted_read_cap_still_persists(self):
         """A guard that refuses valid work is a guard someone switches off.
 
@@ -1389,6 +1426,72 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
 
         result = self._write(a, transcripts)
         self.assertEqual(0, result.returncode, result.stderr)
+
+
+class TheVerdictWritersRefuseAPlantedTarget(unittest.TestCase):
+    """Both writers under `.verdicts/` could be aimed at an outside file (PR #63 recheck, P2).
+
+    The same two mistakes that were found and fixed in `pty-capture.py`'s non-allocated write survived
+    here, in the tool that writes the gate's own artifact:
+
+      * THE ARTIFACT. `<dest>.tmp.<pid>` is a predictable staging name, and a HARD LINK is a regular
+        file — so `O_NOFOLLOW` accepted one, and `O_TRUNC` emptied the victim AT open(), before any
+        check could look. The refusal, if it came, came after the damage.
+      * THE SELF-IGNORING `.gitignore`. `os.path.exists` is FALSE for a DANGLING symlink, so a planted
+        `.verdicts/.gitignore -> <victim>` took the "not there, create it" branch and `open(…, "w")`
+        wrote through the link.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.module = _load_verdict_module("rv_planted_targets")
+
+    def test_a_hard_linked_staging_path_is_refused_with_the_victim_INTACT(self):
+        victim = os.path.join(self.d, "PRECIOUS")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS OUTSIDE DATA\n")
+        target = os.path.join(self.d, "artifact.json.tmp.999")
+        os.link(victim, target)
+
+        with self.assertRaises(OSError) as caught:
+            self.module._write_text_nofollow(target, "attacker artifact")
+        self.assertEqual(errno.EMLINK, caught.exception.errno)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS OUTSIDE DATA\n", fh.read(),
+                             "the victim was emptied — the refusal came after O_TRUNC")
+
+    def test_an_ordinary_rewrite_still_works_and_leaves_no_stale_tail(self):
+        """Discrimination, and the deletion test for dropping O_TRUNC.
+
+        Removing O_TRUNC is what lets the link check run before any damage; the explicit `ftruncate`
+        is what still bounds an honest overwrite. Without it a shorter second artifact would carry the
+        first one's tail — the same defect this repo already fixed once in the transcript writer.
+        """
+        path = os.path.join(self.d, "artifact.json")
+        self.module._write_text_nofollow(path, "x" * 400)
+        self.module._write_text_nofollow(path, "short")
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual("short", fh.read())
+
+    def test_a_DANGLING_gitignore_symlink_is_not_written_through(self):
+        verdicts = os.path.join(self.d, ".verdicts")
+        os.mkdir(verdicts, 0o700)
+        victim = os.path.join(self.d, "OUTSIDE.txt")
+        os.symlink(victim, os.path.join(verdicts, ".gitignore"))
+        self.assertFalse(os.path.exists(victim))
+
+        self.module._ensure_secure_dir(verdicts)
+
+        self.assertFalse(os.path.exists(victim),
+                         "the self-ignoring write followed a dangling symlink out of .verdicts")
+
+    def test_a_missing_gitignore_is_still_created(self):
+        """Positive control: the refusal must be about the link, not about writing at all."""
+        verdicts = os.path.join(self.d, ".verdicts")
+        self.module._ensure_secure_dir(verdicts)
+        with open(os.path.join(verdicts, ".gitignore"), encoding="utf-8") as fh:
+            self.assertEqual("*\n", fh.read())
 
 
 class LegacyNamesAreNotMistakenForAllocations(unittest.TestCase):
@@ -1467,7 +1570,7 @@ class OneArmCannotSatisfyTheDualGate(unittest.TestCase):
         with open(path, "w") as fh:
             fh.write(f"{reviewer} {salt}\nVERDICT: APPROVE\n")
         with open(path + ".launch", "w") as fh:
-            fh.write(run_id + "\n")
+            fh.write(run_id + " " + reviewer + "\n")
         stamp = os.stat(path).st_mtime_ns
         os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
         with open(os.path.join(self.d, self.plan_relative), "rb") as fh:

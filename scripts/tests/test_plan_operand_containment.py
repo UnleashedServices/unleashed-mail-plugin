@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -226,6 +227,97 @@ class PlanOperandContainment(unittest.TestCase):
             cwd=str(loose), capture_output=True, text=True, check=False, input="",
         )
         self.assertNotEqual(0, result.returncode, result.stdout)
+
+
+class ContainedReadWalksEveryComponent(unittest.TestCase):
+    """`contained_regular_file()` validates a NAME; the read must open the object it approved.
+
+    THE FINDING (PR #63 recheck, P1). Every consumer validated with `contained_regular_file()` and then
+    re-opened that pathname with a leaf-only `O_NOFOLLOW`. That flag protects the LEAF and says nothing
+    about ancestors, so a same-account process could rename an accepted operand's parent and put a
+    symlink in its place between the two calls — and the substituted parent was traversed happily. In
+    `bind-prompt.py` the operand in question is the PLAN, the most load-bearing input in the gate.
+
+    The walk that closes it existed in `snapshot-operands.py` only; it now lives in `containment.py`
+    beside the validator. A race cannot be staged deterministically, so the post-swap STATE is built
+    directly — a symlinked parent component is what the attacker leaves behind, and the read must refuse
+    it whether it appeared a microsecond ago or was always there.
+    """
+
+    def setUp(self) -> None:
+        # RESOLVED: `repository_root()` realpaths the worktree, and on macOS the system temp root is
+        # itself a symlink (`/var` -> `/private/var`). An unresolved fixture root makes every operand
+        # look like it is outside the repository, which would refuse these cells for a reason that has
+        # nothing to do with the walk. Consumers pass the realpath `contained_regular_file()` returns,
+        # so this also matches how the function is really called.
+        self.root = Path(tempfile.mkdtemp(prefix="contained-read-")).resolve()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=self.root, check=True)
+        (self.root / "real" / "planning").mkdir(parents=True)
+        self.plan = self.root / "real" / "planning" / "FEATURE_PLAN.md"
+        self.plan.write_text("# Plan\nreal bytes\n", encoding="utf-8")
+        # The swapped parent: an in-repo symlink, so `realpath` still lands INSIDE the repository and
+        # `contained_regular_file()` accepts the name. An out-of-repo target would be caught by the
+        # existing containment check, and the cell would prove nothing about the walk.
+        (self.root / "sneaky").mkdir()
+        (self.root / "sneaky" / "planning").symlink_to(self.root / "real" / "planning")
+        self.through_link = self.root / "sneaky" / "planning" / "FEATURE_PLAN.md"
+
+    def read(self, path: Path, source: str):
+        """Run `source` against `path` in the fixture repo, returning the completed process."""
+        program = (
+            "import sys; sys.path.insert(0, %r)\n" % str(REPO / "scripts" / "review")
+            + "import containment\n"
+            + source
+        )
+        return subprocess.run(
+            [sys.executable, "-c", program, str(path)],
+            cwd=str(self.root), capture_output=True, text=True, check=False,
+        )
+
+    WALK = "sys.stdout.write(containment.read_contained(sys.argv[1], 'plan file').decode())\n"
+    # The reverted implementation: ONE `O_NOFOLLOW` open of the same pathname.
+    LEAF_ONLY = (
+        "import os\n"
+        "fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)\n"
+        "sys.stdout.write(containment.read_leaf(fd, 'plan file').decode())\n"
+    )
+
+    def test_the_name_containment_accepts_is_still_refused_when_a_PARENT_is_a_link(self):
+        from importlib import util
+
+        spec = util.spec_from_file_location(
+            "containment_under_proof", str(REPO / "scripts" / "review" / "containment.py"))
+        module = util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        try:
+            # Containment accepts the linked spelling: the leaf is a real file and resolves in-repo.
+            accepted = module.contained_regular_file(str(self.through_link), "plan file")
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(os.path.realpath(str(self.plan)), accepted)
+
+        refused = self.read(self.through_link, self.WALK)
+        self.assertNotEqual(0, refused.returncode, refused.stdout)
+        self.assertIn("could not be traversed without following a link", refused.stderr)
+
+    def test_the_reverted_leaf_only_read_ACCEPTS_that_same_path(self):
+        """Discrimination. Without this the refusal above could come from any unrelated strictness."""
+        accepted = self.read(self.through_link, self.LEAF_ONLY)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertEqual("# Plan\nreal bytes\n", accepted.stdout)
+
+    def test_the_physical_path_still_reads(self):
+        """Positive control: the walk must refuse a substituted ancestor, not every operand.
+
+        The consumers pass the `realpath` `contained_regular_file()` returns, so in a run with no
+        interference every component is physical and this is the path actually taken.
+        """
+        result = self.read(self.plan, self.WALK)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("# Plan\nreal bytes\n", result.stdout)
 
 
 if __name__ == "__main__":  # pragma: no cover

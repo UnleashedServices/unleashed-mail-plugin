@@ -203,7 +203,7 @@ class M1AtomicReservationTests(AllocatorFixture):
         base = self.root / "state"
         with mock.patch.object(self.mod, "_generate_run_id", return_value=RUN_A):
             allocated = self.allocate(base=base)
-        self.assertEqual((RUN_A + "\n").encode("ascii"), Path(str(allocated) + ".launch").read_bytes())
+        self.assertEqual((RUN_A + " codex\n").encode("ascii"), Path(str(allocated) + ".launch").read_bytes())
         self.assertEqual(RUN_A, allocated.stem.rsplit("-", 1)[1])
 
     def test_M1_11_and_M1_15_exactly_eight_collisions_fail_and_name_parent_on_stderr(self):
@@ -639,7 +639,7 @@ class M1UmaskAndConcurrencyTests(AllocatorFixture):
             elif is_launch:
                 launch_path = Path(path_string)
                 self.assertEqual(0o600, _mode(launch_path))
-                self.assertEqual((RUN_A + "\n").encode("ascii"), launch_path.read_bytes())
+                self.assertEqual((RUN_A + " codex\n").encode("ascii"), launch_path.read_bytes())
                 events.append("launch-reopen")
             fd = real_open(path, flags, mode, *args, **kwargs)
             if is_launch and flags & os.O_CREAT:

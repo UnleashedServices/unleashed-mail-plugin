@@ -271,19 +271,51 @@ def strip_markdown_prefix(payload: bytes) -> bytes:
 # anchor — the line never became a candidate and the default-reject policy was skipped entirely.
 # Verified: `gemini<U+2060>-review …` and `gemini<U+00AD>-review …` both evaded it.
 #
-# The rule is now the CLASS, not a list: every Unicode format character (general category `Cf` — which
-# covers all fourteen of the old entries plus WORD JOINER, SOFT HYPHEN and everything else in it) plus
-# the default-ignorable variation selectors, plus NUL, which is `Cc` and so has to be named.
+# The rule is the CLASS, not a list: every Unicode format character (general category `Cf` — which
+# covers all fourteen of the old entries plus WORD JOINER, SOFT HYPHEN and everything else in it), plus
+# NUL, which is `Cc` and so has to be named, plus the rest of `Default_Ignorable_Code_Point`.
+#
+# `Cf` IS NOT THE WHOLE INVISIBLE CLASS (PR #63 recheck, P2). The property that actually means "renders
+# as nothing" is `Default_Ignorable_Code_Point`, and it reaches into four other general categories that
+# `Cf` does not: `Mn` (COMBINING GRAPHEME JOINER, the Khmer inherent vowels, the Mongolian free
+# variation selectors), `Lo` (the three HANGUL FILLERs — U+3164 is the classic zero-width identifier
+# smuggler), and `Cn`/unassigned reserved-for-DI blocks. Any of them splits an ASCII anchor while
+# rendering identically, which is precisely what this normalisation exists to defeat.
+#
+# `unicodedata` does not expose the property, so the residue — the DI code points NOT already covered by
+# `Cf` or by the variation selectors below — is tabulated. Derived from DerivedCoreProperties.txt and
+# checked by `test_callers_scan`, which recomputes the difference rather than restating this table.
 _VARIATION_SELECTORS = frozenset(
     list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0))
 )
+_DEFAULT_IGNORABLE_RESIDUE = (
+    (0x034F, 0x034F),      # Mn COMBINING GRAPHEME JOINER
+    (0x115F, 0x1160),      # Lo HANGUL CHOSEONG/JUNGSEONG FILLER
+    (0x17B4, 0x17B5),      # Mn KHMER VOWEL INHERENT AQ/AA
+    (0x180B, 0x180D),      # Mn MONGOLIAN FREE VARIATION SELECTOR ONE..THREE
+    (0x180F, 0x180F),      # Cn reserved for DI
+    (0x2065, 0x2065),      # Cn reserved for DI
+    (0x3164, 0x3164),      # Lo HANGUL FILLER
+    (0xFFA0, 0xFFA0),      # Lo HALFWIDTH HANGUL FILLER
+    (0xFFF0, 0xFFF8),      # Cn reserved for DI
+    (0xE0000, 0xE0000),    # Cn reserved for DI (the tag block's edges)
+    (0xE0002, 0xE001F),    # Cn reserved for DI
+    (0xE0080, 0xE00FF),    # Cn reserved for DI
+    (0xE01F0, 0xE0FFF),    # Cn reserved for DI
+)
+
+
+def _in_default_ignorable_residue(code_point: int) -> bool:
+    return any(low <= code_point <= high for low, high in _DEFAULT_IGNORABLE_RESIDUE)
 
 
 def _is_invisible(character: str) -> bool:
+    code_point = ord(character)
     return (
         character == "\x00"
         or unicodedata.category(character) == "Cf"
-        or ord(character) in _VARIATION_SELECTORS
+        or code_point in _VARIATION_SELECTORS
+        or _in_default_ignorable_residue(code_point)
     )
 
 

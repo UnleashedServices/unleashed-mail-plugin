@@ -832,3 +832,116 @@ class WriterPredicateAndSpawnerDetection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
+    """One list, thirteen spellings, one answer (PR #63 recheck, P1).
+
+    Every consumer of a list-valued frontmatter key compares EXACT TOKENS —
+    `check_model_reachable_grants` tests `entry in BROAD_MODEL_REACHABLE_GRANTS`, `_tool_tokens` builds
+    a set — so any spelling the parser failed to normalize produced tokens that matched nothing, and the
+    grant sailed through. Three families were live at once:
+
+      * `[Bash]` kept its brackets, so the tokens were `[Bash` (or `[Read` and `Bash]`).
+      * `- Bash` kept its marker, so the token was `- Bash`.
+      * `["Bash"]` / `- "Bash"` kept their quotes, so the token was `"Bash"`.
+
+    All are the same YAML value. The first two were fixed one at a time as each was found; this cell
+    exists because fixing them individually is what let the third survive — the property is that the
+    SPELLING cannot change the verdict, so it is asserted over the whole matrix rather than per form.
+    """
+
+    #: Every legal way to write the one-item list `[Bash]` and the two-item list `[Read, Bash]`.
+    ONE = (
+        "allowed-tools: Bash",
+        "allowed-tools: [Bash]",
+        'allowed-tools: ["Bash"]',
+        "allowed-tools: ['Bash']",
+        "allowed-tools:\n  - Bash",
+        "allowed-tools:\n- Bash",
+        'allowed-tools:\n  - "Bash"',
+        "allowed-tools:\n  - 'Bash'",
+        "allowed-tools: [Bash] # inline note",
+    )
+    TWO = (
+        "allowed-tools: Read, Bash",
+        "allowed-tools: [Read, Bash]",
+        'allowed-tools: [Read, "Bash"]',
+        "allowed-tools: [\n  Read,\n  Bash,\n]",
+        "allowed-tools: [Read,\n  Bash]",
+        "allowed-tools:\n  - Read\n  - Bash",
+        "allowed-tools:\n- Read\n- Bash",
+    )
+
+    @staticmethod
+    def _grant_problems(spelling: str) -> "list[str]":
+        text = f"---\nname: probe\ndescription: a probe skill\n{spelling}\n---\nbody\n"
+        fm = vpa.parse_frontmatter(text)
+        if fm is None:
+            return [f"frontmatter did not parse: {spelling!r}"]
+        problems: list[str] = []
+        vpa.check_model_reachable_grants(Path("skills/probe/SKILL.md"), fm, problems, [])
+        return problems
+
+    def test_bare_Bash_is_refused_in_every_spelling(self):
+        for spelling in self.ONE + self.TWO:
+            with self.subTest(spelling=spelling):
+                problems = self._grant_problems(spelling)
+                self.assertTrue(problems,
+                                f"a model-invocable skill granting bare Bash passed as {spelling!r}")
+                self.assertTrue(any("`Bash`" in problem for problem in problems),
+                                f"the refusal names something other than Bash: {problems}")
+
+    def test_the_tokens_are_identical_in_every_spelling(self):
+        """The verdict is downstream of the tokens; assert the tokens themselves so a future consumer
+        inherits the normalization instead of re-deriving it."""
+        for spelling in self.ONE:
+            with self.subTest(spelling=spelling):
+                fm = vpa.parse_frontmatter(
+                    f"---\nname: probe\ndescription: d\n{spelling}\n---\nbody\n")
+                self.assertEqual({"Bash"}, vpa._tool_tokens(fm["allowed-tools"]))
+        for spelling in self.TWO:
+            with self.subTest(spelling=spelling):
+                fm = vpa.parse_frontmatter(
+                    f"---\nname: probe\ndescription: d\n{spelling}\n---\nbody\n")
+                self.assertEqual({"Read", "Bash"}, vpa._tool_tokens(fm["allowed-tools"]))
+
+    def test_a_SCOPED_grant_is_accepted_in_every_spelling(self):
+        """Discrimination: normalization must not turn every spelling into a refusal.
+
+        `Write(docs/planning/**)` is bounded and is what the shipped `brainstorm` skill actually grants.
+        It also proves the flow-list split respects parentheses: splitting
+        `[Write(docs/planning/**), Read]` naively on commas is fine here, but the ENTRY-level split the
+        checker uses must keep a parenthesised argument containing a comma whole, so the scoped
+        `Agent(...)` form below is included as the case that would break under a naive split.
+        """
+        for spelling in (
+            "allowed-tools: Write(docs/planning/**), Read",
+            "allowed-tools: [Write(docs/planning/**), Read]",
+            "allowed-tools:\n  - Write(docs/planning/**)\n  - Read",
+            "allowed-tools:\n- 'Write(docs/planning/**)'\n- Read",
+            "allowed-tools: [Agent(unleashed-mail:jira-manager), Read]",
+            "allowed-tools:\n  - Agent(unleashed-mail:jira-manager)\n  - Read",
+        ):
+            with self.subTest(spelling=spelling):
+                self.assertEqual([], self._grant_problems(spelling),
+                                 f"a scoped Bash grant was refused as {spelling!r}")
+
+    def test_a_bracket_inside_a_QUOTED_scalar_is_not_treated_as_a_list(self):
+        """The multi-line fold triggers on a value that OPENS with `[`; a quoted one does not.
+
+        Without this a description like `"see [1] for details"` would start a fold and swallow the
+        frontmatter terminator — turning a valid asset into `missing or unterminated frontmatter`.
+        """
+        fm = vpa.parse_frontmatter(
+            '---\nname: probe\ndescription: "see [1] for details"\nallowed-tools: Read\n---\nbody\n')
+        self.assertIsNotNone(fm)
+        self.assertEqual("see [1] for details", fm["description"])
+        self.assertEqual("Read", fm["allowed-tools"])
+
+    def test_an_UNTERMINATED_flow_list_fails_closed(self):
+        """A list that never closes is malformed YAML, and Claude Code would not read it as a list
+        either. Reporting no usable frontmatter is the fail-closed answer; silently recording
+        `[Read, Bash` would hand every consumer two tokens that match nothing — the bug itself."""
+        self.assertIsNone(vpa.parse_frontmatter(
+            "---\nname: probe\ndescription: d\nallowed-tools: [Read,\n  Bash\n---\nbody\n"))

@@ -207,7 +207,7 @@ class WritePrivateTests(unittest.TestCase):
         # run to completion and exit 0, only for the verdict writer to discard it (PR #63 recheck).
         # A fixture reserving a leaf alone models an allocation the allocator never produces.
         with open(leaf + ".launch", "w", encoding="utf-8") as fh:
-            fh.write("a" * 32 + "\n")
+            fh.write("a" * 32 + " codex\n")
 
         self.assertEqual(0, self.mod.main(leaf, ["/bin/echo", "ok"], timeout=30, allocated=True))
         self.assertIn(b"ok", Path(leaf).read_bytes())
@@ -341,7 +341,7 @@ class WritePrivateTests(unittest.TestCase):
         # the command, which is the state a real allocated run is always in.
         os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         with open(path + ".launch", "w", encoding="utf-8") as fh:
-            fh.write("a" * 32 + "\n")
+            fh.write("a" * 32 + " codex\n")
         writes = []
         real_write_private = self.mod._write_private
 
@@ -538,7 +538,7 @@ class AllocatedTargetHardening(unittest.TestCase):
         os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         if launch:
             with open(leaf + ".launch", "w", encoding="utf-8") as fh:
-                fh.write("a" * 32 + "\n")
+                fh.write("a" * 32 + " codex\n")
         return leaf
 
     def test_a_hard_linked_target_is_refused_before_it_is_rewritten(self):
@@ -718,6 +718,71 @@ class AllocationAndLaunchPreconditions(unittest.TestCase):
             (base / "unleashed-mail" / "review-transcripts").symlink_to(victim)
         self._plant_and_allocate(plant)
 
+    def test_a_preplanted_OTHERS_WRITABLE_ancestor_is_refused(self):
+        """A directory can be the wrong ancestor without being a symlink (PR #63 recheck, P2).
+
+        The anchor was checked for `S_ISDIR` and nothing else, so a self-owned mode-0777 component was
+        adopted and the private subtree built beneath it. Rename and unlink permission comes from the
+        PARENT, so any local user with write access could then replace the mode-0700 child and every
+        private mode validated below it would be protecting a subtree we no longer created. The base
+        candidate's nearest-existing ancestor was already checked this way; the chain builder was not.
+        """
+        base = Path(self.d) / "wide-open"
+        base.mkdir(mode=0o777)
+        os.chmod(base, 0o777)                       # defeat the process umask
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.mod._mkdir_private_chain(str(base / "unleashed-mail" / "review-transcripts"))
+        self.assertIn("writable by others", str(caught.exception))
+
+    def test_a_STICKY_others_writable_ancestor_is_accepted(self):
+        """Discrimination: the sticky bit is what makes `/tmp` — the normal case — usable.
+
+        With `S_ISVTX` only the owner of an entry may rename or delete it, which is exactly the property
+        the check demands. Refusing this too would reject the ordinary temp-directory layout.
+        """
+        base = Path(self.d) / "sticky"
+        base.mkdir()
+        os.chmod(base, 0o1777)
+        target = base / "unleashed-mail" / "review-transcripts"
+        self.mod._mkdir_private_chain(str(target))
+        self.assertTrue(target.is_dir())
+
+    def test_a_component_RACED_into_existence_wide_open_is_refused(self):
+        """The `FileExistsError` branch exists because another process can win this race.
+
+        It required only `S_ISDIR`, so a racer could pre-create the component as their own mode-0777
+        directory in the window between the walk finding it absent and this `mkdir` — and the allocator
+        adopted it. The anchor check cannot see this one: at walk time the component did not exist.
+
+        The race is staged deterministically: `os.mkdir` is wrapped so the FIRST creation lands
+        mode-0777 and then reports `FileExistsError`, which is precisely what the loop observes when it
+        loses. A timing-based version could pass against the broken code, which proves nothing.
+        """
+        base = Path(self.d) / "anchor"
+        base.mkdir(mode=0o700)
+        target = base / "unleashed-mail" / "review-transcripts"
+        real_mkdir = os.mkdir
+        raced = []
+
+        def racing_mkdir(path, mode=0o777, *args, **kwargs):
+            if not raced and os.fspath(path) == str(base / "unleashed-mail"):
+                raced.append(path)
+                real_mkdir(path, 0o777, *args, **kwargs)
+                os.chmod(path, 0o777)               # the racer's directory, not ours
+                raise FileExistsError(errno.EEXIST, "File exists", os.fspath(path))
+            return real_mkdir(path, mode, *args, **kwargs)
+
+        os.mkdir = racing_mkdir
+        try:
+            with self.assertRaises(self.mod.AllocationError) as caught:
+                self.mod._mkdir_private_chain(str(target))
+        finally:
+            os.mkdir = real_mkdir
+        self.assertEqual(1, len(raced), "the fixture never staged the race")
+        self.assertIn("concurrent path", str(caught.exception))
+        self.assertIn("writable by others", str(caught.exception))
+        self.assertFalse(target.exists(), "the chain was built under the raced directory anyway")
+
     def test_a_clean_chain_is_still_created_at_0700(self):
         clean = Path(self.d) / "clean"
         clean.mkdir()
@@ -750,16 +815,78 @@ class AllocationAndLaunchPreconditions(unittest.TestCase):
         self.assertFalse(ran, "the reviewer was spawned on a launch record that can never validate")
 
     def test_a_launch_record_for_a_DIFFERENT_run_refuses_before_spawning(self):
-        result, ran = self._run_with_launch_record("b" * 32 + "\n")
+        """The reviewer field is present and correct, so ONLY the run id differs.
+
+        Written as a bare `b*32` this cell was refused as MALFORMED once the record gained the reviewer
+        field — still a refusal, so the test still passed, but it proved nothing about the run-id rule
+        it names. The diagnostic is asserted for that reason.
+        """
+        result, ran = self._run_with_launch_record("b" * 32 + " codex\n")
         self.assertNotEqual(0, result.returncode)
+        self.assertIn("names a DIFFERENT run than its filename", result.stderr)
         self.assertFalse(ran, "the reviewer was spawned on another run's launch record")
+
+    def test_a_launch_record_naming_ANOTHER_reviewer_refuses_before_spawning(self):
+        """The record's reviewer must agree with the leaf's (PR #63 recheck, P1).
+
+        The record is what the verdict gate reads as the allocator's attestation of WHO reviewed. If the
+        two could disagree here, the preflight would spend a full review producing a transcript the gate
+        must then reject as renamed — and the run id alone cannot detect it.
+        """
+        result, ran = self._run_with_launch_record("a" * 32 + " gemini\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("names reviewer 'gemini' but its filename says 'codex'", result.stderr)
+        self.assertFalse(ran, "the reviewer was spawned on a record attesting the other arm")
 
     def test_a_matching_launch_record_still_runs(self):
         """Positive control: the check must reject corruption, not every allocated capture."""
-        result, ran = self._run_with_launch_record("a" * 32 + "\n")
+        result, ran = self._run_with_launch_record("a" * 32 + " codex\n")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(ran)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunawayOutputIsBounded(unittest.TestCase):
+    """`--timeout` bounded wall-clock; nothing bounded BYTES (PR #63 recheck, P2).
+
+    A reviewer stuck in an output loop accumulated everything it printed into one in-memory bytearray
+    for the whole 28-minute budget — tens of gigabytes at PTY speeds, which takes the machine down
+    rather than the round. The cap is treated exactly like the timeout: the child is terminated through
+    the same ladder, what was captured is persisted, and the wrapper exits non-zero, because a runaway
+    must fail the round loudly rather than leave a silently truncated transcript for someone to grep.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    def test_a_child_that_floods_the_pty_is_terminated_and_the_round_fails(self):
+        out = os.path.join(self.d, "flood.txt")
+        # A small cap keeps the probe fast; the production value is the same code path.
+        original = self.mod.MAX_CAPTURE_BYTES
+        self.mod.MAX_CAPTURE_BYTES = 200_000
+        self.addCleanup(setattr, self.mod, "MAX_CAPTURE_BYTES", original)
+
+        code = self.mod.main(
+            out,
+            ["sh", "-c", "while :; do printf 'flood%.0s' $(seq 1 200); done"],
+            timeout=60,
+        )
+
+        self.assertEqual(125, code, "a runaway must be distinguishable from a slow reviewer (124)")
+        captured = os.path.getsize(out)
+        self.assertGreater(captured, 0, "the partial capture is the evidence — it must be persisted")
+        # Bounded: the whole point. Without the cap this loop would have run for the full 60s.
+        self.assertLess(captured, 4 * self.mod.MAX_CAPTURE_BYTES,
+                        f"the capture was not bounded ({captured} bytes)")
+
+    def test_an_ordinary_capture_is_untouched(self):
+        """Discrimination: the cap must stop a flood, not every command."""
+        out = os.path.join(self.d, "normal.txt")
+        code = self.mod.main(out, ["sh", "-c", "printf 'VERDICT: APPROVE\\n'"], timeout=30)
+        self.assertEqual(0, code)
+        self.assertIn("VERDICT: APPROVE", Path(out).read_text(encoding="utf-8"))

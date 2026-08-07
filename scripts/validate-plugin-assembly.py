@@ -630,13 +630,71 @@ def check_agent_fields(rel: Path, fm: dict[str, str], problems: list[str],
                                 f"`{near[0]}` (advisory — if `{entry}` is a real tool, ignore)")
 
 
+def _unquote(value: str) -> str:
+    """Strip ONE matching pair of surrounding quotes from a list item.
+
+    A QUOTED ITEM IS THE SAME ITEM (PR #63 recheck, P1). Every consumer compares exact tokens —
+    `check_model_reachable_grants` tests `entry in BROAD_MODEL_REACHABLE_GRANTS`, `_tool_tokens`
+    builds a set — so `["Bash"]` and `- "Bash"` produced the token `"Bash"`, quotes included, which
+    matches nothing. The deny-list was disarmed by two characters, in a spelling YAML treats as
+    identical to the bare one. Applied in the PARSER so every consumer is fixed at once, which is the
+    same reasoning as stripping the `- ` marker here rather than in each caller.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        return value[1:-1].strip()
+    return value
+
+
+def _flow_items(value: str) -> str:
+    """`[a, "b", 'c']` -> `a, b, c`. Assumes the brackets are present and balanced."""
+    inner = value[1:-1].strip()
+    return ", ".join(_unquote(item.strip()) for item in inner.split(",") if item.strip())
+
+
+def _join_flow_lists(lines: list[str]) -> list[str]:
+    """Fold a flow list spelled across lines onto its key's line, before anything parses it.
+
+    `tools: [` … `]` is legal YAML and Claude Code reads it as a list, but the line-oriented parser
+    below saw only `tools: [` and then treated the item lines as continuations — so `tools: [\\n  Read,\\n
+    Bash,\\n]` recorded `[ Read, Bash,` with the bracket attached to the first entry and the closing one
+    lost. Both broken spellings then failed the exact-token comparisons every consumer makes, which is
+    the same deny-list bypass as the single-line `[Bash]` form (PR #63 recheck, P1).
+
+    Only a value that OPENS with `[` starts a fold, so a bracket inside a quoted scalar
+    (`description: "see [1]"`) is untouched — that value starts with a quote.
+    """
+    joined: list[str] = []
+    pending: str | None = None
+    for line in lines:
+        if pending is not None:
+            pending += " " + line.strip()
+            if "]" in line:
+                joined.append(pending)
+                pending = None
+            continue
+        match = TOP_KEY.match(line)
+        if match and not line[:1].isspace() and match.group(2).strip().startswith("["):
+            if "]" not in match.group(2):
+                pending = line.rstrip()
+                continue
+        joined.append(line)
+    if pending is not None:                  # unterminated flow list: leave it as written, malformed
+        joined.append(pending)
+    return joined
+
+
 def parse_frontmatter(text: str) -> dict[str, str] | None:
     """Return {key: value} for the leading `---`…`---` block, or None if absent.
 
     Handles inline values and block scalars (`key: >` / `key: |` followed by indented
     lines): such a key is recorded with a non-empty sentinel if it has indented content.
+
+    LIST-VALUED KEYS ARE NORMALIZED TO ONE COMMA FORM whatever their YAML spelling — inline, flow
+    (`[a, b]`, single- or multi-line), block (`- a`, indented or at column 0), and with or without
+    quotes around an item. Consumers compare exact tokens, so each un-normalized spelling was a way to
+    smuggle a tool past them (PR #63 recheck, P1).
     """
-    lines = text.splitlines()
+    lines = _join_flow_lists(text.splitlines())
     if not lines or lines[0].strip() != "---":
         return None
     fm: dict[str, str] = {}
@@ -669,6 +727,13 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
                 hashpos = val.find(" #")
                 if hashpos != -1:
                     val = val[:hashpos].strip()
+            # A FLOW LIST IS A LIST, NOT A STRING WITH BRACKETS (PR #63 recheck, P1). `[Bash]` was stored
+            # verbatim, so a consumer splitting on commas saw `'[Bash'` and `'Grep]'` for the first and
+            # last entries — only INTERIOR entries survived intact — and the model-reachable deny-list
+            # therefore accepted `allowed-tools: [Bash]` outright. Unwrapping here normalizes it to the
+            # inline comma form every consumer already handles.
+            if val.startswith("[") and val.endswith("]"):
+                val = _flow_items(val)
             fm[key] = val  # may be "", ">", "|", or an inline value
             if val in (">", "|", ">-", "|-"):
                 block_scalar_keys.add(key)           # `key: |`/`>` body is PROSE — space-join, never comma
@@ -688,6 +753,13 @@ def parse_frontmatter(text: str) -> dict[str, str] | None:
                 hp = body.find(" #")                 # (`- Task # legacy`) so it doesn't hide a stale tool
                 if hp != -1:
                     body = body[:hp].rstrip()
+                # STRIP THE `- ` MARKER (PR #63 recheck, P1). It used to be stored, so a block list
+                # produced `'- Bash, - Write'` and every consumer comparing against a bare `Bash`
+                # silently missed it — `check_model_reachable_grants`'s deny-list is exactly such a
+                # consumer, so `allowed-tools:\n  - Bash` disarmed it. Normalizing HERE fixes every
+                # consumer at once, which is the point: the parser is the one place that knows the
+                # value came from a list.
+                body = _unquote(body[1:].strip())
             if fm.get(current, "") in ("", ">", "|", ">-", "|-"):
                 fm[current] = body
             elif is_list_item:
