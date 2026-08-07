@@ -40,7 +40,11 @@ detect_base() {
     current=$(git rev-parse --abbrev-ref HEAD)
     prefix=$(printf '%s' "$current" | grep -oE '^1\.0[0-4]/' | tr -d '/')
     if [ -n "$prefix" ]; then
-        if git rev-parse --verify "${prefix}.0000" >/dev/null 2>&1; then
+        # A RESOLVABLE REF IS NOT A BASE. A stale or orphaned `${prefix}.0000` resolves as a commit —
+        # and so passes the `rev-parse --verify` added below — while sharing no history with this
+        # branch, so `git diff base...HEAD` falls through to `HEAD~1` and reviews only the last commit
+        # (PR #63 recheck, P2). Require a common ancestor, which is the thing a base actually is.
+        if git merge-base "$current" "${prefix}.0000" >/dev/null 2>&1; then
             printf '%s' "${prefix}.0000"; return
         fi
         # Explicit refspec — bare `git fetch origin BRANCH` only writes FETCH_HEAD, not
@@ -48,7 +52,7 @@ detect_base() {
         # script performs, and both are to remote-tracking refs; nothing here touches the work tree.
         git fetch origin --quiet \
             "refs/heads/${prefix}.0000:refs/remotes/origin/${prefix}.0000" 2>/dev/null || true
-        if git rev-parse --verify "origin/${prefix}.0000" >/dev/null 2>&1; then
+        if git merge-base "$current" "origin/${prefix}.0000" >/dev/null 2>&1; then
             printf '%s' "origin/${prefix}.0000"; return
         fi
     fi

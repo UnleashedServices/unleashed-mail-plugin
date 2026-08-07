@@ -221,6 +221,20 @@ def main(argv=None) -> int:
     # ONE read. Everything below uses these bytes: the agreement check, the snapshot the reviewer will
     # actually be fed, and the digest recorded for it.
     prompt_bytes = read_nofollow(prompt)
+    # NO NUL BYTES. The capture helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash
+    # command substitution SILENTLY DELETES NULs — so the bytes validated here and the bytes the
+    # reviewer receives are different strings. Reproduced: a prompt naming `A_PLAN.md` normally while
+    # spelling its instruction as `B_PL\0AN.md` bound cleanly against A, because the agreement check
+    # below sees a token that is not a plan name at all, and Codex then received the joined
+    # `B_PLAN.md` — a review of B supporting A's approval (PR #63 recheck, P1).
+    #
+    # Refused at the SOURCE rather than escaped at each call site: a review prompt containing a NUL is
+    # never legitimate, and every transport added later would otherwise need its own defence.
+    if b"\x00" in prompt_bytes:
+        _refuse(
+            f"prompt contains a NUL byte, which shell command substitution deletes — the reviewer "
+            f"would receive different bytes than are being bound: {arguments.prompt}"
+        )
     disagreement = prompt_disagreement(prompt_bytes, plan_relative, root)
     if disagreement is not None:
         _refuse(disagreement)

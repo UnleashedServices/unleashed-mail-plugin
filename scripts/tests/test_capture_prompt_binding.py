@@ -516,6 +516,32 @@ class CapturePromptBindingTests(unittest.TestCase):
         leftovers = sorted(p.name for p in self.leaves.glob("short-write.txt*"))
         self.assertEqual([], leftovers, f"a partial sidecar survived: {leftovers}")
 
+    def test_a_prompt_containing_a_NUL_is_refused(self):
+        """Bash command substitution DELETES NULs, so validated bytes != delivered bytes.
+
+        Reproduced by the reviewer: a prompt naming `A_PLAN.md` normally while spelling its instruction
+        as `B_PL\\0AN.md` bound cleanly against A — the agreement check saw a token that is not a plan
+        name — and Codex then received the joined `B_PLAN.md`, so a review of B could support A's
+        approval (PR #63 recheck, P1).
+
+        Refused at the SOURCE rather than escaped per call site: a review prompt containing a NUL is
+        never legitimate, and every transport added later would otherwise need its own defence.
+        """
+        prompt = self.root / ".codex-prompt-COREDEV-2619r50.md"
+        prompt.write_bytes(
+            b"REVIEW TARGET: FIXTURE_PLAN.md\nalso review OTHER_PL\x00AN.md\n"
+        )
+        result = self._run("codex", "50", prompt)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("NUL", result.stderr)
+
+    def test_a_prompt_without_one_is_unaffected(self):
+        """Control — the rule must reject NULs, not tighten ordinary prompts."""
+        prompt = self.root / ".codex-prompt-COREDEV-2619r51.md"
+        prompt.write_text(FIXTURE_PROMPT, encoding="utf-8")
+        result = self._run("codex", "51", prompt)
+        self.assertEqual(0, result.returncode, result.stderr)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

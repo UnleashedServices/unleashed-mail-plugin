@@ -117,6 +117,20 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **A NUL byte in the prompt made the validated bytes differ from the delivered ones.** The capture
+  helpers hand the snapshot to the reviewer through `$(cat …)`, and Bash command substitution *silently
+  deletes* NULs — so a prompt naming `A_PLAN.md` normally while spelling its instruction as
+  `B_PL\0AN.md` bound cleanly against A (the agreement check saw a token that is not a plan name) and
+  Codex then received the joined `B_PLAN.md`. A review of B could support A's approval. Refused at the
+  source: a review prompt containing a NUL is never legitimate, and escaping it per call site would
+  leave every transport added later needing its own defence.
+
+- **`changeset.sh` accepted a version ref that shared no history.** A stale or orphaned
+  `${prefix}.0000` resolves as a commit — passing the existence check added earlier the same day — while
+  having no common ancestor, so the diff fell through to `HEAD~1` and reviewed only the last commit of a
+  multi-commit branch. It now requires a merge base, which is what a base actually is. Reproduced
+  against a genuine orphan branch.
+
 - **One review arm could satisfy the mandatory two-arm gate.** Two separately allocated **Gemini**
   runs supplied as `gemini=` and `codex=` passed everything — freshness, the plan binding, and the
   distinct path/digest/captureId rules — because every one of those asks whether the two entries
