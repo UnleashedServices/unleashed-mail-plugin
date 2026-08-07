@@ -7,6 +7,7 @@ import importlib.util
 import errno
 import shutil
 import os
+import subprocess
 import stat
 import sys
 import pathlib
@@ -661,6 +662,103 @@ class AllocatedTargetHardening(unittest.TestCase):
             os.path.join(tempfile.gettempdir(), "um-ownership-probe"), home
         )
         self.assertIsNotNone(canonical, reason)
+
+
+class AllocationAndLaunchPreconditions(unittest.TestCase):
+    """Refusals that must happen BEFORE an expensive review, and before a symlink is adopted.
+
+    Every case here was reproduced against the pre-fix code (PR #63 recheck, P2): each one either
+    spent a full 12-28 minute review that could never be cashed in, or built the private transcript
+    hierarchy through an attacker-controlled directory.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    # ---- the round grammar ----------------------------------------------------------------------
+
+    def test_a_nonnumeric_round_is_refused_before_allocation(self):
+        """`round-1` satisfied the generic component grammar, so a full review ran and
+        `review-verdict.py` then rejected the basename because it requires `r[0-9]+`."""
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.mod.allocate_transcript("abc123", "COREDEV-1", "round-1", "codex",
+                                         environ={"XDG_STATE_HOME": self.d, "HOME": self.d})
+        self.assertIn("round", str(caught.exception))
+
+    def test_a_numeric_round_still_allocates(self):
+        """The positive control — the grammar must reject malformed rounds, not all rounds."""
+        leaf = self.mod.allocate_transcript("abc123", "COREDEV-1", "7", "codex",
+                                            environ={"XDG_STATE_HOME": self.d, "HOME": self.d})
+        self.assertTrue(os.path.isfile(leaf), leaf)
+        self.assertIn("r7-codex-", os.path.basename(leaf))
+
+    # ---- the symlink race on the allocation chain ------------------------------------------------
+
+    def _plant_and_allocate(self, plant):
+        base = Path(self.d) / "base"
+        base.mkdir()
+        victim = Path(self.d) / "attacker-target"
+        victim.mkdir()
+        plant(base, victim)
+        with self.assertRaises(self.mod.AllocationError):
+            self.mod._mkdir_private_chain(str(base / "unleashed-mail" / "review-transcripts"))
+        self.assertEqual([], list(victim.iterdir()),
+                         "the chain was built inside the attacker's directory")
+
+    def test_a_preplanted_symlink_ancestor_is_refused(self):
+        """`os.path.exists` is true for a symlink, so the walk stopped there and `os.path.isdir`
+        followed it — the whole private hierarchy was created inside the link's target."""
+        self._plant_and_allocate(lambda base, victim: (base / "unleashed-mail").symlink_to(victim))
+
+    def test_a_symlink_at_a_deeper_component_is_refused(self):
+        def plant(base, victim):
+            (base / "unleashed-mail").mkdir(mode=0o700)
+            (base / "unleashed-mail" / "review-transcripts").symlink_to(victim)
+        self._plant_and_allocate(plant)
+
+    def test_a_clean_chain_is_still_created_at_0700(self):
+        clean = Path(self.d) / "clean"
+        clean.mkdir()
+        target = clean / "unleashed-mail" / "review-transcripts"
+        self.mod._mkdir_private_chain(str(target))
+        self.assertTrue(target.is_dir())
+        self.assertEqual(0o700, stat.S_IMODE(os.stat(target).st_mode))
+
+    # ---- the launch record -----------------------------------------------------------------------
+
+    def _run_with_launch_record(self, record: str, leaf: str = None):
+        run_id = "a" * 32
+        leaf = leaf or f"COREDEV-1r1-codex-{run_id}.txt"
+        out = os.path.join(self.d, leaf)
+        Path(out).touch()
+        Path(out + ".launch").write_text(record, encoding="utf-8")
+        marker = os.path.join(self.d, "reviewer-ran")
+        result = subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", out, "--",
+             "sh", "-c", f"echo ran > {marker}; echo hi"],
+            capture_output=True, text=True,
+        )
+        return result, os.path.exists(marker)
+
+    def test_a_malformed_launch_record_refuses_before_spawning(self):
+        """"Regular and nonempty" accepted `not-a-run-id`, ran the command and returned 0 — the
+        verdict writer then discarded the transcript, so the round was lost anyway."""
+        result, ran = self._run_with_launch_record("not-a-run-id\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(ran, "the reviewer was spawned on a launch record that can never validate")
+
+    def test_a_launch_record_for_a_DIFFERENT_run_refuses_before_spawning(self):
+        result, ran = self._run_with_launch_record("b" * 32 + "\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(ran, "the reviewer was spawned on another run's launch record")
+
+    def test_a_matching_launch_record_still_runs(self):
+        """Positive control: the check must reject corruption, not every allocated capture."""
+        result, ran = self._run_with_launch_record("a" * 32 + "\n")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(ran)
 
 
 if __name__ == "__main__":

@@ -46,15 +46,58 @@ def _read_nofollow(path: str) -> bytes:
     return b"".join(chunks)
 
 
+# A prompt is an argv string, so an unbounded embed would blow past the reviewer CLI's limits with a
+# confusing failure. Refuse loudly instead, and say what to do about it.
+_MAX_EMBED_BYTES = 256 * 1024
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", default="snapshot-operands")
-    parser.add_argument("--dest", required=True, help="private directory to snapshot into")
+    parser.add_argument("--dest", help="private directory to snapshot into (path-transport mode)")
+    parser.add_argument(
+        "--embed",
+        action="store_true",
+        help="emit the retained BYTES inline instead of snapshot paths (no later pathname lookup)",
+    )
     parser.add_argument("operands", nargs="+")
     arguments = parser.parse_args(argv)
 
     containment.TOOL = arguments.tool
     root = containment.repository_root()
+
+    # EMBED: TRANSPORT THE BYTES, NOT A PATHNAME (PR #63 recheck, P2). Snapshotting to a private
+    # directory closed the validate-then-open race against the LIVE tree, but it left a second window:
+    # the reviewer still opened the snapshot by NAME, and a same-account process watching for
+    # `codex-audit-src.*` could overwrite a copy — or replace its leaf with a symlink — between this
+    # helper exiting and that open. A private mode excludes other users, not another process under the
+    # same UID, so "immutable copies" overstated what a directory could promise.
+    #
+    # There is no filesystem defence against a same-UID writer once a pathname is involved, so the
+    # pathname is removed: the authenticated bytes are placed directly in the prompt the reviewer
+    # receives as an argument. Nothing is opened after validation, so there is no window at all.
+    if arguments.embed:
+        sections = []
+        total = 0
+        for operand in arguments.operands:
+            real = containment.contained_regular_file(operand, "audit operand")
+            payload = _read_nofollow(real)
+            relative = os.path.relpath(real, root)
+            total += len(payload)
+            if total > _MAX_EMBED_BYTES:
+                containment.refuse(
+                    f"the operands exceed {_MAX_EMBED_BYTES} bytes once inlined, which would overflow "
+                    "the reviewer's argument. Audit fewer files per run."
+                )
+            # A delimiter that cannot be forged from inside a source file: the operand list was already
+            # contained (no control characters), and the fence carries the repo-relative identity.
+            text = payload.decode("utf-8", "replace")
+            sections.append(f"===== BEGIN {relative} =====\n{text}\n===== END {relative} =====")
+        print("\n".join(sections))
+        return 0
+
+    if not arguments.dest:
+        containment.refuse("pass --dest for path transport, or --embed to inline the bytes")
     dest = os.path.realpath(arguments.dest)
 
     snapshots = []

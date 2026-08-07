@@ -112,6 +112,17 @@ def _identity(path: Path) -> Tuple[int, int]:
     return metadata.st_dev, metadata.st_ino
 
 
+#: The allocator publishes transcripts at `<base>/unleashed-mail/review-transcripts/<repo-hash>/…`, so
+#: a genuine state root is the `review-transcripts` directory itself. Manifest entries are relative to
+#: it and begin with the repo-hash component.
+_STATE_ROOT_NAME = "review-transcripts"
+_STATE_ROOT_PARENT_NAME = "unleashed-mail"
+
+
+def _looks_like_transcript_root(root: Path) -> bool:
+    return root.name == _STATE_ROOT_NAME and root.parent.name == _STATE_ROOT_PARENT_NAME
+
+
 def _canonical_state_root(state_root: Path) -> Tuple[Path, Tuple[int, int]]:
     supplied = Path(state_root)
     try:
@@ -126,6 +137,40 @@ def _canonical_state_root(state_root: Path) -> Tuple[Path, Tuple[int, int]]:
     except OSError as error:
         raise CleanupError("state root cannot be resolved: " + str(supplied)) from error
     return canonical, _identity(canonical)
+
+
+def _require_bound_state_root(root: Path) -> None:
+    """Refuse a root that is neither the canonical transcripts directory nor holds any manifest entry.
+
+    RESUMABILITY MADE "EVERYTHING IS ABSENT" INDISTINGUISHABLE FROM "WRONG DIRECTORY" (PR #63 recheck,
+    P2). `allow_absent=True` is what lets a half-finished `--apply` be re-run: an entry already gone is
+    the goal state, not a failure. But it also meant that pointing `--state-root` at ANY existing
+    directory — a mistyped path, an empty scratch dir — satisfied all 39 files and all nine directories
+    vacuously, so the run exited 0 and reported the leak removed while the real transcripts sat
+    untouched somewhere else. A cleanup that cannot fail cannot be trusted when it passes.
+
+    The binding is deliberately two-sided so resumability survives:
+      * a root that IS `…/unleashed-mail/review-transcripts` is accepted whatever its contents — that
+        is the canonical location, and a completed cleanup legitimately leaves it empty; otherwise
+      * a differently-named root must still contain at least one manifest entry, which is evidence it
+        is the tree the manifest describes (this keeps the tests' throwaway fixtures working, and a
+        genuinely resumable non-canonical root always has entries left to remove).
+    Only the case with neither piece of evidence is refused, and it is refused before any deletion.
+    """
+    if _looks_like_transcript_root(root):
+        return
+    for entry in LEAK_MANIFEST:
+        if root.joinpath(*_pure_relative_path(entry.relative_path).parts).exists():
+            return
+    for relative_path in EMPTY_DIRECTORY_MANIFEST:
+        if root.joinpath(*_pure_relative_path(relative_path).parts).exists():
+            return
+    raise CleanupError(
+        "refusing to report a clean run for an unbound state root: " + str(root) + " is not "
+        + _STATE_ROOT_PARENT_NAME + "/" + _STATE_ROOT_NAME + " and contains no manifest entry, so "
+        "'everything already removed' would be vacuously true. Pass the allocator's "
+        "review-transcripts directory."
+    )
 
 
 def _pure_relative_path(value: str) -> PurePosixPath:
@@ -667,6 +712,10 @@ def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
     """
 
     root, held_identity = _canonical_state_root(state_root)
+    # BIND THE ROOT BEFORE ANYTHING ELSE. Without this, a mistyped `--state-root` satisfied the whole
+    # manifest vacuously through `allow_absent=True` and `--apply` exited 0 claiming the leak was
+    # removed (PR #63 recheck, P2).
+    _require_bound_state_root(root)
     # ONE HELD SESSION for all three phases. The occupant scan used to run on PATHS and
     # `delete_leak_files` then re-opened everything, so an occupant arriving between the two was
     # missed and all 39 files were deleted before the directory phase noticed (PR #63 recheck, P2 —
@@ -736,6 +785,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             _validate_closed_manifests()
             root, _identity_unused = _canonical_state_root(arguments.state_root)
+            # The SAME binding `--apply` enforces. A check that reports "already clean" for a root
+            # `--apply` would refuse is the exact mismatch this flag exists to prevent.
+            _require_bound_state_root(root)
             _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
             present, absent = _preflight_files(root, allow_absent=True)
             unexpected = unexpected_directory_occupants(root)

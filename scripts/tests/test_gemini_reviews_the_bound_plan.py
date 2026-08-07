@@ -104,7 +104,11 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.addCleanup(shutil.rmtree, base, ignore_errors=True)
         out = base / name
         out.touch()
-        Path(str(out) + ".launch").write_text("run=probe\n", encoding="utf-8")
+        # A CANONICAL launch record: 32 hex digits and a newline. `pty-capture` now validates the record's
+        # grammar (and its equality to the run id in the filename) BEFORE spawning, because "regular and
+        # nonempty" let a `not-a-run-id` record burn a full review that the verdict writer then discarded
+        # (PR #63 recheck, P2). A fixture record has to be one a real allocator could have written.
+        Path(str(out) + ".launch").write_text("a" * 32 + "\n", encoding="utf-8")
         Path(str(out) + ".plan").write_text(
             f"{hashlib.sha256(recorded).hexdigest()}  docs/planning/FEATURE_PLAN.md\n",
             encoding="utf-8")

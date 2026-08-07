@@ -108,29 +108,50 @@ class AuditCodexOperandContainment(unittest.TestCase):
         code, received = self.run_audit("/security-reviewer", "Sources/probe.link", cwd=repo)
         self.assert_never_reached_codex(code, received, "symlink to /etc/passwd")
 
-    def test_an_operand_swapped_to_a_symlink_after_validation_reads_the_SNAPSHOT(self):
-        """The validate-then-open race (PR #63 recheck, P1) — reproduced, then closed by snapshotting.
+    def test_no_pathname_reaches_codex_only_the_authenticated_BYTES(self):
+        """The validate-then-open race, closed in two rounds (PR #63 recheck, P1 then P2).
 
-        The wrapper used to validate the operand and hand codex the live PATH, which codex opened later;
-        a swap to an outside-pointing symlink in between disclosed the outside file. `snapshot-operands.py`
-        now reads each operand through one O_NOFOLLOW descriptor into a private tree and codex is pointed
-        at that immutable copy. The deterministic proof: the path codex receives is NOT the in-repo
-        operand — it is a snapshot copy outside the repo — so no later swap of the live path can reach
-        it, and the copy carries the original bytes.
+        Round 1: the wrapper validated the operand and handed codex the live PATH, which codex opened
+        later — a swap to an outside-pointing symlink in between disclosed the outside file.
+        Snapshotting into a private tree fixed that against the live tree.
+
+        Round 2: codex still opened the SNAPSHOT by name, and a same-account process watching for
+        `codex-audit-src.*` could overwrite it between the helper exiting and that open. A 0700
+        directory excludes other users, not another process under the same UID.
+
+        There is no filesystem defence against a same-UID writer once a pathname is involved, so the
+        property asserted here is that NO pathname reaches codex at all: the prompt carries the
+        authenticated file BYTES inline. With nothing to open, there is no window to race.
         """
         repo = self._throwaway_repo()
         code, received = self.run_audit("/security-reviewer", "Sources/File.swift", cwd=repo)
         self.assertEqual(0, code, received)
         self.assertIn("CODEX-ARGV-BEGIN", received)
-        # The prompt argument names a snapshot path under a private codex-audit-src dir, never the live
-        # `Sources/File.swift` in the repo.
         prompt_arg = received.split("CODEX-ARGV-BEGIN\n", 1)[1].split("\nCODEX-ARGV-END", 1)[0]
-        self.assertIn("codex-audit-src", prompt_arg,
-                      "codex was handed a path that is not a private snapshot — the live path is reachable")
+
+        # The operand's BYTES are present, fenced by its repo-relative identity...
+        self.assertIn("let x = 1", prompt_arg, "the operand's bytes were not inlined")
+        self.assertIn("BEGIN Sources/File.swift", prompt_arg)
+        # ...and no openable path is handed over: not the live operand, and not a snapshot copy.
         self.assertNotIn(str(repo / "Sources" / "File.swift"), prompt_arg,
-                         "codex was handed the live in-repo path, not the snapshot copy")
-        # And the snapshot the wrapper took carries the operand's real bytes (basename preserved).
-        self.assertIn("File.swift", prompt_arg)
+                         "codex was handed the live in-repo path")
+        self.assertNotIn("codex-audit-src", prompt_arg,
+                         "codex was handed a snapshot pathname — a same-UID writer can still race it")
+
+    def test_the_embed_refuses_rather_than_overflowing_the_argument(self):
+        """A prompt is argv, so an unbounded inline would fail confusingly inside the reviewer CLI.
+
+        Asserted because the embed replaced a path handoff that had no size ceiling at all — the new
+        failure mode has to be a clear refusal, not a truncated or rejected review.
+        """
+        repo = self._throwaway_repo()
+        big = repo / "Sources" / "Big.swift"
+        big.write_text("x" * (300 * 1024), encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.email=p@t", "-c", "user.name=p",
+                        "commit", "-qm", "big"], cwd=repo, check=True)
+        code, received = self.run_audit("/security-reviewer", "Sources/Big.swift", cwd=repo)
+        self.assert_never_reached_codex(code, received, "an operand set that overflows the argument")
 
     def test_a_traversal_operand_is_refused(self):
         code, received = self.run_audit("/security-reviewer", "docs/planning/../../../etc/hosts")

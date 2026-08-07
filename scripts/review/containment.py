@@ -102,11 +102,21 @@ def contained_regular_file(path: str, label: str, under: str = "") -> str:
             f"(resolved to {real}, which is not beneath {root})"
         )
     if under:
-        subtree = os.path.realpath(os.path.join(root, under))
+        # THE SUBTREE BOUNDARY IS THE PHYSICAL PATH, DELIBERATELY NOT `realpath`'d (PR #63 recheck, P1).
+        # Resolving it MOVED the boundary: with `docs/planning -> ../src`, the base became `<root>/src`,
+        # so a regular file reached through the link satisfied the check and this helper printed
+        # `src/EVIL_PLAN.md` as a plan. The model-invocable snapshot and persistence wrappers would then
+        # create `.verdicts` state under `src` while promising to operate only under `docs/planning`.
+        # Reproduced. The operand's realpath is still fully resolved — only the BASE is left physical —
+        # so a symlinked subtree resolves out from under the boundary and is refused rather than
+        # laundered through it. This is the same asymmetry `resolve-plan-gate.sh`'s `_contained` uses,
+        # and it was fixed there four times before landing here.
+        subtree = os.path.join(root, under)
         if real != subtree and not real.startswith(subtree + os.sep):
             refuse(
                 f"{label} must live under {under}/ in this repository: {path} "
-                f"(resolved to {real}, which is not beneath {subtree})"
+                f"(resolved to {real}, which is not beneath {subtree}). A symlinked {under}/ cannot "
+                "launder its own target."
             )
     return real
 

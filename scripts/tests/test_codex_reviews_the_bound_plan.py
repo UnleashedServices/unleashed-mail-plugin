@@ -118,7 +118,10 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.addCleanup(shutil.rmtree, allocated, ignore_errors=True)
         out = allocated / "COREDEV-9999-r2-codex.txt"
         out.touch()
-        (allocated / (out.name + ".launch")).write_text("run=probe\n", encoding="utf-8")
+        # A CANONICAL launch record: 32 hex digits and a newline. `pty-capture` validates the record's
+        # grammar before spawning, because "regular and nonempty" let a `not-a-run-id` record burn a
+        # full review the verdict writer then discarded (PR #63 recheck, P2).
+        (allocated / (out.name + ".launch")).write_text("a" * 32 + "\n", encoding="utf-8")
         edited = f"# Plan\n{EDITED}\n".encode("utf-8")
         (allocated / (out.name + ".plan")).write_text(
             f"{hashlib.sha256(edited).hexdigest()}  docs/planning/FEATURE_PLAN.md\n", encoding="utf-8")

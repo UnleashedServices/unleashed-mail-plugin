@@ -91,15 +91,23 @@ if [ -n "$PLAN_REL" ]; then
     fi
 fi
 
-# --- rewrite absolute repo paths in the prompt to point at the checkout ------------------------
-mkdir -p "$(dirname "$TREE/$PROMPT_REL")"
-sed "s#$REPO#$TREE#g" "$PROMPT_REL" > "$TREE/$PROMPT_REL"
-if grep -q "$REPO" "$TREE/$PROMPT_REL"; then
-    echo "prompt still references the real worktree after rewrite" >&2; exit 1
+# --- authenticate the bound prompt, rewrite paths, stage it ------------------------------------
+# The SAME shared helper the gemini arm uses (see its comment for the two defects this closes: the
+# unauthenticated snapshot re-read, and the `sed` expression assembled from a path that aborted every
+# capture on a checkout containing `#`). No `--guard` here: codex runs `-s read-only`, so the
+# read-only instruction the gemini guard supplies is enforced by the sandbox instead of by prose.
+# Two explicit calls rather than an array splice: under `set -u`, bash 3.2 — the macOS stock shell this
+# runs on — treats `"${EMPTY[@]}"` as an unbound variable and aborts the capture.
+if [ -r "${OUT}.promptsha256" ]; then
+    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+        --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1)" || exit 1
+else
+    echo "note: no prompt digest beside the transcript; staging the snapshot unauthenticated" >&2
+    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+        --snapshot "$PROMPT_REL" \
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --min-bytes 1)" || exit 1
 fi
-BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
-[ "$BYTES" -ge 1 ] || { echo "assembled prompt is empty" >&2; exit 1; }
-PROMPT_TREE_SHA="$(_sha256 "$TREE/$PROMPT_REL")" || exit 1
 
 # The reserved leaf must be EMPTY (see the gemini harness for the shorter-second-write hazard).
 if [ -s "$OUT" ]; then

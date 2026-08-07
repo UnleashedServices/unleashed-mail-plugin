@@ -705,11 +705,22 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
 
     def test_the_wrapper_guards_against_a_truncated_prompt(self):
         """A guard-only prompt wasted two review rounds; the reviewer's reply read like a wording
-        problem rather than the read-after-truncate bug it was."""
+        problem rather than the read-after-truncate bug it was.
+
+        Both halves moved into the SHARED `stage-prompt.py` when the two arms stopped duplicating a
+        `sed` pipeline and an inline guard-prepend (PR #63 recheck). The wrapper now passes the floor
+        and the helper enforces it, so this asserts the rule at whichever layer owns it — naming the
+        layer explicitly rather than letting the check silently pass on a file that no longer decides.
+        """
         with open(self.WRAPPER, encoding="utf-8") as fh:
             src = fh.read()
-        self.assertIn("1000", src, "must refuse to launch on a truncated prompt")
-        self.assertIn("read back empty", src, "must assert the prompt body was read before writing")
+        self.assertIn("--min-bytes 1000", src,
+                      "the wrapper must still demand the 1000-byte floor from the staging helper")
+        helper = _read("scripts/review/stage-prompt.py")
+        self.assertIn("assembled prompt is only", helper,
+                      "the staging helper must refuse a truncated assembled prompt")
+        self.assertIn("refusing to write a guard-only prompt", helper,
+                      "the staging helper must refuse a guard-only prompt (read before write)")
 
 
 if __name__ == "__main__":
@@ -849,3 +860,50 @@ class DeepReviewP2Fixes(unittest.TestCase):
             skill,
             "settings.json cannot affect a wrapper round — the wrapper always passes --model",
         )
+
+
+class DuplicatedGrammarsAgree(unittest.TestCase):
+    """`pty-capture.py` copies two grammars from `review-verdict.py`; the copies must not drift.
+
+    The copy is deliberate: `pty-capture.py` runs on the blocking hook path and imports nothing local,
+    so it cannot share a module with the verdict writer. But a copy that drifts becomes a SECOND,
+    softer authority — the preflight would accept a transcript the writer later rejects, which is
+    exactly the wasted-round defect the preflight exists to prevent (PR #63 recheck, P2). Asserting the
+    pattern text is identical is what keeps "duplicated" from meaning "diverged".
+    """
+
+    def test_the_launch_record_and_leaf_grammars_are_identical(self):
+        capture = _read("scripts/pty-capture.py")
+        verdict = _read("scripts/review-verdict.py")
+
+        # Both must derive the run-id length from the same value.
+        for source, label in ((capture, "pty-capture"), (verdict, "review-verdict")):
+            self.assertIn("_RUN_ID_HEX_LENGTH = 16 * 2", source,
+                          f"{label} changed the run-id length; the other file must change with it")
+
+        # The launch-record grammar: 32 hex digits and a newline, anchored.
+        for source, name in ((capture, "_LAUNCH_RECORD_RE"), (verdict, "_LAUNCH_RECORD")):
+            self.assertIn(
+                r'rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z"',
+                source,
+                f"{name} no longer matches the shared launch-record grammar",
+            )
+
+        # The allocator leaf grammar: the round is `r[0-9]+` in BOTH, which is the precondition the
+        # allocator's numeric-round check exists to guarantee.
+        for source, label in ((capture, "pty-capture"), (verdict, "review-verdict")):
+            self.assertIn(r"r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-", source,
+                          f"{label}'s allocator-leaf grammar drifted from the other's")
+
+    def test_the_allocator_enforces_the_round_shape_the_leaf_grammar_requires(self):
+        """The two must agree in DIRECTION too: a round the allocator accepts must be one the leaf
+        grammar can match, or the review is spent on a transcript that can never validate."""
+        capture = _read("scripts/pty-capture.py")
+        self.assertIn('_ROUND_COMPONENT_RE = re.compile(r"[0-9]+")', capture,
+                      "the allocator no longer constrains the round to digits")
+        # The rule lives in a NAMED shared validator, not inline in `allocate_transcript` — M1.5/M1.8
+        # bind the allocator's decision to the validators so production logic cannot diverge from them.
+        self.assertIn("def is_valid_round_component(", capture,
+                      "the numeric-round rule must be a named shared validator, not inline logic")
+        self.assertIn("is_valid_round_component if label == \"round\"", capture,
+                      "the round validator is defined but the allocator never applies it")

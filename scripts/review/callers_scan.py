@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
@@ -243,29 +244,40 @@ def strip_markdown_prefix(payload: bytes) -> bytes:
 # defeating the ASCII anchor test below: `/unleashed-mail:gemini<ZWSP>-review` renders as the
 # command to a human but `b"...gemini-review" in payload` is False, so the line was never a
 # candidate and the scanner's default-DENY never applied to it (PR #63 review, gap 25).
-_INVISIBLE_SEQUENCES = (
-    b"\x00",              # NUL
-    b"\xe2\x80\x8b",      # U+200B ZERO WIDTH SPACE
-    b"\xe2\x80\x8c",      # U+200C ZERO WIDTH NON-JOINER
-    b"\xe2\x80\x8d",      # U+200D ZERO WIDTH JOINER
-    b"\xef\xbb\xbf",      # U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM
-    b"\xe2\x80\xaa",      # U+202A..U+202E embeddings and overrides
-    b"\xe2\x80\xab",
-    b"\xe2\x80\xac",
-    b"\xe2\x80\xad",
-    b"\xe2\x80\xae",
-    b"\xe2\x81\xa6",      # U+2066..U+2069 isolates
-    b"\xe2\x81\xa7",
-    b"\xe2\x81\xa8",
-    b"\xe2\x81\xa9",
+# A FINITE LIST OF SEQUENCES WAS A FINITE LIST OF BYPASSES (PR #63 recheck, P2). The previous version
+# enumerated fourteen UTF-8 sequences, so an invocation split by any OTHER invisible format character
+# rendered like the documented command while neither the raw nor the normalized bytes contained an
+# anchor — the line never became a candidate and the default-reject policy was skipped entirely.
+# Verified: `gemini<U+2060>-review …` and `gemini<U+00AD>-review …` both evaded it.
+#
+# The rule is now the CLASS, not a list: every Unicode format character (general category `Cf` — which
+# covers all fourteen of the old entries plus WORD JOINER, SOFT HYPHEN and everything else in it) plus
+# the default-ignorable variation selectors, plus NUL, which is `Cc` and so has to be named.
+_VARIATION_SELECTORS = frozenset(
+    list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0))
 )
 
 
+def _is_invisible(character: str) -> bool:
+    return (
+        character == "\x00"
+        or unicodedata.category(character) == "Cf"
+        or ord(character) in _VARIATION_SELECTORS
+    )
+
+
 def strip_invisible(payload: bytes) -> bytes:
-    """Remove invisible/bidi sequences so an anchor cannot be split by one."""
-    for sequence in _INVISIBLE_SEQUENCES:
-        payload = payload.replace(sequence, b"")
-    return payload
+    """Remove invisible/format characters so an anchor cannot be split by one.
+
+    Decoded with `surrogateescape` so undecodable bytes survive the round trip unchanged: the anchors
+    are ASCII, so invalid UTF-8 around one cannot conceal it, and mangling those bytes here would
+    corrupt the payload the caller compares against.
+    """
+    text = payload.decode("utf-8", "surrogateescape")
+    if not any(_is_invisible(character) for character in text):
+        return payload
+    stripped = "".join(character for character in text if not _is_invisible(character))
+    return stripped.encode("utf-8", "surrogateescape")
 
 
 def is_candidate(path: str, payload: bytes) -> bool:

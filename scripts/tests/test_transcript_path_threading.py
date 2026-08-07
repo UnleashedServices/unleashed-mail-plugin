@@ -21,6 +21,7 @@ ALLOCATE = REPO / "scripts" / "review" / "allocate-transcript.sh"
 ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
 ISOLATED_CODEX = REPO / "scripts" / "review" / "isolated-codex-review.sh"
 STAGE_BOUND_PLAN = REPO / "scripts" / "review" / "stage-bound-plan.py"
+STAGE_PROMPT = REPO / "scripts" / "review" / "stage-prompt.py"
 PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
 REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
@@ -239,6 +240,9 @@ class TranscriptThreadingFixture(unittest.TestCase):
         # lists files by hand does not learn about a new sibling on its own — the codex arm's isolation
         # would fail with a missing-file error without it (the same lesson as containment.py below).
         shutil.copy2(STAGE_BOUND_PLAN, review_dir / STAGE_BOUND_PLAN.name)
+        # ...and the shared PROMPT stager both harnesses call. Third time this fixture has had to learn
+        # about a new shared sibling; each time the symptom was a missing-file error, not a wrong answer.
+        shutil.copy2(STAGE_PROMPT, review_dir / STAGE_PROMPT.name)
         shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
         shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
         shutil.copy2(BIND_PROMPT, review_dir / BIND_PROMPT.name)

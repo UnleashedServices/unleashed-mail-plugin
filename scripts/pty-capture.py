@@ -60,6 +60,24 @@ SIGTERM_GRACE_SEC = 5.0   # bounded grace period before SIGKILL
 POLL_INTERVAL_SEC = 0.1
 SIGKILL_REAP_SEC = 2.0    # bounded wait for the SIGKILL'd child to be reaped
 
+# The allocator's run identity, and the two grammars that must agree with `review-verdict.py`.
+# `_RUN_ID_HEX_LENGTH` is 16 random bytes rendered as hex; `_LAUNCH_RECORD_RE` mirrors that file's
+# `_LAUNCH_RECORD` and `_ALLOCATED_LEAF_RE` mirrors its `_ALLOCATOR_BASENAME`. They are duplicated
+# rather than imported because this module runs on the blocking hook path and imports nothing local —
+# `test_doc_gates` asserts the pairs are identical so the copies cannot drift.
+_RUN_ID_HEX_LENGTH = 16 * 2
+_LAUNCH_RECORD_RE = re.compile(rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii") + rb"})\n\Z")
+_ALLOCATED_LEAF_RE = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-"
+    r"(?P<run_id>[0-9a-f]{" + str(_RUN_ID_HEX_LENGTH) + r"})\.txt\Z"
+)
+# THE ROUND IS NUMERIC, and that is not merely a convention (PR #63 recheck, P2). The generic component
+# grammar below accepts `[A-Za-z0-9._-]+`, so a round of `round-1` allocated a leaf named `…rround-1-…`,
+# the capture spent a full 12-28 minute review, and `review-verdict.py` then refused the transcript
+# because its `_ALLOCATOR_BASENAME` requires `r[0-9]+`. Validating here — the one allocation path both
+# arms funnel through — makes malformed input fail in milliseconds instead of after the review.
+_ROUND_COMPONENT_RE = re.compile(r"[0-9]+")
+
 
 def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
@@ -196,9 +214,19 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         # THE LAUNCH RECORD, BEFORE THE REVIEWER RUNS. `review-verdict.py` rejects a transcript whose
         # `.launch` sibling is absent or malformed — but only at WRITE time, so a deleted or corrupted
         # record meant a 20-30 minute review completed, exited 0, and was then thrown away. Checking
-        # the same precondition here costs a stat and turns a wasted round into an immediate refusal
-        # (PR #63 recheck, P2). Deliberately a shape check, not a re-derivation: the authority stays
-        # with the verdict writer, and duplicating its rules here would create two of them.
+        # the same precondition here costs a read and turns a wasted round into an immediate refusal.
+        #
+        # A SHAPE CHECK WAS NOT ENOUGH (PR #63 recheck, P2). "Regular and nonempty" accepted a
+        # `not-a-run-id` record, ran the wrapped command to completion and returned 0 — the verdict
+        # writer then rejected the transcript, so the expensive round was still lost. Reproduced. The
+        # canonical grammar is checked here instead, AND the recorded run id must equal the one the
+        # allocator embedded in the filename: a record that belongs to a different run is exactly as
+        # unusable as a malformed one, and both are free to detect before spawning.
+        #
+        # `_LAUNCH_RECORD_RE` / `_ALLOCATED_LEAF_RE` mirror `review-verdict.py`'s `_LAUNCH_RECORD` and
+        # `_ALLOCATOR_BASENAME`. That duplication is deliberate — this file is the blocking hook path
+        # and imports nothing local — so `test_doc_gates` asserts the two grammars agree, which is what
+        # keeps a copy from drifting into a second, softer authority.
         launch_path = out_path + ".launch"
         try:
             launch_info = os.lstat(launch_path)
@@ -213,6 +241,32 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
             print(
                 f"pty-capture: allocated transcript's launch record is unusable, refusing to run the "
                 f"command: {launch_path}",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            with open(launch_path, "rb") as launch_stream:
+                launch_bytes = launch_stream.read(_RUN_ID_HEX_LENGTH + 2)
+        except OSError as error:
+            print(
+                f"pty-capture: allocated transcript's launch record is unreadable, refusing to run "
+                f"the command: {launch_path}: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        launch_match = _LAUNCH_RECORD_RE.fullmatch(launch_bytes)
+        if launch_match is None:
+            print(
+                f"pty-capture: allocated transcript's launch record is malformed, refusing to run the "
+                f"command (expected {_RUN_ID_HEX_LENGTH} hex digits and a newline): {launch_path}",
+                file=sys.stderr,
+            )
+            return 1
+        leaf_match = _ALLOCATED_LEAF_RE.fullmatch(os.path.basename(out_path))
+        if leaf_match is not None and leaf_match.group("run_id") != launch_match.group(1).decode("ascii"):
+            print(
+                f"pty-capture: allocated transcript's launch record names a DIFFERENT run than its "
+                f"filename, refusing to run the command: {launch_path}",
                 file=sys.stderr,
             )
             return 1
@@ -561,6 +615,19 @@ def is_valid_transcript_component(value: str) -> bool:
     return value not in ("", ".", "..") and _COMPONENT_RE.fullmatch(value) is not None
 
 
+def is_valid_round_component(value: str) -> bool:
+    """Return whether the ROUND additionally satisfies the numeric grammar synthesis requires.
+
+    A SHARED, NAMED VALIDATOR rather than an inline check in `allocate_transcript` — M1.5/M1.8 bind the
+    allocator's decision to the validators precisely so production logic cannot diverge from them, and
+    an inline rule would be exactly that divergence. The round needs its own because the generic
+    component grammar accepts `[A-Za-z0-9._-]+`, so `round-1` allocated a leaf named `…rround-1-…`, a
+    full 12-28 minute review ran, and `review-verdict.py` then refused the transcript because its
+    `_ALLOCATOR_BASENAME` requires `r[0-9]+` (PR #63 recheck, P2).
+    """
+    return is_valid_transcript_component(value) and _ROUND_COMPONENT_RE.fullmatch(value) is not None
+
+
 def _identity(path: str):
     """(st_dev, st_ino) for an existing path, else None. Case- and spelling-independent by construction."""
     try:
@@ -686,23 +753,54 @@ def _select_allocation_base(environ: "dict[str, str]", diagnostic_stream) -> str
 
 def _mkdir_private_chain(path: str) -> None:
     """Create every absent component at its achieved, publication-time mode 0700."""
+    # `lexists` + `lstat`, NEVER `exists`/`isdir` (PR #63 recheck, P2). Both of the following followed
+    # symlinks, and each is separately exploitable:
+    #   * `os.path.exists(cursor)` is TRUE for a symlink, so a pre-planted link stops the walk and
+    #     becomes the "existing ancestor"; `os.path.isdir(cursor)` then follows it to a real directory
+    #     and accepts it. Reproduced: with `<base>/unleashed-mail -> <attacker-dir>`, the whole private
+    #     transcript hierarchy was created INSIDE the attacker's directory.
+    #   * the same follow in the `FileExistsError` branch below adopts a link raced in mid-loop.
+    # `lexists` sees the link itself so the walk stops there, and `lstat` reports S_IFLNK so it fails
+    # S_ISDIR — the allocation refuses instead of building through an ancestor someone else can
+    # retarget or rename afterwards.
     missing = []
     cursor = path
-    while not os.path.exists(cursor):
+    while not os.path.lexists(cursor):
         missing.append(cursor)
         parent = os.path.dirname(cursor)
         if parent == cursor:
             raise AllocationError(f"cannot find an existing ancestor for {path!r}")
         cursor = parent
-    if not os.path.isdir(cursor):
-        raise AllocationError(f"existing ancestor {cursor!r} is not a directory")
+    try:
+        anchor = os.lstat(cursor)
+    except OSError as error:
+        raise AllocationError(f"existing ancestor {cursor!r} is unreadable: {error}")
+    if not stat.S_ISDIR(anchor.st_mode):
+        raise AllocationError(
+            f"existing ancestor {cursor!r} is not a directory (a symlink or other object occupies it)"
+        )
 
     for directory in reversed(missing):
         try:
             os.mkdir(directory, 0o700)
         except FileExistsError:
-            if not os.path.isdir(directory):
-                raise AllocationError(f"concurrent path {directory!r} is not a directory")
+            # `lstat`, NOT `os.path.isdir` (PR #63 recheck, P2). Another process can win the race by
+            # creating a SYMLINK at a component this loop is about to make; `os.path.isdir` follows it
+            # and accepts the target, so the supposedly private transcript hierarchy gets built through
+            # an attacker-controlled ancestor that can be retargeted or renamed afterwards. `lstat`
+            # reports S_IFLNK for the link itself, so a raced symlink fails S_ISDIR and the allocation
+            # refuses instead of adopting it.
+            try:
+                raced = os.lstat(directory)
+            except OSError as error:
+                raise AllocationError(
+                    f"concurrent path {directory!r} vanished during allocation: {error}"
+                )
+            if not stat.S_ISDIR(raced.st_mode):
+                raise AllocationError(
+                    f"concurrent path {directory!r} is not a directory (a symlink or other object was "
+                    "created there mid-allocation)"
+                )
 
 
 def _validate_existing_private_directory(path: str, metadata=None) -> None:
@@ -868,8 +966,15 @@ def allocate_transcript(
         "reviewer": reviewer,
     }
     for label, value in values.items():
-        if not is_valid_transcript_component(value):
-            raise AllocationError(f"invalid {label} component: {value!r}")
+        # The round is validated by its own shared validator, which subsumes the generic one.
+        checker = is_valid_round_component if label == "round" else is_valid_transcript_component
+        if not checker(value):
+            raise AllocationError(
+                f"invalid {label} component: {value!r}"
+                + (" — the round must be digits only, because review-verdict.py's allocator grammar "
+                   "requires `r<digits>` and would reject the transcript AFTER the review had run"
+                   if label == "round" else "")
+            )
 
     env = dict(os.environ if environ is None else environ)
     diagnostics = sys.stderr if diagnostic_stream is None else diagnostic_stream

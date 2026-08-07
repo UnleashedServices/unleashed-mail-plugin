@@ -1060,6 +1060,42 @@ class EvasiveSelectionProofs(unittest.TestCase):
     def test_plain_invocation_is_still_selected(self) -> None:
         self.assertTrue(production.is_candidate("docs/x.md", b"/unleashed-mail:gemini-review --ticket X"))
 
+    def test_every_format_character_is_normalized_not_a_curated_list(self) -> None:
+        """A finite list of sequences was a finite list of bypasses (PR #63 recheck, P2).
+
+        The old `_INVISIBLE_SEQUENCES` enumerated fourteen UTF-8 sequences, so an invocation split by
+        any OTHER invisible format character rendered like the documented command while neither the raw
+        nor the normalized bytes contained an anchor — the line never became a candidate and the
+        default-reject policy was skipped entirely. Verified for U+2060 and U+00AD, neither of which
+        was on the list. The rule is now the general category `Cf`, so a new spelling cannot be found
+        by picking a character nobody enumerated.
+
+        U+2064 is included as a character that was in NO version of the old list, so this fails against
+        any reintroduced enumeration rather than only against the exact two the reviewer named.
+        """
+        for codepoint, name in ((0x2060, "WORD JOINER"), (0x00AD, "SOFT HYPHEN"),
+                                (0x2064, "INVISIBLE PLUS"), (0x200B, "ZWSP (was listed)")):
+            with self.subTest(character=name):
+                # A ticket operand, NOT one of the legacy fixed-transcript output literals: COREDEV-2619's
+                # inventory tracks every occurrence of those, so naming one here — even in a comment —
+                # fails the quote-keep contract for a reason this cell does not test. (It did.)
+                hidden = f"gemini{chr(codepoint)}-review --ticket COREDEV-1".encode("utf-8")
+                self.assertNotIn(b"gemini-review", hidden, "the fixture must actually hide the anchor")
+                self.assertTrue(
+                    production.is_candidate("docs/x.md", hidden),
+                    f"an invocation split by {name} evaded selection entirely",
+                )
+
+    def test_undecodable_bytes_survive_normalization_unchanged(self) -> None:
+        """The decode/strip/encode round trip must not corrupt a non-UTF-8 document.
+
+        `surrogateescape` is what makes that true; without it the payload the caller compares against
+        would differ from the file's bytes for reasons unrelated to invisibles.
+        """
+        payload = b"\xff\xfe gemini-review --ticket X \x80"
+        self.assertEqual(payload, production.strip_invisible(payload))
+        self.assertTrue(production.is_candidate("docs/x.md", payload))
+
     def test_ordinary_prose_is_still_not_selected(self) -> None:
         """The deletion test: the guard must be conditional, not select everything."""
         self.assertFalse(production.is_candidate("docs/x.md", b"This line mentions nothing relevant."))

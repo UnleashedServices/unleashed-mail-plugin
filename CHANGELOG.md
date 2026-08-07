@@ -445,6 +445,55 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **Prompt staging is shared, authenticated, and no longer built from a `sed` expression.** Both
+  isolation harnesses rewrote the prompt with `sed "s#$REPO#$TREE#g"` plus an inline guard-prepend, and
+  that carried two defects: the snapshot was re-read by NAME and never compared against
+  `<transcript>.promptsha256` (so a snapshot rewritten after binding and restored before synthesis had
+  the reviewer read substituted instructions while the verdict writer hashed the restored bytes), and
+  the expression was assembled from a path — a checkout containing the `#` delimiter made it invalid
+  and **every capture aborted with an empty prompt** (reproduced from `repo#x`). New shared
+  `stage-prompt.py` authenticates the snapshot against its digest, substitutes the repository path as
+  literal bytes, prepends the guard, enforces the size floor, and writes through a no-follow descriptor
+  walk — one implementation, so the two arms cannot drift again.
+- **`audit-codex.sh` hands codex the operand BYTES, never a pathname.** Snapshotting into a private
+  directory closed the race against the live tree but left a narrower one of the same shape: codex
+  still opened the snapshot by name, and a same-account process watching for `codex-audit-src.*` could
+  overwrite it between the helper exiting and that open. A 0700 directory excludes other users, not
+  another process under the same UID, so "immutable copies" claimed more than a directory can promise.
+  The pathname is gone: the authenticated bytes are inlined into the prompt (bounded, with a loud
+  refusal above the limit), so nothing is opened after validation.
+- **The allocator refuses a non-numeric round before spending a review.** The generic component grammar
+  accepted `round-1`, so a leaf named `…rround-1-…` was allocated, a full 12–28 minute review ran, and
+  `review-verdict.py` then refused the transcript because its grammar requires `r[0-9]+`. Now a named
+  shared validator (`is_valid_round_component`) rejects it in milliseconds.
+- **`pty-capture.py` validates the launch record's grammar and run identity before spawning.**
+  "Regular and nonempty" accepted a `not-a-run-id` record, ran the reviewer to completion and returned
+  0 — the verdict writer then discarded the transcript, so the round was lost anyway. The canonical
+  32-hex record is now required, and it must name the same run as the filename. A doc gate asserts the
+  copied grammars stay identical to `review-verdict.py`'s.
+- **The allocation chain no longer follows a symlink planted mid-race.** `os.path.exists` is true for a
+  symlink, so a pre-planted link stopped the ancestor walk and `os.path.isdir` followed it — the whole
+  private transcript hierarchy was created inside an attacker-controlled directory (reproduced). Now
+  `lexists`/`lstat` throughout, on both the walk and the `FileExistsError` branch.
+- **`containment.py`'s subtree boundary is the physical path.** Resolving `--under` with `realpath`
+  MOVED the boundary: with `docs/planning -> ../src`, a regular file reached through the link was
+  accepted as a plan, so the model-invocable wrappers could create `.verdicts` state under `src` while
+  promising to operate only under `docs/planning`. The operand is still fully resolved; only the base
+  is left physical.
+- **`callers_scan.py` normalizes the whole format-character class, not a list of fourteen sequences.**
+  An invocation split by any unlisted invisible character — U+2060 WORD JOINER, U+00AD SOFT HYPHEN —
+  rendered like the documented command while neither the raw nor normalized bytes contained an anchor,
+  so the line never became a candidate and default-reject was skipped entirely. Now general category
+  `Cf` plus the default-ignorable variation selectors, with undecodable bytes preserved via
+  `surrogateescape`.
+- **The cleanup tool refuses an unbound state root instead of reporting a vacuous success.**
+  Resumability (`allow_absent=True`) made "everything already removed" indistinguishable from "wrong
+  directory": a mistyped `--state-root` satisfied all 39 files and nine directories vacuously and
+  `--apply` exited 0 while the real transcripts sat untouched. The root must now either be the
+  canonical `unleashed-mail/review-transcripts` or contain at least one manifest entry.
+- **`brainstorm` grants the two agents its own body requires.** Step 1 launches `jira-manager` and
+  Step 5 `modern-standards-planner`, but the enumeration listed only the two stakeholder personas — so
+  the documented autonomous flow stopped on a permission prompt at both mandatory steps.
 - **Permission-surface and CI hygiene (PR #63 recheck).** The `gemini-review` prompt-file recipe was a
   `cat > … <<EOF` heredoc matching no Bash grant, so the mandatory first step prompted every round
   despite the `Write(.agy-prompt-*.md)` grant — it now instructs the Write tool, mirroring

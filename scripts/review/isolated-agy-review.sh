@@ -165,33 +165,29 @@ if [ -n "$PLAN_REL" ]; then
     fi
 fi
 
-# --- rewrite absolute paths, then prepend the read-only guard ---------------------------------
-mkdir -p "$(dirname "$TREE/$PROMPT_REL")"
-sed "s#$REPO#$TREE#g" "$PROMPT_REL" > "$TREE/$PROMPT_REL"
-if grep -q "$REPO" "$TREE/$PROMPT_REL"; then
-    echo "prompt still references the real worktree after rewrite" >&2; exit 1
+# --- authenticate the bound prompt, rewrite paths, prepend the guard, stage it ------------------
+# ONE SHARED HELPER, for the same reason plan staging is shared: this used to be `sed` plus inline
+# python in each harness, and the two arms drifted. `stage-prompt.py` authenticates the snapshot
+# against `<transcript>.promptsha256` BEFORE transforming it (the staging path never compared them, so
+# a snapshot rewritten after binding and restored before synthesis had the reviewer read substituted
+# instructions), substitutes the repository path as LITERAL BYTES (the `sed "s#…#…#"` expression was
+# assembled from a path, so a checkout containing `#` aborted every capture), prepends the read-only
+# guard, enforces the size floor, and writes through a no-follow descriptor walk (PR #63 recheck, P1+P2).
+#
+# `${OUT}.promptsha256` may be absent for an older capture or a direct call; the record flag is then
+# omitted and the staging still happens, exactly as the plan path degrades.
+# Two explicit calls rather than an array splice: under `set -u`, bash 3.2 — the macOS stock shell this
+# runs on — treats `"${EMPTY[@]}"` as an unbound variable and aborts the capture.
+if [ -r "${OUT}.promptsha256" ]; then
+    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+        --snapshot "$PROMPT_REL" --record "${OUT}.promptsha256" \
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --guard --min-bytes 1000)" || exit 1
+else
+    echo "note: no prompt digest beside the transcript; staging the snapshot unauthenticated" >&2
+    PROMPT_TREE_SHA="$(python3 "${SCRIPT_DIR}/stage-prompt.py" \
+        --snapshot "$PROMPT_REL" \
+        --tree "$TREE" --rel "$PROMPT_REL" --repo "$REPO" --guard --min-bytes 1000)" || exit 1
 fi
-python3 - "$TREE/$PROMPT_REL" <<'PY' || exit 1
-import sys
-p = sys.argv[1]
-guard = ("READ-ONLY REVIEW — CONSTRAINT, NOT A TASK. You have READ access only: do NOT create, modify, "
-         "delete or move any file, and do NOT implement any part of the plan. Producing the written "
-         "review demanded by the instructions that follow is your ONLY deliverable. If you find "
-         "yourself editing a file, stop — that is a failed review.\n"
-         "The full task follows immediately below; read on.\n\n")
-# READ FIRST. `open(p,'w')` truncates on open, so `open(p,'w').write(guard + open(p).read())` evaluates
-# the truncating open BEFORE the read and silently yields a guard-only prompt. That wasted two review
-# rounds: the reviewer replied "the file ends immediately after…", which reads like a wording problem.
-body = open(p, encoding="utf-8").read()
-assert body.strip(), f"refusing to write a guard-only prompt: {p} read back empty"
-with open(p, "w", encoding="utf-8") as fh:
-    fh.write(guard + body)
-PY
-# Fail in a second rather than after a 20-minute review on a truncated prompt.
-BYTES="$(wc -c < "$TREE/$PROMPT_REL" | tr -d ' ')"
-[ "$BYTES" -ge 1000 ] || { echo "assembled prompt is only ${BYTES} bytes — truncated" >&2; exit 1; }
-# The assembled prompt is basis too: verified after the run exactly like the staged plan.
-PROMPT_TREE_SHA="$(_sha256 "$TREE/$PROMPT_REL")" || exit 1
 
 # --- run --------------------------------------------------------------------------------------
 # The reserved leaf must be EMPTY. It is created 0-byte by the allocator, and nothing but this

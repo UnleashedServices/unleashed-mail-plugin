@@ -45,6 +45,47 @@ class PlanOperandContainment(unittest.TestCase):
         self.elsewhere = self.root / "NOT_A_PLAN.md"
         self.elsewhere.write_text("# Not in the planning tree\n", encoding="utf-8")
 
+    def test_a_symlinked_planning_subtree_cannot_launder_its_target(self):
+        """The `--under` boundary was `realpath`'d, which MOVED it (PR #63 recheck, P1).
+
+        With `docs/planning -> ../src`, resolving the subtree made the base `<root>/src`, so a regular
+        file reached through the link satisfied the containment check and was accepted as a plan — the
+        model-invocable snapshot and persistence wrappers would then create `.verdicts` state under
+        `src` while promising to operate only under `docs/planning`. Reproduced.
+
+        The operand is still fully resolved; only the BASE is left physical, so a symlinked subtree
+        resolves out from under the boundary instead of being laundered through it. Same asymmetry
+        `resolve-plan-gate.sh` uses, and it was fixed there four times before it landed here.
+        """
+        linked = Path(tempfile.mkdtemp(prefix="linked-repo-"))
+        self.addCleanup(shutil.rmtree, linked, ignore_errors=True)
+        (linked / "src").mkdir()
+        (linked / "src" / "EVIL_PLAN.md").write_text("# not a tracked plan\n", encoding="utf-8")
+        (linked / "docs").mkdir()
+        (linked / "docs" / "planning").symlink_to("../src")
+        subprocess.run(["git", "init", "-q", "."], cwd=linked, check=True)
+
+        result = subprocess.run(
+            ["python3", str(REPO / "scripts" / "review" / "containment.py"),
+             "--tool", "probe", "--label", "plan", "--under", "docs/planning",
+             "--", "docs/planning/EVIL_PLAN.md"],
+            cwd=linked, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertNotIn("src/EVIL_PLAN.md", result.stdout,
+                         "the symlinked subtree laundered a file outside docs/planning")
+
+    def test_a_real_planning_subtree_is_still_accepted(self):
+        """Positive control — the boundary must refuse a symlinked subtree, not every subtree."""
+        result = subprocess.run(
+            ["python3", str(REPO / "scripts" / "review" / "containment.py"),
+             "--tool", "probe", "--label", "plan", "--under", "docs/planning",
+             "--", "docs/planning/FEATURE_PLAN.md"],
+            cwd=self.root, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("docs/planning/FEATURE_PLAN.md", result.stdout.strip())
+
     def run_entrypoint(self, script, *operands):
         return subprocess.run(
             ["bash", str(script), *operands], cwd=self.root,

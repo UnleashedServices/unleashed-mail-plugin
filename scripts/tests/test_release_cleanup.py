@@ -963,6 +963,38 @@ class HeldDescriptorRaceProofs(SyntheticStateTreeMixin, unittest.TestCase):
         self.assertEqual(39, self._survivors(state_root),
                          "a refusal must delete nothing — that is the whole point of checking first")
 
+    def test_an_unbound_state_root_is_refused_rather_than_reported_clean(self):
+        """Resumability made "everything absent" indistinguishable from "wrong directory".
+
+        `allow_absent=True` is what lets a half-finished `--apply` be re-run — an entry already gone is
+        the goal state. But it also meant a mistyped `--state-root` pointing at ANY existing directory
+        satisfied all 39 files and all nine directories vacuously, so the run exited 0 and reported the
+        leak removed while the real transcripts sat untouched elsewhere (PR #63 recheck, P2). A cleanup
+        that cannot fail cannot be trusted when it passes.
+        """
+        wrong = Path(tempfile.mkdtemp(prefix="not-the-state-root-"))
+        self.addCleanup(shutil.rmtree, wrong, ignore_errors=True)
+        with self.assertRaises(production.CleanupError) as caught:
+            self._cleanup(wrong)
+        self.assertIn("unbound state root", str(caught.exception))
+
+    def test_the_canonical_root_is_accepted_even_when_already_empty(self):
+        """The binding must not break resumability: a COMPLETED cleanup legitimately leaves the
+        canonical `unleashed-mail/review-transcripts` directory empty, and re-running must still say so
+        rather than refusing."""
+        base = Path(tempfile.mkdtemp(prefix="canonical-root-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        canonical = base / "unleashed-mail" / "review-transcripts"
+        canonical.mkdir(parents=True)
+        production._require_bound_state_root(canonical.resolve())  # must not raise
+
+    def test_a_noncanonical_root_holding_manifest_entries_is_still_accepted(self):
+        """The second half of the two-sided binding: the fixtures' throwaway roots are not named
+        `review-transcripts`, and a genuinely resumable run always has entries left — so the presence of
+        a manifest entry is itself the evidence that this is the tree the manifest describes."""
+        state_root, _objects = self.make_state_tree()
+        production._require_bound_state_root(Path(state_root).resolve())  # must not raise
+
     def test_the_nine_parents_are_opened_once_each_not_once_per_entry(self):
         """The first defect, asserted on the mechanism rather than on a comment.
 

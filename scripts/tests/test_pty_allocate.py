@@ -266,11 +266,41 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
             def accept_target(value):
                 return True if value == "bad value" else real_validator(value)
 
+            # THE ROUND HAS A SECOND SHARED VALIDATOR, and the binding property covers it too. The
+            # generic grammar accepts `[A-Za-z0-9._-]+`, so a round like `round-1` allocated a leaf that
+            # `review-verdict.py` refuses only AFTER a full review has run — `is_valid_round_component`
+            # is the named validator that closes that (PR #63 recheck, P2). It is patched alongside the
+            # generic one so this cell still proves "the allocator's decision is bound to the shared
+            # validators", rather than proving the round is unconstrained.
+            patches = [mock.patch.object(self.mod, "is_valid_transcript_component",
+                                         side_effect=accept_target)]
+            if field == "round_value":
+                patches.append(mock.patch.object(self.mod, "is_valid_round_component",
+                                                 side_effect=accept_target))
+
             with self.subTest(field=field, forced="accept"), \
-                    mock.patch.object(self.mod, "is_valid_transcript_component", side_effect=accept_target), \
+                    contextlib.ExitStack() as stack, \
                     mock.patch.object(self.mod, "_generate_run_id", return_value=RUN_A):
+                for patch in patches:
+                    stack.enter_context(patch)
                 allocated = self.allocate(base=base, **kwargs)
                 self.assertIn("bad value", allocated.name)
+
+    def test_the_round_validator_is_stricter_than_the_generic_one(self):
+        """The round's extra rule must be REAL, not merely present (PR #63 recheck, P2).
+
+        `round-1` satisfies the generic component grammar — that is exactly why it allocated a leaf
+        `review-verdict.py` could never accept, after paying for the review. This asserts the two
+        validators genuinely differ, so folding the round rule back into the generic one fails here.
+        """
+        for accepted_by_both in ("1", "42", "007"):
+            self.assertTrue(self.mod.is_valid_transcript_component(accepted_by_both))
+            self.assertTrue(self.mod.is_valid_round_component(accepted_by_both))
+        for generic_only in ("round-1", "1a", "v2", "1.0", "_1"):
+            self.assertTrue(self.mod.is_valid_transcript_component(generic_only),
+                            f"{generic_only!r} should still satisfy the GENERIC grammar")
+            self.assertFalse(self.mod.is_valid_round_component(generic_only),
+                             f"{generic_only!r} is not a numeric round and must be refused")
 
     def test_M1_9_supplied_components_are_echoed_in_the_fixed_layout(self):
         """Rejects inferred, dropped, reordered, or rewritten ticket/round/reviewer fields."""
@@ -337,7 +367,11 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
                 fixed_length = len(
                     self.basename(self.mod, kwargs["ticket"], kwargs["round_value"], kwargs["reviewer"], RUN_A)
                 ) - len(kwargs[field])
-                kwargs[field] = "x" * (limit - fixed_length)
+                # DIGITS for the round, `x` elsewhere: this cell is about the basename LENGTH boundary,
+                # and the round now has a numeric grammar (PR #63 recheck, P2), so padding it with `x`
+                # would fail for a reason this cell does not test.
+                filler = "9" if field == "round_value" else "x"
+                kwargs[field] = filler * (limit - fixed_length)
                 self.assertGreater(len(kwargs[field]), 0)
 
                 with mock.patch.object(self.mod, "_generate_run_id", return_value=RUN_A) as positive_generator:
@@ -356,7 +390,9 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
                 negative_base = self.root / f"negative-{field}"
                 negative_parent = self.prepare_parent(negative_base)
                 too_long = dict(kwargs)
-                too_long[field] += "x"
+                # Same filler as above: an `x` on the round would be refused by the numeric grammar
+                # BEFORE the length check, so the assertion below would read the wrong refusal.
+                too_long[field] += filler
                 with mock.patch.object(self.mod, "_generate_run_id") as negative_generator:
                     with self.assertRaises(self.mod.AllocationError) as caught:
                         self.allocate(base=negative_base, **too_long)
