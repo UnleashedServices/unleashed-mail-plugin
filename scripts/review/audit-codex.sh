@@ -55,20 +55,34 @@ AUDIT_OUT="$(mktemp "${TMPDIR:-/tmp}/codex-audit.XXXXXX")" || die "could not all
 # `containment.py` is the SAME module `bind-prompt.py` uses. That sharing is the actual fix: the
 # prompt-operand hole was closed a day earlier and this sibling — written in the same batch — did not
 # inherit it, because the rule lived inside the other script.
+# SNAPSHOT THE OPERANDS, do not just validate them (PR #63 recheck, P1). Validating with
+# `containment.py` and then handing codex the repo-relative PATH left a validate-then-open race: a
+# same-account process replaced an accepted file with a symlink to an outside secret between the check
+# and codex's open, and `codex exec -s read-only` followed it and disclosed the outside file. Reproduced
+# end to end. `snapshot-operands.py` validates AND reads each operand through one `O_NOFOLLOW` descriptor
+# into a private disposable tree, and codex is pointed at those immutable copies — no later swap can
+# change what it reads, and a swap landing during the read is refused rather than followed. `-s
+# read-only` stops writes; it was never a validate-then-open boundary.
 CONTAINED=""
+SNAP_DIR=""
 if [ "$#" -gt 0 ]; then
-    CONTAINED="$(python3 "${SCRIPT_DIR}/containment.py" --tool "codex audit" --label "audit operand" -- "$@")" \
+    SNAP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-audit-src.XXXXXX")" || die "could not allocate a snapshot dir"
+    CONTAINED="$(python3 "${SCRIPT_DIR}/snapshot-operands.py" --tool "codex audit" --dest "$SNAP_DIR" -- "$@")" \
         || die "refusing to audit: an operand is not an in-repo file (see the message above)"
 fi
+cleanup() { [ -n "$SNAP_DIR" ] && rm -rf "$SNAP_DIR"; }
+trap cleanup EXIT
 
-# One path per line, from the VALIDATED output rather than from the caller's argv, so an operand
-# accepted in one spelling cannot be sent in another. Newlines are safe here because `containment.py`
-# rejects control characters, which is also what stops a crafted filename forging an extra operand.
+# One path per line, from the SNAPSHOT output rather than from the caller's argv, so codex opens the
+# immutable copies. Newlines are safe here because `containment.py` rejects control characters, which is
+# also what stops a crafted filename forging an extra operand.
 PROMPT="$REVIEWER"
 if [ -n "$CONTAINED" ]; then
     PROMPT="$(printf '%s\n%s' "$REVIEWER" "$CONTAINED")"
 fi
 
 printf '%s\n' "$AUDIT_OUT"
-exec python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
+# `exec` would drop the EXIT trap that cleans the snapshot dir, so run-and-propagate instead.
+python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 1200 "$AUDIT_OUT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only "$PROMPT"
+exit $?

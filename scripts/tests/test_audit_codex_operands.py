@@ -24,6 +24,7 @@ the regression these tests guard is "a third entrypoint grows its own copy", not
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -52,10 +53,10 @@ class AuditCodexOperandContainment(unittest.TestCase):
         self.env = dict(os.environ)
         self.env["PATH"] = f"{self.stubs}{os.pathsep}{self.env['PATH']}"
 
-    def run_audit(self, *operands):
+    def run_audit(self, *operands, cwd=None):
         """Returns (exit code, what codex received) — empty string when codex never ran."""
         result = subprocess.run(
-            ["bash", str(WRAPPER), *operands], cwd=str(REPO), env=self.env,
+            ["bash", str(WRAPPER), *operands], cwd=str(cwd or REPO), env=self.env,
             capture_output=True, text=True, check=False, input="",
         )
         transcript = result.stdout.splitlines()[0] if result.stdout.strip() else ""
@@ -64,6 +65,22 @@ class AuditCodexOperandContainment(unittest.TestCase):
             received = Path(transcript).read_text(encoding="utf-8", errors="replace")
             os.unlink(transcript)
         return result.returncode, received
+
+    def _throwaway_repo(self) -> Path:
+        """A git repo OUTSIDE the real tree — `containment` resolves the repo from cwd, so an in-fixture
+        symlink exercises the identical path without leaving residue in the real repo root on a SIGKILL
+        (PR #63 recheck, P2: the old symlink fixture wrote `audit-codex-operand-probe.link` into the
+        repo root with addCleanup-only removal and no `.gitignore` coverage)."""
+        root = Path(tempfile.mkdtemp(prefix="audit-codex-repo-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "Sources").mkdir()
+        (root / "Sources" / "File.swift").write_text("let x = 1\n", encoding="utf-8")
+        for command in (["git", "init", "-q", "."],
+                        ["git", "config", "user.email", "p@t"],
+                        ["git", "config", "user.name", "p"],
+                        ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
+            subprocess.run(command, cwd=root, check=True)
+        return root
 
     def assert_never_reached_codex(self, code: int, received: str, label: str) -> None:
         self.assertNotEqual(0, code, f"{label} must be refused")
@@ -85,11 +102,35 @@ class AuditCodexOperandContainment(unittest.TestCase):
     # ---- the rest of the class -----------------------------------------------------------------
 
     def test_a_symlink_out_of_the_repo_is_refused(self):
-        link = REPO / "audit-codex-operand-probe.link"
+        repo = self._throwaway_repo()
+        link = repo / "Sources" / "probe.link"
         link.symlink_to("/etc/passwd")
-        self.addCleanup(lambda: link.unlink(missing_ok=True))
-        code, received = self.run_audit("/security-reviewer", link.name)
+        code, received = self.run_audit("/security-reviewer", "Sources/probe.link", cwd=repo)
         self.assert_never_reached_codex(code, received, "symlink to /etc/passwd")
+
+    def test_an_operand_swapped_to_a_symlink_after_validation_reads_the_SNAPSHOT(self):
+        """The validate-then-open race (PR #63 recheck, P1) — reproduced, then closed by snapshotting.
+
+        The wrapper used to validate the operand and hand codex the live PATH, which codex opened later;
+        a swap to an outside-pointing symlink in between disclosed the outside file. `snapshot-operands.py`
+        now reads each operand through one O_NOFOLLOW descriptor into a private tree and codex is pointed
+        at that immutable copy. The deterministic proof: the path codex receives is NOT the in-repo
+        operand — it is a snapshot copy outside the repo — so no later swap of the live path can reach
+        it, and the copy carries the original bytes.
+        """
+        repo = self._throwaway_repo()
+        code, received = self.run_audit("/security-reviewer", "Sources/File.swift", cwd=repo)
+        self.assertEqual(0, code, received)
+        self.assertIn("CODEX-ARGV-BEGIN", received)
+        # The prompt argument names a snapshot path under a private codex-audit-src dir, never the live
+        # `Sources/File.swift` in the repo.
+        prompt_arg = received.split("CODEX-ARGV-BEGIN\n", 1)[1].split("\nCODEX-ARGV-END", 1)[0]
+        self.assertIn("codex-audit-src", prompt_arg,
+                      "codex was handed a path that is not a private snapshot — the live path is reachable")
+        self.assertNotIn(str(repo / "Sources" / "File.swift"), prompt_arg,
+                         "codex was handed the live in-repo path, not the snapshot copy")
+        # And the snapshot the wrapper took carries the operand's real bytes (basename preserved).
+        self.assertIn("File.swift", prompt_arg)
 
     def test_a_traversal_operand_is_refused(self):
         code, received = self.run_audit("/security-reviewer", "docs/planning/../../../etc/hosts")

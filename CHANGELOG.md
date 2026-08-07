@@ -445,6 +445,17 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **`audit-codex.sh` snapshots its operands, closing a validate-then-open disclosure race.** It
+  validated each operand with `containment.py` (non-symlink, regular, in-repo) and then handed codex the
+  live repo-relative PATH, which codex opened later. A same-account process that replaced an accepted
+  file with a symlink to an outside secret between the check and the open had `codex exec -s read-only`
+  follow it and disclose the outside file (PR #63 recheck, P1, reproduced). New `snapshot-operands.py`
+  validates AND reads each operand through one `O_NOFOLLOW` descriptor into a private disposable tree,
+  and codex is pointed at those immutable copies — no later swap can change what it reads, and a swap
+  landing during the read is refused rather than followed. Because the snapshot paths are absolute, this
+  also fixes the separate report that a relative operand did not resolve when the wrapper ran from a
+  subdirectory. The fixture that reproduced it no longer writes a stray symlink into the repo root — it
+  builds a throwaway git repo instead.
 - **The codex review arm now reviews an isolated checkout, so a plan swap cannot forge its verdict.**
   `capture-codex-review.sh` ran `codex exec … -s read-only` in the LIVE working tree, so the plan file
   codex opened was the mutable one. An A→B→A swap during codex's read window let it review substituted
