@@ -931,7 +931,7 @@ class DuplicatedGrammarsAgree(unittest.TestCase):
         # bind the allocator's decision to the validators so production logic cannot diverge from them.
         self.assertIn("def is_valid_round_component(", capture,
                       "the numeric-round rule must be a named shared validator, not inline logic")
-        self.assertIn("is_valid_round_component if label == \"round\"", capture,
+        self.assertIn("\"round\": is_valid_round_component,", capture,
                       "the round validator is defined but the allocator never applies it")
 
 
@@ -1031,3 +1031,39 @@ class EveryShippedPythonIsByteCompiledOn39(unittest.TestCase):
         first, second = self._compile_lines()
         self.assertEqual(first, second,
                          "the default-Python and 3.9 compile jobs check different sets of files")
+
+
+class TheTwoStagingHelpersParseTheSameBindingGrammar(unittest.TestCase):
+    """`.plan` and `.promptsha256` have one producer, one consumer and one grammar.
+
+    Both are written by `bind-prompt.py` as `<64 hex>  <identity>\\n` and both are re-parsed by
+    `review-verdict.py` with `_PLAN_BINDING`. Their staging helpers each validated the record before
+    launching a 12-28 minute reviewer, and each originally took `fields[0]` — accepting a record
+    truncated to its digest and spending the round on evidence the verdict writer would reject.
+
+    The `.plan` case was reported and fixed first; the `.promptsha256` sibling was NOT swept and had to
+    be reported separately. This gate is the sweep: the three spellings must stay identical.
+    """
+
+    PATTERN = r'rb"\A([0-9a-f]{64})  (.+)\n\Z"'
+
+    def test_all_three_spell_the_binding_the_same_way(self):
+        for rel, name in (("scripts/review-verdict.py", "_PLAN_BINDING"),
+                          ("scripts/review/stage-bound-plan.py", "_PLAN_BINDING"),
+                          ("scripts/review/stage-prompt.py", "_PROMPT_BINDING")):
+            source = _read(rel)
+            self.assertIn(f"{name} = re.compile({self.PATTERN})", source,
+                          f"{rel}'s binding grammar drifted from the other two")
+
+    def test_neither_staging_helper_takes_only_the_first_field(self):
+        """The defect itself: `fields[0]` accepts a record with no identity at all.
+
+        Asserted against the ASSIGNMENT, not the bare token — both files explain the defect in a
+        comment that names `fields[0]`, and a token search matched the explanation rather than the
+        code. Grepping prose for a code property is the mistake this suite exists to catch elsewhere.
+        """
+        for rel in ("scripts/review/stage-bound-plan.py", "scripts/review/stage-prompt.py"):
+            source = _read(rel)
+            self.assertNotIn("expected = fields[0]", source, f"{rel} parses only the digest again")
+            self.assertIn("fullmatch(record_bytes)", source,
+                          f"{rel} no longer validates the complete record")

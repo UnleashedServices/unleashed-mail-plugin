@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import stat
 import sys
 
@@ -47,6 +48,12 @@ READ_ONLY_GUARD = (
     "yourself editing a file, stop — that is a failed review.\n"
     "The full task follows immediately below; read on.\n\n"
 )
+
+
+#: `<64 hex digits><two spaces><prompt identity><newline>` — what `bind-prompt.py` writes and what
+#: `review-verdict._PLAN_BINDING` re-parses. Duplicated here rather than imported (this runs as a
+#: standalone script from shell); `test_doc_gates` pins the spellings together.
+_PROMPT_BINDING = re.compile(rb"\A([0-9a-f]{64})  (.+)\n\Z")
 
 
 def _refuse(message: str):
@@ -126,10 +133,24 @@ def main(argv=None) -> int:
     # AUTHENTICATE BEFORE TRANSFORMING. The digest names the bytes the binder validated; everything
     # below operates on those bytes or refuses. A missing record is refused rather than skipped —
     # "absent means unchecked" is the fail-open this whole family of bindings exists to close.
-    fields = _read_nofollow(arguments.record, "prompt binding record").decode("utf-8", "replace").split()
-    if not fields:
-        _refuse(f"the prompt binding record is empty: {arguments.record}")
-    expected = fields[0]
+    # THE COMPLETE GRAMMAR, not just the first field (PR #63 recheck, P2). Taking `fields[0]` accepted
+    # a record truncated to its digest alone, so both harnesses staged the snapshot and spent a full
+    # 12-28 minute review — and `review-verdict.py`, which parses this same sidecar with `_PLAN_BINDING`
+    # and requires `<digest>  <prompt identity>\n`, then rejected the approval. A round guaranteed to be
+    # unusable must fail here, in milliseconds.
+    #
+    # THIS IS THE SIBLING I FAILED TO SWEEP. The identical defect was reported and fixed for
+    # `<transcript>.plan` in `stage-bound-plan.py` one commit earlier; `.promptsha256` has the same
+    # producer, the same consumer and the same grammar, and I fixed one of the two. Both staging
+    # helpers now parse with the same pattern.
+    record_bytes = _read_nofollow(arguments.record, "prompt binding record")
+    match = _PROMPT_BINDING.fullmatch(record_bytes)
+    if match is None:
+        _refuse(
+            "the prompt binding record is malformed — expected '<64 hex digits>  <prompt path>' and a "
+            f"newline: {arguments.record}"
+        )
+    expected = match.group(1).decode("ascii")
     actual = hashlib.sha256(payload).hexdigest()
     if actual != expected:
         _refuse(

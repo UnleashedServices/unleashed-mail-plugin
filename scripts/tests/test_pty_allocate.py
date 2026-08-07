@@ -357,7 +357,14 @@ class M1ComponentAndLayoutTests(AllocatorFixture):
         then fail to write that sibling (deep review, codex inline). A hardcoded copy cannot see the
         tuple grow; the assertion below now exercises whichever suffix is currently longest.
         """
-        for field in ("ticket", "round_value", "reviewer"):
+        # The REVIEWER is padded elsewhere. Its length is bounded twice, and the tighter bound is not
+        # the filesystem's: the launch record `<run id> <reviewer>` must fit the bytes both readers
+        # read, so `_MAX_REVIEWER_LENGTH` (94) binds long before `PC_NAME_MAX` headroom (~200 here).
+        # Padding it to the basename limit asks the allocator to accept a reviewer that can never
+        # produce a usable record, and this cell would then fail on THAT rule instead of on the
+        # basename boundary it is named for. `test_pty_capture.ReviewerNamesFitTheLaunchRecord` owns
+        # the record bound, including its own at-the-limit round trip.
+        for field in ("ticket", "round_value"):
             with self.subTest(field=field):
                 positive_base = self.root / f"positive-{field}"
                 positive_parent = self.prepare_parent(positive_base)

@@ -113,6 +113,16 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
 
 ### Fixed — third recheck pass
 
+- **The allocator could reserve a leaf no capture or verdict could use.** Both readers read 128 bytes
+  of `<transcript>.launch` and then `fullmatch` the result, so a reviewer name long enough to push
+  `<run id> <reviewer>` past that bound produced a record that can never validate — `--allocate`
+  accepted a 100-character reviewer and `--allocated` immediately refused the leaf it had just
+  reserved. The bound is derived from the grammar and enforced by a named validator at allocation.
+- **`stage-prompt.py` accepted a `.promptsha256` truncated to its digest** — the SIBLING of the
+  `.plan` case fixed one commit earlier, with the same producer, consumer and grammar. Fixing one of
+  the two and not sweeping the other is the "closing half of something" defect this campaign keeps
+  recording; a doc gate now pins all three spellings of that record grammar together.
+
 - **A validated pathname is not a pin across an `exec`.** The granted wrappers hand `review-verdict.py`
   the path `containment.py` resolved, but resolution happens again in that second process — so a
   same-account swap of `docs/planning` for a symlink in the window between them sent every state write

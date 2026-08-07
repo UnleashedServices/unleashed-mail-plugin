@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1535",
+      "location": "CHANGELOG.md:1545",
       "path": "CHANGELOG.md",
-      "line": 1535,
+      "line": 1545,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -220,7 +220,7 @@
         "S-CAPTURE"
       ],
       "destination": {
-        "line": 558,
+        "line": 566,
         "payloads": [
           "            # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the"
         ],

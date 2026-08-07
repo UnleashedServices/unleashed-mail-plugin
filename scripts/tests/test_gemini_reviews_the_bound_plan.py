@@ -306,6 +306,33 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         self.assertFalse(self.probe.is_file(),
                          "the reviewer RAN on a record the verdict writer will reject")
 
+    def test_a_TRUNCATED_prompt_binding_record_is_refused_BEFORE_the_reviewer_runs(self):
+        """The SIBLING of the `.plan` case, which I fixed one commit earlier and did not sweep.
+
+        `stage-prompt.py` took `fields[0]`, so a `.promptsha256` cut down to its digest passed staging
+        and spent a full round — while `review-verdict.py` parses that same sidecar with the canonical
+        `<digest>  <prompt identity>` grammar and rejects it. Same producer, same consumer, same
+        grammar as `.plan`; fixing one of the two is the "closing half of something" defect this
+        campaign keeps recording, so both staging helpers now parse with the same pattern.
+
+        The digest is CORRECT and only the identity field is missing, isolating the grammar rule from
+        the digest-mismatch rule beside it.
+        """
+        import hashlib
+
+        honest = self.plan.read_bytes()
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r17-gemini.txt", plan_bytes=honest, recorded=honest)
+        Path(str(out) + ".promptsha256").write_text(
+            hashlib.sha256(prompt.read_bytes()).hexdigest() + "\n", encoding="utf-8")
+
+        result = self.run_harness(out, prompt)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("prompt binding record is malformed", result.stderr)
+        self.assertFalse(self.probe.is_file(),
+                         "the reviewer RAN on a record the verdict writer will reject")
+
     def test_an_honest_snapshot_still_stages(self):
         """Positive control for the digest check — it must refuse tampering, not refuse everything.
 

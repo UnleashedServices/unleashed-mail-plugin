@@ -88,6 +88,14 @@ _ALLOCATED_LEAF_RE = re.compile(
 # because its `_ALLOCATOR_BASENAME` requires `r[0-9]+`. Validating here — the one allocation path both
 # arms funnel through — makes malformed input fail in milliseconds instead of after the review.
 _ROUND_COMPONENT_RE = re.compile(r"[0-9]+")
+#: Both readers of the launch record read this many bytes and then `fullmatch` the result, so a record
+#: longer than this can never validate. The allocator therefore has to REFUSE a reviewer that would
+#: produce one, rather than reserving a leaf no capture or verdict can ever use (PR #63 recheck, P2 —
+#: reproduced: a 100-character reviewer allocated cleanly, wrote a 134-byte record, and `--allocated`
+#: immediately refused it). The bound is derived from the grammar, not restated: run id, one space, the
+#: reviewer, one newline.
+_LAUNCH_RECORD_READ_BYTES = 128
+_MAX_REVIEWER_LENGTH = _LAUNCH_RECORD_READ_BYTES - _RUN_ID_HEX_LENGTH - len(" ") - len("\n")
 
 
 def _report_overflow() -> bool:
@@ -292,7 +300,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                 )
                 return 1
             # Run id + a space + the reviewer name + newline; 128 is ample and bounds a planted file.
-            launch_bytes = os.read(launch_fd, 128)
+            launch_bytes = os.read(launch_fd, _LAUNCH_RECORD_READ_BYTES)
         except OSError as error:
             print(
                 f"pty-capture: allocated transcript's launch record is unreadable, refusing to run "
@@ -691,6 +699,18 @@ class AllocationError(RuntimeError):
 def is_valid_transcript_component(value: str) -> bool:
     """Return whether a caller-supplied path component has the S-ALLOC grammar."""
     return value not in ("", ".", "..") and _COMPONENT_RE.fullmatch(value) is not None
+
+
+def is_valid_reviewer_component(value: str) -> bool:
+    """The generic component rule, PLUS the length the launch record can carry.
+
+    The record is `<run id> <reviewer>\n` and both readers read `_LAUNCH_RECORD_READ_BYTES` and then
+    `fullmatch`, so a longer reviewer produces a record that can never validate. Without this the
+    allocator reserved a leaf, wrote the oversized record and returned 0 — and the very next step,
+    `--allocated`, refused it as malformed. A reservation no capture or verdict can use is worse than
+    a refusal, because it consumes the round (PR #63 recheck, P2 — reproduced with 100 characters).
+    """
+    return is_valid_transcript_component(value) and len(value) <= _MAX_REVIEWER_LENGTH
 
 
 def is_valid_round_component(value: str) -> bool:
@@ -1101,14 +1121,21 @@ def allocate_transcript(
     }
     for label, value in values.items():
         # The round is validated by its own shared validator, which subsumes the generic one.
-        checker = is_valid_round_component if label == "round" else is_valid_transcript_component
+        checker = {
+            "round": is_valid_round_component,
+            "reviewer": is_valid_reviewer_component,
+        }.get(label, is_valid_transcript_component)
         if not checker(value):
-            raise AllocationError(
-                f"invalid {label} component: {value!r}"
-                + (" — the round must be digits only, because review-verdict.py's allocator grammar "
-                   "requires `r<digits>` and would reject the transcript AFTER the review had run"
-                   if label == "round" else "")
-            )
+            reason = ""
+            if label == "round":
+                reason = (" — the round must be digits only, because review-verdict.py's allocator "
+                          "grammar requires `r<digits>` and would reject the transcript AFTER the "
+                          "review had run")
+            elif label == "reviewer" and len(value) > _MAX_REVIEWER_LENGTH:
+                reason = (f" — at most {_MAX_REVIEWER_LENGTH} characters, because the launch record "
+                          f"`<run id> <reviewer>` must fit the {_LAUNCH_RECORD_READ_BYTES} bytes both "
+                          "readers read; a longer one allocates a leaf that `--allocated` then refuses")
+            raise AllocationError(f"invalid {label} component: {value!r}" + reason)
 
     env = dict(os.environ if environ is None else environ)
     diagnostics = sys.stderr if diagnostic_stream is None else diagnostic_stream

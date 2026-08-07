@@ -986,3 +986,56 @@ class EveryDrainPathHonoursTheCap(unittest.TestCase):
     def test_the_overflow_exit_status_is_distinct_from_the_timeout(self):
         """125, not 124: a runaway must not read as a slow reviewer."""
         self.assertIn("exit_status = 125", self.SOURCE)
+
+
+class ReviewerNamesFitTheLaunchRecord(unittest.TestCase):
+    """The allocator could reserve a leaf no capture or verdict could ever use.
+
+    THE FINDING (PR #63 recheck, P2). Both readers read `_LAUNCH_RECORD_READ_BYTES` and then
+    `fullmatch` the result, so a reviewer long enough to push `<run id> <reviewer>\\n` past that bound
+    produces a record that can never validate. `--allocate` accepted a 100-character reviewer, wrote a
+    134-byte record and returned 0; `--allocated` then refused it as malformed. A reservation that
+    cannot be used is worse than a refusal, because it consumes the round.
+
+    The bound is DERIVED from the grammar in the module under test, never restated here — a fixture
+    that hardcoded 94 would keep passing if the read size changed underneath it.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        home = os.path.join(self.d, "home")
+        os.makedirs(home, mode=0o700)
+        self.env = {"XDG_STATE_HOME": os.path.join(self.d, "state"), "HOME": home}
+
+    def allocate(self, reviewer):
+        return self.mod.allocate_transcript("H", "COREDEV-1", "1", reviewer, environ=self.env)
+
+    def test_a_reviewer_that_would_overflow_the_record_is_refused_with_NO_leaf_reserved(self):
+        over = "g" * (self.mod._MAX_REVIEWER_LENGTH + 1)
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.allocate(over)
+        self.assertIn("launch record", str(caught.exception))
+        state = os.path.join(self.d, "state")
+        leaves = []
+        for root, _dirs, files in os.walk(state):
+            leaves += [f for f in files if f.endswith(".txt")]
+        self.assertEqual([], leaves, "a leaf was reserved for a reviewer that can never validate")
+
+    def test_a_reviewer_AT_the_limit_allocates_and_the_capture_accepts_it(self):
+        """The round trip is the property: allocation and the preflight must agree at the boundary."""
+        at_limit = "g" * self.mod._MAX_REVIEWER_LENGTH
+        leaf = self.allocate(at_limit)
+        record = Path(leaf + ".launch").read_bytes()
+        self.assertEqual(self.mod._LAUNCH_RECORD_READ_BYTES, len(record))
+        self.assertIsNotNone(self.mod._LAUNCH_RECORD_RE.fullmatch(record),
+                             "the record at the boundary does not satisfy the allocator's own grammar")
+        marker = os.path.join(self.d, "ran")
+        result = subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", leaf, "--",
+             "sh", "-c", f"echo ran > {marker}; echo hi"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(os.path.exists(marker), "the preflight refused a record the allocator wrote")
