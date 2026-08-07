@@ -19,6 +19,8 @@ from typing import Dict, List, Optional, Tuple
 REPO = Path(__file__).resolve().parents[2]
 ALLOCATE = REPO / "scripts" / "review" / "allocate-transcript.sh"
 ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
+ISOLATED_CODEX = REPO / "scripts" / "review" / "isolated-codex-review.sh"
+STAGE_BOUND_PLAN = REPO / "scripts" / "review" / "stage-bound-plan.py"
 PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
 REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
@@ -91,7 +93,11 @@ import pathlib
 import sys
 
 args = sys.argv[1:]
-if args and pathlib.Path(args[0]).name == "isolated-agy-review.sh":
+# Both isolation harnesses are logged: the codex arm now runs `isolated-codex-review.sh` for the same
+# reason the gemini arm runs `isolated-agy-review.sh` — review a disposable checkout with the bound
+# plan staged, never the live file (PR #63 recheck, P1). Symmetric handling here keeps the helper-log
+# assertions symmetric.
+if args and pathlib.Path(args[0]).name in ("isolated-agy-review.sh", "isolated-codex-review.sh"):
     with open(os.environ["THREAD_HELPER_LOG"], "a", encoding="utf-8") as stream:
         stream.write(json.dumps(args) + "\n")
     clean_env = dict(os.environ)
@@ -228,6 +234,11 @@ class TranscriptThreadingFixture(unittest.TestCase):
         library_dir.mkdir()
         shutil.copy2(ALLOCATE, review_dir / ALLOCATE.name)
         shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
+        shutil.copy2(ISOLATED_CODEX, review_dir / ISOLATED_CODEX.name)
+        # The shared plan-staging helper BOTH isolation harnesses call. A relocated-copy fixture that
+        # lists files by hand does not learn about a new sibling on its own — the codex arm's isolation
+        # would fail with a missing-file error without it (the same lesson as containment.py below).
+        shutil.copy2(STAGE_BOUND_PLAN, review_dir / STAGE_BOUND_PLAN.name)
         shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
         shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
         shutil.copy2(BIND_PROMPT, review_dir / BIND_PROMPT.name)
@@ -476,8 +487,21 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         expected_prefix = str(hostile_base.resolve()) + os.sep
         self.assertTrue(gemini_path.startswith(expected_prefix), gemini_path)
         self.assertTrue(codex_path.startswith(expected_prefix), codex_path)
-        self.assertEqual([], codex_helpers)
+        # BOTH arms now go through an isolation harness, so both leave exactly one helper record with
+        # the five-operand contract (harness, prompt SNAPSHOT, transcript, timeout, plan). The codex arm
+        # gained the gemini arm's isolation so a plan swap cannot reach the reviewer (PR #63 recheck, P1).
         self.assertEqual(1, len(gemini_helpers), gemini_helpers)
+        self.assertEqual(1, len(codex_helpers), codex_helpers)
+        self.assertEqual(
+            [
+                str(self.plugin / "scripts" / "review" / "isolated-codex-review.sh"),
+                codex_path + ".prompt",
+                codex_path,
+            ],
+            codex_helpers[0][:3],
+        )
+        self.assertEqual(5, len(codex_helpers[0]), codex_helpers[0])
+        self.assertEqual(PLAN_RELATIVE, codex_helpers[0][4], "the bound plan is not handed to the codex harness")
         # The first three operands are a fixed contract. The timeout is NOT asserted as a literal --
         # see _assert_recipe_timeout_exceeds_print_timeout below for why.
         #

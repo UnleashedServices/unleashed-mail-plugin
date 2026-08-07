@@ -144,169 +144,24 @@ if [ -n "$PLAN_REL" ]; then
     # sidecar and the final digest described the restored bytes. The old `cmp` re-opened that same path
     # and so proved only that two reads agreed at copy time (PR #63 recheck, P1).
     PLAN_SNAPSHOT="${OUT}.planbytes"
+    # STAGING IS THE SHARED HELPER, not inline python — the codex arm ran in the live tree because the
+    # gemini fix lived only here, and a rule in one script is a rule the next entrypoint will not have.
+    # `stage-bound-plan.py` authenticates the snapshot against its `.plan` record, reads it once through
+    # an O_NOFOLLOW descriptor, and writes it through a no-follow descriptor walk (a materialized symlink
+    # leaf or parent is refused). It prints the digest of what it staged, which anchors the post-run
+    # basis check below (PR #63 recheck, P1).
     if [ -r "$PLAN_SNAPSHOT" ]; then
-        # AUTHENTICATE THE SNAPSHOT AGAINST ITS RECORD, and deliver the bytes that were authenticated.
-        # `cp` followed by `cmp` compared the snapshot only with its own copy: a same-account process
-        # rewriting `.planbytes` between the binder returning and this staging was read by BOTH, so the
-        # comparison passed and `agy` reviewed substituted bytes. Nothing downstream caught it either —
-        # `review-verdict.py` validates the `.plan` RECORD against the live plan and never hashes
-        # `.planbytes` — so that review could approve the original plan (PR #63 recheck, P1).
-        #
-        # This is the fifth "recorded and never compared" on this branch: `.plan` carried the digest of
-        # these exact bytes the whole time and nothing read it. One descriptor, read once, hashed and
-        # written — so the bytes the reviewer receives are provably the bytes the record attests to,
-        # with no second open to race.
-        #
-        # The authenticated digest is CAPTURED, because the round is not done with it: the post-run
-        # basis check below re-verifies the staged copy against this value, which is what catches a
-        # reviewer that rewrites the plan mid-review (PR #63 recheck, P1 — see below).
-        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_SNAPSHOT" "${OUT}.plan" "$TREE" "$PLAN_REL" <<'PY'
-
-import hashlib
-import os
-import stat
-import sys
-
-snapshot, record, tree_root, rel = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-
-
-def read_nofollow(path: str, label: str) -> bytes:
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as error:
-        sys.exit(f"cannot read the {label}: {path}: {error}")
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            sys.exit(f"the {label} is not a regular file: {path}")
-        parts = []
-        while True:
-            chunk = os.read(fd, 1 << 20)
-            if not chunk:
-                break
-            parts.append(chunk)
-    finally:
-        os.close(fd)
-    return b"".join(parts)
-
-
-def stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
-    """Write `payload` to tree_root/rel, refusing to traverse ANY symlink component.
-
-    `git worktree add --detach` recreates committed symlinks, so neither the leaf nor a parent can be
-    trusted to be a real path just because we made the tree. Every directory is opened
-    O_DIRECTORY|O_NOFOLLOW relative to the previous one (a symlinked parent fails ELOOP), and the leaf
-    is unlinked-without-following then created O_CREAT|O_EXCL|O_NOFOLLOW — so a materialized symlink
-    leaf is removed as a link, never written through.
-    """
-    components = [c for c in rel.split("/") if c and c != "."]
-    if not components or ".." in components:
-        sys.exit(f"refusing an unsafe staging path: {rel}")
-    dir_fd = os.open(tree_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for comp in components[:-1]:
-            try:
-                os.mkdir(comp, 0o755, dir_fd=dir_fd)
-            except FileExistsError:
-                pass
-            next_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
-            os.close(dir_fd)
-            dir_fd = next_fd
-        leaf = components[-1]
-        try:
-            os.unlink(leaf, dir_fd=dir_fd)   # never follows; removes a materialized symlink as a link
-        except FileNotFoundError:
-            pass
-        fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
-        try:
-            written = 0
-            while written < len(payload):
-                written += os.write(fd, payload[written:])
-        finally:
-            os.close(fd)
-    finally:
-        os.close(dir_fd)
-
-
-payload = read_nofollow(snapshot, "bound plan snapshot")
-fields = read_nofollow(record, "plan binding record").decode("utf-8", "replace").split()
-if not fields:
-    sys.exit(f"the plan binding record is empty, so the snapshot cannot be authenticated: {record}")
-expected, actual = fields[0], hashlib.sha256(payload).hexdigest()
-if actual != expected:
-    sys.exit(
-        "the bound plan snapshot does not match its recorded digest — refusing to review substituted "
-        f"bytes: {snapshot} hashes {actual[:12]}…, {record} records {expected[:12]}…"
-    )
-stage_no_follow(tree_root, rel, payload)
-print(actual)
-PY
-)" || exit 1
+        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
+            --tree "$TREE" --rel "$PLAN_REL" --snapshot "$PLAN_SNAPSHOT" --record "${OUT}.plan")" \
+            || exit 1
     else
         # No snapshot: an older capture, or a direct call. Fall back to the live path and SAY SO, rather
-        # than silently accepting the weaker guarantee. Still staged through the SAME no-follow descriptor
-        # walk — the symlink-leaf escape does not depend on where the bytes came from. The digest of what
-        # was ACTUALLY staged anchors the post-run basis check — weaker provenance, same integrity.
+        # than silently accepting the weaker guarantee. Same no-follow staging — the symlink-leaf escape
+        # does not depend on where the bytes came from.
         echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
-        EXPECTED_PLAN_SHA="$(python3 - "$PLAN_REL" "$TREE" "$PLAN_REL" <<'PY'
-import hashlib
-import os
-import stat
-import sys
-
-live, tree_root, rel = sys.argv[1], sys.argv[2], sys.argv[3]
-
-
-def read_nofollow(path: str) -> bytes:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            sys.exit(f"the plan is not a regular file: {path}")
-        chunks = []
-        while True:
-            chunk = os.read(fd, 1 << 20)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    finally:
-        os.close(fd)
-    return b"".join(chunks)
-
-
-def stage_no_follow(tree_root: str, rel: str, payload: bytes) -> None:
-    components = [c for c in rel.split("/") if c and c != "."]
-    if not components or ".." in components:
-        sys.exit(f"refusing an unsafe staging path: {rel}")
-    dir_fd = os.open(tree_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for comp in components[:-1]:
-            try:
-                os.mkdir(comp, 0o755, dir_fd=dir_fd)
-            except FileExistsError:
-                pass
-            next_fd = os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
-            os.close(dir_fd)
-            dir_fd = next_fd
-        leaf = components[-1]
-        try:
-            os.unlink(leaf, dir_fd=dir_fd)
-        except FileNotFoundError:
-            pass
-        fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
-        try:
-            written = 0
-            while written < len(payload):
-                written += os.write(fd, payload[written:])
-        finally:
-            os.close(fd)
-    finally:
-        os.close(dir_fd)
-
-
-payload = read_nofollow(live)
-stage_no_follow(tree_root, rel, payload)
-print(hashlib.sha256(payload).hexdigest())
-PY
-)" || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
+        EXPECTED_PLAN_SHA="$(python3 "${SCRIPT_DIR}/stage-bound-plan.py" \
+            --tree "$TREE" --rel "$PLAN_REL" --live "$PLAN_REL")" \
+            || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
     fi
 fi
 

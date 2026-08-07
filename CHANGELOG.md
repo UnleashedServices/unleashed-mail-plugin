@@ -445,6 +445,19 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **The codex review arm now reviews an isolated checkout, so a plan swap cannot forge its verdict.**
+  `capture-codex-review.sh` ran `codex exec … -s read-only` in the LIVE working tree, so the plan file
+  codex opened was the mutable one. An A→B→A swap during codex's read window let it review substituted
+  bytes while `.plan` and the live plan both still hashed A, and `review-verdict` authenticates only
+  the live plan — so the artifact attested a plan the reviewer never read (PR #63 recheck, P1,
+  reproduced end to end). The gemini arm already isolated its review into a detached checkout with the
+  authenticated `.planbytes` staged; the codex arm never inherited it — the exact "a rule that lives in
+  one script is a rule the next entrypoint will not have" failure. New `isolated-codex-review.sh` runs
+  codex against a disposable detached checkout, and the plan staging both arms use is now the shared
+  `stage-bound-plan.py` (authenticate `.planbytes` against `.plan`, read once through `O_NOFOLLOW`,
+  write through a no-follow descriptor walk) — so the fix cannot diverge between the arms again. The M5
+  transcript-path contract and the threading fixtures now assert both arms symmetrically, and a
+  cross-arm test drives the same substitution attack through each.
 - **The model-reachable grant validator closed three fail-open spellings.** (PR #63 recheck, P2, all
   measured passing.) (1) A shell operator glued to the entrypoint with no space —
   `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /)` — rode inside a single word that the post-target

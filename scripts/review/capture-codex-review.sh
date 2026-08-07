@@ -53,7 +53,6 @@ die() { printf 'codex review: %s\n' "$1" >&2; exit 1; }
 [ -s "$PROMPT" ] || die "prompt file is EMPTY: $PROMPT"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
 # RETRIES MUST RE-ALLOCATE, and must never delete the reserved leaf. The allocator creates it 0-byte
 # and `pty-capture.py --allocated` opens it WITHOUT O_CREAT, so removing it makes the final write fail
@@ -86,11 +85,12 @@ python3 "${SCRIPT_DIR}/bind-prompt.py" \
     --prompt "$PROMPT" --transcript "${CODEX_TRANSCRIPT}" --plan "$PLAN" \
     || die "refusing to review: the prompt/plan binding could not be established"
 #
-# FEED THE SNAPSHOT, NOT THE CALLER'S PATH. `bind-prompt.py` copied the validated bytes to
-# `<transcript>.prompt` under O_EXCL. Re-reading "$PROMPT" here would reopen the name AFTER the binder
-# blessed it, so replacing the file in between changed what the reviewer saw while both sidecars still
-# described the old bytes; and because the prompt filename is only per-ROUND, two runs sharing a ticket
-# and round shared that file outright. The snapshot carries the transcript's unique run identity, so
-# neither is reachable (PR #63 recheck, P1).
-exec python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout "$TIMEOUT" --allocated "$CODEX_TRANSCRIPT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat "${CODEX_TRANSCRIPT}.prompt")"
+# ISOLATE LIKE THE GEMINI ARM (PR #63 recheck, P1). codex used to run `-s read-only` in the LIVE tree,
+# so the plan file it opened was the mutable working-tree one: an A->B->A swap during codex's read
+# window let it review substituted bytes while `.plan` and the live plan both still hashed A, and the
+# artifact attested a plan the reviewer never read. `isolated-codex-review.sh` runs codex against a
+# disposable detached checkout with the authenticated `.planbytes` staged in through the SHARED
+# `stage-bound-plan.py` — the same isolation and the same staging the gemini arm uses, so the two arms
+# cannot drift again. It feeds the prompt SNAPSHOT (the O_EXCL `.prompt`), never the caller's path.
+exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \
+    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"

@@ -113,7 +113,11 @@ class CapturePromptBindingTests(unittest.TestCase):
         self.plan.write_text("# fixture plan\n", encoding="utf-8")
         for name, payload in (
             ("allocate-transcript.sh", ALLOCATOR_STUB),
+            # BOTH isolation harnesses are stubbed: the codex arm now execs `isolated-codex-review.sh`
+            # for the same reason the gemini arm execs `isolated-agy-review.sh`. These tests exercise
+            # the prompt/plan BINDING, not the isolation, so the simple capture stub stands in for both.
             ("isolated-agy-review.sh", CAPTURE_STUB_SH),
+            ("isolated-codex-review.sh", CAPTURE_STUB_SH),
         ):
             (self.review / name).write_text(payload, encoding="utf-8")
             (self.review / name).chmod(0o755)

@@ -121,11 +121,12 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         self.assertEqual(1, argv.count(allocated))
         self.assertTrue(Path(allocated).is_file())
 
-        if reviewer == "gemini":
-            self.assertEqual(1, len(helper_records), helper_records)
-            self.assertEqual(allocated, helper_records[0][2])
-        else:
-            self.assertEqual([], helper_records)
+        # BOTH arms now route through an isolation harness (`isolated-agy-review.sh` /
+        # `isolated-codex-review.sh`), so both leave exactly one helper record carrying the allocated
+        # path as the harness's second positional argument (PR #63 recheck, P1 — the codex arm gained
+        # the gemini arm's isolation). Asserted symmetrically so a future divergence fails here.
+        self.assertEqual(1, len(helper_records), helper_records)
+        self.assertEqual(allocated, helper_records[0][2])
         return allocated
 
     def captured_pair(
@@ -319,9 +320,14 @@ class M51AndM52PropagationProofs(M5PathFixture):
             # The timeout operand is deliberately NOT part of either anchor. The mutation under test
             # is the re-derived transcript PATH; including the timeout pinned an unrelated literal,
             # so retuning it broke this test for a reason it does not test (PR #63 review, gap 12).
+            # Re-anchored when the codex arm gained the gemini arm's isolation: it now execs
+            # `isolated-codex-review.sh` with the transcript operand, symmetric with gemini below. The
+            # mutant re-derives that operand, which is exactly what M5.2 forbids.
             "codex": (
-                '--allocated "$CODEX_TRANSCRIPT" -- \\\n',
-                '--allocated "${XDG_STATE_HOME}/derived-codex.txt" -- \\\n',
+                'exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \\\n'
+                '    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
+                'exec bash "${SCRIPT_DIR}/isolated-codex-review.sh" \\\n'
+                '    "${CODEX_TRANSCRIPT}.prompt" "${XDG_STATE_HOME}/derived-codex.txt" "$TIMEOUT" "$PLAN"',
             ),
             # Re-anchored when the arm began handing the prompt SNAPSHOT instead of the caller's
             # path: the operand is now `"${GEMINI_TRANSCRIPT}.prompt"`. The mutant is unchanged in

@@ -171,9 +171,14 @@ def _contract_problems(location: str, contracts: list[str], payloads: list[bytes
     # `--allocated`, and a comment mentioning the wrapper does not.
     if "S-WRAPPER" in contracts and b"allocate-transcript.sh" not in joined:
         problems.append(f"{location}: destination lacks S-WRAPPER allocation")
+    # `CODEX_TRANSCRIPT` joins `GEMINI_TRANSCRIPT` as accepted evidence: the codex arm now hands its
+    # allocated leaf to `isolated-codex-review.sh` exactly as the gemini arm hands it to
+    # `isolated-agy-review.sh` (COREDEV-2642, P1 — the `--allocated` write moved into the shared
+    # isolation harness for both arms), so the capture recipe shows the threaded transcript name rather
+    # than `--allocated` directly. Symmetric with the gemini whitelist entry.
     if "S-CAPTURE" in contracts and not any(
         token in joined
-        for token in (b"--allocated", b"GEMINI_TRANSCRIPT", b"allocated", b"reserved")
+        for token in (b"--allocated", b"GEMINI_TRANSCRIPT", b"CODEX_TRANSCRIPT", b"allocated", b"reserved")
     ):
         problems.append(f"{location}: destination lacks S-CAPTURE evidence")
     # `REVIEWER_SPEC` replaces `PERSIST_SPEC`: the synthesis recipe no longer classifies the spec

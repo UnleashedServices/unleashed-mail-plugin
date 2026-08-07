@@ -186,6 +186,7 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
         # the cap that actually governs a gate round went unchecked. Assert BOTH homes.
         src = _read("skills/codex-review/SKILL.md")
         helper = _read("scripts/review/capture-codex-review.sh")
+        isolated = _read("scripts/review/isolated-codex-review.sh")
         audit = _read("scripts/review/audit-codex.sh")
         self.assertIn(
             "--timeout 1200", audit,
@@ -200,11 +201,23 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
             "the helper's default cap must be 1200s (the operand INDEX is not pinned — it moved when "
             "the plan operand was added, and pinning it made this cell fail for an unrelated reason)",
         )
+        # The cap now threads capture-codex -> isolated-codex-review.sh -> pty-capture (COREDEV-2642, the
+        # codex arm gained the gemini arm's isolation). Assert it is HANDED to the isolation harness and
+        # that the harness PASSES it to pty-capture — the pty cap that governs a gate round lives there.
         self.assertIn(
-            '--timeout "$TIMEOUT"', helper,
-            "the helper must pass its cap through to pty-capture",
+            'isolated-codex-review.sh" \\\n    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
+            helper, "the helper must hand its cap to the codex isolation harness",
         )
-        for label, text in (("skill", src), ("helper", helper), ("audit wrapper", audit)):
+        self.assertRegex(
+            isolated, r'TIMEOUT="\$\{\d+:-1200\}"',
+            "the codex isolation harness must default the cap to 1200s",
+        )
+        self.assertIn(
+            '--timeout "$TIMEOUT"', isolated,
+            "the codex isolation harness must pass its cap through to pty-capture",
+        )
+        for label, text in (("skill", src), ("helper", helper),
+                            ("isolation harness", isolated), ("audit wrapper", audit)):
             self.assertNotIn(
                 "--timeout 600", text,
                 f"codex-review {label} must not keep the 600s cap that SIGTERMs xhigh",
