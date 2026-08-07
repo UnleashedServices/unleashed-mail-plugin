@@ -195,9 +195,9 @@ is an accident that looks like compliance.
 
 | Ticket | What shipped | Gate outcome on the shipped bytes |
 |---|---|---|
-| `COREDEV-2619` | per-run transcript paths | gated; the PR body already discloses its exception |
-| `COREDEV-2639` | effort floor | gated |
-| `COREDEV-2497` | citation re-anchor | gated |
+| `COREDEV-2619` | per-run transcript paths | **EXCEPTION, NOT GATED.** The plan's status line reads `NOT GATED`; approving rounds never landed simultaneously and no Combined-verdict artifact exists. "Gated; the PR body discloses its exception" was self-contradictory — a gate pass and an exception are alternatives, not a pair. |
+| `COREDEV-2639` | effort floor | **NO PLAN, SO NO GATE.** There is no `COREDEV-2639` plan in `docs/planning/`. The Jira "full gate green" enumerated a validator/test sweep and was later relabelled a Plan Review Gate pass without evidence. |
+| `COREDEV-2497` | citation re-anchor | **RE-GATE REQUIRED**, per the plan's own status line. Earlier rounds gated earlier bytes. Note the scope split: the plan file covers `verify`-re-checks-transcripts, which is NOT implemented (an ad-hoc attempt was reverted in `1052981`); the citation re-anchor is a separate piece. |
 | `COREDEV-2605` | `AGENT_CONTRACTS.md` §13 narrowed to client-facing output (v2.6.6, `51f6050`) | **NO PASSING GATE.** The plan's own status line records round 19 as codex `REQUEST_CHANGES` (3 High + 1 Medium), with the gemini arm emitting no parseable verdict. Nineteen rounds happened; an approving one did not. |
 | `COREDEV-2617` | plugin state split across two base directories (v2.6.5, `f4ad405`, `ecf1b9f`) | **NO REPRODUCING GATE.** Round 18's double approval FAILED reproduction at the byte-identical digest, and the re-run found a real fail-open→fail-closed regression. The plan records 18 rounds, not the 19 the CHANGELOG claimed. |
 | `COREDEV-2642` | this remediation | **NOT GATED — it is post-implementation review.** Four independent reviews plus two bot passes have run over these bytes, which is evidence, but it is not the "before implementation" gate CLAUDE.md mandates. Do not present it as one. |

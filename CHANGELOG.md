@@ -24,10 +24,21 @@ usage, not just internal hardening.
 
 **Gate disclosure.** This release is **not** gated by the mandatory pre-implementation plan-review
 process — it is post-implementation review of already-shipped code, which is evidence but not a
-substitute for the "before implementation" gate CLAUDE.md mandates. The three tickets 2.6.7 shipped
-under a passing gate (`COREDEV-2619`, `COREDEV-2639`, `COREDEV-2497`) are unaffected by that
-disclosure; it applies to `COREDEV-2642` itself. See
-`docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full per-ticket table.
+substitute for the "before implementation" gate CLAUDE.md mandates.
+
+**Correction (PR #63 recheck).** An earlier version of this paragraph called `COREDEV-2619`,
+`COREDEV-2639` and `COREDEV-2497` "the three tickets 2.6.7 shipped under a passing gate". None of the
+three supports that, and for 2619 it contradicted **this PR's own banner**, which states plainly that
+it shipped under an explicit maintainer exception with no Combined-verdict artifact. This is
+merge-decision evidence, so it is restated per ticket:
+
+| ticket | actual gate status on the shipped bytes |
+|---|---|
+| `COREDEV-2619` | **maintainer exception, not a passing gate.** Its plan's status line reads `NOT GATED`; the approving rounds never landed simultaneously and there is no artifact under `docs/planning/.verdicts/`. |
+| `COREDEV-2639` | **no plan-gate evidence exists.** There is no `COREDEV-2639` plan in `docs/planning/`, so there was nothing to gate. The "full gate green" recorded in Jira was a validator/test sweep, later relabelled a Plan Review Gate pass without supporting evidence. |
+| `COREDEV-2497` | **re-gate required**, by its own plan's status line. Earlier rounds gated earlier bytes; the current ones have not been re-gated, and its implementation has not landed. |
+
+See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full per-ticket table.
 
 ### Security
 
