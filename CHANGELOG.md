@@ -73,6 +73,14 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   third read its diff through a process substitution, where `die` exits only the subshell and the loop
   reports "no untested files" for a diff that never ran.
 
+### Removed
+
+- Five scratch probes at the repository root (`test_capture{,2,3,4,5}.py`), committed by accident in
+  `04f906d`. They printed rather than asserted and belonged to no suite. One behaviour they observed
+  was covered nowhere else — a NUMBERED-LIST prefix (`1. Remaining: X`) is prose, so it is not a
+  detail field and it aborts the Output-Contract trailer — and is now an asserting cell in
+  `mcp/review-synthesizer/tests/test_capture.py`, proven by widening the leading-marker class.
+
 ### Changed
 
 - `parse_frontmatter` normalizes every list-valued key to one comma form, whatever its YAML spelling.

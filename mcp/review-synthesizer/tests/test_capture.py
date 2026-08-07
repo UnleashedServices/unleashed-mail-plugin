@@ -544,6 +544,27 @@ class TestExtractStatus(unittest.TestCase):
         # (COREDEV-2490). It does NOT mean "face value" — that reading was the fail-open.
         self.assertIsNone(self._s("Status: BLOCKED\nBlocker Description: line one\nline two wrap\n" + jfence()))
 
+    def test_a_NUMBERED_LIST_prefix_is_prose_not_a_detail_field(self):
+        """`1. Remaining: X` is a list item in prose, not a line of the Output-Contract trailer.
+
+        `_compile_field` anchors each label at the START of the line, so a numbered prefix makes the
+        line unrecognised — and an unrecognised line ENDS the upward walk, so the trailer aborts and no
+        status is persisted. That is the strict direction: a reviewer enumerating "1. Remaining: ..."
+        inside its prose cannot have that absorbed as the contract field.
+
+        Asserted here because it was only ever observed by a scratch probe at the repository root
+        (`test_capture3.py`, committed by accident in 04f906d) that PRINTED the result rather than
+        checking it. The probes are deleted; the one behaviour none of this suite covered is not.
+        """
+        self.assertIsNone(C._match_field("1. Remaining: B.swift"))
+        self.assertEqual(("remaining", "B.swift"), C._match_field("Remaining: B.swift"))
+        # And the consequence at the level that matters: the numbered line aborts the trailer.
+        self.assertIsNone(self._s("Status: PARTIAL\n1. Remaining: B.swift\n" + jfence()))
+        self.assertEqual(
+            {"status": "PARTIAL", "remaining": "B.swift"},
+            C.extract_status("Status: PARTIAL\nRemaining: B.swift\n" + jfence()),
+        )
+
 
 class TestStatusSidecar(unittest.TestCase):
     def _cap(self, root, msg, agent="security-reviewer", agent_id="id1"):
