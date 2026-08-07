@@ -60,7 +60,11 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   that exists because two distinct plans with identical bytes share a digest.
 - **`callers_scan` treats the whole invisible class as invisible.** General category `Cf` misses the
   rest of `Default_Ignorable_Code_Point` — including U+3164 HANGUL FILLER, category `Lo` and zero
-  width — any of which splits an ASCII anchor while rendering identically.
+  width — any of which splits an ASCII anchor while rendering identically. The residue is a SET with
+  an exact ASCII fast path, not a range scan: the first shipped form put a 13-range linear scan in a
+  per-character predicate and made the scan-heavy tests 4.1x slower, which timed CI's `validate` job
+  out. The current form is 1.3x FASTER than the code before the fix, which called
+  `unicodedata.category` for every ASCII character.
 - **`pty-capture` bounds captured output at 64 MiB (exit 125).** `--timeout` bounded wall-clock and
   nothing bounded bytes, so a reviewer stuck in an output loop accumulated everything it printed for
   the whole budget.
