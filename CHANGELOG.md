@@ -117,6 +117,30 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **One review arm could satisfy the mandatory two-arm gate.** Two separately allocated **Gemini**
+  runs supplied as `gemini=` and `codex=` passed everything — freshness, the plan binding, and the
+  distinct path/digest/captureId rules — because every one of those asks whether the two entries
+  *differ*, and two real Gemini runs do. Nothing asked what either transcript **was**. The allocator
+  encodes the reviewer in the filename it reserves, so the evidence already carried the answer; it was
+  never read. Now compared, for approving verdicts only — a non-approving record blocks `implement`
+  whatever its labels say, so refusing one would discard a legitimate `REQUEST_CHANGES`.
+
+- **Three defects in the Gemini harness, all created by this release's own fixes:**
+  - **A failed review reported success.** The capture status was saved in `RC` and then discarded by a
+    successful diagnostic `echo`, so an `agy` exiting 23 printed `EXIT=23 … FAILED REVIEW` while the
+    helper returned 0 — leaving the caller unable to distinguish a completed review from an auth,
+    model or timeout failure.
+  - **The mutation detector cried wolf on the harness's own input.** Staging the bound plan
+    deliberately dirties the disposable checkout — that *is* the detached-HEAD fix — but the check
+    still compared against `HEAD`, so a reviewer that wrote nothing was reported as having written,
+    with the plan listed. It now baselines the tree after staging. This is the `COREDEV-2607` detector;
+    one that fires on its own inputs is one nobody reads.
+  - **The plan copy re-opened a mutable path.** A plan edited after binding and restored before
+    synthesis could reach the reviewer while both the sidecar and the final digest described the
+    restored bytes; the `cmp` beside it re-read that same path, so it only confirmed two reads agreed.
+    `bind-prompt.py` now retains the exact bytes it hashed in `<transcript>.planbytes` and the harness
+    stages those, falling back to the path with a warning rather than silently accepting less.
+
 - **Containment resolved the working directory, not the repository.** `repository_root()` was
   `realpath(getcwd())`, so a wrapper launched from `scripts/` treated *that* as the repository and
   refused every plan in the tree — breaking the capture, audit, snapshot and persistence entrypoints at

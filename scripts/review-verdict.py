@@ -219,7 +219,7 @@ _TRANSCRIPT_RUN_ID = re.compile(
 # so an allocated transcript that was copied or moved still classifies as per-run. That is exactly the
 # property conditioning on the DIRECTORY would have lost.
 _ALLOCATOR_BASENAME = re.compile(
-    r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-[A-Za-z0-9][A-Za-z0-9-]*-[0-9a-f]{"
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-[0-9a-f]{"
     + str(_RUN_ID_HEX_LENGTH) + r"}\.txt\Z"
 )
 _LAUNCH_RECORD = re.compile(
@@ -692,6 +692,41 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     return None
 
 
+def _reviewer_identity_mismatch(reviewers) -> "str | None":
+    """Refuse a transcript whose ALLOCATED identity is not the reviewer it is declared as.
+
+    THE QUORUM BYPASS (PR #63 recheck, P1 — reproduced). Two separately allocated GEMINI runs supplied
+    as `gemini=APPROVE:` and `codex=APPROVE:` passed everything: freshness, the plan binding, and the
+    distinct path/digest/captureId rules — because every one of those asks whether the two entries
+    DIFFER, and two real gemini runs do. Nothing asked what either transcript actually was. So one arm
+    satisfied the mandatory two-arm gate, which is the single thing the gate exists to require.
+
+    The allocator encodes the reviewer in the filename it reserves, so the answer is already carried by
+    the evidence — it just was not read. That is the same "recorded and never compared" shape as the
+    prompt digest and the bound plan identity, both closed earlier in this release.
+
+    Legacy-shaped transcripts have no encoded identity and are skipped; an APPROVING verdict already
+    requires allocator-shaped evidence, so nothing approving reaches this with an unreadable name.
+    """
+    for reviewer in reviewers:
+        if not isinstance(reviewer, dict):
+            continue
+        declared = str(reviewer.get("name", "")).strip().casefold()
+        transcript = reviewer.get("transcriptPath")
+        if not declared or not isinstance(transcript, str) or not transcript:
+            continue
+        match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))
+        if match is None:
+            continue
+        allocated = match.group("reviewer").casefold()
+        if allocated != declared:
+            return (
+                f"transcript allocated for {allocated!r} is declared as {declared!r}: {transcript}"
+                " — one arm cannot stand in for the other, which is the whole point of a dual review"
+            )
+    return None
+
+
 def _sha256_regular_file(path: str):
     """SHA-256 of a whole regular file through one O_NOFOLLOW descriptor, or None if unreadable.
 
@@ -942,7 +977,24 @@ def cmd_write(args: argparse.Namespace) -> int:
     # "duplicate capture ID" and "empty transcript". Placed before them this answered all three with
     # "not allocator-shaped" — true, but it tells the operator to re-capture when the real fault was a
     # missing operand. Two existing tests caught that regression.
+    # WHAT each transcript IS, not merely that the two differ. Every distinctness rule above compares
+    # the entries to EACH OTHER; this compares each one to ITSELF.
+    #
+    # ORDER, for the second time in this file: placed before the quorum and distinctness rules it
+    # answered "the same transcript given to both reviewers" with "mislabelled", which is true but
+    # useless — the caller's actual mistake was reusing one file, and four tests that name that rule
+    # caught the regression. The specific diagnosis wins; this is the residue.
     if verdict in APPROVING:
+        # APPROVING ONLY, matching the asymmetry the allocated-evidence rule already uses. The bypass
+        # this closes is "one arm satisfies the mandatory TWO-arm gate", which is a property of an
+        # APPROVAL — a non-approving record blocks `implement` whatever its labels say, so refusing one
+        # would discard a legitimate REQUEST_CHANGES for no gain. Two tests that pin the non-approving
+        # asymmetry caught this scope error.
+        mismatch = _reviewer_identity_mismatch(reviewers)
+        if mismatch:
+            raise SystemExit(
+                "review-verdict: refusing to write a mislabelled artifact — " + mismatch
+            )
         for reviewer in reviewers:
             transcript = reviewer.get("transcriptPath")
             if not _is_per_run_transcript(str(transcript)):

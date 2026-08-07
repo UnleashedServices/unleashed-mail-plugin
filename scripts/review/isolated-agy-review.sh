@@ -97,10 +97,23 @@ if [ -n "$PLAN_REL" ]; then
             ;;
     esac
     mkdir -p "$(dirname "$TREE/$PLAN_REL")"
-    cp "$PLAN_REL" "$TREE/$PLAN_REL" \
-        || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
-    if ! cmp -s "$PLAN_REL" "$TREE/$PLAN_REL"; then
-        echo "the review checkout's plan does not match the bound plan" >&2; exit 1
+    # STAGE THE BINDER'S SNAPSHOT, not the live path. `bind-prompt.py` kept the exact bytes it hashed
+    # in `<transcript>.planbytes`; copying the working-tree path instead re-read a mutable source, so a
+    # plan edited after binding and restored before synthesis could reach the reviewer while both the
+    # sidecar and the final digest described the restored bytes. The old `cmp` re-opened that same path
+    # and so proved only that two reads agreed at copy time (PR #63 recheck, P1).
+    PLAN_SNAPSHOT="${OUT}.planbytes"
+    if [ -r "$PLAN_SNAPSHOT" ]; then
+        cp "$PLAN_SNAPSHOT" "$TREE/$PLAN_REL" \
+            || { echo "could not stage the bound plan snapshot" >&2; exit 1; }
+        cmp -s "$PLAN_SNAPSHOT" "$TREE/$PLAN_REL" \
+            || { echo "the staged plan does not match the bound snapshot" >&2; exit 1; }
+    else
+        # No snapshot: an older capture, or a direct call. Fall back to the path and SAY SO, rather than
+        # silently accepting the weaker guarantee.
+        echo "note: no bound plan snapshot beside the transcript; staging the working-tree plan" >&2
+        cp "$PLAN_REL" "$TREE/$PLAN_REL" \
+            || { echo "could not place the bound plan in the review checkout" >&2; exit 1; }
     fi
 fi
 
@@ -145,6 +158,10 @@ if [ -s "$OUT" ]; then
     echo "(it already holds $(wc -c < "$OUT" | tr -d ' ') bytes — allocate a fresh leaf for this round)" >&2
     exit 1
 fi
+# The baseline: everything the HARNESS put in the tree (the prompt, the staged plan). Anything beyond
+# this after the run is the reviewer's doing.
+TREE_BASELINE="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+
 # Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
     agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
@@ -160,7 +177,13 @@ if [ "$BEFORE" != "$AFTER" ]; then
 fi
 
 # Informational: what it wrote inside the disposable copy, which is discarded.
-DIRTY="$(git -C "$TREE" status --porcelain 2>/dev/null | grep -v "$(basename "$PROMPT_REL")" || true)"
+# COMPARED AGAINST THE POST-STAGING BASELINE, not against HEAD. The plan copy above deliberately makes
+# the checkout dirty — that is the fix for the detached-HEAD binding — so comparing to HEAD reported the
+# HARNESS'S OWN staged input as "reviewer wrote inside the checkout", with the plan listed. A detector
+# that cries wolf on its own inputs is one nobody reads, which matters because this is the COREDEV-2607
+# detector (PR #63 recheck, P2).
+TREE_AFTER="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" | grep -v "$(basename "$PROMPT_REL")" || true)"
 [ -n "$DIRTY" ] && { echo "NOTE: reviewer wrote inside the disposable checkout (discarded):"; printf '%s\n' "$DIRTY"; }
 
 BYTES_OUT="$(wc -c < "$OUT" 2>/dev/null | tr -d ' ')"
@@ -168,3 +191,9 @@ BYTES_OUT="$(wc -c < "$OUT" 2>/dev/null | tr -d ' ')"
 # timed-out transcript and reads as a real verdict.
 VERDICT="$(grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' "$OUT" 2>/dev/null | tail -1)"
 echo "EXIT=$RC BYTES=${BYTES_OUT:-0} TREE=clean VERDICT=${VERDICT:-<none — FAILED REVIEW>}"
+# RETURN IT. The status was captured in `RC` and then thrown away by the successful `echo` above, so a
+# stub exiting 23 printed `EXIT=23 … FAILED REVIEW` while this script — and `capture-gemini-review.sh`
+# with it — reported success. The caller then could not tell a completed review from an auth, model or
+# timeout failure, which is exactly the distinction the gate depends on (PR #63 recheck, P2). The
+# mutation detector above keeps its own separate exit path; this only propagates the CAPTURE status.
+exit "$RC"

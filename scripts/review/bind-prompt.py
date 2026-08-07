@@ -235,9 +235,19 @@ def main(argv=None) -> int:
         arguments.transcript + ".promptsha256",
         f"{hashlib.sha256(prompt_bytes).hexdigest()}  {os.path.relpath(prompt, root)}\n",
     )
+    # ONE read of the plan, and the bytes are KEPT. Hashing it and letting the harness re-open the path
+    # left a window: another process could edit the plan after this digest and restore it before
+    # synthesis, so the reviewer saw transient bytes while the sidecar and the final plan digest both
+    # described the restored ones. The harness's `cmp` did not close it — it re-opened the same mutable
+    # source, confirming only that the copy matched at copy time (PR #63 recheck, P1).
+    #
+    # `<transcript>.planbytes` is the plan exactly as hashed. The harness stages THAT, so the bytes the
+    # reviewer reads and the bytes the binding attests to are the same object, not two reads of a name.
+    plan_bytes = read_nofollow(plan)
+    write_sidecar_bytes(arguments.transcript + ".planbytes", plan_bytes)
     write_sidecar(
         arguments.transcript + ".plan",
-        f"{hashlib.sha256(read_nofollow(plan)).hexdigest()}  {plan_relative}\n",
+        f"{hashlib.sha256(plan_bytes).hexdigest()}  {plan_relative}\n",
     )
     return 0
 

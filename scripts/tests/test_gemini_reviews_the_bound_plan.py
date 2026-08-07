@@ -75,7 +75,13 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         stub.write_text(AGY_STUB, encoding="utf-8")
         stub.chmod(0o755)
 
-        self.probe = self.root / "PLAN_AS_REVIEWED.txt"
+        # OUTSIDE the repository. The stub writing inside it is a reviewer mutating the checkout, which
+        # `isolated-agy-review.sh` detects and exits 3 for — correctly. That went unnoticed until the
+        # capture status began propagating: before that the harness returned 0 regardless, so the
+        # detector fired into a void. The fixture's own instrumentation must not look like the defect
+        # the harness exists to catch.
+        self.probe = Path(tempfile.mkdtemp(prefix="agy-probe-")) / "PLAN_AS_REVIEWED.txt"
+        self.addCleanup(shutil.rmtree, self.probe.parent, ignore_errors=True)
         self.env = dict(os.environ)
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
@@ -137,6 +143,32 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
             EDITED, self.probe.read_text(encoding="utf-8").strip(),
             "an absolute plan operand still leaves the reviewer reading the COMMITTED plan",
         )
+
+    def test_a_failing_reviewer_propagates_its_status(self):
+        """`isolated-agy-review.sh` captured the status in `RC` and then discarded it.
+
+        The script ended with a successful diagnostic `echo`, so a stub exiting 23 printed
+        `EXIT=23 … FAILED REVIEW` while the helper reported success — leaving the caller unable to tell
+        a completed review from an auth, model or timeout failure, which is the distinction the gate
+        depends on (PR #63 recheck, P2).
+        """
+        stub = self.root / ".stubs" / "agy"
+        stub.write_text('#!/usr/bin/env bash\nprintf "output\\n"\nexit 23\n', encoding="utf-8")
+        stub.chmod(0o755)
+        result = self.capture("7")
+        self.assertEqual(23, result.returncode, result.stdout + result.stderr)
+
+    def test_the_harness_own_staging_is_not_reported_as_a_reviewer_mutation(self):
+        """The plan copy deliberately dirties the checkout — that IS the detached-HEAD fix.
+
+        Comparing the final tree to `HEAD` therefore reported the harness's own staged input as
+        `NOTE: reviewer wrote inside the disposable checkout`, with the plan listed. A detector that
+        cries wolf on its own inputs is one nobody reads, and this is the COREDEV-2607 detector.
+        """
+        result = self.capture("8")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("reviewer wrote inside the disposable checkout",
+                         result.stdout + result.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover

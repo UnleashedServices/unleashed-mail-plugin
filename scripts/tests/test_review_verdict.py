@@ -221,8 +221,8 @@ class ReviewVerdictTest(unittest.TestCase):
         capture IDs behind ONE identical transcript must NOT waive the content-digest floor; otherwise a
         single review (or zero) manufactures a passing gemini+codex approval (GATE OK / exit 0). The floor
         now runs unconditionally: identical bytes are rejected regardless of captureId."""
-        id1 = allocated_transcript(self.d, self.plan, "id1", "one\nVERDICT: APPROVE\n")
-        id2 = allocated_transcript(self.d, self.plan, "id2", "two\nVERDICT: APPROVE\n")
+        id1 = allocated_transcript(self.d, self.plan, "gemini", "one\nVERDICT: APPROVE\n", salt="id1")
+        id2 = allocated_transcript(self.d, self.plan, "codex", "two\nVERDICT: APPROVE\n", salt="id2")
         for pth in (id1, id2):
             with open(pth, "w", encoding="utf-8") as fh:
                 fh.write("byte-identical review body\nVERDICT: APPROVE\n")   # SAME bytes -> same digest
@@ -261,8 +261,8 @@ class ReviewVerdictTest(unittest.TestCase):
         """A `.captureid` SYMLINK (a pre-seeded, attacker-chosen value) must NOT be read as authoritative
         provenance — otherwise two copied transcripts could be dressed up as distinct wrapper runs. A
         genuine sidecar is a real regular file (pty-capture writes it O_NOFOLLOW) (round 3: codex)."""
-        tx = allocated_transcript(self.d, self.plan, "sidecar" + self._testMethodName[-6:],
-                                  "review body\nVERDICT: APPROVE\n")
+        tx = allocated_transcript(self.d, self.plan, "gemini",
+                                  "review body\nVERDICT: APPROVE\n", salt=self._testMethodName)
         real_value = os.path.join(self.d, "planted-value")
         with open(real_value, "w", encoding="utf-8") as fh:
             fh.write("PLANTED-CID\n")
@@ -278,8 +278,8 @@ class ReviewVerdictTest(unittest.TestCase):
         """COREDEV-2503 F8: `_read_regular_file` bounds the read (cap+1, refuse on overflow) — a size-only
         fstat check races a grow-after-check, and a huge regular sidecar is not a genuine provenance token.
         A >64 KiB `.captureid` must be refused (treated as absent), never read wholesale."""
-        tx = allocated_transcript(self.d, self.plan, "sidecar" + self._testMethodName[-6:],
-                                  "review body\nVERDICT: APPROVE\n")
+        tx = allocated_transcript(self.d, self.plan, "gemini",
+                                  "review body\nVERDICT: APPROVE\n", salt=self._testMethodName)
         with open(tx + ".captureid", "w", encoding="utf-8") as fh:
             fh.write("A" * (65536 + 10) + "\n")   # > 64 KiB regular file
         run("snapshot", "--plan", self.plan)
@@ -373,7 +373,7 @@ class ReviewVerdictTest(unittest.TestCase):
 
     def test_two_distinct_transcripts_still_pass(self):
         """The fix must not break the legitimate case it guards."""
-        tx2 = allocated_transcript(self.d, self.plan, "codex2",
+        tx2 = allocated_transcript(self.d, self.plan, "codex",
                                    "codex said other things\nVERDICT: APPROVE\n")
         _legacy_codex = os.path.join(self.d, "codex.txt")
         with open(tx2, "w", encoding="utf-8") as fh:
@@ -1095,7 +1095,7 @@ class ReviewVerdictTest(unittest.TestCase):
         # Was a shared-`/tmp` reviewer output — the exact legacy shape an approving verdict may no
         # longer rest on.
         # The property under test (a digest IS recorded) is unchanged; the evidence has to be real.
-        t = allocated_transcript(self.d, self.plan, "digest", "VERDICT: APPROVE\n")
+        t = allocated_transcript(self.d, self.plan, "gemini", "VERDICT: APPROVE\n", salt="digest")
         self._write(reviewers=(f"gemini=APPROVE:{t}", f"codex=APPROVE:{self.tx2}"))
         with open(self._verdict_file(), encoding="utf-8") as fh:
             art = json.load(fh)
@@ -1430,6 +1430,76 @@ class LegacyNamesAreNotMistakenForAllocations(unittest.TestCase):
         open(odd, "w").close()
         open(odd + ".launch", "w").close()
         self.assertTrue(module._is_per_run_transcript(odd))
+
+
+class OneArmCannotSatisfyTheDualGate(unittest.TestCase):
+    """Two separately allocated GEMINI runs satisfied the mandatory gemini+codex quorum.
+
+    Every distinctness rule asks whether the two entries DIFFER — distinct paths, digests, capture IDs —
+    and two real gemini runs do differ. None asked what either transcript actually WAS, so one arm
+    satisfied the single thing the gate exists to require (PR #63 recheck, P1 — reproduced).
+
+    The allocator encodes the reviewer in the filename it reserves, so the evidence already carried the
+    answer; it simply was not read. Same "recorded and never compared" shape as the prompt digest and
+    the bound plan identity, both closed earlier in this release.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=self.d, check=True)
+        os.makedirs(os.path.join(self.d, "docs", "planning"))
+        self.plan_relative = "docs/planning/FEATURE_PLAN.md"
+        with open(os.path.join(self.d, self.plan_relative), "w") as fh:
+            fh.write("# Plan\n")
+
+    def _allocated(self, reviewer, salt):
+        run_id = hashlib.sha256((reviewer + salt).encode()).hexdigest()[:32]
+        path = os.path.join(self.d, f"COREDEV-9999r1-{reviewer}-{run_id}.txt")
+        with open(path, "w") as fh:
+            fh.write(f"{reviewer} {salt}\nVERDICT: APPROVE\n")
+        with open(path + ".launch", "w") as fh:
+            fh.write(run_id + "\n")
+        stamp = os.stat(path).st_mtime_ns
+        os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
+        with open(os.path.join(self.d, self.plan_relative), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        with open(path + ".plan", "w") as fh:
+            fh.write(f"{digest}  {self.plan_relative}\n")
+        payload = f"prompt {salt}\n".encode()
+        with open(path + ".prompt", "wb") as fh:
+            fh.write(payload)
+        with open(path + ".promptsha256", "w") as fh:
+            fh.write(hashlib.sha256(payload).hexdigest() + "  prompt.md\n")
+        return path
+
+    def _write(self, gemini, codex, verdict="APPROVE"):
+        run("snapshot", "--plan", self.plan_relative, cwd=self.d)
+        return run("write", "--plan", self.plan_relative, "--verdict", verdict,
+                   "--reviewer", f"gemini=APPROVE:{gemini}",
+                   "--reviewer", f"codex=APPROVE:{codex}", cwd=self.d)
+
+    def test_two_gemini_runs_cannot_pass_as_gemini_and_codex(self):
+        result = self._write(self._allocated("gemini", "one"), self._allocated("gemini", "two"))
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("mislabelled", result.stderr)
+
+    def test_a_genuine_pair_still_passes(self):
+        """Control: the rule must reject MISLABELLING, not the dual review itself."""
+        result = self._write(self._allocated("gemini", "g"), self._allocated("codex", "c"))
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_a_non_approving_record_is_not_subject_to_it(self):
+        """Deliberate asymmetry, matching the allocated-evidence rule.
+
+        The bypass is "one arm satisfies the mandatory TWO-arm gate", which is a property of an
+        APPROVAL. A non-approving record blocks `implement` whatever its labels say, so refusing one
+        would discard a legitimate REQUEST_CHANGES for no gain.
+        """
+        result = run("write", "--plan", self.plan_relative, "--verdict", "REQUEST_CHANGES",
+                     "--reviewer", f"gemini=REQUEST_CHANGES:{self._allocated('gemini', 'x')}",
+                     "--reviewer", f"codex=APPROVE:{self._allocated('gemini', 'y')}", cwd=self.d)
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 if __name__ == "__main__":

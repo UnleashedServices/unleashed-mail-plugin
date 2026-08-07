@@ -985,10 +985,24 @@ class SFreshAdditionalProofs(FreshnessFixture):
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_distinct_evidence_bypass_mutation_is_rejected(self) -> None:
+        """Isolates the QUORUM rule, which now needs BOTH guards disabled to observe.
+
+        A second mechanism began covering this case: the reviewer-identity check refuses a transcript
+        whose allocated name is not the reviewer it is declared as, and one shared transcript is
+        necessarily mislabelled for one of the two arms. With only `_quorum_problem` disabled the write
+        still failed — correct behaviour, but it stopped this cell from saying anything about the rule
+        it is named for. Disabling both restores that isolation; it does not weaken the shipped code,
+        where either guard alone rejects the duplicate (PR #63 recheck).
+        """
         mutant = _replace_once(
             self.verdict_source,
             "    problem = _quorum_problem(verdict, reviewers)\n",
             "    problem = None\n",
+        )
+        mutant = _replace_once(
+            mutant,
+            "        mismatch = _reviewer_identity_mismatch(reviewers)\n",
+            "        mismatch = None\n",
         )
         result = self.run_duplicate_evidence(mutant, "distinct-evidence-bypassed")
         with self.assertRaises(AssertionError):
