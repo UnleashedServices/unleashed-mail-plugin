@@ -117,6 +117,21 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
   `review-verdict.py write` now also checks the snapshot against `.promptsha256`, which nothing had
   ever read. (`cmd_verify` is deliberately untouched — that is `COREDEV-2497`'s territory.)
 
+- **Containment resolved the working directory, not the repository.** `repository_root()` was
+  `realpath(getcwd())`, so a wrapper launched from `scripts/` treated *that* as the repository and
+  refused every plan in the tree — breaking the capture, audit, snapshot and persistence entrypoints at
+  once, since all four share the helper. It resolves `git rev-parse --show-toplevel` now, and **fails
+  closed outside a worktree**: with no repository there is no boundary to enforce, and falling back to
+  the working directory would restore exactly this bug. This is the fourth false refusal this recheck
+  surfaced — each one a guard right about the danger and wrong about the boundary.
+
+- **Shell operators after an allowlisted wrapper went unexamined.** Reaching an in-root entrypoint was
+  treated as the whole answer, so `&& rm *`, `; rm -rf *`, `$(rm *)`, a redirection and a pipe all
+  passed while strict CI reported the tree clean — the policy promises one exact reviewed entrypoint,
+  and that promise only holds if nothing can be appended to it. **Stated residual:** a compound grant
+  with *no* wildcard is still exempt, because the analysis is scoped to wildcards by an explicit
+  decision recorded in the module; a test now pins that boundary so it cannot be mistaken for covered.
+
 - **An allocation base owned by another user was accepted.** `os.access` answers "may I write here",
   never "is this mine" — so an attacker-created mode-0777 directory under `/tmp` passed, and the
   allocator then placed its 0700 subtree beneath a parent whose owner could rename or replace it

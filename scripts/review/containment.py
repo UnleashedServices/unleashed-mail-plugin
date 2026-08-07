@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import stat
+import subprocess
 import sys
 
 TOOL = "containment"
@@ -35,8 +36,33 @@ def refuse(reason: str):
 
 
 def repository_root() -> str:
-    """The physical directory every operand must live beneath."""
-    return os.path.realpath(os.getcwd())
+    """The physical root of the Git worktree every operand must live beneath.
+
+    THIS WAS `realpath(getcwd())`, WHICH BROKE EVERY WRAPPER FROM A SUBDIRECTORY. Launched from
+    `scripts/`, the "repository" became `scripts/`, so `../docs/planning/X_PLAN.md` — every plan in the
+    tree — was refused as out of repo, taking the capture, audit, snapshot and persistence wrappers
+    with it, since they all share this helper (PR #63 recheck, P2 — reproduced).
+
+    That is the fourth false refusal this recheck has surfaced, and the same shape each time: a guard
+    correct about the danger and wrong about the boundary. `git rev-parse --show-toplevel` is the
+    boundary the operands are actually described against.
+
+    FAILS CLOSED when there is no worktree: with no repository there is no containment to enforce, and
+    silently falling back to the working directory would restore exactly the bug above.
+    """
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError as error:
+        refuse(f"could not run git to locate the repository root: {error}")
+    if top.returncode != 0 or not top.stdout.strip():
+        refuse(
+            "not inside a Git worktree, so there is no repository to contain operands to — "
+            "run this from the checkout"
+        )
+    return os.path.realpath(top.stdout.strip())
 
 
 def _control_characters(value: str) -> bool:

@@ -433,6 +433,43 @@ class ModelReachableGrantPolicy(unittest.TestCase):
         )
         self.assertEqual([], problems)
 
+    def test_shell_operators_after_an_allowlisted_wrapper_are_rejected(self):
+        """Reaching an allowlisted target was treated as the whole answer (PR #63 recheck, P2).
+
+        Everything after the wrapper went unexamined, so `&& rm *`, `; rm -rf *`, `$(rm *)`, a
+        redirection and a pipe all passed while CI called the tree clean. The policy claims one exact
+        reviewed entrypoint, and that claim is only true if nothing can be appended to it.
+        """
+        wrapper = "${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh"
+        for tail in ("&& rm *", "; rm -rf *", "$(rm *)", "> /etc/x *", "| tee *", "`rm *`"):
+            with self.subTest(tail=tail):
+                problems, _warnings = self._check(f"Read, Bash(bash {wrapper} {tail})")
+                self.assertTrue(problems, f"`{tail}` after the wrapper must be refused")
+
+    def test_the_plain_wrapper_grant_is_still_accepted(self):
+        """Control. The trailing-token rule must reject OPERATORS, not operands."""
+        for granted in (
+            "Read, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *)",
+            "Read, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py snapshot *)",
+        ):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check(granted)
+                self.assertEqual([], problems, granted)
+
+    def test_the_no_wildcard_residual_is_recorded_not_claimed_closed(self):
+        """A compound grant with NO wildcard is still exempt, by an explicit documented decision.
+
+        `check_model_reachable_grants` analyses only specifiers containing `*`, so
+        `Bash(bash …/x.sh && rm -rf /tmp/x)` is not examined. That scope boundary is deliberate — the
+        module says whether a bounded-but-dangerous exact command belongs on a model-invocable skill is
+        a different policy — but leaving it undocumented would let a reader assume this check covers it.
+        Asserting the CURRENT behaviour makes the boundary visible and fails loudly if it ever moves.
+        """
+        problems, _warnings = self._check(
+            "Read, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh && rm -rf /tmp/x)"
+        )
+        self.assertEqual([], problems, "the no-wildcard scope boundary moved — update this note")
+
     def test_wildcard_bash_is_default_deny(self):
         """The measured fail-open, inverted (PR #63 recheck, P2).
 
@@ -648,7 +685,6 @@ class BashlessAgentsRunNoShell(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual([], self._run(root))
-
 
 if __name__ == "__main__":
     unittest.main()

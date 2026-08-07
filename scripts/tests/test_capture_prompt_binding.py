@@ -85,6 +85,11 @@ class CapturePromptBindingTests(unittest.TestCase):
             self.skipTest("bash is required")
         self.temporary = tempfile.TemporaryDirectory(prefix=".prompt-binding-")
         self.root = Path(self.temporary.name)
+        # A GIT REPOSITORY. `containment.repository_root()` resolves `git rev-parse --show-toplevel`
+        # rather than the working directory — the cwd version rejected every plan when a wrapper ran
+        # from a subdirectory (PR #63 recheck). A fixture that is not a repo now has no containment
+        # boundary at all, which is the fail-closed half of that same change.
+        subprocess.run(["git", "init", "-q", "."], cwd=self.root, check=True)
         self.review = self.root / "scripts" / "review"
         self.review.mkdir(parents=True)
         self.leaves = self.root / "leaves"

@@ -282,6 +282,19 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
         if any(segment == ".." for segment in target.split("/")):
             return (f"`{target}` walks out of the plugin root with `..`; a wrapper that can leave the "
                     "reviewed tree is not an exact plugin-root entrypoint")
+        # THE REST OF THE SPECIFIER MUST BE OPERANDS, NOT A PROGRAM. Reaching an allowlisted target was
+        # treated as the whole answer, so everything after it went unexamined: `&& rm *`, `; rm -rf *`,
+        # `$(rm *)` and `> /etc/x` after an in-root script ALL passed, and CI called the tree clean while
+        # the grant pre-approved a compound shell program (PR #63 recheck, P2 — all four measured).
+        # The policy claims one exact reviewed entrypoint; that claim is only true if nothing can be
+        # appended to it.
+        for token in head[2:]:
+            if any(character in token for character in ";&|<>`$(){}\n"):
+                return (
+                    f"`{token}` follows the wrapper — a shell operator, substitution or redirection "
+                    "after an allowlisted entrypoint makes the grant a compound program, not one "
+                    "reviewed command"
+                )
         return None  # the allowlisted shape: exact plugin-root wrapper, operands bounded by the script
 
     if command in BROAD_BASH_PREFIXES:

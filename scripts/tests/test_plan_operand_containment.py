@@ -115,6 +115,53 @@ class PlanOperandContainment(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_a_wrapper_run_from_a_subdirectory_still_accepts_in_repo_plans(self):
+        """`repository_root()` was `realpath(getcwd())`, which made the CWD the repository.
+
+        Launched from `scripts/`, every plan in the tree became "outside the repository" — the capture,
+        audit, snapshot and persistence wrappers all share this helper, so all four broke at once
+        (PR #63 recheck). Reproduced by running the snapshot entrypoint from a subdirectory with a
+        `../`-relative plan. It resolves the Git top level now.
+
+        This is the fourth false refusal this recheck surfaced, and the same shape each time: a guard
+        right about the danger and wrong about the boundary.
+        """
+        subdirectory = self.root / "scripts"
+        subdirectory.mkdir()
+        result = subprocess.run(
+            ["bash", str(SNAPSHOT), "../docs/planning/FEATURE_PLAN.md"],
+            cwd=str(subdirectory), capture_output=True, text=True, check=False, input="",
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_outside_the_repo_is_still_refused_from_a_subdirectory(self):
+        """Resolving the top level must widen the boundary to the repo, not remove it."""
+        subdirectory = self.root / "scripts2"
+        subdirectory.mkdir()
+        outside = self.outside_dir / "OUTSIDE_PLAN.md"
+        outside.write_text("# outside\n", encoding="utf-8")
+        result = subprocess.run(
+            ["bash", str(SNAPSHOT), str(outside)],
+            cwd=str(subdirectory), capture_output=True, text=True, check=False, input="",
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+
+    def test_outside_a_git_worktree_it_fails_closed(self):
+        """No repository means no containment boundary — refusing is the only safe answer.
+
+        Falling back to the working directory here would restore the exact bug above.
+        """
+        loose = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, loose, ignore_errors=True)
+        (loose / "docs" / "planning").mkdir(parents=True)
+        plan = loose / "docs" / "planning" / "FEATURE_PLAN.md"
+        plan.write_text("# Plan\n", encoding="utf-8")
+        result = subprocess.run(
+            ["bash", str(SNAPSHOT), "docs/planning/FEATURE_PLAN.md"],
+            cwd=str(loose), capture_output=True, text=True, check=False, input="",
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
