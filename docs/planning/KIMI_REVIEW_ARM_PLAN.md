@@ -152,9 +152,10 @@ manifest must be regenerated as the **last** step — after the rename, not duri
 
 Each step ends green. Do not start the next until the previous one's suite passes.
 
-**Step 0 — ticket and worktree.** Create the `COREDEV-2645` ticket, associate it with the Epic, and
-create the worktree FIRST, then this plan's gate artifacts inside it (`CLAUDE.md`'s ordering rule —
-`.verdicts/` is per-directory session state and does not follow a later `git worktree add`).
+**Step 0 — worktree.** `COREDEV-2645` **already exists** (created 2026-08-06; see the Status line) —
+do not create it again; associate the work with it and the Epic. Create the worktree FIRST, then this
+plan's gate artifacts inside it (`CLAUDE.md`'s ordering rule — `.verdicts/` is per-directory session
+state and does not follow a later `git worktree add`).
 
 **Step 1 — the harness, before any rename.** Add `scripts/review/isolated-kimi-review.sh`, modelled on
 `isolated-agy-review.sh`, keeping the worktree isolation, the `$HOME` leak monitor and the exit-3
@@ -221,11 +222,11 @@ opt-in third arm. Decide explicitly; do not leave both wired.
 
 ## 7. Interaction with the rest of PR #63
 
-* **The stale rationale in `isolated-agy-review.sh` is deliberately left in place.** Rewriting the
-  comment to describe a switch that is about to be superseded would be churn, and deleting it would
-  erase the evidence this plan rests on. §1 above is now the resolution of record. If this plan is
-  **not** gated, the fallback is the original item-8 choice: apply the documented switch, or delete
-  the rationale — but do not let the contradiction stand indefinitely.
+* ~~**The stale rationale in `isolated-agy-review.sh` is deliberately left in place.**~~ **Superseded
+  by §1**, which is the resolution of record — this bullet's "deliberately left in place" framing
+  directly contradicted §1's declaration that the matter is resolved, so it is struck. If this plan is
+  **not** gated, the fallback remains the original item-8 choice (apply the documented switch, or
+  delete the rationale); do not let the contradiction stand indefinitely.
 * ~~**The two capture recipes** are still compound blocks that match no `allowed-tools` grant.~~
   **DONE in `COREDEV-2642`** — both extracted: `scripts/review/capture-gemini-review.sh` and
   `scripts/review/capture-codex-review.sh` ship, each a single granted call. The advice to "fold the

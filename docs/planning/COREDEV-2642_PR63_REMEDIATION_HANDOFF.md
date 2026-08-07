@@ -1,14 +1,26 @@
 # COREDEV-2642 — PR #63 remediation handoff
 
-**PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main`
-**State at handoff:** 189 commits over base `ff83f02` (0 unpushed), **551 scripts tests / 304 hook
-tests / 227 MCP tests green**, `callers_scan --root .` exits 0, full validator sweep clean
-**Last commit:** `7f91843`
+**PR:** #63 · branch `claude/plugin-opus5-review-xs81o0` → `main` · base `ff83f02`
 
-> **Every count in this file is measured at the commit named above, not carried forward.** The header
-> previously named `54a0fa1` — a commit the scratch-file history rewrite removed, so it existed
-> nowhere — and reported counts from several commits earlier. A handoff whose figures are stale is the
-> same defect class this PR keeps finding in its own commit messages, so: re-measure, do not copy.
+**State is measured, not frozen — the figures below rot within hours on this branch, so this header
+gives the COMMANDS instead of the numbers** (the previous header's `7f91843` / 189-commit / 551-test
+snapshot was 30+ commits stale, the exact defect the banner beneath it warns against):
+
+| What | Command |
+|---|---|
+| commits over base | `git rev-list --count ff83f02..HEAD` |
+| files / lines | `git diff --shortstat ff83f02..HEAD` |
+| scripts tests | `python3 -m unittest discover -s scripts/tests` (tail: `Ran N tests`) |
+| hook tests | `bash scripts/test-hooks.sh` |
+| MCP tests | `python3 -m unittest discover -s mcp/review-synthesizer/tests` |
+| full gate | `callers_scan --root .` exits 0; assembly / hooks / version-sync strict clean |
+
+**Last verified snapshot (2026-08-07, head `8632a95`):** 224 commits, 119 files, +27,981/−1,201,
+**677 scripts tests / 304 hook tests / 227 MCP tests green**, full sweep clean. Re-run the commands
+above rather than trusting this line if HEAD has moved.
+
+> **Every count in this file is measured, not carried forward.** A handoff whose figures are stale is
+> the same defect class this PR keeps finding in its own commit messages, so: re-measure, do not copy.
 
 > **Third pass, 2026-08-06.** A deep review at exact head filed 9 findings (4×P1, 4×P2, 1×P3) and a
 > 34-commit audit filed 4 open threads plus 9 new gaps. Seven of the nine deep-review findings are
@@ -213,13 +225,15 @@ PR level, where a reader decides whether to merge.
 
 **Still the maintainer's, not mine:**
 
-- **Jira.** All six tickets are `To Do`. COREDEV-2642's description stops at "Gap 2 DONE / Gap 1 open
-  decision" with zero comments, 189 commits later — a direct violation of this repo's Jira-hygiene
-  mandate ("update it with notes through implementation, not just at the end"). COREDEV-2617's Jira
-  acceptance also asks for one shared hook/standalone base, while the shipped D′ design deliberately
-  makes an unset base unresolved; that contradiction needs resolving in Jira, not in the tree.
-- **The Kimi arm swap has no ticket.** `KIMI_REVIEW_ARM_PLAN.md` step 0 requires one; both it and this
-  handoff still say the literal `COREDEV-XXXX` (now **COREDEV-2645**).
+- **Jira.** Verify each ticket's live state before trusting a number here (`searchJiraIssuesUsingJql`
+  or the ticket page) — a recheck found them moved from `To Do` to `In Review` while this bullet still
+  said `To Do`. COREDEV-2642 now carries the running remediation log this batch added, but earlier its
+  description stopped at "Gap 2 DONE / Gap 1 open decision" with no interim notes for many commits — a
+  violation of this repo's Jira-hygiene mandate. COREDEV-2617's Jira acceptance also asks for one shared
+  hook/standalone base, while the shipped D′ design deliberately makes an unset base unresolved; that
+  contradiction needs resolving in Jira, not in the tree.
+- **The Kimi arm swap ticket EXISTS.** `COREDEV-2645` was created 2026-08-06; `KIMI_REVIEW_ARM_PLAN.md`
+  step 0 and this handoff no longer say the literal `COREDEV-XXXX`. Do not create it again.
 - **Two follow-ups were described on the PR as "filed" and are filed nowhere**: reading blob content
   from the index via `git show :path` for `callers_scan`, and documenting "pass the canonical path" in
   the cleanup tool's `--help`. They exist only in PR replies.
