@@ -262,15 +262,23 @@ jobs:
           t="$work/t.txt"
           python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
             --prompt .prompt.md --transcript "$t" --plan docs/planning/X_PLAN.md
-          test -s "$t.plan" && test -s "$t.planbytes" && test -s "$t.prompt" \
-            || { echo "bind-prompt did not write its sidecars on 3.9" >&2; exit 1; }
+          # `if`, not `A && B || C`: shellcheck flags that as SC2015 (info) and actionlint promotes
+          # any shellcheck finding to a failure, so the chained form failed CI while passing a local
+          # `actionlint` whose shellcheck did not report info-level issues.
+          if [ ! -s "$t.plan" ] || [ ! -s "$t.planbytes" ] || [ ! -s "$t.prompt" ]; then
+            echo "bind-prompt did not write its sidecars on 3.9" >&2
+            exit 1
+          fi
           # And a prompt naming a DIFFERENT plan must be refused (the binding is enforced, not cosmetic).
           printf 'Review it.\n%.0s' {1..40} > .bad.md
           printf 'REVIEW TARGET: docs/planning/OTHER_PLAN.md\n' >> .bad.md
           status=0
           python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
             --prompt .bad.md --transcript "$work/t2.txt" --plan docs/planning/X_PLAN.md >/dev/null 2>&1 || status=$?
-          [ "$status" -ne 0 ] || { echo "bind-prompt accepted a prompt naming a different plan on 3.9" >&2; exit 1; }
+          if [ "$status" -eq 0 ]; then
+            echo "bind-prompt accepted a prompt naming a different plan on 3.9" >&2
+            exit 1
+          fi
       - name: generate-callers-exemptions.py produces the shipped manifest on 3.9
         # Added this PR and previously uncovered by CI (PR #63 recheck, P3). It regenerates the
         # exemption manifest the callers scan depends on, and it runs on macOS stock 3.9 — run it and
@@ -278,8 +286,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/review/generate-callers-exemptions.py
-          git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv \
-            || { echo "generate-callers-exemptions.py output drifted from the committed manifest" >&2; exit 1; }
+          if ! git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv; then
+            echo "generate-callers-exemptions.py output drifted from the committed manifest" >&2
+            exit 1
+          fi
       - name: callers_scan.py execution smoke on 3.9
         run: python3 scripts/review/callers_scan.py --help >/dev/null
       - name: callers_scan.py real invocation on 3.9
