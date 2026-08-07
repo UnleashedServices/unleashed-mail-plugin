@@ -396,7 +396,20 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
     missed exactly that, which is the mistake this function is guarding against in the first place.
 
     REDIRECTS ARE DELIBERATELY EXCLUDED. `2>/dev/null` is the only one these recipes use, and the
-    `Grep` tool has no stderr to silence, so the line is expressible without it.
+    `Grep` tool has no stderr to silence, so the line is expressible without it. PROCESS SUBSTITUTION
+    (`<(`, `>(`) is NOT a redirect and is included — nothing but a shell can produce it.
+
+    A TRAILING `#` COMMENT ENDS THE LINE. Found by cross-checking this function against `shlex` over
+    the 398 fenced command lines this repo ships: several disagreements were mine, and all of them were
+    operators sitting inside a comment (`set -o pipefail   # without it, `| tail` returns 0`). Flagging
+    those would refuse a `grep` recipe for what its comment SAYS — a false refusal, which this campaign
+    treats as seriously as a fail-open.
+
+    RESIDUAL, deliberate: unquoted `(`/`)` grouping is not tracked. `shlex` flags it and this does not,
+    but the only lines that reach here START with `grep`, and a `grep` line's parens are inside its
+    pattern. Tracking them would buy nothing and risk refusing `grep -E 'a(b|c)' p`. The remaining
+    disagreements run the other way and are `shlex`'s limits, not this function's: `$(…)` inside double
+    quotes and a leading backtick are both live substitution, and `shlex` misses both.
     """
     operators: "list[str]" = []
     quote = None
@@ -404,6 +417,8 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
     while index < len(line):
         pair = line[index:index + 2]
         character = line[index]
+        if quote is None and character == "#" and (index == 0 or line[index - 1] in " \t"):
+            break                                  # the rest of the line is a comment
         if quote == "'":
             if character == "'":
                 quote = None
@@ -432,8 +447,8 @@ def _unquoted_shell_operators(line: str) -> "list[str]":
             operators.append(pair)
             index += 2                         # both characters consumed, or `||` also counts as `|`
             continue
-        elif pair == "$(":
-            operators.append("$(")
+        elif pair in ("$(", "<(", ">("):
+            operators.append(pair)                 # substitution, or process substitution
             index += 2
             continue
         elif character == "|":

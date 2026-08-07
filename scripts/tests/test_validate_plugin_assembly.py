@@ -974,6 +974,17 @@ class GrepPipelinesAreNotNativeGrep(unittest.TestCase):
             'grep -rn "Button\\|Toggle" path': [],  # alternation inside a quoted regex
             "grep -rn 'A\\|B' --include='*.swift' path": [],
             'grep -rn "A" path 2>/dev/null': [],    # a redirect is not an operator Grep must express
+            # A TRAILING COMMENT ENDS THE LINE. Found by cross-checking this function against `shlex`
+            # over the 398 fenced command lines this repo ships: every disagreement that was MINE had
+            # an operator sitting inside a comment. Flagging those refuses a recipe for what its
+            # comment says, which is a false refusal.
+            'grep -rn "A" path   # then filter | by hand': [],
+            'set -o pipefail   # without it, `| tail` returns 0': [],
+            'grep -rn "A" path | grep -v B   # a real pipeline, commented': ["|"],
+            'grep -rn "A#B" path': [],              # `#` inside quotes is not a comment
+            'grep -rn "A" path#notacomment': [],    # nor is one without preceding whitespace
+            # Process substitution is NOT a redirect: nothing but a shell can produce it.
+            'grep -rn "A" < <(cat p)': ["<("],
         }
         for line, expected in cases.items():
             with self.subTest(line=line):
