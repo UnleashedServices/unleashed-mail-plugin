@@ -39,6 +39,27 @@ EXEMPTION_PATH = "scripts/review/callers-scan-exemptions.tsv"
 # documented-invocation spellings this scanner exists to reject.  The set below is a strict SUBSET of
 # the old one, so nothing that was covered becomes uncovered except the false positives, and all four
 # historical bypasses still select on `/unleashed-mail:`.
+#
+# SELECTING PROSE IS DELIBERATE, AND THE COST IS ONE COMMAND (decided 2026-08-07; raised on PR #63 as
+# "narrow to actual command lines").  A line that merely MENTIONS `gemini-review` does become a
+# candidate and must therefore appear in the exemption manifest, so a documentation edit that adds such
+# a mention fails this gate until the manifest is regenerated.  That is accepted rather than fixed:
+#
+#   * the alternative — requiring an anchor PLUS a command shape (a flag, an operand) — reintroduces
+#     the class of bypass this scanner exists for.  A bare `gemini-review` invocation formatted in any
+#     way the shape rule did not anticipate stops being selected, and selection is the one
+#     default-ALLOW step in an otherwise deny-by-default pipeline: whatever is not selected is never
+#     judged at all.  Trading a guaranteed false POSITIVE for a possible false NEGATIVE is the wrong
+#     direction for a gate whose job is to catch invocations outside the wrappers.
+#   * the friction is bounded and mechanical: the maintainer regeneration tool that sits beside this
+#     module rebuilds the manifest, CI asserts it is the exact complement of the tracked tree, and the
+#     ordering rule ("regenerate LAST") is documented in the remediation handoff.  A prose edit costs
+#     one command, not a judgement call.  (Named only in the docs, never here — production must not be
+#     able to reach the generator, or a new REJECT could exempt itself.)
+#
+# So the residual is real and is a false-positive burden by design.  If it ever stops being worth it,
+# the change to make is a command-shape rule in `is_candidate` — not a narrower ANCHORS tuple, which
+# would silently drop the bare-invocation spellings the measurements above kept on purpose.
 ANCHORS = (b"/unleashed-mail:", b"gemini-review", b"codex-review")
 MARKDOWN_PREFIX = re.compile(
     br"\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|"

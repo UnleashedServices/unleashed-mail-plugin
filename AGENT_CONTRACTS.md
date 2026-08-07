@@ -379,6 +379,36 @@ Each agent type has minimum tool requirements:
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
 
+### 9.1 Accepted residual — `swift-reviewer`'s shell is reachable from model-invoked `pr-review`
+
+**This is a documented decision, not an oversight** (PR #63, raised four times; decided 2026-08-07).
+
+`pr-review` is model-invocable and grants `Agent(swift-reviewer)`. `swift-reviewer` holds bare `Bash`,
+so a prompt-injected finding in untrusted PR content could in principle steer it into an arbitrary
+shell command with no user gesture.
+
+**Why it is not simply removed.** A sub-agent's `tools:` list takes BARE NAMES — `Bash(...)` scoping is
+silently ignored there — so a sub-agent either has arbitrary shell or none. `swift-reviewer` needs it
+for `changeset.sh` (scope detection) and `build-verify.sh` (Step 4). Dropping `Bash` would not make
+those steps safe; it would make them silently produce nothing, which is precisely the worse failure
+mode the `check_bashless_agents_run_no_shell` validator exists to catch — it is what happened to
+`security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
+their bodies still ran `cat`/`find`/`plutil`.
+
+**What bounds it instead** (each verified, each with a regression test):
+- the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**;
+- `swift-reviewer`'s `disallowedTools` denies **every** checkout-writing agent by name, in both the
+  bare and `unleashed-mail:`-namespaced spellings, and that set is **recomputed from disk** by
+  `validate-plugin-assembly.py` rather than hand-maintained, so a newly added writer cannot be missed;
+- `swift-reviewer` denies spawning itself, so there is no recursive amplification;
+- `jira-manager` — the one agent it spawns that is not a reviewer — **denies `Bash`** outright;
+- the skill boundary itself grants only `changeset.sh`, never bare `git`.
+
+**The alternative, if this residual is ever judged unacceptable:** set
+`disable-model-invocation: true` on `skills/pr-review/SKILL.md`. That closes the path completely and
+costs only the model's ability to *enter* the workflow autonomously — a user typing `/pr-review` is
+unaffected. It was not taken because autonomous review is the workflow's purpose.
+
 ## 10. MCP Tool Prefixes
 
 MCP tool names are install-specific (the prefix depends on how the MCP server was installed).
