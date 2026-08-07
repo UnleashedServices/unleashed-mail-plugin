@@ -210,8 +210,35 @@ def _normalized_command_words(specifier: str) -> list[str]:
 
 
 def _bash_specifiers(value: str) -> list[str]:
-    """Every `Bash(...)` specifier in an `allowed-tools` value."""
-    return re.findall(r"Bash\(([^)]*)\)", value)
+    """Every `Bash(...)` specifier in an `allowed-tools` value, extracted with BALANCED parens.
+
+    `re.findall(r"Bash\\(([^)]*)\\)")` stopped at the FIRST `)`, so `Bash(python3 …/x.py $(rm) *)`
+    captured `python3 …/x.py $(rm` and DROPPED the trailing `*` — and the caller only analyses
+    specifiers that contain a `*`, so the whole wildcard check was skipped and the grant passed as if
+    bounded (PR #63 recheck, P2, measured). Walking the parens to the matching close keeps the `*` (and
+    the `$(`), so `_wildcard_bash_problem` sees the real specifier and refuses it.
+    """
+    specifiers = []
+    i = 0
+    token = "Bash("
+    while True:
+        start = value.find(token, i)
+        if start == -1:
+            break
+        j = start + len(token)
+        depth = 1
+        while j < len(value) and depth:
+            if value[j] == "(":
+                depth += 1
+            elif value[j] == ")":
+                depth -= 1
+            j += 1
+        # depth 0 -> j is one past the matching ')'; unbalanced -> take the rest (still analysed, since
+        # a grant that opens `Bash(` and never closes it is malformed and must not pass silently).
+        inner = value[start + len(token): j - 1] if depth == 0 else value[start + len(token):]
+        specifiers.append(inner)
+        i = j
+    return specifiers
 
 
 # Trampolines: a wildcard on these runs arbitrary code one layer down (`xcrun python3 …`, `swift run`,
@@ -268,6 +295,19 @@ def _wildcard_bash_problem(specifier: str) -> str | None:
         if target in _INTERPRETER_CODE_MODES or target == "-" or target.startswith("-"):
             return (f"`{command} {target}` is an interpreter code/module/stdin mode — that is "
                     "arbitrary code execution, not a call to a reviewed script")
+        # AN OPERATOR CAN BE GLUED TO THE ENTRYPOINT WITH NO SPACE, so it never becomes a separate word
+        # for the head[2:] scan below: `${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /` splits to one token whose
+        # `;rm` rides inside `target` (PR #63 recheck, P2 — `;`, `&&`, `|` all measured passing). The
+        # legitimate target is `${CLAUDE_PLUGIN_ROOT}/` followed by a plain path (optionally a trailing
+        # `*`); anything outside that safe path alphabet is an operator, substitution or redirection
+        # welded to the entrypoint. Checked here, before the startswith test, so it fires for every
+        # spelling rather than only in-root ones.
+        prefix = "${CLAUDE_PLUGIN_ROOT}/"
+        if target.startswith(prefix):
+            suffix = target[len(prefix):]
+            if not re.fullmatch(r"[A-Za-z0-9._/*-]+", suffix):
+                return (f"`{target}` has a shell operator, substitution or redirection glued to the "
+                        "entrypoint path — the grant is a compound program, not one reviewed command")
         if "*" in target:
             return ("the wildcard is in the SCRIPT PATH, so it pre-approves every script in that "
                     "directory (including destructive ones). Name the exact entrypoint.")
@@ -466,13 +506,38 @@ def check_model_reachable_grants(rel: Path, fm: dict[str, str], problems: list[s
                 f"{rel}: model-invocable skill grants bare `{entry}` — "
                 f"{BROAD_MODEL_REACHABLE_GRANTS[entry]}"
             )
+            continue
+        # A FULL-BREADTH SCOPE IS THE BARE GRANT BY ANOTHER SPELLING (PR #63 recheck, P2). The exact
+        # match above catches `Write`; it does NOT catch `Write(**)`, `Write(/**)`, `Edit(**)` or
+        # `Agent(*)`, each of which pre-approves the entire surface the bare grant does. Measured passing.
+        scope_match = re.fullmatch(r"(Write|Edit|NotebookEdit|Agent)\((.*)\)", entry)
+        if scope_match and scope_match.group(2).strip() in ("*", "**", "/**", "/*", "**/*"):
+            name = scope_match.group(1)
+            problems.append(
+                f"{rel}: model-invocable skill grants `{entry}` — a `{scope_match.group(2).strip()}` "
+                f"scope pre-approves the entire surface, same as bare `{name}`. "
+                f"{BROAD_MODEL_REACHABLE_GRANTS[name]}"
+            )
 
     for specifier in _bash_specifiers(granted):
-        # Only UNBOUNDED grants are in scope. A specifier with no wildcard pre-approves exactly one
-        # command string — `Bash(command -v codex)`, `Bash(codex --version)` — which is bounded by
-        # construction and visible in review. Analysing those rejected both of the shipped preflight
-        # probes. Whether a bounded-but-dangerous exact command (`Bash(git reset --hard)`) belongs on
-        # a model-invocable skill is a DIFFERENT policy and is deliberately not claimed here.
+        # A COMPOUND SPECIFIER IS NEVER ONE BOUNDED COMMAND, wildcard or not (PR #63 recheck, P2). The
+        # "no `*` -> bounded, skip it" shortcut below assumed a specifier without a wildcard was a single
+        # command — but `python3 …/x.py;rm -rf /` has no `*` and is a two-command program. These control
+        # operators never appear in a legitimate grant: a genuine one is a single command whose only
+        # metacharacters are the `${CLAUDE_PLUGIN_ROOT}` reference and an optional trailing `*` operand.
+        # `$(` is listed as a substring because `$` alone is legitimate (the variable). Checked for EVERY
+        # specifier, before the wildcard gate, so a glued operator cannot ride in on a `*`-free grant.
+        if "$(" in specifier or any(ch in specifier for ch in ";|`<>\n&"):
+            problems.append(
+                f"{rel}: model-invocable skill grants `Bash({specifier})` — a shell operator, "
+                "substitution or redirection makes this a compound program, not one reviewed command"
+            )
+            continue
+        # Only UNBOUNDED grants are otherwise in scope. A specifier with no wildcard pre-approves exactly
+        # one command string — `Bash(command -v codex)`, `Bash(codex --version)` — bounded by
+        # construction and visible in review. Analysing those rejected both shipped preflight probes.
+        # Whether a bounded-but-dangerous exact command (`Bash(git reset --hard)`) belongs on a
+        # model-invocable skill is a DIFFERENT policy and is deliberately not claimed here.
         if "*" not in specifier:
             continue
         problem = _wildcard_bash_problem(specifier)

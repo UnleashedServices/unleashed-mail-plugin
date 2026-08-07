@@ -445,6 +445,19 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **The model-reachable grant validator closed three fail-open spellings.** (PR #63 recheck, P2, all
+  measured passing.) (1) A shell operator glued to the entrypoint with no space —
+  `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /)` — rode inside a single word that the post-target
+  operand scan never inspected; the scan now runs over *every* Bash specifier, wildcard or not,
+  rejecting `;`, `|`, backtick, redirection, `&`, and `$(` (which never appear in a legitimate
+  one-command grant, while `${CLAUDE_PLUGIN_ROOT}` and a trailing `*` still do). (2) `_bash_specifiers`
+  extracted with `Bash\(([^)]*)\)`, stopping at the first `)`, so `Bash(… $(rm) *)` dropped its
+  trailing `*` and skipped analysis as "bounded"; extraction now walks balanced parens. (3) The
+  bare-name refusal was exact-string, so `Write(**)`, `Write(/**)`, `Edit(**)`, `NotebookEdit(**)` and
+  `Agent(*)` slipped past it despite pre-approving the same surface as the bare grant — a full-breadth
+  scope is now refused explicitly. The previously-documented "no-wildcard compound is exempt" boundary
+  was itself the first fail-open and is now closed; a genuinely bounded *single* command
+  (`Bash(command -v codex)`) stays exempt.
 - **Gemini plan staging can no longer be tricked into writing outside its disposable checkout.**
   `git worktree add --detach` materializes committed tree entries, so a plan path recorded in HEAD as a
   **symlink** (or under a symlinked parent) was recreated in the throwaway checkout, and the staging

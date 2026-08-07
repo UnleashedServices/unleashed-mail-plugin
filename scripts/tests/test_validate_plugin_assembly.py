@@ -458,19 +458,60 @@ class ModelReachableGrantPolicy(unittest.TestCase):
                 problems, _warnings = self._check(granted)
                 self.assertEqual([], problems, granted)
 
-    def test_the_no_wildcard_residual_is_recorded_not_claimed_closed(self):
-        """A compound grant with NO wildcard is still exempt, by an explicit documented decision.
+    def test_a_wildcard_free_COMPOUND_grant_is_now_refused(self):
+        """PR #63 recheck, P2: the no-wildcard exemption was a fail-open, and is now closed.
 
-        `check_model_reachable_grants` analyses only specifiers containing `*`, so
-        `Bash(bash …/x.sh && rm -rf /tmp/x)` is not examined. That scope boundary is deliberate — the
-        module says whether a bounded-but-dangerous exact command belongs on a model-invocable skill is
-        a different policy — but leaving it undocumented would let a reader assume this check covers it.
-        Asserting the CURRENT behaviour makes the boundary visible and fails loudly if it ever moves.
+        This test previously ASSERTED that `Bash(bash …/x.sh && rm -rf /tmp/x)` passed, documenting the
+        `*`-only analysis scope as a deliberate boundary. The recheck showed it for what it was — a
+        `*`-free two-command program that pre-approves `rm -rf`. The operator scan now runs for every
+        specifier, so the `&&` (and `;`, `|`, backtick, redirection, `$(`) is refused whether or not a
+        wildcard is present.
+        """
+        for granted in (
+            "Read, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh && rm -rf /tmp/x)",
+            "Read, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py;rm -rf /)",
+            "Read, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py|tee /etc/passwd)",
+            "Read, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py > /etc/x)",
+        ):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check(granted)
+                self.assertTrue(problems, f"{granted} is a compound program and must be refused")
+
+    def test_a_genuinely_bounded_single_command_stays_exempt(self):
+        """The boundary that REMAINS: one command, no operators, no wildcard.
+
+        Whether a bounded-but-dangerous exact command belongs on a model-invocable skill is a different
+        policy this check deliberately does not claim. A single command with no shell operators — the
+        shape of the two shipped preflight probes — must still pass, or the operator scan has
+        over-reached into refusing legitimate exact grants.
+        """
+        for granted in ("Read, Bash(command -v codex)", "Read, Bash(codex --version)",
+                        "Read, Bash(git reset --hard)"):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check(granted)
+                self.assertEqual([], problems, f"{granted} is one bounded command and must stay exempt")
+
+    def test_a_full_breadth_write_or_agent_scope_is_refused(self):
+        """`Write(**)`/`Agent(*)` pre-approve the same surface as the bare grant (PR #63 recheck, P2).
+
+        The bare-name exemption was exact-string, so the scoped spellings slipped past it.
+        """
+        for granted in ("Write(**)", "Write(/**)", "Edit(**)", "NotebookEdit(**)", "Agent(*)"):
+            with self.subTest(granted=granted):
+                problems, _warnings = self._check("Read, " + granted)
+                self.assertTrue(problems, f"{granted} is full-breadth and must be refused")
+        # ...but a real scope must still pass.
+        self.assertEqual([], self._check("Write(docs/planning/**), Agent(db-engineer)")[0])
+
+    def test_nested_parens_do_not_truncate_the_specifier(self):
+        """`re.findall(r'Bash\\(([^)]*)\\)')` stopped at the first `)` and dropped the trailing `*`.
+
+        `Bash(python3 …/x.py $(rm) *)` then looked wildcard-free and skipped analysis. Balanced
+        extraction keeps the whole specifier so the `$(` and `*` are both seen and refused.
         """
         problems, _warnings = self._check(
-            "Read, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh && rm -rf /tmp/x)"
-        )
-        self.assertEqual([], problems, "the no-wildcard scope boundary moved — update this note")
+            "Read, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/x.py $(rm) *)")
+        self.assertTrue(problems, "a nested-paren specifier truncated its wildcard and passed")
 
     def test_wildcard_bash_is_default_deny(self):
         """The measured fail-open, inverted (PR #63 recheck, P2).
