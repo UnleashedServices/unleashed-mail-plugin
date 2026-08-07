@@ -54,6 +54,13 @@ def allocated_transcript(directory, plan, reviewer, body, salt=""):
     _identity, _kind = _rv_identity._plan_identity(str(plan))
     with open(path + ".plan", "w", encoding="utf-8") as fh:
         fh.write(digest + "  " + _identity + "\n")
+    # `.planbytes` — the bytes the binder hashed and the harnesses stage. `write` now READS it and
+    # requires it to match the record: it was written and never read, so a snapshot rewritten after
+    # binding fed the reviewer substituted bytes and still produced a validating artifact.
+    with open(plan, "rb") as fh:
+        _plan_bytes = fh.read()
+    with open(path + ".planbytes", "wb") as fh:
+        fh.write(_plan_bytes)
         # `.promptsha256` and `.prompt` too. `bind-prompt.py` writes all three together, so a per-run
     # transcript carrying only `.plan` was never produced by the capture helper — and `write` now
     # REQUIRES the prompt binding rather than skipping when it is absent, which was the same
@@ -1357,6 +1364,10 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
             digest = hashlib.sha256(fh.read()).hexdigest()
         with open(path + ".plan", "w") as fh:
             fh.write(f"{digest}  {bound_relative}\n")
+        with open(os.path.join(self.d, bound_relative), "rb") as fh:
+            bound_bytes = fh.read()
+        with open(path + ".planbytes", "wb") as fh:
+            fh.write(bound_bytes)
         return path
 
     def _bind_prompt(self, path, payload=b"review prompt\n"):
@@ -1409,6 +1420,43 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
         blanked = self._write("docs/planning/b/SAME_PLAN.md", transcripts)
         self.assertNotEqual(0, blanked.returncode, blanked.stdout)
         self.assertIn("BLANK plan identity", blanked.stderr)
+
+    def test_a_SUBSTITUTED_plan_snapshot_is_refused_at_write_time(self):
+        """`.planbytes` was written by the binder and read by NOTHING (PR #63 recheck, P1).
+
+        Both harnesses stage those bytes — they are what the reviewer actually read — and until now no
+        check downstream ever compared them to the record again. So a snapshot rewritten after binding
+        fed the reviewer substituted bytes and still produced an artifact that validated: the record
+        and the live plan agreed with each other and neither described what was reviewed.
+
+        HONEST SCOPE. This closes the uncoordinated family — a snapshot substituted and left, or
+        restored while the record was not. A same-account process that replaces BOTH sidecars
+        coherently and restores BOTH before the verdict is written is not defended against, and cannot
+        be by any file-based binding: every anchor this program could read is a file that attacker can
+        rewrite, including the transcript whose digest the artifact records.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+        with open(transcripts[0] + ".planbytes", "wb") as fh:
+            fh.write(b"# Plan\nSUBSTITUTED BYTES THE REVIEWER ACTUALLY READ\n")
+
+        result = self._write(a, transcripts)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("does not match its own record", result.stderr)
+
+    def test_a_DELETED_plan_snapshot_is_refused_rather_than_skipped(self):
+        """Absent means unchecked — the shape this whole family of bindings exists to close."""
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+        os.unlink(transcripts[1] + ".planbytes")
+
+        result = self._write(a, transcripts)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("no bound plan snapshot", result.stderr)
 
     def test_a_prompt_larger_than_the_trusted_read_cap_still_persists(self):
         """A guard that refuses valid work is a guard someone switches off.
@@ -1574,9 +1622,12 @@ class OneArmCannotSatisfyTheDualGate(unittest.TestCase):
         stamp = os.stat(path).st_mtime_ns
         os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
         with open(os.path.join(self.d, self.plan_relative), "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
+            plan_bytes = fh.read()
+        digest = hashlib.sha256(plan_bytes).hexdigest()
         with open(path + ".plan", "w") as fh:
             fh.write(f"{digest}  {self.plan_relative}\n")
+        with open(path + ".planbytes", "wb") as fh:
+            fh.write(plan_bytes)
         payload = f"prompt {salt}\n".encode()
         with open(path + ".prompt", "wb") as fh:
             fh.write(payload)

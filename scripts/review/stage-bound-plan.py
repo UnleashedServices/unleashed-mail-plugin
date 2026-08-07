@@ -32,8 +32,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import stat
 import sys
+
+#: `<64 hex digits><two spaces><plan identity><newline>` — the record `bind-prompt.py` writes and
+#: `review-verdict.py` re-parses. Duplicated here rather than imported (this runs as a standalone
+#: script from shell); `test_doc_gates` pins the two spellings together.
+_PLAN_BINDING = re.compile(rb"\A([0-9a-f]{64})  (.+)\n\Z")
 
 
 def _read_nofollow(path: str, label: str) -> bytes:
@@ -99,10 +105,20 @@ def main(argv=None) -> int:
     arguments = parser.parse_args(argv)
 
     payload = _read_nofollow(arguments.snapshot, "bound plan snapshot")
-    fields = _read_nofollow(arguments.record, "plan binding record").decode("utf-8", "replace").split()
-    if not fields:
-        sys.exit(f"stage-bound-plan: the plan binding record is empty: {arguments.record}")
-    expected = fields[0]
+    # THE COMPLETE GRAMMAR, not just the first field (PR #63 recheck, P2). Taking `fields[0]` accepted a
+    # record truncated to its digest alone, so both harnesses staged the snapshot and spent a full
+    # 12-28 minute review — and `review-verdict.py`, which requires the canonical
+    # `<digest>  <plan identity>\n`, then rejected the same record. A round guaranteed to be unusable
+    # must fail here, in milliseconds, not after the reviewer has run. The pattern is the one
+    # `review-verdict._PLAN_BINDING` enforces.
+    record_bytes = _read_nofollow(arguments.record, "plan binding record")
+    match = _PLAN_BINDING.fullmatch(record_bytes)
+    if match is None:
+        sys.exit(
+            "stage-bound-plan: the plan binding record is malformed — expected "
+            f"'<64 hex digits>  <plan path>' and a newline: {arguments.record}"
+        )
+    expected = match.group(1).decode("ascii")
     actual = hashlib.sha256(payload).hexdigest()
     if actual != expected:
         sys.exit(

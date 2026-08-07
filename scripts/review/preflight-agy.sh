@@ -53,14 +53,20 @@ BEFORE=""
 BEFORE_STATUS=""
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
     BEFORE="$(tree_fingerprint "$REPO_ROOT")"
+    # Same untracked mode as `tree_fingerprint`: comparing a collapsed baseline against an expanded
+    # "after" would print every file under an untracked directory as newly added.
     BEFORE_STATUS="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
 fi
 
-if ! ( cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping" ); then
-    printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
-    printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
-    exit 1
-fi
+# THE STATUS IS RETAINED, NOT ACTED ON YET (PR #63 recheck, P2). This used to `exit 1` right here, so
+# an `agy` that MUTATED the reviewed checkout through an absolute path and then exited non-zero left
+# the mutation in the tree while the preflight reported only "unavailable" — the fingerprint below, the
+# safeguard that exists for exactly this shell-capable reviewer, never ran. A mutating build is the
+# more serious finding of the two and must be reported whatever the exit status, so the comparison runs
+# unconditionally and the capture failure is returned after it.
+CAPTURE_RC=0
+( cd "$SCRATCH" && python3 "${SCRIPTS_DIR}/pty-capture.py" --timeout 60 "$PING" -- agy -p "ping" ) \
+    || CAPTURE_RC=$?
 
 # Case-INSENSITIVE, and the `!` is not required: across 3 measured runs agy answered `Pong! How can I
 # help you today?`, a bare lowercase `pong`, and `Pong! Let me know…`. A `Pong!`-exact check calls a
@@ -78,6 +84,12 @@ if [ -n "$BEFORE" ] || [ -n "${REPO_ROOT:-}" ]; then
         printf 'This is the COREDEV-2607 failure mode. Do not run a review with this agy build.\n' >&2
         exit 1
     fi
+fi
+
+if [ "$CAPTURE_RC" -ne 0 ]; then
+    printf 'agy preflight: the capture exited non-zero — treating agy as UNAVAILABLE regardless of\n' >&2
+    printf 'what landed in %s. The gate is FAIL-CLOSED; do not self-waive.\n' "$PING" >&2
+    exit 1
 fi
 
 if grep -qi pong "$PING"; then

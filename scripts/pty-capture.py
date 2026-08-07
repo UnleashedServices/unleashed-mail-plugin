@@ -90,6 +90,26 @@ _ALLOCATED_LEAF_RE = re.compile(
 _ROUND_COMPONENT_RE = re.compile(r"[0-9]+")
 
 
+def _report_overflow() -> bool:
+    """Announce the capture cap and return True, so every drain path sets `overflowed` identically.
+
+    THE CAP MUST HOLD ON EVERY PATH THAT APPENDS (PR #63 recheck, P2). It was applied in the main read
+    loop only, and the two drain sweeps that follow — the post-reap sweep and the `finally` sweep —
+    called `raw.extend()` without rechecking. A child that emitted just under the limit, spawned a
+    descendant holding the PTY and exited, drove the wrapper past it: the reviewer measured 70,561,968
+    bytes captured and an exit status of 0, so the oversized transcript was treated as a completed
+    review. One helper, called from all three, so a fourth append site cannot quietly opt out.
+    """
+    try:
+        sys.stderr.write(
+            f"pty-capture: child produced more than {MAX_CAPTURE_BYTES} bytes; terminating child\n"
+        )
+        sys.stderr.flush()
+    except OSError:
+        pass
+    return True
+
+
 def _write_private(path: str, data: bytes, allocated: bool = False) -> None:
     """Write bytes to `path` at mode 0600, refusing to follow a pre-existing symlink (#44 review §4).
 
@@ -238,27 +258,41 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
         # `_ALLOCATOR_BASENAME`. That duplication is deliberate — this file is the blocking hook path
         # and imports nothing local — so `test_doc_gates` asserts the two grammars agree, which is what
         # keeps a copy from drifting into a second, softer authority.
+        #
+        # ONE OPEN, O_NOFOLLOW|O_NONBLOCK, AND THE CHECKS ARE MADE ON THE DESCRIPTOR (PR #63 recheck,
+        # P2). This was `lstat` followed by a plain `open()` of the same NAME, which is both a
+        # check-then-use and a hang: a same-account process replacing the record with a FIFO — or a
+        # symlink to one — in that window made the blocking `open()` wait for a writer that never
+        # comes. It happens BEFORE the fork and before the timeout clock starts, so `--timeout` cannot
+        # recover the capture and the round hangs indefinitely. `O_NONBLOCK` makes the open of a
+        # reader-less FIFO return immediately, `O_NOFOLLOW` refuses the symlink, and `fstat` on the
+        # resulting descriptor describes the object actually opened rather than one a second lookup
+        # found.
         launch_path = out_path + ".launch"
+        launch_fd = -1
         try:
-            launch_info = os.lstat(launch_path)
+            launch_fd = os.open(
+                launch_path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            )
         except OSError as error:
             print(
-                f"pty-capture: allocated transcript has no launch record, refusing to run the "
+                f"pty-capture: allocated transcript has no usable launch record, refusing to run the "
                 f"command: {launch_path}: {error}",
                 file=sys.stderr,
             )
             return 1
-        if not stat.S_ISREG(launch_info.st_mode) or launch_info.st_size == 0:
-            print(
-                f"pty-capture: allocated transcript's launch record is unusable, refusing to run the "
-                f"command: {launch_path}",
-                file=sys.stderr,
-            )
-            return 1
         try:
-            with open(launch_path, "rb") as launch_stream:
-                # Run id + a space + the reviewer name + newline; 128 is ample and bounds a planted file.
-                launch_bytes = launch_stream.read(128)
+            launch_info = os.fstat(launch_fd)
+            if not stat.S_ISREG(launch_info.st_mode) or launch_info.st_size == 0:
+                print(
+                    f"pty-capture: allocated transcript's launch record is unusable, refusing to run "
+                    f"the command: {launch_path}",
+                    file=sys.stderr,
+                )
+                return 1
+            # Run id + a space + the reviewer name + newline; 128 is ample and bounds a planted file.
+            launch_bytes = os.read(launch_fd, 128)
         except OSError as error:
             print(
                 f"pty-capture: allocated transcript's launch record is unreadable, refusing to run "
@@ -266,6 +300,12 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                 file=sys.stderr,
             )
             return 1
+        finally:
+            if launch_fd >= 0:
+                try:
+                    os.close(launch_fd)
+                except OSError:
+                    pass
         launch_match = _LAUNCH_RECORD_RE.fullmatch(launch_bytes)
         if launch_match is None:
             print(
@@ -379,15 +419,7 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                         break  # EOF on PTY; child likely exited — finally reaps
                     raw.extend(chunk)
                     if len(raw) > MAX_CAPTURE_BYTES:
-                        overflowed = True
-                        try:
-                            sys.stderr.write(
-                                f"pty-capture: child produced more than {MAX_CAPTURE_BYTES} bytes; "
-                                "terminating child\n"
-                            )
-                            sys.stderr.flush()
-                        except OSError:
-                            pass
+                        overflowed = _report_overflow()
                         break
                 except InterruptedError:
                     continue
@@ -413,6 +445,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                         if not chunk:
                             break
                         raw.extend(chunk)
+                        if len(raw) > MAX_CAPTURE_BYTES:
+                            overflowed = _report_overflow()
+                            break
                     except (InterruptedError, OSError):
                         break
                 break
@@ -489,6 +524,9 @@ def main(out_path: str, cmd: list[str], timeout: float | None = None, allocated:
                 if not chunk:
                     break
                 raw.extend(chunk)
+                if len(raw) > MAX_CAPTURE_BYTES:
+                    overflowed = _report_overflow()
+                    break
             except (InterruptedError, OSError):
                 break
         try:

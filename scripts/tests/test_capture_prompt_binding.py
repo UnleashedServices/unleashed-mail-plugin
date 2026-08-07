@@ -625,3 +625,64 @@ class SpacedRepositoryPathReferences(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class PlanReferencesRequireABoundaryAfterTheSuffix(unittest.TestCase):
+    """`A_PLAN.md.bak` extracted the reference `A_PLAN.md` (PR #63 recheck, P1).
+
+    `_PLAN_REFERENCE` stopped at `.md` and asked for nothing after it, so a prompt instructing the
+    reviewer to read a BACKUP — or any sibling with characters past the suffix — satisfied
+    `prompt_disagreement()` as bound to the plan. In the isolated harness the reviewer then reads
+    different committed bytes while the transcript and the final artifact both attest to the plan.
+
+    The fix refuses the whole reference rather than mis-binding it: nothing is extracted from
+    `.md.bak`, so the prompt is rejected for naming no plan. The controls below matter as much as the
+    attack — a boundary rule that also rejected the spellings prose actually produces would refuse
+    honest rounds, which is how a guard gets switched off.
+    """
+
+    def setUp(self) -> None:
+        base = tempfile.mkdtemp(prefix="suffix-boundary-")
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        self.repo = Path(os.path.realpath(base))
+        (self.repo / "docs" / "planning").mkdir(parents=True)
+        for name in ("X_PLAN.md", "X_PLAN.md.bak"):
+            (self.repo / "docs" / "planning" / name).write_text("# plan\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", "."], cwd=self.repo, check=True)
+        self.transcripts = Path(tempfile.mkdtemp(prefix="suffix-transcripts-"))
+        self.addCleanup(shutil.rmtree, self.transcripts, ignore_errors=True)
+
+    def bind(self, body: str, leaf: str):
+        prompt = self.repo / ".prompt.md"
+        prompt.write_text(f"Review carefully.\n{body}\nEnd.\n", encoding="utf-8")
+        return subprocess.run(
+            ["python3", str(BIND_PROMPT), "--prompt", ".prompt.md",
+             "--transcript", str(self.transcripts / leaf), "--plan", "docs/planning/X_PLAN.md"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+
+    def test_a_backup_sibling_cannot_bind_to_the_plan(self):
+        result = self.bind("REVIEW TARGET: docs/planning/X_PLAN.md.bak", "bak.txt")
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("never names a plan", result.stderr)
+        self.assertFalse((self.transcripts / "bak.txt.plan").exists(),
+                         "a binding was written for a prompt targeting the backup")
+
+    def test_an_ABSOLUTE_backup_sibling_cannot_bind_either(self):
+        """The anchored absolute pattern is a second extraction path and needed the same boundary."""
+        result = self.bind(f"REVIEW TARGET: {self.repo}/docs/planning/X_PLAN.md.bak", "abs.txt")
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("never names a plan", result.stderr)
+
+    def test_the_spellings_prose_produces_still_bind(self):
+        """Controls. A sentence-ending period, a comma and a closing bracket are NOT extensions."""
+        for index, body in enumerate((
+            "REVIEW TARGET: docs/planning/X_PLAN.md",
+            "Review the plan at docs/planning/X_PLAN.md.",
+            "Review docs/planning/X_PLAN.md, then stop.",
+            "Review the plan (docs/planning/X_PLAN.md) carefully.",
+            f"REVIEW TARGET: {self.repo}/docs/planning/X_PLAN.md",
+        )):
+            with self.subTest(body=body):
+                result = self.bind(body, f"ok{index}.txt")
+                self.assertEqual(0, result.returncode, result.stderr)

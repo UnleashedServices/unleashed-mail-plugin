@@ -32,13 +32,21 @@ class ManifestEntry:
 @dataclass(frozen=True)
 class FileDeletionReport:
     attempted_relative_paths: Tuple[str, ...]
+    #: The subset actually UNLINKED by this run. Everything else in `attempted` was already absent.
+    #: Reported separately because printing the attempted count under the word "removed" claimed
+    #: deletions that never happened — on a wrong-but-canonically-named root, "removed 39 manifest
+    #: files" while removing nothing (PR #63 recheck, P2).
+    unlinked_relative_paths: Tuple[str, ...]
     root_identity: Tuple[int, int]
 
 
 @dataclass(frozen=True)
 class CleanupReport:
     attempted_relative_paths: Tuple[str, ...]
+    unlinked_relative_paths: Tuple[str, ...]
     removed_directories: Tuple[str, ...]
+    #: The subset of `removed_directories` this run actually `rmdir`'d; the rest were already gone.
+    rmdired_directories: Tuple[str, ...]
     root_identity: Tuple[int, int]
 
 
@@ -605,6 +613,7 @@ def delete_leak_files(state_root: Path, holders=None) -> FileDeletionReport:
     resolved_targets, already_absent = _preflight_files(root, allow_absent=True)
 
     attempted = []  # type: List[str]
+    unlinked = []  # type: List[str]
     # `resolved_targets` carries the containment verdict (no escape, no symlink), which is a decision
     # about PATHS and stays path-shaped. The descriptors below carry the removal, which is a decision
     # about OBJECTS. Both are needed: the first refuses a manifest that points outside the root, the
@@ -630,6 +639,7 @@ def delete_leak_files(state_root: Path, holders=None) -> FileDeletionReport:
             descriptor, name = holders[entry.relative_path]
             try:
                 unlink_regular_file(descriptor, name, entry.relative_path)
+                unlinked.append(entry.relative_path)
             except CleanupError:
                 raise
             except OSError as error:
@@ -642,7 +652,7 @@ def delete_leak_files(state_root: Path, holders=None) -> FileDeletionReport:
         raise CleanupError("attempted deletion targets do not equal the closed leak manifest")
     if _identity(root) != root_identity:
         raise CleanupError("state-root identity changed during file deletion")
-    return FileDeletionReport(tuple(attempted), root_identity)
+    return FileDeletionReport(tuple(attempted), tuple(unlinked), root_identity)
 
 
 def remove_empty_directory(descriptor: int, name: str) -> None:
@@ -659,7 +669,8 @@ def remove_empty_directory(descriptor: int, name: str) -> None:
 def _remove_empty_directories(
     state_root: Path,
     relative_directories: Iterable[str],
-) -> Tuple[str, ...]:
+) -> "Tuple[Tuple[str, ...], Tuple[str, ...]]":
+    """Return (satisfied, actually removed). The two differ when an entry was already absent."""
     root, root_identity = _canonical_state_root(state_root)
     ordered = tuple(sorted(tuple(relative_directories), key=_directory_sort_key))
     if len(ordered) != len(set(ordered)):
@@ -668,6 +679,7 @@ def _remove_empty_directories(
     resolved = _preflight_directories(root, ordered, require_empty=False, allow_absent=True)
 
     removed = []  # type: List[str]
+    rmdired = []  # type: List[str]
     for relative_path in ordered:
         if relative_path not in resolved:
             removed.append(relative_path)   # already absent — the goal state is reached
@@ -693,10 +705,11 @@ def _remove_empty_directories(
         except OSError as error:
             raise CleanupError("could not remove empty manifest directory: " + relative_path) from error
         removed.append(relative_path)
+        rmdired.append(relative_path)
 
     if _identity(root) != root_identity:
         raise CleanupError("state-root identity changed during empty-directory removal")
-    return tuple(removed)
+    return tuple(removed), tuple(rmdired)
 
 
 def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
@@ -734,7 +747,7 @@ def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
             )
 
         file_report = delete_leak_files(state_root, holders=holders)
-        removed_directories = _remove_empty_directories(
+        removed_directories, rmdired_directories = _remove_empty_directories(
             state_root,
             EMPTY_DIRECTORY_MANIFEST,
         )
@@ -748,7 +761,9 @@ def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
             raise CleanupError("state-root identity changed across cleanup phases")
         return CleanupReport(
             file_report.attempted_relative_paths,
+            file_report.unlinked_relative_paths,
             removed_directories,
+            rmdired_directories,
             root_identity,
         )
 
@@ -825,13 +840,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (CleanupError, OSError) as error:
         print("cleanup refused: " + str(error), file=sys.stderr)
         return 1
+    # WHAT WAS ACTUALLY REMOVED, not what was attempted (PR #63 recheck, P2). This printed the
+    # ATTEMPTED counts under the word "removed", so a root that merely ENDS in
+    # `unleashed-mail/review-transcripts` — a stale XDG base, say — reported "removed 39 manifest
+    # files and 9 empty manifest directories" while removing nothing and leaving the real leaks in
+    # place. A message that claims more than the code did is worse than no message.
     print(
         "removed "
+        + str(len(report.unlinked_relative_paths))
+        + " of "
         + str(len(report.attempted_relative_paths))
         + " manifest files and "
+        + str(len(report.rmdired_directories))
+        + " of "
         + str(len(report.removed_directories))
-        + " empty manifest directories"
+        + " empty manifest directories (the remainder were already absent)"
     )
+    if not report.unlinked_relative_paths and not report.rmdired_directories:
+        # THE SUFFIX IS NOT PROOF OF IDENTITY. A canonical-looking root with nothing to remove is
+        # either a completed cleanup or the WRONG root, and the filesystem cannot tell those apart —
+        # so say so rather than let "removed 0 of 39" read as done. Not an error: re-running a
+        # finished cleanup is legitimate and must stay idempotent.
+        print(
+            "note: nothing was removed. That is expected if this cleanup already ran — but it is the "
+            "same result a WRONG state root produces, and the directory name alone cannot tell them "
+            "apart. Confirm this is the allocator's own review-transcripts directory (the one under "
+            "the XDG state base the allocator actually uses) before treating the leaks as gone."
+        )
     return 0
 
 

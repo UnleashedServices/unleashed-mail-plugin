@@ -383,6 +383,69 @@ def _live_tools(frontmatter: dict) -> "set[str]":
     return granted - _tool_tokens(frontmatter.get("disallowedTools", ""))
 
 
+def _unquoted_shell_operators(line: str) -> "list[str]":
+    """Shell operators the SHELL would act on, in source order.
+
+    QUOTING IS THE WHOLE POINT. `grep -rn "Button\\|Toggle" path` contains `|`, but inside a quoted
+    regex it is ALTERNATION — something `Grep` does natively — so a naive substring scan would reject
+    dozens of legitimate single-grep recipes and the check would get switched off. Only an operator
+    that would actually run counts.
+
+    DOUBLE QUOTES DO NOT DISABLE SUBSTITUTION. `"$(cat p)"` and a backtick inside double quotes still
+    execute; only single quotes make everything literal. Treating both quote styles the same way
+    missed exactly that, which is the mistake this function is guarding against in the first place.
+
+    REDIRECTS ARE DELIBERATELY EXCLUDED. `2>/dev/null` is the only one these recipes use, and the
+    `Grep` tool has no stderr to silence, so the line is expressible without it.
+    """
+    operators: "list[str]" = []
+    quote = None
+    index = 0
+    while index < len(line):
+        pair = line[index:index + 2]
+        character = line[index]
+        if quote == "'":
+            if character == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if character == "\\":
+                index += 2                     # a backslash escape inside double quotes
+                continue
+            if pair == "$(":
+                operators.append("$(")         # substitution IS active inside double quotes
+                index += 2
+                continue
+            if character == "`":
+                operators.append("`")
+            elif character == '"':
+                quote = None
+            index += 1
+            continue
+        if character == "\\":
+            index += 2
+            continue
+        if character in "'\"":
+            quote = character
+        elif pair in ("||", "&&"):
+            operators.append(pair)
+            index += 2                         # both characters consumed, or `||` also counts as `|`
+            continue
+        elif pair == "$(":
+            operators.append("$(")
+            index += 2
+            continue
+        elif character == "|":
+            operators.append("|")
+        elif character == ";":
+            operators.append(";")
+        elif character == "`":
+            operators.append("`")
+        index += 1
+    return operators
+
+
 def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
     """An agent without live `Bash` must not document a command only `Bash` could run.
 
@@ -420,6 +483,16 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
                 if stripped.startswith("|") or stripped.startswith("--"):
                     continue
                 if not re.match(r"^grep\b", stripped):
+                    offenders.append(stripped[:70])
+                    continue
+                # A STANDALONE grep, not a grep that STARTS a pipeline (PR #63 recheck, P2). The
+                # exemption keyed on the first word, so `grep … | grep -v …`, `grep … | wc -l` and
+                # `grep … || echo …` were all read as "native Grep can do this". They cannot: the
+                # `Grep` tool takes a path, not stdin, and has no `||`. Those audit sections produced
+                # NOTHING while the reviewer reported a complete review — the exact failure this
+                # check exists to prevent, surviving inside its own exemption.
+                operators = _unquoted_shell_operators(stripped)
+                if operators:
                     offenders.append(stripped[:70])
         if offenders:
             rel = path.relative_to(root).as_posix()

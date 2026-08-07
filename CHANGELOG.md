@@ -73,6 +73,44 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   third read its diff through a process substitution, where `die` exits only the subshell and the loop
   reports "no untested files" for a diff that never ran.
 
+### Fixed — second recheck pass (10 further findings)
+
+- **A prompt naming `X_PLAN.md.bak` bound cleanly to `X_PLAN.md`.** `_PLAN_REFERENCE` stopped at `.md`
+  and required no boundary, so the reviewer was instructed to read a sibling while the transcript and
+  artifact attested to the plan. Nothing is extracted from `.md.bak` now, so the prompt is refused for
+  naming no plan rather than mis-bound; the sentence-period, comma and bracket spellings still bind.
+- **`<transcript>.planbytes` is read at verdict-write time.** It was written by the binder, staged by
+  both harnesses as the bytes the reviewer actually read, and compared by nothing — so a snapshot
+  rewritten after binding produced an artifact that still validated. Honest scope: this closes the
+  uncoordinated family; a same-account process that replaces BOTH sidecars coherently and restores
+  both is not defended against and cannot be by any file-based binding.
+- **The capture cap held on one of three append paths.** Both drain sweeps called `raw.extend()`
+  without rechecking, so a child emitting just under the limit, spawning a descendant that retains the
+  PTY and exiting drove the wrapper past it — the reviewer measured 70,561,968 bytes captured at exit 0.
+- **The `.launch` preflight could hang forever.** `lstat` then a plain `open()` of the same name is
+  both a check-then-use and a blocking open: a FIFO planted in that window waited for a writer that
+  never came, before the fork and before the timeout clock. One `O_NOFOLLOW|O_NONBLOCK` open now, with
+  the checks made on the descriptor.
+- **The reviewer-mutation detector missed writes inside an untracked directory.** Git collapses one to
+  a single `?? dir/` line. The disposable checkout is compared with `--untracked-files=all`; the LIVE
+  tree deliberately is not, because the allocator writes its own per-run files there between the two
+  snapshots and expanding them voided every honest round (reproduced: six harness tests).
+- **`stage-bound-plan.py` accepted a `.plan` truncated to its digest**, spending a full round on
+  evidence `review-verdict.py` was guaranteed to reject. The complete grammar is checked at staging.
+- **The agy preflight returned before its mutation check**, so an `agy` that modified the checkout and
+  then exited non-zero was reported only as "unavailable". The fingerprint comparison runs first.
+- **`containment.repository_root()` stripped a trailing run of newlines** — the third narrowing of the
+  same mistake (`strip()` ate a space, `rstrip("\n")` ate a legal trailing newline). Exactly one
+  terminating byte is removed now.
+- **The bashless-agent check exempted any line starting with `grep`**, so `grep … | grep -v …`,
+  `grep … | wc -l` and `grep … || echo …` passed as native-Grep-compatible. Four shipped agents carried
+  fifteen such recipes whose audit sections produced nothing; all fifteen are rewritten as single
+  greps with the filtering stated in prose. The new check is quoting-aware, because `"A\|B"` is
+  alternation, not a pipe.
+- **`cleanup --apply` printed attempted counts under the word "removed"** — "removed 39 manifest
+  files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
+  zero-removal run cannot be distinguished from a wrong state root.
+
 ### Removed
 
 - Five scratch probes at the repository root (`test_capture{,2,3,4,5}.py`), committed by accident in

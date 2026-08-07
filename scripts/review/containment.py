@@ -57,13 +57,14 @@ def repository_root() -> str:
         )
     except OSError as error:
         refuse(f"could not run git to locate the repository root: {error}")
-    # `rstrip("\n")`, NOT `strip()` (PR #63 recheck). A space is a legal path character, so a checkout
-    # whose final component ends in one — `…/trailing space /` — had that character removed from
-    # `git rev-parse`'s output, and the root then named a DIFFERENT directory. Every operand resolved
-    # outside it and was refused, breaking the capture, audit, snapshot and persistence wrappers that
-    # all share this helper. Reproduced. Git terminates the path with exactly one newline; that is the
-    # only byte to remove.
-    root = top.stdout.rstrip("\n")
+    # EXACTLY ONE TERMINATING NEWLINE — the third narrowing of the same mistake. `strip()` ate a legal
+    # trailing SPACE (`…/trailing space /`), so the root named a different directory and every wrapper
+    # sharing this helper rejected valid operands; `rstrip("\n")` fixed the space and kept the shape of
+    # the bug, because a NEWLINE is a legal path character too — a checkout whose final component ends
+    # in one has git emit `<path-with-newline>` plus its own terminator, and `rstrip` eats both
+    # (PR #63 recheck, P2). Git terminates the path with exactly one newline; that is the only byte to
+    # remove, so slicing it is the answer that cannot be narrowed a fourth time.
+    root = top.stdout[:-1] if top.stdout.endswith("\n") else top.stdout
     if top.returncode != 0 or not root:
         refuse(
             "not inside a Git worktree, so there is no repository to contain operands to — "

@@ -218,7 +218,7 @@ if [ -s "$OUT" ]; then
 fi
 # The baseline: everything the HARNESS put in the tree (the prompt, the staged plan). Anything beyond
 # this after the run is the reviewer's doing.
-TREE_BASELINE="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+TREE_BASELINE="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
 
 # Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
@@ -265,7 +265,7 @@ fi
 # placed is in the baseline, so anything beyond it is the reviewer's doing, and it fails the round.
 # (The old form also excluded the prompt's basename from the diff — which would have HIDDEN a reviewer
 # tampering with any file sharing that name. The content checks above cover the prompt now.)
-TREE_AFTER="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+TREE_AFTER="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
 DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" || true)"
 if [ -n "$DIRTY" ]; then
     { echo "GATE FAILED — the reviewer WROTE inside the disposable checkout (round void — agent-mode"

@@ -890,3 +890,99 @@ class RunawayOutputIsBounded(unittest.TestCase):
         code = self.mod.main(out, ["sh", "-c", "printf 'VERDICT: APPROVE\\n'"], timeout=30)
         self.assertEqual(0, code)
         self.assertIn("VERDICT: APPROVE", Path(out).read_text(encoding="utf-8"))
+
+
+class LaunchRecordOpenCannotHangOrFollow(unittest.TestCase):
+    """The preflight read of `.launch` ran BEFORE the fork and before the timeout clock.
+
+    THE FINDING (PR #63 recheck, P2). It was `lstat` then a plain `open()` of the same NAME — a
+    check-then-use, and a hang: a FIFO at that path makes a blocking open wait for a writer that never
+    arrives, so the round hung with no timeout able to recover it. One `O_NOFOLLOW|O_NONBLOCK` open,
+    with the checks made on the resulting descriptor, fixes both halves.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.marker = os.path.join(self.d, "reviewer-ran")
+
+    def _run(self, plant):
+        run_id = "a" * 32
+        out = os.path.join(self.d, f"COREDEV-1r1-codex-{run_id}.txt")
+        Path(out).touch()
+        plant(out + ".launch")
+        return subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", out, "--",
+             "sh", "-c", f"echo ran > {self.marker}; echo hi"],
+            capture_output=True, text=True, timeout=30,
+        ), os.path.exists(self.marker)
+
+    def test_a_FIFO_at_the_launch_path_refuses_instead_of_hanging(self):
+        """`subprocess.run(timeout=30)` is the assertion: the pre-fix code never returns at all."""
+        result, ran = self._run(lambda path: os.mkfifo(path, 0o600))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("launch record", result.stderr)
+        self.assertFalse(ran, "the reviewer was spawned on a FIFO launch record")
+
+    def test_a_SYMLINK_at_the_launch_path_is_refused(self):
+        def plant(path):
+            target = os.path.join(self.d, "elsewhere.launch")
+            Path(target).write_text("a" * 32 + " codex\n", encoding="utf-8")
+            os.symlink(target, path)
+        result, ran = self._run(plant)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(ran, "the preflight followed a symlinked launch record")
+
+    def test_a_REAL_record_still_runs(self):
+        """Positive control — O_NONBLOCK must not break the ordinary regular-file read."""
+        result, ran = self._run(
+            lambda path: Path(path).write_text("a" * 32 + " codex\n", encoding="utf-8"))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(ran)
+
+
+class EveryDrainPathHonoursTheCap(unittest.TestCase):
+    """The cap was applied in the main read loop only (PR #63 recheck, P2).
+
+    Two drain sweeps follow it — the post-reap sweep and the one in `finally` — and both called
+    `raw.extend()` without rechecking, so a child that emitted just under the limit, spawned a
+    descendant retaining the PTY and exited drove the wrapper past the bound through those sweeps. The
+    reviewer measured 70,561,968 bytes captured and an exit status of 0.
+
+    ASSERTED STRUCTURALLY, and that is a deliberate choice rather than a shortcut. Driving the drain
+    path from outside is not deterministic: each sweep polls with a 50 ms `select` and BREAKS on the
+    first idle window, so whether a descendant's first bytes arrive before that window is a race
+    between `fork`+`exec` and a timer. I built the fixture three ways and measured it — a descendant
+    started after the parent's output never reached the drain at all (exit 0, exactly the parent's
+    90,000 bytes), and one started before it tripped the MAIN loop instead (exit 125), which is the
+    path already covered by `RunawayOutputIsBounded`. A test that passes or fails on that race would
+    tell us nothing about the fix, which is the "a test that can pass against broken code proves
+    nothing" rule this suite applies elsewhere.
+
+    So the property is asserted where it is exact: EVERY site that appends to the capture buffer is
+    followed by the cap check. That is precisely what the defect was — one append site opting out — and
+    it also catches a fourth site added later, which a behavioural test of these two never would.
+    """
+
+    SOURCE = Path(_PTY).read_text(encoding="utf-8")
+
+    def test_every_append_site_is_followed_by_the_cap_check(self):
+        lines = self.SOURCE.splitlines()
+        appends = [i for i, line in enumerate(lines) if line.strip() == "raw.extend(chunk)"]
+        self.assertEqual(3, len(appends),
+                         f"the number of capture-buffer append sites changed: {len(appends)}")
+        for index in appends:
+            window = "\n".join(lines[index + 1:index + 4])
+            self.assertIn("len(raw) > MAX_CAPTURE_BYTES", window,
+                          f"the append at line {index + 1} is not followed by the cap check:\n{window}")
+            self.assertIn("_report_overflow()", window,
+                          f"the append at line {index + 1} does not set `overflowed`:\n{window}")
+
+    def test_the_overflow_report_is_one_shared_helper(self):
+        """One helper, called from all three, so the three cannot drift into different answers."""
+        self.assertEqual(1, self.SOURCE.count("def _report_overflow("))
+        self.assertEqual(3, self.SOURCE.count("overflowed = _report_overflow()"))
+
+    def test_the_overflow_exit_status_is_distinct_from_the_timeout(self):
+        """125, not 124: a runaway must not read as a slow reviewer."""
+        self.assertIn("exit_status = 125", self.SOURCE)

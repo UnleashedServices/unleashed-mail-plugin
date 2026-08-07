@@ -209,6 +209,9 @@ class M5PathFixture(threading.TranscriptThreadingFixture):
         launch.write_text(
             run_id.group(1) + " " + leaf.group("reviewer") + "\n", encoding="utf-8"
         )
+        # The PLAN sidecars (`.plan` + `.planbytes`) are not written here: cells that need them call
+        # the inherited `bind_transcript_to_plan`, which writes both together — the verdict writer
+        # reads the snapshot now and refuses a per-run transcript carrying only the record.
         stamp = path.stat().st_mtime_ns
         os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
 

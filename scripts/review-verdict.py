@@ -669,6 +669,37 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     bound_digest = match.group(1).decode("ascii")
     bound_plan = match.group(2).decode("utf-8", "replace")
 
+    # `.planbytes` IS READ HERE — it was written and never read, which is this branch's own recurring
+    # defect (PR #63 recheck, P1). `bind-prompt.py` keeps the exact bytes it hashed beside the record,
+    # both isolation harnesses stage THOSE bytes, and until now nothing downstream ever compared them
+    # to the record again. So a `.planbytes` rewritten after binding — without a matching edit to
+    # `.plan` — fed the reviewer substituted bytes and left an artifact that still validated.
+    #
+    # HONEST SCOPE, because the reviewer's finding names a stronger attack than this closes. A
+    # same-account process that replaces BOTH sidecars coherently and restores BOTH before the verdict
+    # is written is NOT defended against here, and cannot be by any file-based binding: every anchor
+    # this program could read is a file that same attacker can rewrite and restore, including the
+    # transcript whose digest the artifact records. That is the same residual `audit-codex.sh` states
+    # for its snapshot re-check — an attacker at that privilege can edit these scripts. What IS closed
+    # is the whole uncoordinated family: a snapshot substituted and left, or restored while the record
+    # was not, in either order.
+    snapshot_path = transcript + ".planbytes"
+    snapshot = _read_regular_file_bytes(snapshot_path)
+    if snapshot is None:
+        return (
+            "per-run transcript has no bound plan snapshot: " + snapshot_path
+            + " — the binder writes it beside the record, so absence means it was removed. "
+            "Re-capture the round through the capture helpers."
+        )
+    snapshot_digest = hashlib.sha256(snapshot).hexdigest()
+    if snapshot_digest != bound_digest:
+        return (
+            "the bound plan snapshot does not match its own record: " + snapshot_path
+            + " hashes " + snapshot_digest[:12] + "…, " + binding_path + " records "
+            + bound_digest[:12] + "… — the bytes the reviewer was fed are not the bytes the binding "
+            "attests to"
+        )
+
     # The DIGEST is the binding; the recorded path is diagnostic only. Comparing paths as well would
     # make the check depend on the working directory the capture and the write happened to run from,
     # and a path that merely LOOKS right proves nothing about the bytes anyway. Digest equality is

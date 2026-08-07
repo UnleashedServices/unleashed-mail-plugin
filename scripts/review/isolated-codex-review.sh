@@ -135,7 +135,7 @@ if [ -s "$OUT" ]; then
     echo "refusing to reuse a non-empty reserved leaf: $OUT" >&2
     exit 1
 fi
-TREE_BASELINE="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+TREE_BASELINE="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
 
 # --- run codex from INSIDE the checkout, so the plan it opens is the staged, authenticated one ---
 # `-s read-only` keeps codex from writing; running in $TREE keeps it from reading the live, swappable
@@ -164,7 +164,7 @@ if [ "$ACTUAL_PROMPT_SHA" != "$PROMPT_TREE_SHA" ]; then
     echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
     exit 3
 fi
-TREE_AFTER="$(git -C "$TREE" status --porcelain 2>/dev/null || true)"
+TREE_AFTER="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
 DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" || true)"
 if [ -n "$DIRTY" ]; then
     { echo "GATE FAILED — the reviewer WROTE inside the disposable checkout (round void):"

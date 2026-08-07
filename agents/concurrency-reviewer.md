@@ -42,7 +42,8 @@ grep -rn "@MainActor" --include='*.swift' "Unleashed Mail/Sources/"
 grep -rn "class.*:.*ObservableObject" --include='*.swift' "Unleashed Mail/Sources/"
 
 # Find mutable shared state without actor protection
-grep -rn "var.*=.*\[\|var.*=.*\[:\]" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "struct\|actor\|@MainActor"
+grep -rn "var.*=.*\[\|var.*=.*\[:\]" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard hits on lines also naming `struct`, `actor` or `@MainActor` — those are already isolated.
 
 # Find nonisolated access to actor properties
 grep -rn "nonisolated" --include='*.swift' "Unleashed Mail/Sources/"
@@ -58,7 +59,8 @@ grep -rn "nonisolated" --include='*.swift' "Unleashed Mail/Sources/"
 
 ```bash
 # Find Task {} without structured concurrency
-grep -rn "Task\s*{" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "TaskGroup\|withThrowingTaskGroup\|withTaskGroup"
+grep -rn "Task\s*{" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard `TaskGroup`, `withTaskGroup` and `withThrowingTaskGroup` hits — structured concurrency, not a detached Task.
 
 # Find detached tasks (almost always wrong)
 grep -rn "Task\.detached" --include='*.swift' "Unleashed Mail/Sources/"
@@ -81,7 +83,8 @@ grep -rn "\.task\s*{" --include='*.swift' "Unleashed Mail/Sources/"
 grep -rn "dbQueue\.\|dbPool\." --include='*.swift' "Unleashed Mail/Sources/"
 
 # Find raw database access outside read/write blocks
-grep -rn "\.execute\|\.fetch" --include='*.swift' "Unleashed Mail/Sources/" | grep -v "\.read\|\.write\|db\."
+grep -rn "\.execute\|\.fetch" --include='*.swift' "Unleashed Mail/Sources/"
+# Then discard hits also naming `.read`, `.write` or `db.` — those already go through a GRDB accessor.
 ```
 
 **Check for:**
@@ -202,7 +205,8 @@ grep -rn "@unchecked Sendable" --include='*.swift' "Unleashed Mail/Sources/"
 ```bash
 # Deprecated APIs (app targets macOS 15+)
 grep -rn "NSColor\.\(selectedTextBackgroundColor\)\|NSWorkspace.*launchApplication\|NSAlert()\.beginSheet" --include='*.swift' "Unleashed Mail/Sources/"
-grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' "Unleashed Mail/Sources/" | head -20
+grep -rn "URLSession\.shared\.dataTask\|completionHandler:" --include='*.swift' "Unleashed Mail/Sources/"
+# Read the first ~20 hits; the pattern repeats and the rest add nothing.
 ```
 
 **Flag as 🟡 WARNING:**

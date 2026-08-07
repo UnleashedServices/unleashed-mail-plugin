@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _MOD_PATH = os.path.join(os.path.dirname(__file__), "..", "validate-plugin-assembly.py")
 _spec = importlib.util.spec_from_file_location("validate_plugin_assembly", _MOD_PATH)
 vpa = importlib.util.module_from_spec(_spec)
@@ -945,3 +946,41 @@ class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
         `[Read, Bash` would hand every consumer two tokens that match nothing — the bug itself."""
         self.assertIsNone(vpa.parse_frontmatter(
             "---\nname: probe\ndescription: d\nallowed-tools: [Read,\n  Bash\n---\nbody\n"))
+
+
+class GrepPipelinesAreNotNativeGrep(unittest.TestCase):
+    """The bashless-agent exemption keyed on the FIRST WORD (PR #63 recheck, P2).
+
+    `grep … | grep -v …`, `grep … | wc -l` and `grep … || echo …` all start with `grep`, so the check
+    that exists to catch "documents a command only a shell could run" waved them through. The `Grep`
+    tool takes a path, not stdin, and has no `||` — so those audit sections produced NOTHING while the
+    reviewer reported a complete review, which is the exact failure the check was written for,
+    surviving inside its own exemption. Four shipped agents carried fifteen such recipes.
+
+    Quoting is what makes this checkable rather than a blanket ban: `grep -rn "A\\|B" path` contains a
+    `|`, but inside a quoted regex it is ALTERNATION, which `Grep` does natively. A substring scan
+    would have rejected dozens of legitimate recipes and the check would have been switched off.
+    """
+
+    def test_an_unquoted_operator_is_found_and_a_quoted_one_is_not(self):
+        cases = {
+            'grep -rn "A" path | grep -v "B"': ["|"],
+            'grep -rn "A" path | wc -l': ["|"],
+            'grep -A5 "A" f 2>/dev/null || echo "none"': ["||"],
+            'grep -rn "A" path && echo done': ["&&"],
+            'grep -rn "A" path; echo done': [";"],
+            'grep -rn "$(cat p)" path': ["$("],
+            'grep -rn "`cat p`" path': ["`", "`"],  # double quotes do NOT disable substitution
+            'grep -rn "Button\\|Toggle" path': [],  # alternation inside a quoted regex
+            "grep -rn 'A\\|B' --include='*.swift' path": [],
+            'grep -rn "A" path 2>/dev/null': [],    # a redirect is not an operator Grep must express
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(expected, vpa._unquoted_shell_operators(line))
+
+    def test_the_shipped_bashless_agents_document_no_pipelines(self):
+        """The tree itself, not a fixture: every recipe in a bashless agent must be runnable."""
+        problems: list[str] = []
+        vpa.check_bashless_agents_run_no_shell(Path(_ROOT), problems)
+        self.assertEqual([], problems)

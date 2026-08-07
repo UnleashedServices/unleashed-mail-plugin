@@ -72,7 +72,16 @@ def read_nofollow(path: str, label: str = "operand") -> bytes:
     return read_contained(path, label)
 
 
-_PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md")
+# A BOUNDARY IS REQUIRED AFTER `.md` (PR #63 recheck, P1). Without it `docs/planning/A_PLAN.md.bak`
+# yielded the reference `docs/planning/A_PLAN.md`, so a prompt instructing the reviewer to read the
+# BACKUP bound cleanly to the plan — the reviewer read different committed bytes while the transcript
+# and the final artifact both attested to A. `_PLAN_SUFFIX_BOUNDARY` rejects a following filename
+# character and a following dotted extension (`.md.bak`, `.mdx`), while still accepting the spellings
+# prose actually produces: `…_PLAN.md` at end of line, before a space, a comma, a closing bracket, or a
+# sentence-ending period. Nothing is extracted from `.md.bak`, so `prompt_disagreement` refuses the
+# prompt for naming no plan rather than binding it to the wrong one — the safe direction.
+_PLAN_SUFFIX_BOUNDARY = rb"(?!\.?[A-Za-z0-9_-])"
+_PLAN_REFERENCE = re.compile(rb"[A-Za-z0-9_./-]*_PLAN\.md" + _PLAN_SUFFIX_BOUNDARY)
 
 
 def _plan_references(prompt_bytes: bytes, root: str) -> "list[bytes]":
@@ -94,7 +103,9 @@ def _plan_references(prompt_bytes: bytes, root: str) -> "list[bytes]":
     contains a space matches neither pattern. Space-free alternate spellings keep working exactly as
     before, via `realpath` in the caller.
     """
-    anchored = re.compile(re.escape(os.fsencode(root)) + rb"/[^\n]*?_PLAN\.md")
+    anchored = re.compile(
+        re.escape(os.fsencode(root)) + rb"/[^\n]*?_PLAN\.md" + _PLAN_SUFFIX_BOUNDARY
+    )
     references = anchored.findall(prompt_bytes)
     references += _PLAN_REFERENCE.findall(anchored.sub(b" ", prompt_bytes))
     return references

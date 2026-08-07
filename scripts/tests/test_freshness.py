@@ -63,6 +63,29 @@ MALFORMED_RECORDS = (
 )
 
 
+#: Cells that bind a transcript to ANOTHER plan need snapshot bytes hashing to that plan's digest,
+#: because `.planbytes` is by construction the input the record's digest was taken over. A digest is
+#: one-way, so the cells that use this pass a digest they computed from bytes they still hold; this
+#: raises rather than inventing bytes, so a caller that forgets is told instead of silently drifting.
+_KNOWN_PLAN_BYTES = {}
+
+
+def _bytes_hashing_to(digest: str) -> bytes:
+    payload = _KNOWN_PLAN_BYTES.get(digest)
+    if payload is None:
+        raise AssertionError(
+            "no fixture bytes registered for digest " + digest[:12] + "… — register them with "
+            "`_register_plan_bytes` so the snapshot can agree with the record it is bound to"
+        )
+    return payload
+
+
+def _register_plan_bytes(payload: bytes) -> str:
+    digest = hashlib.sha256(payload).hexdigest()
+    _KNOWN_PLAN_BYTES[digest] = payload
+    return digest
+
+
 def _replace_once(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
         raise AssertionError("mutation anchor must occur exactly once: " + repr(old))
@@ -414,6 +437,9 @@ class FreshnessFixture(unittest.TestCase):
             Path(str(transcript) + ".plan").write_text(
                 f"{plan_digest}  {plan_identity}\n", encoding="utf-8"
             )
+            # `.planbytes` too: `write` reads the snapshot and requires it to match the record, so a
+            # fixture producing only `.plan` models a capture no binder ever made.
+            Path(str(transcript) + ".planbytes").write_bytes(plan.read_bytes())
             write_prompt_binding(transcript)
 
         self.configure_kind(
@@ -1011,6 +1037,7 @@ class SFreshAdditionalProofs(FreshnessFixture):
         # binding comparison exempted separator-free records (PR #63 recheck).
         shared_identity, _kind = _verdict_module()._plan_identity(str(plan))
         Path(str(shared) + ".plan").write_text(f"{digest}  {shared_identity}\n", encoding="utf-8")
+        Path(str(shared) + ".planbytes").write_bytes(plan.read_bytes())
         write_prompt_binding(shared)
         return self.invoke(
             script,
@@ -1333,6 +1360,16 @@ class PlanBindingProofs(FreshnessFixture):
                 Path(str(transcript) + ".plan").write_text(
                     f"{recorded}  {identity}\n", encoding="utf-8"
                 )
+                # THE SNAPSHOT AGREES WITH THE RECORD, always — that is what the binder produces,
+                # since `.planbytes` are the very bytes it hashed. `write` now compares the two, and
+                # a fixture whose snapshot contradicted its own record would fail on THAT rule
+                # instead of on the binding rule each cell isolates. When the record names another
+                # plan's digest, the snapshot holds bytes hashing to it: the review really did read
+                # something else, which is the scenario.
+                Path(str(transcript) + ".planbytes").write_bytes(
+                    plan.read_bytes() if recorded == plan_digest
+                    else _bytes_hashing_to(recorded)
+                )
                 write_prompt_binding(transcript)
             transcripts.append(transcript)
 
@@ -1352,7 +1389,10 @@ class PlanBindingProofs(FreshnessFixture):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_a_transcript_reviewing_another_plan_cannot_approve_this_one(self):
-        other = hashlib.sha256(b"a completely different plan\n").hexdigest()
+        # Registered, so the transcript's `.planbytes` can hold the bytes this digest was taken over —
+        # a review of ANOTHER plan is the scenario, and its snapshot must be self-consistent or the
+        # cell fails on the snapshot rule instead of on the binding rule it names.
+        other = _register_plan_bytes(b"a completely different plan\n")
         result, _ = self.write_with_binding("binding-other-plan", other)
         output = result.stdout + result.stderr
         self.assertNotEqual(0, result.returncode, output)

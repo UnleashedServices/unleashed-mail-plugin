@@ -19,6 +19,23 @@
 # the round's BASIS files (plan, prompt) against the digests recorded before launch.
 
 # Print the content-aware fingerprint of the checkout rooted at $1.
+# THE DEFAULT UNTRACKED MODE, DELIBERATELY — this function fingerprints the LIVE checkout.
+#
+# Git collapses an untracked directory to a single `?? dir/` line, which hides a file created beneath
+# one; `--untracked-files=all` expands it, and that IS the right answer for the disposable review
+# checkout, where the harnesses use it (PR #63 recheck, P2). It is the wrong answer here: the allocator
+# writes its own per-run files — the reserved leaf, `.captureid`, the sidecars — into the transcript
+# state tree BETWEEN this function's before and after calls, and when that tree sits inside the
+# repository (`XDG_STATE_HOME` under the checkout, which the harness fixtures use and a developer may
+# too) every one of them appears as a new line and VOIDS a clean round. Reproduced: six harness tests
+# failed with `GATE FAILED — the reviewer MUTATED the working tree` naming a `.captureid` the harness
+# itself had just created.
+#
+# RESIDUAL, stated rather than traded away: a reviewer writing inside an ALREADY-untracked directory of
+# the live checkout is not seen here. The `git diff HEAD` half below covers every tracked change, the
+# disposable checkout — where the reviewer actually runs — is compared with `-uall`, and the round's
+# basis files are content-verified against their recorded digests. A guard that fails every honest
+# round is one that gets switched off, which is the worse failure.
 tree_fingerprint() {
     git -C "$1" status --porcelain 2>/dev/null
     printf '\036\n'   # a record separator so status and diff cannot alias across the boundary

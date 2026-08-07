@@ -473,11 +473,14 @@ class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
         state_root, _objects = self.make_state_tree()
         nested_root = state_root / "ordering-fixture"
         (nested_root / "parent" / "child").mkdir(parents=True)
-        removed = production._remove_empty_directories(
+        # `(satisfied, actually removed)` — the two differ when an entry was already absent, which is
+        # what lets `--apply` report removals it performed instead of removals it attempted.
+        removed, rmdired = production._remove_empty_directories(
             nested_root,
             ("parent", "parent/child"),
         )
         self.assertEqual(("parent/child", "parent"), removed)
+        self.assertEqual(("parent/child", "parent"), rmdired)
 
         mutant_source = _replace_once(
             PRODUCTION_SOURCE,
@@ -564,7 +567,8 @@ class ReleaseCleanupProofs(SyntheticStateTreeMixin, unittest.TestCase):
             text=True,
         )
         self.assertEqual(0, applied.returncode, applied.stderr)
-        self.assertIn("removed 39 manifest files and 9 empty manifest directories", applied.stdout)
+        self.assertIn("removed 39 of 39 manifest files and 9 of 9 empty manifest directories",
+                      applied.stdout)
         self.assertTrue(objects["root-canary"].is_file())
         self.assertEqual(b"fake HOME canary\n", home_canary.read_bytes())
 
@@ -1072,3 +1076,49 @@ class HeldDescriptorRaceProofs(SyntheticStateTreeMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyReportsWhatItRemoved(unittest.TestCase):
+    """`--apply` printed ATTEMPTED counts under the word "removed" (PR #63 recheck, P2).
+
+    A root that merely ENDS in `unleashed-mail/review-transcripts` — a stale XDG base, say — is
+    accepted by the suffix binding, because a completed cleanup legitimately leaves that directory
+    empty and the tool must stay idempotent. On such a root the run removed nothing and reported
+    "removed 39 manifest files and 9 empty manifest directories". A message claiming more than the
+    code did is worse than no message: it reads as "the leaks are gone" when they are untouched.
+
+    The binding itself is not tightened, because the filesystem cannot distinguish a finished cleanup
+    from a wrong root — so the run says exactly that instead of implying the former.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="cleanup-report-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.wrong = Path(self.tmp) / "stale-xdg" / "unleashed-mail" / "review-transcripts"
+        self.wrong.mkdir(parents=True, mode=0o700)
+
+    def _apply(self, root: Path):
+        return subprocess.run(
+            [sys.executable, str(PRODUCTION_PATH), "--apply", "--state-root", str(root)],
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_a_canonically_named_but_EMPTY_root_reports_zero_and_says_why(self):
+        result = self._apply(self.wrong)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("removed 0 of 39 manifest files", result.stdout)
+        self.assertIn("0 of 9 empty manifest directories", result.stdout)
+        self.assertIn("same result a WRONG state root produces", result.stdout,
+                      "a zero-removal run must not read as a completed cleanup")
+        self.assertNotIn("removed 39 manifest files", result.stdout)
+
+    def test_a_REAL_root_still_reports_its_removals_and_the_note_is_absent(self):
+        """Discrimination: the note must appear only when nothing was removed."""
+        fixture = ReleaseCleanupProofs("run")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        state_root, _objects = fixture.make_state_tree()
+        result = self._apply(state_root)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("removed 39 of 39 manifest files", result.stdout)
+        self.assertNotIn("same result a WRONG state root produces", result.stdout)

@@ -131,7 +131,8 @@ All views must use Curator design tokens (per `.claude/rules/swiftui-views.md`).
 
 ```bash
 grep -rn "\.foregroundColor\|Color(hex:\|NSColor(" --include='*.swift' "Unleashed Mail/Sources/Views/" "Unleashed Mail/Sources/Components/"
-grep -rn "Divider()" --include='*.swift' "Unleashed Mail/Sources/Views/" | grep -v "CuratorDivider"
+grep -rn "Divider()" --include='*.swift' "Unleashed Mail/Sources/Views/"
+# Then ignore hits naming `CuratorDivider` — those are the Curator's own separators.
 ```
 
 ### 4. Color & Visual Accessibility
@@ -175,13 +176,13 @@ Both variants are equally important — a parity gap in a11y is a **BLOCKER**.
 
 ```bash
 # Check both compose editors
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "compose\|editor"
+grep -rni "accessibilityLabel.*\(compose\|editor\)\|accessibilityHint.*\(compose\|editor\)" --include='*.swift' .
 
 # Check the email detail view (SimpleEmailWebView — the sole production renderer)
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "email.*web\|simple.*email"
+grep -rni "accessibilityLabel.*\(email.*web\|simple.*email\)\|accessibilityHint.*\(email.*web\|simple.*email\)" --include='*.swift' .
 
 # Check both AI agent views
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "askai\|ai.*view\|ai.*window"
+grep -rni "accessibilityLabel.*\(askai\|ai.*view\|ai.*window\)\|accessibilityHint.*\(askai\|ai.*view\|ai.*window\)" --include='*.swift' .
 ```
 
 - [ ] Native compose editor AND WebKit compose editor both accessible — **🔴 BLOCKER if one has a11y and the other doesn't**

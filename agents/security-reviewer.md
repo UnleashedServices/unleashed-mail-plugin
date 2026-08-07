@@ -105,7 +105,8 @@ grep -rn "Content-Security-Policy\|CSP" --include='*.swift' --include='*.html' "
 
 ```bash
 # Check for ATS exceptions
-grep -A5 "NSAppTransportSecurity" "Unleashed Mail/Info.plist" 2>/dev/null || echo "No ATS exceptions found (good)"
+grep -A5 "NSAppTransportSecurity" "Unleashed Mail/Info.plist"
+# No output means no ATS exceptions, which is the good outcome.
 # Check for certificate validation disabling
 grep -rn "serverTrust\|allowsInvalid\|disable.*ssl\|URLSessionDelegate" --include='*.swift' "Unleashed Mail/Sources/"
 ```

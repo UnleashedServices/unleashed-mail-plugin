@@ -282,6 +282,30 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
             "dropping the launch record re-opened the live-plan fallback",
         )
 
+    def test_a_TRUNCATED_plan_binding_record_is_refused_BEFORE_the_reviewer_runs(self):
+        """Staging took `fields[0]`, so a record cut down to its digest passed (PR #63 recheck, P2).
+
+        `review-verdict.py` requires the canonical `<digest>  <plan identity>` and rejects that same
+        record at write time — so the round was spent, 12 to 28 minutes of it, on evidence guaranteed
+        to be unusable. The grammar is checked at staging now, in milliseconds.
+
+        The digest is CORRECT here; only the identity field is missing. That isolates the grammar rule
+        from the digest-mismatch rule next to it, which would otherwise supply the refusal.
+        """
+        honest = self.plan.read_bytes()
+        out, prompt = self.allocated_transcript(
+            "COREDEV-9999-r16-gemini.txt", plan_bytes=honest, recorded=honest)
+        import hashlib
+        Path(str(out) + ".plan").write_text(
+            hashlib.sha256(honest).hexdigest() + "\n", encoding="utf-8")   # digest only, no identity
+
+        result = self.run_harness(out, prompt)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("plan binding record is malformed", result.stderr)
+        self.assertFalse(self.probe.is_file(),
+                         "the reviewer RAN on a record the verdict writer will reject")
+
     def test_an_honest_snapshot_still_stages(self):
         """Positive control for the digest check — it must refuse tampering, not refuse everything.
 
@@ -437,6 +461,26 @@ printf 'VERDICT: APPROVE\\n'
         # Emitted only when the new-status-lines diff is EMPTY, which is the harness's own evidence
         # that a status-only comparison had nothing to report. That is the deletion test for the fix.
         self.assertIn("no new status line", result.stdout + result.stderr)
+
+    def test_a_reviewer_writing_INSIDE_an_untracked_directory_voids_the_round(self):
+        """Git collapses an untracked directory to one `?? dir/` line (PR #63 recheck, P2).
+
+        The absolute prompt snapshot stages under a new hierarchy in the disposable checkout, so the
+        baseline legitimately contains a collapsed entry. A reviewer that then created another file
+        anywhere beneath it left `git status --porcelain` byte-identical, the set-difference came out
+        empty, and the round was reported clean — despite the stated rule that any reviewer write voids
+        it. `--untracked-files=all` lists every file individually.
+
+        The stub writes into the checkout's own `.git` sibling hierarchy rather than at the tree root,
+        so the file is beneath a directory the baseline already collapses; a root-level write was
+        already caught and would not exercise this.
+        """
+        self.install_stub(self.MUTATING_STUB
+                          % 'mkdir -p "$tree/scratchdir/nested" && : > "$tree/scratchdir/nested/EVIL.txt"')
+        first = self.capture("15")
+        self.assertEqual(3, first.returncode, first.stdout + first.stderr)
+        self.assertIn("EVIL.txt", first.stdout + first.stderr,
+                      "the write was detected but the file beneath the collapsed entry was not named")
 
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by

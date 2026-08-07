@@ -385,6 +385,10 @@ class TranscriptThreadingFixture(unittest.TestCase):
             Path(str(transcript) + ".plan").write_text(
                 f"{digest}  {PLAN_RELATIVE}\n", encoding="utf-8"
             )
+            # `.planbytes` as well: `write` reads the snapshot and requires it to hash to the record,
+            # because the snapshot is what the reviewer was actually fed and nothing downstream had
+            # ever compared it (PR #63 recheck, P1).
+            Path(str(transcript) + ".planbytes").write_bytes(plan.read_bytes())
             write_prompt_binding(transcript)
 
     def run_persistence_recipe(
