@@ -137,16 +137,19 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 
 Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-prompt-${TICKET}r${ROUND}.md`, never a shared `.agy-prompt.md`, because two concurrent rounds sharing one prompt cross-wire prompt and transcript (deep review, P1) — then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
 
+# 1. WRITE the prompt to the per-round workspace file with the **Write tool**, not a shell heredoc.
+#    This skill grants `Write(.agy-prompt-*.md)`; a `cat > … <<EOF` is a Bash redirect matching no Bash
+#    grant, so it PROMPTS on every gate round — the exact reprompt the granted flow exists to avoid
+#    (PR #63 recheck, P2). Same shape as codex-review's `Write(.codex-prompt-*.md)` step. Give the file
+#    an absolute plan reference so agy resolves it regardless of how it was launched, e.g.:
+#
+#        Write(.agy-prompt-${TICKET}r${ROUND}.md):
+#          # Review task
+#          Read $(pwd)/docs/planning/FEATURE_PLAN.md
+#          and provide architectural assessment.
+#          Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
+
 ```bash
-# 1. From the project root, write the prompt to a workspace file.
-#    Use an absolute path so agy resolves it regardless of how it was launched.
-cat > ".agy-prompt-${TICKET}r${ROUND}.md" <<EOF
-# Review task
-
-Read $(pwd)/docs/planning/FEATURE_PLAN.md
-and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
-EOF
-
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
 # --print-timeout 28m: agy's own default is 5m and a real plan review blows past it (see above).

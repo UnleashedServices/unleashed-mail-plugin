@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1329",
+      "location": "CHANGELOG.md:1343",
       "path": "CHANGELOG.md",
-      "line": 1329,
+      "line": 1343,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -498,7 +498,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 171,
+        "line": 174,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
           "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
@@ -523,7 +523,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 233,
+        "line": 236,
         "payloads": [
           "6. **Capture output** \u2014 the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -546,7 +546,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 236,
+        "line": 239,
         "payloads": [
           "8. **Synthesize both reviews** \u2014 once the paired `/codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",

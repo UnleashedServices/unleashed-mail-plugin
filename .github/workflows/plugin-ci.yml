@@ -60,7 +60,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py scripts/review/stage-bound-plan.py scripts/review/snapshot-operands.py scripts/review/generate-callers-exemptions.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -129,22 +129,49 @@ jobs:
         # neither did CI. Checked against the merge base rather than the whole tree so history is not
         # re-litigated (PR #63 recheck, P3).
         id: whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          # `git merge-base origin/main HEAD` needs origin/main, and actions/checkout fetches only the
-          # triggering commit by default — so on a pull_request run the substitution aborted the whole
-          # job under `set -e` before the check ran. `fetch-depth: 0` on this job's checkout is what
-          # makes the base resolvable; asserting it here means a future checkout change fails loudly
-          # rather than silently skipping the gate.
-          # THE WORKFLOW'S ACTUAL BASE, not a hard-coded `main`. This repo has an `alpha` integration
-          # branch, and on an alpha-targeting PR a `main` merge base re-checks the whole accumulated
-          # `main..alpha` history — so one pre-existing whitespace issue on alpha would fail every
-          # unrelated alpha PR, which is exactly the re-litigation the comment above disclaims
-          # (PR #63 recheck).
-          base_ref="${GITHUB_BASE_REF:-main}"
-          git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1 \
-            || { echo "origin/${base_ref} is unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
-          base="$(git merge-base "origin/${base_ref}" HEAD)"
+          # THE BASE IS EVENT-DEPENDENT (PR #63 recheck, P2). `GITHUB_BASE_REF` is populated on a
+          # pull_request run and EMPTY on a push, so the old `${GITHUB_BASE_REF:-main}` made a main push
+          # compute `merge-base(origin/main, HEAD) == HEAD` and check an EMPTY range — the gate did
+          # nothing — while an alpha push re-checked the whole `main..alpha` divergence. Select the base
+          # from the event, and FAIL CLOSED whenever the base cannot be resolved (which needs
+          # `fetch-depth: 0`) rather than silently skipping.
+          ZERO="0000000000000000000000000000000000000000"
+          case "$EVENT_NAME" in
+            pull_request)
+              # The PR's real base branch — not a hard-coded `main` — so an alpha-targeting PR is diffed
+              # against alpha and its accumulated history is not re-litigated.
+              base_ref="${PR_BASE:?pull_request run carried no base ref}"
+              git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1 \
+                || { echo "origin/${base_ref} unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base "origin/${base_ref}" HEAD)"
+              ;;
+            push)
+              # The previous tip of the branch. All-zeros = a new branch with no ancestor, and an
+              # unresolvable value = a shallow fetch; both fall back to the merge base with the default
+              # branch so only THIS push's changes are checked, and fail closed if even that is absent.
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ] \
+                   && git rev-parse --verify "$PUSH_BEFORE" >/dev/null 2>&1; then
+                base="$PUSH_BEFORE"
+              else
+                git rev-parse --verify origin/main >/dev/null 2>&1 \
+                  || { echo "no usable push ancestor and origin/main unavailable — needs fetch-depth: 0" >&2; exit 1; }
+                base="$(git merge-base origin/main HEAD)"
+              fi
+              ;;
+            *)
+              # workflow_dispatch (and any future trigger): an explicit, documented base — the merge
+              # base with the default branch.
+              git rev-parse --verify origin/main >/dev/null 2>&1 \
+                || { echo "origin/main unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base origin/main HEAD)"
+              ;;
+          esac
           git diff --check "$base" HEAD
 
       - name: ShellCheck plugin scripts
@@ -193,6 +220,7 @@ jobs:
             echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
             echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"
+            echo "| whitespace (git diff --check) | ${{ steps.whitespace.outcome || 'did not run' }} |"
             echo "| shellcheck (-S warning) | ${{ steps.shellcheck_gate.outcome || 'did not run' }} |"
             echo "| actionlint | ${{ steps.actionlint_gate.outcome || 'did not run' }} |"
             echo "| hooks-manifest (strict) | ${{ steps.hooks_manifest.outcome || 'did not run' }} |"
@@ -215,7 +243,43 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py scripts/review/cleanup_coredev_2619_leaks.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py scripts/review/callers_scan.py scripts/review/bind-prompt.py scripts/review/containment.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/stage-bound-plan.py scripts/review/snapshot-operands.py scripts/review/generate-callers-exemptions.py
+      - name: bind-prompt.py real invocation on 3.9
+        # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
+        # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
+        # reasoning that earned bash-write-scan its 3.9 exec smoke). Drive a REAL bind (a git repo, a
+        # prompt naming the plan, a transcript) plus a refusal, so a 3.9 regression surfaces here.
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+          cd "$work"
+          git init -q .; git config user.email c@i; git config user.name ci
+          mkdir -p docs/planning
+          printf '# Plan\ncontent\n' > docs/planning/X_PLAN.md
+          printf 'Review the plan for correctness and completeness.\n%.0s' {1..40} > .prompt.md
+          printf 'REVIEW TARGET: docs/planning/X_PLAN.md\n' >> .prompt.md
+          git add -A; git commit -qm init
+          t="$work/t.txt"
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .prompt.md --transcript "$t" --plan docs/planning/X_PLAN.md
+          test -s "$t.plan" && test -s "$t.planbytes" && test -s "$t.prompt" \
+            || { echo "bind-prompt did not write its sidecars on 3.9" >&2; exit 1; }
+          # And a prompt naming a DIFFERENT plan must be refused (the binding is enforced, not cosmetic).
+          printf 'Review it.\n%.0s' {1..40} > .bad.md
+          printf 'REVIEW TARGET: docs/planning/OTHER_PLAN.md\n' >> .bad.md
+          status=0
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .bad.md --transcript "$work/t2.txt" --plan docs/planning/X_PLAN.md >/dev/null 2>&1 || status=$?
+          [ "$status" -ne 0 ] || { echo "bind-prompt accepted a prompt naming a different plan on 3.9" >&2; exit 1; }
+      - name: generate-callers-exemptions.py produces the shipped manifest on 3.9
+        # Added this PR and previously uncovered by CI (PR #63 recheck, P3). It regenerates the
+        # exemption manifest the callers scan depends on, and it runs on macOS stock 3.9 — run it and
+        # assert it leaves the committed manifest unchanged, so a drift or a 3.9 regression fails here.
+        run: |
+          set -euo pipefail
+          python3 scripts/review/generate-callers-exemptions.py
+          git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv \
+            || { echo "generate-callers-exemptions.py output drifted from the committed manifest" >&2; exit 1; }
       - name: callers_scan.py execution smoke on 3.9
         run: python3 scripts/review/callers_scan.py --help >/dev/null
       - name: callers_scan.py real invocation on 3.9

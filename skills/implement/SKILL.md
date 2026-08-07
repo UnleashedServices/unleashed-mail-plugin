@@ -10,7 +10,7 @@ argument-hint: [feature name or docs/planning/PLAN.md path]
 # `allowed-tools` is a pre-approval grant, NOT a restriction — narrowing it does not disable
 # anything, it just means those calls need the normal user gesture. That is the correct posture for
 # a model-reachable workflow.
-allowed-tools: Read, Grep, Glob, Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(tester), Agent(unleashed-mail:tester), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(security-reviewer), Agent(unleashed-mail:security-reviewer), Agent(concurrency-reviewer), Agent(unleashed-mail:concurrency-reviewer), Agent(ux-perf-reviewer), Agent(unleashed-mail:ux-perf-reviewer), Agent(accessibility-auditor), Agent(unleashed-mail:accessibility-auditor), Agent(prompt-review), Agent(unleashed-mail:prompt-review), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh *)
+allowed-tools: Read, Grep, Glob, Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(security-reviewer), Agent(unleashed-mail:security-reviewer), Agent(concurrency-reviewer), Agent(unleashed-mail:concurrency-reviewer), Agent(ux-perf-reviewer), Agent(unleashed-mail:ux-perf-reviewer), Agent(accessibility-auditor), Agent(unleashed-mail:accessibility-auditor), Agent(prompt-review), Agent(unleashed-mail:prompt-review), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh *)
 ---
 
 # Implement: $ARGUMENTS
@@ -81,7 +81,7 @@ so the one block that must run before any implementation prompted every time.
 CLI availability — it only ever inspects the artifact — so an unavailable reviewer reaches you as **one of
 two different failures**, depending on how far the user got:
 
-| What the user did | `verify` says | 
+| What the user did | `verify` says |
 |---|---|
 | Never ran `/unleashed-mail:review-synthesis` | *no artifact* |
 | Ran it, recording `<reviewer>=MISSING` | *not an approving verdict* … `<reviewer> recorded MISSING: no usable verdict` |

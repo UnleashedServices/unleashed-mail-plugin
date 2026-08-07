@@ -51,7 +51,14 @@ PROMPT_BODY = (
     "`VERDICT: APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES`.\n"
 ) * 12
 
-REVIEWER_STUB = "#!/usr/bin/env bash\nprintf 'VERDICT: APPROVE\\n%s reviewed the plan.\\n' \"$0\"\n"
+# Drops a run-marker when `UM_REVIEWER_RAN` is set, so a test can prove the reviewer did NOT run rather
+# than only that the wrapper exited non-zero — a refusal that happens AFTER the bytes reach the reviewer
+# is not a refusal (PR #63 recheck, P3: the never-reaches test asserted only the exit code).
+REVIEWER_STUB = (
+    "#!/usr/bin/env bash\n"
+    "[ -n \"${UM_REVIEWER_RAN:-}\" ] && : > \"$UM_REVIEWER_RAN\"\n"
+    "printf 'VERDICT: APPROVE\\n%s reviewed the plan.\\n' \"$0\"\n"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -197,13 +204,21 @@ class EndToEndGate(unittest.TestCase):
         link = self.root / ".codex-prompt-COREDEV-9999r7.md"
         link.symlink_to(outside)
 
+        marker = self.root.parent / f"reviewer-ran-{self.root.name}"
+        self.addCleanup(lambda: marker.unlink(missing_ok=True))
+        self.env["UM_REVIEWER_RAN"] = str(marker)
         for operand in (str(outside), link.name):
             with self.subTest(operand=operand):
+                marker.unlink(missing_ok=True)
                 result = self.run_script(
                     "bash", REVIEW / "capture-codex-review.sh", "COREDEV-9999", "7",
                     operand, "docs/planning/FEATURE_PLAN.md", "60",
                 )
                 self.assertNotEqual(0, result.returncode, result.stdout)
+                # The point of the finding: the reviewer must never have been reached. A non-zero exit
+                # that happened AFTER the secret was disclosed would still pass the exit-code check.
+                self.assertFalse(marker.exists(),
+                                 f"the reviewer RAN on operand {operand!r} before the refusal")
 
     def test_a_transcript_bound_to_another_plan_cannot_back_this_one(self):
         codex, gemini, _artifact = self.passing_gate()

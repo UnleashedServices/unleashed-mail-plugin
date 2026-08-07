@@ -445,6 +445,20 @@ See `docs/planning/COREDEV-2642_PR63_REMEDIATION_HANDOFF.md` §7 for the full pe
 
 ### Fixed
 
+- **Permission-surface and CI hygiene (PR #63 recheck).** The `gemini-review` prompt-file recipe was a
+  `cat > … <<EOF` heredoc matching no Bash grant, so the mandatory first step prompted every round
+  despite the `Write(.agy-prompt-*.md)` grant — it now instructs the Write tool, mirroring
+  `codex-review`. The `implement` skill dropped its dead `Agent(tester)` grant (the body never spawns
+  `tester`, and it is a full-write agent). The whitespace CI gate is now event-aware: it selected its
+  base from `GITHUB_BASE_REF`, which is empty on a push, so a `main` push checked an empty range and an
+  `alpha` push re-checked the whole `main..alpha` divergence — it now picks the base per event
+  (PR base / `github.event.before` / merge-base) and fails closed when the base is unresolvable, and its
+  outcome is added to the job-summary table. `bind-prompt.py` gains a py3.9 EXECUTION smoke (a real bind
+  plus a refusal, not compile-only), and `generate-callers-exemptions.py`, `stage-bound-plan.py` and
+  `snapshot-operands.py` are added to CI coverage. Two tests were strengthened past assertions that
+  could pass on broken code: the audit never-reaches test now proves the reviewer did not run via a
+  run-marker, and the cleanup open-count test pins the constant two-pass-per-parent count against the
+  fixture's differing entry counts instead of a loose `< 39`.
 - **`audit-codex.sh` snapshots its operands, closing a validate-then-open disclosure race.** It
   validated each operand with `containment.py` (non-symlink, regular, in-repo) and then handed codex the
   live repo-relative PATH, which codex opened later. A same-account process that replaced an accepted

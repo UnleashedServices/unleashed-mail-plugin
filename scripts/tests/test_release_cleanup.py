@@ -986,10 +986,28 @@ class HeldDescriptorRaceProofs(SyntheticStateTreeMixin, unittest.TestCase):
 
         parents = {PurePosixPath(p).parent.as_posix() for p in EXPECTED_PATHS}
         self.assertEqual(9, len(parents))
-        # One open per unique parent, plus the root each chain descends from. The bound that matters is
-        # simply that it is far below 39 — one per ENTRY is what the defect looked like.
-        self.assertLess(len(opened), 39,
-                        f"parents are still being opened per entry: {len(opened)} directory opens")
+        # NOT-PER-ENTRY, asserted as a CONSTANT (PR #63 recheck, P3). `assertLess(len(opened), 39)` had a
+        # margin of 3 over the real 36 and never checked the named property — a regression to per-entry
+        # opening for one lightly-populated parent could stay under 39 and pass. The cleanup descends
+        # each chain twice (a file-unlink pass and a directory-removal pass), opening dirs RELATIVE to a
+        # descriptor, so `opened` carries component NAMES and each leaf-parent component appears exactly
+        # TWICE regardless of how many entries sit beneath it. The invariant that rules out "once per
+        # entry" is that this count is the SAME small constant for every parent despite their differing
+        # entry counts — a per-entry regression would make the busier parents show more.
+        from collections import Counter
+
+        opened_names = Counter(PurePosixPath(p).name for p in opened)
+        leaf_counts = {PurePosixPath(parent).name: opened_names[PurePosixPath(parent).name]
+                       for parent in parents}
+        self.assertEqual(
+            {2}, set(leaf_counts.values()),
+            f"leaf-parent opens are not the constant two-pass count — per-entry regression? {leaf_counts}",
+        )
+        # And the parents do NOT all hold the same number of entries, so a constant open count genuinely
+        # rules out per-entry scaling rather than coinciding with a uniform tree.
+        entries_per_parent = Counter(PurePosixPath(p).parent.as_posix() for p in EXPECTED_PATHS)
+        self.assertGreater(len(set(entries_per_parent.values())), 1,
+                           "the fixture's parents must have DIFFERING entry counts for this proof to bite")
 
     def test_an_occupant_arriving_after_the_final_check_is_NOT_caught(self):
         """THE CEILING, recorded deliberately. This test passing is not a bug.
