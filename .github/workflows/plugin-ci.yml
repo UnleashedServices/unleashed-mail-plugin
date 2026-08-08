@@ -374,10 +374,22 @@ jobs:
     # (Ubuntu), and one root cause — `tr` aborting on invalid UTF-8 outside `LC_ALL=C`, which
     # TRUNCATES the message — literally inverts by platform: green on GNU, red on BSD. A
     # single-platform run is half a result, and the half that passes is the half that hides it.
+    # macOS RUNS ON PUSH TO `main` ONLY — not on pull requests, and not on `alpha`.
+    #
+    # WHY IT IS RESTRICTED. A macOS runner bills at 10x the Linux rate, and this leg measured 10m30s
+    # against 2m35s for the ubuntu one, so it was ~105 Linux-equivalent minutes on EVERY push. The
+    # matrix is computed rather than filtered with a step-level `if:`, because an `if:` still
+    # provisions the runner and starts the meter.
+    #
+    # WHAT THAT COSTS, stated plainly: this is now a POST-MERGE CANARY, not a gate. The comment below
+    # is still true — the `tr`-on-invalid-UTF-8 root cause inverts by platform, green on GNU and red on
+    # BSD — so a BSD-only defect now LANDS on main and is caught after the fact rather than blocked
+    # before it. `redactor-equivalence (macos-latest)` was removed from the required checks at the same
+    # time, because a context that PR commits no longer produce would make every PR unmergeable.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
     # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
