@@ -165,7 +165,61 @@ def main(argv=None) -> int:
     repo = os.fsencode(arguments.repo)
     tree = os.fsencode(arguments.tree)
     if repo:
-        payload = payload.replace(repo, tree)
+        # COMPLETE PATH COMPONENTS ONLY (PR #63 recheck, P2 — live in this project's own layout). A raw
+        # substring replace rewrote any path merely PREFIXED by the repository root: with the checkout
+        # at `…/Unleashed Mail`, a prompt naming `…/Unleashed MailTests/AuthTests.swift` became
+        # `<tree>Tests/AuthTests.swift`, which does not exist. The reviewer then silently reads nothing
+        # while the residue and digest checks both pass and the round stays valid — the "audit section
+        # produces nothing while the reviewer reports a complete review" failure this repo keeps
+        # closing. `Unleashed Mail`, `Unleashed MailTests` and `Unleashed Mail.worktrees` are all real
+        # sibling directories here, so this is the ordinary case, not a contrived one.
+        #
+        # THE BOUNDARY IS `/` OR END-OF-INPUT, and nothing else. My first form also treated "any byte
+        # outside `[A-Za-z0-9._-]`" as a boundary, which makes a SPACE one — and a space is a legal
+        # path character here: `…/Unleashed Mail Helper/notes.md` was rewritten to
+        # `<tree> Helper/notes.md`, the very defect this fix exists to close, one character class over.
+        # Caught in review of the fix itself.
+        #
+        # The suggested repair was a smarter lookahead around the space, but that question is not
+        # decidable from text: `<repo> Helper/x.md` (a sibling directory) and `<repo> is dirty` (prose
+        # about the checkout) are the same bytes. `/` and end-of-input are the only boundaries a
+        # component definitively ends at, so those are the only ones rewritten — and the real prompts
+        # always spell the plan as `<root>/docs/planning/…`, which is the `/` case.
+        #
+        # What that gives up: a bare `<repo>` mentioned in prose keeps naming the live path. That is a
+        # MENTION, not a file the reviewer opens, and leaving it is the conservative direction — a
+        # stale mention is visible, a silently corrupted sibling path is not.
+        # THE BOUNDARY RULE, DERIVED ONCE. It was patched four times from reported cases — every byte
+        # outside a name class, then `/` and end only, then a sentence period, then the punctuation
+        # class — and each patch was still a guess about the next spelling. Reviewers then found two
+        # more: a LEFT boundary was missing entirely, and stacked closing punctuation was not handled.
+        # So the rule is stated rather than accumulated:
+        #
+        #   A match must be a COMPLETE path token denoting the checkout root.
+        #     * LEFT  — the character before it cannot continue a path from the left. Without this,
+        #       `/Volumes/backup/Users/me/app/docs/plan.md` — the root as a SUFFIX of a longer path —
+        #       became `/Volumes/backup<tree>/docs/plan.md`.
+        #     * RIGHT — the token ends at `/`, at end-of-input, or at ONE OR MORE closing/sentence
+        #       punctuation bytes followed by whitespace or end. `one or more` is what allows
+        #       ``Review `<repo>`.`` and `Review "<repo>".`, which ordinary Markdown produces; and
+        #       requiring at least one is what keeps a SPACE out of the class, because
+        #       `<repo> Helper/x.md` (a sibling) and `<repo> is dirty` (prose) are the same bytes and
+        #       nothing can separate them.
+        #
+        # Everything left alone is left alone deliberately: `<repo>Tests/…`, `<repo>.worktrees/…`,
+        # `<repo>,archive/…` and `<repo> Helper/…` are all OTHER directories, and rewriting them
+        # silently points the reviewer at a path that does not exist.
+        boundary = re.compile(
+            rb"(?<![A-Za-z0-9._/-])"
+            + re.escape(repo)
+            + rb"""(?=/|\Z|[.,;:!?)\]}"'`]+(?:\s|\Z))"""
+        )
+        # A CALLABLE, NOT A TEMPLATE STRING (review of this fix). `Pattern.sub` interprets the
+        # replacement as a template, so a backslash in the scratch-tree path — legal in a Unix path and
+        # reachable through `TMPDIR` — is expanded: `\1` raises `invalid group reference` and aborts
+        # staging, `\t` silently inserts a TAB and produces a path that does not exist. Verified both.
+        # A callable returns the bytes literally.
+        payload = boundary.sub(lambda _match: tree, payload)
         # THE CHECK LOOKS AT THE RESIDUE, NOT THE WHOLE PAYLOAD (PR #63 recheck, P2). When `TMPDIR`
         # points inside the checkout — which both harnesses honour, so it is a configuration, not an
         # exotic state — the scratch worktree lands beneath the repository and the REPLACEMENT value
@@ -184,7 +238,9 @@ def main(argv=None) -> int:
         # refusal that was reported. It is kept as a cheap invariant against a future non-total
         # rewrite, NOT presented as an active defence, and no test claims to exercise it — a test that
         # cannot fail is not evidence.
-        if repo in payload.replace(tree, b""):
+        # The residue check asks the same boundary question, or it would fire on the references the
+        # substitution CORRECTLY left alone (`…/Unleashed MailTests/…` still contains the root).
+        if boundary.search(payload.replace(tree, b"")):
             _refuse("the prompt still references the real worktree after rewriting")
 
     if arguments.guard:

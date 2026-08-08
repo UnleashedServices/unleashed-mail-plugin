@@ -13,6 +13,17 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The prompt rewriter corrupted paths that merely share the checkout's prefix.** Staging replaced the
+  repository root as a raw substring, so with the checkout at `…/Unleashed Mail` a prompt naming
+  `…/Unleashed MailTests/AuthTests.swift` became `<tree>Tests/AuthTests.swift` — a path that does not
+  exist. The reviewer then silently reads nothing while the residue and digest checks pass and the
+  round stays valid. `Unleashed Mail`, `Unleashed MailTests` and `Unleashed Mail.worktrees` are all
+  real sibling directories in this project's own layout, so this was the ordinary case for an app
+  review, not a contrived one. The rewrite (and the residue check with it) now matches only where the
+  root is a COMPLETE path component.
+
 `COREDEV-2642` — remediation of two further PR #63 review passes over the 2.7.0 bytes. Twenty-one
 findings; every fix carries a proof that fails when the fix is reverted. Suite 701 → 731.
 
