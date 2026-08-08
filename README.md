@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.7.0
+# UnleashedMail — Claude Code Plugin v2.7.1
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,22 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.7.1
+
+- **Six review passes over the 2.7.0 permission and transcript surface (`COREDEV-2642`)** — 40+ findings
+  remediated, each with a proof that fails when the fix is reverted. The ones that changed observable
+  behaviour: a prompt naming a path that merely *shares the checkout's prefix* (`…/Unleashed Mail` vs
+  `…/Unleashed MailTests/…`) was silently rewritten to a path that does not exist, so the reviewer read
+  nothing while the round still validated; a plan over 64 KiB could never be persisted, because the
+  bound-snapshot digest was taken through a cap meant for small sidecars; and `pr-review` could approve
+  a PR having inspected **nothing**, because a stale local base branch made the changeset empty.
+  Reviewer identity is now allocator-attested rather than parsed from the filename, the plan and prompt
+  bindings are mandatory rather than skippable, and gate state is written and read through a
+  descriptor walk so a swapped path component cannot redirect it.
+  **Expect new refusals, not failures:** a stale/advanced base branch, a transcript missing
+  `.planbytes`/`.promptsha256`, or a symlinked path component now stop a round instead of quietly
+  degrading it.
 
 ### v2.7.0
 

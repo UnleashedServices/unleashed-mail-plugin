@@ -13,7 +13,14 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.7.1] — 2026-08-08
+
+Six successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof
+that fails when the fix is reverted.
+
 ### Fixed
+
+#### seventh pass — the prompt rewriter
 
 - **The prompt rewriter corrupted paths that merely share the checkout's prefix.** Staging replaced the
   repository root as a raw substring, so with the checkout at `…/Unleashed Mail` a prompt naming
@@ -27,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 `COREDEV-2642` — remediation of two further PR #63 review passes over the 2.7.0 bytes. Twenty-one
 findings; every fix carries a proof that fails when the fix is reverted. Suite 701 → 731.
 
-### Fixed
+#### first recheck pass
 
 - **The reviewer identity is now allocator-ATTESTED, not parsed from the filename.** The `.launch`
   record carries `<run id> <reviewer>`, and `review-verdict` reads the identity from it. A rename
@@ -84,7 +91,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   third read its diff through a process substitution, where `die` exits only the subshell and the loop
   reports "no untested files" for a diff that never ran.
 
-### Fixed — second recheck pass (10 further findings)
+#### second recheck pass (10 further findings)
 
 - **A prompt naming `X_PLAN.md.bak` bound cleanly to `X_PLAN.md`.** `_PLAN_REFERENCE` stopped at `.md`
   and required no boundary, so the reviewer was instructed to read a sibling while the transcript and
@@ -122,7 +129,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
   zero-removal run cannot be distinguished from a wrong state root.
 
-### Fixed — sixth recheck pass
+#### sixth recheck pass
 
 - **A reviewer that destroyed the LIVE checkout's `.git` passed as a clean tree.** `tree_fingerprint`
   suppressed both probes, so with the metadata gone the fingerprint became the bare record separator —
@@ -139,7 +146,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   learned about a new shared sibling three times; `tree-fingerprint.sh` was the fourth, and only the
   fail-closed change above made it visible instead of silently degrading.
 
-### Fixed — fifth recheck pass
+#### fifth recheck pass
 
 - **A plan over 64 KiB could never be persisted.** The `.planbytes` check added earlier in this release
   hashed the snapshot through `_read_regular_file_bytes`, whose cap bounds untrusted PARSING of small
@@ -162,7 +169,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   strictly, so a repository named with a non-UTF-8 byte killed every wrapper with a traceback before
   containment could run. Captured as bytes and `os.fsdecode`d.
 
-### Fixed — fourth recheck pass
+#### fourth recheck pass
 
 - **`pr-review` could approve a PR having inspected nothing.** `changeset.sh`'s base detection used
   `git merge-base`, which succeeds on ANY shared ancestor — so a local `1.0X.0000` that had advanced
@@ -178,7 +185,7 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   verification reads go through the same descriptor walk now. The third member of that family —
   `write`'s own read of the snapshot sidecar — was found by sweeping rather than by a report.
 
-### Fixed — third recheck pass
+#### third recheck pass
 
 - **The allocator could reserve a leaf no capture or verdict could use.** Both readers read 128 bytes
   of `<transcript>.launch` and then `fullmatch` the result, so a reviewer name long enough to push
