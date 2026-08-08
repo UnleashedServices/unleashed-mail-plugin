@@ -165,7 +165,19 @@ def main(argv=None) -> int:
     repo = os.fsencode(arguments.repo)
     tree = os.fsencode(arguments.tree)
     if repo:
-        payload = payload.replace(repo, tree)
+        # COMPLETE PATH COMPONENTS ONLY (PR #63 recheck, P2 — live in this project's own layout). A raw
+        # substring replace rewrote any path merely PREFIXED by the repository root: with the checkout
+        # at `…/Unleashed Mail`, a prompt naming `…/Unleashed MailTests/AuthTests.swift` became
+        # `<tree>Tests/AuthTests.swift`, which does not exist. The reviewer then silently reads nothing
+        # while the residue and digest checks both pass and the round stays valid — the "audit section
+        # produces nothing while the reviewer reports a complete review" failure this repo keeps
+        # closing. `Unleashed Mail`, `Unleashed MailTests` and `Unleashed Mail.worktrees` are all real
+        # sibling directories here, so this is the ordinary case, not a contrived one.
+        #
+        # The boundary is "the root is not continued by another path-name character": `/` or a
+        # separator-like byte ends the component, while `T` (MailTests) and `.` (Mail.worktrees) do not.
+        boundary = re.compile(re.escape(repo) + rb"(?=/|\Z|[^A-Za-z0-9._-])")
+        payload = boundary.sub(tree, payload)
         # THE CHECK LOOKS AT THE RESIDUE, NOT THE WHOLE PAYLOAD (PR #63 recheck, P2). When `TMPDIR`
         # points inside the checkout — which both harnesses honour, so it is a configuration, not an
         # exotic state — the scratch worktree lands beneath the repository and the REPLACEMENT value
@@ -184,7 +196,9 @@ def main(argv=None) -> int:
         # refusal that was reported. It is kept as a cheap invariant against a future non-total
         # rewrite, NOT presented as an active defence, and no test claims to exercise it — a test that
         # cannot fail is not evidence.
-        if repo in payload.replace(tree, b""):
+        # The residue check asks the same boundary question, or it would fire on the references the
+        # substitution CORRECTLY left alone (`…/Unleashed MailTests/…` still contains the root).
+        if boundary.search(payload.replace(tree, b"")):
             _refuse("the prompt still references the real worktree after rewriting")
 
     if arguments.guard:

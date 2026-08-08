@@ -754,6 +754,41 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
             capture_output=True, text=True, check=False,
         ), tree_root
 
+    def test_a_SIBLING_sharing_the_repository_prefix_is_left_alone(self):
+        """`Unleashed Mail` vs `Unleashed MailTests` — live in this project's own layout.
+
+        The raw substring replace rewrote any path merely PREFIXED by the repository root, so a prompt
+        naming `…/Unleashed MailTests/AuthTests.swift` became `<tree>Tests/AuthTests.swift`, a path
+        that does not exist. The reviewer silently reads nothing while the residue and digest checks
+        both pass and the round stays valid. `Unleashed Mail`, `Unleashed MailTests` and
+        `Unleashed Mail.worktrees` are all real sibling directories in this developer's checkout, so
+        this is the ordinary case rather than a contrived one.
+        """
+        repo = tempfile.mkdtemp(prefix="prefix-repo-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        sibling = repo + "Tests"           # shares the whole root as a prefix
+        dotted = repo + ".worktrees"       # ditto, continued by `.`
+        for path in (sibling, dotted):
+            os.makedirs(path, exist_ok=True)
+            self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        tree = os.path.join(tempfile.mkdtemp(prefix="prefix-tree-"), "tree")
+        self.addCleanup(shutil.rmtree, os.path.dirname(tree), ignore_errors=True)
+
+        body = ("Review carefully.\n" * 20
+                + f"REVIEW TARGET: {repo}/docs/planning/X_PLAN.md\n"
+                + f"Also read {sibling}/AuthTests.swift\n"
+                + f"and the worktree {dotted}/feature/\n")
+        result, tree_root = self.stage(repo, tree, body)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged, "the plan reference was not rewritten")
+        self.assertIn(f"{sibling}/AuthTests.swift", staged,
+                      "a sibling sharing the repository prefix was rewritten into a path that does "
+                      "not exist — the reviewer would silently read nothing")
+        self.assertIn(f"{dotted}/feature/", staged)
+        self.assertNotIn(f"{tree}Tests", staged)
+
     def test_a_scratch_tree_BENEATH_the_repository_still_stages(self):
         repo = tempfile.mkdtemp(prefix="nested-repo-")
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
