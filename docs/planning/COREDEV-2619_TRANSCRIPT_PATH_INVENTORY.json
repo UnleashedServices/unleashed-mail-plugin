@@ -81,33 +81,33 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1601",
+      "location": "CHANGELOG.md:1615",
       "path": "CHANGELOG.md",
-      "line": 1601,
+      "line": 1615,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
     },
     {
-      "location": "README.md:187",
+      "location": "README.md:189",
       "path": "README.md",
-      "line": 187,
+      "line": 189,
       "class": "rewrite",
       "reason": "Current feature documentation must describe explicit per-run transcript inputs.",
       "contracts": [
         "S-THREAD"
       ],
       "destination": {
-        "line": 192,
+        "line": 194,
         "payloads": [
           "- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each transcript path is carried as one opaque `--reviewer \"<name>=<STATUS>:<path>\"` argument (**at this version the two paths were fixed; per-run allocated paths arrived in v2.6.7** — this historical entry had been rewritten to describe the later behaviour, so the file contradicted itself about when per-run paths existed); a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a."
         ],
         "payloadSha256": "08fdf76dbbc6e61a79a1b7419f0294cadefcda727c9aa26171a0f77517ac71ba"
       },
       "sourceSha256": "54edc358667a681e92fd16dd34d7e38da3646f8d159c70573b288fcd6781a3cf",
-      "precedingAnchorLine": 186,
+      "precedingAnchorLine": 188,
       "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "followingAnchorLine": 188,
+      "followingAnchorLine": 190,
       "followingAnchorSha256": "5c061e7b1fb306d8030de6c9e5990bc63b8dbce6155a369fe03b66226d5f6d49"
     },
     {

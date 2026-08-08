@@ -16,6 +16,20 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 `COREDEV-2642` — remediation of two further PR #63 review passes over the 2.7.0 bytes. Twenty-one
 findings; every fix carries a proof that fails when the fix is reverted. Suite 701 → 731.
 
+### Added
+
+- **Opus 5 + Fable 5 model-compatibility audit (`COREDEV-2642`)** —
+  [`docs/audits/PLUGIN_MODEL_COMPAT_AUDIT_2026-08-08.md`](docs/audits/PLUGIN_MODEL_COMPAT_AUDIT_2026-08-08.md).
+  The validator's `MODEL_ALIASES` is verified **byte-identical** to the live Claude Code 2.1.226 runtime
+  table (no drift since the CI-pinned 2.1.220; `fable`/`fable[1m]` legal), the model-id regex accepts the
+  5-family ids, and no shipped asset carries a stale model id, an effort pin, a reviewer severity filter,
+  or pre-5 API scaffolding — the review pipeline already matches the 5-family coverage-first guidance.
+  Two documentation gaps closed: AGENT_CONTRACTS §11 now states the Fable-session behavior (the `inherit`
+  tier follows the session model/effort; deep reviewers deliberately hold `opus` as a floor, with the
+  one-edit escalation path spelled out), and the README carries a current-state compatibility line
+  instead of only historical What's-New entries. Three residuals documented in the audit (bracketed
+  concrete ids, unused `best`/`opusplan`, the standing alias-table re-check contract).
+
 ### Fixed
 
 - **The reviewer identity is now allocator-ATTESTED, not parsed from the filename.** The `.launch`

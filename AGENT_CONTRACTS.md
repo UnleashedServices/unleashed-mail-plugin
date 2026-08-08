@@ -485,6 +485,18 @@ Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current 
 updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
 replaces ("prefer `inherit`/`sonnet` over hard-pinning `opus`") conflated the two.
 
+**Session-model compatibility (Opus 5 / Fable 5).** The alias tiers are what makes a new session model
+a zero-edit event: on a Claude Fable 5 session the `inherit` tier runs Fable 5 at the session's effort,
+while the deep-review tier keeps running `opus` — current-generation Opus, **below** the session model.
+That asymmetry is deliberate: the `opus` pin exists to hold a *floor* on cheap sessions, not to chase
+the session ceiling. A maintainer who wants Fable-grade deep review on Fable sessions moves those three
+agents to the `inherit` row (frontmatter + table in the same edit, validator-enforced) and accepts that
+sonnet/haiku sessions then drop the deep tier with them. `fable`/`fable[1m]` are legal `model:` values
+(validator and runtime agree — re-verified against Claude Code 2.1.226); `best` and `opusplan` are legal
+but **unused by policy**, because their resolution is runtime-defined — do not move a tier onto them
+without verifying what the pinned CLI resolves them to. Audit trail:
+`docs/audits/PLUGIN_MODEL_COMPAT_AUDIT_2026-08-08.md`.
+
 ---
 
 ## 12. Change-Failure Rate (CFR) Labeling

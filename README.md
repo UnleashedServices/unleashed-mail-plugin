@@ -4,6 +4,8 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 **21 agents · 21 skills · 0 commands · 1 MCP server**
 
+Compatible with **Claude Opus 5 and Claude Fable 5 sessions** (Claude Code ≥ 2.1.219; CI pins 2.1.220): every asset uses runtime model aliases — the `inherit` tier follows the session model and effort, deep reviewers hold `opus` — per [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §11, re-verified by the [2026-08-08 model-compat audit](docs/audits/PLUGIN_MODEL_COMPAT_AUDIT_2026-08-08.md).
+
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
