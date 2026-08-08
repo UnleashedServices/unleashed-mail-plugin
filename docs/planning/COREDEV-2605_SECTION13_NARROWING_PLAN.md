@@ -1,6 +1,6 @@
 # COREDEV-2605 — Narrow AGENT_CONTRACTS §13 to client-facing output only
 
-**Status:** Planning — **round 20 gated (BOTH arms `REQUEST_CHANGES` — gemini 2 High + 1 Medium · codex 4 High + 2 Medium).** **The clean candidate had ROTTED:** all nine anchor lines were valid at the round-19 freeze and **0/9 valid one commit later**, broken by unrelated `COREDEV-2642` edits to the nine source files, two of them pointing past end-of-file — so the mandated table failed **step 2 on every row** before any mutant could run. The anchor line is now **derived, never transcribed**, and **§7 gains step 7: a shipped `test_scope_anchors_resolve` CI check**, because nineteen rounds of review could not have caught this and no care in round 21 will catch the next one. Also: **M12j′'s required PASS** was missing from all four operative sites (third recurrence of this defect — M12i in r14, M12j in r16); **M12m** discriminates on **five rows only**, since on the four self-fingerprinting rows its decoy is a second fingerprint and step 3 fires first; the **row-local rule was asserted but never specified**, so M12d/M12g/M12l/M12m now carry deterministic selection rules and M12f an explicit exemption; **M12e is a rename, never a delete**; and **M12j′ is redundant with M12i**, so step 3's content search is evidenced on five rows. codex, after substituting current anchors, **could not build a wrong gate** — the second round running that the algorithm held. See §29. Previously — **round 19 (codex `REQUEST_CHANGES` 3 High + 1 Medium; gemini's arm emitted no verdict line but its findings are applied).** The round-18 "every mutant × all nine rows" mandate is **not executable** — four rows' fingerprints **are** their anchor heading, so M12j has no "between" position (**M12j′** added); the rejection mutants **hard-code their targets**, so parameterising them trips step 0 for the wrong reason (now **row-local**); every stated rejection cause is restated as **its first failing step**; and a **heading-TEXT gate** survives the whole suite, closed by **M12m**, a same-text decoy. See §28. Previously — **round 18 (both arms): step 0 DISARMED two existing mutants.** Adding the path pin in round 17 made **M12f and M12h** fail at step 0 *before* their intended checks — so M12h stopped proving fingerprint/surface discrimination and is **re-specified as artifact-only** (swap the fingerprint *strings*, not the anchors), while M12f becomes **step 0's own proof**. The all-nine parameterisation is widened from "anchor mutants" to **every** mutant, and the plan no longer says the anchor is "never equality-checked" — it **splits**: path pinned, line resolved. *When an algorithm gains a step, every mutant's rejection cause is stale until re-derived.* See §27. Previously — **round 17 (both arms): the anchor never authenticated the FILE.** Round 11 removed anchor equality to make resolution testable and removed the **file binding** with it — a decoy file carrying one heading and one fingerprint passes all five steps while the surface is redirected off its canonical producer. **Step 0 pins the path**; only the line stays resolution-driven. Two mandated steps also had **no mutant** — uniqueness and nearest-enclosing — closed by **M12k** and **M12l** *(the latter is the counterexample codex built in round 14, fixed in the algorithm and never turned into a proof)*. **A CommonMark parser is now mandatory.** See §26. Previously — **round 16: THE ALGORITHM HELD.** For the first time in six rounds codex **could not build a wrong gate** — "no compare-only gate actually conforms to all five mandated steps". It also verified by execution that **each of the nine fingerprints occurs exactly once** and that **§4.5's query is complete at eight tests**. Remaining: **M12j's required PASS had not reached the risk register, polarity rule or step 7** (the same propagation defect M12i had one round earlier), a backtick info string may not contain a backtick, and step 5 carried stale §4.5 guidance. *(gemini's arm did not run — quota.)* See §25. Previously — **round 15 gated** (**both arms**). **Step 4 survived a round intact** — both arms verified the nearest-enclosing-heading walk for all nine rows — and both then broke **step 3**: a gate storing each fingerprint's line `F` and reusing M12i's `+1` delta passes every existing mutant while failing on a harmless blank line. Step 3 now mandates a **content-driven search of the current file**, no stored or derived line, **exactly one** occurrence — with **M12j**, the positive body-shift case, as its proof. Fences are now CommonMark-**complete** (≤3-space indent, matching delimiter char), the taxonomy says **three** kinds, and §4.5 names an **eighth** at-risk test. See §24. Previously — **round 14 gated** (**gemini 2 High · codex 3 High + 2 Medium**). gemini tried to build a wrong gate and **failed** (M12g caught it) — **codex built one that survives**: a *shift-aware* equality gate that accepts the clean document and every M12i parameterisation without ever resolving a section. So **the gate's ALGORITHM is now mandated** rather than inferred from its mutants, with a new step 4 — **the anchor must be the NEAREST ENCLOSING real heading of the fingerprint** (a sole-H1 anchor passed all three old checks). Positive metamorphic cases are now a **third proof kind** (M12i/**M12j**/M1p/M3p) propagated to every polarity statement; fences are **CommonMark**, not substring toggles; and §4.5 names **seven** at-risk tests. See §23. Previously — **round 13 gated** (**codex `REQUEST_CHANGES` 1 High + 2 Medium; the gemini arm IMPLEMENTED the plan instead of reviewing it — contained by the isolation harness, no verdict, not counted**). Two real defects in round 12's own fix: the mutants are all **rejection-only**, so an anchor-**equality** gate still passes every one of them — closed by **M12i**, a *positive* metamorphic case the gate must **accept**; and **all five fingerprints live inside code fences**, so a non-fence-aware scanner terminates each section before reaching them and **rejects the clean document** — section boundaries are now fence-aware. §4.5 itself now names **four** at-risk tests. See §22. Previously — **round 12 gated** (**both arms `REQUEST_CHANGES`; codex 3 High + 1 Medium**). Two more wrong gates, both narrower than round 11's: **all four anchor mutants targeted `verdict-report`**, so a gate resolving only that row passed every one of them — mutants are now **parameterised across all nine rows**; and **four `out` surfaces shared the generic `## Output Format` fingerprint**, so a security↔concurrency swap was accepted — fingerprints are now **unique per surface** (verified) with **M12h** proving it. Step 2's residual anchor-equality wording is scoped to the triple, and §4.5 must name both pinned test maps. See §21. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` 3 High + 2 Medium · codex `REQUEST_CHANGES` 2 High + 1 Medium**). **Both arms independently constructed a wrong gate that passes every mutant the plan had** — so the **anchor column is no longer equality-checked** (triples are; anchors are resolution-checked), and **M12f** (swap two anchors → pins check (iii) to the table) and **M12g** (non-heading anchor → pins check (ii)) are added. M3's **exactly one** classifier is now mandated by step 5 itself; **M4** was pinned to the Scope paragraph the narrowing deletes; step 6 now orders M5's **isolated** regressions; and intra-document references are **by name, never by line**. See §20. Previously — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+**Status:** Planning — **round 21 gated: THE ARMS SPLIT (gemini `APPROVE` · codex `REQUEST_CHANGES`, 2 High + 2 Medium).** gemini's first approval in 21 rounds was thorough — it re-derived all nine anchors 9/9, spotted the five fenced fingerprints and corrected its own round-20 off-by-one — and **wrong**, because codex built a **conforming wrong gate**: CommonMark does not recognise **YAML frontmatter**, all nine canonical files open with `---`, and `agents/swift-reviewer.md:14`-`:26` are `#`-prefixed YAML comments that parse as **H1 headings**. Relocate a fingerprint into that block and *every* mandated step passes while §13 binds metadata the loader ignores. **The parser's domain is now the document body**, with **M12n** as its proof. Also: **M12f and M12h** were the two **pair** mutants and had no partner rule, so the all-nine matrix was unimplementable for them (round 20 generalised the four single-target mutants and called the class closed — the family had six); **M12m's** decoy locus is now a stable AST position; and round 20's claim that **M12k carries the four self-fingerprinting rows' step-3 location property is WITHDRAWN** — step 3 is three properties with different coverage. **One approving arm proves nothing.** See §30. Previously — **round 20 gated (BOTH arms `REQUEST_CHANGES` — gemini 2 High + 1 Medium · codex 4 High + 2 Medium).** **The clean candidate had ROTTED:** all nine anchor lines were valid at the round-19 freeze and **0/9 valid one commit later**, broken by unrelated `COREDEV-2642` edits to the nine source files, two of them pointing past end-of-file — so the mandated table failed **step 2 on every row** before any mutant could run. The anchor line is now **derived, never transcribed**, and **§7 gains step 7: a shipped `test_scope_anchors_resolve` CI check**, because nineteen rounds of review could not have caught this and no care in round 21 will catch the next one. Also: **M12j′'s required PASS** was missing from all four operative sites (third recurrence of this defect — M12i in r14, M12j in r16); **M12m** discriminates on **five rows only**, since on the four self-fingerprinting rows its decoy is a second fingerprint and step 3 fires first; the **row-local rule was asserted but never specified**, so M12d/M12g/M12l/M12m now carry deterministic selection rules and M12f an explicit exemption; **M12e is a rename, never a delete**; and **M12j′ is redundant with M12i**, so step 3's content search is evidenced on five rows. codex, after substituting current anchors, **could not build a wrong gate** — the second round running that the algorithm held. See §29. Previously — **round 19 (codex `REQUEST_CHANGES` 3 High + 1 Medium; gemini's arm emitted no verdict line but its findings are applied).** The round-18 "every mutant × all nine rows" mandate is **not executable** — four rows' fingerprints **are** their anchor heading, so M12j has no "between" position (**M12j′** added); the rejection mutants **hard-code their targets**, so parameterising them trips step 0 for the wrong reason (now **row-local**); every stated rejection cause is restated as **its first failing step**; and a **heading-TEXT gate** survives the whole suite, closed by **M12m**, a same-text decoy. See §28. Previously — **round 18 (both arms): step 0 DISARMED two existing mutants.** Adding the path pin in round 17 made **M12f and M12h** fail at step 0 *before* their intended checks — so M12h stopped proving fingerprint/surface discrimination and is **re-specified as artifact-only** (swap the fingerprint *strings*, not the anchors), while M12f becomes **step 0's own proof**. The all-nine parameterisation is widened from "anchor mutants" to **every** mutant, and the plan no longer says the anchor is "never equality-checked" — it **splits**: path pinned, line resolved. *When an algorithm gains a step, every mutant's rejection cause is stale until re-derived.* See §27. Previously — **round 17 (both arms): the anchor never authenticated the FILE.** Round 11 removed anchor equality to make resolution testable and removed the **file binding** with it — a decoy file carrying one heading and one fingerprint passes all five steps while the surface is redirected off its canonical producer. **Step 0 pins the path**; only the line stays resolution-driven. Two mandated steps also had **no mutant** — uniqueness and nearest-enclosing — closed by **M12k** and **M12l** *(the latter is the counterexample codex built in round 14, fixed in the algorithm and never turned into a proof)*. **A CommonMark parser is now mandatory.** See §26. Previously — **round 16: THE ALGORITHM HELD.** For the first time in six rounds codex **could not build a wrong gate** — "no compare-only gate actually conforms to all five mandated steps". It also verified by execution that **each of the nine fingerprints occurs exactly once** and that **§4.5's query is complete at eight tests**. Remaining: **M12j's required PASS had not reached the risk register, polarity rule or step 7** (the same propagation defect M12i had one round earlier), a backtick info string may not contain a backtick, and step 5 carried stale §4.5 guidance. *(gemini's arm did not run — quota.)* See §25. Previously — **round 15 gated** (**both arms**). **Step 4 survived a round intact** — both arms verified the nearest-enclosing-heading walk for all nine rows — and both then broke **step 3**: a gate storing each fingerprint's line `F` and reusing M12i's `+1` delta passes every existing mutant while failing on a harmless blank line. Step 3 now mandates a **content-driven search of the current file**, no stored or derived line, **exactly one** occurrence — with **M12j**, the positive body-shift case, as its proof. Fences are now CommonMark-**complete** (≤3-space indent, matching delimiter char), the taxonomy says **three** kinds, and §4.5 names an **eighth** at-risk test. See §24. Previously — **round 14 gated** (**gemini 2 High · codex 3 High + 2 Medium**). gemini tried to build a wrong gate and **failed** (M12g caught it) — **codex built one that survives**: a *shift-aware* equality gate that accepts the clean document and every M12i parameterisation without ever resolving a section. So **the gate's ALGORITHM is now mandated** rather than inferred from its mutants, with a new step 4 — **the anchor must be the NEAREST ENCLOSING real heading of the fingerprint** (a sole-H1 anchor passed all three old checks). Positive metamorphic cases are now a **third proof kind** (M12i/**M12j**/M1p/M3p) propagated to every polarity statement; fences are **CommonMark**, not substring toggles; and §4.5 names **seven** at-risk tests. See §23. Previously — **round 13 gated** (**codex `REQUEST_CHANGES` 1 High + 2 Medium; the gemini arm IMPLEMENTED the plan instead of reviewing it — contained by the isolation harness, no verdict, not counted**). Two real defects in round 12's own fix: the mutants are all **rejection-only**, so an anchor-**equality** gate still passes every one of them — closed by **M12i**, a *positive* metamorphic case the gate must **accept**; and **all five fingerprints live inside code fences**, so a non-fence-aware scanner terminates each section before reaching them and **rejects the clean document** — section boundaries are now fence-aware. §4.5 itself now names **four** at-risk tests. See §22. Previously — **round 12 gated** (**both arms `REQUEST_CHANGES`; codex 3 High + 1 Medium**). Two more wrong gates, both narrower than round 11's: **all four anchor mutants targeted `verdict-report`**, so a gate resolving only that row passed every one of them — mutants are now **parameterised across all nine rows**; and **four `out` surfaces shared the generic `## Output Format` fingerprint**, so a security↔concurrency swap was accepted — fingerprints are now **unique per surface** (verified) with **M12h** proving it. Step 2's residual anchor-equality wording is scoped to the triple, and §4.5 must name both pinned test maps. See §21. Previously — **round 11 gated** (**gemini `REQUEST_CHANGES` 3 High + 2 Medium · codex `REQUEST_CHANGES` 2 High + 1 Medium**). **Both arms independently constructed a wrong gate that passes every mutant the plan had** — so the **anchor column is no longer equality-checked** (triples are; anchors are resolution-checked), and **M12f** (swap two anchors → pins check (iii) to the table) and **M12g** (non-heading anchor → pins check (ii)) are added. M3's **exactly one** classifier is now mandated by step 5 itself; **M4** was pinned to the Scope paragraph the narrowing deletes; step 6 now orders M5's **isolated** regressions; and intra-document references are **by name, never by line**. See §20. Previously — **round 10 gated** (**gemini `REQUEST_CHANGES` 2 High · codex `REQUEST_CHANGES` 1 High**). **M3's marker failed for the third time, the same way twice:** `**Adapted**` was pinned to a value §4.4 permits the narrowing to change (rule 3 may legitimately become `**Adopted**`), so the strong gate would fail on the **clean** document. M3 is now a **membership** test — each row carries exactly one classifier from the closed vocabulary — which is invariant under every rewrite step 5 allows. **M12d retargeted to `agents/swift-reviewer.md:439`**, a real heading whose section lacks `### Verdict:`, so it passes the heading check and fails the fingerprint check, proving check (iii) reads the anchor **from the table**. Rounds 7-10 are in §16-§19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 1 High · codex `REQUEST_CHANGES` 3 High + 1 Medium**). **Every finding is against round 8's own fixes.** Step 2 mandated four columns and shipped a **five**-column table (the fingerprints now live in the gate, test-only, with the literal four-column §13 table separate); **M2's mutant row was three cells** and is now the full four-column row with the anchor retained; **M3's marker was not guaranteed to survive** the simplification step 5 orders, so it is now the disposition classifier `**Adapted**` with step 5 **pinning the classifier vocabulary**; and **M12d proved nothing about the fingerprint** (`:538` is a blockquote, not a heading), so **M12e** is added. Rounds 7-9 are in §16-§18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 2 High + 1 Medium**). Both reviewers again found the **same High**, and it is the same
 *class* as round 6's: **round 7's `anchor` column reached §4.2 and never reached §7 step 2**, which still
 mandated a three-column table — so **M12d had no column to mutate**. Step 2 now ships the four-column
@@ -31,10 +31,10 @@ round 3 gated (**gemini REQUEST_CHANGES ×3 / codex REQUEST_CHANGES ×4**). The
 scope table gains a **closed lexical schema** (free text cannot reject paraphrase); M5's
 "exists and is collected" is strengthened because collection permits a no-op; and `BLOCKED — …` is
 reframed — it has no **shared** owner in `AGENT_CONTRACTS.md`, but real contracts in two agent bodies.
-See §12. Rounds 1-2 are in §10-§11; rounds 3-20 are in §12-§29.
+See §12. Rounds 1-2 are in §10-§11; rounds 3-21 are in §12-§30.
 **Ticket:** `COREDEV-2605` (Epic `COREDEV-2485`) · follow-up to `COREDEV-2602`, which shipped §13 in v2.6.1
 **Blocks:** `COREDEV-2604` (per the ticket, 2604 shrinks once this lands)
-**Last Updated:** 2026-08-01 (round 20, post-gate revision — anchors re-derived + drift check; M12j′ propagated; M12m scoped to five rows; row-local rules specified)
+**Last Updated:** 2026-08-08 (round 21, post-gate revision — parser domain excludes YAML frontmatter + M12n; M12f/M12h partner rule; M12m locus; M12k claim withdrawn)
 **Measured against:** HEAD `adda52d` (v2.6.4, merged to main as `ff83f02`), worktree
 `.claude/worktrees/opus5-review`, plugin **`2.6.4`** — round 1 caught this header saying `2.6.3`; the
 frozen commit's manifest reads `2.6.4` (`.claude-plugin/plugin.json:3`).
@@ -321,7 +321,8 @@ M5, M9-M13 were re-checked and are stated against the table or the parser, not a
 > > **M12e (round 9):** leave the table **entirely untouched** and instead rename or delete the
 > > fingerprint `### Verdict:` at `agents/swift-reviewer.md:660`; the gate must **fail**.
 > > **M12f (step 0's proof), M12g, M12h (ARTIFACT-ONLY — swap the fingerprint *strings*, not the
-> > anchors), the positive M12i / M12j / M12j′, and the rejection cases M12k, M12l and M12m, plus the
+> > anchors), the positive M12i / M12j / M12j′, and the rejection cases M12k, M12l, M12m and **M12n**
+> > (the frontmatter-relocation case, round 21), plus the
 > > mandated **six-step** resolution ALGORITHM — step 0's pinned canonical path, step 3's exactly-one
 > > content search, step 4's nearest-enclosing walk — and the fence-aware section definition, are all
 > > specified in §7 step 2** *(round 19: this summary still called M12h an anchor swap and omitted steps
@@ -844,6 +845,37 @@ satisfied by a suite that never rejects a mutant.
    > *boundary detection* ignores fenced `#` lines. **All nine anchors are real headings outside fences**
    > (verified), so check (ii) is unaffected.
    >
+   > **THE PARSER'S DOMAIN IS THE DOCUMENT BODY — THE INITIAL YAML FRONTMATTER BLOCK IS NOT PART OF IT.
+   > Round 21, codex, and it is a CONFORMING WRONG GATE.** CommonMark does not recognise YAML
+   > frontmatter, so a parser fed the raw file treats the metadata block as ordinary content. **All nine
+   > canonical files open with `---` frontmatter** (verified), and `agents/swift-reviewer.md:14`-`:26` are
+   > `#`-prefixed YAML **comments** that raw CommonMark reads as **H1 headings**. Two consequences, both
+   > real:
+   >
+   > 1. **A surface can be bound to inert metadata.** Move a row's fingerprint out of its output surface
+   >    and into the frontmatter as a YAML comment (`## Security Review`), then update the table to the
+   >    newly resolved line. Step 0 passes (path unchanged), step 2 sees an ATX heading outside a fence,
+   >    step 3 finds exactly one occurrence, step 4 resolves it to itself, step 5 and
+   >    `test_scope_anchors_resolve` both pass — and §13 now governs a block **the plugin loader
+   >    ignores**. Every existing mutant keeps its required polarity, so nothing in the suite objects.
+   > 2. **Mutant target selection becomes parser-configuration-dependent.** M12d's "first real heading in
+   >    the file" and M12l's ancestor walk resolve to `:14` under raw CommonMark and to a body heading
+   >    under a frontmatter-aware reader — so the same recipe names different loci on different
+   >    implementations, which is not determinism.
+   >
+   > **So: strip the initial frontmatter block before parsing.** If the file's first line is exactly
+   > `---`, the body begins after the next line that is exactly `---`; everything before it is **outside
+   > the parser's domain** for heading resolution, fingerprint search, uniqueness counting and every
+   > mutant's target selection. A file whose frontmatter is unterminated is a **hard failure**, not a
+   > document with no body. **M12n** *(round 21)* is its proof: relocate a row's fingerprint into the
+   > frontmatter as a YAML comment and update the anchor to the resolved line — the gate must **FAIL**
+   > (fingerprint occurs zero times in the body). Run row-locally across all nine rows.
+   >
+   > *(This is the first conforming wrong gate built since round 14 — rounds 16 and 20 both ended with
+   > codex unable to construct one. It survived because every previous round reasoned about the document
+   > and never about what the parser is handed. **A parser contract that does not state its input domain
+   > is incomplete, however precisely it states its rules.**)*
+   >
    > **THE GATE'S ALGORITHM IS MANDATED, NOT INFERRED FROM ITS MUTANTS — round 14.**
    > *(codex built a **shift-aware equality gate** that survives everything: hard-code expected anchor `E`,
    > heading text `H` and fingerprint line `F` per row; set `delta = 1` when line `E` went blank and
@@ -916,6 +948,7 @@ satisfied by a suite that never rejects a mutant.
    > | **M12k** | step **3** (multiplicity) |
    > | **M12l** | step **4** — *only* with a concrete **same-file ancestor** heading; otherwise step 2 first |
    > | **M12m** | step **4** on the five rows whose anchor text differs from their fingerprint; step **3** (multiplicity) on the four self-fingerprinting rows, because the same-text decoy is a *second occurrence of the fingerprint* |
+   > | **M12n** *(round 21)* | step **3** — the fingerprint is relocated into the initial YAML frontmatter, which is outside the parser's domain, so it occurs **zero** times in the body |
    > | **M12i**, **M12j**, **M12j′**, **M1p**, **M3p** | none — required **PASS** |
    >
    > *(Round 20, both arms: M12m was absent from this summary entirely, and the M12d/M12l causes held only
@@ -956,15 +989,21 @@ satisfied by a suite that never rejects a mutant.
    >   or delete". On the four rows whose fingerprint **is** their anchor heading, deleting it leaves a
    >   non-heading at the anchor line, so the mutant fails step **2** first and never exercises step 3 —
    >   a rejection for the wrong reason, which is the exact defect round 19 set out to remove.)*
-   > - **M12f** *(round 14; reclassified round 18 as step 0's own proof)* **SWAPS two rows' anchors** —
-   >   `verdict-report` ↔ `security-findings`, each row's anchor taking the other's **resolved** path:line.
-   >   Since round 17 pinned the canonical path, the gate must fail at **step 0** on the path mismatch,
-   >   before any heading or fingerprint check runs. A gate that hard-codes each surface's locus does not
-   >   notice a swap, so this is the mutant that proves the path is **read from the table**.
-   >   **M12f is the SOLE mutant exempt from row-locality** — crossing canonical files is precisely its
-   >   mutation, so the rule "never leave the row's own canonical file" cannot apply to it. *(Round 20,
-   >   codex: the exemption was implicit; stated here so parameterising M12f row-locally does not silently
-   >   turn it into a no-op. This recipe also still described a failure on the retired "check (iii)".)*
+   > - **M12f** *(round 14; reclassified round 18 as step 0's own proof)* **SWAPS two rows' anchors**, each
+   >   row's anchor taking the other's **resolved** path:line. Since round 17 pinned the canonical path,
+   >   the gate must fail at **step 0** on the path mismatch, before any heading or fingerprint check runs.
+   >   A gate that hard-codes each surface's locus does not notice a swap, so this is the mutant that
+   >   proves the path is **read from the table**.
+   >   **PARTNER SELECTION IS DETERMINISTIC AND COVERS ALL NINE ROWS — round 21.** For target row *i*
+   >   (table order, 1-9), the partner is **row *i*+1, wrapping from row 9 to row 1**. That yields nine
+   >   distinct parameterisations, one per row, not a single fixed pair.
+   >   **M12f is exempt from ROW-LOCALITY but NOT from the all-nine mandate** — crossing canonical files is
+   >   precisely its mutation, so "never leave the row's own canonical file" cannot apply to it; "run it
+   >   for every row" still does. *(Round 20, codex: the row-locality exemption was implicit and is now
+   >   stated. **Round 21, codex: the exemption was being read as covering the all-nine rule too, and the
+   >   recipe named only the fixed `verdict-report`↔`security-findings` pair — so a gate enforcing step 0
+   >   on those two rows alone passed every specified parameterisation.** This recipe also still described
+   >   a failure on the retired "check (iii)".)*
    > - **M12g** *(round 14)* points one row's anchor at a **NON-HEADING** line selected **row-locally and
    >   deterministically**: *the first line after that row's resolved anchor that is not a real heading* —
    >   in the row's own canonical file, still inside the section whose *enclosing* heading contains the
@@ -973,11 +1012,18 @@ satisfied by a suite that never rejects a mutant.
    >   hard-coded line. *(Round 20, codex: previously pinned to `agents/swift-reviewer.md:591`, which is
    >   neither row-local nor still accurate.)*
    >
-   > - **M12h** *(round 15; re-specified round 18 as ARTIFACT-ONLY)* swap the two surfaces' **fingerprint
-   >   strings in the artifacts** — put `## Correctness & Concurrency Review` where `## Security Review`
-   >   was and vice versa — leaving both canonical paths and both anchors **untouched**. The gate must
-   >   **fail** on the fingerprint check. This is what proves the fingerprints discriminate *surfaces*
-   >   rather than merely existing.
+   > - **M12h** *(round 15; re-specified round 18 as ARTIFACT-ONLY)* swap two surfaces' **fingerprint
+   >   strings in the artifacts** — write each row's fingerprint where the other's was — leaving both
+   >   canonical paths and both anchors **untouched**. The gate must **fail** at **step 3** (each row's
+   >   fingerprint now occurs zero times in its own file). This is what proves the fingerprints
+   >   discriminate *surfaces* rather than merely existing.
+   >   **PARTNER SELECTION IS DETERMINISTIC AND COVERS ALL NINE ROWS — round 21**, by the same rule as
+   >   M12f: for target row *i*, the partner is **row *i*+1, wrapping**. *(Round 21, codex: this named only
+   >   the fixed security↔concurrency swap while §6 mandates every mutant across all nine rows, so a gate
+   >   enforcing fingerprint/surface association for those two rows alone passed every specified
+   >   parameterisation. **M12f and M12h were the two PAIR mutants; round 20 generalised only the four
+   >   single-target ones and declared the class closed** — the family had six members and four were
+   >   fixed.)*
    >   *(codex, round 18: M12h previously swapped **anchors** across canonical files, so **step 0 now
    >   rejects it before the fingerprint check ever runs** — it would pass for the wrong reason and stop
    >   proving what it exists to prove. **M12f**, which also swaps anchors, is **reclassified as the proof
@@ -991,8 +1037,16 @@ satisfied by a suite that never rejects a mutant.
    >   **untested** — a gate that takes the first match and never counts passes the clean document and
    >   every other mutant.)*
    > - **M12m — the SAME-TEXT DECOY case, round 19.** Insert a second heading with the **exact same text**
-   >   as a row's anchor heading elsewhere in that row's canonical file, and repoint the anchor to it — a
-   >   heading that does **not** enclose the fingerprint.
+   >   as a row's anchor heading into that row's canonical file, and repoint the anchor to it — a heading
+   >   that does **not** enclose the fingerprint.
+   >   **THE INSERTION LOCUS IS DETERMINISTIC — round 21, codex.** Insert the decoy **immediately after
+   >   the last line of the row's own anchored section** — that is, immediately before the next real
+   >   heading at or above the anchor's depth, or at **end-of-body** if the anchored section is the last.
+   >   This is a single stable position derived from the resolved AST, it is guaranteed to fall **after**
+   >   the fingerprint, and therefore guarantees the decoy does not enclose it — so walking up from the
+   >   fingerprint still reaches the true anchor and step 4 fails as intended. *("Elsewhere in the file"
+   >   named a property, not a position; the summary called the rule deterministic while the recipe left
+   >   the locus free.)*
    >   **Its first failing step is NOT uniform across the nine rows, and the difference is load-bearing:**
    >   - On the **five** rows whose anchor text differs from their fingerprint, the decoy adds no
    >     fingerprint occurrence, so the mutant reaches and fails **step 4** — which is what M12m exists
@@ -1011,6 +1065,16 @@ satisfied by a suite that never rejects a mutant.
    >   hard-coded `EXPECTED_HEADING_TEXT`" survives everything else — M12i/M12j leave heading text unchanged
    >   so they pass, and M12d/M12l point at differently-titled headings so they fail the text match. Only a
    >   decoy with **identical text** separates a text comparison from the nearest-enclosing walk.)*
+   > - **M12n — the FRONTMATTER-RELOCATION case, round 21.** Move a row's fingerprint out of its output
+   >   surface and into that file's **initial YAML frontmatter block**, written as a YAML comment
+   >   (`## Security Review`), then repoint the anchor to the line the mutated file now resolves to. The
+   >   gate must **fail at step 3** — with the frontmatter excluded from the parser's domain, the
+   >   fingerprint occurs **zero** times in the document body. Run row-locally across all nine rows.
+   >   *(codex, round 21: this is the conforming wrong gate. Fed the raw file, a CommonMark parser accepts
+   >   the metadata block as content — all nine canonical files open with `---`, and
+   >   `agents/swift-reviewer.md:14`-`:26` are `#`-prefixed YAML comments that parse as H1 headings. Every
+   >   mandated step then passes while §13 governs a block the plugin loader ignores. **M12n is the mutant
+   >   that pins the parser's INPUT DOMAIN**, exactly as M12g pins step 2 to the table.)*
    > - **M12l — the BROAD-ANCHOR case, round 17.** Repoint a row's anchor **up** to an **ANCESTOR** heading
    >   selected **row-locally and deterministically**: *the nearest real heading above the row's resolved
    >   anchor, in that row's own canonical file, whose section still contains the fingerprint* — i.e. a
@@ -1061,19 +1125,42 @@ satisfied by a suite that never rejects a mutant.
    > independently**: shifting the body and updating the anchor is the identical transformation as
    > **M12i**, and a gate that stores the fingerprint's line and adjusts it by the anchor delta passes
    > M12j′ just as it passes M12i. M12j′ is therefore a **valid but redundant** required PASS — it keeps
-   > the suite executable across all nine rows and nothing more. **Step 3's content-driven search is
-   > independently exercised on the FIVE non-self-fingerprinting rows only** (by M12j), and every
-   > statement in this plan about step-3 coverage is scoped to those five. The four rows' step-3 property
-   > is carried by **M12k** (multiplicity), not by M12j′.
+   > the suite executable across all nine rows and nothing more.
    >
-   > **Every rejection mutant is applied ROW-LOCALLY** — the recipe names a target *inside that row's own
-   > canonical file*, never a hard-coded `agents/swift-reviewer.md` or `skills/brainstorm/SKILL.md`.
-   > **M12f is the sole exemption**, since crossing canonical paths is its mutation. Each row-local recipe
-   > states a **deterministic selection rule** (M12d: first same-file heading whose section lacks the
-   > fingerprint · M12g: first non-heading line after the resolved anchor · M12l: nearest enclosing
-   > ancestor that still contains the fingerprint · M12m: same-text decoy in the same file), **asserts the
-   > selected target has the property the mutant depends on**, and records an exemption for any row where
-   > no such target exists.
+   > **STEP 3 IS TWO PROPERTIES, AND THEY HAVE DIFFERENT COVERAGE — round 21, codex.** Do not state
+   > step-3 coverage as one thing:
+   > - **Uniqueness** (the fingerprint occurs exactly once) is proved on **all nine** rows by **M12k**.
+   > - **Presence** (it occurs at all) is proved on **all nine** rows by **M12e**.
+   > - **Content-driven LOCATION** — that the gate finds the occurrence by searching the current file
+   >   rather than trusting a stored or derived line — is proved on the **five** non-self-fingerprinting
+   >   rows only, by **M12j**.
+   >
+   > On the four self-fingerprinting rows **nothing proves location**, and M12k does not: a gate can count
+   > occurrences to reject M12k and still use `anchor.line` as the fingerprint's location, because there
+   > the fingerprint *is* the anchor heading. That shortcut is **semantically equivalent while the
+   > fingerprint remains the unique anchor heading**, so it is an accepted residual rather than a hole —
+   > but the round-20 claim that "M12k carries the four rows' step-3 property" was **too strong and is
+   > withdrawn**. *(A claim written in the same round that fixed a neighbouring defect, and wrong in the
+   > same way: it named a mutant that covers one property as covering the property that mattered.)*
+   >
+   > **EVERY rejection mutant runs on ALL NINE ROWS, and every one names its target by a DETERMINISTIC
+   > RULE — never a fixed locus and never a fixed pair.** Two distinct requirements, and round 21 proved
+   > they are not the same one:
+   > - **Row-locality** — the target lies *inside that row's own canonical file*, never a hard-coded
+   >   `agents/swift-reviewer.md` or `skills/brainstorm/SKILL.md`. **M12f is the sole exemption**, since
+   >   crossing canonical paths is its mutation.
+   > - **All-nine coverage** — every mutant is parameterised over all nine rows. **Nothing is exempt from
+   >   this**, M12f included.
+   >
+   > The selection rules, all resolved against the **document body** (frontmatter excluded):
+   > **M12d** first same-file body heading whose section lacks the fingerprint · **M12e** in-place rename
+   > of the row's own fingerprint · **M12f** partner = row *i*+1 in table order, wrapping · **M12g** first
+   > non-heading line after the resolved anchor · **M12h** partner = row *i*+1, wrapping · **M12k**
+   > duplicate inserted immediately before the anchored line · **M12l** nearest enclosing ancestor that
+   > still contains the fingerprint · **M12m** same-text decoy immediately after the row's anchored
+   > section · **M12n** the row's fingerprint relocated into that file's YAML frontmatter.
+   > Each recipe **asserts the selected target has the property the mutant depends on** before running,
+   > and records an exemption for any row where no such target exists.
    > *(codex, round 19: M12d, M12g and M12l hard-code their targets, so parameterising them literally across
    > other rows trips **step 0** before the intended check — a rejection for the wrong reason proves nothing
    > about steps 2-5. **Round 20, codex: the rule was asserted here but never specified** — the three
@@ -1154,7 +1241,9 @@ satisfied by a suite that never rejects a mutant.
    and require it to reproduce all nine recorded values; a resolver that has not reproduced a known-good
    state is not evidence. It must be **fence-aware** — five of the nine fingerprints sit inside ```text
    blocks, and a fence-blind walk silently returns the fenced line itself instead of its enclosing
-   heading. *(Round 20, BOTH arms: the nine anchors were 9/9 valid at `63354a9` and 0/9 valid at
+   heading — and **frontmatter-aware**: all nine canonical files open with a `---` block that CommonMark
+   treats as content, so a resolver fed the raw file can resolve an anchor to a YAML comment (round 21).
+   Resolution, uniqueness counting and mutant target selection all operate on the **document body only**. *(Round 20, BOTH arms: the nine anchors were 9/9 valid at `63354a9` and 0/9 valid at
    `f463ed7` — broken by unrelated `COREDEV-2642` edits, with two pointing past end-of-file. Nothing in
    the repository failed; only a reviewer opening all nine files caught it. This check is what makes the
    next drift a red test instead of a lost round.)*
@@ -1791,3 +1880,41 @@ proposed replacements were right on **8 of 9**: `ux-perf-findings` resolves to `
 know.** Also: reviewers execute whatever is on `PATH` — earlier rounds' transcripts show them digesting
 plans through a `PATH` shim rather than `shasum` itself, which is harmless here but means the review
 environment should stay boring and reproducible.)*
+
+## 30. Round-21 gate outcome — THE ARMS SPLIT
+
+**gemini `APPROVE` · codex `REQUEST_CHANGES` (2 High, 2 Medium).** Frozen at `fea4edb`, sha256
+`3f5986139690baee50f58af37ff52999eca1ecd05056a1ca215ea1d7123e322a`; **both arms recomputed and matched
+it.** Transcripts: `COREDEV-2605r21-agy-…txt` (6,899 B) and `COREDEV-2605r21-codex-…txt` (678,817 B —
+the largest of the campaign), both `TREE=clean`.
+
+**This is the round that justifies the two-arm gate.** gemini produced its first `APPROVE` in twenty-one
+rounds, and it was not a lazy one: it independently re-derived all nine anchors, matched them 9/9,
+correctly identified the five fenced fingerprints, corrected its own round-20 off-by-one on
+`ux-perf-findings` to `:205`, and audited the renumbering. It was thorough, checkable, and **wrong** —
+because it reasoned about the document and never about what the parser is handed. **One approving arm
+proves nothing; a single reviewer's diligence is not coverage.**
+
+| # | from | finding | verified | fix |
+|---|---|---|---|---|
+| 1 | codex | **A CONFORMING WRONG GATE — the parser's domain includes YAML frontmatter.** CommonMark does not recognise frontmatter. Relocate a row's fingerprint into the `---` block as a YAML comment, repoint the anchor, and **every mandated step passes** — step 0 (path unchanged), step 2 (ATX heading outside a fence), step 3 (exactly one), step 4 (resolves to itself), step 5, and `test_scope_anchors_resolve` — while §13 binds a block the plugin loader **ignores**. It also makes M12d/M12l target selection parser-configuration-dependent | **confirmed, and broader than reported** — **all nine** canonical files open with `---`, and `agents/swift-reviewer.md:14`-`:26` are `#`-prefixed YAML comments that parse as **H1 headings** | the parser's domain is the **document body**: strip the initial frontmatter before resolution, uniqueness counting and target selection; unterminated frontmatter is a hard failure. **M12n** added as its proof |
+| 2 | codex | **the all-nine matrix is unimplementable for M12f and M12h** — both define a single fixed pair, so a gate enforcing step 0 for M12f's two rows and fingerprint association for M12h's two rows passes every *specified* parameterisation. M12f's exemption is from **row-locality**, not from the all-nine mandate | **confirmed** — `:1044` mandates all nine; M12f and M12h name fixed pairs | deterministic partner rule for both: **partner = row *i*+1 in table order, wrapping**. The two requirements are now stated **separately**, with M12f exempt from one and not the other |
+| 3 | codex | **M12m had no deterministic construction rule** — the recipe said "elsewhere in the file" while the summary called it deterministic | **confirmed** | the decoy is inserted **immediately after the row's anchored section** — one stable AST-derived position, guaranteed to fall after the fingerprint |
+| 4 | codex | **M12k does not carry the four self-fingerprinting rows' content-driven-LOCATION property** — it proves multiplicity. A gate can count occurrences to reject M12k and still use `anchor.line` as the fingerprint's location on those rows | **confirmed** — and this was a claim written in **round 20's own remediation** | step 3 is now stated as **three properties with different coverage**: uniqueness (nine, M12k), presence (nine, M12e), location (five, M12j). The round-20 claim is **withdrawn**; the four rows' shortcut is an accepted residual |
+
+**Finding 2 is my defect, and it is a repeat.** Round 20 generalised the four **single-target** mutants
+(M12d, M12g, M12l, M12m) and declared the row-locality class closed. The family had **six** members —
+M12f and M12h are **pair** mutants and needed a partner rule, not a target rule. I fixed four and wrote
+"the row-local rule is now specified" as though it covered all of them. **Derive the family
+mechanically and gate its members together; a class closed from memory is a class half closed.**
+
+**Finding 4 is the same shape one level down:** round 20's fix for M12j′'s redundancy invented a
+replacement claim — "M12k carries those rows' step-3 property" — that was never checked against what
+M12k actually rejects. **A remediation is new surface, and the claims written while fixing something are
+exactly as unverified as the ones being fixed.**
+
+**Where the plan now stands.** The six-step algorithm plus the frontmatter domain has survived every
+wrong gate either arm has built; the anchors resolve 9/9 and are now guarded by a shipped test; and the
+mutant suite is, for the first time, both fully parameterised and fully deterministic. The open risk is
+no longer the design — it is whether the *claims about coverage* keep pace with the mutants, which is
+what rounds 19, 20 and 21 each caught in a different member of the same family.
