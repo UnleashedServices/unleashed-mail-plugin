@@ -791,7 +791,13 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
                 # The rest of the decidable class — punctuation followed by whitespace or end. The
                 # review reported the PERIOD; measuring showed the others behaved identically, so they
                 # are swept together rather than arriving one report at a time.
-                + f"Compare {repo}, then {repo}; and finally ({repo}) or \"{repo}\" here.\n")
+                + f"Compare {repo}, then {repo}; and finally ({repo}) or \"{repo}\" here.\n"
+                # STACKED closing punctuation — ordinary Markdown produces it, and requiring the first
+                # closing byte to be followed immediately by whitespace missed it.
+                + f"See `{repo}`. And \"{repo}\".\n"
+                # The root as a SUFFIX of a longer path. Without a LEFT boundary this became
+                # `/Volumes/backup<tree>/…` — the same silent corruption, on the other side.
+                + f"Backup at /Volumes/backup{repo}/docs/plan.md\n")
         result, tree_root = self.stage(repo, tree, body)
 
         self.assertEqual(0, result.returncode, result.stderr)
@@ -810,6 +816,12 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
                       "a sentence-ending period left the root naming the LIVE checkout")
         self.assertIn(f"Compare {tree}, then {tree}; and finally ({tree}) or \"{tree}\" here.", staged,
                       "punctuation followed by whitespace is prose and must be rewritten")
+        self.assertIn(f"See `{tree}`. And \"{tree}\".", staged,
+                      "stacked closing punctuation left the root naming the LIVE checkout")
+        self.assertIn(f"/Volumes/backup{repo}/docs/plan.md", staged,
+                      "the root as a SUFFIX of a longer path was rewritten — a left boundary is "
+                      "required, not only a right one")
+        self.assertNotIn(f"/Volumes/backup{tree}", staged)
         self.assertNotIn(repo + ",", staged)
         self.assertNotIn("(" + repo, staged)
 

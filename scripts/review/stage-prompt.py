@@ -189,18 +189,30 @@ def main(argv=None) -> int:
         # What that gives up: a bare `<repo>` mentioned in prose keeps naming the live path. That is a
         # MENTION, not a file the reviewer opens, and leaving it is the conservative direction — a
         # stale mention is visible, a silently corrupted sibling path is not.
-        # PUNCTUATION FOLLOWED BY WHITESPACE OR END IS PROSE, and that is the whole decidable class.
-        # The review reported the PERIOD member (`Review /work/repo.` left the root naming the LIVE
-        # checkout, and the residue check — asking the same question — did not notice). Measured, the
-        # comma, semicolon, colon, bang, question mark, closing bracket and closing quote members all
-        # behaved identically, so they are swept together rather than one report at a time.
+        # THE BOUNDARY RULE, DERIVED ONCE. It was patched four times from reported cases — every byte
+        # outside a name class, then `/` and end only, then a sentence period, then the punctuation
+        # class — and each patch was still a guess about the next spelling. Reviewers then found two
+        # more: a LEFT boundary was missing entirely, and stacked closing punctuation was not handled.
+        # So the rule is stated rather than accumulated:
         #
-        # The rule stays decidable: the punctuation must be followed by whitespace or end-of-input.
-        # `<repo>.worktrees/x`, `<repo>,archive/x` and `<repo>"weird/x` are filenames and are left
-        # alone; `<repo>.`, `<repo>, then` and `("<repo>")` are prose and are rewritten. A SPACE is
-        # deliberately NOT in the class — `<repo> Helper/x.md` and `<repo> is dirty` are the same bytes.
+        #   A match must be a COMPLETE path token denoting the checkout root.
+        #     * LEFT  — the character before it cannot continue a path from the left. Without this,
+        #       `/Volumes/backup/Users/me/app/docs/plan.md` — the root as a SUFFIX of a longer path —
+        #       became `/Volumes/backup<tree>/docs/plan.md`.
+        #     * RIGHT — the token ends at `/`, at end-of-input, or at ONE OR MORE closing/sentence
+        #       punctuation bytes followed by whitespace or end. `one or more` is what allows
+        #       ``Review `<repo>`.`` and `Review "<repo>".`, which ordinary Markdown produces; and
+        #       requiring at least one is what keeps a SPACE out of the class, because
+        #       `<repo> Helper/x.md` (a sibling) and `<repo> is dirty` (prose) are the same bytes and
+        #       nothing can separate them.
+        #
+        # Everything left alone is left alone deliberately: `<repo>Tests/…`, `<repo>.worktrees/…`,
+        # `<repo>,archive/…` and `<repo> Helper/…` are all OTHER directories, and rewriting them
+        # silently points the reviewer at a path that does not exist.
         boundary = re.compile(
-            re.escape(repo) + rb"""(?=/|\Z|[.,;:!?)\]}"'](?:\s|\Z))"""
+            rb"(?<![A-Za-z0-9._/-])"
+            + re.escape(repo)
+            + rb"""(?=/|\Z|[.,;:!?)\]}"'`]+(?:\s|\Z))"""
         )
         # A CALLABLE, NOT A TEMPLATE STRING (review of this fix). `Pattern.sub` interprets the
         # replacement as a template, so a backslash in the scratch-tree path — legal in a Unix path and
