@@ -509,6 +509,21 @@ printf 'VERDICT: APPROVE\\n'
         self.assertIn("EVIL.txt", first.stdout + first.stderr,
                       "the write was detected but the file beneath the collapsed entry was not named")
 
+    def test_a_reviewer_that_BREAKS_the_checkout_voids_the_round(self):
+        """`|| true` turned a failed status into a clean tree (PR #63 recheck, P2).
+
+        The post-run `git status` ran with `|| true`, so a shell-capable reviewer that removed the
+        disposable checkout's `.git` file broke the detector meant to catch it: the empty result
+        compared against the non-empty baseline produced an empty `DIRTY`, and the round returned 0
+        with `VERDICT: APPROVE`. The basis files stay byte-identical throughout, so the content checks
+        see nothing either — this is the only guard positioned to notice.
+        """
+        self.install_stub(self.MUTATING_STUB % 'rm -f "$tree/.git"')
+        result = self.capture("18")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("could not read the disposable checkout's status",
+                      result.stdout + result.stderr)
+
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by
         construction. The prompt is basis exactly like the plan; content-verified the same way."""

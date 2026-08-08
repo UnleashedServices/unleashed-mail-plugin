@@ -164,7 +164,16 @@ if [ "$ACTUAL_PROMPT_SHA" != "$PROMPT_TREE_SHA" ]; then
     echo "GATE FAILED — the assembled PROMPT was modified during the review (round void)" >&2
     exit 3
 fi
-TREE_AFTER="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
+# A FAILED STATUS IS NOT A CLEAN TREE (PR #63 recheck, P2). `|| true` turned a `git status` failure
+# into an EMPTY string, and comparing empty against the non-empty baseline yields an empty `DIRTY` —
+# so a shell-capable reviewer that removed or corrupted the checkout's `.git` file broke the very
+# detector meant to catch it and the round returned 0 with `VERDICT: APPROVE`. The basis files can be
+# byte-identical throughout, so nothing else notices. Any non-zero status here VOIDS the round.
+if ! TREE_AFTER="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    { echo "GATE FAILED — could not read the disposable checkout's status after the review (round"
+      echo "void). A reviewer that breaks the checkout must not pass as a clean tree."; } >&2
+    exit 3
+fi
 DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" || true)"
 if [ -n "$DIRTY" ]; then
     { echo "GATE FAILED — the reviewer WROTE inside the disposable checkout (round void):"

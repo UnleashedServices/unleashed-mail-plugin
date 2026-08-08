@@ -111,6 +111,29 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
   zero-removal run cannot be distinguished from a wrong state root.
 
+### Fixed — fifth recheck pass
+
+- **A plan over 64 KiB could never be persisted.** The `.planbytes` check added earlier in this release
+  hashed the snapshot through `_read_regular_file_bytes`, whose cap bounds untrusted PARSING of small
+  sidecars — so any plan above it hashed a truncated prefix, disagreed with its own record, and every
+  approving persist was rejected as a modified snapshot. Five plans in this checkout are over the cap
+  (largest 204 KB). Streamed now, exactly as the prompt-snapshot check beside it already was.
+- **A `]` inside a YAML comment ended the flow-list fold early**, so `allowed-tools: [ # tool list ]`
+  recorded `[ Bash` and the bare-grant deny-list matched nothing while Claude's parser granted
+  unrestricted shell. Comments are stripped per folded line, quote-aware — stripping only after joining
+  discards every item past the first comment, which is the same bypass one step along.
+- **A prompt naming the plan through a symlink ALIAS defeated the isolation.** `prompt_disagreement`
+  resolved it and accepted, but `stage-prompt.py` rewrites by literal-byte substitution of the
+  canonical path — so a prompt with no canonical bytes was not rewritten at all and both "isolated"
+  reviewers were left pointed at the live plan. Alias spellings are refused; the canonical form the
+  gemini skill generates still binds.
+- **`git status` failing in the disposable checkout counted as a clean tree.** `|| true` turned the
+  failure into an empty string, so a reviewer that removed the checkout's `.git` broke the detector
+  meant to catch it and the round returned 0 with `VERDICT: APPROVE`. Any non-zero status voids it.
+- **`containment.repository_root()` raised on a path byte the filesystem allows.** `text=True` decodes
+  strictly, so a repository named with a non-UTF-8 byte killed every wrapper with a traceback before
+  containment could run. Captured as bytes and `os.fsdecode`d.
+
 ### Fixed — fourth recheck pass
 
 - **`pr-review` could approve a PR having inspected nothing.** `changeset.sh`'s base detection used

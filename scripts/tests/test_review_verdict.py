@@ -1458,6 +1458,28 @@ class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("no bound plan snapshot", result.stderr)
 
+    def test_a_PLAN_larger_than_the_trusted_read_cap_still_persists(self):
+        """My own regression, in the file that carries the warning about it (PR #63 recheck, P1).
+
+        `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1` to bound UNTRUSTED PARSING of
+        small sidecars. Hashing the bound plan snapshot through it truncated every plan over 64 KiB to
+        its prefix, so the digest could never match its own record and EVERY approving persist for such
+        a plan was rejected as a modified snapshot. Five plans in this checkout are over the cap — the
+        largest is 204 KB — so this was not hypothetical. The prompt-snapshot check one field over had
+        already been fixed for exactly this and carries the comment saying so; I copied the wrong
+        sibling. A digest reads every byte and holds none, which is why the cap does not apply to it.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        oversized = ("# Plan\n" + ("x" * 100 + "\n") * 1000).encode()   # ~100 KB, over the cap
+        with open(os.path.join(self.d, a), "wb") as fh:
+            fh.write(oversized)
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+
+        result = self._write(a, transcripts)
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_a_prompt_larger_than_the_trusted_read_cap_still_persists(self):
         """A guard that refuses valid work is a guard someone switches off.
 

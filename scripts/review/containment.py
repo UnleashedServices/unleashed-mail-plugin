@@ -51,9 +51,15 @@ def repository_root() -> str:
     silently falling back to the working directory would restore exactly the bug above.
     """
     try:
+        # BYTES, not `text=True` (PR #63 recheck, P2). Strict locale decoding raises
+        # `UnicodeDecodeError` on a path byte that is valid on a POSIX filesystem but not valid UTF-8,
+        # and it raises BEFORE containment can run — every wrapper sharing this helper dies with a
+        # traceback rather than a refusal. Reproduced with a repository named with byte 0xff.
+        # `os.fsdecode` uses surrogateescape, which is how Python names such a path everywhere else,
+        # so the value round-trips through `os.path` and `os.open` unchanged.
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=False,
+            capture_output=True, check=False,
         )
     except OSError as error:
         refuse(f"could not run git to locate the repository root: {error}")
@@ -64,7 +70,8 @@ def repository_root() -> str:
     # in one has git emit `<path-with-newline>` plus its own terminator, and `rstrip` eats both
     # (PR #63 recheck, P2). Git terminates the path with exactly one newline; that is the only byte to
     # remove, so slicing it is the answer that cannot be narrowed a fourth time.
-    root = top.stdout[:-1] if top.stdout.endswith("\n") else top.stdout
+    raw_root = top.stdout[:-1] if top.stdout.endswith(b"\n") else top.stdout
+    root = os.fsdecode(raw_root)
     if top.returncode != 0 or not root:
         refuse(
             "not inside a Git worktree, so there is no repository to contain operands to — "

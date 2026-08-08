@@ -900,14 +900,22 @@ def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
     # is the whole uncoordinated family: a snapshot substituted and left, or restored while the record
     # was not, in either order.
     snapshot_path = transcript + ".planbytes"
-    snapshot = _read_regular_file_bytes(snapshot_path)
-    if snapshot is None:
+    # STREAM IT, exactly as the prompt-snapshot check below already does — and this is a regression I
+    # introduced, in the one file that carries the comment warning about it. `_read_regular_file_bytes`
+    # caps at `_MAX_TRUSTED_READ_BYTES + 1` to bound UNTRUSTED PARSING of small sidecars; hashing a
+    # plan through it truncates every plan over 64 KiB to its prefix, so the digest could never match
+    # and EVERY approving persist for such a plan was rejected as a modified snapshot. Five plans in
+    # this checkout are over the cap (the largest is 204 KB), so this was not hypothetical. A digest
+    # reads every byte and holds none of them, which is why the cap does not apply to it.
+    if _read_regular_file_bytes(snapshot_path) is None:
         return (
             "per-run transcript has no bound plan snapshot: " + snapshot_path
             + " — the binder writes it beside the record, so absence means it was removed. "
             "Re-capture the round through the capture helpers."
         )
-    snapshot_digest = hashlib.sha256(snapshot).hexdigest()
+    snapshot_digest = _sha256_regular_file(snapshot_path)
+    if snapshot_digest is None:
+        return "the bound plan snapshot became unreadable: " + snapshot_path
     if snapshot_digest != bound_digest:
         return (
             "the bound plan snapshot does not match its own record: " + snapshot_path

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -625,6 +626,55 @@ class SpacedRepositoryPathReferences(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class AnAliasSpellingOfTheRepositoryIsRefused(unittest.TestCase):
+    """An absolute reference through a symlink alias defeated the isolation entirely.
+
+    THE FINDING (PR #63 recheck, P1). `prompt_disagreement()` resolved absolute references with
+    `realpath`, so `/tmp/repo-alias/docs/planning/A_PLAN.md` bound cleanly. But `stage-prompt.py`
+    rewrites the prompt by LITERAL-BYTE substitution of the canonical repository path — and a prompt
+    containing no canonical bytes is rewritten not at all, so the staged prompt still pointed both
+    supposedly isolated reviewers at the mutable LIVE plan. The A->B->A swap that isolation exists to
+    stop then works, while the staged-plan digest and the final binding both pass.
+
+    Refusing is the right direction: the gemini skill generates the prompt with the canonical absolute
+    path, which the control below shows still binds.
+    """
+
+    def setUp(self) -> None:
+        self.base = Path(tempfile.mkdtemp(prefix="alias-"))
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        self.repo = Path(os.path.realpath(self.base / "repo"))
+        (self.repo / "docs" / "planning").mkdir(parents=True)
+        (self.repo / "docs" / "planning" / "A_PLAN.md").write_text("# plan\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", "."], cwd=self.repo, check=True)
+        self.alias = self.base / "repo-alias"
+        self.alias.symlink_to(self.repo)
+        self.transcripts = Path(tempfile.mkdtemp(prefix="alias-t-"))
+        self.addCleanup(shutil.rmtree, self.transcripts, ignore_errors=True)
+
+    def bind(self, target: Path, leaf: str):
+        prompt = self.repo / ".p.md"
+        prompt.write_text("Review carefully.\n" * 30 +
+                          f"REVIEW TARGET: {target}/docs/planning/A_PLAN.md\n", encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(BIND_PROMPT), "--prompt", ".p.md",
+             "--transcript", str(self.transcripts / leaf), "--plan", "docs/planning/A_PLAN.md"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+
+    def test_an_alias_spelling_is_refused(self):
+        result = self.bind(self.alias, "alias.txt")
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("alias for this repository", result.stderr)
+        self.assertFalse((self.transcripts / "alias.txt.plan").exists(),
+                         "a binding was written for a prompt the rewriter cannot reach")
+
+    def test_the_canonical_spelling_still_binds(self):
+        """Control — the gemini skill's own generated form must keep working."""
+        result = self.bind(self.repo, "canonical.txt")
+        self.assertEqual(0, result.returncode, result.stderr)
 
 
 class PlanReferencesRequireABoundaryAfterTheSuffix(unittest.TestCase):

@@ -739,6 +739,25 @@ def _flow_items(value: str) -> str:
     return ", ".join(_unquote(item.strip()) for item in inner.split(",") if item.strip())
 
 
+def _strip_yaml_comment(value: str) -> str:
+    """Drop a trailing `#` comment, respecting quotes.
+
+    YAML starts a comment at an unquoted `#` preceded by whitespace or the start of the value, so
+    `"a # b"` keeps its hash and `[a] # note` loses everything from the hash on.
+    """
+    quote = None
+    for index, character in enumerate(value):
+        if quote:
+            if character == quote:
+                quote = None
+            continue
+        if character in "'\"":
+            quote = character
+        elif character == "#" and (index == 0 or value[index - 1] in " \t"):
+            return value[:index]
+    return value
+
+
 def _join_flow_lists(lines: list[str]) -> list[str]:
     """Fold a flow list spelled across lines onto its key's line, before anything parses it.
 
@@ -755,15 +774,28 @@ def _join_flow_lists(lines: list[str]) -> list[str]:
     pending: str | None = None
     for line in lines:
         if pending is not None:
-            pending += " " + line.strip()
-            if "]" in line:
+            # EACH LINE IS COMMENT-STRIPPED AS IT IS FOLDED, not after joining. Joining first and
+            # letting the main loop strip once discards every item that follows the first comment —
+            # `[ # note ]` + `Bash` + `]` collapsed to `[`, losing the grant entirely, which is the
+            # same bypass one step along.
+            stripped = _strip_yaml_comment(line).strip()
+            if stripped:
+                pending += " " + stripped
+            if "]" in stripped:
                 joined.append(pending)
                 pending = None
             continue
         match = TOP_KEY.match(line)
         if match and not line[:1].isspace() and match.group(2).strip().startswith("["):
-            if "]" not in match.group(2):
-                pending = line.rstrip()
+            # THE COMMENT IS NOT THE COLLECTION (PR #63 recheck, P1). A raw `"]" not in value` search
+            # matched a `]` inside a YAML COMMENT on the opening line — `allowed-tools: [ # tool list ]`
+            # — so the fold stopped there, `parse_frontmatter` recorded `[ Bash`, and the bare-grant
+            # deny-list matched nothing while Claude's own parser granted unrestricted shell. Strip the
+            # comment with the same quote awareness the operator lexer uses before deciding the list is
+            # complete; the closing bracket must be YAML, not prose.
+            opener = _strip_yaml_comment(line).rstrip()
+            if "]" not in _strip_yaml_comment(match.group(2)):
+                pending = opener
                 continue
         joined.append(line)
     if pending is not None:                  # unterminated flow list: leave it as written, malformed

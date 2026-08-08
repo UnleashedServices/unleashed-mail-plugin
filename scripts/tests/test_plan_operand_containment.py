@@ -15,12 +15,14 @@ bounded is the pre-approved path the model can enter.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -342,6 +344,57 @@ class StateWritesArePinnedToTheContainedDirectory(unittest.TestCase):
         self.assertEqual({".gitignore", "FEATURE_PLAN.md.reviewed-sha256"},
                          {entry.name for entry in verdicts.iterdir()})
         self.assertEqual("*\n", (verdicts / ".gitignore").read_text(encoding="utf-8"))
+
+
+class TheRepositoryRootDecodesLikeTheFilesystem(unittest.TestCase):
+    """`text=True` made every wrapper die on a path byte the filesystem allows (PR #63 recheck, P2).
+
+    `git rev-parse --show-toplevel` was decoded with strict locale rules, so a repository whose name
+    carries a byte that is legal on a POSIX filesystem but not valid UTF-8 raised `UnicodeDecodeError`
+    BEFORE containment could run — a traceback rather than a refusal, in every entrypoint that shares
+    this helper. `os.fsdecode` uses surrogateescape, which is how Python names such a path everywhere
+    else, so the value round-trips through `os.path` and `os.open` unchanged.
+
+    TESTED AT THE FUNCTION, not end to end, and the reason is worth stating: APFS enforces UTF-8
+    filenames, so macOS cannot even CREATE such a repository (`OSError: Illegal byte sequence`). The
+    reviewer reproduced it on a filesystem that permits the byte. Driving the decode directly is the
+    part that is testable everywhere; a fixture that silently skipped on this developer's machine would
+    be worse than one that states its scope.
+    """
+
+    def _module(self):
+        spec = importlib.util.spec_from_file_location(
+            "containment_decode", str(REPO / "scripts" / "review" / "containment.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_an_undecodable_path_byte_is_carried_through_not_raised(self):
+        module = self._module()
+        raw = b"/tmp/repo-\xff"
+
+        class _Result:
+            stdout = raw + b"\n"
+            returncode = 0
+
+        with mock.patch.object(module.subprocess, "run", return_value=_Result()), \
+                mock.patch.object(module.os.path, "realpath", side_effect=lambda value: value):
+            root = module.repository_root()
+        self.assertEqual(os.fsdecode(raw), root)
+        self.assertEqual(raw, os.fsencode(root), "the byte did not survive the round trip")
+
+    def test_exactly_one_terminating_newline_is_removed(self):
+        """The byte-level form of the third narrowing: a path ENDING in a newline keeps it."""
+        module = self._module()
+        raw = b"/tmp/trailing-newline\n"
+
+        class _Result:
+            stdout = raw + b"\n"
+            returncode = 0
+
+        with mock.patch.object(module.subprocess, "run", return_value=_Result()), \
+                mock.patch.object(module.os.path, "realpath", side_effect=lambda value: value):
+            self.assertEqual(os.fsdecode(raw), module.repository_root())
 
 
 class ContainedReadWalksEveryComponent(unittest.TestCase):

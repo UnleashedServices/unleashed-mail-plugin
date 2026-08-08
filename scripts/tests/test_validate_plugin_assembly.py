@@ -864,6 +864,17 @@ class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
         "allowed-tools:\n  - 'Bash'",
         "allowed-tools: [Bash] # inline note",
     )
+    #: A YAML COMMENT IS NOT THE COLLECTION (PR #63 recheck, P1). The multi-line fold decided the list
+    #: was complete with a raw `"]" in line` search, so a `]` inside a comment on the OPENING line
+    #: ended it early: `parse_frontmatter` recorded `[ Bash`, the bare-grant deny-list matched nothing,
+    #: and Claude's own parser granted unrestricted shell. Stripping the comment only after joining is
+    #: not enough either — that discards every item past the first comment and loses the grant entirely,
+    #: which is the same bypass one step along. Each folded line is stripped as it is folded.
+    COMMENTED = (
+        "allowed-tools: [ # tool list ]\n  Bash\n]",
+        "allowed-tools: [\n  Bash # keep ] this\n]",
+        "allowed-tools: [\n  # just a note\n  Bash,\n]",
+    )
     TWO = (
         "allowed-tools: Read, Bash",
         "allowed-tools: [Read, Bash]",
@@ -885,7 +896,7 @@ class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
         return problems
 
     def test_bare_Bash_is_refused_in_every_spelling(self):
-        for spelling in self.ONE + self.TWO:
+        for spelling in self.ONE + self.TWO + self.COMMENTED:
             with self.subTest(spelling=spelling):
                 problems = self._grant_problems(spelling)
                 self.assertTrue(problems,
@@ -893,10 +904,19 @@ class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
                 self.assertTrue(any("`Bash`" in problem for problem in problems),
                                 f"the refusal names something other than Bash: {problems}")
 
+    def test_a_hash_inside_quotes_is_not_a_comment(self):
+        """Discrimination: the comment rule must not eat a `#` that belongs to the value."""
+        fm = vpa.parse_frontmatter(
+            '---\nname: p\ndescription: d\nallowed-tools: ["Bash(printf a#b)"]\n---\nb\n')
+        self.assertEqual("Bash(printf a#b)", fm["allowed-tools"])
+        problems: list[str] = []
+        vpa.check_model_reachable_grants(Path("skills/p/SKILL.md"), fm, problems, [])
+        self.assertEqual([], problems, "a scoped grant containing `#` was refused")
+
     def test_the_tokens_are_identical_in_every_spelling(self):
         """The verdict is downstream of the tokens; assert the tokens themselves so a future consumer
         inherits the normalization instead of re-deriving it."""
-        for spelling in self.ONE:
+        for spelling in self.ONE + self.COMMENTED:
             with self.subTest(spelling=spelling):
                 fm = vpa.parse_frontmatter(
                     f"---\nname: probe\ndescription: d\n{spelling}\n---\nbody\n")

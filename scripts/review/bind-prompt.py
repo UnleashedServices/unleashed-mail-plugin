@@ -154,6 +154,25 @@ def prompt_disagreement(prompt_bytes: bytes, plan_relative: str, root: str) -> "
         if os.path.isabs(reference):
             resolved = os.path.realpath(reference)
             if resolved == root or resolved.startswith(root + os.sep):
+                # AN ALIAS SPELLING IS REFUSED, NOT NORMALIZED (PR #63 recheck, P1). Resolving the
+                # reference here is what lets an ABSOLUTE path reach the plan under a different
+                # spelling — a symlink alias to the checkout, say — and pass this check. It then
+                # defeats the isolation entirely: `stage-prompt.py` substitutes the canonical
+                # repository path as LITERAL BYTES, so a prompt containing no canonical bytes is
+                # rewritten not at all, and the staged prompt still points both "isolated" reviewers at
+                # the mutable LIVE plan. The A->B->A swap that isolation exists to stop then works while
+                # the staged-plan and final binding checks both pass.
+                #
+                # Refusing is the right direction and costs nothing real: the gemini skill generates
+                # the prompt with the canonical absolute path, which is exactly what this accepts.
+                if not reference.startswith(root + os.sep) and reference != root:
+                    return (
+                        "the prompt names the plan through an alias for this repository: "
+                        + reference + " resolves inside the checkout but is not spelled as "
+                        + root + ". The staged prompt is rewritten by literal-byte substitution, so an "
+                        "alias would leave both reviewers pointed at the LIVE plan. State the plan by "
+                        "its canonical absolute path, or relative to the repository root."
+                    )
                 reference = os.path.relpath(resolved, root)
         referenced.add(reference)
     if not referenced:
