@@ -787,7 +787,11 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
                 # A SENTENCE-ENDING PERIOD closes the component; `.worktrees` above does not. Left
                 # unrewritten, the prompt would still name the LIVE checkout and the residue check —
                 # asking the same question — would not notice.
-                + f"The checkout is {repo}. Then stop.\n")
+                + f"The checkout is {repo}. Then stop.\n"
+                # The rest of the decidable class — punctuation followed by whitespace or end. The
+                # review reported the PERIOD; measuring showed the others behaved identically, so they
+                # are swept together rather than arriving one report at a time.
+                + f"Compare {repo}, then {repo}; and finally ({repo}) or \"{repo}\" here.\n")
         result, tree_root = self.stage(repo, tree, body)
 
         self.assertEqual(0, result.returncode, result.stderr)
@@ -804,6 +808,10 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         self.assertNotIn(f"{tree} Helper", staged)
         self.assertIn(f"The checkout is {tree}. Then stop.", staged,
                       "a sentence-ending period left the root naming the LIVE checkout")
+        self.assertIn(f"Compare {tree}, then {tree}; and finally ({tree}) or \"{tree}\" here.", staged,
+                      "punctuation followed by whitespace is prose and must be rewritten")
+        self.assertNotIn(repo + ",", staged)
+        self.assertNotIn("(" + repo, staged)
 
     def test_a_scratch_tree_whose_path_contains_a_BACKSLASH_stages_literally(self):
         """`Pattern.sub` treats the replacement as a TEMPLATE (review of this fix).

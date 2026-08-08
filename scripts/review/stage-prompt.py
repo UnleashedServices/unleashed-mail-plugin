@@ -189,11 +189,19 @@ def main(argv=None) -> int:
         # What that gives up: a bare `<repo>` mentioned in prose keeps naming the live path. That is a
         # MENTION, not a file the reviewer opens, and leaving it is the conservative direction — a
         # stale mention is visible, a silently corrupted sibling path is not.
-        # A SENTENCE-ENDING PERIOD ALSO ENDS THE COMPONENT (review of this fix). `Review /work/repo.`
-        # left the root unrewritten, so the prompt still named the LIVE checkout — and the residue
-        # check, asking the same question, did not notice. It is decidable, unlike the space case: a
-        # period followed by whitespace or end-of-input closes a sentence, while `.worktrees/` does not.
-        boundary = re.compile(re.escape(repo) + rb"(?=/|\Z|\.(?:\s|\Z))")
+        # PUNCTUATION FOLLOWED BY WHITESPACE OR END IS PROSE, and that is the whole decidable class.
+        # The review reported the PERIOD member (`Review /work/repo.` left the root naming the LIVE
+        # checkout, and the residue check — asking the same question — did not notice). Measured, the
+        # comma, semicolon, colon, bang, question mark, closing bracket and closing quote members all
+        # behaved identically, so they are swept together rather than one report at a time.
+        #
+        # The rule stays decidable: the punctuation must be followed by whitespace or end-of-input.
+        # `<repo>.worktrees/x`, `<repo>,archive/x` and `<repo>"weird/x` are filenames and are left
+        # alone; `<repo>.`, `<repo>, then` and `("<repo>")` are prose and are rewritten. A SPACE is
+        # deliberately NOT in the class — `<repo> Helper/x.md` and `<repo> is dirty` are the same bytes.
+        boundary = re.compile(
+            re.escape(repo) + rb"""(?=/|\Z|[.,;:!?)\]}"'](?:\s|\Z))"""
+        )
         # A CALLABLE, NOT A TEMPLATE STRING (review of this fix). `Pattern.sub` interprets the
         # replacement as a template, so a backslash in the scratch-tree path — legal in a Unix path and
         # reachable through `TMPDIR` — is expanded: `\1` raises `invalid group reference` and aborts
