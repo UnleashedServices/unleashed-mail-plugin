@@ -1,10 +1,12 @@
 ---
 name: pr-review
 description: Run a multi-agent code review on the current branch (security + concurrency + UX/perf + accessibility + AI-prompt-safety + parity)
-effort: xhigh
 argument-hint: [PR number or branch (defaults to current branch)]
-allowed-tools: Read, Bash, Grep, Glob, Agent
-disable-model-invocation: true
+# COREDEV-2642: model-invocable, so every tool here is PRE-APPROVED with no user gesture. `Bash(git *)`
+# was every git command — reset/clean/push and the git-to-shell trampolines — while this workflow reads
+# untrusted PR content (deep review, P1). It is replaced by one audited read-only wrapper, and `Agent` is
+# enumerated to the reviewers this body actually spawns rather than every subagent installed.
+allowed-tools: Read, Grep, Glob, Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(security-reviewer), Agent(unleashed-mail:security-reviewer), Agent(concurrency-reviewer), Agent(unleashed-mail:concurrency-reviewer), Agent(ux-perf-reviewer), Agent(unleashed-mail:ux-perf-reviewer), Agent(accessibility-auditor), Agent(unleashed-mail:accessibility-auditor), Agent(prompt-review), Agent(unleashed-mail:prompt-review), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/changeset.sh *)
 ---
 
 # PR Review: $ARGUMENTS
@@ -12,42 +14,12 @@ disable-model-invocation: true
 ## Step 1: Identify the Changeset
 
 ```bash
-# Base-branch detection per AGENT_CONTRACTS.md §1+§5 (matches swift-reviewer):
-#   1. If on a 1.0X/feature-name branch, target the matching 1.0X.0000 version branch
-#   2. Else fall back to `git merge-base $(current) origin/main`
-detect_base() {
-    local current prefix
-    current=$(git rev-parse --abbrev-ref HEAD)
-    prefix=$(echo "$current" | grep -oE '^1\.0[0-4]/' | tr -d '/')
-    if [ -n "$prefix" ]; then
-        if git rev-parse --verify "${prefix}.0000" >/dev/null 2>&1; then
-            echo "${prefix}.0000"; return
-        fi
-        # Explicit refspec — bare `git fetch origin BRANCH` only writes
-        # FETCH_HEAD, not refs/remotes/origin/BRANCH
-        git fetch origin --quiet \
-            "refs/heads/${prefix}.0000:refs/remotes/origin/${prefix}.0000" 2>/dev/null || true
-        if git rev-parse --verify "origin/${prefix}.0000" >/dev/null 2>&1; then
-            echo "origin/${prefix}.0000"; return
-        fi
-    fi
-    git fetch origin --quiet \
-        refs/heads/main:refs/remotes/origin/main 2>/dev/null || true
-    if git merge-base "$current" origin/main >/dev/null 2>&1; then
-        git merge-base "$current" origin/main
-    else
-        echo "main"
-    fi
-}
-BASE_BRANCH=$(detect_base)
-echo "Base: $BASE_BRANCH"
-
-echo "=== Changed files ==="
-git diff "$BASE_BRANCH"...HEAD --name-only 2>/dev/null || git diff HEAD~1 --name-only
-
-echo ""
-echo "=== Diff stats ==="
-git diff "$BASE_BRANCH"...HEAD --stat 2>/dev/null || git diff HEAD~1 --stat
+# ONE granted command. This was a compound program — `detect_base()` with `local`, `grep`, `tr`, then
+# two more git calls — under a `Bash(git *)` grant that pre-approved EVERY git command, including
+# `reset --hard`, `clean` and `push`, while this workflow reads untrusted PR content (deep review, P1).
+# `changeset.sh` performs base detection and the diff, and can run no other git verb.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/changeset.sh" files
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/changeset.sh" stat
 ```
 
 Categorize the changes:
@@ -88,46 +60,9 @@ Step 4 ([`build-verify.sh`](../../scripts/review/build-verify.sh)), which Step 2
 arrives in the unified review). Here we only resolve the base branch and do the cheap missing-test scan:
 
 ```bash
-set -o pipefail
-# Detect base branch (each bash block is a fresh shell — can't rely on
-# Step 1's variable surviving)
-detect_base() {
-    local current prefix
-    current=$(git rev-parse --abbrev-ref HEAD)
-    prefix=$(echo "$current" | grep -oE '^1\.0[0-4]/' | tr -d '/')
-    if [ -n "$prefix" ]; then
-        if git rev-parse --verify "${prefix}.0000" >/dev/null 2>&1; then
-            echo "${prefix}.0000"; return
-        fi
-        # Explicit refspec — bare `git fetch origin BRANCH` only writes
-        # FETCH_HEAD, not refs/remotes/origin/BRANCH
-        git fetch origin --quiet \
-            "refs/heads/${prefix}.0000:refs/remotes/origin/${prefix}.0000" 2>/dev/null || true
-        if git rev-parse --verify "origin/${prefix}.0000" >/dev/null 2>&1; then
-            echo "origin/${prefix}.0000"; return
-        fi
-    fi
-    git fetch origin --quiet \
-        refs/heads/main:refs/remotes/origin/main 2>/dev/null || true
-    if git merge-base "$current" origin/main >/dev/null 2>&1; then
-        git merge-base "$current" origin/main
-    else
-        echo "main"
-    fi
-}
-BASE_BRANCH=$(detect_base)
-
-# Check for test coverage of changed files
-echo "=== Changed source files without test coverage ==="
-while IFS= read -r -d '' f; do
-    case "$f" in
-        "Unleashed Mail/Sources/"*.swift)
-            test_path=$(echo "$f" | sed 's|Unleashed Mail/Sources/|Unleashed MailTests/|;s|\.swift$|Tests.swift|')
-            ;;
-        *) continue ;;
-    esac
-    [ -f "$test_path" ] || echo "⚠️  $f → missing $test_path"
-done < <(git diff -z "$BASE_BRANCH"...HEAD --name-only 2>/dev/null)
+# Same wrapper, coverage mode. Each bash block is a fresh shell, so the base is re-detected inside the
+# script rather than carried in a variable.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/changeset.sh" untested
 ```
 
 ## Step 4: Compile the Final Report

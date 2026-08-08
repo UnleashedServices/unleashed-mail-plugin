@@ -16,7 +16,7 @@ separate repo). You are working on the *plugin's own assets* here — treat them
 ```
 agents/      21 subagents (*.md)                 skills/     21 skills (*/SKILL.md)
 hooks/       hooks.json (10 events)              (incl. workflow skills brainstorm/implement/pr-review,
-                                                  disable-model-invocation — commands merged into skills)
+                                                  model-invocable — commands merged into skills)
 mcp/review-synthesizer/  1 bundled stdio MCP server (.mcp.json)
 scripts/     hook scripts + validators + lib/    docs/       planning/ (+ audits/ on later branches)
 .claude-plugin/  plugin.json + marketplace.json
@@ -38,7 +38,8 @@ AGENT_CONTRACTS.md   cross-agent boundaries (source of truth for disputes)
   `opus` is an **alias** that tracks the current Opus generation; `claude-opus-5` is a hard version
   pin. Prefer the alias. (The old "prefer `inherit`/`sonnet` over hard-pinning `opus`" guidance
   conflated the two and is superseded by AGENT_CONTRACTS §11's consequence-based tiering.)
-- **`effort:` is mandatory** — every agent and every skill pins `effort: xhigh`; CI enforces it.
+- **`effort:` is a FLOOR, not a pin** — assets omit `effort:` and **inherit** the session level, so a
+  `max` session is not silently pulled down. CI rejects any pin below `xhigh`; `xhigh`/`max` are legal.
   Frontmatter effort is an override in BOTH directions (it pulls a `max` session down), and
   `CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor is not enforceable from inside the plugin.
 - `skills:` (YAML list) preloads a skill's **SKILL.md body** (not its `references/`) at startup.

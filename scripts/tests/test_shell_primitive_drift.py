@@ -78,21 +78,28 @@ class MtimeShape(unittest.TestCase):
 
 
 class BasePathExpansion(unittest.TestCase):
-    #: Every plugin-data base expansion must keep the `${HOME:-}` inner guard AND use `:-` (not `-`).
-    #: `${CLAUDE_PLUGIN_DATA-…}` passes a three-environment matrix identically to the correct form and
-    #: fails only when the variable is set-but-EMPTY, where it returns "" and silently relocates every
-    #: marker, log and snapshot to a relative path.
+    #: COREDEV-2617 / D': the base resolves ONLY from CLAUDE_PLUGIN_DATA. When it is unset or empty
+    #: the libs return the POISONED SENTINEL and persist nothing — they no longer fall back to
+    #: ${HOME}/.claude/unleashed-mail, because that fallback IS the second store this ticket exists to
+    #: eliminate (state written outside a hook landed there and the two directories never saw each
+    #: other). The legacy expansion survives only as `unleashed_plugin_legacy_base`, asserted below.
+    SENTINEL = "/dev/null/unresolved-plugin-base"
+
+    #: The legacy expansion, still asserted for `unleashed_plugin_legacy_base` so the two load-bearing
+    #: details are locked: `:-` NOT `-` (the single-dash form returns EMPTY for a set-but-empty
+    #: variable, relocating every marker/log/snapshot to a relative path) and the `${HOME:-}` inner
+    #: guard (a missing HOME under `set -u` must not abort a hook).
     EXPECTED = "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
 
-    #: (env, expected). The FOURTH row is the only one that rejects `${CLAUDE_PLUGIN_DATA-…}`
-    #: (single dash): that form passes rows 1-3 identically to the correct `:-` form and returns
-    #: EMPTY only when the variable is set-but-empty, which would relocate every marker, log and
-    #: snapshot to a relative path.
+    #: (env, expected) under D'. Rows 1, 2 and 4 changed in COREDEV-2617: unset and set-but-EMPTY now
+    #: both yield the sentinel. Row 4 still carries the `:-` vs `-` distinction — under `-` a
+    #: set-but-empty variable is "set", so the base would be "" and compose ROOT paths at every call
+    #: site; the sentinel is what makes an unguarded caller safe instead.
     MATRIX = (
-        ({"__unset__": ["HOME", "CLAUDE_PLUGIN_DATA"]}, "/.claude/unleashed-mail"),
-        ({"HOME": "/probe", "__unset__": ["CLAUDE_PLUGIN_DATA"]}, "/probe/.claude/unleashed-mail"),
+        ({"__unset__": ["HOME", "CLAUDE_PLUGIN_DATA"]}, SENTINEL),
+        ({"HOME": "/probe", "__unset__": ["CLAUDE_PLUGIN_DATA"]}, SENTINEL),
         ({"HOME": "/probe", "CLAUDE_PLUGIN_DATA": "/custom/d"}, "/custom/d"),
-        ({"HOME": "/probe", "CLAUDE_PLUGIN_DATA": ""}, "/probe/.claude/unleashed-mail"),
+        ({"HOME": "/probe", "CLAUDE_PLUGIN_DATA": ""}, SENTINEL),
     )
     LIBS = (("marker.sh", "marker_base"), ("log.sh", "log_base"), ("context.sh", "context_base"))
 
@@ -108,15 +115,32 @@ class BasePathExpansion(unittest.TestCase):
             capture_output=True, text=True, env=env,
         ).stdout
 
-    def test_every_copy_is_the_same_expression(self):
-        missing = [
+    def test_legacy_expansion_survives_only_in_paths_sh(self):
+        """COREDEV-2617 / D': the legacy ${HOME}-based fallback is GONE from the three libs.
+
+        Before D' each lib carried the literal expansion as its own fallback, and that fallback is
+        precisely the second store this ticket eliminates: with CLAUDE_PLUGIN_DATA unset (every
+        non-hook shell) it resolved to ~/.claude/unleashed-mail while hooks wrote under
+        ~/.claude/plugins/data/..., and neither directory could see the other. The libs must now
+        yield the poisoned sentinel instead, so the expansion must NOT reappear in them.
+
+        It survives in paths.sh as `unleashed_plugin_legacy_base`, where the drift matrix can still
+        lock its two load-bearing details (`:-` not `-`, and the `${HOME:-}` inner guard).
+        """
+        leaked = [
             n for n in ("marker.sh", "log.sh", "context.sh")
-            if self.EXPECTED not in open(os.path.join(SCRIPTS, "lib", n), encoding="utf-8").read()
+            if self.EXPECTED in open(os.path.join(SCRIPTS, "lib", n), encoding="utf-8").read()
         ]
         self.assertEqual(
-            [], missing,
-            "base-path fallback expansion diverged (or dropped the `:-` / `${HOME:-}` guard) in: "
-            + ", ".join(missing),
+            [], leaked,
+            "the legacy ${HOME}-based fallback reappeared in: " + ", ".join(leaked)
+            + " — under D' an unresolved base must yield the sentinel, never a second store",
+        )
+        paths_sh = open(os.path.join(SCRIPTS, "lib", "paths.sh"), encoding="utf-8").read()
+        self.assertIn(
+            self.EXPECTED, paths_sh,
+            "paths.sh must retain the legacy expansion as unleashed_plugin_legacy_base so the "
+            "`:-` vs `-` and ${HOME:-} guarantees stay locked",
         )
 
     def test_matrix_with_paths_sh_present(self):
@@ -157,8 +181,6 @@ class BasePathExpansion(unittest.TestCase):
         self.assertEqual([], offenders, "single-dash default found: " + ", ".join(offenders))
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class WorkflowPinDrift(unittest.TestCase):
@@ -207,3 +229,7 @@ class WorkflowPinDrift(unittest.TestCase):
                          "cross-job env reference — CLAUDE_CODE_VERSION is step-scoped and expands empty")
         bare = re.findall(r"claude-code@\s*$", self.src, re.M)
         self.assertEqual([], bare, "unpinned claude-code install")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

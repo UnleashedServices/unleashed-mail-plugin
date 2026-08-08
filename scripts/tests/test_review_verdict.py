@@ -1,4 +1,8 @@
 """Tests for scripts/review-verdict.py — the plan-digest-bound Combined-verdict artifact."""
+import hashlib
+import errno
+import importlib.util
+import shutil
 import json
 import os
 import stat
@@ -10,9 +14,72 @@ import unittest
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "review-verdict.py")
 
 
-def run(*args):
+def run(*args, cwd=None):
+    """`cwd` matters for plan IDENTITY: `_plan_identity` is repo-relative inside a git repo and
+    absolute outside one, so a case about two same-named plans has to run from that repo's root."""
     return subprocess.run([sys.executable, SCRIPT, *args],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, cwd=cwd)
+
+
+def allocated_transcript(directory, plan, reviewer, body, salt=""):
+    """Build one transcript the way the allocator does: run-ID name, `.launch`, and a `.plan` binding.
+
+    Module-level so every class shares ONE definition of "what an allocated transcript is". An
+    approving write now REFUSES anything else (PR #63 recheck, P1): `_is_per_run_transcript` decides
+    whether freshness AND the plan binding run at all, so a legacy-shaped path was exempt from both,
+    and two stale shared-`/tmp` reviewer outputs could carry an APPROVE for a plan nobody reviewed.
+    Every fixture in this file used bare names — which is precisely why no test caught the hole.
+    """
+    run_id = hashlib.sha256((reviewer + str(directory) + salt).encode()).hexdigest()[:32]
+    path = os.path.join(str(directory), "COREDEV-2619r9-" + reviewer + "-" + run_id + ".txt")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    launch = path + ".launch"
+    with open(launch, "w", encoding="utf-8") as fh:
+        # `<run id> <reviewer>` — the allocator records the reviewer so the gate reads the
+        # identity from evidence the caller did not write (PR #63 recheck, P1).
+        fh.write(run_id + " " + reviewer + "\n")
+    stamp = os.stat(path).st_mtime_ns
+    # BEFORE the transcript: a record written after it is the stale-dispatch shape freshness rejects.
+    os.utime(launch, ns=(stamp - 1_000_000, stamp - 1_000_000))
+    with open(plan, "rb") as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    # The identity is DERIVED from the module under test, not restated as a basename. A bare basename
+    # was accepted only while the binding comparison exempted separator-free records — the exemption
+    # that also let a transcript bound to one root-level plan approve another with identical bytes
+    # (PR #63 recheck). Restating it here would make unrelated cells fail on the binding.
+    fh_spec = importlib.util.spec_from_file_location("rv_identity", SCRIPT)
+    _rv_identity = importlib.util.module_from_spec(fh_spec)
+    fh_spec.loader.exec_module(_rv_identity)
+    _identity, _kind = _rv_identity._plan_identity(str(plan))
+    with open(path + ".plan", "w", encoding="utf-8") as fh:
+        fh.write(digest + "  " + _identity + "\n")
+    # `.planbytes` — the bytes the binder hashed and the harnesses stage. `write` now READS it and
+    # requires it to match the record: it was written and never read, so a snapshot rewritten after
+    # binding fed the reviewer substituted bytes and still produced a validating artifact.
+    with open(plan, "rb") as fh:
+        _plan_bytes = fh.read()
+    with open(path + ".planbytes", "wb") as fh:
+        fh.write(_plan_bytes)
+        # `.promptsha256` and `.prompt` too. `bind-prompt.py` writes all three together, so a per-run
+    # transcript carrying only `.plan` was never produced by the capture helper — and `write` now
+    # REQUIRES the prompt binding rather than skipping when it is absent, which was the same
+    # "absent means unchecked" fail-open the plan binding exists to close (PR #63 recheck).
+    prompt_bytes = ("review prompt for " + os.path.basename(str(plan)) + "\n").encode("utf-8")
+    with open(path + ".prompt", "wb") as fh:
+        fh.write(prompt_bytes)
+    with open(path + ".promptsha256", "w", encoding="utf-8") as fh:
+        fh.write(hashlib.sha256(prompt_bytes).hexdigest() + "  prompt.md\n")
+    return path
+
+
+def _load_verdict_module(name):
+    """The SHIPPED `review-verdict.py`, loaded as a module."""
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class ReviewVerdictTest(unittest.TestCase):
@@ -24,16 +91,19 @@ class ReviewVerdictTest(unittest.TestCase):
         # A non-empty transcript. An APPROVING artifact now requires one per reviewer (COREDEV-2492
         # PR review): `--reviewer gemini=APPROVE` with no `:TRANSCRIPT` used to produce a GATE OK on
         # the caller's bare assertion, and a 0-byte file passed because only `isfile` was checked.
-        self.tx = os.path.join(self.d, "transcript.txt")
-        with open(self.tx, "w", encoding="utf-8") as fh:
-            fh.write("reviewer said things\nVERDICT: APPROVE\n")
+        # ALLOCATOR-SHAPED, with a launch record. An approving write now REFUSES any transcript that
+        # is not (PR #63 recheck, P1): `_is_per_run_transcript` is the switch deciding whether freshness
+        # AND the plan binding run at all, so a legacy-shaped path was exempt from both, and two stale
+        # shared-`/tmp` reviewer outputs could carry an APPROVE for a plan nobody reviewed. This fixture
+        # used bare `transcript.txt` names — i.e. it only ever exercised the exempt path.
+        self.tx = allocated_transcript(self.d, self.plan, "gemini",
+                                       "reviewer said things\nVERDICT: APPROVE\n")
         # A SECOND, distinct transcript. An approving artifact requires a DISTINCT transcript per
         # reviewer (codex, #41 review), and until that rule existed this fixture handed the SAME file to
         # both reviewers — so every test wrote the exact artifact shape that rule now forbids, which is
         # precisely why no test caught the hole. `_write` gives each reviewer its own by default.
-        self.tx2 = os.path.join(self.d, "transcript2.txt")
-        with open(self.tx2, "w", encoding="utf-8") as fh:
-            fh.write("the OTHER reviewer said other things\nVERDICT: APPROVE\n")
+        self.tx2 = allocated_transcript(self.d, self.plan, "codex",
+                                        "the OTHER reviewer said other things\nVERDICT: APPROVE\n")
 
     def tearDown(self):
         import shutil
@@ -81,10 +151,14 @@ class ReviewVerdictTest(unittest.TestCase):
         for pth in (a_plan, b_plan):
             with open(pth, "w", encoding="utf-8") as fh:
                 fh.write("# Same plan\nidentical bytes\n")
-        # approve a_plan
+        # approve a_plan — with evidence bound to a_plan, not to the fixture's default plan. The
+        # binding compares DIGESTS, and these two plans deliberately share bytes, so this fixture also
+        # keeps the test honest: what distinguishes them is the recorded plan identity, not the digest.
+        a_tx = allocated_transcript(a_dir, a_plan, "gemini", "a\nVERDICT: APPROVE\n")
+        a_tx2 = allocated_transcript(a_dir, a_plan, "codex", "b\nVERDICT: APPROVE\n")
         run("snapshot", "--plan", a_plan)
         r = run("write", "--plan", a_plan, "--verdict", "APPROVE",
-                "--reviewer", f"gemini=APPROVE:{self.tx}", "--reviewer", f"codex=APPROVE:{self.tx2}")
+                "--reviewer", f"gemini=APPROVE:{a_tx}", "--reviewer", f"codex=APPROVE:{a_tx2}")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(run("verify", "--plan", a_plan).returncode, 0)  # legit
         # copy a's artifact next to b's identically-named plan
@@ -123,10 +197,23 @@ class ReviewVerdictTest(unittest.TestCase):
     def test_uppercase_and_padded_digests_are_normalized_not_rejected(self):
         """The hex check must not be over-strict: hex is case-insensitive, and the digest is stripped
         before matching, so `A...A` and ` a...a ` are REAL digests in a different skin. A check that
-        rejected them would fail a legitimate artifact — a false GATE FAILED is its own outage."""
+        rejected them would fail a legitimate artifact — a false GATE FAILED is its own outage.
+
+        Re-skinned on the REAL fixture digests when `verify` began re-reading each transcript and
+        comparing it to `transcriptSha256`. The old vehicle wrote invented digests (`A`*64, `b`*64)
+        while the transcripts on disk kept their true ones, so the evidence check refused — correctly.
+        Using the true digest in a different skin is a strictly better test of the same property, and
+        it now also proves normalization is applied on BOTH sides of the new comparison: an artifact
+        holding a legitimately uppercase digest must still verify.
+        """
         import glob
-        for good in ("A" * 64, " " + "a" * 64 + " "):
-            with self.subTest(digest=good):
+
+        def _skins(path):
+            true = hashlib.sha256(open(path, "rb").read()).hexdigest()
+            return (true.upper(), " " + true + " ")
+
+        for skin in (0, 1):
+            with self.subTest(skin=("uppercase", "padded")[skin]):
                 self.assertEqual(self._write().returncode, 0)
                 art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
                 with open(art, encoding="utf-8") as fh:
@@ -134,11 +221,11 @@ class ReviewVerdictTest(unittest.TestCase):
                 d["verdict"] = "APPROVE"
                 for i, r in enumerate(d["reviewers"]):
                     r["status"] = "APPROVE"
-                    r["transcriptSha256"] = good if i == 0 else "b" * 64
+                    r["transcriptSha256"] = _skins(self.tx if i == 0 else self.tx2)[skin]
                 with open(art, "w", encoding="utf-8") as fh:
                     json.dump(d, fh)
                 v = run("verify", "--plan", self.plan)
-                self.assertEqual(v.returncode, 0, f"{good!r} normalizes to a real digest: {v.stderr}")
+                self.assertEqual(v.returncode, 0, f"skin {skin} is a real digest: {v.stderr}")
 
     def test_one_transcript_cannot_back_TWO_approvals(self):
         """Distinct NAMES are not distinct EVIDENCE.
@@ -161,8 +248,8 @@ class ReviewVerdictTest(unittest.TestCase):
         capture IDs behind ONE identical transcript must NOT waive the content-digest floor; otherwise a
         single review (or zero) manufactures a passing gemini+codex approval (GATE OK / exit 0). The floor
         now runs unconditionally: identical bytes are rejected regardless of captureId."""
-        id1 = os.path.join(self.d, "r1.txt")
-        id2 = os.path.join(self.d, "r2.txt")
+        id1 = allocated_transcript(self.d, self.plan, "gemini", "one\nVERDICT: APPROVE\n", salt="id1")
+        id2 = allocated_transcript(self.d, self.plan, "codex", "two\nVERDICT: APPROVE\n", salt="id2")
         for pth in (id1, id2):
             with open(pth, "w", encoding="utf-8") as fh:
                 fh.write("byte-identical review body\nVERDICT: APPROVE\n")   # SAME bytes -> same digest
@@ -201,9 +288,8 @@ class ReviewVerdictTest(unittest.TestCase):
         """A `.captureid` SYMLINK (a pre-seeded, attacker-chosen value) must NOT be read as authoritative
         provenance — otherwise two copied transcripts could be dressed up as distinct wrapper runs. A
         genuine sidecar is a real regular file (pty-capture writes it O_NOFOLLOW) (round 3: codex)."""
-        tx = os.path.join(self.d, "r.txt")
-        with open(tx, "w", encoding="utf-8") as fh:
-            fh.write("review body\nVERDICT: APPROVE\n")
+        tx = allocated_transcript(self.d, self.plan, "gemini",
+                                  "review body\nVERDICT: APPROVE\n", salt=self._testMethodName)
         real_value = os.path.join(self.d, "planted-value")
         with open(real_value, "w", encoding="utf-8") as fh:
             fh.write("PLANTED-CID\n")
@@ -219,9 +305,8 @@ class ReviewVerdictTest(unittest.TestCase):
         """COREDEV-2503 F8: `_read_regular_file` bounds the read (cap+1, refuse on overflow) — a size-only
         fstat check races a grow-after-check, and a huge regular sidecar is not a genuine provenance token.
         A >64 KiB `.captureid` must be refused (treated as absent), never read wholesale."""
-        tx = os.path.join(self.d, "r.txt")
-        with open(tx, "w", encoding="utf-8") as fh:
-            fh.write("review body\nVERDICT: APPROVE\n")
+        tx = allocated_transcript(self.d, self.plan, "gemini",
+                                  "review body\nVERDICT: APPROVE\n", salt=self._testMethodName)
         with open(tx + ".captureid", "w", encoding="utf-8") as fh:
             fh.write("A" * (65536 + 10) + "\n")   # > 64 KiB regular file
         run("snapshot", "--plan", self.plan)
@@ -315,7 +400,9 @@ class ReviewVerdictTest(unittest.TestCase):
 
     def test_two_distinct_transcripts_still_pass(self):
         """The fix must not break the legitimate case it guards."""
-        tx2 = os.path.join(self.d, "codex.txt")
+        tx2 = allocated_transcript(self.d, self.plan, "codex",
+                                   "codex said other things\nVERDICT: APPROVE\n")
+        _legacy_codex = os.path.join(self.d, "codex.txt")
         with open(tx2, "w", encoding="utf-8") as fh:
             fh.write("codex said other things\nVERDICT: APPROVE\n")
         run("snapshot", "--plan", self.plan)
@@ -982,11 +1069,61 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertIn("symlink", r.stderr.lower())
 
     # --- transcript digests ----------------------------------------------------------
+    def test_legacy_transcripts_cannot_back_an_APPROVING_verdict(self):
+        """The reproduction: two stale legacy files + a fresh snapshot = a gate-passing artifact.
+
+        `_is_per_run_transcript` decides whether freshness AND the plan binding run at all, so a
+        legacy-shaped path was exempt from BOTH — and the shapes it exempts are the fixed
+        the fixed shared-`/tmp` reviewer outputs an older plugin version left behind. Nothing
+        connected them to this plan and nothing checked how old they were, yet they satisfied an
+        APPROVE (PR #63 recheck, P1).
+        """
+        # DISTINCT bodies. Identical ones trip the "same content for two reviewers" rule first, so the
+        # test would refuse for a reason that has nothing to do with the finding — a refusal is only
+        # evidence if it is the refusal you are claiming.
+        legacy = []
+        # Neutral names on purpose. The historical filenames are frozen literals the M3.1 inventory
+        # forbids reappearing in the tree, and they are not load-bearing here: what reproduces the
+        # finding is any shape the allocator would not produce, not those particular names.
+        for name, body in (("stale-gemini-output.txt", "stale gemini bytes\nVERDICT: APPROVE\n"),
+                           ("stale-codex-output.txt", "stale codex bytes\nVERDICT: APPROVE\n")):
+            path = os.path.join(self.d, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            legacy.append(path)
+
+        run("snapshot", "--plan", self.plan)
+        approving = run("write", "--plan", self.plan, "--verdict", "APPROVE",
+                        "--reviewer", f"gemini=APPROVE:{legacy[0]}",
+                        "--reviewer", f"codex=APPROVE:{legacy[1]}")
+        self.assertNotEqual(0, approving.returncode, approving.stdout)
+        self.assertIn("ALLOCATED evidence", approving.stderr)
+        self.assertFalse(
+            os.path.exists(self._verdict_file()),
+            "a refused approving write must leave no artifact behind",
+        )
+
+    def test_legacy_transcripts_are_still_accepted_for_a_NON_approving_record(self):
+        """Deliberately asymmetric, and the asymmetry is the design.
+
+        A REQUEST_CHANGES record blocks `implement` regardless of its evidence, so refusing legacy
+        paths there would discard a legitimate rejection captured before the migration — a false
+        refusal with no security benefit. It is only the APPROVING direction that must insist.
+        """
+        legacy = os.path.join(self.d, "stale-gemini-output.txt")
+        with open(legacy, "w", encoding="utf-8") as fh:
+            fh.write("older run\nVERDICT: REQUEST_CHANGES\n")
+        result = run("write", "--plan", self.plan, "--verdict", "REQUEST_CHANGES",
+                     "--reviewer", f"gemini=REQUEST_CHANGES:{legacy}",
+                     "--reviewer", f"codex=APPROVE:{self.tx2}")
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_transcript_digest_recorded(self):
-        t = os.path.join(self.d, "agy-out.txt")
-        with open(t, "w", encoding="utf-8") as fh:
-            fh.write("VERDICT: APPROVE\n")
-        self._write(reviewers=(f"gemini=APPROVE:{t}", "codex=APPROVE"))
+        # Was a shared-`/tmp` reviewer output — the exact legacy shape an approving verdict may no
+        # longer rest on.
+        # The property under test (a digest IS recorded) is unchanged; the evidence has to be real.
+        t = allocated_transcript(self.d, self.plan, "gemini", "VERDICT: APPROVE\n", salt="digest")
+        self._write(reviewers=(f"gemini=APPROVE:{t}", f"codex=APPROVE:{self.tx2}"))
         with open(self._verdict_file(), encoding="utf-8") as fh:
             art = json.load(fh)
         g = next(r for r in art["reviewers"] if r["name"] == "gemini")
@@ -994,8 +1131,6 @@ class ReviewVerdictTest(unittest.TestCase):
         self.assertEqual(len(g["transcriptSha256"]), 64)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class WriteTextNofollowTest(unittest.TestCase):
@@ -1042,8 +1177,10 @@ class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
         self.plan = os.path.join(self.plandir, "FEATURE_NAME_PLAN.md")
         with open(self.plan, "w", encoding="utf-8") as fh:
             fh.write("# Plan\nDo the thing.\n")
-        self.tx = os.path.join(self.base, "t1.txt")
-        self.tx2 = os.path.join(self.base, "t2.txt")
+        self.tx = allocated_transcript(self.base, self.plan, "gemini", "t1\nVERDICT: APPROVE\n")
+        _unused_t1 = os.path.join(self.base, "t1.txt")
+        self.tx2 = allocated_transcript(self.base, self.plan, "codex", "t2\nVERDICT: APPROVE\n")
+        _unused_t2 = os.path.join(self.base, "t2.txt")
         for f, body in ((self.tx, "gemini said things\n"), (self.tx2, "codex said other things\n")):
             with open(f, "w", encoding="utf-8") as fh:
                 fh.write(body)
@@ -1053,11 +1190,21 @@ class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
         shutil.rmtree(self.base, ignore_errors=True)
 
     def _gate(self, plan=None):
+        """Gate `plan` with evidence bound to THAT plan.
+
+        It reused `self.tx`/`self.tx2` unconditionally, which were bound to the default plan — fine
+        while the binding was skipped for legacy-shaped transcripts, wrong now that an approving write
+        requires allocated evidence and therefore reaches the binding for every reviewer. Each call
+        allocates its own pair, salted by the plan path so two gates never collide.
+        """
         plan = plan or self.plan
+        directory = os.path.dirname(plan)
+        gemini = allocated_transcript(directory, plan, "gemini", "g\nVERDICT: APPROVE\n", salt=plan)
+        codex = allocated_transcript(directory, plan, "codex", "c\nVERDICT: APPROVE\n", salt=plan)
         run("snapshot", "--plan", plan)
         return run("write", "--plan", plan, "--verdict", "APPROVE",
-                   "--reviewer", f"gemini=APPROVE:{self.tx}",
-                   "--reviewer", f"codex=APPROVE:{self.tx2}")
+                   "--reviewer", f"gemini=APPROVE:{gemini}",
+                   "--reviewer", f"codex=APPROVE:{codex}")
 
     def _artifact(self, plan=None):
         plan = plan or self.plan
@@ -1185,3 +1332,359 @@ class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
             ident, _kind = rv._plan_identity(p)
             with self.subTest(plan=p):
                 self.assertFalse(ident.startswith(".."), f"identity escaped the root: {ident!r}")
+
+
+class PlanIdentityAndOversizedSnapshot(unittest.TestCase):
+    """Two write-path defects the recheck found in the binding (PR #63 recheck).
+
+    Both are the same shape as defects already fixed one layer away, which is why they are worth
+    pinning: the digest-only comparison repeats PR #41's basename shortcut, and the capped read repeats
+    the "a guard that refuses valid work" failure the absolute-path fix corrected.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=self.d, check=True)
+        for sub in ("a", "b"):
+            os.makedirs(os.path.join(self.d, "docs", "planning", sub))
+            with open(os.path.join(self.d, "docs", "planning", sub, "SAME_PLAN.md"), "w") as fh:
+                fh.write("# Identical bytes\n")
+
+    def _allocated(self, reviewer, bound_relative):
+        run_id = hashlib.sha256((reviewer + bound_relative).encode()).hexdigest()[:32]
+        path = os.path.join(self.d, f"COREDEV-2619r9-{reviewer}-{run_id}.txt")
+        with open(path, "w") as fh:
+            fh.write(reviewer + "\nVERDICT: APPROVE\n")
+        with open(path + ".launch", "w") as fh:
+            fh.write(run_id + " " + reviewer + "\n")
+        stamp = os.stat(path).st_mtime_ns
+        os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
+        with open(os.path.join(self.d, bound_relative), "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        with open(path + ".plan", "w") as fh:
+            fh.write(f"{digest}  {bound_relative}\n")
+        with open(os.path.join(self.d, bound_relative), "rb") as fh:
+            bound_bytes = fh.read()
+        with open(path + ".planbytes", "wb") as fh:
+            fh.write(bound_bytes)
+        return path
+
+    def _bind_prompt(self, path, payload=b"review prompt\n"):
+        with open(path + ".prompt", "wb") as fh:
+            fh.write(payload)
+        with open(path + ".promptsha256", "w") as fh:
+            fh.write(hashlib.sha256(payload).hexdigest() + "  prompt.md\n")
+
+    def _write(self, plan_relative, transcripts):
+        run("snapshot", "--plan", plan_relative, cwd=self.d)
+        return run("write", "--plan", plan_relative, "--verdict", "APPROVE",
+                   "--reviewer", f"gemini=APPROVE:{transcripts[0]}",
+                   "--reviewer", f"codex=APPROVE:{transcripts[1]}", cwd=self.d)
+
+    def test_identical_bytes_in_two_plans_cannot_be_crossed(self):
+        """The digest cannot discriminate here, so the recorded identity has to."""
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+
+        crossed = self._write("docs/planning/b/SAME_PLAN.md", transcripts)
+        self.assertNotEqual(0, crossed.returncode, crossed.stdout)
+        self.assertIn("bound to a different plan", crossed.stderr)
+
+        matched = self._write(a, transcripts)
+        self.assertEqual(0, matched.returncode, matched.stderr)
+
+    def test_a_BLANK_recorded_identity_is_refused_not_treated_as_absent(self):
+        """`.strip()` made a whitespace-only field indistinguishable from no field (PR #63 recheck, P2).
+
+        The identity comparison exists because two distinct plans with identical bytes share a digest.
+        Writing spaces into the record's path field made `bound_identity` empty, which took the "nothing
+        recorded" branch — so the comparison could be switched OFF by a blank, and the byte-identical
+        crossing it was added to stop worked again. Same "absent means unchecked" shape as a deleted
+        sidecar, spelled with a space.
+
+        The plan under test is one half of the identical-bytes pair above, so the digest cannot
+        discriminate and only the identity can — if the blank were tolerated, this write would succeed.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+            with open(os.path.join(self.d, a), "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+            with open(path + ".plan", "w") as fh:
+                fh.write(f"{digest}   \n")          # present, non-empty by the grammar, and blank
+
+        blanked = self._write("docs/planning/b/SAME_PLAN.md", transcripts)
+        self.assertNotEqual(0, blanked.returncode, blanked.stdout)
+        self.assertIn("BLANK plan identity", blanked.stderr)
+
+    def test_a_SUBSTITUTED_plan_snapshot_is_refused_at_write_time(self):
+        """`.planbytes` was written by the binder and read by NOTHING (PR #63 recheck, P1).
+
+        Both harnesses stage those bytes — they are what the reviewer actually read — and until now no
+        check downstream ever compared them to the record again. So a snapshot rewritten after binding
+        fed the reviewer substituted bytes and still produced an artifact that validated: the record
+        and the live plan agreed with each other and neither described what was reviewed.
+
+        HONEST SCOPE. This closes the uncoordinated family — a snapshot substituted and left, or
+        restored while the record was not. A same-account process that replaces BOTH sidecars
+        coherently and restores BOTH before the verdict is written is not defended against, and cannot
+        be by any file-based binding: every anchor this program could read is a file that attacker can
+        rewrite, including the transcript whose digest the artifact records.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+        with open(transcripts[0] + ".planbytes", "wb") as fh:
+            fh.write(b"# Plan\nSUBSTITUTED BYTES THE REVIEWER ACTUALLY READ\n")
+
+        result = self._write(a, transcripts)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("does not match its own record", result.stderr)
+
+    def test_a_DELETED_plan_snapshot_is_refused_rather_than_skipped(self):
+        """Absent means unchecked — the shape this whole family of bindings exists to close."""
+        a = "docs/planning/a/SAME_PLAN.md"
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+        os.unlink(transcripts[1] + ".planbytes")
+
+        result = self._write(a, transcripts)
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("no bound plan snapshot", result.stderr)
+
+    def test_a_PLAN_larger_than_the_trusted_read_cap_still_persists(self):
+        """My own regression, in the file that carries the warning about it (PR #63 recheck, P1).
+
+        `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1` to bound UNTRUSTED PARSING of
+        small sidecars. Hashing the bound plan snapshot through it truncated every plan over 64 KiB to
+        its prefix, so the digest could never match its own record and EVERY approving persist for such
+        a plan was rejected as a modified snapshot. Five plans in this checkout are over the cap — the
+        largest is 204 KB — so this was not hypothetical. The prompt-snapshot check one field over had
+        already been fixed for exactly this and carries the comment saying so; I copied the wrong
+        sibling. A digest reads every byte and holds none, which is why the cap does not apply to it.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        oversized = ("# Plan\n" + ("x" * 100 + "\n") * 1000).encode()   # ~100 KB, over the cap
+        with open(os.path.join(self.d, a), "wb") as fh:
+            fh.write(oversized)
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path)
+
+        result = self._write(a, transcripts)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_a_prompt_larger_than_the_trusted_read_cap_still_persists(self):
+        """A guard that refuses valid work is a guard someone switches off.
+
+        `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1`, so a legitimate prompt above
+        that hashed only its prefix and the write reported the snapshot as modified — an otherwise
+        valid approving review could never be recorded. The cap bounds untrusted PARSING; a digest
+        reads every byte and keeps none, so it is not what the cap protects.
+        """
+        a = "docs/planning/a/SAME_PLAN.md"
+        oversized = b"x" * (65537 + 4096)
+        transcripts = [self._allocated("gemini", a), self._allocated("codex", a)]
+        for path in transcripts:
+            self._bind_prompt(path, oversized)
+
+        result = self._write(a, transcripts)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+
+class TheVerdictWritersRefuseAPlantedTarget(unittest.TestCase):
+    """Both writers under `.verdicts/` could be aimed at an outside file (PR #63 recheck, P2).
+
+    The same two mistakes that were found and fixed in `pty-capture.py`'s non-allocated write survived
+    here, in the tool that writes the gate's own artifact:
+
+      * THE ARTIFACT. `<dest>.tmp.<pid>` is a predictable staging name, and a HARD LINK is a regular
+        file — so `O_NOFOLLOW` accepted one, and `O_TRUNC` emptied the victim AT open(), before any
+        check could look. The refusal, if it came, came after the damage.
+      * THE SELF-IGNORING `.gitignore`. `os.path.exists` is FALSE for a DANGLING symlink, so a planted
+        `.verdicts/.gitignore -> <victim>` took the "not there, create it" branch and `open(…, "w")`
+        wrote through the link.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.module = _load_verdict_module("rv_planted_targets")
+
+    def test_a_hard_linked_staging_path_is_refused_with_the_victim_INTACT(self):
+        victim = os.path.join(self.d, "PRECIOUS")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS OUTSIDE DATA\n")
+        target = os.path.join(self.d, "artifact.json.tmp.999")
+        os.link(victim, target)
+
+        with self.assertRaises(OSError) as caught:
+            self.module._write_text_nofollow(target, "attacker artifact")
+        self.assertEqual(errno.EMLINK, caught.exception.errno)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS OUTSIDE DATA\n", fh.read(),
+                             "the victim was emptied — the refusal came after O_TRUNC")
+
+    def test_an_ordinary_rewrite_still_works_and_leaves_no_stale_tail(self):
+        """Discrimination, and the deletion test for dropping O_TRUNC.
+
+        Removing O_TRUNC is what lets the link check run before any damage; the explicit `ftruncate`
+        is what still bounds an honest overwrite. Without it a shorter second artifact would carry the
+        first one's tail — the same defect this repo already fixed once in the transcript writer.
+        """
+        path = os.path.join(self.d, "artifact.json")
+        self.module._write_text_nofollow(path, "x" * 400)
+        self.module._write_text_nofollow(path, "short")
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual("short", fh.read())
+
+    def test_a_DANGLING_gitignore_symlink_is_not_written_through(self):
+        verdicts = os.path.join(self.d, ".verdicts")
+        os.mkdir(verdicts, 0o700)
+        victim = os.path.join(self.d, "OUTSIDE.txt")
+        os.symlink(victim, os.path.join(verdicts, ".gitignore"))
+        self.assertFalse(os.path.exists(victim))
+
+        self.module._ensure_secure_dir(verdicts)
+
+        self.assertFalse(os.path.exists(victim),
+                         "the self-ignoring write followed a dangling symlink out of .verdicts")
+
+    def test_a_missing_gitignore_is_still_created(self):
+        """Positive control: the refusal must be about the link, not about writing at all."""
+        verdicts = os.path.join(self.d, ".verdicts")
+        self.module._ensure_secure_dir(verdicts)
+        with open(os.path.join(verdicts, ".gitignore"), encoding="utf-8") as fh:
+            self.assertEqual("*\n", fh.read())
+
+
+class LegacyNamesAreNotMistakenForAllocations(unittest.TestCase):
+    """Classification must key on the WHOLE allocator basename, not just its hex suffix.
+
+    `_TRANSCRIPT_RUN_ID` matches any name ending `-<32 hex>.txt`, and the classifier's own docstring
+    names the realistic collision: a digest-suffixed file like `review-<md5>.txt`, MD5 hex being exactly
+    32 characters. Such a file was then treated as per-run, REQUIRED to carry a `.launch`, and rejected
+    without one — so a legitimate custom or historical transcript became unusable (PR #63 recheck, P2).
+
+    The narrowing keeps the property the docstring refuses to give up: the basename travels with the
+    file, so an allocated transcript that was copied or moved still classifies as per-run. Conditioning
+    on the DIRECTORY would have lost exactly that, which is the fail-open the docstring rejects — and
+    this is why the fix is on the name, not the location.
+    """
+
+    def _module(self):
+        spec = importlib.util.spec_from_file_location("rv_names", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["rv_names"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_allocator_shape_classifies_as_per_run(self):
+        module = self._module()
+        for name in ("COREDEV-2619r9-codex-" + "a" * 32 + ".txt",
+                     "COREDEV-2619r12-gemini-" + "b" * 32 + ".txt"):
+            with self.subTest(name=name):
+                self.assertTrue(module._is_per_run_transcript("/anywhere/" + name),
+                                "a real allocated name must stay per-run wherever it lives")
+
+    def test_a_digest_suffixed_legacy_name_does_not(self):
+        """The named collision. Before the narrowing this demanded a `.launch` and failed without one."""
+        module = self._module()
+        for name in ("review-" + "c" * 32 + ".txt", "backup-" + "d" * 32 + ".txt"):
+            with self.subTest(name=name):
+                self.assertFalse(module._is_per_run_transcript("/anywhere/" + name),
+                                 "a digest-suffixed legacy file was classified as an allocation")
+
+    def test_a_launch_record_still_forces_the_per_run_branch(self):
+        """The narrowing must not weaken the third branch: a sibling record is proof of provenance,
+        and planting one only makes the gate STRICTER, never laxer."""
+        module = self._module()
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        odd = os.path.join(directory, "review-" + "c" * 32 + ".txt")
+        open(odd, "w").close()
+        open(odd + ".launch", "w").close()
+        self.assertTrue(module._is_per_run_transcript(odd))
+
+
+class OneArmCannotSatisfyTheDualGate(unittest.TestCase):
+    """Two separately allocated GEMINI runs satisfied the mandatory gemini+codex quorum.
+
+    Every distinctness rule asks whether the two entries DIFFER — distinct paths, digests, capture IDs —
+    and two real gemini runs do differ. None asked what either transcript actually WAS, so one arm
+    satisfied the single thing the gate exists to require (PR #63 recheck, P1 — reproduced).
+
+    The allocator encodes the reviewer in the filename it reserves, so the evidence already carried the
+    answer; it simply was not read. Same "recorded and never compared" shape as the prompt digest and
+    the bound plan identity, both closed earlier in this release.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=self.d, check=True)
+        os.makedirs(os.path.join(self.d, "docs", "planning"))
+        self.plan_relative = "docs/planning/FEATURE_PLAN.md"
+        with open(os.path.join(self.d, self.plan_relative), "w") as fh:
+            fh.write("# Plan\n")
+
+    def _allocated(self, reviewer, salt):
+        run_id = hashlib.sha256((reviewer + salt).encode()).hexdigest()[:32]
+        path = os.path.join(self.d, f"COREDEV-9999r1-{reviewer}-{run_id}.txt")
+        with open(path, "w") as fh:
+            fh.write(f"{reviewer} {salt}\nVERDICT: APPROVE\n")
+        with open(path + ".launch", "w") as fh:
+            fh.write(run_id + " " + reviewer + "\n")
+        stamp = os.stat(path).st_mtime_ns
+        os.utime(path + ".launch", ns=(stamp - 1_000_000, stamp - 1_000_000))
+        with open(os.path.join(self.d, self.plan_relative), "rb") as fh:
+            plan_bytes = fh.read()
+        digest = hashlib.sha256(plan_bytes).hexdigest()
+        with open(path + ".plan", "w") as fh:
+            fh.write(f"{digest}  {self.plan_relative}\n")
+        with open(path + ".planbytes", "wb") as fh:
+            fh.write(plan_bytes)
+        payload = f"prompt {salt}\n".encode()
+        with open(path + ".prompt", "wb") as fh:
+            fh.write(payload)
+        with open(path + ".promptsha256", "w") as fh:
+            fh.write(hashlib.sha256(payload).hexdigest() + "  prompt.md\n")
+        return path
+
+    def _write(self, gemini, codex, verdict="APPROVE"):
+        run("snapshot", "--plan", self.plan_relative, cwd=self.d)
+        return run("write", "--plan", self.plan_relative, "--verdict", verdict,
+                   "--reviewer", f"gemini=APPROVE:{gemini}",
+                   "--reviewer", f"codex=APPROVE:{codex}", cwd=self.d)
+
+    def test_two_gemini_runs_cannot_pass_as_gemini_and_codex(self):
+        result = self._write(self._allocated("gemini", "one"), self._allocated("gemini", "two"))
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("mislabelled", result.stderr)
+
+    def test_a_genuine_pair_still_passes(self):
+        """Control: the rule must reject MISLABELLING, not the dual review itself."""
+        result = self._write(self._allocated("gemini", "g"), self._allocated("codex", "c"))
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_a_non_approving_record_is_not_subject_to_it(self):
+        """Deliberate asymmetry, matching the allocated-evidence rule.
+
+        The bypass is "one arm satisfies the mandatory TWO-arm gate", which is a property of an
+        APPROVAL. A non-approving record blocks `implement` whatever its labels say, so refusing one
+        would discard a legitimate REQUEST_CHANGES for no gain.
+        """
+        result = run("write", "--plan", self.plan_relative, "--verdict", "REQUEST_CHANGES",
+                     "--reviewer", f"gemini=REQUEST_CHANGES:{self._allocated('gemini', 'x')}",
+                     "--reviewer", f"codex=APPROVE:{self._allocated('gemini', 'y')}", cwd=self.d)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

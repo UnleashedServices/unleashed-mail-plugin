@@ -7,7 +7,6 @@ description: >
   when swift build or xcodebuild returns errors, when SPM package resolution fails,
   when seeing "cannot find type", "has no member", "module not found", linker errors,
   code signing errors, or any compilation failure.
-effort: xhigh
 model: inherit
 skills:
   - macos-debugging

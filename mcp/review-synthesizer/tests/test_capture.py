@@ -544,6 +544,27 @@ class TestExtractStatus(unittest.TestCase):
         # (COREDEV-2490). It does NOT mean "face value" — that reading was the fail-open.
         self.assertIsNone(self._s("Status: BLOCKED\nBlocker Description: line one\nline two wrap\n" + jfence()))
 
+    def test_a_NUMBERED_LIST_prefix_is_prose_not_a_detail_field(self):
+        """`1. Remaining: X` is a list item in prose, not a line of the Output-Contract trailer.
+
+        `_compile_field` anchors each label at the START of the line, so a numbered prefix makes the
+        line unrecognised — and an unrecognised line ENDS the upward walk, so the trailer aborts and no
+        status is persisted. That is the strict direction: a reviewer enumerating "1. Remaining: ..."
+        inside its prose cannot have that absorbed as the contract field.
+
+        Asserted here because it was only ever observed by a scratch probe at the repository root
+        (`test_capture3.py`, committed by accident in 04f906d) that PRINTED the result rather than
+        checking it. The probes are deleted; the one behaviour none of this suite covered is not.
+        """
+        self.assertIsNone(C._match_field("1. Remaining: B.swift"))
+        self.assertEqual(("remaining", "B.swift"), C._match_field("Remaining: B.swift"))
+        # And the consequence at the level that matters: the numbered line aborts the trailer.
+        self.assertIsNone(self._s("Status: PARTIAL\n1. Remaining: B.swift\n" + jfence()))
+        self.assertEqual(
+            {"status": "PARTIAL", "remaining": "B.swift"},
+            C.extract_status("Status: PARTIAL\nRemaining: B.swift\n" + jfence()),
+        )
+
 
 class TestStatusSidecar(unittest.TestCase):
     def _cap(self, root, msg, agent="security-reviewer", agent_id="id1"):
@@ -761,3 +782,51 @@ class SecureTmpWriteTest(unittest.TestCase):
         src = open(os.path.join(os.path.dirname(__file__), "..", "capture.py"), encoding="utf-8").read()
         self.assertNotIn('with open(tmp, "w"', src,
                          "every tmp write must go through _open_private_tmp (O_NOFOLLOW|O_EXCL)")
+
+
+class TestCOREDEV2605PayloadRegionIsolated(unittest.TestCase):
+    """COREDEV-2605 M5 — ISOLATED regressions, one per independent rejection cause.
+
+    `extract_status` stops on EITHER kind of intervening content: ordinary prose, or a line inside a
+    code fence. A single combined fixture that contains both would pass against a parser that handles
+    only one of them — the documented masking false-pass. Each cause therefore gets its own fixture,
+    plus a positive control proving the trailer parses when nothing intervenes.
+
+    This is the regression that owns the payload-region invariant's evidence, which §5 of
+    AGENT_CONTRACTS.md now names (the invariant moved there from §13 in COREDEV-2605).
+    """
+
+    def _s(self, text):
+        r = C.extract_status(text)
+        return r["status"] if r else None
+
+    def test_control_clean_trailer_parses(self):
+        """Positive control: without this, a parser that rejects EVERYTHING passes both cases below."""
+        self.assertEqual("COMPLETE", self._s("Status: COMPLETE\n" + jfence()))
+
+    def test_cause_1_prose_between_status_and_fence(self):
+        """PROSE in the payload region ends the trailer."""
+        self.assertIsNone(self._s("Status: COMPLETE\nA sentence of prose.\n" + jfence()))
+
+    def test_cause_2_machine_payload_between_status_and_fence(self):
+        """A second MACHINE payload ends it too — a stray `VERDICT:` breaks the parse exactly as
+        prose does. This is the half a prose-only fixture would mask."""
+        self.assertIsNone(self._s("Status: COMPLETE\nVERDICT: APPROVE\n" + jfence()))
+
+    def test_cause_3_fenced_status_in_an_UNTERMINATED_fence(self):
+        """A `Status:` inside an UNTERMINATED fence must not be persisted.
+
+        This is the fixture that genuinely isolates fence-AWARENESS. A terminated fence would prove
+        nothing here: its closing ``` delimiter is not a valid trailer field either, so the walk stops
+        on the delimiter whether or not the parser tracks fences — the fixture would pass for the
+        wrong reason. With the fence left open, the `Status:` line itself is the first thing the walk
+        meets, and only a fence-aware parser rejects it.
+
+        Verified by mutation: deleting `if in_code[i]: break` from extract_status's upward walk makes
+        THIS case return "COMPLETE".
+        """
+        self.assertIsNone(self._s("```text\nStatus: COMPLETE\n" + jfence()))
+
+    def test_status_buried_in_a_terminated_fence_is_never_persisted(self):
+        """The invariant's stated consequence, for the terminated case."""
+        self.assertIsNone(self._s("```text\nStatus: COMPLETE\n```\nprose\n" + jfence()))

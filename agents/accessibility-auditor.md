@@ -8,9 +8,8 @@ description: >
   Invoke automatically after any SwiftUI view is created or modified, after any
   UI component change, when adding buttons/controls/images, when modifying
   navigation or layout, or when touching WKWebView rendering code.
-effort: xhigh
 model: sonnet
-tools: Read, Bash, Grep, Glob
+tools: Read, Grep, Glob
 disallowedTools: Write, Edit
 ---
 
@@ -24,6 +23,7 @@ part of every UI change — this is stated in the project's CLAUDE.md and is non
 > across both dual-implementation variants, including files outside the diff. A
 > structural change can break a11y or dual-impl parity far from the changed lines. Tag
 > any finding you surface outside the diff with `scope: "structural-pipeline"`.
+
 
 ## macOS 15+ (Sequoia) Accessibility APIs
 
@@ -131,7 +131,8 @@ All views must use Curator design tokens (per `.claude/rules/swiftui-views.md`).
 
 ```bash
 grep -rn "\.foregroundColor\|Color(hex:\|NSColor(" --include='*.swift' "Unleashed Mail/Sources/Views/" "Unleashed Mail/Sources/Components/"
-grep -rn "Divider()" --include='*.swift' "Unleashed Mail/Sources/Views/" | grep -v "CuratorDivider"
+grep -rn "Divider()" --include='*.swift' "Unleashed Mail/Sources/Views/"
+# Then ignore hits naming `CuratorDivider` — those are the Curator's own separators.
 ```
 
 ### 4. Color & Visual Accessibility
@@ -175,13 +176,13 @@ Both variants are equally important — a parity gap in a11y is a **BLOCKER**.
 
 ```bash
 # Check both compose editors
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "compose\|editor"
+grep -rni "accessibilityLabel.*\(compose\|editor\)\|accessibilityHint.*\(compose\|editor\)" --include='*.swift' .
 
 # Check the email detail view (SimpleEmailWebView — the sole production renderer)
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "email.*web\|simple.*email"
+grep -rni "accessibilityLabel.*\(email.*web\|simple.*email\)\|accessibilityHint.*\(email.*web\|simple.*email\)" --include='*.swift' .
 
 # Check both AI agent views
-grep -rn "accessibilityLabel\|accessibilityHint" --include='*.swift' . | grep -i "askai\|ai.*view\|ai.*window"
+grep -rni "accessibilityLabel.*\(askai\|ai.*view\|ai.*window\)\|accessibilityHint.*\(askai\|ai.*view\|ai.*window\)" --include='*.swift' .
 ```
 
 - [ ] Native compose editor AND WebKit compose editor both accessible — **🔴 BLOCKER if one has a11y and the other doesn't**
@@ -293,3 +294,22 @@ findings verdict (is-the-code-OK). Use these exact `key: value` fields:
   - `Completed: <files/scope reviewed>`
   - `Remaining: <files/scope not reached — name any structural files; tie to scope: structural-pipeline>`
   - `Confidence: <0-100>`
+
+## Tooling note
+
+> **These `grep` recipes are PATTERNS — run them with the `Grep` tool, not Bash.** This agent no
+> longer holds `Bash`, because `pr-review` is model-invocable and injected PR content could otherwise
+> steer a spawned reviewer to arbitrary shell one level below the skill's own scoped grant (deep
+> review, P1).
+>
+> **Correction (PR #63 recheck).** The first version of this note claimed every command in this body
+> "was a `grep -rn`". That was false, and the claim is what made it dangerous: `security-reviewer`
+> still called `cat .gitignore | grep …` and `cat *.entitlements || find …`, and
+> `concurrency-reviewer` still called `plutil`. `Grep` cannot execute `cat`, `find`, `plutil` or
+> pipeline semantics, so those audit sections would have silently produced nothing while this note
+> asserted they were covered — a reviewer that cannot run its own step is worse than one holding
+> Bash, because the gap is invisible. Those steps are now written as explicit `Glob`/`Read`/`Grep`
+> operations. I had checked the dominant pattern rather than the whole set.
+>
+> A CI check (`validate-plugin-assembly.py`) now fails if any agent without `Bash` carries a shell
+> fence line that is not a bare `grep`, so this cannot drift back.

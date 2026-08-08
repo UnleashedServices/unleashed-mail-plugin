@@ -11,21 +11,49 @@
 # write is `2>/dev/null` and fail-open: a logging failure must never abort a hook or leak
 # a path to stderr.
 
-log_base() {
-    # Delegate to the single source (scripts/lib/paths.sh, COREDEV-2600 item 1), but FALL BACK to
-    # the literal expansion if it cannot be located — never abort. This lib is sourced standalone
-    # (see paths.sh's header), so aborting here would turn three independent fail-open paths into
-    # one shared point of failure. `:-` not `-`, and keep the `${HOME:-}` guard, in BOTH forms.
-    if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-        _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
-        # shellcheck source=scripts/lib/paths.sh
-        [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
-    fi
-    if command -v unleashed_plugin_base >/dev/null 2>&1; then
-        unleashed_plugin_base
+# ── COREDEV-2617 / D': resolve the plugin-data base ONCE, EAGERLY, at source time ────────────────
+# Prefer the single source (scripts/lib/paths.sh). If it cannot be located this lib establishes the
+# SAME protocol itself rather than aborting — these libs are sourced standalone (see paths.sh's
+# header), so aborting would turn three independent fail-open paths into one shared point of failure.
+#
+# The duplication below is deliberate and bounded: it is the D' protocol, not the legacy expansion.
+# An unresolved base yields the POISONED SENTINEL (non-empty, non-root, ENOTDIR beneath it), never
+# the empty string — an empty base composes a ROOT path at the call site.
+#
+# The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
+# or three libs sourced in one shell would otherwise each emit one.
+if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+    _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+    # shellcheck source=scripts/lib/paths.sh
+    [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
+fi
+if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+    if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+        _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+        _UNLEASHED_BASE_OK=1
     else
-        printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
+        _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
+        _UNLEASHED_BASE_OK=0
+        if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+            _UNLEASHED_BASE_DIAGNOSED=1
+            printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+        fi
     fi
+fi
+# The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
+# undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
+# fail-open -> fail-closed inversion is exactly what COREDEV-2617's round-18 reproduction caught in
+# the agent fence; it must not be re-introduced one layer down.
+if ! command -v unleashed_base_ok >/dev/null 2>&1; then
+    unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
+fi
+
+
+log_base() {
+    # COREDEV-2617 / D': the base was resolved ONCE, at source time, by the block above. Just print
+    # it. Never re-resolve here — this function is invoked as $(...), so anything assigned inside it
+    # lives in a subshell and is gone on return (the round-6 "cache" defect).
+    printf '%s' "$_UNLEASHED_BASE_RESOLVED"
 }
 
 log_dir() {
@@ -37,6 +65,7 @@ log_dir() {
 # $3 = max lines before rotation (default 500). On rotation the newest max/2 lines are
 # kept (so we don't rotate on every subsequent write). Fail-open, stderr-clean.
 log_append() {
+    unleashed_base_ok || return 0        # D' (COREDEV-2617): unresolved base persists nothing.
     local name="$1" line="$2" max="${3:-500}" dir="" path="" tmp="" keep="" n=""
     case "$max" in ''|*[!0-9]*) max=500 ;; esac
     dir="$(log_dir)"

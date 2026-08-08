@@ -1,11 +1,14 @@
 ---
 name: gemini-review
-description: Plan and debug review via the Antigravity CLI (binary `agy`, model `gemini-3.1-pro`). Use before implementing any plan or fix.
+description: Plan and debug review via the Antigravity CLI (binary `agy`, model `gemini-3.6-flash-high`). Use before implementing any plan or fix.
 # MIN-27: this user-invoked workflow is nothing BUT pty-capture Bash pipelines, yet granted no tools — so
 # every one of the documented 2-6 gate rounds re-prompted for the same commands. Scope the grant to exactly
 # what the body runs (the plugin's scripts, the CLI probe, and `agy`); do not grant unscoped Bash.
-effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*), Bash(command -v *), Bash(agy *), Bash(rm -f /tmp/agy-out.txt*)
+# The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
+# step prompted for permission (or was denied) before the newly narrowed capture grant could run —
+# so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
+# per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Write(.agy-prompt-*.md)
 ---
 
 # Antigravity (`agy`) Review
@@ -21,9 +24,9 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 
 - **Tool:** Antigravity CLI binary `agy` — resolve via `$PATH` (typical install: `~/.local/bin/agy`). Current verified version: 1.0.1 (2026-05-23). Call it directly via Bash — do NOT use an MCP wrapper.
 - **Auth:** OAuth-personal handled by the CLI's own login. Creds cached at `~/.gemini/oauth_creds.json` (the `~/.gemini/` dir is reused by Antigravity for backward compatibility). DO NOT set `GEMINI_API_KEY` or `GOOGLE_CLOUD_PROJECT` (user rejected Vertex 2026-04-20).
-- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success): `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` with `grep -qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
-- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 18m -p "Read and follow .agy-prompt.md"` — the slim-argv form recommended below, NOT `-p "$(cat .agy-prompt.md)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a *failure*, never a verdict, and never an APPROVE.
-- **Model selection — NO `-m` flag.** The model is set globally in `~/.gemini/settings.json` under `"model": { "name": "gemini-3.1-pro" }`. Verify with `cat ~/.gemini/settings.json | grep model`. For plan-review fallback to `gemini-2.5-pro`, temporarily edit settings.json and restore after. For debug review: NO fallback — fail the review rather than degrade.
+- **Smoke test / preflight:** route through the PTY wrapper (bare `agy -p` writes 0 bytes from Claude's Bash tool / CI even on success). Allocate a PER-RUN ping path — a shared `/tmp` file lets a preflight that dies before writing leave the PREVIOUS run's `pong` in place, so a dead CLI reads as healthy, and two concurrent preflights overwrite each other (deep review, P2): `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"` — ONE granted command that allocates its own per-run ping path, hard-codes `-p "ping"`, and checks the path it allocated. It replaces `Bash(agy *)`, which let `agy` run OUTSIDE `isolated-agy-review.sh` even though this skill documents that agy has no read-only mode (deep review, P1). It greps `-qi pong` (**case-insensitive, and do not require the `!`** — across 3 measured runs agy answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let me know how I can help you today.`; a `Pong!`-exact check calls a healthy CLI unavailable ~1 run in 3). Any of those from a real terminal is valid. If empty/errors, run `agy` interactively once to re-login. **If `agy` is unavailable (fresh machine / CI), the gate is fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+- **`--print-timeout` is REQUIRED for a real review.** `agy -p` defaults to `--print-timeout 5m0s`; a plan review that reads several files routinely exceeds it and dies with `Error: timeout waiting for response` (a ~36-byte transcript, exit 1). Always pass `agy --print-timeout 28m -p "Read and follow <the per-round prompt file>"` — the slim-argv form recommended below, NOT `-p "$(cat …)"`, which inlines the whole prompt into argv. **A healthy ping (`grep -qi pong`) plus a failed review means the invocation is wrong, NOT that the CLI is unavailable** — fix the flag and re-run; do not treat it as a reviewer-unavailable case. A tiny transcript is a *failure*, never a verdict, and never an APPROVE.
+- **Model selection — `--model` EXISTS; the short `-m` does not.** `agy --help` lists `--model  Model for the current CLI session`, and `agy models` lists the valid names. A session flag OVERRIDES the global default in `~/.gemini/settings.json` (`"model": { "name": "gemini-3.1-pro" }`), which governs only invocations that pass no flag. **The wrapper passes `--model` explicitly** (`MODEL="${MODEL:-gemini-3.6-flash-high}"` in `scripts/review/isolated-agy-review.sh`, overridable via the `MODEL` environment variable), so wrapper rounds run that model and NOT the settings.json one. This documentation previously claimed the flag was removed while the wrapper was passing it — one of the two had to be wrong, and it was this text (PR #63 review, gap 6). **A fallback must therefore go through `MODEL`, not settings.json** — editing the global setting cannot affect a wrapper round, because the wrapper always supplies `--model`. To fall back for one plan review, pass the model as the SIXTH OPERAND — not as a `MODEL=` prefix, which is a different command shape and does not match this skill's capture grant: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" <ticket> <round> <prompt> <plan> 1800 gemini-2.5-pro`, and check `agy models` for the current valid names. Verify what a bare `agy` would use with `cat ~/.gemini/settings.json | grep model`, but do not mistake that for what the gate ran. For debug review: NO fallback — fail the review rather than degrade.
 - **NO `-o` flag.** Output is plaintext only.
 - **Workspace access — NOT persistent.** Each `agy -p` invocation is a fresh session. Either pass `--add-dir /absolute/path/to/workspace` on every invocation, OR use absolute paths in the prompt. The interactive `/add-dir` slash command (inside `agy -i` sessions) updates persistent state but doesn't affect `-p` runs.
 
@@ -55,30 +58,53 @@ All plans and debugging sessions must be reviewed by the `agy` CLI before implem
 > [`codex-review`](../codex-review/SKILL.md), which already runs `-s read-only`. **Isolate instead of
 > constraining** — that is what the wrapper below does.
 
-Interface: `isolated-agy-review.sh <prompt-file> <out-path> [timeout]`. The prompt path is **relative
-to the repo root**; the wrapper rewrites absolute paths inside it to point at the disposable copy.
+Interface: `capture-gemini-review.sh <ticket> <round> <prompt-file> <plan> [timeout] [model]`.
+
+**`isolated-agy-review.sh` is the harness that entrypoint calls, not a command to run directly.** This
+skill's `allowed-tools` grants the capture wrapper and not the harness, so invoking the harness yourself
+prompts or is denied; and the plan is its *fourth* operand, so a hand-written three-argument call skips
+plan staging entirely and `agy` reviews the COMMITTED plan instead of the uncommitted edits that are the
+normal state during review iteration (PR #63 recheck, P2). Two recipes here documented that stale
+three-argument shape. Use the complete recipe under "Required invocation inputs" below; never derive or
+normalize the allocated path.
 
 ```bash
-# Creates a disposable DETACHED worktree at the reviewed commit, rewrites the prompt's absolute paths
-# to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
+# capture-gemini-review.sh allocates the per-run leaf, binds the prompt AND the plan to it, and hands
+# off to scripts/review/isolated-agy-review.sh, which creates a disposable DETACHED worktree at the
+# reviewed commit, stages the bound plan snapshot into it — authenticated against the `.plan` digest, so
+# bytes substituted after binding are refused rather than reviewed — rewrites the prompt's absolute
+# paths to point there, prepends a read-only guard, runs agy against THAT copy, then asserts the real
 # working tree is byte-identical before/after. A tree mutation exits 3 and VOIDS the round rather than
 # being cleaned up silently.
 #
-# It also pre-cleans the transcript (an ABSENT file maps to MISSING -> the gate fails closed; a STALE
-# one would be read as this round's verdict) and extracts the verdict with an ANCHORED grep — a loose
-# `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" \
-    .agy-prompt.md /tmp/agy-out.txt 1500
-# -> EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
+# Staleness protection comes from the PER-RUN ALLOCATED PATH — the wrapper no longer pre-cleans, and
+# must not (an ABSENT transcript maps to MISSING -> the gate fails closed; a STALE one would be read as
+# this round's verdict). Each round gets its own leaf, so absence is guaranteed without deleting
+# anything. The wrapper additionally REFUSES a non-empty reserved leaf, so a retry is forced to
+# re-allocate rather than overwrite a previous round's bytes. It extracts the verdict with an ANCHORED
+# grep — a loose `grep VERDICT:` matches the prompt's own echoed template in a timed-out transcript.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> UNLEASHED_TRANSCRIPT=<the allocated leaf>  (printed BEFORE the capture starts, so a timeout keeps it)
+#    EXIT=0 BYTES=… TREE=clean VERDICT=VERDICT: APPROVE_WITH_NOTES
 # Exit 3 = the reviewer mutated the tree. Exit 1 = setup/prompt failure (e.g. a truncated prompt,
 # which the wrapper refuses to launch on rather than burning 20 minutes).
 ```
 
-**Timeouts are unchanged and still load-bearing.** `--print-timeout 18m` is passed by the wrapper
-because `agy`'s own default is 5m and a real plan review blows past it; the pty wrapper's timeout
-(default 1500s) is deliberately ABOVE that, because a lower wrapper cap SIGTERMs `agy` before its
-own print-timeout can fire, giving a masked exit 124 instead of `agy`'s diagnosable
-`Error: timeout waiting for response`.
+**Timeouts are load-bearing, and the INVARIANT matters more than either number:**
+
+> the pty wrapper's timeout must **exceed** `agy`'s `--print-timeout`.
+
+`--print-timeout 28m` (1680s) is passed by the wrapper because `agy`'s own default is 5m and a real
+plan review blows past it. The pty wrapper's timeout (default **1800s**) sits deliberately above it,
+because a lower wrapper cap SIGTERMs `agy` before its own print-timeout can fire, giving a masked
+exit 124 instead of `agy`'s diagnosable `Error: timeout waiting for response`.
+
+**Do not "correct" a recipe back to a smaller number.** This prose previously still described the
+retired 18m/1500s pair while the wrapper had already moved to 28m/1800s, so following it produced a
+wrapper cap *below* the print-timeout — killing live reviews at 25 minutes, the exact failure the
+invariant exists to prevent (PR #63 review, gaps 10-12 and bot thread 4). If you change one value,
+re-check the other and the contract test that binds them.
 
 Do not paste or re-derive the recipe inline — invoke the committed [`scripts/pty-capture.py`](../../scripts/pty-capture.py). Its hardening contract (verified across four Codex + Gemini review rounds):
 - **Command passed after `--`** — wraps any command (`agy`, `codex exec`, …); the program is resolved on `$PATH`, callable from any directory.
@@ -109,32 +135,45 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 
 ### Slim-argv + workspace prompt file (recommended)
 
-Put the full review/task spec in a workspace markdown file (e.g., `.agy-prompt.md`), then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
+Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-prompt-${TICKET}r${ROUND}.md`, never a shared `.agy-prompt.md`, because two concurrent rounds sharing one prompt cross-wire prompt and transcript (deep review, P1) — then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
+
+# 1. WRITE the prompt to the per-round workspace file with the **Write tool**, not a shell heredoc.
+#    This skill grants `Write(.agy-prompt-*.md)`; a `cat > … <<EOF` is a Bash redirect matching no Bash
+#    grant, so it PROMPTS on every gate round — the exact reprompt the granted flow exists to avoid
+#    (PR #63 recheck, P2). Same shape as codex-review's `Write(.codex-prompt-*.md)` step. Give the file
+#    an absolute plan reference so agy resolves it regardless of how it was launched, e.g.:
+#
+#        Write(.agy-prompt-${TICKET}r${ROUND}.md):
+#          # Review task
+#          Read $(pwd)/docs/planning/FEATURE_PLAN.md
+#          and provide architectural assessment.
+#          Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
 
 ```bash
-# 1. From the project root, write the prompt to a workspace file.
-#    Use an absolute path so agy resolves it regardless of how it was launched.
-cat > .agy-prompt.md <<EOF
-# Review task
-
-Read $(pwd)/docs/planning/FEATURE_PLAN.md
-and provide architectural assessment. Verdict: APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES.
-EOF
-
 # 2. Invoke agy through the shared PTY wrapper:
 #    pty-capture.py <out-path> -- <command> [args...]
-# --print-timeout 18m: agy's own default is 5m and a real plan review blows past it (see above).
-# Wrapper 1200s (20m) > agy's 18m ON PURPOSE. The PREVIOUS value (600s) would SIGTERM agy 8 minutes
-# BEFORE its print-timeout could fire, giving a masked exit 124 instead of agy's diagnosable
+# --print-timeout 28m: agy's own default is 5m and a real plan review blows past it (see above).
+# Wrapper 1800s (30m) > agy's 28m (1680s) ON PURPOSE. A wrapper cap BELOW the print-timeout SIGTERMs
+# agy before its own timeout can fire, giving a masked exit 124 instead of agy's diagnosable
 # `Error: timeout waiting for response`. Keep the wrapper ABOVE the print-timeout.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (agy absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
+# MAJ-10 — staleness protection now comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
+# one. Each round allocates its own transcript leaf, so a wrapper that never starts (agy absent / auth
+# expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a STALE
 # previous-round transcript that review-synthesis would read as THIS round's APPROVE. Absent (not stale)
-# maps to MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
+# maps to MISSING -> the gate fails closed.
+# DO NOT `rm -f` THE RESERVED LEAF. The allocator creates it 0-byte and pty-capture.py --allocated opens
+# it WITHOUT O_CREAT; deleting it makes the final write fail on a missing file after the full ~25-minute
+# review has already run, losing the round (PR #63 review, gaps 13-14). Retries must RE-ALLOCATE, which
+# the wrapper now enforces by refusing a non-empty reserved leaf.
 # SUPERSEDED — this raw form points agy at the WORKING TREE, which it can write to (COREDEV-2607).
-# Use scripts/review/isolated-agy-review.sh instead; it wraps exactly this pipeline, but against a
-# disposable detached checkout, and asserts the real tree is unchanged afterwards.
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-agy-review.sh" .agy-prompt.md /tmp/agy-out.txt 1500
+# Use the GRANTED capture wrapper instead. It wraps exactly this pipeline, but binds the prompt and plan
+# to the leaf, runs against a disposable detached checkout, and asserts the real tree is unchanged
+# afterwards. Calling scripts/review/isolated-agy-review.sh directly — as this line used to — is neither
+# granted by this skill nor complete: its plan operand is the fourth, and omitting it makes agy review
+# the COMMITTED plan rather than the working-tree edits under review (PR #63 recheck, P2).
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" \
+    "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# -> the same UNLEASHED_TRANSCRIPT= marker; the capture lands in that allocated leaf and nowhere else.
 ```
 
 ### From an interactive terminal (no wrapper needed)
@@ -149,7 +188,7 @@ The drip animation renders to a real TTY directly. Read the output in your termi
 # Plan review — agy -p with workspace flag in same invocation.
 # Run from the project root so "$(pwd)" resolves to the workspace.
 # NOTE: this points agy at the real tree. For a gate round use the isolated wrapper above.
-agy --add-dir "$(pwd)" --print-timeout 18m -p "Read and follow .agy-prompt.md"
+agy --add-dir "$(pwd)" --print-timeout 28m -p "Read and follow .agy-prompt-${TICKET}r${ROUND}.md"
 
 # For record-keeping: use the PTY wrapper above instead of `> file`.
 # A redirect like `agy ... > /tmp/review.md` will produce 0 bytes because
@@ -183,22 +222,48 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 | `--dangerously-skip-permissions` | Auto-approve all tool permission requests |
 
 **Removed/changed since the old gemini-cli:**
-- `-m / --model` → removed (model in `~/.gemini/settings.json`)
+- `--model` → supported (session override; `-m` short form is NOT). `~/.gemini/settings.json` is the default when the flag is absent
 - `-o / --output-format` → removed (always plaintext)
 - `--include-directories` → renamed `--add-dir`
 
 ## Workflow
 
 1. **Smoke-test:** `agy -p "ping"` → expect a `pong` (case-insensitive; the `!` is not guaranteed). If empty, re-login interactively.
-2. **Check current model:** `grep -A1 model ~/.gemini/settings.json` → confirm `gemini-3.1-pro`.
-3. **Write the task** to a workspace prompt file (e.g., `.agy-prompt.md`) with all context including absolute paths to any files agy must read.
+2. **Check the model the GATE will use:** the wrapper passes `--model` explicitly, so read `MODEL=` in `scripts/review/isolated-agy-review.sh` (or your `MODEL` override) — currently `gemini-3.6-flash-high`. `~/.gemini/settings.json` governs only a bare `agy` invocation.
+3. **Write the task** to a PER-ROUND workspace prompt file (`.agy-prompt-${TICKET}r${ROUND}.md`) with all context including absolute paths to any files agy must read.
 4. **Invoke** via PTY wrapper from non-TTY contexts, or directly from a real terminal.
 5. **Continue the conversation** with `agy -c` or `agy -i` for follow-up questions. Do not treat the first response as final.
-6. **Capture output** — if invoking from Claude Code's Bash tool, the PTY wrapper writes to `/tmp/agy-out.txt`. Read that file back into context.
+6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that
+   allocated file back into context; do not reconstruct its name.
 7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/agy-out.txt` + `/tmp/codex-out.txt` into one auditable **Combined verdict** block before implementation. Make sure each review prompt asks the reviewer to finish with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the synthesis can read it deterministically.
+8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke
+   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer
+   "<name>=<STATUS>:<allocated-path>"` argument. Make sure each review prompt asks the reviewer to finish
+   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the
+   synthesis can read it deterministically.
 
 Do not skip to save time. Do not treat as a rubber stamp.
+
+## Required invocation inputs
+
+/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run this complete recipe. The marker remainder
+is copied with shell prefix removal only; every later expansion is quoted so the path remains one opaque
+argument.
+
+```bash
+# Write this round's prompt to a PER-ROUND file first — `.agy-prompt-${TICKET}r${ROUND}.md`, never a
+# shared `.agy-prompt.md`. A shared prompt is the same MAJ-10 hazard as a shared transcript: two
+# concurrent rounds each get a unique leaf, but the second overwrites the prompt before the first
+# wrapper reads it, so the first round records a fresh, valid transcript OF THE OTHER PLAN under its
+# own ticket and round. The helper records the prompt's digest beside the transcript.
+# COREDEV2619_GEMINI_CAPTURE_BEGIN
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh" "$TICKET" "$ROUND" ".agy-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1800
+# COREDEV2619_GEMINI_CAPTURE_END
+```
 
 ## Diagnostics
 
@@ -217,7 +282,7 @@ clarifying questions and end with "Start by asking me…". The automated gate fe
 `agy -p` through `pty-capture.py` — a reviewer following them verbatim replies with a *counter-question*,
 producing a transcript `/unleashed-mail:review-synthesis` cannot parse, which burns a gate round.
 
-**So when building `.agy-prompt.md` for the one-shot path, prepend this preamble** (it overrides the
+**So when building the per-round prompt file for the one-shot path, prepend this preamble** (it overrides the
 ask-first/opener instructions below) and append the target path:
 
 ```markdown

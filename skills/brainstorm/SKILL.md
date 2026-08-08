@@ -1,10 +1,8 @@
 ---
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
-effort: xhigh
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, Agent, WebFetch, WebSearch, AskUserQuestion, Write, Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py *)
-disable-model-invocation: true
+allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Write(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
 ---
 
 # Feature Brainstorm: $ARGUMENTS
@@ -171,29 +169,30 @@ Combined-verdict artifact** exists. Going straight from here to `/implement` the
 1. **Snapshot the reviewed digest BEFORE dispatching the reviews** — this binds the eventual approval to
    the bytes the reviewers saw, and an **APPROVING** `write` now REQUIRES it (fails closed otherwise):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
-       --plan docs/planning/FEATURE_NAME_PLAN.md
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh" docs/planning/FEATURE_NAME_PLAN.md
    ```
 2. **Review the plan with BOTH reviewers** (AGENT_CONTRACTS §2 — neither is optional):
-   `/unleashed-mail:gemini-review` and `/unleashed-mail:codex-review` on `docs/planning/FEATURE_NAME_PLAN.md` (the plugin registers its skills namespaced; the bare `/gemini-review` form resolves only where the consumer workspace ships its own `.claude/skills/` copies).
+   - /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+   - /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
    Route non-TTY runs through `scripts/pty-capture.py` (see those skills).
-3. **Iterate to convergence** — revise the plan and re-run until **both** return
-   `APPROVE` / `APPROVE_WITH_NOTES` (typically 2–6 rounds). If you revise the plan, **re-run `snapshot`**
-   (step 1) and the reviews on the new bytes — an approval is only valid for the exact plan reviewed.
+3. **Iterate to convergence** — revise and re-run until **both** return `APPROVE` /
+   `APPROVE_WITH_NOTES` (typically 2–6 rounds). After a revision, re-run `snapshot` (step 1) and both reviews on the exact new bytes.
 4. **Synthesize:** run `/unleashed-mail:review-synthesis` to combine the two transcripts into one
    auditable Combined verdict — it also **persists** the artifact (`write` auto-reads the snapshot from
-   step 1, so no `--reviewed-sha256` is needed):
+   step 1, so no `--reviewed-sha256` is needed). Bind the exact allocated paths returned by the two
+   review recipes; do not reconstruct them:
 
    ```bash
    # The bare `${CLAUDE_PLUGIN_ROOT}` token is substituted inline in the skill body -> the plugin install
    # path; the `:-.` form is NOT substituted (it would resolve to `.`) and would fail to persist the
    # artifact, so /implement would report "no artifact" (COREDEV-2504). Matches implement.
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" write \
-       --plan docs/planning/FEATURE_NAME_PLAN.md \
-       --verdict <COMBINED_VERDICT> \
-       --reviewer gemini=<STATUS>:/tmp/agy-out.txt \
-       --reviewer codex=<STATUS>:/tmp/codex-out.txt \
-       --created-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   # COREDEV2619_BRAINSTORM_PERSIST_BEGIN
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh" \
+       --plan "$PLAN_PATH" \
+       --verdict "$COMBINED_VERDICT" \
+       --reviewer "gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}" \
+       --reviewer "codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}"
+   # COREDEV2619_BRAINSTORM_PERSIST_END
    ```
 5. **Then** hand off: `/unleashed-mail:implement FEATURE_NAME`.
 

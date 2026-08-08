@@ -4,7 +4,6 @@ description: >
   Accessibility patterns and compliance for UnleashedMail. Covers VoiceOver support,
   keyboard navigation, Dynamic Type, color contrast, and testing. Activates when
   implementing accessible UI, testing a11y features, or ensuring compliance.
-effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

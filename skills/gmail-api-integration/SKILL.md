@@ -4,8 +4,7 @@ description: >
   Gmail REST API integration patterns for UnleashedMail. Activates when working
   with email fetching, sending, label management, OAuth flows, Pub/Sub push
   notifications, or any Google API interaction.
-effort: xhigh
-allowed-tools: Read, Write, Edit, Grep, Glob
+allowed-tools: Read, Grep, Glob
 ---
 
 # Gmail API Integration — UnleashedMail

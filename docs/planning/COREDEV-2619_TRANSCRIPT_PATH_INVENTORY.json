@@ -1,0 +1,680 @@
+{
+  "schemaVersion": 2,
+  "ticket": "COREDEV-2619",
+  "step": "S-INVENTORY",
+  "frozenCommit": "78e28f26cb56572b22fe1635552dd10fa95bdb48",
+  "scanExclusions": [
+    "docs/planning/COREDEV-2619_PER_RUN_TRANSCRIPT_PATHS_PLAN.md"
+  ],
+  "expectedTotals": {
+    "sites": 31,
+    "files": 13,
+    "rewrite": 21,
+    "quote-keep": 10
+  },
+  "expectedFileCounts": {
+    "CHANGELOG.md": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "README.md": {
+      "sites": 1,
+      "rewrite": 1,
+      "quote-keep": 0
+    },
+    "docs/audits/PLUGIN_AUDIT_2026-07-19.md": {
+      "sites": 4,
+      "rewrite": 0,
+      "quote-keep": 4
+    },
+    "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "docs/planning/HANDOFF.md": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "docs/planning/OCTO_ADOPTION_PLAN.md": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "scripts/pty-capture.py": {
+      "sites": 3,
+      "rewrite": 3,
+      "quote-keep": 0
+    },
+    "scripts/review-verdict.py": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "scripts/tests/test_review_verdict.py": {
+      "sites": 1,
+      "rewrite": 0,
+      "quote-keep": 1
+    },
+    "skills/brainstorm/SKILL.md": {
+      "sites": 2,
+      "rewrite": 2,
+      "quote-keep": 0
+    },
+    "skills/codex-review/SKILL.md": {
+      "sites": 5,
+      "rewrite": 5,
+      "quote-keep": 0
+    },
+    "skills/gemini-review/SKILL.md": {
+      "sites": 5,
+      "rewrite": 5,
+      "quote-keep": 0
+    },
+    "skills/review-synthesis/SKILL.md": {
+      "sites": 5,
+      "rewrite": 5,
+      "quote-keep": 0
+    }
+  },
+  "sites": [
+    {
+      "location": "CHANGELOG.md:1601",
+      "path": "CHANGELOG.md",
+      "line": 1601,
+      "class": "quote-keep",
+      "reason": "Released behavior is a historical changelog record and must not be rewritten.",
+      "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
+    },
+    {
+      "location": "README.md:187",
+      "path": "README.md",
+      "line": 187,
+      "class": "rewrite",
+      "reason": "Current feature documentation must describe explicit per-run transcript inputs.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 192,
+        "payloads": [
+          "- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each transcript path is carried as one opaque `--reviewer \"<name>=<STATUS>:<path>\"` argument (**at this version the two paths were fixed; per-run allocated paths arrived in v2.6.7** — this historical entry had been rewritten to describe the later behaviour, so the file contradicted itself about when per-run paths existed); a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a."
+        ],
+        "payloadSha256": "08fdf76dbbc6e61a79a1b7419f0294cadefcda727c9aa26171a0f77517ac71ba"
+      },
+      "sourceSha256": "54edc358667a681e92fd16dd34d7e38da3646f8d159c70573b288fcd6781a3cf",
+      "precedingAnchorLine": 186,
+      "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "followingAnchorLine": 188,
+      "followingAnchorSha256": "5c061e7b1fb306d8030de6c9e5990bc63b8dbce6155a369fe03b66226d5f6d49"
+    },
+    {
+      "location": "docs/audits/PLUGIN_AUDIT_2026-07-19.md:89",
+      "path": "docs/audits/PLUGIN_AUDIT_2026-07-19.md",
+      "line": 89,
+      "class": "quote-keep",
+      "reason": "Historical audit finding must preserve the fixed-path defect statement.",
+      "sourceSha256": "0c32028f3c4ffb0cd2444d34ea7f5fee57053dc674107f14dc40720a2aa82b7e"
+    },
+    {
+      "location": "docs/audits/PLUGIN_AUDIT_2026-07-19.md:91",
+      "path": "docs/audits/PLUGIN_AUDIT_2026-07-19.md",
+      "line": 91,
+      "class": "quote-keep",
+      "reason": "Historical audit evidence must preserve the stale-transcript failure scenario.",
+      "sourceSha256": "43602e9ebe9f50bdda9a0e9f70217309a71dfefb557d471f6d6bb60c3ea844e8"
+    },
+    {
+      "location": "docs/audits/PLUGIN_AUDIT_2026-07-19.md:92",
+      "path": "docs/audits/PLUGIN_AUDIT_2026-07-19.md",
+      "line": 92,
+      "class": "quote-keep",
+      "reason": "Historical audit remediation advice must remain an accurate record of the proposal.",
+      "sourceSha256": "c989ce64f4acb22f2387f79712ab39104a6c50ae79f181108de3d6ac5bf34e54"
+    },
+    {
+      "location": "docs/audits/PLUGIN_AUDIT_2026-07-19.md:93",
+      "path": "docs/audits/PLUGIN_AUDIT_2026-07-19.md",
+      "line": 93,
+      "class": "quote-keep",
+      "reason": "Historical audit verification must preserve the evidence that established the defect.",
+      "sourceSha256": "e1563fc84db030571e7158cd9ba06af097f55e59373248aab6ec0ec8eb01096e"
+    },
+    {
+      "location": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md:62",
+      "path": "docs/planning/COREDEV-2497_VERIFY_TRANSCRIPTS_PLAN.md",
+      "line": 62,
+      "class": "quote-keep",
+      "reason": "The predecessor plan preserves the measured stale-transcript incident.",
+      "sourceSha256": "720374b95a3a3b6357a6f0405c48ad69787a1cc0b58ac44b7deadb826b636d3b"
+    },
+    {
+      "location": "docs/planning/HANDOFF.md:96",
+      "path": "docs/planning/HANDOFF.md",
+      "line": 96,
+      "class": "quote-keep",
+      "reason": "The handoff preserves the cross-project transcript collision incident.",
+      "sourceSha256": "44a3fa9f43a672ed7234ccf25d6e8888dc6c63ee2984131cbfaded0356ce0138"
+    },
+    {
+      "location": "docs/planning/OCTO_ADOPTION_PLAN.md:367",
+      "path": "docs/planning/OCTO_ADOPTION_PLAN.md",
+      "line": 367,
+      "class": "quote-keep",
+      "reason": "Superseded design input is historical planning evidence.",
+      "sourceSha256": "bf4bdb89ae60f2e344b9de647fccce14aec382f9aa1580b6d6421ec0e3ce420e"
+    },
+    {
+      "location": "scripts/pty-capture.py:27",
+      "path": "scripts/pty-capture.py",
+      "line": 27,
+      "class": "rewrite",
+      "reason": "The Codex usage example must demonstrate capture to a reserved allocated leaf.",
+      "contracts": [
+        "S-CAPTURE"
+      ],
+      "destination": {
+        "line": 27,
+        "payloads": [
+          "    python3 pty-capture.py --allocated \"$CODEX_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "e6cbdd84ae6ec80ab2462d612c1fa361c70a0731c54c3f8649da8fcfec63cb20"
+      },
+      "sourceSha256": "f9457755ff4929f0aef8cf8d6e936e4eb727294fa8815cb8b462b375fa3015cb",
+      "precedingAnchorLine": 26,
+      "precedingAnchorSha256": "619a3a00d8b193ccecfc03a8ca0b433cba5cf3ae54c116d1b6ce7c91a59e8091",
+      "followingAnchorLine": 28,
+      "followingAnchorSha256": "b66d43be6717c16107148a18a3d116160b59f075e3e78a155b4ca29f78b9ae7a"
+    },
+    {
+      "location": "scripts/pty-capture.py:31",
+      "path": "scripts/pty-capture.py",
+      "line": 31,
+      "class": "rewrite",
+      "reason": "The Gemini usage example must demonstrate capture to a reserved allocated leaf.",
+      "contracts": [
+        "S-CAPTURE"
+      ],
+      "destination": {
+        "line": 31,
+        "payloads": [
+          "    python3 pty-capture.py --allocated \"$GEMINI_TRANSCRIPT\" -- \\"
+        ],
+        "payloadSha256": "59b6861e17c81eb47109f192e80dc0be2b6b646fcf634ea32f32b0bc6effaf69"
+      },
+      "sourceSha256": "5a3eb5808cdf4ae356f45bb138dc2dfee451b644714aed7dcbe9cacd9228699e",
+      "precedingAnchorLine": 30,
+      "precedingAnchorSha256": "c1a51d38bbfedd5c6a58023f2d20ae8fd2650f8c393ac0baba62891d7ce236cb",
+      "followingAnchorLine": 32,
+      "followingAnchorSha256": "4ccc2fbab4384e2db01c116527dbccb0237e09c1ef13ef8d06c167251d702e98"
+    },
+    {
+      "location": "scripts/pty-capture.py:317",
+      "path": "scripts/pty-capture.py",
+      "line": 317,
+      "class": "rewrite",
+      "reason": "Live security commentary must describe reserved leaves after fixed paths are retired.",
+      "contracts": [
+        "S-CAPTURE"
+      ],
+      "destination": {
+        "line": 566,
+        "payloads": [
+          "            # local hazard: another user could replace the reserved `<out-path>` with a symlink to redirect the"
+        ],
+        "payloadSha256": "e801f26ecb1d6d6f4b6c0f28d7395f2a9cf6824cdc59e491bdee252c99274ce0"
+      },
+      "sourceSha256": "a3955210fd5b09f37b8ad298f732e4547394efb05ceb4e00316179fcb2513ce5",
+      "precedingAnchorLine": 316,
+      "precedingAnchorSha256": "b72a7be9a37c412be33dc87730941394c494bc7a909e2c7f47161b21dcdb5a02",
+      "followingAnchorLine": 318,
+      "followingAnchorSha256": "87240623bef785d8db32948961ea48ab2bb43eccc792d113bf6f3a1e7784b26b"
+    },
+    {
+      "location": "scripts/review-verdict.py:131",
+      "path": "scripts/review-verdict.py",
+      "line": 131,
+      "class": "quote-keep",
+      "reason": "Regression commentary intentionally quotes the duplicate-transcript incident.",
+      "sourceSha256": "27fdb49bf4e90af135d80d728e214e48b975c0b558838a2a3f3129daddcc05e9"
+    },
+    {
+      "location": "scripts/tests/test_review_verdict.py:233",
+      "path": "scripts/tests/test_review_verdict.py",
+      "line": 233,
+      "class": "quote-keep",
+      "reason": "Regression-test documentation intentionally quotes the duplicate-transcript command.",
+      "sourceSha256": "4ee436c99b8105a87a8a84527f364f2a5647a01c529493a6fb5f6b24e38a212b"
+    },
+    {
+      "location": "skills/brainstorm/SKILL.md:194",
+      "path": "skills/brainstorm/SKILL.md",
+      "line": 194,
+      "class": "rewrite",
+      "reason": "The Gemini verdict argument must use the allocated transcript path returned for this run.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 193,
+        "payloads": [
+          "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
+        ],
+        "payloadSha256": "46712a23b08956488b54cd0f8b716e0001829e259fe19797e053580612b27a3d"
+      },
+      "sourceSha256": "147256856f08cdd932f6ee395953c3137ef99fafc1c1240bba99cc6497fc4781",
+      "precedingAnchorLine": 193,
+      "precedingAnchorSha256": "8f60baf074a984d1c75bb7db0456219ca6a8a232cbe014815a2962e1a9c24db7",
+      "followingAnchorLine": 196,
+      "followingAnchorSha256": "9758e7de45f8085c7e05ad257d420580d642a6307bb14153829d49f552c1995b"
+    },
+    {
+      "location": "skills/brainstorm/SKILL.md:195",
+      "path": "skills/brainstorm/SKILL.md",
+      "line": 195,
+      "class": "rewrite",
+      "reason": "The Codex verdict argument must use the allocated transcript path returned for this run.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 194,
+        "payloads": [
+          "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\""
+        ],
+        "payloadSha256": "474de13107de1dab084ef1704222256ec58ef6d51715f53194318a73f675d5d6"
+      },
+      "sourceSha256": "f7020818a7143be993c629ab484d841b97c6e6db8b37fbeaad6ec395d97afcc5",
+      "precedingAnchorLine": 193,
+      "precedingAnchorSha256": "8f60baf074a984d1c75bb7db0456219ca6a8a232cbe014815a2962e1a9c24db7",
+      "followingAnchorLine": 196,
+      "followingAnchorSha256": "9758e7de45f8085c7e05ad257d420580d642a6307bb14153829d49f552c1995b"
+    },
+    {
+      "location": "skills/codex-review/SKILL.md:7",
+      "path": "skills/codex-review/SKILL.md",
+      "line": 7,
+      "class": "rewrite",
+      "reason": "The fixed-path cleanup grant is removed and the allocator wrapper grant is added.",
+      "contracts": [
+        "S-PRECLEAN"
+      ],
+      "destination": {
+        "line": 10,
+        "payloads": [
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)"
+        ],
+        "payloadSha256": "4f823cd491422129775226420675695c2632c146202d603a71cd9c9fa5ce62f7"
+      },
+      "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
+      "precedingAnchorLine": 6,
+      "precedingAnchorSha256": "40f48895dc59fd5a8d06c29cbbdb4a19a4c6a5910697154278835c5f212a0c35",
+      "followingAnchorLine": 8,
+      "followingAnchorSha256": "cb3f91d54eee30e53e35b2b99905f70f169ed549fd78909d3dac2defc9ed8d3b"
+    },
+    {
+      "location": "skills/codex-review/SKILL.md:48",
+      "path": "skills/codex-review/SKILL.md",
+      "line": 48,
+      "class": "rewrite",
+      "reason": "The pre-clean command is replaced by allocation before capture.",
+      "contracts": [
+        "S-PRECLEAN",
+        "S-WRAPPER",
+        "S-CAPTURE"
+      ],
+      "destination": {
+        "path": "scripts/review/capture-codex-review.sh",
+        "line": 86,
+        "payloads": [
+          "if TRANSCRIPT_MARKER=\"$(bash \"${SCRIPT_DIR}/allocate-transcript.sh\" \"$TICKET\" \"$ROUND\" codex)\"; then",
+          "    :",
+          "else",
+          "    status=\"$?\"",
+          "    exit \"$status\"",
+          "fi",
+          "case \"$TRANSCRIPT_MARKER\" in",
+          "    UNLEASHED_TRANSCRIPT=?*) ;;",
+          "    *) die \"allocator returned an invalid marker\" ;;",
+          "esac",
+          "CODEX_TRANSCRIPT=\"${TRANSCRIPT_MARKER#UNLEASHED_TRANSCRIPT=}\"",
+          "printf '%s\\n' \"$TRANSCRIPT_MARKER\"",
+          "# Bind the prompt AND the plan to THIS transcript, BEFORE the capture runs. `bind-prompt.py` also",
+          "# CONTAINS the operands: the `-r`/`-s` pair this replaced accepted any readable path, including",
+          "# `../secret`, whose bytes the capture below would then have sent to the reviewer CLI verbatim — and",
+          "# this entrypoint is pre-approved on a model-invocable skill, so the model chooses that operand",
+          "# (deep review, P1). It writes both sidecars with O_NOFOLLOW|O_EXCL, which the shell redirect it",
+          "# replaced did not. A failed binding aborts here, before the reviewer launches.",
+          "python3 \"${SCRIPT_DIR}/bind-prompt.py\" \\",
+          "    --prompt \"$PROMPT\" --transcript \"${CODEX_TRANSCRIPT}\" --plan \"$PLAN\" \\",
+          "    || die \"refusing to review: the prompt/plan binding could not be established\"",
+          "#",
+          "# ISOLATE LIKE THE GEMINI ARM (PR #63 recheck, P1). codex used to run `-s read-only` in the LIVE tree,",
+          "# so the plan file it opened was the mutable working-tree one: an A->B->A swap during codex's read",
+          "# window let it review substituted bytes while `.plan` and the live plan both still hashed A, and the",
+          "# artifact attested a plan the reviewer never read. `isolated-codex-review.sh` runs codex against a",
+          "# disposable detached checkout with the authenticated `.planbytes` staged in through the SHARED",
+          "# `stage-bound-plan.py` — the same isolation and the same staging the gemini arm uses, so the two arms",
+          "# cannot drift again. It feeds the prompt SNAPSHOT (the O_EXCL `.prompt`), never the caller's path.",
+          "exec bash \"${SCRIPT_DIR}/isolated-codex-review.sh\" \\",
+          "    \"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
+        ],
+        "payloadSha256": "99403c968000e88dea860de32d24f770198658e536687e20e69492e6f18bfdc4"
+      },
+      "sourceSha256": "650c55b205aa824685bc5fc0084ec981b3c86c38639186c881a7db72da675553",
+      "precedingAnchorLine": 47,
+      "precedingAnchorSha256": "1c584669f86902bc99c3e6e42bb9131553b9bd014730200a82ecdcdbfd324367",
+      "followingAnchorLine": 50,
+      "followingAnchorSha256": "ba4b9432176d80f1659a2db5ed53f14f1081fa239fec065b19b7e372d8732b3a"
+    },
+    {
+      "location": "skills/codex-review/SKILL.md:49",
+      "path": "skills/codex-review/SKILL.md",
+      "line": 49,
+      "class": "rewrite",
+      "reason": "The PTY capture target must be the allocated path passed as one argument.",
+      "contracts": [
+        "S-CAPTURE",
+        "S-THREAD"
+      ],
+      "destination": {
+        "path": "scripts/review/capture-codex-review.sh",
+        "line": 115,
+        "payloads": [
+          "exec bash \"${SCRIPT_DIR}/isolated-codex-review.sh\" \\",
+          "    \"${CODEX_TRANSCRIPT}.prompt\" \"$CODEX_TRANSCRIPT\" \"$TIMEOUT\" \"$PLAN\""
+        ],
+        "payloadSha256": "eabe915437fcd098d6d17b6cadc4304147d37c998060446f86a4462a6610e8e8"
+      },
+      "sourceSha256": "140cfc84e527dc2259392ae57eed8ba2e0c5a61496d8476a25d7db90a8c1a4cf",
+      "precedingAnchorLine": 47,
+      "precedingAnchorSha256": "1c584669f86902bc99c3e6e42bb9131553b9bd014730200a82ecdcdbfd324367",
+      "followingAnchorLine": 50,
+      "followingAnchorSha256": "ba4b9432176d80f1659a2db5ed53f14f1081fa239fec065b19b7e372d8732b3a"
+    },
+    {
+      "location": "skills/codex-review/SKILL.md:51",
+      "path": "skills/codex-review/SKILL.md",
+      "line": 51,
+      "class": "rewrite",
+      "reason": "The live recipe commentary must point readers to the allocated capture target.",
+      "contracts": [
+        "S-CAPTURE",
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 69,
+        "payloads": [
+          "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
+          "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
+        ],
+        "payloadSha256": "f2042e3932ca79b23b425ca5a15fc507e70809a82eb226a287b2818afda31c2c"
+      },
+      "sourceSha256": "92e2d03c635c1e692a47f4bbcc4ae4f3e7eb6901adba5aa8122b501fbd1aeda0",
+      "precedingAnchorLine": 50,
+      "precedingAnchorSha256": "ba4b9432176d80f1659a2db5ed53f14f1081fa239fec065b19b7e372d8732b3a",
+      "followingAnchorLine": 52,
+      "followingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "location": "skills/codex-review/SKILL.md:181",
+      "path": "skills/codex-review/SKILL.md",
+      "line": 181,
+      "class": "rewrite",
+      "reason": "Plan-review synthesis must consume the two allocated transcript paths.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 206,
+        "payloads": [
+          "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
+        ],
+        "payloadSha256": "2fa4e7b2b3d16f2e54394bd0913718f32afe3dbbc1cd98c57f73c310d7638029"
+      },
+      "sourceSha256": "2db38ffecb2222616bb614ba6bc7eaea51228347866d78c3e7cf654678fc7829",
+      "precedingAnchorLine": 180,
+      "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "followingAnchorLine": 182,
+      "followingAnchorSha256": "4e64e5a805ee43284f7850daad9206e5a18732d924b079fb216d0e0904446a81"
+    },
+    {
+      "location": "skills/gemini-review/SKILL.md:8",
+      "path": "skills/gemini-review/SKILL.md",
+      "line": 8,
+      "class": "rewrite",
+      "reason": "The fixed-path cleanup grant is removed when allocation eliminates pre-cleaning.",
+      "contracts": [
+        "S-PRECLEAN"
+      ],
+      "destination": {
+        "line": 11,
+        "payloads": [
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Write(.agy-prompt-*.md)"
+        ],
+        "payloadSha256": "7ebd82d12f3ea56c27ab79bfc84d0545dcf4ee126b56996360f9e8253c7e69b5"
+      },
+      "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
+      "precedingAnchorLine": 7,
+      "precedingAnchorSha256": "40f48895dc59fd5a8d06c29cbbdb4a19a4c6a5910697154278835c5f212a0c35",
+      "followingAnchorLine": 9,
+      "followingAnchorSha256": "cb3f91d54eee30e53e35b2b99905f70f169ed549fd78909d3dac2defc9ed8d3b"
+    },
+    {
+      "location": "skills/gemini-review/SKILL.md:71",
+      "path": "skills/gemini-review/SKILL.md",
+      "line": 71,
+      "class": "rewrite",
+      "reason": "The isolated review helper must capture to the single allocated output argument.",
+      "contracts": [
+        "S-CAPTURE",
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 86,
+        "payloads": [
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
+          "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
+          "# -> UNLEASHED_TRANSCRIPT=<the allocated leaf>  (printed BEFORE the capture starts, so a timeout keeps it)"
+        ],
+        "payloadSha256": "b148306e83cbcaf717a03a0658a3cc046d8b7a986d527fde7449d4c3075d9b11"
+      },
+      "sourceSha256": "023d8ab2eb52d46c113492552938fc963f61b06013b013de4689daf63bbef35d",
+      "precedingAnchorLine": 70,
+      "precedingAnchorSha256": "a1a0d04d359495626280628ff9f1fb4050b910765c4a5eb1fb111a5e35371ebb",
+      "followingAnchorLine": 72,
+      "followingAnchorSha256": "7acfc9e0cbb3724d6dee0f7fc9a84abba3c7d70e5273555e3a452d58f79e12b0"
+    },
+    {
+      "location": "skills/gemini-review/SKILL.md:137",
+      "path": "skills/gemini-review/SKILL.md",
+      "line": 137,
+      "class": "rewrite",
+      "reason": "The primary isolated review recipe must capture to the allocated output argument.",
+      "contracts": [
+        "S-CAPTURE",
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 174,
+        "payloads": [
+          "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
+          "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
+          "# -> the same UNLEASHED_TRANSCRIPT= marker; the capture lands in that allocated leaf and nowhere else."
+        ],
+        "payloadSha256": "1ce5c541f7b49cba88cbb747cbc2c8342496cb126becbab50b36a68503707abc"
+      },
+      "sourceSha256": "39c3aae64f0722977fcad2430f6ba7ade99d0a6a8855ba69a42873c173e9ab39",
+      "precedingAnchorLine": 136,
+      "precedingAnchorSha256": "fdb4dc5dcc5130f71c9d2117caf24a16d309537e97dd3a646f616d54d791c777",
+      "followingAnchorLine": 138,
+      "followingAnchorSha256": "f1b901847390b0ed7e374e7c1e464ec17b46a427c487a5ad6cbd2906405083d5"
+    },
+    {
+      "location": "skills/gemini-review/SKILL.md:197",
+      "path": "skills/gemini-review/SKILL.md",
+      "line": 197,
+      "class": "rewrite",
+      "reason": "The live capture instruction must identify the allocated target, not a shared path.",
+      "contracts": [
+        "S-CAPTURE",
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 236,
+        "payloads": [
+          "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
+          "   allocated file back into context; do not reconstruct its name."
+        ],
+        "payloadSha256": "981690c6089e9c0de60631c26d3b90da03436cc269a5c9dab3534615c8cea4cd"
+      },
+      "sourceSha256": "2bd217d4fef72dd066b7bd3099643c9e03a195e02f4c8c5e607e93a41c78760c",
+      "precedingAnchorLine": 196,
+      "precedingAnchorSha256": "9b71e9e51f157c171ea31aef40c9a87437cdfabc9102b1b03b62d8f81023359f",
+      "followingAnchorLine": 198,
+      "followingAnchorSha256": "a9c0975f017e72906e35f6e7b49217d2637bbc02f78ff93c28ba52c728f2262a"
+    },
+    {
+      "location": "skills/gemini-review/SKILL.md:199",
+      "path": "skills/gemini-review/SKILL.md",
+      "line": 199,
+      "class": "rewrite",
+      "reason": "Synthesis must receive both reviewers' allocated paths as opaque arguments.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 239,
+        "payloads": [
+          "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
+          "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
+          "   \"<name>=<STATUS>:<allocated-path>\"` argument. Make sure each review prompt asks the reviewer to finish",
+          "   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the",
+          "   synthesis can read it deterministically."
+        ],
+        "payloadSha256": "32d57d69d0ef0edc8a1a773acaaca69b4fa8dc4e08f86724941bf7f5b06cac5e"
+      },
+      "sourceSha256": "ed22e9edc7d8a3ffe5028b2ee66fd6933789aad09f530bb47167e5ced441bbfd",
+      "precedingAnchorLine": 198,
+      "precedingAnchorSha256": "a9c0975f017e72906e35f6e7b49217d2637bbc02f78ff93c28ba52c728f2262a",
+      "followingAnchorLine": 200,
+      "followingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "location": "skills/review-synthesis/SKILL.md:23",
+      "path": "skills/review-synthesis/SKILL.md",
+      "line": 23,
+      "class": "rewrite",
+      "reason": "Default Gemini input must become the explicitly supplied allocated transcript path.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 24,
+        "payloads": [
+          "  --reviewer \"gemini=<STATUS>:<gemini-allocated-path>\" \\"
+        ],
+        "payloadSha256": "8d72fcd1d654554221c31bd72987940658ad5d000c953e86259160e7942ccab6"
+      },
+      "sourceSha256": "79a223e3bab3f5ca3c2600bb9bf878eb311e62c4facc4bde608e2748f7b6d6c6",
+      "precedingAnchorLine": 22,
+      "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "followingAnchorLine": 25,
+      "followingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "location": "skills/review-synthesis/SKILL.md:24",
+      "path": "skills/review-synthesis/SKILL.md",
+      "line": 24,
+      "class": "rewrite",
+      "reason": "Default Codex input must become the explicitly supplied allocated transcript path.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 25,
+        "payloads": [
+          "  --reviewer \"codex=<STATUS>:<codex-allocated-path>\""
+        ],
+        "payloadSha256": "9110bd7d570f8b8ef13ac81356f46f9ded8e2c77bbc568cc3bfe21605f552b68"
+      },
+      "sourceSha256": "416c9417bc7eb1173a951308a7d14ce5acd1a808702858900a7fb3c9dfc01022",
+      "precedingAnchorLine": 22,
+      "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "followingAnchorLine": 25,
+      "followingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "location": "skills/review-synthesis/SKILL.md:38",
+      "path": "skills/review-synthesis/SKILL.md",
+      "line": 38,
+      "class": "rewrite",
+      "reason": "Synthesis must read the two opaque allocated paths supplied for this run.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 41,
+        "payloads": [
+          "1. Parse the two explicit `--reviewer` arguments using only their first structural `=` and `:`",
+          "   delimiters, then read those exact path remainders. Treat a **missing, empty, or 0-byte** allocated file",
+          "   as **\"reviewer did not return\" (`MISSING`)** — never as silent approval. Still confirm each transcript",
+          "   is **this round's** review (it names the current plan / matches the feedback you just sent); if you",
+          "   cannot confirm it is fresh, treat it as MISSING and re-run the review."
+        ],
+        "payloadSha256": "0ebe165137ecb68438ea8cf8a8b6de40e9db66c38090d9d440babec19d4d0f38"
+      },
+      "sourceSha256": "7c910ce2d36799340f5e22b9ee1eb8a9e316027213845970f0327caace338bfb",
+      "precedingAnchorLine": 37,
+      "precedingAnchorSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "followingAnchorLine": 39,
+      "followingAnchorSha256": "3ffd903b997d2e64647012c799a3e0b8708e0bf6d015424fae95452862153f1b"
+    },
+    {
+      "location": "skills/review-synthesis/SKILL.md:137",
+      "path": "skills/review-synthesis/SKILL.md",
+      "line": 137,
+      "class": "rewrite",
+      "reason": "The Gemini reviewer argument must carry its allocated path into the verdict artifact.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 159,
+        "payloads": [
+          "    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"
+        ],
+        "payloadSha256": "48edb8ac7d02f796d072b85659f2ec5d86a689ada5266ec5795ff54423d8ac93"
+      },
+      "sourceSha256": "ca3f44a34edfa4cc64175b45c7ffffa7f65b4aee8a5381cd7f88f67230d1b1d7",
+      "precedingAnchorLine": 136,
+      "precedingAnchorSha256": "b72088873ef2b7bac9c4888fee7a50a507260f4c68afac28c5eebac838fe0034",
+      "followingAnchorLine": 139,
+      "followingAnchorSha256": "9114b554bedd43cc3a3d4135f0db78e7fa57993c24ea5ef6b868e21570ba7ac9"
+    },
+    {
+      "location": "skills/review-synthesis/SKILL.md:138",
+      "path": "skills/review-synthesis/SKILL.md",
+      "line": 138,
+      "class": "rewrite",
+      "reason": "The Codex reviewer argument must carry its allocated path into the verdict artifact.",
+      "contracts": [
+        "S-THREAD"
+      ],
+      "destination": {
+        "line": 160,
+        "payloads": [
+          "    --reviewer \"$CODEX_REVIEWER_SPEC\""
+        ],
+        "payloadSha256": "516aa19b833ee82b1fdcf3c13ed1f6d00694ac6594ee8e5c833c3dd7eb44b6bb"
+      },
+      "sourceSha256": "833317d1cd59935e55540c732344b39897b17fb10d304aa7c81fae6f65447157",
+      "precedingAnchorLine": 136,
+      "precedingAnchorSha256": "b72088873ef2b7bac9c4888fee7a50a507260f4c68afac28c5eebac838fe0034",
+      "followingAnchorLine": 139,
+      "followingAnchorSha256": "9114b554bedd43cc3a3d4135f0db78e7fa57993c24ea5ef6b868e21570ba7ac9"
+    }
+  ]
+}

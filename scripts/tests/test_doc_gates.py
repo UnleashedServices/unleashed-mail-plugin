@@ -3,6 +3,7 @@ contradictions), F9 (provider-parity gate drift), B7 (CFR protocol consistency a
 assertion flips if the corresponding doc fix is reverted."""
 import os
 import re
+import subprocess
 import unittest
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -11,6 +12,19 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 def _read(rel):
     with open(os.path.join(_ROOT, rel), encoding="utf-8") as fh:
         return fh.read()
+
+
+def _valid_agents():
+    """Read capture.VALID_AGENTS from the source of truth — never restate it here.
+
+    Hardcoding the five names makes the disjointness gate INERT: the dangerous change is
+    `swift-reviewer` joining the tuple while still named `in` in §13, and a hardcoded copy cannot
+    see that happen.
+    """
+    src = _read("mcp/review-synthesizer/capture.py")
+    m = re.search(r"VALID_AGENTS\s*=\s*\(([^)]*)\)", src, re.S)
+    assert m, "VALID_AGENTS tuple not found in capture.py"
+    return tuple(re.findall(r'"([a-z-]+)"', m.group(1)))
 
 
 class F6_Step4FailClosed(unittest.TestCase):
@@ -145,9 +159,18 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                                          "${CLAUDE_PLUGIN_ROOT}/scripts/review/build-verify.sh",
                                          "${CLAUDE_PLUGIN_ROOT}/scripts/lib/context.sh"],
             "skills/create-feature-plan/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
-            "skills/review-synthesis/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
-            "skills/brainstorm/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
-            "skills/implement/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py"],
+            # The two persistence skills reach `review-verdict.py` THROUGH `persist-verdict.sh` now,
+            # so the bare-token reference to assert is the script they actually invoke. Asserting the
+            # old one would pass on a stale prose mention while the executed path went unchecked.
+            "skills/review-synthesis/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh"
+            ],
+            "skills/brainstorm/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh"
+            ],
+            "skills/implement/SKILL.md": [
+                "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh"
+            ],
             "skills/codex-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
             "skills/gemini-review/SKILL.md": ["${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"],
         }
@@ -157,10 +180,52 @@ class COREDEV2504_PluginRootConvention(unittest.TestCase):
                 self.assertIn(ref, src, f"COREDEV-2504: {rel} lost the bare-token reference {ref!r}")
 
     def test_codex_review_pty_timeout_is_1200(self):
-        # COREDEV-2504 medium: the two codex-review pty caps must be 1200s (xhigh survives), not 600.
+        # COREDEV-2504 medium: every codex-review pty cap must be 1200s (xhigh survives), not 600.
+        # One of the two caps moved into `capture-codex-review.sh` when the capture recipe was
+        # extracted (COREDEV-2642), so counting occurrences in the SKILL alone would now pass while
+        # the cap that actually governs a gate round went unchecked. Assert BOTH homes.
         src = _read("skills/codex-review/SKILL.md")
-        self.assertEqual(src.count("--timeout 1200"), 2, "codex-review must use --timeout 1200 (x2)")
-        self.assertNotIn("--timeout 600", src, "codex-review must not keep the 600s cap that SIGTERMs xhigh")
+        helper = _read("scripts/review/capture-codex-review.sh")
+        isolated = _read("scripts/review/isolated-codex-review.sh")
+        audit = _read("scripts/review/audit-codex.sh")
+        self.assertIn(
+            "--timeout 1200", audit,
+            "the audit wrapper must keep the 1200s cap",
+        )
+        self.assertIn(
+            'capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1200', src,
+            "the capture recipe must pass the 1200s cap to the helper",
+        )
+        self.assertRegex(
+            helper, r'TIMEOUT="\$\{\d+-1200\}"',
+            "the helper's default cap must be 1200s (the operand INDEX is not pinned — it moved when "
+            "the plan operand was added, and pinning it made this cell fail for an unrelated reason)",
+        )
+        # The cap now threads capture-codex -> isolated-codex-review.sh -> pty-capture (COREDEV-2642, the
+        # codex arm gained the gemini arm's isolation). Assert it is HANDED to the isolation harness and
+        # that the harness PASSES it to pty-capture — the pty cap that governs a gate round lives there.
+        self.assertIn(
+            'isolated-codex-review.sh" \\\n    "${CODEX_TRANSCRIPT}.prompt" "$CODEX_TRANSCRIPT" "$TIMEOUT" "$PLAN"',
+            helper, "the helper must hand its cap to the codex isolation harness",
+        )
+        self.assertRegex(
+            isolated, r'TIMEOUT="\$\{\d+:-1200\}"',
+            "the codex isolation harness must default the cap to 1200s",
+        )
+        self.assertIn(
+            '--timeout "$TIMEOUT"', isolated,
+            "the codex isolation harness must pass its cap through to pty-capture",
+        )
+        for label, text in (("skill", src), ("helper", helper),
+                            ("isolation harness", isolated), ("audit wrapper", audit)):
+            self.assertNotIn(
+                "--timeout 600", text,
+                f"codex-review {label} must not keep the 600s cap that SIGTERMs xhigh",
+            )
+            self.assertNotIn(
+                "{4-600}", text,
+                f"codex-review {label} must not default to the 600s cap",
+            )
 
 
 class F13_CFRStateMachine(unittest.TestCase):
@@ -218,8 +283,6 @@ class B7_CFRProtocolConsistency(unittest.TestCase):
             self.assertIn("dismiss", low, f"B7: {rel} must name the human-dismissal terminal")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class COREDEV2583_DocDefects(unittest.TestCase):
@@ -252,9 +315,11 @@ class COREDEV2583_DocDefects(unittest.TestCase):
         # `default` is NOT in the runtime table; an earlier draft of this plan proposed adding it.
         self.assertIn("no** `default` alias", _read("CLAUDE.md"))
 
-    def test_b_claude_md_documents_the_mandatory_effort_pin(self):
+    def test_b_claude_md_documents_the_effort_floor(self):
         claude_md = _read("CLAUDE.md")
-        self.assertIn("`effort: xhigh`", claude_md)
+        self.assertIn("**`effort:` is a FLOOR, not a pin**", claude_md)
+        self.assertIn("assets omit `effort:` and **inherit** the session level", claude_md)
+        self.assertIn("CI rejects any pin below `xhigh`; `xhigh`/`max` are legal", claude_md)
         self.assertIn("CLAUDE_CODE_EFFORT_LEVEL", claude_md,
                       "the honest limit (the env var outranks frontmatter) must be stated")
 
@@ -281,121 +346,233 @@ class COREDEV2583_DocDefects(unittest.TestCase):
                          "agent bodies must not teach from a superseded model id")
 
 
-class COREDEV2602_AgentOutputStyle(unittest.TestCase):
-    """§13 Agent Output Style — per-rule assertions are ROW-scoped; per-contract are SECTION-scoped.
+class COREDEV2605_Section13Narrowing(unittest.TestCase):
+    """§13 Agent Output Style, narrowed to client-facing surfaces (COREDEV-2605).
 
-    The two are NOT interchangeable. A section-scoped per-rule assertion false-passes, because a
-    rule's marker phrase also occurs in the precedence clause and elsewhere in §13 — that was the
-    round-7 defect. Row scoping is what makes a deleted disposition detectable.
+    §13 now carries a four-column SCOPE TABLE that binds each surface to its producer and to a
+    repository ANCHOR. The anchor's PATH is pinned by equality to a canonical map; only its LINE is
+    resolution-driven. That split is deliberate: pinning the whole anchor would make the resolution
+    logic untestable, and pinning nothing lets a decoy file satisfy every check while the surface is
+    silently redirected off its canonical producer.
     """
 
+    #: (surface_id, producer_id, scope, canonical path, fingerprint the anchored section must contain).
+    #: The fingerprints are TEST-ONLY metadata — they never ship inside AGENT_CONTRACTS.md — and each
+    #: is UNIQUE to its surface, because four `out` rows once shared a generic `## Output Format` and a
+    #: security<->concurrency swap was therefore accepted by the gate.
+    SURFACES = (
+        ("verdict-report", "swift-reviewer", "in", "agents/swift-reviewer.md", "### Verdict:"),
+        ("brainstorm-summary", "brainstorm", "in", "skills/brainstorm/SKILL.md", "## Step 8: Summary for Approval"),
+        ("implement-wrapup", "implement", "in", "skills/implement/SKILL.md", "## Phase 6: Wrap Up"),
+        ("pr-review-report", "pr-review", "in", "skills/pr-review/SKILL.md", "## Step 4: Compile the Final Report"),
+        ("security-findings", "security-reviewer", "out", "agents/security-reviewer.md", "## Security Review"),
+        ("concurrency-findings", "concurrency-reviewer", "out", "agents/concurrency-reviewer.md", "## Correctness & Concurrency Review"),
+        ("ux-perf-findings", "ux-perf-reviewer", "out", "agents/ux-perf-reviewer.md", "## Performance & UX Review"),
+        ("accessibility-findings", "accessibility-auditor", "out", "agents/accessibility-auditor.md", "## Accessibility Audit"),
+        ("prompt-safety-findings", "prompt-review", "out", "agents/prompt-review.md", "## Structured Findings (orchestrator handoff)"),
+    )
+
+    CLASSIFIERS = ("**Adapted**", "**Adopted**", "**Restated positively**")
+
     # --- extraction helpers: read the artifact, never restate expectations ------------------
+
+    def _doc(self):
+        return _read("AGENT_CONTRACTS.md")
+
     def _section13(self):
-        text = _read("AGENT_CONTRACTS.md")
-        start = text.index("## 13. Agent Output Style")
-        end = text.index("## Cross-references", start)
-        return text[start:end]
+        t = self._doc()
+        start = t.index("## 13. Agent Output Style")
+        return t[start:t.index("## 14.", start)]
 
-    def _rows(self):
-        """rule number -> its single disposition row.
+    def _section14(self):
+        t = self._doc()
+        start = t.index("## 14. Blocked Subagent Handoff Contract")
+        return t[start:t.index("## Cross-references", start)]
 
-        §13's table is `| # | Rule | Disposition |` — three columns, four pipes. Derive the shape
-        from the header rather than hardcoding a count, so a future column cannot silently make
-        every row invisible and turn this whole class into a no-op.
+    @staticmethod
+    def _fence_state(lines):
+        """Yield (line, inside_fence) with CommonMark-ish fence tracking.
+
+        A delimiter is a LINE whose first non-whitespace run is >= 3 backticks or tildes, indented at
+        most three spaces; a closer must use the same character. Inline triple-backticks in prose are
+        NOT delimiters — `agents/swift-reviewer.md` contains several, well before its real fence, and a
+        substring-based scanner inverts the state and rejects the clean document.
         """
-        lines = self._section13().split("\n")
-        header = next(l for l in lines if l.startswith("| # |"))
-        ncols = header.count("|")
-        rows = {}
-        for line in lines:
-            m = re.match(r"^\| (\d+) \|", line)
-            if m and line.count("|") == ncols:
-                self.assertNotIn(int(m.group(1)), rows,
-                                 f"rule {m.group(1)} has more than one disposition row")
-                rows[int(m.group(1))] = line
+        fence = None
+        for ln in lines:
+            stripped = ln.lstrip(" ")
+            indent = len(ln) - len(stripped)
+            m = re.match(r"^(`{3,}|~{3,})", stripped) if indent <= 3 else None
+            if m:
+                ch = m.group(1)[0]
+                if fence is None:
+                    fence = ch
+                    yield ln, True          # the opener itself is inside
+                    continue
+                if ch == fence:
+                    fence = None
+                    yield ln, True
+                    continue
+            yield ln, fence is not None
+
+    def _scope_rows(self):
+        """FAIL-CLOSED parser for the four-column scope table.
+
+        Raises on a malformed or unrecognised row rather than skipping it — `_rows` below matches
+        numbered rule rows only and, given a scope table, silently returned the rules instead.
+        """
+        rows = []
+        seen_header = False
+        for line, inside in self._fence_state(self._section13().split("\n")):
+            s = line.strip()
+            if inside:
+                continue
+            if not s.startswith("|"):
+                if seen_header and rows:
+                    break          # the scope table ended; the rules table is NOT ours to parse
+                continue
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if not seen_header:
+                if cells[:1] == ["`surface_id`"]:
+                    seen_header = True
+                continue
+            if set("".join(cells)) <= set("-: "):
+                continue
+            if len(cells) != 4:
+                raise ValueError(f"scope row must have exactly 4 cells, got {len(cells)}: {s}")
+            sid, pid, scope, anchor = (c.strip("`") for c in cells)
+            if scope not in ("in", "out"):
+                raise ValueError(f"scope must be in/out, got {scope!r}")
+            if ":" not in anchor:
+                raise ValueError(f"anchor must be path:line, got {anchor!r}")
+            rows.append((sid, pid, scope, anchor))
+        if not rows:
+            raise ValueError("no scope rows parsed — the table is missing or malformed")
         return rows
 
-    # --- the section exists and is complete -------------------------------------------------
-    def test_section_13_exists_before_cross_references(self):
-        text = _read("AGENT_CONTRACTS.md")
-        self.assertIn("## 13. Agent Output Style", text)
-        self.assertLess(text.index("## 13. Agent Output Style"),
-                        text.index("## Cross-references"))
+    def _rows(self):
+        """rule number -> its single disposition row."""
+        out = {}
+        for line in self._section13().split("\n"):
+            m = re.match(r"^\|\s*(\d+)\s*\|", line)
+            if m:
+                out[int(m.group(1))] = line
+        return out
+
+    # --- the scope table --------------------------------------------------------------------
+
+    def test_scope_table_is_the_exact_nine_triples(self):
+        got = {(s, p, sc) for s, p, sc, _ in self._scope_rows()}
+        want = {(s, p, sc) for s, p, sc, _, _ in self.SURFACES}
+        self.assertEqual(want, got, "the scope table must carry exactly the nine approved triples")
+
+    def test_scope_rows_are_duplicate_free(self):
+        ids = [s for s, _, _, _ in self._scope_rows()]
+        self.assertEqual(len(ids), len(set(ids)), "duplicate surface_id in the scope table")
+
+    def test_in_set_is_exact_and_DISJOINT_from_valid_agents(self):
+        """Positive allowlist + empty intersection — NOT equality with the tuple (§4.1, round 1).
+
+        Equality was considered and rejected: it couples §13 to every future captured specialist, so
+        adding a harmless one would force prose churn even though the positive `in` allowlist already
+        puts it out of scope. Disjointness catches the change that actually matters — `swift-reviewer`
+        joining VALID_AGENTS while still named `in` — without that coupling.
+
+        This distinction is not academic: the first version of this gate asserted equality, and the
+        M1p positive case (add an unrelated captured specialist; the gate must still PASS) failed.
+        """
+        rows = self._scope_rows()
+        ins = {p for _, p, sc, _ in rows if sc == "in"}
+        outs = {p for _, p, sc, _ in rows if sc == "out"}
+        valid = set(_valid_agents())
+        self.assertEqual({"swift-reviewer", "brainstorm", "implement", "pr-review"}, ins,
+                         "the `in` set is an exact positive allowlist of four surfaces")
+        self.assertEqual(set(), ins & valid,
+                         "an `in` producer is also a captured reviewer — the dangerous change")
+        self.assertLessEqual(outs, valid,
+                            "every `out` producer must be a real captured reviewer")
+
+    def test_anchor_paths_are_pinned_to_their_canonical_producer(self):
+        """Step 0. Without this a decoy file carrying one heading and one fingerprint passes every
+        other check while the surface is redirected off its canonical producer."""
+        canonical = {s: path for s, _, _, path, _ in self.SURFACES}
+        for sid, _, _, anchor in self._scope_rows():
+            with self.subTest(surface=sid):
+                self.assertEqual(canonical[sid], anchor.rsplit(":", 1)[0])
+
+    def test_anchor_resolves_to_the_nearest_enclosing_real_heading_of_its_fingerprint(self):
+        """Steps 1-5, in order, for every row.
+
+        The anchor must BE the nearest enclosing real heading of the fingerprint — not merely some
+        heading whose section happens to contain it. A file's sole H1 encloses everything to EOF and
+        would otherwise pass.
+        """
+        fp = {s: f for s, _, _, _, f in self.SURFACES}
+        for sid, _, _, anchor in self._scope_rows():
+            with self.subTest(surface=sid):
+                path, line = anchor.rsplit(":", 1)
+                lines = _read(path).split("\n")
+                marked = list(self._fence_state(lines))
+                idx = int(line) - 1
+                self.assertTrue(marked[idx][0].startswith("#"), f"{anchor} is not a heading")
+                self.assertFalse(marked[idx][1], f"{anchor} is inside a fence")
+                # step 3: content search of the CURRENT file, exactly one occurrence
+                hits = [i for i, (ln, _) in enumerate(marked) if fp[sid] in ln]
+                self.assertEqual(1, len(hits), f"{fp[sid]!r} must occur exactly once in {path}")
+                # step 4: walk UP from the fingerprint to the first real heading
+                nearest = None
+                for i in range(hits[0], -1, -1):
+                    ln, inside = marked[i]
+                    if ln.startswith("#") and not inside:
+                        nearest = i
+                        break
+                self.assertEqual(idx, nearest,
+                                 f"{anchor} is not the nearest enclosing real heading of {fp[sid]!r}")
+
+    # --- the rules --------------------------------------------------------------------------
 
     def test_exactly_ten_dispositions_one_row_each(self):
-        self.assertEqual(sorted(self._rows()), list(range(1, 11)))
+        self.assertEqual(list(range(1, 11)), sorted(self._rows()))
 
-    def test_every_rule_declares_an_explicit_disposition(self):
-        # A blanked or flipped Disposition cell must fail — asserting titles + markers alone
-        # would not catch it (round-8 finding).
-        expected = {1: "Adapted", 2: "Adapted", 3: "Adapted", 4: "Adapted", 5: "Adapted",
-                    6: "Adapted", 7: "Adopted", 8: "Adopted", 9: "Restated positively",
-                    10: "Adapted"}
-        rows = self._rows()
-        for n, disposition in expected.items():
+    def test_each_rule_carries_exactly_one_classifier(self):
+        """M3's differential depends on this: membership, never a fixed token per rule.
+
+        Pinning rule N to a particular classifier breaks the moment the narrowing legitimately changes
+        it — which §4.4 expressly permits for rules 1, 2, 3 and 5.
+        """
+        for n, row in self._rows().items():
             with self.subTest(rule=n):
-                self.assertIn(f"**{disposition}**", rows[n],
-                              f"rule {n} must declare `{disposition}` explicitly")
+                found = [c for c in self.CLASSIFIERS if c in row]
+                self.assertEqual(1, len(found), f"rule {n} must carry exactly one classifier, got {found}")
 
-    # --- per-rule markers: ROW-scoped ---------------------------------------------------------
-    def test_each_adapted_rule_carries_its_marker_in_its_own_row(self):
-        markers = {
-            1: "never reorder a mandated payload",
-            2: "keep their mandated single-line/schema shape",
-            3: "per the payload-region invariant",
-            4: "defer an in-scope finding out of the current array",
-            5: "never before a mandated result prefix",
-            6: "whoever runs the steps",
-            9: "cap, split, omit, or defer",
-            10: "payload, not preamble",
-        }
+    def test_rules_4_and_9_still_protect_the_consolidated_table(self):
+        """The narrowing removes the PARSER justification, not the CONTRACT one (codex, round 1)."""
         rows = self._rows()
-        for n, marker in markers.items():
+        for n in (4, 9):
             with self.subTest(rule=n):
-                self.assertIn(marker, rows[n],
-                              f"rule {n}'s marker must be literal IN ITS OWN ROW (row-scoped)")
+                self.assertIn("All Issues (Consolidated)", rows[n])
 
-    def test_parser_touching_rules_reference_the_invariant_by_name(self):
-        rows = self._rows()
-        # The approved plan requires 1, 2, 3, 5 AND 10 to reference it by name.
-        for n in (1, 2, 3, 5, 10):
-            with self.subTest(rule=n):
-                self.assertIn("payload-region invariant", rows[n])
+    # --- relocation -------------------------------------------------------------------------
 
-    # --- the invariant: SECTION-scoped --------------------------------------------------------
-    def test_payload_region_invariant_is_present_on_one_physical_line(self):
-        # One physical line by construction: a Markdown line break inside the marker made exact
-        # matching fail against a CORRECT document in round 10.
-        marker = "Within it, nothing but detail fields and blank lines."
-        lines = [l for l in self._section13().split("\n") if marker in l]
-        self.assertTrue(lines, "the invariant marker must appear literally on a single line")
+    def test_payload_region_invariant_moved_to_section_5_verbatim(self):
+        t = self._doc()
+        s5 = t[t.index("## 5. Code Review Pipeline"):t.index("## 6. CI / GitHub Actions Pinning")]
+        self.assertIn("The payload region is the span from the `Status:` line to the final fenced JSON block.", s5)
+        self.assertIn("Within it, nothing but detail fields and blank lines.", s5)
+        self.assertNotIn("The payload region is the span", self._section13(),
+                         "the invariant must MOVE, not be copied")
 
-    def test_invariant_covers_non_prose_payloads_too(self):
-        # It breaks on ANY non-detail content, not only prose — a stray VERDICT: included.
-        self.assertIn("VERDICT:", self._section13())
+    def test_section_14_exists_and_owns_the_blocked_prefix(self):
+        s14 = self._section14()
+        self.assertIn("BLOCKED — <reason>", s14)
+        self.assertNotIn("BLOCKED — <reason>", self._section13())
 
-    # --- the precedence clause: SECTION-scoped, all six contracts ------------------------------
-    def test_precedence_clause_names_all_six_contracts(self):
-        section = self._section13()
-        for contract in ("JSON findings array", "`Status:`", "Remaining", "`VERDICT:`",
-                         "final fenced JSON block", "BLOCKED"):
-            with self.subTest(contract=contract):
-                self.assertIn(contract, section)
-
-    def test_precedence_clause_states_the_contract_wins(self):
-        self.assertIn("the contract wins and the rule yields", self._section13())
-
-    def test_remaining_is_marked_safety_information(self):
-        self.assertIn("never a list to shorten", self._section13())
-
-    # --- attribution -------------------------------------------------------------------------
-    def test_attribution_names_the_source_licence_and_pinned_commit(self):
-        section = self._section13()
-        self.assertIn("i-have-adhd", section)
-        self.assertIn("MIT", section)
-        self.assertIn("07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba", section,
-                      "pin the upstream commit so the adaptation stays auditable")
-
+    def test_section_13_keeps_only_a_precedence_pointer(self):
+        s13 = self._section13()
+        self.assertIn("§5", s13)
+        self.assertIn("§14", s13)
+        self.assertNotIn("Blocker Description", s13,
+                         "the six-contract enumeration belongs to §5, not §13")
 
 class COREDEV2603_WorktreeOrdering(unittest.TestCase):
     """The worktree-BEFORE-plan ordering must stay documented (COREDEV-2603 item C1).
@@ -528,8 +705,365 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
 
     def test_the_wrapper_guards_against_a_truncated_prompt(self):
         """A guard-only prompt wasted two review rounds; the reviewer's reply read like a wording
-        problem rather than the read-after-truncate bug it was."""
+        problem rather than the read-after-truncate bug it was.
+
+        Both halves moved into the SHARED `stage-prompt.py` when the two arms stopped duplicating a
+        `sed` pipeline and an inline guard-prepend (PR #63 recheck). The wrapper now passes the floor
+        and the helper enforces it, so this asserts the rule at whichever layer owns it — naming the
+        layer explicitly rather than letting the check silently pass on a file that no longer decides.
+        """
         with open(self.WRAPPER, encoding="utf-8") as fh:
             src = fh.read()
-        self.assertIn("1000", src, "must refuse to launch on a truncated prompt")
-        self.assertIn("read back empty", src, "must assert the prompt body was read before writing")
+        self.assertIn("--min-bytes 1000", src,
+                      "the wrapper must still demand the 1000-byte floor from the staging helper")
+        helper = _read("scripts/review/stage-prompt.py")
+        self.assertIn("assembled prompt is only", helper,
+                      "the staging helper must refuse a truncated assembled prompt")
+        self.assertIn("refusing to write a guard-only prompt", helper,
+                      "the staging helper must refuse a guard-only prompt (read before write)")
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class DeepReviewP2Fixes(unittest.TestCase):
+    """Two findings from the exact-head deep review, each executed rather than eyeballed."""
+
+    def test_codex_audit_allocator_is_portable_and_substitutes_its_template(self):
+        """`mktemp -t codex-audit` exits 1 on GNU: "too few X's in template".
+
+        The Linux CI job never executes this documentation recipe, so it stayed green while the recipe
+        could not run on the platform CI uses. `-t name.XXXXXX` satisfies GNU but BSD leaves the X's
+        LITERAL and appends its own suffix, so the assertion below is on the produced NAME, not just on
+        the template: a form that only half-works produces a path still containing `XXXXXX`.
+        """
+        # The allocator moved into `audit-codex.sh` when the audit recipe became one granted command
+        # (deep review, P1) — read it where it now lives, not where it used to.
+        line = [
+            item
+            for item in _read("scripts/review/audit-codex.sh").splitlines()
+            if item.startswith("AUDIT_OUT=")
+        ]
+        self.assertEqual(1, len(line), "expected exactly one audit allocator line")
+        allocator = line[0]
+        self.assertNotIn(
+            " -t ", allocator, "the BSD `-t` shorthand without a template is rejected by GNU mktemp"
+        )
+        self.assertRegex(allocator, r"X{6,}", "GNU mktemp requires at least six trailing X's")
+
+        result = subprocess.run(
+            ["bash", "-c", allocator + '\nprintf "%s" "$AUDIT_OUT"'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        produced = result.stdout.strip()
+        try:
+            self.assertTrue(os.path.isfile(produced), f"allocator produced no file: {produced!r}")
+            self.assertNotIn(
+                "XXXXXX",
+                os.path.basename(produced),
+                "the template was not substituted — this is the BSD `-t name.XXXXXX` half-fix",
+            )
+        finally:
+            if os.path.isfile(produced):
+                os.remove(produced)
+
+    def test_agy_arm_default_is_the_model_its_own_comment_names(self):
+        """The comment described a switch the code never made, for every round this branch ran.
+
+        Binding the two to each other is the point: either can be edited, but they cannot disagree.
+        """
+        source = _read("scripts/review/isolated-agy-review.sh")
+        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', source, re.M)
+        self.assertIsNotNone(match, "isolated-agy-review.sh has no MODEL default line")
+        default = match.group(1)
+        self.assertIn(
+            "Switched from gemini-3.1-pro to " + default,
+            source,
+            f"the default is {default!r} but the rationale above it names a different model",
+        )
+        self.assertNotEqual(
+            "gemini-3.1-pro-high",
+            default,
+            "this is the model the comment says failed to emit a parseable verdict in 5 of 6 rounds",
+        )
+
+    def test_agy_preflight_ping_is_allocated_per_run(self):
+        """A shared `/tmp/agy-ping.txt` lets a dead CLI read as healthy.
+
+        The preflight decides whether the mandatory gate can run at all. With one shared path, a
+        preflight that dies before writing leaves the PREVIOUS run's `pong` in place and the next
+        reader calls the CLI available; two concurrent preflights also overwrite each other
+        (deep review, P2). Both surfaces that document it must allocate per run AND re-read the path
+        they allocated, never a re-derived name.
+        """
+        for rel in ("skills/gemini-review/SKILL.md", "AGENT_CONTRACTS.md"):
+            with self.subTest(file=rel):
+                source = _read(rel)
+                self.assertNotIn(
+                    "/tmp/agy-ping.txt",
+                    source,
+                    f"{rel} still documents a fixed shared preflight path",
+                )
+                if rel.startswith("skills/"):
+                    # The skill now calls the wrapper, which allocates and re-reads the path itself.
+                    self.assertIn(
+                        "scripts/review/preflight-agy.sh",
+                        source,
+                        f"{rel} must route the preflight through the granted wrapper",
+                    )
+                else:
+                    self.assertRegex(
+                        source,
+                        r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"',
+                        f"{rel} must allocate the ping path per run with a portable template",
+                    )
+                    self.assertIn(
+                        '"$PING"',
+                        source,
+                        f"{rel} must pass and re-read the allocated path, not a re-derived name",
+                    )
+        # And the wrapper itself must do the allocating it now owns.
+        wrapper = _read("scripts/review/preflight-agy.sh")
+        self.assertRegex(wrapper, r'PING="\$\(mktemp "\$\{TMPDIR:-/tmp\}/agy-ping\.X{6,}"\)"')
+        self.assertIn('grep -qi pong "$PING"', wrapper)
+
+    def test_gemini_skill_quotes_the_model_the_wrapper_actually_defaults_to(self):
+        """The skill QUOTES the wrapper's default line, so the two can drift silently.
+
+        They did: the script moved to `gemini-3.6-flash-high` while the skill still quoted
+        `gemini-3.1-pro-high` and told operators to fall back by editing `settings.json` — a route the
+        wrapper makes inert, because it always passes `--model` (deep review, codex inline). Bind the
+        quotation to the source rather than pinning either to a literal.
+        """
+        script = _read("scripts/review/isolated-agy-review.sh")
+        skill = _read("skills/gemini-review/SKILL.md")
+        match = re.search(r'^MODEL="\$\{MODEL:-([^}]+)\}"$', script, re.M)
+        self.assertIsNotNone(match)
+        default = match.group(1)
+
+        self.assertIn(
+            'MODEL="${MODEL:-' + default + '}"',
+            skill,
+            "the skill quotes a different wrapper default than the wrapper has",
+        )
+        self.assertIn(
+            "(binary `agy`, model `" + default + "`)",
+            skill,
+            "the skill's frontmatter description names a different model than the wrapper runs",
+        )
+        self.assertNotIn(
+            "temporarily edit settings.json and restore after",
+            skill,
+            "settings.json cannot affect a wrapper round — the wrapper always passes --model",
+        )
+
+
+class DuplicatedGrammarsAgree(unittest.TestCase):
+    """`pty-capture.py` copies two grammars from `review-verdict.py`; the copies must not drift.
+
+    The copy is deliberate: `pty-capture.py` runs on the blocking hook path and imports nothing local,
+    so it cannot share a module with the verdict writer. But a copy that drifts becomes a SECOND,
+    softer authority — the preflight would accept a transcript the writer later rejects, which is
+    exactly the wasted-round defect the preflight exists to prevent (PR #63 recheck, P2). Asserting the
+    pattern text is identical is what keeps "duplicated" from meaning "diverged".
+    """
+
+    def test_the_launch_record_and_leaf_grammars_are_identical(self):
+        capture = _read("scripts/pty-capture.py")
+        verdict = _read("scripts/review-verdict.py")
+
+        # Both must derive the run-id length from the same value.
+        for source, label in ((capture, "pty-capture"), (verdict, "review-verdict")):
+            self.assertIn("_RUN_ID_HEX_LENGTH = 16 * 2", source,
+                          f"{label} changed the run-id length; the other file must change with it")
+
+        # The launch-record grammar: 32 hex digits, a space, the reviewer, a newline. The reviewer
+        # field is what makes the gate's identity check read ALLOCATOR-ATTESTED evidence instead of a
+        # filename the caller supplies — a rename defeated the two-arm quorum in both directions
+        # without it (PR #63 recheck, P1). Both files must parse the same two fields.
+        for source, name in ((capture, "_LAUNCH_RECORD_RE"), (verdict, "_LAUNCH_RECORD")):
+            self.assertIn(r'rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"', source,
+                          f"{name} no longer records/parses the reviewer field")
+            self.assertIn(r'rb"\A([0-9a-f]{"', source,
+                          f"{name} no longer anchors the run id")
+
+    def test_the_allocator_writes_the_reviewer_into_the_launch_record(self):
+        """The record is the evidence the identity check reads, so it must actually contain it."""
+        capture = _read("scripts/pty-capture.py")
+        self.assertIn('_write_all(fd, (run_id + " " + reviewer + "\\n").encode("ascii"))', capture,
+                      "the allocator no longer records the reviewer beside the run id")
+        verdict = _read("scripts/review-verdict.py")
+        self.assertIn(
+            '_run_id, attested, _info, problem = _read_launch_record(transcript + ".launch")',
+            verdict,
+            "the identity check no longer reads the allocator's record",
+        )
+        # ONE parser for the record, not one per field. The freshness check reads the run id and the
+        # identity check reads the reviewer, and they briefly had a copy each — so the grammar had to
+        # be tightened twice, which is the divergence-between-arms defect the shared staging helpers
+        # exist to prevent, in the file that adjudicates them.
+        self.assertEqual(1, verdict.count("_LAUNCH_RECORD.fullmatch("),
+                         "review-verdict.py must parse the launch record in exactly one place")
+        self.assertNotIn(
+            'match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))\n        if match is None:\n            continue',
+            verdict,
+            "the identity check still skips a transcript whose FILENAME is not allocator-shaped — "
+            "that is the rename bypass",
+        )
+
+        # The allocator leaf grammar: the round is `r[0-9]+` in BOTH, which is the precondition the
+        # allocator's numeric-round check exists to guarantee.
+        for source, label in ((capture, "pty-capture"), (verdict, "review-verdict")):
+            self.assertIn(r"r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-", source,
+                          f"{label}'s allocator-leaf grammar drifted from the other's")
+
+    def test_the_allocator_enforces_the_round_shape_the_leaf_grammar_requires(self):
+        """The two must agree in DIRECTION too: a round the allocator accepts must be one the leaf
+        grammar can match, or the review is spent on a transcript that can never validate."""
+        capture = _read("scripts/pty-capture.py")
+        self.assertIn('_ROUND_COMPONENT_RE = re.compile(r"[0-9]+")', capture,
+                      "the allocator no longer constrains the round to digits")
+        # The rule lives in a NAMED shared validator, not inline in `allocate_transcript` — M1.5/M1.8
+        # bind the allocator's decision to the validators so production logic cannot diverge from them.
+        self.assertIn("def is_valid_round_component(", capture,
+                      "the numeric-round rule must be a named shared validator, not inline logic")
+        self.assertIn("\"round\": is_valid_round_component,", capture,
+                      "the round validator is defined but the allocator never applies it")
+
+
+class ContainedOperandsAreTheOnesUsed(unittest.TestCase):
+    """Every entrypoint that validates an operand must pass ON what the validator returned.
+
+    THE FINDING (PR #63 recheck, P1). `containment.py` emits the resolved path precisely so the caller
+    builds from THAT — its own docstring says so, and `audit-codex.sh` follows it ("from the SNAPSHOT
+    output rather than from the caller's argv"). The two plan-state wrappers instead sent the output to
+    `/dev/null` and passed the caller's original operand to `review-verdict.py`, which resolves and
+    OPENS it: the string that was proved contained and the string that was opened were two different
+    things, so an alternate spelling — or a `docs/planning` swapped for a symlink after the check —
+    reached an object containment never saw.
+
+    Asserted structurally because the divergence has no single-process observable: with the `--under`
+    base left physical, every accepted alternate spelling resolves to the same file, and what remains is
+    a post-validation swap, which cannot be staged deterministically. The reproducible half of this
+    finding — a symlinked ANCESTOR between validation and the read — is proven end-to-end in
+    `test_plan_operand_containment.ContainedReadWalksEveryComponent`.
+    """
+
+    WRAPPERS = (
+        ("scripts/review/snapshot-plan.sh", "PLAN_CONTAINED", "$PLAN"),
+        ("scripts/review/persist-verdict.sh", "PLAN_PATH", "$PLAN_PATH"),
+    )
+
+    def test_neither_plan_wrapper_discards_the_containment_result(self):
+        for path, captured, _raw in self.WRAPPERS:
+            source = _read(path)
+            self.assertIn("--absolute", source,
+                          f"{path} no longer asks containment for the resolved path")
+            self.assertNotIn('-- "$PLAN" >/dev/null', source,
+                             f"{path} discards the containment result again")
+            self.assertNotIn('-- "$PLAN_PATH" >/dev/null', source,
+                             f"{path} discards the containment result again")
+            self.assertIn(f'{captured}="$(python3', source,
+                          f"{path} does not capture the validated path")
+
+    def test_the_captured_path_is_what_reaches_review_verdict(self):
+        snapshot = _read("scripts/review/snapshot-plan.sh")
+        self.assertIn('review-verdict.py" snapshot --plan "$PLAN_CONTAINED"', snapshot,
+                      "snapshot-plan.sh passes an operand other than the validated one")
+        # `persist-verdict.sh` REPLACES `PLAN_PATH` rather than capturing into a new name, so there is
+        # no unvalidated spelling left in scope for a later line to reach for. Assert the absence, which
+        # is the property — a second variable would let both survive.
+        persist = _read("scripts/review/persist-verdict.sh")
+        self.assertNotIn("PLAN_CONTAINED", persist,
+                         "persist-verdict.sh kept a second name, so the raw operand is still in scope")
+
+    def test_the_shared_reader_is_the_only_descriptor_walk(self):
+        """The walk lived in `snapshot-operands.py` alone while `bind-prompt.py` kept a leaf-only read.
+
+        One implementation, in `containment.py` beside the validator — the same "a rule that lives in
+        one script is a rule the next entrypoint will not have" failure this module keeps recording.
+        """
+        self.assertIn("def read_contained(", _read("scripts/review/containment.py"),
+                      "the shared descriptor walk is gone from containment.py")
+        for path in ("scripts/review/snapshot-operands.py", "scripts/review/bind-prompt.py"):
+            source = _read(path)
+            self.assertNotIn("O_DIRECTORY", source,
+                             f"{path} grew its own descriptor walk again")
+            self.assertIn("read_contained(", source,
+                          f"{path} no longer reads through the shared walk")
+
+
+class EveryShippedPythonIsByteCompiledOn39(unittest.TestCase):
+    """The 3.9 compile job protects an ENUMERATED list, so a new script joins it only if remembered.
+
+    `stage-prompt.py` did not (PR #63 recheck, P3), and the two py_compile invocations had drifted from
+    each other as well — the 3.9 job covered `cleanup_coredev_2619_leaks.py` and the default-Python job
+    did not. macOS ships 3.9.6 as `/usr/bin/python3` and the review CLIs run these scripts under it, so
+    an unlisted script is one whose 3.9 syntax nothing checks.
+
+    Enumeration is not the class. This derives the class — every tracked non-test `.py` under `scripts/`
+    — and requires both invocations to name all of it.
+    """
+
+    def _compile_lines(self) -> "list[str]":
+        lines = [line.strip() for line in _read(".github/workflows/plugin-ci.yml").splitlines()
+                 if line.strip().startswith("run: python3 -m py_compile")]
+        self.assertEqual(2, len(lines), "the two py_compile invocations moved or multiplied")
+        return lines
+
+    def test_both_invocations_cover_every_shipped_script(self):
+        import subprocess
+
+        tracked = subprocess.run(["git", "ls-files", "*.py"], cwd=str(_ROOT),
+                                 capture_output=True, text=True, check=True).stdout.split()
+        shipped = sorted(path for path in tracked
+                         if path.startswith("scripts/") and "/tests/" not in path)
+        self.assertTrue(shipped, "the tracked-script query found nothing — the derivation is broken")
+        for line in self._compile_lines():
+            for path in shipped:
+                self.assertIn(path, line, f"{path} is not byte-compiled by: {line[:80]}…")
+
+    def test_the_two_invocations_are_identical(self):
+        first, second = self._compile_lines()
+        self.assertEqual(first, second,
+                         "the default-Python and 3.9 compile jobs check different sets of files")
+
+
+class TheTwoStagingHelpersParseTheSameBindingGrammar(unittest.TestCase):
+    """`.plan` and `.promptsha256` have one producer, one consumer and one grammar.
+
+    Both are written by `bind-prompt.py` as `<64 hex>  <identity>\\n` and both are re-parsed by
+    `review-verdict.py` with `_PLAN_BINDING`. Their staging helpers each validated the record before
+    launching a 12-28 minute reviewer, and each originally took `fields[0]` — accepting a record
+    truncated to its digest and spending the round on evidence the verdict writer would reject.
+
+    The `.plan` case was reported and fixed first; the `.promptsha256` sibling was NOT swept and had to
+    be reported separately. This gate is the sweep: the three spellings must stay identical.
+    """
+
+    PATTERN = r'rb"\A([0-9a-f]{64})  (.+)\n\Z"'
+
+    def test_all_three_spell_the_binding_the_same_way(self):
+        for rel, name in (("scripts/review-verdict.py", "_PLAN_BINDING"),
+                          ("scripts/review/stage-bound-plan.py", "_PLAN_BINDING"),
+                          ("scripts/review/stage-prompt.py", "_PROMPT_BINDING")):
+            source = _read(rel)
+            self.assertIn(f"{name} = re.compile({self.PATTERN})", source,
+                          f"{rel}'s binding grammar drifted from the other two")
+
+    def test_neither_staging_helper_takes_only_the_first_field(self):
+        """The defect itself: `fields[0]` accepts a record with no identity at all.
+
+        Asserted against the ASSIGNMENT, not the bare token — both files explain the defect in a
+        comment that names `fields[0]`, and a token search matched the explanation rather than the
+        code. Grepping prose for a code property is the mistake this suite exists to catch elsewhere.
+        """
+        for rel in ("scripts/review/stage-bound-plan.py", "scripts/review/stage-prompt.py"):
+            source = _read(rel)
+            self.assertNotIn("expected = fields[0]", source, f"{rel} parses only the digest again")
+            self.assertIn("fullmatch(record_bytes)", source,
+                          f"{rel} no longer validates the complete record")

@@ -1,7 +1,6 @@
 ---
 name: create-feature-plan
 description: Scaffold a new FEATURE_NAME_PLAN.md under docs/planning/ using the project template.
-effort: xhigh
 ---
 
 # Create Feature Plan
@@ -78,7 +77,8 @@ Open questions, alternatives considered, lessons learned.
    ```
    `review-verdict.py write` auto-reads that sidecar and refuses to record an approval if the plan
    changed after the snapshot — so the synthesis step needs no `--reviewed-sha256` argument.
-3. Run `/gemini-review` and `/codex-review` on the plan before any code is written.
+3. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+   - /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 4. Incorporate reviewer feedback into the plan doc before the implementation batch begins. If you
    revise the plan in response to feedback, the reviews **and** the `snapshot` (step 2) must be **re-run**
    on the new bytes — an approval is only valid for the exact plan the reviewers saw (re-running

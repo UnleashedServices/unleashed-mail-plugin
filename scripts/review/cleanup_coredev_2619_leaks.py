@@ -1,0 +1,874 @@
+#!/usr/bin/env python3
+"""Remove only the closed COREDEV-2619 transcript-leak manifest.
+
+This is an intentionally one-shot release tool.  It never discovers deletion
+targets and it never derives a state root from HOME.  The maintainer must first
+verify the closed manifest against the real filesystem, then pass that exact
+state root explicitly with ``--state-root ... --apply``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import os
+import stat
+import sys
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+REGULAR_FILE = "regular file"
+
+
+@dataclass(frozen=True)
+class ManifestEntry:
+    relative_path: str
+    expected_type: str
+
+
+@dataclass(frozen=True)
+class FileDeletionReport:
+    attempted_relative_paths: Tuple[str, ...]
+    #: The subset actually UNLINKED by this run. Everything else in `attempted` was already absent.
+    #: Reported separately because printing the attempted count under the word "removed" claimed
+    #: deletions that never happened — on a wrong-but-canonically-named root, "removed 39 manifest
+    #: files" while removing nothing (PR #63 recheck, P2).
+    unlinked_relative_paths: Tuple[str, ...]
+    root_identity: Tuple[int, int]
+
+
+@dataclass(frozen=True)
+class CleanupReport:
+    attempted_relative_paths: Tuple[str, ...]
+    unlinked_relative_paths: Tuple[str, ...]
+    removed_directories: Tuple[str, ...]
+    #: The subset of `removed_directories` this run actually `rmdir`'d; the rest were already gone.
+    rmdired_directories: Tuple[str, ...]
+    root_identity: Tuple[int, int]
+
+
+class CleanupError(RuntimeError):
+    """The closed cleanup contract could not be completed safely."""
+
+
+# Closed output of the two identified runaway review runs (rounds 25 and 36).
+# Keep the expected object type beside every literal path: this is deliberately
+# not a filename family, prefix, suffix, regular expression, or discovered set.
+LEAK_MANIFEST = (
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt", REGULAR_FILE),
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.captureid", REGULAR_FILE),
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-codex-429f9c747d18a3f8bbe32656b947d884.txt.launch", REGULAR_FILE),
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt", REGULAR_FILE),
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.captureid", REGULAR_FILE),
+    ManifestEntry("38483bff6fb293c5b0f90254466c52bc06a785e7/COREDEV-9999r1-gemini-407dab25213096ed784af0b230e1f845.txt.launch", REGULAR_FILE),
+    ManifestEntry("4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt", REGULAR_FILE),
+    ManifestEntry("4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076/COREDEV-2619r1-gemini-25ec588d03bc3789.txt.launch", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.captureid", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-codex-0b4ee67fd1233a726932d81748fec7e3.txt.launch", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.captureid", REGULAR_FILE),
+    ManifestEntry("738b2f6174a7aed615fa597d3847744862d4d5f8/COREDEV-9999r1-gemini-55fa0328fa731a38b618702fd1180f6b.txt.launch", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.captureid", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-codex-96c2ca473f971e90f0855291e2528296.txt.launch", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.captureid", REGULAR_FILE),
+    ManifestEntry("9aa62bb321c69d0c52f62c9fcc86f13b005ee36a/COREDEV-9999r1-gemini-36c5cb831b7f164e5b0ee2934a72b789.txt.launch", REGULAR_FILE),
+    ManifestEntry("abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt", REGULAR_FILE),
+    ManifestEntry("abc/123r1-gemini-ffcfde63ee0d2fb407da00e6c927dd50.txt.launch", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.captureid", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-codex-b18361e095b72d10f336be81e5e40f9e.txt.launch", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.captureid", REGULAR_FILE),
+    ManifestEntry("bcda793b5bdcbb9dcb2592246b9a9003385e9e38/COREDEV-9999r1-gemini-ebaee05047f913a2cb91d58d98ae19bc.txt.launch", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.captureid", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-codex-88708cc3e0afb43207fe39196d5058af.txt.launch", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.captureid", REGULAR_FILE),
+    ManifestEntry("df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e/COREDEV-9999r1-gemini-c3c1095a91cdb0527230e6d5a38639be.txt.launch", REGULAR_FILE),
+    ManifestEntry("h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt", REGULAR_FILE),
+    ManifestEntry("h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.captureid", REGULAR_FILE),
+    ManifestEntry("h1/t1rr1-n1-d535d109b8cc53426b150f67546cc59a.txt.launch", REGULAR_FILE),
+    ManifestEntry("testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt", REGULAR_FILE),
+    ManifestEntry("testhash/COREDEV-9999r1-codex-d4053b6b18a8dcb719bffb5a7f1118f7.txt.launch", REGULAR_FILE),
+)
+
+
+# The distinct manifest parents, kept literal and already ordered deepest first
+# (all nine happen to be at the same depth, with bytewise order as the tie-break).
+EMPTY_DIRECTORY_MANIFEST = (
+    "38483bff6fb293c5b0f90254466c52bc06a785e7",
+    "4c5e3e4c560819f8de798b1a20f7959b037b0de888dc89e561ad3840a3f68076",
+    "738b2f6174a7aed615fa597d3847744862d4d5f8",
+    "9aa62bb321c69d0c52f62c9fcc86f13b005ee36a",
+    "abc",
+    "bcda793b5bdcbb9dcb2592246b9a9003385e9e38",
+    "df56ce6d9d5c6b55e47e23f1db46fdec52ed2f6e",
+    "h1",
+    "testhash",
+)
+
+
+def _identity(path: Path) -> Tuple[int, int]:
+    metadata = os.stat(str(path), follow_symlinks=False)
+    return metadata.st_dev, metadata.st_ino
+
+
+#: The allocator publishes transcripts at `<base>/unleashed-mail/review-transcripts/<repo-hash>/…`, so
+#: a genuine state root is the `review-transcripts` directory itself. Manifest entries are relative to
+#: it and begin with the repo-hash component.
+_STATE_ROOT_NAME = "review-transcripts"
+_STATE_ROOT_PARENT_NAME = "unleashed-mail"
+
+
+def _looks_like_transcript_root(root: Path) -> bool:
+    return root.name == _STATE_ROOT_NAME and root.parent.name == _STATE_ROOT_PARENT_NAME
+
+
+def _canonical_state_root(state_root: Path) -> Tuple[Path, Tuple[int, int]]:
+    supplied = Path(state_root)
+    try:
+        supplied_metadata = os.lstat(str(supplied))
+    except OSError as error:
+        raise CleanupError("state root is unavailable: " + str(supplied)) from error
+    if not stat.S_ISDIR(supplied_metadata.st_mode):
+        raise CleanupError("state root is not a real directory: " + str(supplied))
+
+    try:
+        canonical = supplied.resolve(strict=True)
+    except OSError as error:
+        raise CleanupError("state root cannot be resolved: " + str(supplied)) from error
+    return canonical, _identity(canonical)
+
+
+def _require_bound_state_root(root: Path) -> None:
+    """Refuse a root that is neither the canonical transcripts directory nor holds any manifest entry.
+
+    RESUMABILITY MADE "EVERYTHING IS ABSENT" INDISTINGUISHABLE FROM "WRONG DIRECTORY" (PR #63 recheck,
+    P2). `allow_absent=True` is what lets a half-finished `--apply` be re-run: an entry already gone is
+    the goal state, not a failure. But it also meant that pointing `--state-root` at ANY existing
+    directory — a mistyped path, an empty scratch dir — satisfied all 39 files and all nine directories
+    vacuously, so the run exited 0 and reported the leak removed while the real transcripts sat
+    untouched somewhere else. A cleanup that cannot fail cannot be trusted when it passes.
+
+    The binding is deliberately two-sided so resumability survives:
+      * a root that IS `…/unleashed-mail/review-transcripts` is accepted whatever its contents — that
+        is the canonical location, and a completed cleanup legitimately leaves it empty; otherwise
+      * a differently-named root must still contain at least one manifest entry, which is evidence it
+        is the tree the manifest describes (this keeps the tests' throwaway fixtures working, and a
+        genuinely resumable non-canonical root always has entries left to remove).
+    Only the case with neither piece of evidence is refused, and it is refused before any deletion.
+    """
+    if _looks_like_transcript_root(root):
+        return
+    for entry in LEAK_MANIFEST:
+        if root.joinpath(*_pure_relative_path(entry.relative_path).parts).exists():
+            return
+    for relative_path in EMPTY_DIRECTORY_MANIFEST:
+        if root.joinpath(*_pure_relative_path(relative_path).parts).exists():
+            return
+    raise CleanupError(
+        "refusing to report a clean run for an unbound state root: " + str(root) + " is not "
+        + _STATE_ROOT_PARENT_NAME + "/" + _STATE_ROOT_NAME + " and contains no manifest entry, so "
+        "'everything already removed' would be vacuously true. Pass the allocator's "
+        "review-transcripts directory."
+    )
+
+
+def _pure_relative_path(value: str) -> PurePosixPath:
+    relative = PurePosixPath(value)
+    if (
+        not value
+        or relative.is_absolute()
+        or relative.as_posix() != value
+        or any(part in ("", ".", "..") for part in relative.parts)
+    ):
+        raise CleanupError("manifest path is not canonical and relative: " + repr(value))
+    return relative
+
+
+def _resolve_beneath(root: Path, relative_path: str) -> Path:
+    relative = _pure_relative_path(relative_path)
+    candidate = root.joinpath(*relative.parts)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise CleanupError("manifest target is unavailable: " + relative_path) from error
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise CleanupError("manifest target escapes the state root: " + relative_path) from error
+    if resolved == root:
+        raise CleanupError("manifest target resolves to the state root: " + relative_path)
+    return resolved
+
+
+def _describe_type(mode: int) -> str:
+    if stat.S_ISREG(mode):
+        return REGULAR_FILE
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISLNK(mode):
+        return "symbolic link"
+    if stat.S_ISFIFO(mode):
+        return "FIFO"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISCHR(mode):
+        return "character device"
+    if stat.S_ISBLK(mode):
+        return "block device"
+    return "unknown object"
+
+
+def _directory_sort_key(relative_path: str) -> Tuple[int, bytes]:
+    relative = _pure_relative_path(relative_path)
+    return -len(relative.parts), os.fsencode(relative.as_posix())
+
+
+def _validate_closed_manifests() -> None:
+    manifest_paths = tuple(entry.relative_path for entry in LEAK_MANIFEST)
+    if len(manifest_paths) != 39 or len(set(manifest_paths)) != 39:
+        raise CleanupError("the closed leak manifest must contain 39 unique paths")
+    if any(entry.expected_type != REGULAR_FILE for entry in LEAK_MANIFEST):
+        raise CleanupError("every closed leak-manifest entry must expect a regular file")
+
+    derived_directories = {
+        _pure_relative_path(entry.relative_path).parent.as_posix()
+        for entry in LEAK_MANIFEST
+    }
+    if len(EMPTY_DIRECTORY_MANIFEST) != 9 or len(set(EMPTY_DIRECTORY_MANIFEST)) != 9:
+        raise CleanupError("the empty-directory manifest must contain 9 unique paths")
+    if set(EMPTY_DIRECTORY_MANIFEST) != derived_directories:
+        raise CleanupError("the empty-directory manifest must equal the leak-manifest parents")
+    if tuple(sorted(EMPTY_DIRECTORY_MANIFEST, key=_directory_sort_key)) != EMPTY_DIRECTORY_MANIFEST:
+        raise CleanupError("the empty-directory manifest is not ordered deepest first")
+
+
+def _preflight_directories(
+    root: Path,
+    relative_directories: Sequence[str],
+    require_empty: bool,
+    allow_absent: bool = False,
+) -> Dict[str, Path]:
+    """Resolve the manifest directories, optionally tolerating ones already removed.
+
+    `allow_absent` is what makes the DIRECTORY phase resumable, and it was the half missing from the
+    first resumability fix: `delete_leak_files` tolerated an already-deleted FILE, but a run that
+    died during directory removal still aborted here on the first directory it had already removed.
+    So the tool remained unrecoverable exactly as before — the fix did not achieve what it claimed.
+    Reproduced: 0 files, 4 of 9 directories gone, `--apply` exits 1 and removes nothing.
+
+    Fail-closed is unchanged: a manifest directory that exists but is the WRONG TYPE, or that
+    escapes the state root, still raises. Only genuine absence is treated as satisfied, because the
+    goal state for that entry is "does not exist", and it does not.
+    """
+    resolved_directories = {}  # type: Dict[str, Path]
+    nonempty = []  # type: List[str]
+    for relative_path in relative_directories:
+        lexical = root.joinpath(*_pure_relative_path(relative_path).parts)
+        try:
+            metadata = os.lstat(str(lexical))
+        except FileNotFoundError:
+            if allow_absent:
+                continue
+            raise CleanupError("manifest directory is unavailable: " + relative_path)
+        except OSError as error:
+            raise CleanupError("manifest directory is unavailable: " + relative_path) from error
+        resolved = _resolve_beneath(root, relative_path)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise CleanupError(
+                "manifest directory type mismatch for "
+                + relative_path
+                + ": expected directory, found "
+                + _describe_type(metadata.st_mode)
+            )
+        if require_empty:
+            try:
+                with os.scandir(str(resolved)) as children:
+                    if next(children, None) is not None:
+                        nonempty.append(relative_path)
+            except OSError as error:
+                raise CleanupError("could not inspect manifest directory: " + relative_path) from error
+        resolved_directories[relative_path] = resolved
+
+    if nonempty:
+        raise CleanupError(
+            "refusing directory removal because the following manifest directories are not empty: "
+            + ", ".join(nonempty)
+        )
+    return resolved_directories
+
+
+def _preflight_files(root: Path, allow_absent: bool = False) -> Tuple[Dict[str, Path], List[str]]:
+    """Resolve every manifest target, optionally tolerating ones that are already gone.
+
+    `allow_absent` makes the run RESUMABLE. Without it a single failed unlink — EACCES, an I/O
+    error, a concurrent removal — was terminal for the tool: entries 1..n-1 were already deleted,
+    so every later invocation aborted here on "manifest target is unavailable", and the remaining
+    leaked transcripts could never be removed by the sanctioned tool again. That forces exactly the
+    ad-hoc `rm` in a sensitive directory that the closed-manifest design exists to prevent
+    (PR #63 review, gap 5).
+
+    An already-absent leaf is treated as SATISFIED, never as an error — the goal state is "this
+    file does not exist", and it does not. Everything else stays fail-closed: a type mismatch or a
+    path escaping the state root still raises, because those mean the tree is not what the frozen
+    manifest describes and deleting anything would be unsafe.
+
+    lstat is checked BEFORE resolution on purpose: `_resolve_beneath` uses `resolve(strict=True)`,
+    which also fails for a dangling symlink. Only a genuine ENOENT on the LEXICAL path counts as
+    absent; a symlink whose target is missing is still a type mismatch and must be reported.
+    """
+    resolved_targets = {}  # type: Dict[str, Path]
+    already_absent = []  # type: List[str]
+    for entry in LEAK_MANIFEST:
+        lexical = root.joinpath(*_pure_relative_path(entry.relative_path).parts)
+        try:
+            metadata = os.lstat(str(lexical))
+        except FileNotFoundError:
+            if allow_absent:
+                already_absent.append(entry.relative_path)
+                continue
+            raise CleanupError("manifest target is unavailable: " + entry.relative_path)
+        except OSError as error:
+            raise CleanupError("manifest target is unavailable: " + entry.relative_path) from error
+        resolved = _resolve_beneath(root, entry.relative_path)
+        actual_type = _describe_type(metadata.st_mode)
+        if actual_type != entry.expected_type:
+            raise CleanupError(
+                "manifest target type mismatch for "
+                + entry.relative_path
+                + ": expected "
+                + entry.expected_type
+                + ", found "
+                + actual_type
+            )
+        resolved_targets[entry.relative_path] = resolved
+    return resolved_targets, already_absent
+
+
+def _open_parent_chain(
+    root: Path,
+    relative: PurePosixPath,
+    root_identity: Tuple[int, int],
+    relative_path: str,
+) -> List[int]:
+    """Open every directory from `root` down to `relative`'s parent, following no symlink.
+
+    Each `os.open` carries `O_DIRECTORY | O_NOFOLLOW` and is resolved RELATIVE to the descriptor
+    above it, so no component is ever re-resolved from a name. The root descriptor is `fstat`ed
+    against the identity the preflight recorded, which is the only way to know the chain starts at
+    the directory that was validated rather than at whatever now answers to its path.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptors = []  # type: List[int]
+    try:
+        descriptors.append(os.open(str(root), flags))
+        metadata = os.fstat(descriptors[0])
+        if (metadata.st_dev, metadata.st_ino) != root_identity:
+            raise CleanupError("state-root identity changed before removal: " + relative_path)
+        for component in relative.parts[:-1]:
+            descriptors.append(os.open(component, flags, dir_fd=descriptors[-1]))
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+    return descriptors
+
+
+@contextlib.contextmanager
+def parent_descriptor(root: Path, relative_path: str, root_identity: Tuple[int, int]):
+    """Yield `(descriptor, leaf_name)` for one manifest entry's parent directory.
+
+    WHY A DESCRIPTOR AND NOT A PATH
+    The preflight resolves each target, checks its type and proves it is beneath the state root —
+    and then the removal phase used the resolved STRING, re-walking every component against the live
+    filesystem. Between those two walks a same-account process can rename a parent directory and put
+    a symlink in its place, so the name the preflight blessed and the name the unlink follows are
+    two different objects. `--apply` runs 39 unlinks in a loop, which is 39 chances (deep review,
+    P2). Descending once through descriptors closes the window: `os.unlink(name, dir_fd=...)` acts
+    on a directory the kernel is holding open, and a rename of that directory's PATH cannot retarget
+    it.
+
+    Containment survives too — a descriptor obtained by walking down from the root without following
+    a symlink cannot address anything outside the root, which is the same property `_resolve_beneath`
+    asserts lexically.
+    """
+    relative = _pure_relative_path(relative_path)
+    try:
+        descriptors = _open_parent_chain(root, relative, root_identity, relative_path)
+    except CleanupError:
+        raise
+    except OSError as error:
+        raise CleanupError(
+            "could not open the manifest parent directory: " + relative_path
+        ) from error
+    try:
+        yield descriptors[-1], relative.parts[-1]
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+@contextlib.contextmanager
+def held_manifest_parents(root: Path, root_identity: Tuple[int, int]):
+    """Open each UNIQUE parent directory exactly once, and hold them for the entire run.
+
+    THE FIRST VERSION SAID "once" AND OPENED 39 TIMES (PR #63 recheck, P2). It looped over
+    `LEAK_MANIFEST`, so the nine directories were opened once PER ENTRY — up to six opens of the same
+    parent, at six different instants. A swap landing between the first and the second split the run
+    across two generations: five validated originals survived while five same-named files in the
+    replacement directory were deleted, and the function reported success. Reproduced by the reviewer.
+    The comment claimed the property; the loop did not implement it.
+
+    So the unique parents are computed first and opened once each. Every entry beneath a parent shares
+    that one descriptor, which is what makes "the object inspected is the object removed" true for the
+    whole set rather than per entry.
+
+    ABSENCE IS SATISFIED. A parent removed by an earlier `--apply`'s directory phase cannot contain a
+    file, so the entries beneath it are already at their goal state. Only `FileNotFoundError` is
+    forgiven — `ENOTDIR` and `ELOOP` (a component swapped for a file or a symlink) still abort, which
+    is the entire point of descending with `O_NOFOLLOW`.
+    """
+    unique_parents = sorted(
+        {_pure_relative_path(entry.relative_path).parent.as_posix() for entry in LEAK_MANIFEST}
+    )
+    with contextlib.ExitStack() as stack:
+        descriptors = {}  # type: Dict[str, int]
+        for parent in unique_parents:
+            try:
+                descriptor, _name = stack.enter_context(
+                    parent_descriptor(root, parent + "/.keep", root_identity)
+                )
+            except CleanupError as error:
+                if not isinstance(error.__cause__, FileNotFoundError):
+                    raise
+                continue
+            descriptors[parent] = descriptor
+
+        holders = {}  # type: Dict[str, Tuple[int, str]]
+        for entry in LEAK_MANIFEST:
+            relative = _pure_relative_path(entry.relative_path)
+            parent = relative.parent.as_posix()
+            if parent in descriptors:
+                holders[entry.relative_path] = (descriptors[parent], relative.name)
+        yield descriptors, holders
+
+
+def _present_through_descriptors(holders: Dict[str, Tuple[int, str]]) -> Dict[str, None]:
+    """Classify every entry through its HELD descriptor, refusing before a single unlink.
+
+    A wrong type must abort the whole tree, not the tail of it — `unlink_regular_file`'s own guard
+    fires mid-loop, by which point earlier entries are already gone. Absence stays satisfiable, which
+    is what makes `--apply` resumable.
+    """
+    present = {}  # type: Dict[str, None]
+    for entry in LEAK_MANIFEST:
+        if entry.relative_path not in holders:
+            continue  # the parent directory is gone; so is the file
+        descriptor, name = holders[entry.relative_path]
+        try:
+            metadata = os.lstat(name, dir_fd=descriptor)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise CleanupError(
+                "could not inspect manifest target: " + entry.relative_path
+            ) from error
+        if not stat.S_ISREG(metadata.st_mode):
+            raise CleanupError(
+                "manifest target is not a regular file: "
+                + entry.relative_path
+                + " is "
+                + _describe_type(metadata.st_mode)
+            )
+        present[entry.relative_path] = None
+    return present
+
+
+def unlink_regular_file(descriptor: int, name: str, relative_path: str) -> None:
+    """Unlink one manifest file through its parent's descriptor; never remove a directory.
+
+    The `lstat` and the `unlink` are BOTH relative to `descriptor`, so the object typed-checked here
+    is the object removed — a swap between the two would have to replace that one directory entry,
+    which the check is positioned to catch.
+    """
+
+    metadata = os.lstat(name, dir_fd=descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise CleanupError(
+            "target changed type before unlink: "
+            + relative_path
+            + " is "
+            + _describe_type(metadata.st_mode)
+        )
+    os.unlink(name, dir_fd=descriptor)
+
+
+def _occupants_through_descriptors(descriptors: Dict[str, int]) -> Dict[str, Tuple[str, ...]]:
+    """The same question as `unexpected_directory_occupants`, asked through the HELD descriptors.
+
+    The path-based scan runs before the unlink phase, and then `delete_leak_files` opened everything
+    again — so an occupant dropped between the two was still missed, and all 39 files were deleted
+    before the directory phase noticed it (PR #63 recheck, P2 — reproduced by injecting one occupant
+    after the clean scan). Asking through the descriptors already held for the removal closes that
+    window: it is the same directory object, and no name is re-resolved between the answer and the act.
+
+    `os.scandir` consumes the descriptor's position, so each one is duplicated — the original must stay
+    rewound and usable for the unlinks that follow.
+    """
+    manifest_children = {}  # type: Dict[str, set]
+    for entry in LEAK_MANIFEST:
+        relative = _pure_relative_path(entry.relative_path)
+        manifest_children.setdefault(relative.parent.as_posix(), set()).add(relative.name)
+
+    unexpected = {}  # type: Dict[str, Tuple[str, ...]]
+    for relative_path, descriptor in sorted(descriptors.items()):
+        accounted = manifest_children.get(relative_path, set())
+        nested = {
+            _pure_relative_path(other).name
+            for other in EMPTY_DIRECTORY_MANIFEST
+            if _pure_relative_path(other).parent.as_posix() == relative_path
+        }
+        duplicate = os.dup(descriptor)
+        try:
+            with os.scandir(duplicate) as children:
+                leftovers = tuple(sorted(
+                    child.name for child in children
+                    if child.name not in accounted and child.name not in nested
+                ))
+        except OSError as error:
+            raise CleanupError("could not inspect manifest directory: " + relative_path) from error
+        if leftovers:
+            unexpected[relative_path] = leftovers
+    return unexpected
+
+
+def unexpected_directory_occupants(root: Path) -> Dict[str, Tuple[str, ...]]:
+    """Per manifest directory, the children that the manifest does NOT account for.
+
+    A directory is only removable once it is empty, and it can only BECOME empty if every child is a
+    manifest file. So this answers the question both `--check` and `--apply` actually need: after the
+    39 files go, would anything be left?
+
+    It existed nowhere. `--check` ran `_preflight_directories(require_empty=False)` and never looked at
+    emptiness at all, while `--apply` deleted all 39 files FIRST and only then refused a non-empty
+    directory — so a file dropped into a manifest directory between the two (a concurrent review run is
+    enough) produced a green check followed by a destructive partial apply (deep review, P2). Reporting
+    it and checking it before the unlink phase are the same question asked twice, so it is one function.
+    """
+    # Canonicalize here rather than trusting the caller: `_resolve_beneath` compares against the root,
+    # and on macOS a `/var` vs `/private/var` mismatch makes every containment check fail.
+    root, _identity_unused = _canonical_state_root(root)
+
+    manifest_children = {}  # type: Dict[str, set]
+    for entry in LEAK_MANIFEST:
+        relative = _pure_relative_path(entry.relative_path)
+        parent = relative.parent.as_posix()
+        manifest_children.setdefault(parent, set()).add(relative.name)
+
+    unexpected = {}  # type: Dict[str, Tuple[str, ...]]
+    for relative_path in EMPTY_DIRECTORY_MANIFEST:
+        lexical = root.joinpath(*_pure_relative_path(relative_path).parts)
+        if not lexical.is_dir():
+            continue
+        resolved = _resolve_beneath(root, relative_path)
+        accounted = manifest_children.get(relative_path, set())
+        # A nested manifest DIRECTORY is accounted for too: the directory phase removes those, deepest
+        # first, so a parent holding only manifest subdirectories still reaches empty.
+        nested = {
+            _pure_relative_path(other).name
+            for other in EMPTY_DIRECTORY_MANIFEST
+            if _pure_relative_path(other).parent.as_posix() == relative_path
+        }
+        try:
+            with os.scandir(str(resolved)) as children:
+                leftovers = tuple(
+                    sorted(
+                        child.name
+                        for child in children
+                        if child.name not in accounted and child.name not in nested
+                    )
+                )
+        except OSError as error:
+            raise CleanupError("could not inspect manifest directory: " + relative_path) from error
+        if leftovers:
+            unexpected[relative_path] = leftovers
+    return unexpected
+
+
+def delete_leak_files(state_root: Path, holders=None) -> FileDeletionReport:
+    """Delete the 39 literal manifest files and nothing else."""
+
+    _validate_closed_manifests()
+    root, root_identity = _canonical_state_root(state_root)
+    _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
+    # Resumable: entries already gone are satisfied, not failures. See _preflight_files.
+    resolved_targets, already_absent = _preflight_files(root, allow_absent=True)
+
+    attempted = []  # type: List[str]
+    unlinked = []  # type: List[str]
+    # `resolved_targets` carries the containment verdict (no escape, no symlink), which is a decision
+    # about PATHS and stays path-shaped. The descriptors below carry the removal, which is a decision
+    # about OBJECTS. Both are needed: the first refuses a manifest that points outside the root, the
+    # second refuses to let anything move under the first one's feet.
+    with contextlib.ExitStack() as stack:
+        # REUSE the caller's descriptors when it has them. The orchestrator holds one session across
+        # the occupant check, this deletion and the directory removal, so nothing can be swapped or
+        # dropped in between; called directly (as its own tests do) this opens its own.
+        #
+        # `delete_leak_files` deliberately does NOT check for unaccounted-for occupants: its contract
+        # is narrower — delete exactly the literal manifest and nothing of the same filename family —
+        # and that is only provable on a tree that HAS such a neighbour. Putting the occupant refusal
+        # here made that proof unrunnable, which is how this split got noticed.
+        if holders is None:
+            _descriptors, holders = stack.enter_context(
+                held_manifest_parents(root, root_identity)
+            )
+        present = _present_through_descriptors(holders)
+        for entry in LEAK_MANIFEST:
+            attempted.append(entry.relative_path)
+            if entry.relative_path not in resolved_targets or entry.relative_path not in present:
+                continue  # already absent — the goal state for this entry is reached
+            descriptor, name = holders[entry.relative_path]
+            try:
+                unlink_regular_file(descriptor, name, entry.relative_path)
+                unlinked.append(entry.relative_path)
+            except CleanupError:
+                raise
+            except OSError as error:
+                raise CleanupError(
+                    "could not unlink manifest target: " + entry.relative_path
+                ) from error
+
+    expected = tuple(entry.relative_path for entry in LEAK_MANIFEST)
+    if Counter(attempted) != Counter(expected) or set(attempted) != set(expected):
+        raise CleanupError("attempted deletion targets do not equal the closed leak manifest")
+    if _identity(root) != root_identity:
+        raise CleanupError("state-root identity changed during file deletion")
+    return FileDeletionReport(tuple(attempted), tuple(unlinked), root_identity)
+
+
+def remove_empty_directory(descriptor: int, name: str) -> None:
+    """Remove one preflighted empty directory, through its parent's descriptor, without recursion.
+
+    Same reasoning as `unlink_regular_file`: the emptiness scan immediately above and the `rmdir`
+    must name the same object, and a path-based `rmdir` re-resolves every component after the scan
+    has already looked.
+    """
+
+    os.rmdir(name, dir_fd=descriptor)
+
+
+def _remove_empty_directories(
+    state_root: Path,
+    relative_directories: Iterable[str],
+) -> "Tuple[Tuple[str, ...], Tuple[str, ...]]":
+    """Return (satisfied, actually removed). The two differ when an entry was already absent."""
+    root, root_identity = _canonical_state_root(state_root)
+    ordered = tuple(sorted(tuple(relative_directories), key=_directory_sort_key))
+    if len(ordered) != len(set(ordered)):
+        raise CleanupError("empty-directory removal targets contain duplicates")
+    # Resumable, matching delete_leak_files: a directory already removed is SATISFIED.
+    resolved = _preflight_directories(root, ordered, require_empty=False, allow_absent=True)
+
+    removed = []  # type: List[str]
+    rmdired = []  # type: List[str]
+    for relative_path in ordered:
+        if relative_path not in resolved:
+            removed.append(relative_path)   # already absent — the goal state is reached
+            continue
+        try:
+            # One descriptor spans BOTH the emptiness scan and the removal. Scanning a path and then
+            # removing that path asks the filesystem the same question twice and accepts two answers.
+            with parent_descriptor(root, relative_path, root_identity) as (holder, name):
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                inspected = os.open(name, flags, dir_fd=holder)
+                try:
+                    with os.scandir(inspected) as children:
+                        if next(children, None) is not None:
+                            raise CleanupError(
+                                "refusing directory removal because the manifest directory is not "
+                                "empty: " + relative_path
+                            )
+                finally:
+                    os.close(inspected)
+                remove_empty_directory(holder, name)
+        except CleanupError:
+            raise
+        except OSError as error:
+            raise CleanupError("could not remove empty manifest directory: " + relative_path) from error
+        removed.append(relative_path)
+        rmdired.append(relative_path)
+
+    if _identity(root) != root_identity:
+        raise CleanupError("state-root identity changed during empty-directory removal")
+    return tuple(removed), tuple(rmdired)
+
+
+def cleanup_coredev_2619_leaks(state_root: Path) -> CleanupReport:
+    """Run the closed file cleanup, then remove exactly its nine empty parents.
+
+    The whole-run precondition lives HERE rather than in `delete_leak_files`, whose contract is
+    narrower and deliberately so: it deletes exactly the literal manifest and nothing of the same
+    filename family, which is provable only on a tree that HAS such a neighbour. What this function
+    owns is the two phases together — and the second requires each manifest directory to be empty, so
+    an unaccounted-for child means the run cannot succeed. Discovering that after the unlink phase
+    meant 39 files were already gone and the run still failed (deep review, P2). Nothing is deleted
+    before this refusal.
+    """
+
+    root, held_identity = _canonical_state_root(state_root)
+    # BIND THE ROOT BEFORE ANYTHING ELSE. Without this, a mistyped `--state-root` satisfied the whole
+    # manifest vacuously through `allow_absent=True` and `--apply` exited 0 claiming the leak was
+    # removed (PR #63 recheck, P2).
+    _require_bound_state_root(root)
+    # ONE HELD SESSION for all three phases. The occupant scan used to run on PATHS and
+    # `delete_leak_files` then re-opened everything, so an occupant arriving between the two was
+    # missed and all 39 files were deleted before the directory phase noticed (PR #63 recheck, P2 —
+    # reproduced). Holding the descriptors across the scan, the unlinks and the directory removal
+    # means the directories answering the question are the ones acted on.
+    with held_manifest_parents(root, held_identity) as (descriptors, holders):
+        unexpected = _occupants_through_descriptors(descriptors)
+        if unexpected:
+            raise CleanupError(
+                "refusing to delete anything because these manifest directories hold files the "
+                "manifest does not account for: "
+                + "; ".join(
+                    relative_path + " (" + ", ".join(names) + ")"
+                    for relative_path, names in sorted(unexpected.items())
+                )
+            )
+
+        file_report = delete_leak_files(state_root, holders=holders)
+        removed_directories, rmdired_directories = _remove_empty_directories(
+            state_root,
+            EMPTY_DIRECTORY_MANIFEST,
+        )
+        expected_directories = tuple(
+            sorted(EMPTY_DIRECTORY_MANIFEST, key=_directory_sort_key)
+        )
+        if removed_directories != expected_directories or len(removed_directories) != 9:
+            raise CleanupError("removed directories do not equal the closed 9-entry manifest")
+        _root, root_identity = _canonical_state_root(state_root)
+        if root_identity != file_report.root_identity:
+            raise CleanupError("state-root identity changed across cleanup phases")
+        return CleanupReport(
+            file_report.attempted_relative_paths,
+            file_report.unlinked_relative_paths,
+            removed_directories,
+            rmdired_directories,
+            root_identity,
+        )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--state-root",
+        required=True,
+        type=Path,
+        help="explicit review-transcripts state root; HOME is never consulted",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="required acknowledgement that the closed manifest was verified first",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="read-only preflight: report what WOULD be removed and what is already gone; deletes nothing",
+    )
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    arguments = _build_parser().parse_args(None if argv is None else list(argv))
+    if arguments.check and arguments.apply:
+        print("cleanup refused: --check and --apply are mutually exclusive", file=sys.stderr)
+        return 2
+    if arguments.check:
+        # Read-only. The tool is destructive and one-shot, so there must be a way to SEE the state
+        # it would act on without acting (PR #63 review, gap 5). Nothing here mutates the tree.
+        try:
+            _validate_closed_manifests()
+            root, _identity_unused = _canonical_state_root(arguments.state_root)
+            # The SAME binding `--apply` enforces. A check that reports "already clean" for a root
+            # `--apply` would refuse is the exact mismatch this flag exists to prevent.
+            _require_bound_state_root(root)
+            _preflight_directories(root, EMPTY_DIRECTORY_MANIFEST, require_empty=False, allow_absent=True)
+            present, absent = _preflight_files(root, allow_absent=True)
+            unexpected = unexpected_directory_occupants(root)
+        except (CleanupError, OSError) as error:
+            print("cleanup check failed: " + str(error), file=sys.stderr)
+            return 1
+        if unexpected:
+            # A check that says green for a state `--apply` refuses is worse than no check: it is the
+            # signal an operator uses to decide it is safe to run the destructive half.
+            print(
+                "check: NOT SAFE TO APPLY — these manifest directories hold files the manifest does "
+                "not account for, so the directory phase would refuse AFTER the files were deleted:",
+                file=sys.stderr,
+            )
+            for relative_path, names in sorted(unexpected.items()):
+                print("  " + relative_path + ": " + ", ".join(names), file=sys.stderr)
+            return 1
+        print(
+            "check: "
+            + str(len(present))
+            + " of "
+            + str(len(LEAK_MANIFEST))
+            + " manifest files present and removable, "
+            + str(len(absent))
+            + " already absent"
+        )
+        for relative_path in sorted(absent):
+            print("  already absent: " + relative_path)
+        return 0
+    if not arguments.apply:
+        print("cleanup refused: pass --apply only after independent manifest verification", file=sys.stderr)
+        return 2
+    try:
+        report = cleanup_coredev_2619_leaks(arguments.state_root)
+    except (CleanupError, OSError) as error:
+        print("cleanup refused: " + str(error), file=sys.stderr)
+        return 1
+    # WHAT WAS ACTUALLY REMOVED, not what was attempted (PR #63 recheck, P2). This printed the
+    # ATTEMPTED counts under the word "removed", so a root that merely ENDS in
+    # `unleashed-mail/review-transcripts` — a stale XDG base, say — reported "removed 39 manifest
+    # files and 9 empty manifest directories" while removing nothing and leaving the real leaks in
+    # place. A message that claims more than the code did is worse than no message.
+    print(
+        "removed "
+        + str(len(report.unlinked_relative_paths))
+        + " of "
+        + str(len(report.attempted_relative_paths))
+        + " manifest files and "
+        + str(len(report.rmdired_directories))
+        + " of "
+        + str(len(report.removed_directories))
+        + " empty manifest directories (the remainder were already absent)"
+    )
+    if not report.unlinked_relative_paths and not report.rmdired_directories:
+        # THE SUFFIX IS NOT PROOF OF IDENTITY. A canonical-looking root with nothing to remove is
+        # either a completed cleanup or the WRONG root, and the filesystem cannot tell those apart —
+        # so say so rather than let "removed 0 of 39" read as done. Not an error: re-running a
+        # finished cleanup is legitimate and must stay idempotent.
+        print(
+            "note: nothing was removed. That is expected if this cleanup already ran — but it is the "
+            "same result a WRONG state root produces, and the directory name alone cannot tell them "
+            "apart. Confirm this is the allocator's own review-transcripts directory (the one under "
+            "the XDG state base the allocator actually uses) before treating the leaks as gone."
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

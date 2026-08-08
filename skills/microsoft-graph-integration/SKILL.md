@@ -5,8 +5,7 @@ description: >
   with Outlook/Microsoft 365 email fetching, sending, folder management, MSAL OAuth
   flows, Graph webhook subscriptions for push notifications, or any Microsoft
   identity/mail API interaction.
-effort: xhigh
-allowed-tools: Read, Write, Edit, Grep, Glob
+allowed-tools: Read, Grep, Glob
 ---
 
 # Microsoft Graph API Integration — UnleashedMail

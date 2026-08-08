@@ -10,14 +10,17 @@ description: >
   approach for", "plan this feature", when starting a new feature, before any
   major refactor, or when the user asks about current best practices for any
   technology in the stack.
-effort: xhigh
 model: inherit
 # Scoped by DENY-LIST (not an allowlist) so the install-specific Context7 MCP prefix is still inherited
 # (an allowlist would block it). This planner researches UNTRUSTED web/Context7 content, so it must not be
 # able to mutate the repo: deny the whole github MCP write surface. Bash is intentionally RETAINED — the
 # preloaded create-feature-plan skill runs `review-verdict.py snapshot` (a Bash command) as part of the
 # plan-review gate (COREDEV-2525 MIN-6; see AGENT_CONTRACTS §9).
-disallowedTools: mcp__github
+# `Agent` is DENIED: omitting `tools:` inherits it exactly as it inherits the MCP prefix, and this body
+# spawns nobody — an unused capability on an agent reading untrusted content is pure downside. The
+# spawner check in validate-plugin-assembly.py now counts inherit-all agents, which is what surfaced
+# this (PR #63 recheck, P1).
+disallowedTools: Agent, mcp__github
 skills:
   - create-feature-plan
 ---
@@ -39,8 +42,8 @@ each technology in the stack. You research before you plan.
 Per `AGENT_CONTRACTS.md §2`, every plan you produce must be reviewed by **both** Antigravity and Codex CLI before implementation begins:
 
 0. **Snapshot the plan first (§2 step 0).** Before dispatching the reviews, run `review-verdict.py snapshot --plan <PLAN>` to bind the plan's digest — without this the eventual approving `write` fails **closed**. The preloaded `create-feature-plan` skill carries the exact `snapshot` command; re-run it whenever the plan changes.
-1. `/unleashed-mail:gemini-review` — uses `gemini-3.1-pro` via Antigravity CLI (`agy`)
-2. `/unleashed-mail:codex-review` — uses `codex exec -c model_reasoning_effort=xhigh -s read-only`
+1. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+2. /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 3. **Combine (§2 step 3a).** Once both converge, run `/unleashed-mail:review-synthesis` to merge the two transcripts into the single auditable Combined verdict and persist it via `review-verdict.py write`.
 
 Both must return APPROVE / APPROVE_WITH_NOTES before any implementation agent picks up the plan. Iterate (typically 2–6 rounds). At the end of every plan you produce, include the reviewer verdicts and any unresolved feedback. A plan lacking recorded dual-review evidence is refused at the `/unleashed-mail:implement` **Design Gate** (which resolves the plan's `.verdicts/` artifact) — enforcement lives there, not in `jira-manager` (which has no plan-evidence duty).

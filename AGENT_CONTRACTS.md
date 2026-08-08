@@ -96,8 +96,8 @@ Before any implementation begins:
     recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
     digest-bound review cannot approve a moving target"* — and the round is void. This applies to the
     author exactly as §2's read-only expectation applies to the reviewer.
-1. Plan author runs `/unleashed-mail:gemini-review` (uses `gemini-3.1-pro` via Antigravity CLI `agy`)
-2. Plan author runs `/unleashed-mail:codex-review` (uses `codex exec -c model_reasoning_effort=xhigh -s read-only`)
+1. /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+2. /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
 3. **Both must produce APPROVE / APPROVE_WITH_NOTES** before implementation starts
    - **(3a)** Once both transcripts are captured, run `/unleashed-mail:review-synthesis` to combine them into a single auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) — the record that this gate passed, with any divergence surfaced as `DISAGREEMENT` (never averaged) and a missing/empty transcript never counted as approval. This is the **plan-review** synthesizer (2 prose transcripts); keep it distinct from the code-review `synthesize_review` MCP tool (5 JSON findings arrays, `APPROVE_WITH_SUGGESTIONS` / `NEEDS_DISCUSSION`) used in §5.
 4. Iterate (typically 2–6 rounds) until both converge
@@ -109,15 +109,17 @@ machine or in CI they may be absent — the gate must NOT silently pass, and mus
 loop with no escape.
 
 - **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
-  isn't misread as unavailable — `command -v agy && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 60 /tmp/agy-ping.txt -- agy -p "ping"`, then check `/tmp/agy-ping.txt` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
+  isn't misread as unavailable, and allocate the ping path PER RUN — a shared one lets a preflight that
+  died before writing leave the previous `pong` for the next reader, so a dead CLI reads as healthy —
+  `command -v agy && PING="$(mktemp "${TMPDIR:-/tmp}/agy-ping.XXXXXX")" && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
+  --timeout 60 "$PING" -- agy -p "ping"`, then check that same `"$PING"` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
   only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
   unavailable and sends you down the recovery path for no reason (bare
   `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
   codex, `command -v codex && codex --version` (note: this only proves the binary is on PATH, not that it
   is authenticated). If either is missing/unauthenticated, do NOT proceed as if the gate passed.
   A **healthy ping but a failed review is an invocation problem, not an unavailable CLI** — `agy -p`
-  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 18m`; a tiny transcript
+  defaults to `--print-timeout 5m0s` and a long plan review needs `--print-timeout 28m`; a tiny transcript
   (e.g. `Error: timeout waiting for response`) is a *failure*, never a verdict. Fix the invocation and
   re-run; that is not a reviewer-unavailable situation.
 - **Default is fail-closed:** with a reviewer unavailable, the Combined verdict is `DISAGREEMENT` /
@@ -290,6 +292,27 @@ null-delimited (`-print0` / `-0`) or quoted paths.
 - Tests green (`xcodebuild test`)
 - All sub-reviewer JSON findings collected, run through the `synthesize_review` MCP tool (or the documented fallback rules), and every gating blocker confirmed via the verify gate before REQUEST CHANGES
 
+### The payload-region invariant
+
+> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
+> **Within it, nothing but detail fields and blank lines.**
+
+Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
+payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
+agent emits goes **before** `Status:`.
+
+This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
+behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
+a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent. The regression
+that owns this evidence is `mcp/review-synthesizer/tests/test_capture.py`.
+
+Where a rule of §13 would conflict with a machine-readable contract — the completeness of a JSON
+findings array, the `Status:` line that precedes it, the Output Contract detail trailer that follows it
+(`Blocker Description`, `What Was Attempted`, `Completed`, `Remaining`, `Confidence`), the `VERDICT:`
+line that must end a review transcript, the final fenced JSON block, or a `BLOCKED — …` result prefix —
+**the contract wins and the rule yields.** Completeness and position of a machine-consumed payload are
+never traded for brevity. In particular `Remaining:` is **safety information, never a list to shorten**.
+
 ## 6. CI / GitHub Actions Pinning
 
 **Owners:** `ci-engineer`, `release-manager`, `security-reviewer`
@@ -351,10 +374,40 @@ Each agent type has minimum tool requirements:
 | Diagnostic | + WebFetch (look up vendor docs mid-debug) |
 | Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
 | Personas (read+search) | Read, Grep, Glob |
-| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, MultiEdit, NotebookEdit, Agent, mcp__github` blocks file edits, subagent dispatch, and the github MCP write surface. It is **not** fully non-mutating: Bash is retained for `gh pr view` (and can run other commands), and it mutates Jira via the Atlassian MCP by design |
+| Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` blocks every checkout-write vector — file editors, shell, subagent dispatch — and the github MCP write surface. `Bash` is denied (PR #63 recheck, P1): `swift-reviewer` spawns this agent while processing untrusted review content, and a sub-agent `Bash` cannot be scoped to one command — so the caller passes the PR URL instead of the agent running `gh pr view`. It mutates JIRA via the Atlassian MCP by design, and nothing else. (This row previously listed a `MultiEdit` deny the agent file never carried — Claude Code removed that tool, and the stale-name rule rejects denying it.) |
 
 > The Claude Code subagent dispatcher tool is named `Agent`, **not** `Task`. `Task` is not a
 > valid tool name in current Claude Code; older docs that say `Task` are stale.
+
+### 9.1 Accepted residual — `swift-reviewer`'s shell is reachable from model-invoked `pr-review`
+
+**This is a documented decision, not an oversight** (PR #63, raised four times; decided 2026-08-07).
+
+`pr-review` is model-invocable and grants `Agent(swift-reviewer)`. `swift-reviewer` holds bare `Bash`,
+so a prompt-injected finding in untrusted PR content could in principle steer it into an arbitrary
+shell command with no user gesture.
+
+**Why it is not simply removed.** A sub-agent's `tools:` list takes BARE NAMES — `Bash(...)` scoping is
+silently ignored there — so a sub-agent either has arbitrary shell or none. `swift-reviewer` needs it
+for `changeset.sh` (scope detection) and `build-verify.sh` (Step 4). Dropping `Bash` would not make
+those steps safe; it would make them silently produce nothing, which is precisely the worse failure
+mode the `check_bashless_agents_run_no_shell` validator exists to catch — it is what happened to
+`security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
+their bodies still ran `cat`/`find`/`plutil`.
+
+**What bounds it instead** (each verified, each with a regression test):
+- the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**;
+- `swift-reviewer`'s `disallowedTools` denies **every** checkout-writing agent by name, in both the
+  bare and `unleashed-mail:`-namespaced spellings, and that set is **recomputed from disk** by
+  `validate-plugin-assembly.py` rather than hand-maintained, so a newly added writer cannot be missed;
+- `swift-reviewer` denies spawning itself, so there is no recursive amplification;
+- `jira-manager` — the one agent it spawns that is not a reviewer — **denies `Bash`** outright;
+- the skill boundary itself grants only `changeset.sh`, never bare `git`.
+
+**The alternative, if this residual is ever judged unacceptable:** set
+`disable-model-invocation: true` on `skills/pr-review/SKILL.md`. That closes the path completely and
+costs only the model's ability to *enter* the workflow autonomously — a user typing `/pr-review` is
+unaffected. It was not taken because autonomous review is the workflow's purpose.
 
 ## 10. MCP Tool Prefixes
 
@@ -409,10 +462,24 @@ constraint the maintainer accepts): the tier is now set by **consequence of bein
 A maintainer who wants any agent to scale with the session flips its frontmatter and moves it between
 rows **in the same edit** — the validator keeps the two in sync and fails otherwise.
 
-**Effort policy: every agent and every skill pins `effort: xhigh`. There is no effort tiering.** The
-floor is unconditional, so tier selection is a *capability* decision only. Note frontmatter `effort` is
-an override in both directions — it pulls a `low` session up and a `max` session down — and
-`CLAUDE_CODE_EFFORT_LEVEL` outranks it, so the floor cannot be guaranteed from inside the plugin.
+**Effort policy: assets INHERIT the session effort. The "floor" constrains permitted PINS, not runtime
+effort.** Omit `effort:` so a `max` session runs its subagents at `max`. Frontmatter effort overrides the
+session in **both** directions, so a hard `effort: xhigh` pin silently *capped* a `max` session — which is
+why the policy is omit-to-inherit rather than pin-everywhere. CI accepts exactly `absent | xhigh | max`;
+any lower pin fails, so **no agent or skill pins an effort below `xhigh`**.
+
+**What this does NOT do — state it plainly, because the previous wording claimed the opposite in
+consecutive sentences.** There is **no in-plugin mechanism that raises a low session.** With `effort:`
+omitted, a `low` session runs its subagents at `low`; nothing pulls it up. `CLAUDE_CODE_EFFORT_LEVEL`
+outranks frontmatter regardless. So the floor is a **CI rule about what may be written into an asset**,
+not a runtime guarantee — it prevents the repo from shipping a cap, and that is all it can do. The
+earlier text asserted "the floor is unconditional" and then, three lines later, that it "cannot be
+guaranteed from inside the plugin"; §11 is the designated source of truth for disputes, so the
+contradiction is resolved here in favour of the mechanism that actually exists (PR #63 review, gap 20).
+
+Consequence for tier selection: it is a *capability* decision, made on the assumption that the session
+is run at an appropriate effort. If a maintainer needs a guaranteed minimum, it must be set on the
+session (or via `CLAUDE_CODE_EFFORT_LEVEL`), not requested from the plugin.
 
 Note on `opus` vs a version pin: `opus` is an **alias** that tracks the current Opus generation and
 updates with the CLI; `claude-opus-5` would be a hard version pin. Prefer the alias — the guidance this
@@ -465,52 +532,75 @@ attributable to a recent deploy. See `jira-manager` (Change-Failure Labeling) an
 ## 13. Agent Output Style
 
 Rules adapted from [`ayghri/i-have-adhd`](https://github.com/ayghri/i-have-adhd) (MIT), pinned at commit
-`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — this plugin's output is mostly
-consumed by *software*, so four of the ten upstream rules carry carve-outs and one is restated. See
-`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence.
+`07684c4ab625dd7d1ea6e99e065f60bc0ac6a1ba`. **Adapted, not adopted** — see
+`docs/planning/AGENT_OUTPUT_STYLE_PLAN.md` (COREDEV-2602) for the derivation and the evidence, and
+`docs/planning/COREDEV-2605_SECTION13_NARROWING_PLAN.md` for this narrowing.
 
-**Scope:** human-facing prose written by agents, and by workflow skills while producing reader-facing
-output. It does **not** govern skill-body documentation (that is injected context, not output).
+### Scope
 
-### The payload-region invariant
+This is a **narrowing, not a relaxation.** The five capture-roster reviewers are *out* of scope here
+because their output is machine-consumed and governed by their own contracts — those contracts are
+unchanged and still mandatory.
 
-> **The payload region is the span from the `Status:` line to the final fenced JSON block.**
-> **Within it, nothing but detail fields and blank lines.**
+| `surface_id` | `producer_id` | `scope` | `anchor` |
+|---|---|---|---|
+| `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:613` |
+| `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
+| `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:237` |
+| `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |
+| `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:208` |
+| `concurrency-findings` | `concurrency-reviewer` | `out` | `agents/concurrency-reviewer.md:269` |
+| `ux-perf-findings` | `ux-perf-reviewer` | `out` | `agents/ux-perf-reviewer.md:205` |
+| `accessibility-findings` | `accessibility-auditor` | `out` | `agents/accessibility-auditor.md:211` |
+| `prompt-safety-findings` | `prompt-review` | `out` | `agents/prompt-review.md:95` |
 
-Not prose, not a numbered step, not a next action, not a state restatement, and **not another machine
-payload** — a stray `VERDICT:` line there breaks the parse exactly as prose does. Everything else an
-agent emits goes **before** `Status:`.
+This table is the **only** scope statement and it is **exclusive and normative**. Every row is exactly
+one of `in`/`out`; rows are duplicate-free; every `surface_id`, `producer_id` and `scope` is drawn from a
+finite allowlist, and any unknown key, catch-all, alias or semantically overlapping row is a **failure**,
+not a skip. The four `in` `producer_id`s are an exact positive allowlist and are **disjoint** from
+`capture.VALID_AGENTS`; each `out` `producer_id` is one of that roster. The binding is disjointness, not
+equality — a future captured specialist is already out of scope by virtue of the positive allowlist and
+must not force churn here. Prose descriptions are not row content; the `anchor` identifies
+the surface in the repository and is validated by resolution, not by prose.
 
-This is not a style preference; it is `mcp/review-synthesizer/capture.py::extract_status`'s actual
-behaviour, verified by execution. Violating it returns `None` → no `.status` sidecar → `UNATTRIBUTED` →
-a re-dispatch, or `NEEDS DISCUSSION` when the reviewer's single retry is already spent.
+It does **not** govern skill-body documentation (that is injected context, not output).
 
 ### The rules
 
 | # | Rule | Disposition |
 |---|------|-------------|
-| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. The lead goes before `Status:`, per the payload-region invariant. |
-| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only, and only before `Status:`, per the payload-region invariant. Machine trailer fields and JSON values keep their mandated single-line/schema shape. |
-| 3 | End with one concrete next action | **Adapted** — the next action goes before `Status:`, per the payload-region invariant; not merely before the fence. |
-| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array. |
-| 5 | Restate state every turn | **Adapted** — restate state in prose; never before a mandated result prefix, and never inside the payload region, per the payload-region invariant. |
+| 1 | Lead with the next action | **Adapted** — lead the prose with the actionable point; never reorder a mandated payload to do it. |
+| 2 | Number multi-step tasks | **Adapted** — number human-facing prose only. |
+| 3 | End with one concrete next action | **Adapted** — end the prose with the next action. |
+| 4 | Suppress tangents | **Adapted** — suppress out-of-scope tangents; **never** defer an in-scope finding out of the current array, and never drop a row from `swift-reviewer`'s **All Issues (Consolidated)** table. |
+| 5 | Restate state every turn | **Adapted** — restate state in prose, never before a mandated result prefix. |
 | 6 | Give specific time estimates | **Adapted** — estimates address whoever runs the steps; these agents advise, they rarely execute. |
 | 7 | Make completed work visible | **Adopted** — state what now works, concretely. |
 | 8 | Matter-of-fact tone for errors | **Adopted** — state cause and fix. No "Uh oh." |
-| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit, or defer machine-consumed findings. Prose only. |
-| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; per the payload-region invariant the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
+| 9 | Cap lists at 5 items | **Restated positively** — rank prose for readability; **never** cap, split, omit or defer a machine-consumed finding, and never shorten the **All Issues (Consolidated)** table. Prose only. |
+| 10 | No preamble, no recap, no closing pleasantries | **Adapted** — `Status:` and `BLOCKED — …` are **payload, not preamble**; the cure for an unwanted opener is to delete it, never to move it below `Status:`. |
 
-### Precedence — the contract wins
+Each disposition carries **exactly one** classifier from `{Adapted, Adopted, Restated positively}`.
 
-These rules govern **prose written for a human reader**. Where a rule conflicts with a machine-readable
-contract — the completeness of a JSON findings array, the `Status:` line that precedes it, the Output
-Contract detail trailer that follows it (`Blocker Description`, `What Was Attempted`, `Completed`,
-`Remaining`, `Confidence`), the `VERDICT:` line that must end a review transcript, the final fenced JSON
-block, or a `BLOCKED — …` result prefix — **the contract wins and the rule yields**. Completeness and
-position of a machine-consumed payload are never traded for brevity. In particular `Remaining:` is
-**safety information, never a list to shorten**.
+### Precedence
 
-`Status:`, the trailer, and `BLOCKED — …` are payload, not preamble.
+Surfaces outside the four-item `in` allowlist above remain governed by their existing contracts, which
+take precedence over every rule in this section — see §5 for the payload-region invariant and §14 for the
+blocked-handoff prefix.
+
+---
+
+## 14. Blocked Subagent Handoff Contract
+
+A subagent that cannot proceed hands control back with a **`BLOCKED — <reason>`** prefix as the first
+line of its reply. This is **payload, not preamble**: §13 rule 10's carve-out exists so it is never moved
+below `Status:` or deleted as an opener.
+
+The handoff states, in this order: the **diagnosis**, what was **attempted**, the **user action
+required**, and what remains. It is used for diagnostic confirmation
+(`agents/graph-api-debugger.md`) and for Jira-tool failure (`agents/jira-manager.md`) — a subagent
+pausing to hand control back for external action, which is why it belongs here and not in §2's
+Plan → Implement contract.
 
 ---
 

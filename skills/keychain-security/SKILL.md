@@ -4,7 +4,6 @@ description: >
   Keychain and credential management patterns for UnleashedMail. Activates when
   working with OAuth tokens, stored credentials, encryption keys, or any
   Security.framework / Keychain Services code.
-effort: xhigh
 allowed-tools: Read, Grep, Glob
 ---
 

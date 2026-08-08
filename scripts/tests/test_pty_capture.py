@@ -1,11 +1,16 @@
-"""Tests for scripts/pty-capture.py's _write_private — the session-safe transcript writer.
+"""Tests for scripts/pty-capture.py's session-safe transcript writer.
 
-Covers the write's security discipline (0600 mode, O_NOFOLLOW symlink refusal) and, specifically, the
-round-1 double-close fix: once os.fdopen() owns the fd, the except path must NOT close it again (a second
-close can clobber a concurrently-reused fd number)."""
+Covers the allocated/non-allocated write modes, their descriptor-based security discipline, and the
+round-1 double-close fix: once open() owns the fd, the except path must not close it again (a second close
+can clobber a concurrently reused fd number)."""
 import importlib.util
+import errno
+import shutil
 import os
+import subprocess
 import stat
+import sys
+import pathlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,20 +35,329 @@ class WritePrivateTests(unittest.TestCase):
         import shutil
         shutil.rmtree(self.d, ignore_errors=True)
 
-    def test_writes_content_at_0600(self):
+    def test_nonallocated_mode_creates_absent_target_at_0600(self):
         path = os.path.join(self.d, "t.txt")
         self.mod._write_private(path, b"hello")
         self.assertEqual(Path(path).read_bytes(), b"hello")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
-    def test_tightens_a_preexisting_world_readable_file(self):
+    def test_nonallocated_mode_truncates_a_longer_world_readable_file(self):
         path = os.path.join(self.d, "t.txt")
         with open(path, "wb") as fh:
-            fh.write(b"old")
+            fh.write(b"old-with-a-stale-suffix")
         os.chmod(path, 0o644)
         self.mod._write_private(path, b"new")
         self.assertEqual(Path(path).read_bytes(), b"new")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_nonallocated_mode_refuses_a_hardlinked_victim_without_touching_it(self):
+        """PR #63 recheck, P2 — reproduced: the victim was rewritten.
+
+        The non-allocated path used `O_CREAT|O_TRUNC`, which empties a pre-existing file AT open(),
+        before any fstat — so a hard link planted at the predictable capture/`.captureid` path was
+        truncated to zero on the way in, and the `nlink != 1` guard that would have caught it was
+        skipped entirely on this path (`if allocated and …`). Now the path opens without O_TRUNC and the
+        guard is unconditional, so the victim is refused with its bytes intact.
+        """
+        victim = os.path.join(self.d, "PRECIOUS")
+        Path(victim).write_bytes(b"PRECIOUS OUTSIDE DATA\n")
+        target = os.path.join(self.d, "capture.txt")
+        os.link(victim, target)  # a hard link IS a regular file — O_NOFOLLOW/S_ISREG both accept it
+
+        with self.assertRaises(OSError) as caught:
+            self.mod._write_private(target, b"attacker capture bytes\n")  # non-allocated (default)
+        self.assertEqual(caught.exception.errno, errno.EMLINK)
+        self.assertEqual(Path(victim).read_bytes(), b"PRECIOUS OUTSIDE DATA\n",
+                         "the hard-linked victim was modified — the refusal came too late")
+
+    def test_allocated_mode_omits_create_and_truncate_but_retains_open_defences(self):
+        path = os.path.join(self.d, "reserved.txt")
+        Path(path).touch()
+        real_open = os.open
+        target_flags = []
+
+        def _open_spy(open_path, flags, mode=0o777, *args, **kwargs):
+            if os.fspath(open_path) == path:
+                target_flags.append(flags)
+            return real_open(open_path, flags, mode, *args, **kwargs)
+
+        os.open = _open_spy
+        try:
+            self.mod._write_private(path, b"captured", allocated=True)
+        finally:
+            os.open = real_open
+
+        self.assertEqual(len(target_flags), 1, "the reserved leaf should be opened exactly once")
+        flags = target_flags[0]
+        self.assertFalse(flags & os.O_CREAT, "allocated mode must not create the reserved leaf")
+        self.assertFalse(flags & os.O_TRUNC, "allocated mode must not truncate the reserved leaf")
+        self.assertTrue(flags & os.O_NOFOLLOW, "allocated mode must retain O_NOFOLLOW")
+        self.assertTrue(flags & os.O_NONBLOCK, "allocated mode must retain O_NONBLOCK")
+        self.assertEqual(Path(path).read_bytes(), b"captured")
+
+    def test_allocated_rewrite_shorter_than_the_previous_run_leaves_no_stale_tail(self):
+        """A shorter second write must not resurrect the first run's VERDICT (PR #63 review, High).
+
+        `--allocated` omits O_TRUNC to protect the reservation, which also left the file unbounded:
+        a failed round that wrote fewer bytes than a previous successful one left that round's tail
+        in place, and the wrapper's `grep … | tail -1` reported the OLD approval for the NEW failed
+        review. The existing allocated-mode coverage all writes into a 0-byte leaf, so none of it
+        could observe this. Assert on the surviving bytes, not on the flags — the fix is ftruncate,
+        and a flags-only assertion would pass with the bug still present.
+        """
+        path = os.path.join(self.d, "reserved.txt")
+        Path(path).touch()
+
+        first = b"round 1 transcript, long and complete\nVERDICT: APPROVE\n"
+        self.mod._write_private(path, first, allocated=True)
+        self.assertEqual(Path(path).read_bytes(), first)
+
+        shorter = b"round 2 died early\n"
+        self.mod._write_private(path, shorter, allocated=True)
+
+        got = Path(path).read_bytes()
+        self.assertEqual(got, shorter, "the leaf must hold exactly what THIS run wrote")
+        self.assertNotIn(b"VERDICT:", got, "the previous run's verdict must not survive the rewrite")
+
+    def test_allocated_rewrite_still_refuses_to_create_an_unreserved_leaf(self):
+        """The truncation fix must not weaken the reservation invariant it sits next to.
+
+        ftruncate is used precisely because it cannot create a file; O_TRUNC would have. This is the
+        deletion test for that choice: if someone later "simplifies" the fix back to O_TRUNC, the
+        allocated write starts creating leaves it never reserved and this fails.
+        """
+        path = os.path.join(self.d, "never-reserved.txt")
+        with self.assertRaises(OSError):
+            self.mod._write_private(path, b"must-not-land", allocated=True)
+        self.assertFalse(os.path.exists(path), "allocated mode must never create the leaf")
+
+    def test_allocated_mode_never_recreates_the_private_parent_chain(self):
+        """The allocator owns the directory chain at 0700; the capture must not rebuild it at umask.
+
+        `main()` created `dirname(out_path)` unconditionally, using the process umask. In allocated mode
+        that rebuilt the private state tree at 0755 — and the allocator VALIDATES the mode, so every
+        later `--allocate` for that repo hash failed "has mode 0o0755, expected 0o0700" permanently
+        (PR #63 review, gap 3). Assert on the filesystem, not on the flags: the parent must still be
+        absent afterwards, and the run must fail rather than silently write somewhere new.
+        """
+        parent = os.path.join(self.d, "state-root", "review-transcripts", "abcdef")
+        target = os.path.join(parent, "leaf.txt")
+        self.assertFalse(os.path.exists(parent))
+
+        code = self.mod.main(target, ["/bin/echo", "hi"], timeout=20, allocated=True)
+
+        self.assertNotEqual(0, code, "an allocated write into a missing chain must fail")
+        self.assertFalse(
+            os.path.isdir(parent), "allocated mode must never recreate the allocator's parent chain"
+        )
+
+    def test_nonallocated_mode_still_creates_its_parent_chain(self):
+        """The deletion test for the guard: it must be conditional, not a blanket removal."""
+        parent = os.path.join(self.d, "ordinary", "nested")
+        target = os.path.join(parent, "out.txt")
+
+        code = self.mod.main(target, ["/bin/echo", "hi"], timeout=20, allocated=False)
+
+        self.assertEqual(0, code)
+        self.assertTrue(os.path.isdir(parent), "non-allocated mode must still create its parents")
+
+    def test_allocated_mode_refuses_before_running_the_command(self):
+        """A stale/deleted reservation must fail FAST, not after the review has already run.
+
+        The reservation used to be enforced only by the final write — i.e. after the wrapped command
+        finished — so a stale allocated path burned an entire review (up to 28 minutes of `agy`) and
+        only then failed on a missing file. The round is lost either way; the cost was the wasted
+        wall-clock (PR #63 second-round review).
+
+        Asserts the command's SIDE EFFECT is absent rather than timing the failure: a timing
+        assertion would pass on a fast machine even if the command did run.
+        """
+        marker = os.path.join(self.d, "the-command-ran")
+        missing = os.path.join(self.d, "never-reserved.txt")
+
+        self.assertNotEqual(
+            0, self.mod.main(missing, ["/usr/bin/touch", marker], timeout=30, allocated=True)
+        )
+
+        self.assertFalse(
+            os.path.exists(marker), "the wrapped command must NOT run when the leaf is unreserved"
+        )
+        self.assertFalse(os.path.exists(missing), "and the leaf must still not be created")
+
+    def test_allocated_mode_refuses_a_symlink_at_the_reserved_path_before_running(self):
+        """A symlink planted at the reserved path is rejected at preflight, via lstat."""
+        marker = os.path.join(self.d, "symlink-command-ran")
+        target = os.path.join(self.d, "elsewhere.txt")
+        open(target, "w").close()
+        link = os.path.join(self.d, "reserved-link.txt")
+        os.symlink(target, link)
+
+        self.assertNotEqual(
+            0, self.mod.main(link, ["/usr/bin/touch", marker], timeout=30, allocated=True)
+        )
+
+        self.assertFalse(os.path.exists(marker), "a symlinked reservation must not run the command")
+
+    def test_allocated_mode_still_runs_for_a_properly_reserved_leaf(self):
+        """The deletion test: preflight must be conditional, not refuse every allocated run."""
+        leaf = os.path.join(self.d, "properly-reserved.txt")
+        os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        # …and its `.launch` record. The allocator writes both, and the preflight now refuses an
+        # allocation without one — a deleted or corrupted record used to let a 20-30 minute review
+        # run to completion and exit 0, only for the verdict writer to discard it (PR #63 recheck).
+        # A fixture reserving a leaf alone models an allocation the allocator never produces.
+        with open(leaf + ".launch", "w", encoding="utf-8") as fh:
+            fh.write("a" * 32 + " codex\n")
+
+        self.assertEqual(0, self.mod.main(leaf, ["/bin/echo", "ok"], timeout=30, allocated=True))
+        self.assertIn(b"ok", Path(leaf).read_bytes())
+
+    def test_allocated_mode_missing_leaf_is_a_hard_error_without_creating_retry(self):
+        path = os.path.join(self.d, "missing.txt")
+        real_open = os.open
+        target_flags = []
+
+        def _open_spy(open_path, flags, mode=0o777, *args, **kwargs):
+            if os.fspath(open_path) == path:
+                target_flags.append(flags)
+            return real_open(open_path, flags, mode, *args, **kwargs)
+
+        os.open = _open_spy
+        try:
+            with self.assertRaises(OSError):
+                self.mod._write_private(path, b"must-not-land", allocated=True)
+        finally:
+            os.open = real_open
+
+        self.assertFalse(os.path.lexists(path), "a missing reservation must not be recreated")
+        self.assertTrue(target_flags, "the writer must attempt to open the reserved leaf")
+        for flags in target_flags:
+            self.assertFalse(flags & os.O_CREAT, "no retry may create the missing reservation")
+            self.assertFalse(flags & os.O_TRUNC, "no retry may truncate a replacement target")
+
+    def test_allocated_mode_consumes_reader_held_fifo_fstat_with_a_distinct_error(self):
+        path = os.path.join(self.d, "reserved.fifo")
+        os.mkfifo(path)
+        reader_fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        real_open, real_fstat = os.open, os.fstat
+        opened_fds = []
+        fstat_fds = []
+
+        def _open_spy(open_path, flags, mode=0o777, *args, **kwargs):
+            fd = real_open(open_path, flags, mode, *args, **kwargs)
+            if os.fspath(open_path) == path:
+                opened_fds.append(fd)
+            return fd
+
+        def _fstat_spy(fd):
+            fstat_fds.append(fd)
+            return real_fstat(fd)
+
+        os.open, os.fstat = _open_spy, _fstat_spy
+        try:
+            with self.assertRaises(self.mod.NonRegularCaptureTargetError):
+                self.mod._write_private(path, b"must-not-land", allocated=True)
+        finally:
+            os.open, os.fstat = real_open, real_fstat
+            os.close(reader_fd)
+
+        self.assertTrue(opened_fds, "the FIFO must be opened before its file type is decided")
+        self.assertEqual(fstat_fds, opened_fds, "fstat must consume the descriptor returned by os.open")
+
+    def test_regular_fstat_result_does_not_mask_an_independent_rejection(self):
+        path = os.path.join(self.d, "reserved.fifo")
+        os.mkfifo(path)
+        reader_fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        real_fstat, real_fchmod = os.fstat, os.fchmod
+
+        class IndependentDefenceError(OSError):
+            pass
+
+        def _regular_fstat(fd):
+            values = list(real_fstat(fd))
+            values[0] = stat.S_IFREG | 0o600
+            return os.stat_result(values)
+
+        def _independent_rejection(_fd, _mode):
+            raise IndependentDefenceError("independent defence")
+
+        os.fstat, os.fchmod = _regular_fstat, _independent_rejection
+        try:
+            with self.assertRaises(IndependentDefenceError) as raised:
+                self.mod._write_private(path, b"must-not-land", allocated=True)
+        finally:
+            os.fstat, os.fchmod = real_fstat, real_fchmod
+            os.close(reader_fd)
+        self.assertNotIsInstance(raised.exception, self.mod.NonRegularCaptureTargetError)
+
+    def test_allocated_mode_fchmods_open_fd_before_writing_without_path_chmod(self):
+        path = os.path.join(self.d, "reserved.txt")
+        Path(path).touch()
+        os.chmod(path, 0o644)
+        real_chmod, real_fchmod, real_fstat = os.chmod, os.fchmod, os.fstat
+        fchmod_observations = []
+
+        def _fchmod_spy(fd, mode):
+            fchmod_observations.append((mode, real_fstat(fd).st_size))
+            return real_fchmod(fd, mode)
+
+        def _path_chmod_forbidden(*_args, **_kwargs):
+            raise AssertionError("the capture target must not be tightened through its path")
+
+        os.fchmod, os.chmod = _fchmod_spy, _path_chmod_forbidden
+        try:
+            self.mod._write_private(path, b"payload", allocated=True)
+        finally:
+            os.fchmod, os.chmod = real_fchmod, real_chmod
+
+        self.assertEqual(fchmod_observations, [(0o600, 0)], "fchmod must precede every payload byte")
+        self.assertEqual(Path(path).read_bytes(), b"payload")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_allocated_mode_fchmod_failure_writes_nothing(self):
+        path = os.path.join(self.d, "reserved.txt")
+        Path(path).touch()
+        real_fchmod, real_fstat = os.fchmod, os.fstat
+        fchmod_observations = []
+
+        def _fchmod_boom(fd, mode):
+            fchmod_observations.append((mode, real_fstat(fd).st_size))
+            raise PermissionError("forced allocated-mode fchmod failure")
+
+        os.fchmod = _fchmod_boom
+        try:
+            with self.assertRaises(PermissionError):
+                self.mod._write_private(path, b"must-not-land", allocated=True)
+        finally:
+            os.fchmod = real_fchmod
+
+        self.assertEqual(fchmod_observations, [(0o600, 0)], "fchmod must run before payload persistence")
+        self.assertEqual(Path(path).read_bytes(), b"", "fchmod failure must leave the reservation empty")
+
+    def test_main_applies_allocated_mode_only_to_the_reserved_transcript(self):
+        path = os.path.join(self.d, "reserved.txt")
+        # Actually reserve the leaf. This test stubs `_write_private`, so it previously passed with no
+        # reservation at all — nothing checked. `main()` now preflights the reservation before spawning
+        # the command, which is the state a real allocated run is always in.
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        with open(path + ".launch", "w", encoding="utf-8") as fh:
+            fh.write("a" * 32 + " codex\n")
+        writes = []
+        real_write_private = self.mod._write_private
+
+        def _write_spy(write_path, data, allocated=False):
+            writes.append((write_path, data, allocated))
+
+        self.mod._write_private = _write_spy
+        try:
+            status = self.mod.main(path, [sys.executable, "-c", "pass"], allocated=True)
+        finally:
+            self.mod._write_private = real_write_private
+
+        self.assertEqual(status, 0)
+        self.assertEqual(writes[0], (path, b"", True))
+        self.assertEqual(writes[1][0], path + ".captureid")
+        self.assertFalse(writes[1][2], "the unreserved capture-id sidecar keeps create/truncate mode")
 
     def test_refuses_to_write_to_a_fifo(self):
         """O_NOFOLLOW alone permits a pre-created FIFO at the predictable capture path — with no reader
@@ -110,11 +424,7 @@ class WritePrivateTests(unittest.TestCase):
         self.assertEqual(closed, [], "os.fdopen owns fd; the except path must not os.close it again")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class ParseTimeoutEqualsForm(unittest.TestCase):
+class CaptureArgumentParsingTests(unittest.TestCase):
     """COREDEV-2503 B1: `--timeout=N` (equals form) was unrecognized and fell into the out-path, so a caller
     using `=N` got an UNBOUNDED run. Both forms now parse to the same timeout via parse_pre_args."""
 
@@ -122,13 +432,15 @@ class ParseTimeoutEqualsForm(unittest.TestCase):
         self.mod = _load()
 
     def test_equals_form_sets_timeout(self):
-        t, out = self.mod.parse_pre_args(["--timeout=5", "/tmp/o.txt"])
+        t, out, allocated = self.mod.parse_pre_args(["--timeout=5", "/tmp/o.txt"])
         self.assertEqual(t, 5.0)
         self.assertEqual(out, "/tmp/o.txt")
+        self.assertFalse(allocated)
 
     def test_space_form_still_works(self):
-        t, _ = self.mod.parse_pre_args(["--timeout", "5", "/tmp/o.txt"])
+        t, _, allocated = self.mod.parse_pre_args(["--timeout", "5", "/tmp/o.txt"])
         self.assertEqual(t, 5.0)
+        self.assertFalse(allocated)
 
     def test_equals_form_validates_like_space_form(self):
         for bad in ("--timeout=abc", "--timeout=0", "--timeout=-1", "--timeout=inf", "--timeout=nan"):
@@ -137,5 +449,593 @@ class ParseTimeoutEqualsForm(unittest.TestCase):
 
     def test_equals_form_does_not_leak_into_outpath(self):
         # before B1 `--timeout=600` became the out-path (unbounded run + a 'too many arguments' error)
-        t, out = self.mod.parse_pre_args(["--timeout=600", "/real/out.txt"])
-        self.assertEqual((t, out), (600.0, "/real/out.txt"))
+        t, out, allocated = self.mod.parse_pre_args(["--timeout=600", "/real/out.txt"])
+        self.assertEqual((t, out, allocated), (600.0, "/real/out.txt", False))
+
+    def test_missing_out_path_is_refused_rather_than_defaulted(self):
+        """The out-path used to default to a fixed `/tmp/pty-out.txt` (deep review, P2).
+
+        That is MAJ-10 in miniature: a run that dies before writing leaves the PREVIOUS run's bytes at
+        the shared path for the next reader to trust, and two concurrent captures overwrite each other.
+        The caller who forgets a path is exactly the caller who must not silently get a shared file.
+        """
+        with self.assertRaises(SystemExit) as raised:
+            self.mod.parse_pre_args(["--timeout=5"])
+        self.assertIn("out-path is required", str(raised.exception))
+
+        source = pathlib.Path(_PTY).read_text(encoding="utf-8")
+        self.assertNotIn(
+            '"/tmp/pty-out.txt"',
+            source,
+            "a fixed default out-path is back in the parser",
+        )
+
+    def test_restoring_the_default_out_path_is_what_the_guard_prevents(self):
+        """Mutation: put the default back and the same call succeeds, handing back the shared path."""
+        mutant_source = pathlib.Path(_PTY).read_text(encoding="utf-8").replace(
+            "    if not positional:", "    if False:", 1
+        )
+        self.assertNotIn("    if not positional:", mutant_source)
+        mutant_source = mutant_source.replace(
+            "    return timeout, positional[0], allocated",
+            '    return timeout, (positional[0] if positional else "/tmp/pty-out.txt"), allocated',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "pty_capture_mutant.py"
+            path.write_text(mutant_source, encoding="utf-8")
+            spec = importlib.util.spec_from_file_location("_pty_default_mutant", path)
+            mutant = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mutant
+            try:
+                spec.loader.exec_module(mutant)
+                _timeout, out, _allocated = mutant.parse_pre_args(["--timeout=5"])
+                self.assertEqual("/tmp/pty-out.txt", out)
+            finally:
+                sys.modules.pop(spec.name, None)
+
+    def test_allocated_flag_is_forwarded_to_main(self):
+        observed = []
+        real_main = self.mod.main
+
+        def _main_spy(out_path, command, timeout=None, allocated=False):
+            observed.append((out_path, command, timeout, allocated))
+            return 23
+
+        self.mod.main = _main_spy
+        try:
+            status = self.mod.cli_main([
+                "--timeout=5",
+                "--allocated",
+                "/reserved/transcript.txt",
+                "--",
+                "reviewer",
+                "--arg",
+            ])
+        finally:
+            self.mod.main = real_main
+
+        self.assertEqual(status, 23)
+        self.assertEqual(
+            observed,
+            [("/reserved/transcript.txt", ["reviewer", "--arg"], 5.0, True)],
+        )
+
+
+class AllocatedTargetHardening(unittest.TestCase):
+    """Four allocated-capture defects the recheck reproduced (PR #63 recheck, P2)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        spec = importlib.util.spec_from_file_location("ptycap_h", _PTY)
+        self.mod = importlib.util.module_from_spec(spec)
+        sys.modules["ptycap_h"] = self.mod
+        spec.loader.exec_module(self.mod)
+
+    def _reserve(self, name="leaf.txt", launch=True):
+        leaf = os.path.join(self.d, name)
+        os.close(os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        if launch:
+            with open(leaf + ".launch", "w", encoding="utf-8") as fh:
+                fh.write("a" * 32 + " codex\n")
+        return leaf
+
+    def test_a_hard_linked_target_is_refused_before_it_is_rewritten(self):
+        """A hard link IS a regular file, so `O_NOFOLLOW` and `S_ISREG` both accept one.
+
+        Reproduced: linking an 18-byte file at the reserved path made `_write_private` rewrite that
+        file's contents and set it 0600 — corrupting an arbitrary same-user file. Asserted on the
+        victim's bytes, not on the exception: an exception raised after the write would be no defence.
+        """
+        victim = os.path.join(self.d, "victim.txt")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS DATA\n")
+        leaf = os.path.join(self.d, "linked.txt")
+        os.link(victim, leaf)
+
+        with self.assertRaises(Exception):
+            self.mod._write_private(leaf, b"REVIEW OUTPUT\n", allocated=True)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS DATA\n", fh.read())
+
+    def test_an_unlinked_reservation_is_still_accepted(self):
+        """The positive control: the guard must reject SHARING, not every allocated write."""
+        leaf = self._reserve()
+        self.mod._write_private(leaf, b"REVIEW OUTPUT\n", allocated=True)
+        with open(leaf, encoding="utf-8") as fh:
+            self.assertEqual("REVIEW OUTPUT\n", fh.read())
+
+    def test_a_missing_launch_record_refuses_BEFORE_running_the_command(self):
+        """Asserted on the child never running, which is the whole point of moving the check earlier.
+
+        `review-verdict.py` already rejected such a transcript — but only at WRITE time, so a 20-30
+        minute review completed and exited 0 before being discarded. A refusal after the cost is paid
+        is a report, not a preflight.
+        """
+        leaf = self._reserve("no-record.txt", launch=False)
+        marker = os.path.join(self.d, "child-ran")
+        code = self.mod.main(leaf, ["/bin/sh", "-c", f"touch {marker}"], timeout=30, allocated=True)
+        self.assertEqual(1, code)
+        self.assertFalse(os.path.exists(marker), "the reviewer ran despite an unusable allocation")
+
+    def test_an_empty_launch_record_is_also_refused(self):
+        """Present-but-useless is the same outcome as absent, and was equally invisible until now."""
+        leaf = self._reserve("empty-record.txt", launch=False)
+        open(leaf + ".launch", "w").close()
+        marker = os.path.join(self.d, "child-ran-2")
+        code = self.mod.main(leaf, ["/bin/sh", "-c", f"touch {marker}"], timeout=30, allocated=True)
+        self.assertEqual(1, code)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_case_mangled_protected_root_is_rejected(self):
+        """`commonpath` is case-SENSITIVE; APFS is not, by default.
+
+        `$HOME/.CLAUDE/x` opens the same directory as `$HOME/.claude/x` while comparing unequal, so a
+        case-mangled `XDG_STATE_HOME` was accepted as outside the protected root. `realpath` does not
+        help: it resolves symlinks but preserves the caller's spelling.
+
+        MUTATION NOTE — the containment has TWO independent mechanisms, the inode walk and the
+        casefolded lexical fallback, and either alone rejects this. So disabling one changes nothing
+        and a single-mutant run reports no failures; only disabling BOTH reopens the hole, which this
+        test then catches. Recorded because "the mutant passed" would otherwise read as "the guard is
+        inert" — it means the redundancy is real, not that the check is decorative.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        os.makedirs(os.path.join(home, ".claude", "review-state"))
+        for spelling in (".claude", ".CLAUDE", ".Claude"):
+            with self.subTest(spelling=spelling):
+                candidate = os.path.join(home, spelling, "review-state")
+                canonical, reason = self.mod._validate_base_candidate(candidate, home)
+                self.assertIsNone(canonical, f"{spelling} was accepted: {reason}")
+
+    def test_a_base_outside_the_protected_root_is_still_accepted(self):
+        """Control — the containment must not have become "reject everything"."""
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        elsewhere = os.path.join(home, "elsewhere")
+        os.makedirs(elsewhere)
+        canonical, reason = self.mod._validate_base_candidate(elsewhere, home)
+        self.assertIsNotNone(canonical, reason)
+    def test_a_base_owned_by_another_user_is_rejected(self):
+        """`os.access` answers "may I write here", never "is this mine".
+
+        An attacker-created mode-0777 directory under `/tmp` passed, and the allocator then placed its
+        0700 subtree beneath a parent whose owner can rename or replace that subtree between allocation
+        and capture (PR #63 recheck, P2). The uid is stubbed because creating a foreign-owned directory
+        needs root — the check under test is the comparison, not the kernel's bookkeeping.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        foreign = os.path.join(home, "attacker")
+        os.makedirs(foreign, mode=0o777)
+
+        real_stat = os.stat
+
+        class _Foreign:
+            def __init__(self, base): self._base = base
+            def __getattr__(self, name): return getattr(self._base, name)
+            @property
+            def st_uid(self): return 4242      # neither this user nor root
+
+        def stub(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            same = os.path.realpath(str(path)) == os.path.realpath(foreign)
+            return _Foreign(info) if same else info
+
+        self.mod.os.stat = stub
+        self.addCleanup(setattr, self.mod.os, "stat", real_stat)
+        canonical, reason = self.mod._validate_base_candidate(foreign, home)
+        self.assertIsNone(canonical, "a foreign-owned base was accepted")
+        self.assertIn("owned by uid", reason)
+
+    def test_a_root_owned_ancestor_is_still_accepted(self):
+        """Control, and the reason the check is not simply "must be mine".
+
+        `/tmp` and `/` are root-owned and are the normal case; rejecting them would refuse every
+        default configuration, which is a false positive nobody would tolerate for long.
+        """
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        canonical, reason = self.mod._validate_base_candidate(
+            os.path.join(tempfile.gettempdir(), "um-ownership-probe"), home
+        )
+        self.assertIsNotNone(canonical, reason)
+
+
+class AllocationAndLaunchPreconditions(unittest.TestCase):
+    """Refusals that must happen BEFORE an expensive review, and before a symlink is adopted.
+
+    Every case here was reproduced against the pre-fix code (PR #63 recheck, P2): each one either
+    spent a full 12-28 minute review that could never be cashed in, or built the private transcript
+    hierarchy through an attacker-controlled directory.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    # ---- the round grammar ----------------------------------------------------------------------
+
+    def test_a_nonnumeric_round_is_refused_before_allocation(self):
+        """`round-1` satisfied the generic component grammar, so a full review ran and
+        `review-verdict.py` then rejected the basename because it requires `r[0-9]+`."""
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.mod.allocate_transcript("abc123", "COREDEV-1", "round-1", "codex",
+                                         environ={"XDG_STATE_HOME": self.d, "HOME": self.d})
+        self.assertIn("round", str(caught.exception))
+
+    def test_a_numeric_round_still_allocates(self):
+        """The positive control — the grammar must reject malformed rounds, not all rounds."""
+        leaf = self.mod.allocate_transcript("abc123", "COREDEV-1", "7", "codex",
+                                            environ={"XDG_STATE_HOME": self.d, "HOME": self.d})
+        self.assertTrue(os.path.isfile(leaf), leaf)
+        self.assertIn("r7-codex-", os.path.basename(leaf))
+
+    # ---- the symlink race on the allocation chain ------------------------------------------------
+
+    def _plant_and_allocate(self, plant):
+        base = Path(self.d) / "base"
+        base.mkdir()
+        victim = Path(self.d) / "attacker-target"
+        victim.mkdir()
+        plant(base, victim)
+        with self.assertRaises(self.mod.AllocationError):
+            self.mod._mkdir_private_chain(str(base / "unleashed-mail" / "review-transcripts"))
+        self.assertEqual([], list(victim.iterdir()),
+                         "the chain was built inside the attacker's directory")
+
+    def test_a_preplanted_symlink_ancestor_is_refused(self):
+        """`os.path.exists` is true for a symlink, so the walk stopped there and `os.path.isdir`
+        followed it — the whole private hierarchy was created inside the link's target."""
+        self._plant_and_allocate(lambda base, victim: (base / "unleashed-mail").symlink_to(victim))
+
+    def test_a_symlink_at_a_deeper_component_is_refused(self):
+        def plant(base, victim):
+            (base / "unleashed-mail").mkdir(mode=0o700)
+            (base / "unleashed-mail" / "review-transcripts").symlink_to(victim)
+        self._plant_and_allocate(plant)
+
+    def test_a_preplanted_OTHERS_WRITABLE_ancestor_is_refused(self):
+        """A directory can be the wrong ancestor without being a symlink (PR #63 recheck, P2).
+
+        The anchor was checked for `S_ISDIR` and nothing else, so a self-owned mode-0777 component was
+        adopted and the private subtree built beneath it. Rename and unlink permission comes from the
+        PARENT, so any local user with write access could then replace the mode-0700 child and every
+        private mode validated below it would be protecting a subtree we no longer created. The base
+        candidate's nearest-existing ancestor was already checked this way; the chain builder was not.
+        """
+        base = Path(self.d) / "wide-open"
+        base.mkdir(mode=0o777)
+        os.chmod(base, 0o777)                       # defeat the process umask
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.mod._mkdir_private_chain(str(base / "unleashed-mail" / "review-transcripts"))
+        self.assertIn("writable by others", str(caught.exception))
+
+    def test_a_STICKY_others_writable_ancestor_is_accepted(self):
+        """Discrimination: the sticky bit is what makes `/tmp` — the normal case — usable.
+
+        With `S_ISVTX` only the owner of an entry may rename or delete it, which is exactly the property
+        the check demands. Refusing this too would reject the ordinary temp-directory layout.
+        """
+        base = Path(self.d) / "sticky"
+        base.mkdir()
+        os.chmod(base, 0o1777)
+        target = base / "unleashed-mail" / "review-transcripts"
+        self.mod._mkdir_private_chain(str(target))
+        self.assertTrue(target.is_dir())
+
+    def test_a_component_RACED_into_existence_wide_open_is_refused(self):
+        """The `FileExistsError` branch exists because another process can win this race.
+
+        It required only `S_ISDIR`, so a racer could pre-create the component as their own mode-0777
+        directory in the window between the walk finding it absent and this `mkdir` — and the allocator
+        adopted it. The anchor check cannot see this one: at walk time the component did not exist.
+
+        The race is staged deterministically: `os.mkdir` is wrapped so the FIRST creation lands
+        mode-0777 and then reports `FileExistsError`, which is precisely what the loop observes when it
+        loses. A timing-based version could pass against the broken code, which proves nothing.
+        """
+        base = Path(self.d) / "anchor"
+        base.mkdir(mode=0o700)
+        target = base / "unleashed-mail" / "review-transcripts"
+        real_mkdir = os.mkdir
+        raced = []
+
+        def racing_mkdir(path, mode=0o777, *args, **kwargs):
+            if not raced and os.fspath(path) == str(base / "unleashed-mail"):
+                raced.append(path)
+                real_mkdir(path, 0o777, *args, **kwargs)
+                os.chmod(path, 0o777)               # the racer's directory, not ours
+                raise FileExistsError(errno.EEXIST, "File exists", os.fspath(path))
+            return real_mkdir(path, mode, *args, **kwargs)
+
+        os.mkdir = racing_mkdir
+        try:
+            with self.assertRaises(self.mod.AllocationError) as caught:
+                self.mod._mkdir_private_chain(str(target))
+        finally:
+            os.mkdir = real_mkdir
+        self.assertEqual(1, len(raced), "the fixture never staged the race")
+        self.assertIn("concurrent path", str(caught.exception))
+        self.assertIn("writable by others", str(caught.exception))
+        self.assertFalse(target.exists(), "the chain was built under the raced directory anyway")
+
+    def test_a_clean_chain_is_still_created_at_0700(self):
+        clean = Path(self.d) / "clean"
+        clean.mkdir()
+        target = clean / "unleashed-mail" / "review-transcripts"
+        self.mod._mkdir_private_chain(str(target))
+        self.assertTrue(target.is_dir())
+        self.assertEqual(0o700, stat.S_IMODE(os.stat(target).st_mode))
+
+    # ---- the launch record -----------------------------------------------------------------------
+
+    def _run_with_launch_record(self, record: str, leaf: str = None):
+        run_id = "a" * 32
+        leaf = leaf or f"COREDEV-1r1-codex-{run_id}.txt"
+        out = os.path.join(self.d, leaf)
+        Path(out).touch()
+        Path(out + ".launch").write_text(record, encoding="utf-8")
+        marker = os.path.join(self.d, "reviewer-ran")
+        result = subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", out, "--",
+             "sh", "-c", f"echo ran > {marker}; echo hi"],
+            capture_output=True, text=True,
+        )
+        return result, os.path.exists(marker)
+
+    def test_a_malformed_launch_record_refuses_before_spawning(self):
+        """"Regular and nonempty" accepted `not-a-run-id`, ran the command and returned 0 — the
+        verdict writer then discarded the transcript, so the round was lost anyway."""
+        result, ran = self._run_with_launch_record("not-a-run-id\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(ran, "the reviewer was spawned on a launch record that can never validate")
+
+    def test_a_launch_record_for_a_DIFFERENT_run_refuses_before_spawning(self):
+        """The reviewer field is present and correct, so ONLY the run id differs.
+
+        Written as a bare `b*32` this cell was refused as MALFORMED once the record gained the reviewer
+        field — still a refusal, so the test still passed, but it proved nothing about the run-id rule
+        it names. The diagnostic is asserted for that reason.
+        """
+        result, ran = self._run_with_launch_record("b" * 32 + " codex\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("names a DIFFERENT run than its filename", result.stderr)
+        self.assertFalse(ran, "the reviewer was spawned on another run's launch record")
+
+    def test_a_launch_record_naming_ANOTHER_reviewer_refuses_before_spawning(self):
+        """The record's reviewer must agree with the leaf's (PR #63 recheck, P1).
+
+        The record is what the verdict gate reads as the allocator's attestation of WHO reviewed. If the
+        two could disagree here, the preflight would spend a full review producing a transcript the gate
+        must then reject as renamed — and the run id alone cannot detect it.
+        """
+        result, ran = self._run_with_launch_record("a" * 32 + " gemini\n")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("names reviewer 'gemini' but its filename says 'codex'", result.stderr)
+        self.assertFalse(ran, "the reviewer was spawned on a record attesting the other arm")
+
+    def test_a_matching_launch_record_still_runs(self):
+        """Positive control: the check must reject corruption, not every allocated capture."""
+        result, ran = self._run_with_launch_record("a" * 32 + " codex\n")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(ran)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class RunawayOutputIsBounded(unittest.TestCase):
+    """`--timeout` bounded wall-clock; nothing bounded BYTES (PR #63 recheck, P2).
+
+    A reviewer stuck in an output loop accumulated everything it printed into one in-memory bytearray
+    for the whole 28-minute budget — tens of gigabytes at PTY speeds, which takes the machine down
+    rather than the round. The cap is treated exactly like the timeout: the child is terminated through
+    the same ladder, what was captured is persisted, and the wrapper exits non-zero, because a runaway
+    must fail the round loudly rather than leave a silently truncated transcript for someone to grep.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+
+    def test_a_child_that_floods_the_pty_is_terminated_and_the_round_fails(self):
+        out = os.path.join(self.d, "flood.txt")
+        # A small cap keeps the probe fast; the production value is the same code path.
+        original = self.mod.MAX_CAPTURE_BYTES
+        self.mod.MAX_CAPTURE_BYTES = 200_000
+        self.addCleanup(setattr, self.mod, "MAX_CAPTURE_BYTES", original)
+
+        code = self.mod.main(
+            out,
+            ["sh", "-c", "while :; do printf 'flood%.0s' $(seq 1 200); done"],
+            timeout=60,
+        )
+
+        self.assertEqual(125, code, "a runaway must be distinguishable from a slow reviewer (124)")
+        captured = os.path.getsize(out)
+        self.assertGreater(captured, 0, "the partial capture is the evidence — it must be persisted")
+        # Bounded: the whole point. Without the cap this loop would have run for the full 60s.
+        self.assertLess(captured, 4 * self.mod.MAX_CAPTURE_BYTES,
+                        f"the capture was not bounded ({captured} bytes)")
+
+    def test_an_ordinary_capture_is_untouched(self):
+        """Discrimination: the cap must stop a flood, not every command."""
+        out = os.path.join(self.d, "normal.txt")
+        code = self.mod.main(out, ["sh", "-c", "printf 'VERDICT: APPROVE\\n'"], timeout=30)
+        self.assertEqual(0, code)
+        self.assertIn("VERDICT: APPROVE", Path(out).read_text(encoding="utf-8"))
+
+
+class LaunchRecordOpenCannotHangOrFollow(unittest.TestCase):
+    """The preflight read of `.launch` ran BEFORE the fork and before the timeout clock.
+
+    THE FINDING (PR #63 recheck, P2). It was `lstat` then a plain `open()` of the same NAME — a
+    check-then-use, and a hang: a FIFO at that path makes a blocking open wait for a writer that never
+    arrives, so the round hung with no timeout able to recover it. One `O_NOFOLLOW|O_NONBLOCK` open,
+    with the checks made on the resulting descriptor, fixes both halves.
+    """
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        self.marker = os.path.join(self.d, "reviewer-ran")
+
+    def _run(self, plant):
+        run_id = "a" * 32
+        out = os.path.join(self.d, f"COREDEV-1r1-codex-{run_id}.txt")
+        Path(out).touch()
+        plant(out + ".launch")
+        return subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", out, "--",
+             "sh", "-c", f"echo ran > {self.marker}; echo hi"],
+            capture_output=True, text=True, timeout=30,
+        ), os.path.exists(self.marker)
+
+    def test_a_FIFO_at_the_launch_path_refuses_instead_of_hanging(self):
+        """`subprocess.run(timeout=30)` is the assertion: the pre-fix code never returns at all."""
+        result, ran = self._run(lambda path: os.mkfifo(path, 0o600))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("launch record", result.stderr)
+        self.assertFalse(ran, "the reviewer was spawned on a FIFO launch record")
+
+    def test_a_SYMLINK_at_the_launch_path_is_refused(self):
+        def plant(path):
+            target = os.path.join(self.d, "elsewhere.launch")
+            Path(target).write_text("a" * 32 + " codex\n", encoding="utf-8")
+            os.symlink(target, path)
+        result, ran = self._run(plant)
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(ran, "the preflight followed a symlinked launch record")
+
+    def test_a_REAL_record_still_runs(self):
+        """Positive control — O_NONBLOCK must not break the ordinary regular-file read."""
+        result, ran = self._run(
+            lambda path: Path(path).write_text("a" * 32 + " codex\n", encoding="utf-8"))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(ran)
+
+
+class EveryDrainPathHonoursTheCap(unittest.TestCase):
+    """The cap was applied in the main read loop only (PR #63 recheck, P2).
+
+    Two drain sweeps follow it — the post-reap sweep and the one in `finally` — and both called
+    `raw.extend()` without rechecking, so a child that emitted just under the limit, spawned a
+    descendant retaining the PTY and exited drove the wrapper past the bound through those sweeps. The
+    reviewer measured 70,561,968 bytes captured and an exit status of 0.
+
+    ASSERTED STRUCTURALLY, and that is a deliberate choice rather than a shortcut. Driving the drain
+    path from outside is not deterministic: each sweep polls with a 50 ms `select` and BREAKS on the
+    first idle window, so whether a descendant's first bytes arrive before that window is a race
+    between `fork`+`exec` and a timer. I built the fixture three ways and measured it — a descendant
+    started after the parent's output never reached the drain at all (exit 0, exactly the parent's
+    90,000 bytes), and one started before it tripped the MAIN loop instead (exit 125), which is the
+    path already covered by `RunawayOutputIsBounded`. A test that passes or fails on that race would
+    tell us nothing about the fix, which is the "a test that can pass against broken code proves
+    nothing" rule this suite applies elsewhere.
+
+    So the property is asserted where it is exact: EVERY site that appends to the capture buffer is
+    followed by the cap check. That is precisely what the defect was — one append site opting out — and
+    it also catches a fourth site added later, which a behavioural test of these two never would.
+    """
+
+    SOURCE = Path(_PTY).read_text(encoding="utf-8")
+
+    def test_every_append_site_is_followed_by_the_cap_check(self):
+        lines = self.SOURCE.splitlines()
+        appends = [i for i, line in enumerate(lines) if line.strip() == "raw.extend(chunk)"]
+        self.assertEqual(3, len(appends),
+                         f"the number of capture-buffer append sites changed: {len(appends)}")
+        for index in appends:
+            window = "\n".join(lines[index + 1:index + 4])
+            self.assertIn("len(raw) > MAX_CAPTURE_BYTES", window,
+                          f"the append at line {index + 1} is not followed by the cap check:\n{window}")
+            self.assertIn("_report_overflow()", window,
+                          f"the append at line {index + 1} does not set `overflowed`:\n{window}")
+
+    def test_the_overflow_report_is_one_shared_helper(self):
+        """One helper, called from all three, so the three cannot drift into different answers."""
+        self.assertEqual(1, self.SOURCE.count("def _report_overflow("))
+        self.assertEqual(3, self.SOURCE.count("overflowed = _report_overflow()"))
+
+    def test_the_overflow_exit_status_is_distinct_from_the_timeout(self):
+        """125, not 124: a runaway must not read as a slow reviewer."""
+        self.assertIn("exit_status = 125", self.SOURCE)
+
+
+class ReviewerNamesFitTheLaunchRecord(unittest.TestCase):
+    """The allocator could reserve a leaf no capture or verdict could ever use.
+
+    THE FINDING (PR #63 recheck, P2). Both readers read `_LAUNCH_RECORD_READ_BYTES` and then
+    `fullmatch` the result, so a reviewer long enough to push `<run id> <reviewer>\\n` past that bound
+    produces a record that can never validate. `--allocate` accepted a 100-character reviewer, wrote a
+    134-byte record and returned 0; `--allocated` then refused it as malformed. A reservation that
+    cannot be used is worse than a refusal, because it consumes the round.
+
+    The bound is DERIVED from the grammar in the module under test, never restated here — a fixture
+    that hardcoded 94 would keep passing if the read size changed underneath it.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
+        home = os.path.join(self.d, "home")
+        os.makedirs(home, mode=0o700)
+        self.env = {"XDG_STATE_HOME": os.path.join(self.d, "state"), "HOME": home}
+
+    def allocate(self, reviewer):
+        return self.mod.allocate_transcript("H", "COREDEV-1", "1", reviewer, environ=self.env)
+
+    def test_a_reviewer_that_would_overflow_the_record_is_refused_with_NO_leaf_reserved(self):
+        over = "g" * (self.mod._MAX_REVIEWER_LENGTH + 1)
+        with self.assertRaises(self.mod.AllocationError) as caught:
+            self.allocate(over)
+        self.assertIn("launch record", str(caught.exception))
+        state = os.path.join(self.d, "state")
+        leaves = []
+        for root, _dirs, files in os.walk(state):
+            leaves += [f for f in files if f.endswith(".txt")]
+        self.assertEqual([], leaves, "a leaf was reserved for a reviewer that can never validate")
+
+    def test_a_reviewer_AT_the_limit_allocates_and_the_capture_accepts_it(self):
+        """The round trip is the property: allocation and the preflight must agree at the boundary."""
+        at_limit = "g" * self.mod._MAX_REVIEWER_LENGTH
+        leaf = self.allocate(at_limit)
+        record = Path(leaf + ".launch").read_bytes()
+        self.assertEqual(self.mod._LAUNCH_RECORD_READ_BYTES, len(record))
+        self.assertIsNotNone(self.mod._LAUNCH_RECORD_RE.fullmatch(record),
+                             "the record at the boundary does not satisfy the allocator's own grammar")
+        marker = os.path.join(self.d, "ran")
+        result = subprocess.run(
+            [sys.executable, _PTY, "--timeout", "10", "--allocated", leaf, "--",
+             "sh", "-c", f"echo ran > {marker}; echo hi"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(os.path.exists(marker), "the preflight refused a record the allocator wrote")

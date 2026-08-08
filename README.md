@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.6.4
+# UnleashedMail — Claude Code Plugin v2.7.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,31 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.7.0
+
+- **Model-invocable skill grants narrowed from wildcards to exact entrypoints (`COREDEV-2642`)** — remediation of four independent reviews over the permission surface v2.6.7 shipped. `Bash(python3 …/scripts/*)`, `Bash(codex *)`, `Bash(agy *)` and `Bash(git *)` are gone from every model-invocable skill, replaced by exact wrapper scripts (`audit-codex.sh`, `preflight-agy.sh`, `changeset.sh`, plus five extracted capture/persistence helpers); bare `Write`/`Agent` are now `Write(docs/planning/**)` and enumerated `Agent(<type>)`. `validate-plugin-assembly.py` now rejects broad write/VCS/agent grants on any model-reachable skill — it found 17 further instances across 8 knowledge skills. Several fail-open gaps in the transcript-freshness and cleanup gates were also closed.
+  **Breaking for direct callers:** `pty-capture.py` now requires an out-path (no more shared `/tmp/pty-out.txt` default); both review recipes require a per-round prompt file (`.codex-prompt-${TICKET}r${ROUND}.md` / `.agy-prompt-${TICKET}r${ROUND}.md`) instead of a shared `.codex-prompt.md` / `.agy-prompt.md`; the gemini arm's default model is now `gemini-3.6-flash-high`. See the CHANGELOG for the full breakdown, including which of the underlying tickets did and did not clear the mandatory plan-review gate.
+
+### v2.6.7
+
+- **Per-run transcript paths and freshness (`COREDEV-2619`)** — reviewer captures are atomically allocated, threaded unchanged through review and synthesis, and bound to per-capture launch records so stale output cannot satisfy a later run; a one-shot release tool cleans only the closed 39-file leak manifest and its nine empty parents.
+
+### v2.6.6
+
+- **`AGENT_CONTRACTS.md` §13 narrowed to client-facing output** (`COREDEV-2605`) — a **scope narrowing, not a relaxation.** §13's scope is now a parseable four-column table binding each surface to its producer and to a repository **anchor**; the five capture-roster reviewers are `out` because their output is machine-consumed and governed by their own contracts, which are unchanged and still mandatory.
+  The payload-region invariant moves verbatim to **§5**, and the blocked-handoff prefix gets its own **§14**.
+
+### v2.6.5
+
+- **Plugin state no longer splits across two directories** (`COREDEV-2617`) — `CLAUDE_PLUGIN_DATA` is
+  exported to hooks and MCP subprocesses but **not** to an ordinary shell, so anything written outside a
+  hook landed in a *second* store (`~/.claude/unleashed-mail`) that the hooks' store never saw. An
+  unresolved base now **persists nothing**: path primitives return a poisoned, non-root sentinel
+  (`/dev/null/unresolved-plugin-base` — every path beneath a character device is `ENOTDIR`, so an
+  unguarded caller fails harmlessly instead of composing `/logs`), writers become no-ops, and one
+  diagnostic per process says so. **State written before this fix may still live in the second
+  directory** — see the CHANGELOG for how to find it.
 
 ### v2.6.4
 
@@ -164,7 +189,7 @@ its own guarantees.
 
 ### v2.3.1
 
-- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts (gemini → `/tmp/agy-out.txt`, codex → `/tmp/codex-out.txt`) and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Read-only and gates nothing automatically; a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a.
+- **Plan-review synthesis skill** — new [`/unleashed-mail:review-synthesis`](skills/review-synthesis/SKILL.md) reads the two captured plan-review transcripts and emits one auditable **Combined verdict** block (`APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES | DISAGREEMENT`) with Agreement / Disagreement / Minority report / Risk register / Confidence. Each transcript path is carried as one opaque `--reviewer "<name>=<STATUS>:<path>"` argument (**at this version the two paths were fixed; per-run allocated paths arrived in v2.6.7** — this historical entry had been rewritten to describe the later behaviour, so the file contradicted itself about when per-run paths existed); a one-approve / one-reject split is surfaced as `DISAGREEMENT` rather than averaged, and a missing/empty transcript can never claim `APPROVE`. Kept **distinct** from the code-review `synthesize_review` MCP tool (5 JSON arrays, `APPROVE_WITH_SUGGESTIONS`). Wired into [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) §2 as plan-review step 3a.
 - **Reviewer Output-Contract status enum** — the four specialist reviewers now end with a `## Output Contract` status (`COMPLETE | BLOCKED | PARTIAL`) that is **orthogonal** to their findings, so a reviewer that *couldn't run* returns `BLOCKED` + `[]` instead of an empty `[]` that reads as a clean pass. `swift-reviewer` Step 5 reads status **first**: `BLOCKED` → NEEDS DISCUSSION (the explicit form of a did-not-run uncertainty — **not** a `verification` blocker); `PARTIAL` → keep completed-scope findings + a non-gating `verification` warning naming the un-reviewed files. No synthesizer (Python) change.
 - **Decision-support option tables in `/unleashed-mail:brainstorm`** — a new design-phase **Step 4b** presents 2–4 options for a genuine architectural fork in a comparison table (with an unleashed-specific **Parity-Impact** column, S/M/L effort, a `**(Recommended)**` row, no emoji), then calls `AskUserQuestion` to record the chosen fork before the plan document is written. `AskUserQuestion` is added to the command's `allowed-tools` (a command-interface change).
 - **Skill count: 18** (was 17) — adds `review-synthesis`.
@@ -371,8 +396,8 @@ claude --plugin-dir /path/to/unleashed-mail-plugin   # session-scoped, no market
 
 ## Workflow skills (3)
 
-These three orchestration workflows ship as `disable-model-invocation` **skills** (custom commands
-have merged into skills) — you invoke them exactly as before, and Claude won't auto-trigger them:
+These three orchestration workflows ship as **skills** (custom commands have merged into skills) — you
+invoke them exactly as before, and Claude can now also trigger them itself when the task calls for one:
 
 | Skill | Usage |
 |---|---|

@@ -63,7 +63,16 @@ SESSION_KEY="$(hook_str session_id)"
 # wedge (the loop-guard cannot be durably recorded, so blocking would re-fire on every later Stop).
 if [ -n "$SESSION_KEY" ]; then
     SESSION_HASH="$(marker_hash_str "$SESSION_KEY")"
+    # COREDEV-2617 / D': the destructive site. :66 composes a path, :120 mktemps under it and
+    # :123 mv -f's into it. With an unresolved base the sentinel makes each fail ENOTDIR, but
+    # the gate must not depend on that — skip the sentinel machinery outright and let the gate
+    # fall through to its normal non-blocking result.
+    # ORDER IS LOAD-BEARING. These two statements were reversed, so the guard was DEAD CODE: the
+    # assignment below unconditionally overwrote the `SENTINEL=""` the guard had just set, and the
+    # gate's safety rested only on `/dev/null`'s ENOTDIR making the later mktemp/mv fail — the very
+    # accident the comment above says the gate "must not depend on" (PR #63 review, gap 26).
     SENTINEL="$(marker_dir)/stop-last-blocked-${REPO_HASH}-${SESSION_HASH}"
+    unleashed_base_ok || SENTINEL=""
 else
     SENTINEL=""
 fi

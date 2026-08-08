@@ -27,6 +27,8 @@ case "$SOURCE" in
     *) exit 0 ;;
 esac
 
+# COREDEV-2617 / D': nothing was persisted, so there is nothing to restore. Exit 0 silently.
+unleashed_base_ok || exit 0
 SNAP="$(context_snapshot_path)"   # per-checkout snapshot (repo-hash namespaced)
 [ -f "$SNAP" ] || exit 0
 

@@ -1,10 +1,16 @@
 ---
 name: implement
 description: Implement a feature using specialized coding agents (db, logic, UI) with TDD and modern standards
-effort: xhigh
 argument-hint: [feature name or docs/planning/PLAN.md path]
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, Agent
-disable-model-invocation: true
+# COREDEV-2642 (PR #63 review, gap 1): this skill is model-invocable, so every tool listed here
+# is PRE-APPROVED with no user gesture — including one the model opened by deciding a task "is an
+# implementation", a decision injected content in a reviewed file can steer. The body ORCHESTRATES:
+# it delegates all file writing to db-engineer / logic-engineer / ui-engineer via Agent, which carry
+# their own tools. So blanket Write/Edit/Bash were pre-approval this skill never exercises itself.
+# `allowed-tools` is a pre-approval grant, NOT a restriction — narrowing it does not disable
+# anything, it just means those calls need the normal user gesture. That is the correct posture for
+# a model-reachable workflow.
+allowed-tools: Read, Grep, Glob, Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(security-reviewer), Agent(unleashed-mail:security-reviewer), Agent(concurrency-reviewer), Agent(unleashed-mail:concurrency-reviewer), Agent(ux-perf-reviewer), Agent(unleashed-mail:ux-perf-reviewer), Agent(accessibility-auditor), Agent(unleashed-mail:accessibility-auditor), Agent(prompt-review), Agent(unleashed-mail:prompt-review), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh *)
 ---
 
 # Implement: $ARGUMENTS
@@ -17,149 +23,35 @@ Implementation without a **reviewed** plan violates CLAUDE.md's mandatory Plan R
 plan **for this feature**, then **verify its Combined-verdict artifact deterministically**, before writing
 any code:
 
+**Do NOT paste the user's argument into a shell command.** Resolve the plan yourself first — with
+`Glob` over `docs/planning/*_PLAN.md` and `Read` — then invoke the gate with the concrete path you
+resolved, as a single operand:
+
 ```bash
-# Resolve THE plan for the feature the user named — never let an unrelated approved plan satisfy the gate.
-# The argument is the feature name (e.g. "dark mode") or a repo-relative docs/planning path.
-#
-# MAJ-9: bind the argument ONCE via a QUOTED heredoc so shell metacharacters in it (`"`, `$( )`, backticks)
-# are LITERAL data, never executed. The argument placeholder (dollar-prefixed when Claude Code renders it)
-# is substituted TEXTUALLY across this ENTIRE fence BEFORE the shell runs — so the ONLY place it may appear
-# is the quoted-heredoc body just below. It must NOT appear anywhere earlier, not even in a comment: a
-# multi-line/pasted value would break out of the comment and run its second line as a command BEFORE the
-# guard below fires (that was the original injection bug — splicing it into shell syntax also broke on a
-# feature name with a quote). The quoted delimiter disables all expansion of the heredoc body; everything
-# after this uses "$ARG", never the raw placeholder.
-ARG="$(cat <<'UM_IMPLEMENT_ARG_EOF'
-$ARGUMENTS
-UM_IMPLEMENT_ARG_EOF
-)"
-# A slash argument is single-line; reject a multi-line value (only a crafted paste produces one, and it is
-# never a valid feature name or plan path) so a newline cannot smuggle a second line past the heredoc.
-if [ "$ARG" != "${ARG%%$'\n'*}" ]; then
-    echo "REFUSED: multi-line argument is not a valid plan name/path." >&2
-    exit 1
-fi
-
-# PHYSICAL CONTAINMENT — the one guard, used by BOTH resolution branches.
-#
-# The plan's BYTES must live under <repo-root>/docs/planning. Everything else here is convenience; this
-# is the tracked-plan mandate (CLAUDE.md:68) and it has been bypassed four different ways, each time
-# because the previous guard checked a PROXY for containment instead of containment:
-#   /tmp/OUTSIDE_PLAN.md                        -> `-f` accepts any existing file      (textual fix)
-#   docs/planning/../../evil/OUTSIDE_PLAN.md    -> `..` wears the prefix               (added `..` case)
-#   docs/planning/EVIL_PLAN.md -> /tmp/...      -> a symlink wears the prefix          (added realpath)
-#   docs/planning -> /tmp/...                   -> a symlinked ROOT: realpath'ing the BASE resolved it
-#                                                  through the same link, so both sides matched
-# Resolve the plan, but anchor the base to the PHYSICAL repo root and do NOT resolve the base itself —
-# then a symlinked docs/planning cannot launder its own target. (codex, #41 review; all reproduced.)
-_contained() {
-    python3 - "$1" <<'PYEOF'
-import os, sys
-root = os.path.realpath(".")
-base = os.path.join(root, "docs", "planning")   # deliberately NOT realpath'd
-real = os.path.realpath(sys.argv[1])
-sys.exit(0 if real == base or real.startswith(base + os.sep) else 1)
-PYEOF
-}
-_refuse_uncontained() {
-    { echo "REFUSED: '$1' does not live under <repo-root>/docs/planning."
-      echo "A tracked plan's BYTES must be in the repo — a symlink, a ../ escape, or a symlinked"
-      echo "docs/planning is not a tracked plan (CLAUDE.md's Plan Review Gate)."; } >&2
-    exit 1
-}
-
-if [ -f "$ARG" ]; then
-    _p="${ARG#./}"
-    case "$_p" in
-        docs/planning/*PLAN*.md) ;;
-        *) { echo "REFUSED: '$ARG' is not a tracked plan."
-             echo "The Plan Review Gate requires a repo-relative docs/planning/*PLAN*.md (CLAUDE.md)."; } >&2
-           exit 1 ;;
-    esac
-    _contained "$_p" || _refuse_uncontained "$ARG"
-    PLAN="$_p"
-else
-    # One tr, not two: `[:upper:]`->`[:lower:]` positionally, then ` `/`.`/`-` -> `_` (gemini, #41).
-    # THE DASH MUST COME LAST: in a tr SET a dash BETWEEN two characters is a RANGE, so ` -.` meant
-    # space(32)..dot(46) — 15 characters — and `/implement "c+dark"` then matched C-DARK_PLAN.md, i.e.
-    # the gate verified a plan nobody named (gemini, #41 review). Trailing `-` is a literal.
-    KEY=$(printf '%s' "$ARG" | tr '[:upper:] .-' '[:lower:]___')
-    # THE CONTENT GUARD IS LOAD-BEARING AND IS THE LOOP'S GATE — do not "simplify" it to `-n "$KEY"`.
-    # `[[ "$b" == *""* ]]` matches EVERY plan, so an empty KEY resolves to the first plan on disk: a
-    # fail-OPEN. `-n` alone is not enough either — `tr` maps ' ', '-' and '.' to '_' BEFORE this runs, so
-    # ARGUMENTS=" " yields KEY="_", which is non-empty and `*_*` matches most plan filenames. `*[!_]*`
-    # states the real property ("not composed solely of what tr just mapped to _") and is
-    # locale-independent, where the earlier `*[a-z0-9]*` was an ASCII proxy that refused `日本語`.
-    # EXACT STEM matches are collected separately from mere SUBSTRING matches. A unique substring used
-    # to resolve silently as identity — `/implement mode` picked DARK_MODE_PLAN.md — so a coincidental
-    # fragment could satisfy the gate against a plan the user did not name (full review, #41). Now a
-    # full/exact feature name always wins, and a pure substring must be named explicitly.
-    #
-    # For each plan, three stems the arg may exactly equal:
-    #   full   — the basename minus the `_PLAN.md` suffix            (coredev_2328_reviewer_status_capture)
-    #   desc   — full minus a leading `coredev_<digits>_` ticket     (reviewer_status_capture)
-    #   ticket — the `coredev_<digits>` prefix alone                 (coredev_2328)
-    EXACT=(); SUBSTR=()
-    if [[ "$KEY" == *[!_]* ]]; then
-        for p in docs/planning/*PLAN*.md; do
-            [ -e "$p" ] || continue                 # unmatched glob stays literal -> skip
-            # THE SAME CONTAINMENT GUARD AS THE DIRECT BRANCH. Without it `/implement evil` selected
-            # `docs/planning/EVIL_PLAN.md -> /tmp/OUTSIDE_PLAN.md` and returned GATE OK — the direct
-            # branch refused that exact symlink while the glob branch happily took it (codex, #41
-            # review; reproduced). Filtering here so an out-of-tree symlink cannot even reach a match.
-            _contained "$p" || continue
-            # `b` is the NORMALIZED basename: tr already mapped ` `/`.`/`-` -> `_`, so `.md` is `_md`
-            # here and the suffix to strip is `_plan_md`, not `_plan.md`.
-            b=$(printf '%s' "${p##*/}" | tr '[:upper:] .-' '[:lower:]___')
-            full="${b%_plan_md}"
-            desc="$full"; ticket=""
-            case "$full" in
-                coredev_[0-9]*)
-                    rest="${full#coredev_}"      # 2328_reviewer_status_capture
-                    ticket="coredev_${rest%%_*}" # coredev_2328
-                    desc="${rest#*_}"            # reviewer_status_capture
-                    ;;
-            esac
-            if [ "$KEY" = "$full" ] || [ "$KEY" = "$desc" ] || [ "$KEY" = "$ticket" ]; then
-                EXACT+=("$p")
-            elif [[ "$b" == *"$KEY"* ]]; then
-                SUBSTR+=("$p")
-            fi
-        done
-    fi
-    # Prefer EXACT: a full name wins over any coincidental substring.
-    if [ "${#EXACT[@]}" -gt 1 ]; then
-        { echo "AMBIGUOUS: '$ARG' exactly names ${#EXACT[@]} plans — name a path:"; printf '%s\n' "${EXACT[@]}"; } >&2
-        exit 2
-    elif [ "${#EXACT[@]}" -eq 1 ]; then
-        PLAN="${EXACT[0]}"
-    elif [ "${#SUBSTR[@]}" -ge 1 ]; then
-        # A PURE SUBSTRING is NOT identity. Do not auto-resolve it — the gate would then verify a plan
-        # the user only partially named. Require an exact name (full review, #41).
-        { echo "No plan is named exactly '$ARG'. Did you mean one of these? Name it exactly:"
-          printf '%s\n' "${SUBSTR[@]}"; } >&2
-        exit 2
-    fi
-    # No EXACT and no SUBSTR -> empty PLAN -> the fail-closed branch below.
-fi
-if [ -z "$PLAN" ]; then
-    # exit 1, and to stderr: the old form fell through with `ls`'s status, which is 0 whenever ANY
-    # plan exists — so a FAILED resolution reported success.
-    { echo "No plan matches '$ARG'. Available:"; ls docs/planning/*PLAN*.md 2>/dev/null; } >&2
-    exit 1
-else
-    echo "Plan: $PLAN"
-    # Verify the persisted, digest-bound verdict for THAT plan. The bare `${CLAUDE_PLUGIN_ROOT}` token is
-    # substituted inline in the skill body -> the plugin install path; the `:-.` form is NOT recognized by
-    # that substitution (it would reach the shell literally and resolve to `.`) (COREDEV-2504).
-    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" verify --plan "$PLAN"
-fi
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/resolve-plan-gate.sh" docs/planning/FEATURE_NAME_PLAN.md
 ```
 
+The script owns the resolution fallback, the physical-containment guard (the plan's bytes must live
+under `<repo-root>/docs/planning`) and the deterministic verify. It is ONE command, so the scoped grant
+above covers it; when this was ~135 lines of inline functions and branches it matched no grant at all,
+so the one block that must run before any implementation prompted every time.
+
+> **Why the argument is no longer substituted here (PR #63 recheck, P1).** This fence used to bind the
+> argument through a quoted heredoc, which kept shell metacharacters (`"`, `$( )`, backticks) as literal
+> data. What that could not defend was the DELIMITER: the placeholder is substituted **textually across
+> this entire fence before the shell runs**, so an argument containing a line exactly equal to the
+> heredoc delimiter closed the body early and every following line was parsed as a shell command — with
+> the skill model-invocable, that needed no user gesture. A quoted delimiter stops expansion inside the
+> body; it does not stop the body from ending. No quoting fixes it, because the fault sits one level
+> above the quoting: untrusted text in shell *syntax*. The remedy is to keep it out of syntax entirely,
+> which is why you resolve the path and pass a real one.
+
+
 - **No plan matching `$ARGUMENTS`?** STOP and hand back to the user: *"No planning doc found for
-  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first (it's `disable-model-invocation: true`, so it's
-  user-run only), then the Plan Review Gate (`/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review` →
-  `/unleashed-mail:review-synthesis`). Those two review skills are model-invocable, but per the
+  `$ARGUMENTS` — run `/unleashed-mail:brainstorm` first to produce one, then gate it with:*
+    /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+    /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
+  *and then `/unleashed-mail:review-synthesis`. Those review skills are model-invocable, but per the
   AGENT_CONTRACTS §2 gate I run them under the plan-review workflow rather than self-approving here."*
   Do NOT proceed to Phase 2, and do **not** fall back to some other feature's plan.
 - **`verify` exits non-zero?** STOP — read the `GATE FAILED` reason on stderr and act on it:
@@ -168,10 +60,11 @@ fi
     and self-ignored by a `*` `.gitignore` the tool writes inside that directory, so a fresh
     `git worktree add` or `git clone` contains only the plan. If you gated elsewhere, either re-run the
     gate in THIS worktree or copy `docs/planning/.verdicts/` across from the checkout that gated. To
-    avoid this entirely, create the worktree BEFORE the plan (`AGENT_CONTRACTS.md` §2 step 00).
-    Otherwise ask the user to run `/gemini-review` + `/codex-review` →
-    `/unleashed-mail:review-synthesis` to convergence. If the gate never ran **because a reviewer CLI
-    was unavailable**, see **Unavailable reviewer** below.
+    avoid this entirely, create the worktree BEFORE the plan (§2 step 00). **ASK THE USER to run these — do NOT run the gate here: with no artifact, self-gating is indistinguishable from self-approving:**
+    /unleashed-mail:gemini-review --ticket <T> --round <N> <plan>
+    /unleashed-mail:codex-review --ticket <T> --round <N> <plan>
+    then `/unleashed-mail:review-synthesis`, iterated to convergence.
+    If the gate never ran **because a reviewer CLI was unavailable**, see **Unavailable reviewer** below.
   - *not an approving verdict* → `REQUEST_CHANGES`/`DISAGREEMENT`; iterate the plan + gate. If the reason
     names a reviewer as `MISSING`, that reviewer produced **no usable verdict** (it never ran, *or* its
     transcript was empty/unparseable) — see **Unavailable reviewer** below. Read the
@@ -188,7 +81,7 @@ fi
 CLI availability — it only ever inspects the artifact — so an unavailable reviewer reaches you as **one of
 two different failures**, depending on how far the user got:
 
-| What the user did | `verify` says | 
+| What the user did | `verify` says |
 |---|---|
 | Never ran `/unleashed-mail:review-synthesis` | *no artifact* |
 | Ran it, recording `<reviewer>=MISSING` | *not an approving verdict* … `<reviewer> recorded MISSING: no usable verdict` |
@@ -198,7 +91,7 @@ normalization table maps *missing / empty / **unparseable** transcript* → `MIS
 
 1. the reviewer **never ran** — install/authenticate the CLI, or capture the review elsewhere;
 2. it ran but the transcript was **empty or unparseable** — re-capture it (`agy` writes exactly 0 bytes
-   from a non-TTY on failure, and needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+   from a non-TTY on failure, and needs `--print-timeout 28m`; a tiny transcript is a failure, not a
    verdict).
 
 Check the transcript before assuming (1): the fix for (2) is a re-run, not an install. What they share —
@@ -212,7 +105,7 @@ and stands on its own. `verify` reports that case as `TWO SEPARATE problems: …
 changes *and* recover the missing reviewer. Neither alone passes the gate.
 
 First **rule out a bad invocation**: a PTY-wrapped `agy -p "ping"` that answers a **`pong`** means the CLI is healthy
-and the review call was wrong (`agy` needs `--print-timeout 18m`; a tiny transcript is a failure, not a
+and the review call was wrong (`agy` needs `--print-timeout 28m`; a tiny transcript is a failure, not a
 verdict). A healthy ping plus a failed review is a **you** problem, not an availability problem — fix the
 flag and re-run.
 
@@ -220,7 +113,7 @@ flag and re-run.
 > measured runs `agy` answered `Pong! How can I help you today?`, a bare lowercase `pong`, and `Pong! Let
 > me know how I can help you today.` A `Pong!`-exact check reports a **healthy** CLI as unavailable
 > roughly one run in three — sending you down this recovery path (and escalating to the user) when the
-> only real problem was a missing `--print-timeout 18m`. That is the exact misdiagnosis this step exists
+> only real problem was a missing `--print-timeout 28m`. That is the exact misdiagnosis this step exists
 > to prevent.
 
 If it is genuinely unavailable, STOP and present the recovery choices to the **user** — install/authenticate
@@ -236,7 +129,9 @@ so it catches a stale/edited/absent/unrelated approval a prose check would miss.
 **workflow-level** fail-closed — `implement` declines to proceed; a skill cannot mechanically enforce a
 tool boundary on its own (the gate deliberately drops the heavier PreToolUse-token approach as
 over-engineering for this cooperative workflow). If `${CLAUDE_PLUGIN_ROOT}` is unset, use the
-repo-relative `scripts/review-verdict.py`.
+repo-relative `scripts/review/resolve-plan-gate.sh` — **not** `review-verdict.py` directly. Calling the
+writer skips this gate's name resolution and its physical-containment guard, which is the whole point
+of the fence (deep review, P2).
 
 ## Phase 2: Implementation Plan
 

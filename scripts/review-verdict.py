@@ -24,8 +24,10 @@ import hashlib
 import json
 import os
 import re
+import errno
 import stat
 import sys
+from typing import NamedTuple
 
 SCHEMA_VERSION = 3
 APPROVING = {"APPROVE", "APPROVE_WITH_NOTES"}
@@ -199,6 +201,36 @@ def _quorum_problem(verdict, reviewers) -> str | None:
                 "transcript content is recorded for more than one reviewer, i.e. one review standing in for two")
     return None
 
+
+# S-FRESH applies to the per-run allocator layout introduced by COREDEV-2619. Historical callers and
+# unit fixtures outside that layout remain readable, while every allocator-produced path is required to
+# carry its own run-bound launch record. The allocator draws exactly 16 bytes and hex-encodes them.
+_RUN_ID_HEX_LENGTH = 16 * 2
+_TRANSCRIPT_RUN_ID = re.compile(
+    r"-([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH) + r"})\.txt\Z"
+)
+# The FULL allocator basename, used for CLASSIFICATION. `_TRANSCRIPT_RUN_ID` matches any name ending
+# `-<32 hex>.txt`, which the docstring below names as colliding with digest-suffixed files like
+# `review-<md5>.txt` — MD5 hex being exactly 32 characters. Such a file was then REQUIRED to carry a
+# `.launch` and rejected without one, so a legitimate custom or historical transcript became
+# unusable (PR #63 recheck, P2).
+#
+# Narrowing to the whole allocator shape — `<ticket>r<round>-<reviewer>-<32 hex>.txt` — removes that
+# collision WITHOUT the fail-open the docstring rightly refuses: the basename travels with the file,
+# so an allocated transcript that was copied or moved still classifies as per-run. That is exactly the
+# property conditioning on the DIRECTORY would have lost.
+_ALLOCATOR_BASENAME = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]*r[0-9]+-(?P<reviewer>[A-Za-z0-9][A-Za-z0-9-]*)-[0-9a-f]{"
+    + str(_RUN_ID_HEX_LENGTH) + r"}\.txt\Z"
+)
+# `<32 hex run id> <reviewer>\n`. The reviewer field is what makes the identity ALLOCATOR-ATTESTED
+# rather than parsed out of a filename the caller supplies (PR #63 recheck, P1). `pty-capture.py`
+# writes it and carries a matching `_LAUNCH_RECORD_RE`; `test_doc_gates` pins the two together.
+_LAUNCH_RECORD = re.compile(
+    rb"\A([0-9a-f]{" + str(_RUN_ID_HEX_LENGTH).encode("ascii")
+    + rb"}) ([A-Za-z0-9][A-Za-z0-9-]*)\n\Z"
+)
+
 def _sha256_bytes(path: str) -> str:
     """Raw-byte SHA-256 of a file (never text-normalized — a whitespace edit must change it)."""
     h = hashlib.sha256()
@@ -206,6 +238,34 @@ def _sha256_bytes(path: str) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _sha256_descriptor(descriptor: int) -> str:
+    """Raw-byte SHA-256 of an ALREADY-OPEN descriptor — the same bytes `_sha256_bytes` would produce
+    for that file, but bound to the OPEN FILE rather than to a name that can be re-pointed.
+
+    `pread` rather than `read`: it takes an explicit offset, so the caller's descriptor offset is
+    untouched and this can never disturb a later `fstat`/read by whoever owns the descriptor.
+    """
+    h = hashlib.sha256()
+    offset = 0
+    while True:
+        chunk = os.pread(descriptor, 65536, offset)
+        if not chunk:
+            return h.hexdigest()
+        offset += len(chunk)
+        h.update(chunk)
+
+
+class _VerifiedTranscript(NamedTuple):
+    """The canonical path and raw-byte digest of the descriptor the freshness check VALIDATED.
+
+    The gate's evidence must be the file that passed the check, so both fields are produced from the
+    one descriptor rather than re-derived from the name afterwards (see `_regular_file_info`).
+    """
+
+    path: str
+    sha256: str
 
 
 def _read_regular_file(path: str) -> str | None:
@@ -247,11 +307,28 @@ def _write_text_nofollow(path: str, text: str) -> None:
     `.tmp.<pid>` staging name is predictable, so a same-account attacker could pre-plant it as a symlink;
     `open(path, "w")` would then write THROUGH it to the link target with the gate process's privileges
     (round 8: codex). The `opener` keeps single-close ownership."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    # NO O_TRUNC, and an EXPLICIT link-count check (PR #63 recheck, P2). A HARD LINK is a regular file,
+    # so `O_NOFOLLOW` accepts one — and `O_TRUNC` empties the target AT open(), before any `fstat` can
+    # look. A same-account attacker who pre-planted `<dest>.tmp.<pid>` as a hard link to a file they
+    # wanted destroyed got it emptied on the way in, whatever this function decided afterwards. The same
+    # pair of mistakes was found and fixed in `pty-capture.py`'s non-allocated write; this writer kept
+    # them. Opening without O_TRUNC lets the `st_nlink` check refuse a linked victim with its bytes
+    # intact, and the explicit `ftruncate` below bounds an honest overwrite exactly as O_TRUNC would.
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
 
     def _op(p, _f):
         fd = os.open(p, flags, 0o600)
         try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(errno.ENOTSUP, "refusing a non-regular verdict target", p)
+            if info.st_nlink != 1:
+                raise OSError(
+                    errno.EMLINK,
+                    f"refusing to write through a hard-linked path ({info.st_nlink} links)",
+                    p,
+                )
+            os.ftruncate(fd, 0)
             os.fchmod(fd, 0o600)
         except BaseException:
             os.close(fd)
@@ -262,10 +339,226 @@ def _write_text_nofollow(path: str, text: str) -> None:
         fh.write(text)
 
 
+#: The private per-plan state directory. Named once so the descriptor writer and the two path helpers
+#: cannot disagree about which directory they are creating.
+VERDICT_DIR_NAME = ".verdicts"
+
+
+def _plan_directory_fd(plan: str) -> "int | None":
+    """A descriptor for the plan's directory, reached WITHOUT following a symlink at any component.
+
+    THE PATHNAME IS NOT A PIN (PR #63 recheck, P1 — reproduced). The granted wrappers validate the
+    plan with `containment.py` and hand this program the resolved path, but resolution happens again
+    HERE, in a second process: a same-account swap of `docs/planning` for a symlink in that window made
+    every state write follow the new ancestor. Reproduced end to end — `snapshot-plan.sh` returned 0
+    having created `.verdicts/` and the digest sidecar inside an outside directory. Passing the
+    realpath removed the "two different strings" half of that finding and could not remove this half,
+    because a string cannot pin an inode across an exec.
+
+    Walking down from the repository root with `O_DIRECTORY|O_NOFOLLOW` does pin it: a symlinked
+    component fails ELOOP whenever it was planted, and every write below goes through the descriptor
+    rather than through the name.
+
+    Returns None when the plan is not inside a git worktree. That is `review-verdict.py`'s designed,
+    tested behaviour for a plan outside any repository — it is the maintainer's own CLI as well as the
+    gate's — and the granted wrappers, which are what the model can reach, refuse that case before
+    calling it.
+    """
+    absolute = os.path.abspath(plan)
+    root = _repo_root(absolute)
+    if root is None:
+        return None
+    directory = os.path.dirname(absolute)
+    relative = os.path.relpath(directory, root)
+    components = [c for c in relative.split(os.sep) if c and c != os.curdir]
+    if os.pardir in components:
+        return None
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        for component in components:
+            next_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=dir_fd,
+            )
+            os.close(dir_fd)
+            dir_fd = next_fd
+    except OSError as error:
+        os.close(dir_fd)
+        raise SystemExit(
+            f"review-verdict: refusing to reach plan state through a symlinked path component: "
+            f"{directory}: {error}"
+        )
+    return dir_fd
+
+
+def _read_state_file(plan: str, name: str) -> "bytes | None":
+    """Read `<plan dir>/.verdicts/<name>` through the same no-follow walk the writes use.
+
+    THE READ PATH WAS NOT COVERED BY THE WRITE FIX (PR #63 recheck, P1). `_write_state_file` pinned the
+    directory for `snapshot` and `write`, and `verify` still reopened the artifact by pathname — so the
+    identical ancestor swap produced `GATE OK` against a DIFFERENT plan and its matching artifact, and
+    restoring the ancestor afterwards left `implement` proceeding on a plan nothing had verified. That
+    is the same sidecar-family mistake this campaign keeps making: the fix was applied to the members
+    in front of me rather than to the family, and the read half was reported separately.
+
+    Returns None when the file is absent, unreadable, or not a regular file. Raises SystemExit through
+    `_plan_directory_fd` when a component is a symlink — refusing is right here: a verification that
+    cannot prove WHICH file it read must not pass.
+    """
+    parent_fd = _plan_directory_fd(plan)
+    if parent_fd is None:
+        return _read_regular_file_bytes(
+            os.path.join(os.path.dirname(os.path.abspath(plan)), VERDICT_DIR_NAME, name)
+        )
+    try:
+        state_fd = os.open(
+            VERDICT_DIR_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+    except OSError:
+        return None
+    finally:
+        os.close(parent_fd)
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=state_fd,
+        )
+    except OSError:
+        return None
+    finally:
+        os.close(state_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def _write_state_file(plan: str, name: str, text: str) -> str:
+    """Create `<plan dir>/.verdicts/` and write `name` into it, never following a symlink.
+
+    Both state writes had the same shape — `_ensure_secure_dir` on a NAME, then a path-based temp
+    write and `os.replace` — so both followed a substituted ancestor. They share this one descriptor
+    walk now, which is also why a third state file cannot quietly opt out.
+    """
+    parent_fd = _plan_directory_fd(plan)
+    verdict_dir = os.path.join(os.path.dirname(os.path.abspath(plan)), VERDICT_DIR_NAME)
+    if parent_fd is None:
+        # No repository: the documented path-based behaviour, unchanged.
+        _ensure_secure_dir(verdict_dir)
+        dest = os.path.join(verdict_dir, name)
+        if os.path.islink(dest):
+            raise SystemExit(f"review-verdict: refusing to overwrite a symlinked state file: {dest}")
+        tmp = f"{dest}.tmp.{os.getpid()}"
+        old_umask = os.umask(0o077)
+        try:
+            _write_text_nofollow(tmp, text)
+            os.replace(tmp, dest)
+        finally:
+            os.umask(old_umask)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return dest
+
+    old_umask = os.umask(0o077)
+    try:
+        try:
+            os.mkdir(VERDICT_DIR_NAME, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        info = os.stat(VERDICT_DIR_NAME, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode):
+            raise SystemExit(
+                f"review-verdict: refusing a symlinked or non-directory verdict dir: {verdict_dir}"
+            )
+        state_fd = os.open(
+            VERDICT_DIR_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+    finally:
+        os.umask(old_umask)
+        os.close(parent_fd)
+
+    old_umask = os.umask(0o077)
+    tmp_name = f"{name}.tmp.{os.getpid()}"
+    try:
+        os.fchmod(state_fd, 0o700)
+        _write_self_ignore(state_fd)
+        _write_text_at(state_fd, tmp_name, text)
+        os.replace(tmp_name, name, src_dir_fd=state_fd, dst_dir_fd=state_fd)
+    finally:
+        os.umask(old_umask)
+        try:
+            os.unlink(tmp_name, dir_fd=state_fd)
+        except OSError:
+            pass
+        os.close(state_fd)
+    return os.path.join(verdict_dir, name)
+
+
+def _write_self_ignore(state_fd: int) -> None:
+    """`.gitignore` holding `*`, created through the descriptor, never through a dangling link."""
+    try:
+        descriptor = os.open(
+            ".gitignore",
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=state_fd,
+        )
+    except OSError:
+        return                                   # already present, or a link we must not write through
+    try:
+        os.write(descriptor, b"*\n")
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _write_text_at(state_fd: int, name: str, text: str) -> None:
+    """Write `text` to `name` under `state_fd` at 0600, refusing a symlink or a hard-linked victim."""
+    descriptor = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=state_fd,
+    )
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.ENOTSUP, "refusing a non-regular state target", name)
+        if info.st_nlink != 1:
+            raise OSError(errno.EMLINK, "refusing a hard-linked state target", name)
+        os.ftruncate(descriptor, 0)
+        os.fchmod(descriptor, 0o600)
+        payload = text.encode("utf-8")
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+    finally:
+        os.close(descriptor)
+
+
 def _verdict_path(plan_path: str) -> str:
     """`<plan-dir>/.verdicts/<plan-basename>.verdict.json` — co-located with the plan it binds."""
     plan_path = os.path.abspath(plan_path)
-    return os.path.join(os.path.dirname(plan_path), ".verdicts",
+    return os.path.join(os.path.dirname(plan_path), VERDICT_DIR_NAME,
                         os.path.basename(plan_path) + ".verdict.json")
 
 
@@ -276,7 +569,7 @@ def _reviewed_sha_sidecar(plan_path: str) -> str:
     tool invocations, so the earlier `REVIEWED_PLAN_SHA256=…` shell-local expanded EMPTY at write time
     (round 4: codex). Session state, git-ignored beside the artifact."""
     plan_path = os.path.abspath(plan_path)
-    return os.path.join(os.path.dirname(plan_path), ".verdicts",
+    return os.path.join(os.path.dirname(plan_path), VERDICT_DIR_NAME,
                         os.path.basename(plan_path) + ".reviewed-sha256")
 
 
@@ -295,13 +588,27 @@ def _ensure_secure_dir(d: str) -> None:
     # repo — the plugin's own .gitignore does not apply where the plugin is loaded from the cache (e.g.
     # the app repo's docs/planning/.verdicts/), where a routine `git add docs/` would otherwise commit an
     # approving artifact and satisfy `implement`'s verify in every clone (PR #39 review).
+    # `lexists` + O_EXCL, NOT `exists` + `open(…, "w")` (PR #63 recheck, P2). `os.path.exists` is FALSE
+    # for a DANGLING symlink, so a pre-planted `.verdicts/.gitignore -> /somewhere/victim` took the
+    # write branch and `open(…, "w")` created and wrote THROUGH the link with this process's privileges.
+    # `lexists` sees the link itself so the branch is not taken, and O_CREAT|O_EXCL|O_NOFOLLOW makes the
+    # create-or-refuse atomic rather than a check followed by an unprotected open.
     gi = os.path.join(d, ".gitignore")
-    if not os.path.exists(gi):
+    if not os.path.lexists(gi):
         try:
-            with open(gi, "w", encoding="utf-8") as fh:
-                fh.write("*\n")
+            descriptor = os.open(
+                gi,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except OSError:
+            return
+        try:
+            os.write(descriptor, b"*\n")
         except OSError:
             pass
+        finally:
+            os.close(descriptor)
 
 
 def _repo_root(path: str) -> str | None:
@@ -348,6 +655,477 @@ def _plan_identity(path: str) -> tuple[str, str]:
     return rel.replace(os.sep, "/"), "repo-relative"
 
 
+def _is_per_run_transcript(path: str) -> bool:
+    """Return whether `path` has the allocator name or state-root-relative directory shape.
+
+    Classification decides whether the launch-record freshness check runs at all, so every way of
+    spelling an allocated path that still OPENS the allocated file must classify as per-run.
+    Two ways did not (PR #63 review):
+
+    * **Case.** The comparisons below were case-sensitive, but this gate runs on macOS, where APFS
+      is case-insensitive by default. `…/Unleashed-Mail/…` opens the identical file while failing
+      both branches, so the transcript was treated as legacy and the check never ran — readmitting
+      exactly the stale/foreign transcript acceptance the check exists to reject. Compare casefolded.
+    * **A sibling launch record is itself proof of per-run provenance.** Adding it as a third
+      branch closes the residual spellings without enumerating them. The direction is safe:
+      planting a `.launch` beside a genuinely legacy transcript only makes the gate STRICTER,
+      because the record must then validate rather than being skipped.
+
+    **The filename branch is deliberately not conditioned on the directory** (PR #63 review, item 4).
+    It means any basename ending `-<32 lowercase hex>.txt` takes the per-run branch wherever it lives,
+    so a transcript outside the allocator directory that happens to match — a digest-suffixed name like
+    `review-<md5>.txt` is the realistic collision, MD5 hex being exactly 32 characters — is now required
+    to carry a `.launch` and is REJECTED without one.
+
+    That is accepted, because the alternative is a fail-open. Requiring the layout as well would make a
+    genuinely allocated transcript that was copied or moved out of `unleashed-mail/review-transcripts/`
+    classify as legacy and skip the check entirely, which is precisely the stale/foreign acceptance the
+    check exists to reject — and moving a file is far easier than the collision it would guard against.
+    A false positive here costs a re-run through the allocator, which is the mandated path anyway; the
+    recovery is to rename the file, never to plant a `.launch` beside it, since a hand-written record
+    would forge exactly the provenance this check verifies.
+
+    **The ANCESTRY is resolved; the leaf never is.** The layout comparison used the lexical parents, so
+    the same file classified differently depending only on how its path was spelled: `…/HASH/./f.txt`,
+    `…/HASH/../HASH/f.txt` and a symlinked ancestor all opened the identical bytes while failing the
+    comparison, and a layout-placed transcript with no allocator filename and no `.launch` therefore
+    skipped the freshness check entirely (deep review; reproduced for all three spellings).
+
+    Resolving `dirname(path)` fixes all three at once — `realpath` both normalizes `.`/`..` and follows
+    a symlinked ancestor. It is NOT the defect this function's history warns about: that one resolved
+    the WHOLE path, which walked a symlinked LEAF out of the layout and skipped the check. The leaf's
+    own name and link-ness are untouched here, so the `islink` refusal below still sees it.
+
+    `hash_directory` is the per-run repo-hash component, not the repository root (Rovo thread 3).
+    """
+    hash_directory = os.path.realpath(os.path.dirname(path))
+    transcripts_directory = os.path.dirname(hash_directory)
+    product_directory = os.path.dirname(transcripts_directory)
+    return (
+        _ALLOCATOR_BASENAME.match(os.path.basename(path)) is not None
+        or (
+            os.path.basename(transcripts_directory).casefold() == "review-transcripts"
+            and os.path.basename(product_directory).casefold() == "unleashed-mail"
+        )
+        or os.path.lexists(path + ".launch")
+    )
+
+
+def _read_launch_record(launch_path: str):
+    """Return (run ID, attested reviewer, descriptor metadata, problem) for one launch-record line.
+
+    ONE parser returns BOTH fields. The freshness check needs the run id and the identity check needs
+    the reviewer, and giving each its own copy of this reader meant the record grammar had to be
+    tightened twice — the same divergence-between-two-arms defect the shared staging helpers exist to
+    prevent, in the file that adjudicates them (PR #63 recheck).
+    """
+    launch_fd = -1
+    try:
+        launch_fd = os.open(
+            launch_path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+    except FileNotFoundError:
+        return None, None, None, "launch record is absent: " + launch_path
+    except OSError:
+        return None, None, None, "launch record is unreadable or non-regular: " + launch_path
+
+    try:
+        launch_info = os.fstat(launch_fd)
+        if not stat.S_ISREG(launch_info.st_mode):
+            return None, None, None, "launch record is unreadable or non-regular: " + launch_path
+        with os.fdopen(launch_fd, "rb") as stream:
+            launch_fd = -1
+            # Run id + space + reviewer + newline; 128 bounds a planted file while fitting any name.
+            record = stream.read(128)
+            if record == b"":
+                return None, None, None, "launch record is EMPTY: " + launch_path
+            record_match = _LAUNCH_RECORD.fullmatch(record)
+            if record_match is None:
+                return None, None, None, "launch record is malformed: " + launch_path
+    except OSError:
+        return None, None, None, "launch record is unreadable or non-regular: " + launch_path
+    finally:
+        if launch_fd >= 0:
+            try:
+                os.close(launch_fd)
+            except OSError:
+                pass
+
+    return (
+        record_match.group(1).decode("ascii"),
+        record_match.group(2).decode("ascii"),
+        launch_info,
+        None,
+    )
+
+
+def _regular_file_info(path: str):
+    """Return (descriptor metadata, raw-byte digest, problem), refusing symlinks and non-regular files.
+
+    The digest is read from the SAME descriptor the metadata came from, and that is the whole point of
+    returning it here. Returning only the metadata and letting the caller hash the PATH afterwards was a
+    TOCTOU (PR #63 review): `_transcript_freshness_problem` validated this descriptor, closed it, and
+    `_sha256_bytes` then re-opened the NAME — so a local attacker able to swap the leaf in that window
+    got a gate that checked file A and recorded file B's digest as the reviewed evidence. Everything the
+    caller is told about the transcript now comes from one O_NOFOLLOW open.
+    """
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            return None, None, "transcript is unreadable or non-regular: " + path
+        return info, _sha256_descriptor(descriptor), None
+    except OSError:
+        return None, None, "transcript is unreadable or non-regular: " + path
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _transcript_freshness_problem(transcript: str):
+    """Return (failure, verified transcript) for one per-run transcript — (None, record) when the
+    record is valid, (reason, None) when it is not, and (None, None) for a legacy path the check
+    does not govern.
+
+    Each call derives and opens its own sibling record; neither the other reviewer nor the reviewed-plan
+    snapshot can become the anchor.
+
+    The second element exists so the CALLER never has to resolve or open `transcript` again. Handing
+    back only a reason meant the digest recorded as evidence came from a second, independent lookup of
+    the same name, which is a check-then-use race on the gate's own evidence (PR #63 review, item 1).
+    """
+    # Classify on the LEXICAL path, BEFORE resolving it. Resolving first was the defect: a symlink
+    # at an allocated path resolves out of the `unleashed-mail/review-transcripts/…` layout, so it
+    # classified as legacy and the entire freshness check was skipped. Reproduced by the reviewer —
+    # an allocated-looking symlink plus a matching `.launch` returned None and let `write` hash the
+    # symlink's target, reintroducing stale/foreign transcript acceptance for that per-run path.
+    if not _is_per_run_transcript(transcript):
+        return None, None
+    # Having classified it as per-run, refuse a symlink outright rather than validating the record
+    # against one file and hashing another. A reserved leaf is a regular file the allocator created;
+    # a symlink in its place is never legitimate, so this is fail-closed by construction.
+    if os.path.islink(transcript):
+        return "per-run transcript is a symbolic link: " + transcript, None
+    # DO NOT RESOLVE THE LEAF. `islink()` then `realpath()` is a lookup-then-lookup pair: a same-account
+    # process that plants a symlink between the two has it FOLLOWED, and every check below then runs
+    # against the attacker's target instead of the allocated path — a foreign transcript with a matching
+    # `.launch` and `.plan` passed as valid evidence (PR #63 recheck, P2). Keeping the allocated name is
+    # also what the freshness TOCTOU fix already established: `_regular_file_info` opens it with
+    # `O_NOFOLLOW` and everything downstream comes from that one descriptor, so a symlink planted later
+    # fails the open rather than being resolved through.
+    #
+    # The ANCESTRY is still resolved (in `_is_per_run_transcript`) — that is the layout question, and it
+    # is a different one from "which file is the leaf".
+
+    filename_match = _TRANSCRIPT_RUN_ID.search(os.path.basename(transcript))
+    if filename_match is None:
+        return "per-run transcript filename has no canonical run ID: " + transcript, None
+    filename_run_id = filename_match.group(1)
+    launch_path = transcript + ".launch"
+    record_run_id, _attested, launch_info, launch_problem = _read_launch_record(launch_path)
+    if launch_problem is not None:
+        return launch_problem, None
+
+    if record_run_id != filename_run_id:
+        return "launch record run ID does not match transcript filename: " + launch_path, None
+
+    transcript_info, transcript_sha256, transcript_problem = _regular_file_info(transcript)
+    if transcript_problem is not None:
+        return transcript_problem, None
+
+    transcript_mtime_ns = transcript_info.st_mtime_ns
+    launch_mtime_ns = launch_info.st_mtime_ns
+    if transcript_mtime_ns < launch_mtime_ns:
+        return (
+            "transcript is OLDER than its launch record "
+            + f"({transcript_mtime_ns} < {launch_mtime_ns}): "
+            + transcript
+        ), None
+    return None, _VerifiedTranscript(transcript, transcript_sha256)
+
+
+_PLAN_BINDING = re.compile(rb"\A([0-9a-f]{64})  (.+)\n\Z")
+
+
+def _plan_binding_problem(transcript: str, plan: str, plan_digest: str):
+    """Refuse a per-run transcript that reviewed a DIFFERENT plan.
+
+    The capture helpers write `<transcript>.promptsha256` and `<transcript>.plan`. The first was
+    written and never read by anything — so transcripts allocated for an unrelated ticket, with
+    sidecars naming unrelated prompts, still produced `GATE OK — APPROVE` for this plan: freshness
+    proved the transcript was fresh, and the snapshot proved the PLAN was unedited, but nothing
+    connected the two (deep review, P1). Freshness answers "is this transcript from a real, recent
+    run"; this answers "a run of WHAT".
+
+    Absent binding is refused rather than skipped, for per-run transcripts only — a legacy transcript
+    the freshness check does not govern has no binding to check and never had one.
+    """
+    binding_path = transcript + ".plan"
+    record = _read_regular_file_bytes(binding_path)
+    if record is None:
+        return (
+            "per-run transcript has no plan binding: " + binding_path
+            + " — re-capture it with the current capture helper, which records what it reviewed"
+        )
+    match = _PLAN_BINDING.fullmatch(record)
+    if match is None:
+        return "plan binding is malformed: " + binding_path
+    bound_digest = match.group(1).decode("ascii")
+    bound_plan = match.group(2).decode("utf-8", "replace")
+
+    # `.planbytes` IS READ HERE — it was written and never read, which is this branch's own recurring
+    # defect (PR #63 recheck, P1). `bind-prompt.py` keeps the exact bytes it hashed beside the record,
+    # both isolation harnesses stage THOSE bytes, and until now nothing downstream ever compared them
+    # to the record again. So a `.planbytes` rewritten after binding — without a matching edit to
+    # `.plan` — fed the reviewer substituted bytes and left an artifact that still validated.
+    #
+    # HONEST SCOPE, because the reviewer's finding names a stronger attack than this closes. A
+    # same-account process that replaces BOTH sidecars coherently and restores BOTH before the verdict
+    # is written is NOT defended against here, and cannot be by any file-based binding: every anchor
+    # this program could read is a file that same attacker can rewrite and restore, including the
+    # transcript whose digest the artifact records. That is the same residual `audit-codex.sh` states
+    # for its snapshot re-check — an attacker at that privilege can edit these scripts. What IS closed
+    # is the whole uncoordinated family: a snapshot substituted and left, or restored while the record
+    # was not, in either order.
+    snapshot_path = transcript + ".planbytes"
+    # STREAM IT, exactly as the prompt-snapshot check below already does — and this is a regression I
+    # introduced, in the one file that carries the comment warning about it. `_read_regular_file_bytes`
+    # caps at `_MAX_TRUSTED_READ_BYTES + 1` to bound UNTRUSTED PARSING of small sidecars; hashing a
+    # plan through it truncates every plan over 64 KiB to its prefix, so the digest could never match
+    # and EVERY approving persist for such a plan was rejected as a modified snapshot. Five plans in
+    # this checkout are over the cap (the largest is 204 KB), so this was not hypothetical. A digest
+    # reads every byte and holds none of them, which is why the cap does not apply to it.
+    if _read_regular_file_bytes(snapshot_path) is None:
+        return (
+            "per-run transcript has no bound plan snapshot: " + snapshot_path
+            + " — the binder writes it beside the record, so absence means it was removed. "
+            "Re-capture the round through the capture helpers."
+        )
+    snapshot_digest = _sha256_regular_file(snapshot_path)
+    if snapshot_digest is None:
+        return "the bound plan snapshot became unreadable: " + snapshot_path
+    if snapshot_digest != bound_digest:
+        return (
+            "the bound plan snapshot does not match its own record: " + snapshot_path
+            + " hashes " + snapshot_digest[:12] + "…, " + binding_path + " records "
+            + bound_digest[:12] + "… — the bytes the reviewer was fed are not the bytes the binding "
+            "attests to"
+        )
+
+    # The DIGEST is the binding; the recorded path is diagnostic only. Comparing paths as well would
+    # make the check depend on the working directory the capture and the write happened to run from,
+    # and a path that merely LOOKS right proves nothing about the bytes anyway. Digest equality is
+    # what answers "did this review read what is being approved" — and it composes exactly with the
+    # snapshot check next to it, which answers "is the plan still those bytes".
+    # THE IDENTITY TOO, not only the digest. Two distinct plans with byte-identical contents share a
+    # digest, so a transcript captured for plan A satisfied an approval for plan B while this check
+    # recorded — and ignored — the full repo-relative identity that distinguishes them. Same lesson as
+    # PR #41's artifact fix and this morning's basename collision: equal bytes are not one plan.
+    # ONLY WHEN THE RECORDED VALUE CAN DISCRIMINATE. The comment below is right that the digest is the
+    # binding and that comparing paths in general would make this depend on the directory each step ran
+    # from — that decision stands. What it missed is the case where the digest CANNOT discriminate: two
+    # distinct plans with byte-identical contents share one, so a transcript captured for plan A
+    # satisfied an approval for plan B (PR #63 recheck).
+    #
+    # A recorded value carrying a DIRECTORY is exactly what tells those two apart, and `bind-prompt.py`
+    # always writes one (`os.path.relpath(plan, repo_root)`). A bare basename is under-specified — it
+    # cannot distinguish them either way — so it is left alone rather than guessed at, which also keeps
+    # pre-binding captures readable.
+    # EVERY recorded identity is compared — there is no separator exemption (PR #63 recheck).
+    # The `os.sep in bound_plan` guard was meant to leave under-specified legacy bindings alone, but
+    # `bind-prompt.py` writes `os.path.relpath(plan, root)`, and for a plan at the REPOSITORY ROOT that
+    # is a bare basename with no separator. So the exemption covered bindings the CURRENT binder
+    # produces: two root-level plans with identical bytes both skipped this check, the equal digest
+    # passed, and a transcript bound to `A_PLAN.md` approved `B_PLAN.md`. Reproduced.
+    #
+    # Comparing unconditionally is also the right direction for the legacy case the guard was written
+    # for: a transcript whose recorded identity does not match the plan being written is refused rather
+    # than accepted on a digest alone, and the operator re-captures. A transcript with NO binding at all
+    # is a different branch above, which still names it explicitly.
+    # A WHITESPACE-ONLY RECORDED IDENTITY IS NOT AN ABSENT ONE (PR #63 recheck, P2). `.strip()` turned
+    # `<digest>   \n` into `""`, and the empty string then took the "no identity recorded" branch — so
+    # the identity comparison this block exists for could be switched off by writing a blank path into
+    # the record. That is the same "absent means unchecked" shape as a deleted sidecar, spelled with a
+    # space, and it reopens exactly the byte-identical-plans bypass the comparison was added to close.
+    # The binding grammar requires a non-empty field, so a blank one is malformed, not legacy.
+    if bound_plan is not None and bound_plan != "" and not bound_plan.strip():
+        return (
+            "transcript binding records a BLANK plan identity: " + binding_path
+            + " — the field is present but empty, which cannot be compared against the plan being "
+            "written. Re-capture the round through the capture helpers."
+        )
+    bound_identity = bound_plan.strip() if bound_plan else ""
+    if bound_identity:
+        plan_identity, _kind = _plan_identity(plan)
+        if os.path.normpath(bound_identity) != os.path.normpath(plan_identity):
+            return (
+                "transcript is bound to a different plan: " + binding_path + " records "
+                + bound_identity + ", the verdict is being written for " + plan_identity
+            )
+    if bound_digest != plan_digest:
+        return (
+            "transcript reviewed different bytes than this verdict approves: " + binding_path
+            + " records " + bound_digest[:12] + "… (" + bound_plan + "), the plan being written is "
+            + plan_digest[:12] + "…"
+        )
+    # THE PROMPT SNAPSHOT, checked here because nothing else ever read `.promptsha256`.
+    # `bind-prompt.py` writes both the snapshot the reviewer was fed and its digest; until now the
+    # digest was recorded and never compared, which is the same "written and never read" shape as the
+    # other two sidecars. This is a WRITE-time check — `cmd_verify` is COREDEV-2497's territory and is
+    # deliberately untouched.
+    snapshot = transcript + ".prompt"
+    # REQUIRED, not optional. Skipping when the sidecar is absent meant deleting `.promptsha256` turned
+    # the check off — the same "absent means unchecked" fail-open the plan binding above was written to
+    # close, reintroduced one field over (PR #63 recheck). Both sidecars are written together by
+    # `bind-prompt.py`, so a per-run transcript missing this one was not captured by the current helper.
+    recorded = _read_regular_file_bytes(transcript + ".promptsha256")
+    if recorded is None:
+        return (
+            "per-run transcript has no prompt binding: " + transcript + ".promptsha256"
+            + " — re-capture it with the current capture helper, which records the prompt it fed"
+        )
+    match = _PLAN_BINDING.fullmatch(recorded)
+    if match is None:
+        return "prompt binding is malformed: " + transcript + ".promptsha256"
+    # STREAM IT. `_read_regular_file_bytes` caps at `_MAX_TRUSTED_READ_BYTES + 1`, so a legitimate
+    # prompt above that cap hashed only its prefix and this reported the snapshot as modified —
+    # an otherwise valid approving review could never be persisted (PR #63 recheck). The cap exists to
+    # bound TRUSTED PARSING of small sidecars; a digest reads every byte and holds none of them, so it
+    # is not the thing the cap protects against.
+    actual_digest = _sha256_regular_file(snapshot)
+    if actual_digest is None:
+        return (
+            "the prompt snapshot the reviewer was fed is missing: " + snapshot
+            + " — re-capture the round rather than writing a verdict for evidence that is gone"
+        )
+    actual = actual_digest.encode("ascii")
+    if actual != match.group(1):
+        return (
+            "the prompt snapshot no longer matches the digest recorded when it was bound ("
+            + snapshot + ") — the bytes the reviewer saw are not the bytes on disk"
+        )
+    return None
+
+
+def _reviewer_identity_mismatch(reviewers) -> "str | None":
+    """Refuse a transcript whose ALLOCATED identity is not the reviewer it is declared as.
+
+    THE QUORUM BYPASS (PR #63 recheck, P1 — reproduced). Two separately allocated GEMINI runs supplied
+    as `gemini=APPROVE:` and `codex=APPROVE:` passed everything: freshness, the plan binding, and the
+    distinct path/digest/captureId rules — because every one of those asks whether the two entries
+    DIFFER, and two real gemini runs do. Nothing asked what either transcript actually was. So one arm
+    satisfied the mandatory two-arm gate, which is the single thing the gate exists to require.
+
+    The allocator encodes the reviewer in the filename it reserves, so the answer is already carried by
+    the evidence — it just was not read. That is the same "recorded and never compared" shape as the
+    prompt digest and the bound plan identity, both closed earlier in this release.
+
+    THE FILENAME WAS THE ONLY WITNESS, AND A RENAME DEFEATED IT IN BOTH DIRECTIONS (PR #63 recheck,
+    P1 — both reproduced end to end, yielding `GATE OK — APPROVE [gemini, codex]` from two genuine
+    GEMINI captures with Codex never running):
+
+      * OUT OF THE GRAMMAR. This function was the only reader of the reviewer, and it `continue`d when
+        `_ALLOCATOR_BASENAME` did not match — while the approving-evidence gate admitted the file on the
+        looser `_is_per_run_transcript` (name OR directory layout OR a `.launch` sibling) and freshness
+        keyed off a bare run-id suffix search. Three checks, three definitions of "allocated". The old
+        docstring's premise — that approving evidence is always allocator-shaped, so no approving
+        transcript reaches here unreadable — is exactly what failed.
+      * INSIDE THE GRAMMAR. A canonical name with the reviewer field swapped satisfied everything,
+        because the `.launch` record bound the run id and nothing else. Tightening this function to
+        require the grammar would have closed the first and left the second untouched.
+
+    So the identity is read from the ALLOCATOR'S RECORD, which the caller does not write: `.launch` now
+    carries `<run id> <reviewer>`, and a rename cannot change it. A transcript whose record is absent or
+    unparseable is REFUSED rather than skipped — "absent means unchecked" is the fail-open shape this
+    whole family of bindings exists to close, and this function is only reached for approving verdicts.
+    """
+    for reviewer in reviewers:
+        if not isinstance(reviewer, dict):
+            continue
+        declared = str(reviewer.get("name", "")).strip().casefold()
+        transcript = reviewer.get("transcriptPath")
+        if not declared or not isinstance(transcript, str) or not transcript:
+            continue
+
+        _run_id, attested, _info, problem = _read_launch_record(transcript + ".launch")
+        if problem is not None:
+            return (
+                f"{declared!r}'s transcript carries no usable allocator record, so its identity cannot "
+                f"be attested: {problem}. Re-capture the round through the capture helpers."
+            )
+        if attested.casefold() != declared:
+            return (
+                f"transcript allocated for {attested!r} is declared as {declared!r}: {transcript}"
+                " — one arm cannot stand in for the other, which is the whole point of a dual review"
+            )
+        # The filename is the caller's spelling; when it is allocator-shaped it must AGREE with the
+        # record. A mismatch means one of the two was rewritten, which is the rename attack itself.
+        match = _ALLOCATOR_BASENAME.match(os.path.basename(transcript))
+        if match is not None and match.group("reviewer").casefold() != attested.casefold():
+            return (
+                f"transcript filename says {match.group('reviewer')!r} but its allocator record "
+                f"attests {attested!r}: {transcript} — the leaf was renamed"
+            )
+    return None
+
+
+def _sha256_regular_file(path: str):
+    """SHA-256 of a whole regular file through one O_NOFOLLOW descriptor, or None if unreadable.
+
+    Separate from `_read_regular_file_bytes` on purpose: that one bounds how much UNTRUSTED text is
+    parsed, which a digest never does — it consumes every byte and keeps none.
+    """
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        return _sha256_descriptor(descriptor)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _read_regular_file_bytes(path: str):
+    """Raw bytes of a regular file, refusing a symlink or non-regular target. None on any of those."""
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        return os.pread(descriptor, _MAX_TRUSTED_READ_BYTES + 1, 0)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _parse_reviewer(spec: str) -> dict:
     """`name=STATUS[:TRANSCRIPT_PATH]` -> {name, status, transcriptSha256?, transcriptPath?, captureId?}."""
     if "=" not in spec:
@@ -366,15 +1144,44 @@ def _parse_reviewer(spec: str) -> dict:
             # 0-byte file recorded transcriptSha256 = e3b0c442…855 (the empty-string digest) and
             # sailed through — the exact "a missing/empty transcript is never APPROVE" rule this
             # artifact exists to record. `agy` writes precisely 0 bytes from a non-TTY on failure.
-            raise SystemExit(f"review-verdict: reviewer {name!r} transcript is EMPTY: {transcript}")
-        out["transcriptSha256"] = _sha256_bytes(transcript)
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript is EMPTY and therefore MISSING: "
+                + transcript
+            )
+        freshness_problem, verified = _transcript_freshness_problem(transcript)
+        if freshness_problem is not None:
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript failed freshness: "
+                + freshness_problem
+            )
+        # A per-run transcript's evidence is read off the descriptor freshness VALIDATED — never by
+        # naming the file a second time. `verified` is None only for a legacy path the check does not
+        # govern, where there is no earlier validation for a second lookup to diverge from.
+        # THE LEGACY BRANCH GETS THE SAME DESCRIPTOR DISCIPLINE (PR #63 recheck, P2). `_sha256_bytes`
+        # is an ordinary blocking, symlink-following open, taken AFTER the `isfile`/size checks — so a
+        # same-account process could substitute a FIFO and wedge `persist-verdict.sh` with no timeout,
+        # or substitute a symlink and have the artifact record the digest of an unrelated file. The
+        # branch is reachable for NON-APPROVING legacy records, which the allocated-evidence rule does
+        # not cover. `_sha256_regular_file` opens once with `O_NOFOLLOW|O_NONBLOCK` and refuses a
+        # non-regular target, exactly as the per-run branch already does.
+        legacy_digest = None if verified is not None else _sha256_regular_file(transcript)
+        if verified is None and legacy_digest is None:
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript is unreadable or not a regular file: "
+                + transcript
+            )
+        out["transcriptSha256"] = (
+            verified.sha256 if verified is not None else legacy_digest
+        )
         # PROVENANCE beyond content-inequality (full review, #41). Record the canonical capture PATH,
         # and a wrapper-produced capture ID when `pty-capture.py` left one beside the transcript
         # (`<transcript>.captureid`). Content-inequality alone cannot tell two genuinely-separate
         # reviews that happen to be byte-identical from one file reused for both; a distinct path (the
         # common accidental case) and a distinct capture ID (a per-run token) can. Both optional and
         # auto-discovered — no caller/skill change needed; absent -> the digest floor still applies.
-        out["transcriptPath"] = os.path.realpath(transcript)
+        out["transcriptPath"] = (
+            verified.path if verified is not None else os.path.realpath(transcript)
+        )
         _cid = transcript + ".captureid"
         # Read the sidecar with O_NOFOLLOW so a SYMLINK is refused ATOMICALLY at open. A pre-seeded
         # `<transcript>.captureid` symlink (attacker-chosen value) would otherwise be trusted as
@@ -418,21 +1225,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         raise SystemExit(f"review-verdict: plan not found: {plan}")
     digest = _sha256_bytes(plan)
-    dest = _reviewed_sha_sidecar(plan)
-    _ensure_secure_dir(os.path.dirname(dest))
-    if os.path.islink(dest):
-        raise SystemExit(f"review-verdict: refusing to overwrite a symlinked snapshot: {dest}")
-    tmp = f"{dest}.tmp.{os.getpid()}"
-    old_umask = os.umask(0o077)
-    try:
-        _write_text_nofollow(tmp, digest + "\n")
-        os.replace(tmp, dest)
-    finally:
-        os.umask(old_umask)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+    dest = _write_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)), digest + "\n")
     print(f"review-verdict: snapshotted reviewed plan digest {digest[:12]}… for {plan}")
     return 0
 
@@ -477,7 +1270,22 @@ def cmd_write(args: argparse.Namespace) -> int:
             if not _SHA256_HEX.match(expected):
                 raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
         else:
-            _snap = _read_regular_file(_reviewed_sha_sidecar(plan))
+            # THROUGH THE SAME WALK as the artifact read and both writes — the third member of this
+            # family, found by sweeping rather than by a report. `_read_regular_file` closes the
+            # islink-then-open race on the LEAF; the ancestor swap it cannot see is what redirected
+            # the other two (PR #63 recheck, P1).
+            _raw = _read_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)))
+            # UNDECODABLE BYTES MEAN "NO BINDING", exactly as `_read_regular_file` treated them — a
+            # decision made with codex in round 7, and the fail-closed "requires a reviewed-plan
+            # digest" is the message that tells the operator to re-run `snapshot`. Decoding with
+            # `errors="replace"` instead turned garbage into a present-but-corrupt string and changed
+            # that diagnostic; the pinned test caught it. Same refusal either way, different guidance.
+            _snap = None
+            if _raw is not None:
+                try:
+                    _snap = _raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    _snap = None
             if _snap is not None:
                 expected = _snap.strip().lower()
                 if not _SHA256_HEX.match(expected):
@@ -497,6 +1305,22 @@ def cmd_write(args: argparse.Namespace) -> int:
                 f"approval bound to bytes the reviewers never saw (reviewed {expected[:12]}…, now "
                 f"{plan_sha[:12]}…). Re-run the reviews and `snapshot` on the current plan.")
     reviewers = [_parse_reviewer(s) for s in (args.reviewer or [])]
+    # WHAT did each transcript review? Freshness proves a transcript is a real, recent run; the
+    # snapshot proves the PLAN is unedited. Neither connects the two, so transcripts captured for an
+    # unrelated ticket satisfied this plan's gate (deep review, P1). Applies to APPROVING verdicts:
+    # a non-approving one blocks `implement` regardless, and refusing it on a binding problem would
+    # stop a legitimate REQUEST_CHANGES from being recorded.
+    if verdict in APPROVING:
+        for reviewer in reviewers:
+            transcript = reviewer.get("transcriptPath")
+            if not transcript or not _is_per_run_transcript(transcript):
+                continue
+            binding_problem = _plan_binding_problem(transcript, plan, plan_sha)
+            if binding_problem is not None:
+                raise SystemExit(
+                    f"review-verdict: reviewer {reviewer['name']!r} transcript is not bound to this "
+                    "plan: " + binding_problem
+                )
     if len(reviewers) < 2:
         # The gate is a DUAL review — a single reviewer can never carry an approval artifact.
         raise SystemExit("review-verdict: at least two reviewers (gemini + codex) are required")
@@ -506,6 +1330,54 @@ def cmd_write(args: argparse.Namespace) -> int:
     problem = _quorum_problem(verdict, reviewers)
     if problem:
         raise SystemExit("review-verdict: refusing to write an approving artifact — " + problem)
+    # ALLOCATOR-SHAPED OR NOTHING, for an approving verdict — and deliberately LAST.
+    #
+    # `_is_per_run_transcript` is the switch deciding whether freshness AND the plan binding run at
+    # all, so a transcript failing it was exempt from BOTH. The shapes it exempts are the fixed
+    # the fixed shared-`/tmp` reviewer outputs an older plugin version left behind, so two stale
+    # legacy files could be labelled APPROVE, combined with a fresh snapshot of the current plan, and
+    # produce a gate-passing artifact for a plan nobody reviewed (PR #63 recheck, P1 — reproduced).
+    #
+    # Legacy paths stay readable for NON-approving records: those block `implement` anyway, and
+    # refusing them would discard a legitimate REQUEST_CHANGES captured before the migration.
+    #
+    # ORDER: after the quorum and identity rules, which own "no transcript for this reviewer",
+    # "duplicate capture ID" and "empty transcript". Placed before them this answered all three with
+    # "not allocator-shaped" — true, but it tells the operator to re-capture when the real fault was a
+    # missing operand. Two existing tests caught that regression.
+    # WHAT each transcript IS, not merely that the two differ. Every distinctness rule above compares
+    # the entries to EACH OTHER; this compares each one to ITSELF.
+    #
+    # ORDER, for the second time in this file: placed before the quorum and distinctness rules it
+    # answered "the same transcript given to both reviewers" with "mislabelled", which is true but
+    # useless — the caller's actual mistake was reusing one file, and four tests that name that rule
+    # caught the regression. The specific diagnosis wins; this is the residue.
+    if verdict in APPROVING:
+        # APPROVING ONLY, matching the asymmetry the allocated-evidence rule already uses. The bypass
+        # this closes is "one arm satisfies the mandatory TWO-arm gate", which is a property of an
+        # APPROVAL — a non-approving record blocks `implement` whatever its labels say, so refusing one
+        # would discard a legitimate REQUEST_CHANGES for no gain. Two tests that pin the non-approving
+        # asymmetry caught this scope error.
+        # ORDER, for the THIRD time in this function. The allocated-evidence rule runs BEFORE the
+        # identity check because the identity check now REFUSES a transcript whose `.launch` is absent
+        # (PR #63 recheck, P1) — which is every legacy path. Run second, it answered "this is a legacy
+        # transcript" with "its identity cannot be attested": true, but it names the wrong rule and
+        # leaves the coarser one unreachable, so a later relaxation of the identity check would silently
+        # change what legacy paths are allowed to do. The test that pins the legacy rule caught this.
+        for reviewer in reviewers:
+            transcript = reviewer.get("transcriptPath")
+            if not _is_per_run_transcript(str(transcript)):
+                raise SystemExit(
+                    "review-verdict: an APPROVING verdict requires ALLOCATED evidence, but "
+                    f"{reviewer.get('name')}'s transcript is not allocator-shaped: {transcript!r}. "
+                    "A legacy/fixed transcript path is exempt from BOTH the freshness check and the "
+                    "plan binding, so an approval backed by one attests to nothing. Re-capture the "
+                    "round through `capture-codex-review.sh` / `capture-gemini-review.sh`.")
+        mismatch = _reviewer_identity_mismatch(reviewers)
+        if mismatch:
+            raise SystemExit(
+                "review-verdict: refusing to write a mislabelled artifact — " + mismatch
+            )
     artifact = {
         "schemaVersion": SCHEMA_VERSION,
         # REPO-RELATIVE when the plan is inside a git repo, absolute otherwise (COREDEV-2603).
@@ -528,21 +1400,11 @@ def cmd_write(args: argparse.Namespace) -> int:
         "round": args.round,
         "createdAt": args.created_at or "",   # caller passes an ISO stamp; scripts can't read the clock
     }
-    dest = _verdict_path(plan)
-    _ensure_secure_dir(os.path.dirname(dest))
-    if os.path.islink(dest):
-        raise SystemExit(f"review-verdict: refusing to overwrite a symlinked artifact: {dest}")
-    tmp = f"{dest}.tmp.{os.getpid()}"
-    old_umask = os.umask(0o077)
-    try:
-        _write_text_nofollow(tmp, json.dumps(artifact, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, dest)
-    finally:
-        os.umask(old_umask)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+    dest = _write_state_file(
+        plan,
+        os.path.basename(_verdict_path(plan)),
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+    )
     print(f"review-verdict: wrote {verdict} artifact bound to {plan} ({artifact['planSha256'][:12]}…)")
     return 0
 
@@ -557,16 +1419,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         return _fail(f"plan not found: {plan}")
     dest = _verdict_path(plan)
-    # Refuse a symlinked .verdicts dir too (write already does) — otherwise `dest` could resolve to a
-    # regular file OUTSIDE the plan directory through the link and satisfy the gate (PR #39 review).
-    if os.path.islink(os.path.dirname(dest)):
-        return _fail(f"refusing symlinked verdict dir: {os.path.dirname(dest)}")
-    if os.path.islink(dest) or not os.path.isfile(dest):
+    # READ THROUGH THE SAME NO-FOLLOW WALK THE WRITES USE (PR #63 recheck, P1). The `islink` checks
+    # below were a pathname pre-check, so a same-account swap of a plan ANCESTOR between them and the
+    # open sent verification at a different directory entirely — `GATE OK` against another plan and its
+    # matching artifact, with the ancestor restored afterwards. `_read_state_file` opens the artifact
+    # relative to a descriptor obtained by walking from the repository root, so no component can be
+    # substituted between the walk and the read.
+    try:
+        raw = _read_state_file(plan, os.path.basename(dest))
+    except SystemExit as refusal:
+        return _fail(str(refusal).replace("review-verdict: ", ""))
+    if raw is None:
         return _fail(f"no Combined-verdict artifact for this plan (run the gate first): {dest}")
     try:
-        with open(dest, encoding="utf-8") as fh:
-            art = json.load(fh)
-    except (OSError, ValueError) as e:
+        art = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
         return _fail(f"artifact unreadable/corrupt: {e}")
     if not isinstance(art, dict) or art.get("schemaVersion") != SCHEMA_VERSION:
         return _fail(f"artifact schemaVersion != {SCHEMA_VERSION} (stale format — re-run the gate)")

@@ -1,0 +1,560 @@
+#!/usr/bin/env python3
+"""Fail-closed scanner for documented plan-review skill invocations.
+
+The residual exemption manifest is intentionally maintained outside this module.  It is
+bound to final physical line numbers and payload digests, so production never derives or
+widens it automatically.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import re
+import subprocess
+import sys
+import unicodedata
+from collections import defaultdict
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Iterable, Mapping, Sequence
+
+
+EXEMPTION_PATH = "scripts/review/callers-scan-exemptions.tsv"
+# Selection anchors.  A bare `-review` was over-selecting badly: it matches `security-reviewer`,
+# `pr-review` and `code-review` anywhere in prose, so the tree yielded 1409 candidates against 14 real
+# invocations, and the residual manifest that must be reviewed by hand came to ~1395 rows (PR #63
+# review, gap on `callers_scan.py:269`).  Naming the two review commands instead drops the unrelated
+# review words while keeping every spelling of a real one.  Measured over the tracked tree:
+#
+#     /unleashed-mail: + -review                    1409 candidates, 14 exact productions
+#     /unleashed-mail: only                          103 candidates, 14 exact productions
+#     /unleashed-mail: + /gemini-review /codex-review  195 candidates, 14 exact productions
+#     /unleashed-mail: + gemini-review codex-review    268 candidates, 14 exact productions   <- this
+#
+# The slash-prefixed variant is smaller but narrows further than the defect warrants: it stops
+# selecting `unleashed-mail:gemini-review …` and a bare `gemini-review --ticket …`, both of which are
+# documented-invocation spellings this scanner exists to reject.  The set below is a strict SUBSET of
+# the old one, so nothing that was covered becomes uncovered except the false positives, and all four
+# historical bypasses still select on `/unleashed-mail:`.
+#
+# SELECTING PROSE IS DELIBERATE, AND THE COST IS ONE COMMAND (decided 2026-08-07; raised on PR #63 as
+# "narrow to actual command lines").  A line that merely MENTIONS `gemini-review` does become a
+# candidate and must therefore appear in the exemption manifest, so a documentation edit that adds such
+# a mention fails this gate until the manifest is regenerated.  That is accepted rather than fixed:
+#
+#   * the alternative — requiring an anchor PLUS a command shape (a flag, an operand) — reintroduces
+#     the class of bypass this scanner exists for.  A bare `gemini-review` invocation formatted in any
+#     way the shape rule did not anticipate stops being selected, and selection is the one
+#     default-ALLOW step in an otherwise deny-by-default pipeline: whatever is not selected is never
+#     judged at all.  Trading a guaranteed false POSITIVE for a possible false NEGATIVE is the wrong
+#     direction for a gate whose job is to catch invocations outside the wrappers.
+#   * the friction is bounded and mechanical: the maintainer regeneration tool that sits beside this
+#     module rebuilds the manifest, CI asserts it is the exact complement of the tracked tree, and the
+#     ordering rule ("regenerate LAST") is documented in the remediation handoff.  A prose edit costs
+#     one command, not a judgement call.  (Named only in the docs, never here — production must not be
+#     able to reach the generator, or a new REJECT could exempt itself.)
+#
+# So the residual is real and is a false-positive burden by design.  If it ever stops being worth it,
+# the change to make is a command-shape rule in `is_candidate` — not a narrower ANCHORS tuple, which
+# would silently drop the bare-invocation spellings the measurements above kept on purpose.
+ANCHORS = (b"/unleashed-mail:", b"gemini-review", b"codex-review")
+MARKDOWN_PREFIX = re.compile(
+    br"\A(?:(?:[ \t]{0,3}(?:[-+*]|[0-9]+[.)])[ \t]+)|"
+    br"(?:[ \t]{0,3}>[ \t]?)|(?: {4}|\t))*"
+)
+PRODUCTIONS = frozenset(
+    {
+        b"/unleashed-mail:gemini-review --ticket <T> --round <N> <plan>",
+        b"/unleashed-mail:codex-review --ticket <T> --round <N> <plan>",
+    }
+)
+
+
+class Disposition(Enum):
+    ALLOW = "allow"
+    EXEMPT = "exempt"
+    REJECT = "reject"
+
+
+# M5.13 mutates this decision itself.  Keep the non-match default explicit: adding
+# named bypasses instead would turn the allowlist back into an incomplete blacklist.
+DEFAULT_NON_MATCH_DISPOSITION = Disposition.REJECT
+
+
+class ManifestError(ValueError):
+    """The exemption manifest is not in its one canonical form."""
+
+
+@dataclass(frozen=True, order=True)
+class Exemption:
+    path: str
+    line_number: int
+    payload_sha256: str
+
+    def serialize(self) -> bytes:
+        return (
+            self.path.encode("utf-8")
+            + b"\t"
+            + str(self.line_number).encode("ascii")
+            + b"\t"
+            + self.payload_sha256.encode("ascii")
+        )
+
+
+@dataclass(frozen=True)
+class Candidate:
+    path: str
+    line_number: int
+    payload: bytes
+    disposition: Disposition
+
+    @property
+    def identity(self) -> Exemption:
+        return Exemption(
+            self.path,
+            self.line_number,
+            hashlib.sha256(self.payload).hexdigest(),
+        )
+
+
+@dataclass(frozen=True)
+class ScanReport:
+    candidates: tuple[Candidate, ...]
+    unmatched_exemptions: tuple[Exemption, ...]
+
+    @property
+    def rejected(self) -> tuple[Candidate, ...]:
+        return tuple(
+            candidate
+            for candidate in self.candidates
+            if candidate.disposition is Disposition.REJECT
+        )
+
+    @property
+    def ok(self) -> bool:
+        return not self.rejected and not self.unmatched_exemptions
+
+
+@dataclass(frozen=True)
+class MigrationDestination:
+    path: str
+    frozen_source_line: int
+    reviewer: str
+    preceding_sha256: str
+    following_sha256: str
+
+    @property
+    def command(self) -> bytes:
+        return (
+            f"/unleashed-mail:{self.reviewer}-review "
+            "--ticket <T> --round <N> <plan>"
+        ).encode("ascii")
+
+
+# Frozen at 78e28f26cb56572b22fe1635552dd10fa95bdb48.  Adjacent source
+# lines share the nearest unchanged anchors; reviewer order disambiguates them.
+MIGRATION_DESTINATIONS = (
+    MigrationDestination(
+        "skills/create-feature-plan/SKILL.md",
+        81,
+        "gemini",
+        "1ce5a2d7d373ab419b116a97a14dd59994df2f36238e3ee65d6623ca5c4e150d",
+        "a72073877a5870be01aa4c9ba347995d463b7721aa76e039d6923850e45248fe",
+    ),
+    MigrationDestination(
+        "skills/create-feature-plan/SKILL.md",
+        81,
+        "codex",
+        "1ce5a2d7d373ab419b116a97a14dd59994df2f36238e3ee65d6623ca5c4e150d",
+        "a72073877a5870be01aa4c9ba347995d463b7721aa76e039d6923850e45248fe",
+    ),
+    MigrationDestination(
+        "AGENT_CONTRACTS.md",
+        99,
+        "gemini",
+        "d3fa68e8648033ceb93f2530a658d911fcfd1e3af0a1a020305261ae5e1d81d3",
+        "c64d8498c05505db8e51fbc1deb220e889c8c1df7a00158879bb786c1f9aee0b",
+    ),
+    MigrationDestination(
+        "AGENT_CONTRACTS.md",
+        100,
+        "codex",
+        "d3fa68e8648033ceb93f2530a658d911fcfd1e3af0a1a020305261ae5e1d81d3",
+        "c64d8498c05505db8e51fbc1deb220e889c8c1df7a00158879bb786c1f9aee0b",
+    ),
+    MigrationDestination(
+        "skills/brainstorm/SKILL.md",
+        178,
+        "gemini",
+        "ada3ae7255db128cf4053c2055873b6b4db382d5b1ad5f4c34dbd4df980c8e1a",
+        "83bb5acac65b191a7ce344a258afab5af1f825e94099102615de1965c89c6972",
+    ),
+    MigrationDestination(
+        "skills/brainstorm/SKILL.md",
+        178,
+        "codex",
+        "ada3ae7255db128cf4053c2055873b6b4db382d5b1ad5f4c34dbd4df980c8e1a",
+        "83bb5acac65b191a7ce344a258afab5af1f825e94099102615de1965c89c6972",
+    ),
+    MigrationDestination(
+        "agents/modern-standards-planner.md",
+        42,
+        "gemini",
+        "7c2392ea5c6ec5c93c80e7463397ee4ebb96df68d6182e4acc5148c68d351d48",
+        "b692d6f1a64c321889e36fd5d03ff26676394f71d180428ec25d6f0c446fc089",
+    ),
+    MigrationDestination(
+        "agents/modern-standards-planner.md",
+        43,
+        "codex",
+        "7c2392ea5c6ec5c93c80e7463397ee4ebb96df68d6182e4acc5148c68d351d48",
+        "b692d6f1a64c321889e36fd5d03ff26676394f71d180428ec25d6f0c446fc089",
+    ),
+    MigrationDestination(
+        "skills/implement/SKILL.md",
+        169,
+        "gemini",
+        "6e9ac7efd288872063808b04a0a8e7a400f6bf1cdbed50790cecb0617fdda778",
+        "fb16dd012eec99f71ec273b8b15784d63ad30ca115bd2cece2edf73684b88c66",
+    ),
+    MigrationDestination(
+        "skills/implement/SKILL.md",
+        169,
+        "codex",
+        "6e9ac7efd288872063808b04a0a8e7a400f6bf1cdbed50790cecb0617fdda778",
+        "fb16dd012eec99f71ec273b8b15784d63ad30ca115bd2cece2edf73684b88c66",
+    ),
+    MigrationDestination(
+        "skills/implement/SKILL.md",
+        180,
+        "gemini",
+        "5b97f8b731626d15f40fa04ffe97fd1dc248f58513a4d0c8731b53c4834827b3",
+        "0800c16ca0f8760d6663dda202a48545d4f616f94a3b14ae319e1a7754a0d09a",
+    ),
+    MigrationDestination(
+        "skills/implement/SKILL.md",
+        180,
+        "codex",
+        "5b97f8b731626d15f40fa04ffe97fd1dc248f58513a4d0c8731b53c4834827b3",
+        "0800c16ca0f8760d6663dda202a48545d4f616f94a3b14ae319e1a7754a0d09a",
+    ),
+)
+
+
+def physical_lines(payload: bytes) -> list[bytes]:
+    """Split LF-delimited physical lines, retaining every other payload byte."""
+
+    if not payload:
+        return []
+    lines = payload.split(b"\n")
+    if payload.endswith(b"\n"):
+        lines.pop()
+    return lines
+
+
+def strip_markdown_prefix(payload: bytes) -> bytes:
+    match = MARKDOWN_PREFIX.match(payload)
+    assert match is not None
+    return payload[match.end() :]
+
+
+# Invisible and direction-control sequences that can sit INSIDE a spelled invocation while
+# defeating the ASCII anchor test below: `/unleashed-mail:gemini<ZWSP>-review` renders as the
+# command to a human but `b"...gemini-review" in payload` is False, so the line was never a
+# candidate and the scanner's default-DENY never applied to it (PR #63 review, gap 25).
+# A FINITE LIST OF SEQUENCES WAS A FINITE LIST OF BYPASSES (PR #63 recheck, P2). The previous version
+# enumerated fourteen UTF-8 sequences, so an invocation split by any OTHER invisible format character
+# rendered like the documented command while neither the raw nor the normalized bytes contained an
+# anchor — the line never became a candidate and the default-reject policy was skipped entirely.
+# Verified: `gemini<U+2060>-review …` and `gemini<U+00AD>-review …` both evaded it.
+#
+# The rule is the CLASS, not a list: every Unicode format character (general category `Cf` — which
+# covers all fourteen of the old entries plus WORD JOINER, SOFT HYPHEN and everything else in it), plus
+# NUL, which is `Cc` and so has to be named, plus the rest of `Default_Ignorable_Code_Point`.
+#
+# `Cf` IS NOT THE WHOLE INVISIBLE CLASS (PR #63 recheck, P2). The property that actually means "renders
+# as nothing" is `Default_Ignorable_Code_Point`, and it reaches into four other general categories that
+# `Cf` does not: `Mn` (COMBINING GRAPHEME JOINER, the Khmer inherent vowels, the Mongolian free
+# variation selectors), `Lo` (the three HANGUL FILLERs — U+3164 is the classic zero-width identifier
+# smuggler), and `Cn`/unassigned reserved-for-DI blocks. Any of them splits an ASCII anchor while
+# rendering identically, which is precisely what this normalisation exists to defeat.
+#
+# `unicodedata` does not expose the property, so the residue — the DI code points NOT already covered by
+# `Cf` or by the variation selectors below — is tabulated. Derived from DerivedCoreProperties.txt and
+# checked by `test_callers_scan`, which recomputes the difference rather than restating this table.
+_VARIATION_SELECTORS = frozenset(
+    list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0))
+)
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x034F, 0x034F),      # Mn COMBINING GRAPHEME JOINER
+    (0x115F, 0x1160),      # Lo HANGUL CHOSEONG/JUNGSEONG FILLER
+    (0x17B4, 0x17B5),      # Mn KHMER VOWEL INHERENT AQ/AA
+    (0x180B, 0x180D),      # Mn MONGOLIAN FREE VARIATION SELECTOR ONE..THREE
+    (0x180F, 0x180F),      # Cn reserved for DI
+    (0x2065, 0x2065),      # Cn reserved for DI
+    (0x3164, 0x3164),      # Lo HANGUL FILLER
+    (0xFFA0, 0xFFA0),      # Lo HALFWIDTH HANGUL FILLER
+    (0xFFF0, 0xFFF8),      # Cn reserved for DI
+    (0xE0000, 0xE0000),    # Cn reserved for DI (the tag block's edges)
+    (0xE0002, 0xE001F),    # Cn reserved for DI
+    (0xE0080, 0xE00FF),    # Cn reserved for DI
+    (0xE01F0, 0xE0FFF),    # Cn reserved for DI
+)
+#: Expanded to a SET once. This predicate runs per CHARACTER of every line of every tracked file, so a
+#: 13-range linear scan inside it is not a detail: measured 9.3x slower than set membership on ordinary
+#: source text, and it pushed CI's `validate` job past its 15-minute timeout the first time it shipped.
+_DEFAULT_IGNORABLE_RESIDUE = frozenset(
+    code_point
+    for low, high in _DEFAULT_IGNORABLE_RANGES
+    for code_point in range(low, high + 1)
+)
+
+
+def _is_invisible(character: str) -> bool:
+    code_point = ord(character)
+    # ASCII FAST PATH, and it is EXACT rather than an approximation: no code point below U+0080 is
+    # `Cf` (that category starts at U+00AD SOFT HYPHEN), none is a variation selector, and none is in
+    # the residue above — so NUL is the only invisible character in the range. Nearly every character
+    # this sees is ASCII, and the code before this paid a `unicodedata.category` call for each one.
+    if code_point < 0x80:
+        return code_point == 0
+    return (
+        unicodedata.category(character) == "Cf"
+        or code_point in _VARIATION_SELECTORS
+        or code_point in _DEFAULT_IGNORABLE_RESIDUE
+    )
+
+
+def strip_invisible(payload: bytes) -> bytes:
+    """Remove invisible/format characters so an anchor cannot be split by one.
+
+    Decoded with `surrogateescape` so undecodable bytes survive the round trip unchanged: the anchors
+    are ASCII, so invalid UTF-8 around one cannot conceal it, and mangling those bytes here would
+    corrupt the payload the caller compares against.
+    """
+    text = payload.decode("utf-8", "surrogateescape")
+    if not any(_is_invisible(character) for character in text):
+        return payload
+    stripped = "".join(character for character in text if not _is_invisible(character))
+    return stripped.encode("utf-8", "surrogateescape")
+
+
+def is_candidate(path: str, payload: bytes) -> bool:
+    if path == EXEMPTION_PATH:
+        return False
+    # Re-test ONLY when normalisation actually CHANGED the line. Selecting every line that merely
+    # CONTAINS an invisible byte would sweep in the plan documents that discuss CRLF/BOM handling
+    # and carry those bytes as examples -- an earlier version of this fix did exactly that and
+    # turned hundreds of prose lines into rejects. What matters is whether removing them REVEALS an
+    # invocation that was hidden; nothing else about selection changes.
+    #
+    # Invalid UTF-8 needs no arm: the anchors are ASCII byte sequences, so surrounding undecodable
+    # bytes cannot conceal one -- `anchor in payload` still matches through them.
+    normalized = strip_invisible(payload)
+    if normalized != payload and any(anchor in normalized for anchor in ANCHORS):
+        return True
+    return any(anchor in payload for anchor in ANCHORS)
+
+
+def is_exact_production(payload: bytes) -> bool:
+    return strip_markdown_prefix(payload) in PRODUCTIONS
+
+
+def _validate_manifest_path(path_bytes: bytes) -> str:
+    if not path_bytes or path_bytes.startswith(b"/") or path_bytes.endswith(b"/"):
+        raise ManifestError("manifest path must be a normalized repo-relative path")
+    if b"\x00" in path_bytes:
+        raise ManifestError("manifest path contains a forbidden byte")
+    components = path_bytes.split(b"/")
+    if any(component in (b"", b".", b"..") for component in components):
+        raise ManifestError("manifest path is not normalized")
+    try:
+        path = path_bytes.decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise ManifestError("manifest path is not UTF-8") from error
+    if path.encode("utf-8") != path_bytes:
+        raise ManifestError("manifest path is not canonically encoded")
+    return path
+
+
+def parse_exemption_manifest(payload: bytes) -> tuple[Exemption, ...]:
+    if b"\r" in payload:
+        raise ManifestError("manifest must use LF line endings")
+    if payload and not payload.endswith(b"\n"):
+        raise ManifestError("manifest must terminate every record with LF")
+
+    raw_records = payload[:-1].split(b"\n") if payload else []
+    exemptions: list[Exemption] = []
+    previous: bytes | None = None
+    for raw_record in raw_records:
+        if raw_record.count(b"\t") != 2:
+            raise ManifestError("manifest records require exactly three TSV fields")
+        path_bytes, line_bytes, digest_bytes = raw_record.split(b"\t")
+        path = _validate_manifest_path(path_bytes)
+        if re.fullmatch(br"[1-9][0-9]*", line_bytes) is None:
+            raise ManifestError("manifest line number is not canonical")
+        if re.fullmatch(br"[0-9a-f]{64}", digest_bytes) is None:
+            raise ManifestError("manifest digest is not lowercase SHA-256")
+        exemption = Exemption(path, int(line_bytes), digest_bytes.decode("ascii"))
+        if exemption.serialize() != raw_record:
+            raise ManifestError("manifest record is not canonical")
+        if previous is not None and raw_record <= previous:
+            raise ManifestError("manifest records must be unique and byte-sorted")
+        previous = raw_record
+        exemptions.append(exemption)
+    return tuple(exemptions)
+
+
+def scan_files(
+    files: Mapping[str, bytes], exemptions: Sequence[Exemption]
+) -> ScanReport:
+    exemption_set = set(exemptions)
+    consumed: set[Exemption] = set()
+    candidates: list[Candidate] = []
+
+    for path in sorted(files, key=os.fsencode):
+        for line_number, payload in enumerate(physical_lines(files[path]), start=1):
+            if not is_candidate(path, payload):
+                continue
+            identity = Exemption(path, line_number, hashlib.sha256(payload).hexdigest())
+            if is_exact_production(payload):
+                disposition = Disposition.ALLOW
+            elif identity in exemption_set:
+                disposition = Disposition.EXEMPT
+                consumed.add(identity)
+            else:
+                disposition = DEFAULT_NON_MATCH_DISPOSITION
+            candidates.append(Candidate(path, line_number, payload, disposition))
+
+    unmatched = tuple(sorted(exemption_set - consumed))
+    return ScanReport(tuple(candidates), unmatched)
+
+
+def _migration_groups() -> dict[tuple[str, str, str], list[MigrationDestination]]:
+    groups: dict[tuple[str, str, str], list[MigrationDestination]] = defaultdict(list)
+    for destination in MIGRATION_DESTINATIONS:
+        key = (
+            destination.path,
+            destination.preceding_sha256,
+            destination.following_sha256,
+        )
+        groups[key].append(destination)
+    for destinations in groups.values():
+        destinations.sort(
+            key=lambda item: (
+                item.frozen_source_line,
+                0 if item.reviewer == "gemini" else 1,
+            )
+        )
+    return groups
+
+
+def validate_migration_destinations(files: Mapping[str, bytes]) -> tuple[str, ...]:
+    errors: list[str] = []
+    for (path, preceding, following), destinations in _migration_groups().items():
+        if path not in files:
+            errors.append(f"missing migration file: {path}")
+            continue
+        lines = physical_lines(files[path])
+        digests = [hashlib.sha256(line).hexdigest() for line in lines]
+        preceding_indexes = [
+            index for index, digest in enumerate(digests) if digest == preceding
+        ]
+        following_indexes = [
+            index for index, digest in enumerate(digests) if digest == following
+        ]
+        expected = [destination.command for destination in destinations]
+        matches: list[tuple[int, int]] = []
+        for preceding_index in preceding_indexes:
+            for following_index in following_indexes:
+                if following_index <= preceding_index:
+                    continue
+                actual = [
+                    strip_markdown_prefix(line)
+                    for line in lines[preceding_index + 1 : following_index]
+                ]
+                if actual == expected:
+                    matches.append((preceding_index, following_index))
+        if len(matches) != 1:
+            source_lines = ",".join(
+                str(destination.frozen_source_line) for destination in destinations
+            )
+            errors.append(
+                f"{path}: frozen source region {source_lines} has "
+                f"{len(matches)} conforming destinations (expected 1)"
+            )
+    return tuple(errors)
+
+
+def read_tracked_files(root: Path) -> dict[str, bytes]:
+    result = subprocess.run(
+        ["git", "-C", os.fspath(root), "ls-files", "-z"],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        diagnostic = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git ls-files failed: {diagnostic}")
+
+    files: dict[str, bytes] = {}
+    for encoded_path in result.stdout.split(b"\x00"):
+        if not encoded_path:
+            continue
+        path = os.fsdecode(encoded_path)
+        absolute = root / path
+        if absolute.is_symlink():
+            files[path] = os.fsencode(os.readlink(absolute))
+        else:
+            try:
+                files[path] = absolute.read_bytes()
+            except OSError as error:
+                raise RuntimeError(f"cannot read tracked path {path}: {error}") from error
+    return files
+
+
+def _print_report(report: ScanReport, migration_errors: Iterable[str]) -> bool:
+    ok = report.ok
+    for candidate in report.rejected:
+        print(
+            f"REJECT {candidate.path}:{candidate.line_number}: "
+            f"{candidate.payload.decode('utf-8', 'backslashreplace')}",
+            file=sys.stderr,
+        )
+    for exemption in report.unmatched_exemptions:
+        print(
+            f"UNMATCHED {exemption.path}:{exemption.line_number}: "
+            f"{exemption.payload_sha256}",
+            file=sys.stderr,
+        )
+    for error in migration_errors:
+        ok = False
+        print(f"MIGRATION {error}", file=sys.stderr)
+    return ok
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--manifest", type=Path)
+    arguments = parser.parse_args(argv)
+
+    root = arguments.root.resolve()
+    manifest = arguments.manifest or root / EXEMPTION_PATH
+    try:
+        manifest_payload = manifest.read_bytes()
+        exemptions = parse_exemption_manifest(manifest_payload)
+        files = read_tracked_files(root)
+    except (OSError, ManifestError, RuntimeError) as error:
+        print(f"callers-scan: {error}", file=sys.stderr)
+        return 2
+
+    report = scan_files(files, exemptions)
+    migration_errors = validate_migration_destinations(files)
+    return 0 if _print_report(report, migration_errors) else 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

@@ -3,8 +3,11 @@ name: codex-review
 description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
-effort: xhigh
-allowed-tools: Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*), Bash(command -v *), Bash(codex *), Bash(rm -f /tmp/codex-out.txt*)
+# The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
+# step prompted for permission (or was denied) before the newly narrowed capture grant could run —
+# so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
+# per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)
 ---
 
 # Codex CLI Review
@@ -36,26 +39,48 @@ Docs: https://developers.openai.com/codex/cli/reference
 **Default to routing every `codex exec` through the shared PTY wrapper:** [`scripts/pty-capture.py`](../../scripts/pty-capture.py) (invoke as `${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py`). It runs codex inside a pseudo-terminal so output always renders, ANSI-strips it, and writes it to `<out-path>`. There is **no flag to forget**, so capture cannot silently fail. This is the same wrapper [`gemini-review`](../gemini-review/SKILL.md) uses for `agy` — one PTY wrapper, both review CLIs.
 
 ```bash
-# Put the prompt in a workspace file, then run codex through the wrapper.
-# Wrapper timeout is 1200s: mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
-# SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
-# (COREDEV-2504). Matches gemini-review. Keep the Monitor pattern below — an outer runner timeout could
-# otherwise kill the run before the wrapper's cap fires.
-# MAJ-10: pre-clean the fixed transcript path FIRST so a wrapper that never starts (codex absent / auth
-# expired / a Bash-tool kill before pty-capture's finally-write) leaves this file ABSENT — never a STALE
-# previous-round transcript that review-synthesis would read as THIS round's verdict. Absent maps to
-# MISSING -> the gate fails closed. Re-run this before every round; it also clears the captureid.
-rm -f /tmp/codex-out.txt /tmp/codex-out.txt.captureid
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/codex-out.txt -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat .codex-prompt.md)"
-# Captured output is in /tmp/codex-out.txt; the wrapper's exit code matches codex's.
+# Write this round's prompt to a PER-ROUND file first — `.codex-prompt-${TICKET}r${ROUND}.md`,
+# never a shared `.codex-prompt.md`: two concurrent rounds would otherwise cross-wire prompt and
+# transcript (deep review, P1). Bind TICKET, ROUND and PLAN (the plan being reviewed), then run this ONE command. It allocates
+# the per-run transcript leaf, prints the `UNLEASHED_TRANSCRIPT=` marker for synthesis to bind, and
+# captures the review into that exact leaf through the PTY wrapper.
+#
+# ONE command, so the `Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/*)` grant above covers it. This
+# used to be two `:` guards, an `if`/`else` around the allocator and a `case` on the marker — a compound
+# command matching no grant, so the block every gate round must run prompted every time.
+#
+# The rules it carries, which now live in one place instead of in a skill body:
+#   * timeout 1200s — mandated `model_reasoning_effort=xhigh` runs to ~12 min; the previous 600s cap
+#     SIGTERM'd codex mid-run -> masked exit 124 / partial transcript / MISSING-verdict retry loop
+#     (COREDEV-2504). This is NOT the same cap as gemini-review, which is 1800s because `agy` needs a
+#     longer `--print-timeout`; an earlier note here claimed they matched (deep review, P2). Keep
+#     the Monitor pattern below: an outer runner timeout could otherwise kill the
+#     run before the wrapper's cap fires.
+#   * MAJ-10 — staleness protection comes from the PER-RUN ALLOCATED PATH, not from deleting a fixed
+#     one. Each round allocates its own leaf, so a wrapper that never starts (codex absent / auth
+#     expired / a Bash-tool kill before pty-capture's finally-write) leaves that leaf ABSENT — never a
+#     STALE previous-round transcript that review-synthesis would read as THIS round's verdict. Absent
+#     maps to MISSING -> the gate fails closed.
+#   * DO NOT `rm -f` the reserved leaf on a retry; retries must RE-ALLOCATE (gap 14). The script says
+#     why at the line that would tempt you.
+# COREDEV2619_CODEX_CAPTURE_BEGIN
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" "$TICKET" "$ROUND" ".codex-prompt-${TICKET}r${ROUND}.md" "$PLAN" 1200
+# COREDEV2619_CODEX_CAPTURE_END
+# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code
+# matches codex's. Preserve the marker remainder byte-for-byte for synthesis.
 
-# Skill-based audit through the wrapper:
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py" --timeout 1200 /tmp/security.txt -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "/security-reviewer [FILES]"
+# Skill-based audit through the wrapper, as ONE granted command.
+# `audit-codex.sh` ALLOCATES its own per-run output and HARD-CODES `-s read-only` and
+# `model_reasoning_effort=xhigh`. The old form needed `Bash(codex *)` and
+# `Bash(python3 ${CLAUDE_PLUGIN_ROOT}/scripts/*)`, which between them pre-approved any codex
+# invocation (including `-s danger-full-access`) and `pty-capture.py <any path> -- <any command>`
+# — arbitrary child execution writing anywhere (deep review, P1). It prints the transcript path.
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh" /security-reviewer [FILES]
 ```
 
-Interface: `pty-capture.py [--timeout SECONDS] <out-path> -- <command> [args...]`. Read `<out-path>` back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
+Interface: `pty-capture.py [--timeout SECONDS] [--allocated] <out-path> -- <command> [args...]`.
+Read the allocated path back into context after the run. If `${CLAUDE_PLUGIN_ROOT}` is unset (skill
+running outside the plugin), use the repo-relative `scripts/pty-capture.py`.
 
 ## Monitor, not Bash background (user-confirmed preference)
 
@@ -178,11 +203,21 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
 
 ## Full workflow (plan or debug → implementation → post-impl audit)
 
-1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, run `/unleashed-mail:review-synthesis` to combine `/tmp/codex-out.txt` + `/tmp/agy-out.txt` into one auditable **Combined verdict** block before implementation.
+1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_CONTENT"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer "<name>=<STATUS>:<allocated-path>"` argument to produce the auditable **Combined verdict** block before implementation.
 2. **Post-implementation audit:** run the five Codex audit skills in parallel (`/security-reviewer`, `/concurrency-reviewer`, `/ux-perf-reviewer`, `/accessibility-auditor`, `/prompt-review`) with `-s read-only`
 3. **Full diff review:** optionally also run `codex -c review_model=gpt-5.6-sol -c model_reasoning_effort=xhigh review --uncommitted`
 4. **Synthesize:** run `/swift-reviewer` last, feeding it the five audit outputs
 5. Incorporate feedback from both Gemini and Codex before considering work complete
+
+## Required invocation inputs
+
+/unleashed-mail:codex-review --ticket <T> --round <N> <plan>
+
+Ticket and round are required operands received from that invocation; never infer either from the plan,
+branch, or prior transcript. If either is absent, stop before allocation. Bind the received operands to
+`TICKET`, `ROUND` and `PLAN` in the same Bash invocation, then run the complete allocation-and-capture recipe
+above. It passes the hard-coded reviewer literal `codex`, removes only the marker prefix, and quotes every
+later expansion of `CODEX_TRANSCRIPT` so the allocated path remains one opaque argument.
 
 ## Safety rules
 

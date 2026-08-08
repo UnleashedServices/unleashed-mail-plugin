@@ -28,19 +28,39 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from 10: measured 3m00s, but this PR added an `apt-get install zsh` step whose duration
+    # depends on the package mirror, so the headroom is less predictable than the median suggests.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the whitespace gate resolves origin/main to compute a merge base.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
+      - name: Install zsh (the shell the agent fence runs)
+        # WITHOUT THIS NO CI JOB CAN EXECUTE ANY ZSH TEST. ubuntu-latest ships no zsh, so
+        # test_plugin_state_base.py::test_zsh_agrees_with_bash self-skips here -- and the macOS leg
+        # ran only the redactor suite. The exact regression that test exists to catch (a Bash-only
+        # construct failing silently under zsh) could therefore land green (PR #63 review, gap 15).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+
+      - name: Assert zsh is present so the agreement test cannot silently skip
+        # A skip reads identically to a pass in the summary. Fail loudly if the install regressed.
+        run: |
+          command -v zsh || {
+            echo "zsh missing - the zsh-agreement test would SKIP, not fail"
+            exit 1
+          }
+
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -103,6 +123,57 @@ jobs:
           # the pinned @anthropic-ai/claude-code tarball (npm pack + sha512) like actionlint/gitleaks.
           claude plugin validate .claude-plugin/plugin.json
 
+      - name: Whitespace check (git diff --check)
+        # `git diff --check` exits 2 on trailing whitespace and new blank lines at EOF. Five had
+        # accumulated across this PR and nothing caught them: the pre-commit hook does not run it and
+        # neither did CI. Checked against the merge base rather than the whole tree so history is not
+        # re-litigated (PR #63 recheck, P3).
+        id: whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.base_ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          # THE BASE IS EVENT-DEPENDENT (PR #63 recheck, P2). `GITHUB_BASE_REF` is populated on a
+          # pull_request run and EMPTY on a push, so the old `${GITHUB_BASE_REF:-main}` made a main push
+          # compute `merge-base(origin/main, HEAD) == HEAD` and check an EMPTY range — the gate did
+          # nothing — while an alpha push re-checked the whole `main..alpha` divergence. Select the base
+          # from the event, and FAIL CLOSED whenever the base cannot be resolved (which needs
+          # `fetch-depth: 0`) rather than silently skipping.
+          ZERO="0000000000000000000000000000000000000000"
+          case "$EVENT_NAME" in
+            pull_request)
+              # The PR's real base branch — not a hard-coded `main` — so an alpha-targeting PR is diffed
+              # against alpha and its accumulated history is not re-litigated.
+              base_ref="${PR_BASE:?pull_request run carried no base ref}"
+              git rev-parse --verify "origin/${base_ref}" >/dev/null 2>&1 \
+                || { echo "origin/${base_ref} unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base "origin/${base_ref}" HEAD)"
+              ;;
+            push)
+              # The previous tip of the branch. All-zeros = a new branch with no ancestor, and an
+              # unresolvable value = a shallow fetch; both fall back to the merge base with the default
+              # branch so only THIS push's changes are checked, and fail closed if even that is absent.
+              if [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ] \
+                   && git rev-parse --verify "$PUSH_BEFORE" >/dev/null 2>&1; then
+                base="$PUSH_BEFORE"
+              else
+                git rev-parse --verify origin/main >/dev/null 2>&1 \
+                  || { echo "no usable push ancestor and origin/main unavailable — needs fetch-depth: 0" >&2; exit 1; }
+                base="$(git merge-base origin/main HEAD)"
+              fi
+              ;;
+            *)
+              # workflow_dispatch (and any future trigger): an explicit, documented base — the merge
+              # base with the default branch.
+              git rev-parse --verify origin/main >/dev/null 2>&1 \
+                || { echo "origin/main unavailable — this job needs fetch-depth: 0" >&2; exit 1; }
+              base="$(git merge-base origin/main HEAD)"
+              ;;
+          esac
+          git diff --check "$base" HEAD
+
       - name: ShellCheck plugin scripts
         id: shellcheck_gate
         run: shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
@@ -149,6 +220,7 @@ jobs:
             echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
             echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"
+            echo "| whitespace (git diff --check) | ${{ steps.whitespace.outcome || 'did not run' }} |"
             echo "| shellcheck (-S warning) | ${{ steps.shellcheck_gate.outcome || 'did not run' }} |"
             echo "| actionlint | ${{ steps.actionlint_gate.outcome || 'did not run' }} |"
             echo "| hooks-manifest (strict) | ${{ steps.hooks_manifest.outcome || 'did not run' }} |"
@@ -171,7 +243,71 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/pty-capture.py scripts/lib/bash-write-scan.py scripts/validate-plugin-assembly.py scripts/validate-hooks.py scripts/review-verdict.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
+      - name: bind-prompt.py real invocation on 3.9
+        # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
+        # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
+        # reasoning that earned bash-write-scan its 3.9 exec smoke). Drive a REAL bind (a git repo, a
+        # prompt naming the plan, a transcript) plus a refusal, so a 3.9 regression surfaces here.
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+          cd "$work"
+          git init -q .; git config user.email c@i; git config user.name ci
+          mkdir -p docs/planning
+          printf '# Plan\ncontent\n' > docs/planning/X_PLAN.md
+          printf 'Review the plan for correctness and completeness.\n%.0s' {1..40} > .prompt.md
+          printf 'REVIEW TARGET: docs/planning/X_PLAN.md\n' >> .prompt.md
+          git add -A; git commit -qm init
+          t="$work/t.txt"
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .prompt.md --transcript "$t" --plan docs/planning/X_PLAN.md
+          # `if`, not `A && B || C`: shellcheck flags that as SC2015 (info) and actionlint promotes
+          # any shellcheck finding to a failure, so the chained form failed CI while passing a local
+          # `actionlint` whose shellcheck did not report info-level issues.
+          if [ ! -s "$t.plan" ] || [ ! -s "$t.planbytes" ] || [ ! -s "$t.prompt" ]; then
+            echo "bind-prompt did not write its sidecars on 3.9" >&2
+            exit 1
+          fi
+          # And a prompt naming a DIFFERENT plan must be refused (the binding is enforced, not cosmetic).
+          printf 'Review it.\n%.0s' {1..40} > .bad.md
+          printf 'REVIEW TARGET: docs/planning/OTHER_PLAN.md\n' >> .bad.md
+          status=0
+          python3 "$GITHUB_WORKSPACE/scripts/review/bind-prompt.py" \
+            --prompt .bad.md --transcript "$work/t2.txt" --plan docs/planning/X_PLAN.md >/dev/null 2>&1 || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "bind-prompt accepted a prompt naming a different plan on 3.9" >&2
+            exit 1
+          fi
+      - name: generate-callers-exemptions.py produces the shipped manifest on 3.9
+        # Added this PR and previously uncovered by CI (PR #63 recheck, P3). It regenerates the
+        # exemption manifest the callers scan depends on, and it runs on macOS stock 3.9 — run it and
+        # assert it leaves the committed manifest unchanged, so a drift or a 3.9 regression fails here.
+        run: |
+          set -euo pipefail
+          python3 scripts/review/generate-callers-exemptions.py
+          if ! git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv; then
+            echo "generate-callers-exemptions.py output drifted from the committed manifest" >&2
+            exit 1
+          fi
+      - name: callers_scan.py execution smoke on 3.9
+        run: python3 scripts/review/callers_scan.py --help >/dev/null
+      - name: callers_scan.py real invocation on 3.9
+        # `--help` never loads the manifest or reads the tree, so it stayed green for the whole of
+        # PR #63 while the production invocation exited 2 on an ABSENT exemption manifest — the
+        # scanner could not scan at all and nothing said so (PR #63 review, thread 5). Run the real
+        # thing: this is the only step that would have caught it.
+        run: python3 scripts/review/callers_scan.py --root .
+      - name: cleanup tool refuses without --apply on 3.9
+        # Its ONLY real execution is destructive and happens on macOS stock 3.9, so 3.9 must at least
+        # prove it parses and still fail-closes without the acknowledgement (PR #63 review, gap 29).
+        run: |
+          # GitHub Actions runs `run:` under `bash -eo pipefail`, so a bare non-zero command ABORTS
+          # the step before the next line executes. Capturing an EXPECTED failure therefore needs
+          # `|| status=$?`, which suppresses -e; `status=$?` on the following line never runs.
+          status=0
+          python3 scripts/review/cleanup_coredev_2619_leaks.py --state-root /nonexistent-state-root >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 2 ] || { echo "expected refusal exit 2 without --apply, got $status"; exit 1; }
       - name: bash-write-scan.py execution smoke on 3.9 (byte-compile can't catch a runtime-evaluated union)
         # MIN-2: bash-write-scan.py runs inside the BLOCKING PreToolUse sensitive-file guard on macOS's
         # stock 3.9. A PEP-604 `X | None` in a def signature byte-compiles fine on 3.9 and only raises
@@ -243,7 +379,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
+    # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
+    # A cap that close to the observed time turns a slow runner into a red build that says
+    # nothing about the code (PR #63 second-round review).
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,6 +401,20 @@ jobs:
         run: python3 mcp/review-synthesizer/redactor_model.py --count 40000 --seed 20260729
       - name: Second seed (the same invariant, a disjoint corpus)
         run: python3 mcp/review-synthesizer/redactor_model.py --count 20000 --seed 31337
+
+      # macOS ONLY. The `validate` job already runs these on ubuntu; duplicating them here would just
+      # burn minutes. What macOS adds is the PLATFORM: the agent fence runs zsh on developer macOS,
+      # `sed`/`tr` are BSD rather than GNU, and the filesystem is case-INSENSITIVE by default -- so a
+      # shell or path-classification defect can be green on ubuntu and red here. Before this the macOS
+      # leg ran only the redactor suite, so nothing platform-specific in the scripts suite or the hook
+      # harness was ever exercised on the platform it targets (PR #63 review, gap 15).
+      - name: Run the scripts test suite (macOS platform coverage)
+        if: matrix.os == 'macos-latest'
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Run the hook stdin-contract harness (macOS platform coverage)
+        if: matrix.os == 'macos-latest'
+        run: bash scripts/test-hooks.sh
 
   secret-scan:
     # History-aware secret scan (COREDEV-2486 / audit critic.1). Prevents a recurrence of the
