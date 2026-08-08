@@ -35,6 +35,25 @@ git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
 # Base-branch detection per AGENT_CONTRACTS.md §1+§5 (matches swift-reviewer):
 #   1. If on a 1.0X/feature-name branch, target the matching 1.0X.0000 version branch
 #   2. Else fall back to `git merge-base $(current) origin/main`
+# A USABLE BASE IS A PROPER ANCESTOR OF HEAD (PR #63 recheck, P1 — reproduced).
+#
+# `git merge-base A B` succeeds whenever the two share ANY common ancestor, which a stale local
+# `${prefix}.0000` that has ADVANCED PAST the feature branch still does — after a local test merge it
+# may contain HEAD outright. The check below passed, the remote fetch was skipped as unnecessary, and
+# `git diff "$BASE"...HEAD` then took HEAD itself as the merge base and reported an EMPTY changeset:
+# `pr-review` approves having inspected nothing. Reproduced on a two-commit branch whose local base
+# had been fast-forwarded to its tip — `changeset.sh files` printed the heading and no files.
+#
+# `--is-ancestor` asks the question that actually matters ("is the first one an ancestor of the
+# other?"), and the equality clause is required with it: a base fast-forwarded to exactly HEAD IS an
+# ancestor of HEAD, and still yields an empty diff. Refusing there is right — a review whose range is
+# empty must fail, not pass quietly.
+_usable_base() {
+    git rev-parse --verify "$1^{commit}" >/dev/null 2>&1 || return 1
+    git merge-base --is-ancestor "$1" HEAD >/dev/null 2>&1 || return 1
+    [ "$(git rev-parse "$1")" != "$(git rev-parse HEAD)" ]
+}
+
 detect_base() {
     local current prefix
     current=$(git rev-parse --abbrev-ref HEAD)
@@ -44,28 +63,34 @@ detect_base() {
         # and so passes the `rev-parse --verify` added below — while sharing no history with this
         # branch, so `git diff base...HEAD` falls through to `HEAD~1` and reviews only the last commit
         # (PR #63 recheck, P2). Require a common ancestor, which is the thing a base actually is.
-        if git merge-base "$current" "${prefix}.0000" >/dev/null 2>&1; then
-            printf '%s' "${prefix}.0000"; return
-        fi
-        # Explicit refspec — bare `git fetch origin BRANCH` only writes FETCH_HEAD, not
-        # refs/remotes/origin/BRANCH. This and the `main` fetch below are the ONLY writes this
-        # script performs, and both are to remote-tracking refs; nothing here touches the work tree.
+        # THE FETCHED REMOTE IS TRIED FIRST. The local ref was preferred, so a stale or advanced local
+        # copy shadowed the branch the PR actually targets — and the fetch that would have corrected it
+        # was skipped precisely because the stale ref "resolved". Explicit refspec: bare
+        # `git fetch origin BRANCH` only writes FETCH_HEAD, not refs/remotes/origin/BRANCH. This and
+        # the `main` fetch below are the ONLY writes this script performs, and both are to
+        # remote-tracking refs; nothing here touches the work tree.
         git fetch origin --quiet \
             "refs/heads/${prefix}.0000:refs/remotes/origin/${prefix}.0000" 2>/dev/null || true
-        if git merge-base "$current" "origin/${prefix}.0000" >/dev/null 2>&1; then
+        if _usable_base "origin/${prefix}.0000"; then
             printf '%s' "origin/${prefix}.0000"; return
+        fi
+        if _usable_base "${prefix}.0000"; then
+            printf '%s' "${prefix}.0000"; return
         fi
     fi
     git fetch origin --quiet \
         refs/heads/main:refs/remotes/origin/main 2>/dev/null || true
-    if git merge-base "$current" origin/main >/dev/null 2>&1; then
-        git merge-base "$current" origin/main
-        return
+    # The MERGE BASE, not the branch tip — and it is validated the same way. A merge base is an
+    # ancestor of HEAD by construction, but it EQUALS HEAD when the branch is fully merged into the
+    # target, which is the same empty-range fail-open one resolution path over.
+    _candidate="$(git merge-base "$current" origin/main 2>/dev/null || true)"
+    if [ -n "$_candidate" ] && _usable_base "$_candidate"; then
+        printf '%s' "$_candidate"; return
     fi
     # A LOCAL main is still a real base — use it before giving up.
-    if git merge-base "$current" main >/dev/null 2>&1; then
-        git merge-base "$current" main
-        return
+    _candidate="$(git merge-base "$current" main 2>/dev/null || true)"
+    if [ -n "$_candidate" ] && _usable_base "$_candidate"; then
+        printf '%s' "$_candidate"; return
     fi
     # FAIL, do not invent one. This returned the literal string `main` as though resolution had
     # succeeded; with no remote and no local `main`, `files`/`stat` then fell through to `HEAD~1` and

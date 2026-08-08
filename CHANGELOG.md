@@ -111,6 +111,22 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
   zero-removal run cannot be distinguished from a wrong state root.
 
+### Fixed — fourth recheck pass
+
+- **`pr-review` could approve a PR having inspected nothing.** `changeset.sh`'s base detection used
+  `git merge-base`, which succeeds on ANY shared ancestor — so a local `1.0X.0000` that had advanced
+  past the feature branch (after a local test merge, say) satisfied it, the remote fetch was skipped
+  as unnecessary, and `git diff BASE...HEAD` then took HEAD itself as the merge base and reported an
+  EMPTY changeset. Reproduced on a two-commit branch: the heading printed and no files. A usable base
+  must now be a PROPER ancestor of HEAD (`--is-ancestor`, plus not equal to it — a base
+  fast-forwarded to exactly HEAD is an ancestor and still yields an empty range), and the fetched
+  remote is preferred over the local ref rather than shadowed by it.
+- **`verify` read the artifact by pathname**, so the ancestor swap the write path had just been pinned
+  against still produced `GATE OK` — against a different plan and ITS matching artifact, with the
+  ancestor restored afterwards leaving `implement` proceeding on a plan nothing had verified. Both
+  verification reads go through the same descriptor walk now. The third member of that family —
+  `write`'s own read of the snapshot sidecar — was found by sweeping rather than by a report.
+
 ### Fixed — third recheck pass
 
 - **The allocator could reserve a leaf no capture or verdict could use.** Both readers read 128 bytes

@@ -275,6 +275,64 @@ class StateWritesArePinnedToTheContainedDirectory(unittest.TestCase):
         self.assertFalse((self.outside / "planning" / ".verdicts").exists(),
                          "state was created outside the repository through the swapped ancestor")
 
+    def gate(self, rel: str) -> None:
+        """Run an honest gate for `rel` in the fixture repo, leaving a valid approving artifact."""
+        import hashlib
+
+        state = self.repo / "state" / "unleashed-mail" / "review-transcripts" / "H"
+        state.mkdir(parents=True, exist_ok=True)
+        for path in (self.repo / "state", state.parent.parent, state.parent, state):
+            path.chmod(0o700)
+        payload = (self.repo / rel).read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        specs = []
+        for reviewer, run in (("gemini", "a" * 32), ("codex", "b" * 32)):
+            leaf = state / f"COREDEV-1r1-{reviewer}-{run}.txt"
+            leaf.write_text(f"{reviewer}\nVERDICT: APPROVE\n", encoding="utf-8")
+            Path(str(leaf) + ".launch").write_text(f"{run} {reviewer}\n", encoding="utf-8")
+            stamp = leaf.stat().st_mtime_ns
+            os.utime(str(leaf) + ".launch", ns=(stamp - 10**6, stamp - 10**6))
+            Path(str(leaf) + ".plan").write_text(f"{digest}  {rel}\n", encoding="utf-8")
+            Path(str(leaf) + ".planbytes").write_bytes(payload)
+            prompt = b"prompt\n"
+            Path(str(leaf) + ".prompt").write_bytes(prompt)
+            Path(str(leaf) + ".promptsha256").write_text(
+                hashlib.sha256(prompt).hexdigest() + "  prompt.md\n", encoding="utf-8")
+            specs += ["--reviewer", f"{reviewer}=APPROVE:{leaf}"]
+        verdict = str(REPO / "scripts" / "review-verdict.py")
+        for argv in (["snapshot", "--plan", rel],
+                     ["write", "--plan", rel, "--verdict", "APPROVE"] + specs):
+            done = subprocess.run([sys.executable, verdict] + argv, cwd=str(self.repo),
+                                  capture_output=True, text=True, check=False)
+            self.assertEqual(0, done.returncode, done.stderr)
+
+    def test_a_SWAPPED_ancestor_cannot_make_verify_read_another_plans_artifact(self):
+        """The READ path was not covered by the write fix (PR #63 recheck, P1).
+
+        `verify` reopened the artifact by pathname after its `islink` pre-checks, so the same ancestor
+        swap sent verification at a different directory: `GATE OK` against another plan and ITS
+        matching artifact, with the ancestor restored afterwards leaving `implement` proceeding on a
+        plan nothing had verified. The decoy here is genuinely gated, so nothing but the pinning can
+        refuse it.
+        """
+        rel = "docs/planning/FEATURE_PLAN.md"
+        (self.repo / "decoydocs" / "planning").mkdir(parents=True)
+        (self.repo / "decoydocs" / "planning" / "FEATURE_PLAN.md").write_text(
+            "# Plan\nDECOY\n", encoding="utf-8")
+        self.gate("decoydocs/planning/FEATURE_PLAN.md")
+        shutil.move(str(self.repo / "decoydocs" / "planning"), str(self.outside / "planning"))
+
+        shutil.rmtree(self.repo / "docs" / "planning")
+        (self.repo / "docs" / "planning").symlink_to(self.outside / "planning")
+
+        result = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "review-verdict.py"), "verify", "--plan", rel],
+            cwd=str(self.repo), capture_output=True, text=True, check=False)
+
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertNotIn("GATE OK", result.stdout + result.stderr)
+        self.assertIn("symlinked path component", result.stdout + result.stderr)
+
     def test_an_ordinary_plan_still_gets_its_private_state(self):
         """Positive control: the walk must refuse a substituted ancestor, not every write."""
         result = self.snapshot("docs/planning/FEATURE_PLAN.md")

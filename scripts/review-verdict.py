@@ -386,10 +386,65 @@ def _plan_directory_fd(plan: str) -> "int | None":
     except OSError as error:
         os.close(dir_fd)
         raise SystemExit(
-            f"review-verdict: refusing to write state through a symlinked path component: "
+            f"review-verdict: refusing to reach plan state through a symlinked path component: "
             f"{directory}: {error}"
         )
     return dir_fd
+
+
+def _read_state_file(plan: str, name: str) -> "bytes | None":
+    """Read `<plan dir>/.verdicts/<name>` through the same no-follow walk the writes use.
+
+    THE READ PATH WAS NOT COVERED BY THE WRITE FIX (PR #63 recheck, P1). `_write_state_file` pinned the
+    directory for `snapshot` and `write`, and `verify` still reopened the artifact by pathname — so the
+    identical ancestor swap produced `GATE OK` against a DIFFERENT plan and its matching artifact, and
+    restoring the ancestor afterwards left `implement` proceeding on a plan nothing had verified. That
+    is the same sidecar-family mistake this campaign keeps making: the fix was applied to the members
+    in front of me rather than to the family, and the read half was reported separately.
+
+    Returns None when the file is absent, unreadable, or not a regular file. Raises SystemExit through
+    `_plan_directory_fd` when a component is a symlink — refusing is right here: a verification that
+    cannot prove WHICH file it read must not pass.
+    """
+    parent_fd = _plan_directory_fd(plan)
+    if parent_fd is None:
+        return _read_regular_file_bytes(
+            os.path.join(os.path.dirname(os.path.abspath(plan)), VERDICT_DIR_NAME, name)
+        )
+    try:
+        state_fd = os.open(
+            VERDICT_DIR_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+    except OSError:
+        return None
+    finally:
+        os.close(parent_fd)
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=state_fd,
+        )
+    except OSError:
+        return None
+    finally:
+        os.close(state_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
 
 
 def _write_state_file(plan: str, name: str, text: str) -> str:
@@ -1194,7 +1249,22 @@ def cmd_write(args: argparse.Namespace) -> int:
             if not _SHA256_HEX.match(expected):
                 raise SystemExit(f"review-verdict: --reviewed-sha256 must be 64 hex chars, got {expected!r}")
         else:
-            _snap = _read_regular_file(_reviewed_sha_sidecar(plan))
+            # THROUGH THE SAME WALK as the artifact read and both writes — the third member of this
+            # family, found by sweeping rather than by a report. `_read_regular_file` closes the
+            # islink-then-open race on the LEAF; the ancestor swap it cannot see is what redirected
+            # the other two (PR #63 recheck, P1).
+            _raw = _read_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)))
+            # UNDECODABLE BYTES MEAN "NO BINDING", exactly as `_read_regular_file` treated them — a
+            # decision made with codex in round 7, and the fail-closed "requires a reviewed-plan
+            # digest" is the message that tells the operator to re-run `snapshot`. Decoding with
+            # `errors="replace"` instead turned garbage into a present-but-corrupt string and changed
+            # that diagnostic; the pinned test caught it. Same refusal either way, different guidance.
+            _snap = None
+            if _raw is not None:
+                try:
+                    _snap = _raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    _snap = None
             if _snap is not None:
                 expected = _snap.strip().lower()
                 if not _SHA256_HEX.match(expected):
@@ -1328,16 +1398,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         return _fail(f"plan not found: {plan}")
     dest = _verdict_path(plan)
-    # Refuse a symlinked .verdicts dir too (write already does) — otherwise `dest` could resolve to a
-    # regular file OUTSIDE the plan directory through the link and satisfy the gate (PR #39 review).
-    if os.path.islink(os.path.dirname(dest)):
-        return _fail(f"refusing symlinked verdict dir: {os.path.dirname(dest)}")
-    if os.path.islink(dest) or not os.path.isfile(dest):
+    # READ THROUGH THE SAME NO-FOLLOW WALK THE WRITES USE (PR #63 recheck, P1). The `islink` checks
+    # below were a pathname pre-check, so a same-account swap of a plan ANCESTOR between them and the
+    # open sent verification at a different directory entirely — `GATE OK` against another plan and its
+    # matching artifact, with the ancestor restored afterwards. `_read_state_file` opens the artifact
+    # relative to a descriptor obtained by walking from the repository root, so no component can be
+    # substituted between the walk and the read.
+    try:
+        raw = _read_state_file(plan, os.path.basename(dest))
+    except SystemExit as refusal:
+        return _fail(str(refusal).replace("review-verdict: ", ""))
+    if raw is None:
         return _fail(f"no Combined-verdict artifact for this plan (run the gate first): {dest}")
     try:
-        with open(dest, encoding="utf-8") as fh:
-            art = json.load(fh)
-    except (OSError, ValueError) as e:
+        art = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as e:
         return _fail(f"artifact unreadable/corrupt: {e}")
     if not isinstance(art, dict) or art.get("schemaVersion") != SCHEMA_VERSION:
         return _fail(f"artifact schemaVersion != {SCHEMA_VERSION} (stale format — re-run the gate)")
