@@ -174,10 +174,32 @@ def main(argv=None) -> int:
         # closing. `Unleashed Mail`, `Unleashed MailTests` and `Unleashed Mail.worktrees` are all real
         # sibling directories here, so this is the ordinary case, not a contrived one.
         #
-        # The boundary is "the root is not continued by another path-name character": `/` or a
-        # separator-like byte ends the component, while `T` (MailTests) and `.` (Mail.worktrees) do not.
-        boundary = re.compile(re.escape(repo) + rb"(?=/|\Z|[^A-Za-z0-9._-])")
-        payload = boundary.sub(tree, payload)
+        # THE BOUNDARY IS `/` OR END-OF-INPUT, and nothing else. My first form also treated "any byte
+        # outside `[A-Za-z0-9._-]`" as a boundary, which makes a SPACE one — and a space is a legal
+        # path character here: `…/Unleashed Mail Helper/notes.md` was rewritten to
+        # `<tree> Helper/notes.md`, the very defect this fix exists to close, one character class over.
+        # Caught in review of the fix itself.
+        #
+        # The suggested repair was a smarter lookahead around the space, but that question is not
+        # decidable from text: `<repo> Helper/x.md` (a sibling directory) and `<repo> is dirty` (prose
+        # about the checkout) are the same bytes. `/` and end-of-input are the only boundaries a
+        # component definitively ends at, so those are the only ones rewritten — and the real prompts
+        # always spell the plan as `<root>/docs/planning/…`, which is the `/` case.
+        #
+        # What that gives up: a bare `<repo>` mentioned in prose keeps naming the live path. That is a
+        # MENTION, not a file the reviewer opens, and leaving it is the conservative direction — a
+        # stale mention is visible, a silently corrupted sibling path is not.
+        # A SENTENCE-ENDING PERIOD ALSO ENDS THE COMPONENT (review of this fix). `Review /work/repo.`
+        # left the root unrewritten, so the prompt still named the LIVE checkout — and the residue
+        # check, asking the same question, did not notice. It is decidable, unlike the space case: a
+        # period followed by whitespace or end-of-input closes a sentence, while `.worktrees/` does not.
+        boundary = re.compile(re.escape(repo) + rb"(?=/|\Z|\.(?:\s|\Z))")
+        # A CALLABLE, NOT A TEMPLATE STRING (review of this fix). `Pattern.sub` interprets the
+        # replacement as a template, so a backslash in the scratch-tree path — legal in a Unix path and
+        # reachable through `TMPDIR` — is expanded: `\1` raises `invalid group reference` and aborts
+        # staging, `\t` silently inserts a TAB and produces a path that does not exist. Verified both.
+        # A callable returns the bytes literally.
+        payload = boundary.sub(lambda _match: tree, payload)
         # THE CHECK LOOKS AT THE RESIDUE, NOT THE WHOLE PAYLOAD (PR #63 recheck, P2). When `TMPDIR`
         # points inside the checkout — which both harnesses honour, so it is a configuration, not an
         # exotic state — the scratch worktree lands beneath the repository and the REPLACEMENT value

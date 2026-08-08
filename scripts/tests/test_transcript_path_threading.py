@@ -768,7 +768,12 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
         sibling = repo + "Tests"           # shares the whole root as a prefix
         dotted = repo + ".worktrees"       # ditto, continued by `.`
-        for path in (sibling, dotted):
+        # A SPACE IS A LEGAL PATH CHARACTER, and this project's checkout name contains one. My first
+        # boundary treated "any byte outside [A-Za-z0-9._-]" as a component end, so `<repo> Helper/…`
+        # was rewritten to `<tree> Helper/…` — the same defect this cell exists for, one character
+        # class over. Caught in review of the fix; the boundary is now `/` or end-of-input only.
+        spaced = repo + " Helper"
+        for path in (sibling, dotted, spaced):
             os.makedirs(path, exist_ok=True)
             self.addCleanup(shutil.rmtree, path, ignore_errors=True)
         tree = os.path.join(tempfile.mkdtemp(prefix="prefix-tree-"), "tree")
@@ -777,7 +782,12 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         body = ("Review carefully.\n" * 20
                 + f"REVIEW TARGET: {repo}/docs/planning/X_PLAN.md\n"
                 + f"Also read {sibling}/AuthTests.swift\n"
-                + f"and the worktree {dotted}/feature/\n")
+                + f"and the worktree {dotted}/feature/\n"
+                + f"and the helper {spaced}/notes.md\n"
+                # A SENTENCE-ENDING PERIOD closes the component; `.worktrees` above does not. Left
+                # unrewritten, the prompt would still name the LIVE checkout and the residue check —
+                # asking the same question — would not notice.
+                + f"The checkout is {repo}. Then stop.\n")
         result, tree_root = self.stage(repo, tree, body)
 
         self.assertEqual(0, result.returncode, result.stderr)
@@ -787,7 +797,35 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
                       "a sibling sharing the repository prefix was rewritten into a path that does "
                       "not exist — the reviewer would silently read nothing")
         self.assertIn(f"{dotted}/feature/", staged)
+        self.assertIn(f"{spaced}/notes.md", staged,
+                      "a sibling whose name continues with a SPACE was rewritten — a space is a legal "
+                      "path character, and this project's own checkout name contains one")
         self.assertNotIn(f"{tree}Tests", staged)
+        self.assertNotIn(f"{tree} Helper", staged)
+        self.assertIn(f"The checkout is {tree}. Then stop.", staged,
+                      "a sentence-ending period left the root naming the LIVE checkout")
+
+    def test_a_scratch_tree_whose_path_contains_a_BACKSLASH_stages_literally(self):
+        """`Pattern.sub` treats the replacement as a TEMPLATE (review of this fix).
+
+        A backslash is legal in a Unix path and reaches here through `TMPDIR`: `\1` raised
+        `invalid group reference` and aborted staging outright, while `\t` silently inserted a TAB and
+        produced a path that does not exist — the second is the dangerous one, because staging then
+        SUCCEEDS and the reviewer reads nothing. Both verified against the template form. A callable
+        replacement returns the bytes literally.
+        """
+        repo = tempfile.mkdtemp(prefix="backslash-repo-")
+        self.addCleanup(shutil.rmtree, repo, ignore_errors=True)
+        scratch = tempfile.mkdtemp(prefix="backslash-tmp-")
+        self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
+        tree = os.path.join(scratch, "a\\1b", "tree")     # a literal backslash-one in the path
+
+        result, tree_root = self.stage(repo, tree, f"Review {repo}/docs/planning/X_PLAN.md.\n" * 20)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
+        self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged,
+                      "the backslash was expanded as a template escape instead of copied literally")
 
     def test_a_scratch_tree_BENEATH_the_repository_still_stages(self):
         repo = tempfile.mkdtemp(prefix="nested-repo-")
