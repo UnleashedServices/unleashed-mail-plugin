@@ -65,7 +65,10 @@ trap cleanup EXIT
 # saw nothing. The same defect was found and fixed in `preflight-agy.sh` first; the fix did not
 # reach here, so the rule now lives in `tree-fingerprint.sh` and all three source it.
 BEFORE_STATUS="$(git status --porcelain)"
-BEFORE="$(tree_fingerprint "$REPO")"
+if ! BEFORE="$(tree_fingerprint "$REPO")"; then
+    echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2
+    exit 3
+fi
 
 SHA="$(git rev-parse HEAD)"
 git worktree add --detach "$SCR/tree" "$SHA" >/dev/null 2>&1 \
@@ -146,7 +149,11 @@ TREE_BASELINE="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/
 RC=$?
 
 # --- basis check: the plan and prompt codex read must be unchanged; nothing new may appear -------
-AFTER="$(tree_fingerprint "$REPO")"
+if ! AFTER="$(tree_fingerprint "$REPO")"; then
+    { echo "GATE FAILED — could not fingerprint the live checkout after the review (round"
+      echo "void). A reviewer that breaks the checkout must not pass as a clean tree."; } >&2
+    exit 3
+fi
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "GATE FAILED — the reviewer MUTATED the real working tree during the review:" >&2
     tree_fingerprint_report "$REPO" "$BEFORE_STATUS"

@@ -524,6 +524,21 @@ printf 'VERDICT: APPROVE\\n'
         self.assertIn("could not read the disposable checkout's status",
                       result.stdout + result.stderr)
 
+    def test_a_reviewer_that_BREAKS_THE_LIVE_checkout_voids_the_round(self):
+        """The LIVE-checkout half — `tree_fingerprint` suppressed both probes (PR #63 recheck, P1).
+
+        A reviewer that deletes the live checkout's `.git` through an absolute path makes BOTH commands
+        fail, so the fingerprint became the bare record separator — byte-identical to the one taken
+        before — and the comparison found no mutation. The DISPOSABLE-checkout probe was fixed for
+        exactly this one commit earlier and this one was not: the sibling sweep, missed again.
+
+        The fixture repo is the live checkout here, so removing its `.git` is the reproduction.
+        """
+        self.install_stub(self.MUTATING_STUB % f'rm -rf "{self.root}/.git"')
+        result = self.capture("19")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("could not fingerprint the live checkout", result.stdout + result.stderr)
+
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by
         construction. The prompt is basis exactly like the plan; content-verified the same way."""

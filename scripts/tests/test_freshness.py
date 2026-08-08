@@ -1298,8 +1298,12 @@ class SFreshDescriptorBindingProofs(FreshnessFixture):
                 "caller-rehashes-the-path",
                 _replace_once(
                     self.verdict_source,
+                    # The legacy arm now streams through `_sha256_regular_file` (O_NOFOLLOW|O_NONBLOCK)
+                    # rather than `_sha256_bytes`, so the anchor moved with it. The PROPERTY is
+                    # unchanged and is what the mutant violates: a per-run digest must come from the
+                    # descriptor freshness validated, never from a second lookup by name.
                     "        out[\"transcriptSha256\"] = (\n"
-                    "            verified.sha256 if verified is not None else _sha256_bytes(transcript)\n"
+                    "            verified.sha256 if verified is not None else legacy_digest\n"
                     "        )\n",
                     "        out[\"transcriptSha256\"] = _sha256_bytes(transcript)\n",
                 ),

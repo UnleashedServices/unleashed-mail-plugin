@@ -23,6 +23,9 @@ ISOLATED_AGY = REPO / "scripts" / "review" / "isolated-agy-review.sh"
 ISOLATED_CODEX = REPO / "scripts" / "review" / "isolated-codex-review.sh"
 STAGE_BOUND_PLAN = REPO / "scripts" / "review" / "stage-bound-plan.py"
 STAGE_PROMPT = REPO / "scripts" / "review" / "stage-prompt.py"
+#: Every shipped file under `scripts/review/`, so the relocated-copy fixture cannot fall behind a new
+#: shared sibling again.
+REVIEW_DIR = REPO / "scripts" / "review"
 PTY_CAPTURE = REPO / "scripts" / "pty-capture.py"
 REVIEW_VERDICT = REPO / "scripts" / "review-verdict.py"
 
@@ -250,24 +253,16 @@ class TranscriptThreadingFixture(unittest.TestCase):
         library_dir = self.plugin / "scripts" / "lib"
         review_dir.mkdir(parents=True)
         library_dir.mkdir()
-        shutil.copy2(ALLOCATE, review_dir / ALLOCATE.name)
-        shutil.copy2(ISOLATED_AGY, review_dir / ISOLATED_AGY.name)
-        shutil.copy2(ISOLATED_CODEX, review_dir / ISOLATED_CODEX.name)
-        # The shared plan-staging helper BOTH isolation harnesses call. A relocated-copy fixture that
-        # lists files by hand does not learn about a new sibling on its own — the codex arm's isolation
-        # would fail with a missing-file error without it (the same lesson as containment.py below).
-        shutil.copy2(STAGE_BOUND_PLAN, review_dir / STAGE_BOUND_PLAN.name)
-        # ...and the shared PROMPT stager both harnesses call. Third time this fixture has had to learn
-        # about a new shared sibling; each time the symptom was a missing-file error, not a wrong answer.
-        shutil.copy2(STAGE_PROMPT, review_dir / STAGE_PROMPT.name)
-        shutil.copy2(CAPTURE_CODEX, review_dir / CAPTURE_CODEX.name)
-        shutil.copy2(CAPTURE_GEMINI, review_dir / CAPTURE_GEMINI.name)
-        shutil.copy2(BIND_PROMPT, review_dir / BIND_PROMPT.name)
-        # …and the module it imports. The containment rules were factored into `containment.py` so the
-        # SAME implementation guards `audit-codex.sh`, whose identical defect the recheck found. A
-        # relocated-copy fixture that lists files by hand does not learn about a new sibling on its own;
-        # this line exists because three such fixtures failed with `ModuleNotFoundError`.
-        shutil.copy2(CONTAINMENT, review_dir / CONTAINMENT.name)
+        # THE WHOLE DIRECTORY, DERIVED — not a hand-kept list. This fixture had learned about a new
+        # shared sibling THREE times, each with its own comment saying so, and the fourth was
+        # `tree-fingerprint.sh`: the harnesses source it, the relocated copy did not have it, and the
+        # only reason that had not already failed loudly is that the fingerprint swallowed its own
+        # errors — the fail-closed fix landing in this same commit is what surfaced it. Enumeration is
+        # not the class. Copying every file the review directory ships makes a new sibling automatic,
+        # and the cost is a few kilobytes.
+        for source in sorted(REVIEW_DIR.iterdir()):
+            if source.is_file():
+                shutil.copy2(source, review_dir / source.name)
         shutil.copy2(REPO / "scripts" / "lib" / "context.sh", library_dir / "context.sh")
         self._write_executable(self.plugin / "scripts" / "pty-capture.py", WRITER_SHIM)
 

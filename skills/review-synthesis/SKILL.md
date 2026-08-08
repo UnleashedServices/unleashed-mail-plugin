@@ -128,10 +128,18 @@ fresh `snapshot` taken before dispatch), then synthesize those transcripts. An a
 the exact plan the reviewers actually reviewed.
 
 Then persist — bind `PLAN_PATH`, `COMBINED_VERDICT`, `GEMINI_REVIEWER_SPEC`, and
-`CODEX_REVIEWER_SPEC` to the current synthesis inputs in one Bash invocation. Each reviewer spec must be
-the exact single argument supplied to this skill. `scripts/review/persist-verdict.sh` parses only the
+`CODEX_REVIEWER_SPEC` to the current synthesis inputs in one Bash invocation. Each reviewer spec must
+carry the CANONICAL status and the exact transcript-path remainder supplied to this skill — that is,
+rebuild it as `<name>=<canonical status>:<the original path, unchanged>`.
+
+> **`APPROVE_WITH_NITS` must be canonicalized in the spec too, not only in the synthesis** (PR #63
+> recheck). `agy` emits `NITS`, the normalization table above converts it for the combined verdict, and
+> passing the reviewer argument through byte-for-byte then handed `persist-verdict.sh` a token it does
+> not accept — `invalid reviewer status`, aborting an otherwise valid dual approval at the last step.
+> The path remainder is still passed unchanged, because it is the thing the gate binds to. `scripts/review/persist-verdict.sh` parses only the
 first delimiters, classifies an absent or empty allocated leaf as `MISSING`, and otherwise passes the
-original spec unchanged. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so
+spec through unchanged — it accepts `APPROVE`, `APPROVE_WITH_NOTES`, `REQUEST_CHANGES` and `MISSING`
+only, which is why the canonicalization above has to happen before it is called. `write` auto-reads the snapshot sidecar and aborts if the plan changed since, so
 no `--reviewed-sha256` argument is needed in the normal flow.
 
 This used to be the same logic pasted inline here, in `brainstorm`, and (in capture form) in the two

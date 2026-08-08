@@ -111,6 +111,23 @@ findings; every fix carries a proof that fails when the fix is reverted. Suite 7
   files" on a root where it removed nothing. It reports `removed N of M` now, and says plainly that a
   zero-removal run cannot be distinguished from a wrong state root.
 
+### Fixed — sixth recheck pass
+
+- **A reviewer that destroyed the LIVE checkout's `.git` passed as a clean tree.** `tree_fingerprint`
+  suppressed both probes, so with the metadata gone the fingerprint became the bare record separator —
+  byte-identical to the one taken before. It returns non-zero now and every caller voids the round.
+  The disposable-checkout half of this was fixed one commit earlier; the live half was not.
+- **The legacy-transcript digest was taken by a second, unprotected open.** `_sha256_bytes` blocks and
+  follows symlinks, after the `isfile`/size checks — reachable for non-approving legacy records, where
+  a planted FIFO wedges the persist step and a symlink makes the artifact record another file's digest.
+- **`APPROVE_WITH_NITS` aborted an otherwise valid dual approval.** `agy` emits it, the synthesis
+  normalizes it for the combined verdict, and the skill then required the reviewer argument to be
+  passed byte-for-byte — handing `persist-verdict.sh` a token it rejects. The skill now says to rebuild
+  the spec with the canonical status and the path remainder unchanged.
+- The relocated-plugin fixture copies the whole review directory rather than a hand-kept list. It had
+  learned about a new shared sibling three times; `tree-fingerprint.sh` was the fourth, and only the
+  fail-closed change above made it visible instead of silently degrading.
+
 ### Fixed — fifth recheck pass
 
 - **A plan over 64 KiB could never be persisted.** The `.planbytes` check added earlier in this release

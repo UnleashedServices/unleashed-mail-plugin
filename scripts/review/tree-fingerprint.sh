@@ -36,10 +36,18 @@
 # disposable checkout — where the reviewer actually runs — is compared with `-uall`, and the round's
 # basis files are content-verified against their recorded digests. A guard that fails every honest
 # round is one that gets switched off, which is the worse failure.
+# A FAILED PROBE IS NOT A CLEAN TREE — the LIVE-checkout half of the same finding (PR #63 recheck, P1).
+# Both commands suppressed their status, so a shell-capable reviewer that deleted or corrupted the live
+# checkout's `.git` through an absolute path made BOTH fail: the fingerprint became the bare record
+# separator, identical to the one taken before, and the comparison found no mutation. Reproduced by the
+# reviewer. The disposable-checkout probe was fixed for exactly this one commit earlier and this one
+# was not — the sibling-sweep failure this campaign keeps repeating.
+#
+# Returns non-zero when either probe fails; callers treat that as a void round, never as a clean tree.
 tree_fingerprint() {
-    git -C "$1" status --porcelain 2>/dev/null
+    git -C "$1" status --porcelain 2>/dev/null || return 1
     printf '\036\n'   # a record separator so status and diff cannot alias across the boundary
-    git -C "$1" diff HEAD 2>/dev/null
+    git -C "$1" diff HEAD 2>/dev/null || return 1
 }
 
 # Print the human-readable summary of what changed between two fingerprints, to stderr.

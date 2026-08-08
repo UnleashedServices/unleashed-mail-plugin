@@ -52,7 +52,10 @@ trap cleanup_scratch EXIT
 BEFORE=""
 BEFORE_STATUS=""
 if REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    BEFORE="$(tree_fingerprint "$REPO_ROOT")"
+    BEFORE="$(tree_fingerprint "$REPO_ROOT")" || {
+        printf 'agy preflight: FAILED — could not fingerprint the checkout before the ping.\n' >&2
+        exit 1
+    }
     # Same untracked mode as `tree_fingerprint`: comparing a collapsed baseline against an expanded
     # "after" would print every file under an untracked directory as newly added.
     BEFORE_STATUS="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)"
@@ -74,7 +77,11 @@ CAPTURE_RC=0
 # THE CHECKOUT MUST BE UNCHANGED. Checked before the verdict, so a mutating agy cannot be reported
 # healthy — the earlier version would have said `healthy` while a file it created sat in the tree.
 if [ -n "$BEFORE" ] || [ -n "${REPO_ROOT:-}" ]; then
-    AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")"
+    AFTER="$(tree_fingerprint "${REPO_ROOT:-.}")" || {
+        printf 'agy preflight: FAILED — agy left the checkout unreadable (its Git metadata is gone or\n' >&2
+        printf 'corrupt). Do not run a review with this agy build.\n' >&2
+        exit 1
+    }
     if [ "$BEFORE" != "$AFTER" ]; then
         printf 'agy preflight: FAILED — agy MUTATED the working tree during a ping:\n' >&2
         # Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or

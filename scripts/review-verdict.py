@@ -1157,8 +1157,21 @@ def _parse_reviewer(spec: str) -> dict:
         # A per-run transcript's evidence is read off the descriptor freshness VALIDATED — never by
         # naming the file a second time. `verified` is None only for a legacy path the check does not
         # govern, where there is no earlier validation for a second lookup to diverge from.
+        # THE LEGACY BRANCH GETS THE SAME DESCRIPTOR DISCIPLINE (PR #63 recheck, P2). `_sha256_bytes`
+        # is an ordinary blocking, symlink-following open, taken AFTER the `isfile`/size checks — so a
+        # same-account process could substitute a FIFO and wedge `persist-verdict.sh` with no timeout,
+        # or substitute a symlink and have the artifact record the digest of an unrelated file. The
+        # branch is reachable for NON-APPROVING legacy records, which the allocated-evidence rule does
+        # not cover. `_sha256_regular_file` opens once with `O_NOFOLLOW|O_NONBLOCK` and refuses a
+        # non-regular target, exactly as the per-run branch already does.
+        legacy_digest = None if verified is not None else _sha256_regular_file(transcript)
+        if verified is None and legacy_digest is None:
+            raise SystemExit(
+                f"review-verdict: reviewer {name!r} transcript is unreadable or not a regular file: "
+                + transcript
+            )
         out["transcriptSha256"] = (
-            verified.sha256 if verified is not None else _sha256_bytes(transcript)
+            verified.sha256 if verified is not None else legacy_digest
         )
         # PROVENANCE beyond content-inequality (full review, #41). Record the canonical capture PATH,
         # and a wrapper-produced capture ID when `pty-capture.py` left one beside the transcript
