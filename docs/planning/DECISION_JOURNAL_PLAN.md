@@ -23,8 +23,35 @@ rewritten live-state)
 > next free patch, **2.7.2**, and asserts **no** version for its siblings — they take whatever is free
 > when they land.
 
-**Depends on:** `COREDEV-2597` (redactor defects) — **LANDED as v2.6.2**, commit `929c160`. §7 step 1
-is a verification step, not outstanding work, and §7 records the one gap that verification found.
+**Depends on:** `COREDEV-2597` (redactor defects) — **LANDED as v2.6.2**, commit `929c160`. §7 **step 0**
+is a verification step, not outstanding work, and §7 records the gaps that verification found.
+
+> ### ⛔ A REAL dependency, found in round 2 — and it is the one nobody was looking for
+>
+> **`COREDEV-2617` §4.2a (D″) must land before this ticket does anything useful.** §4.5b specifies that
+> the model writes a checkpoint by invoking `scripts/journal-checkpoint.sh` **through the ordinary
+> `Bash` tool**. Under D′ that path cannot write, because `CLAUDE_PLUGIN_DATA` is exported to hooks and
+> MCP subprocesses **but not to the Bash tool**. Executed in a live Bash tool call at `dbb1fb8`:
+>
+> ```
+> CLAUDE_PLUGIN_DATA = [UNSET]
+> base=/dev/null/unresolved-plugin-base   ok=0
+> ```
+>
+> So **every model-written checkpoint — the entire point of this ticket — would be a silent no-op**,
+> while the hook-written half kept working. The journal would ship, pass its own hook-side tests, and
+> record nothing the model ever decided.
+>
+> **D″'s step 2 is exactly the mechanism that fixes it:** the hooks, which do have the variable, publish
+> a pointer file; the Bash-tool shell, which cannot know the base, reads it and converges on the **same**
+> store. Without step 2 this ticket needs its own private answer to a question `COREDEV-2617` is already
+> answering — and two answers to that question is precisely the split-brain both tickets exist to prevent.
+>
+> **The irony is recorded rather than hidden.** This round's headline change was *removing* a dependency
+> on `COREDEV-2584` that proved to be a plan-ordering preference. The verification sweep then found a
+> dependency on `COREDEV-2617` that **nobody had stated** and that is load-bearing. A declared dependency
+> was false; an undeclared one was real. Round 1 reviewed the declared one twice and neither arm caught
+> the real one, because the two plans were read separately and the coupling exists only where they meet.
 
 **Ordering: this plan is INDEPENDENT of `COREDEV-2583` and `COREDEV-2584`.** Round 1 asserted a hard
 `2583 → 2584 → 2585` chain. That was never a technical dependency — codex round-1 finding 5 caught the
@@ -843,12 +870,12 @@ nothing else. No new row, no new kill switch, no count edits. Both hooks already
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Model-written rationale names a person, customer, or employer | **High** | The redactor provably cannot catch it (§4.7a). Controls are §3 (pointers not prose), a bounded checkpoint set (§4.6), and a write-time instruction. Stated as a residual risk, not a solved one. |
+| Model-written rationale names a person, customer, or employer | **High** | The redactor provably cannot catch it (§4.7a — **there is no §4.7a; the reference is stale round-1 residue and the subsection meant is §4.7(a)**). Controls are §3 (pointers not prose), a bounded checkpoint set (§4.6), and a write-time instruction. Stated as a residual risk, not a solved one. |
 | Redaction corrupts the rationale it is meant to protect | **Low — RESOLVED upstream** | Was High. `COREDEV-2597` repaired the `sk-`/`~`/`tr` defects in both implementations, closed five further leak classes, and gated the shell/Python equivalence in CI on both engines. Verify the dependency landed; do not re-do it. |
 | A credential is pasted into rationale and survives | Medium | Only 4 credential shapes are covered; `ghp_`, `AKIA…`, `password=` are not. Nothing downstream scans a git-ignored file. Write-time instruction is the only control — say so. |
 | Journal grows unbounded over a long autonomous run | Medium | §4.10 self-compaction. Explicitly not `log_append`'s truncation. |
-| Restore injects noise instead of context after a corrupt write | Medium | §4.3 — emit nothing rather than an all-`unknown` hint, and retain the file as evidence. |
-| Run-scoping degrades to unkeyed with no JSON parser | Low | Documented fail-open (§4.9); matches the shipped precedent at `scripts/lib/context.sh:353-356`, where session id is a soft discriminator and never the primary key. |
+| Restore injects noise instead of context after a corrupt write | Medium | §4.3 — emit nothing rather than an all-`unknown` hint, and **QUARANTINE** the payload (bounded by count AND TTL) while clearing the active path. **Round 1's "retain the file as evidence" is reversed**, on codex finding 4: retention at the active path re-logs on every restore and the next checkpoint destroys the evidence anyway. |
+| No JSON parser, so no run id, so the journal is inert | Low | **Fail-CLOSED.** Round 1's "degrades to unkeyed" fail-open is **withdrawn** (§4.9), and the `context.sh:353-356` precedent cited to justify it is **withdrawn with it** — codex finding 3 is right that a soft discriminator layered on agent/slug/round/TTL is not a precedent for a bare unkeyed key. No run id → no write and no restore. |
 | A worktree and its parent checkout keep separate journals | Medium | Correct for isolation, surprising for continuity. Stated in §4.5 rather than discovered later. |
 | Token budget overruns the ~1.5–2 k target | **Low — CLOSED** | Was Medium. Codex finding 6: a fixed *shape* does not bound tokens. §4.5a now sets an explicit **2048-byte serialized cap**, asserted by a test that fails if the constant is removed. O(1) in run length remains true by construction. |
 | **Lost update: concurrent writers each replace version N** | **Medium** | Codex finding 2. §4.5c holds **one** `mkdir` mutex across the whole checkpoint — `seq` allocation, append, `live-state` rewrite and self-compaction alike. An earlier draft exempted the append and was measurably wrong (489 records lost racing compaction); that draft and its refutation are kept in §4.5c so the exemption is not reinvented. Proved by concurrent-append, append-vs-compaction and two-writer cases. |
