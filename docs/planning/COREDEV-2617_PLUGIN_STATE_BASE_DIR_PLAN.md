@@ -217,15 +217,23 @@ not both hold. Restated:
 > first draft of §4.2a patched the *tests* to keep passing while leaving this text untouched — moving the
 > oracle to fit the code. Stated honestly:
 >
-> * **Set:** step 1 additionally writes **one** file outside the host base — the pointer,
->   `${HOME}/.claude/unleashed-mail/base`, containing the base path and nothing else. *"only in the
->   supplied host base"* is no longer literally true and is restated below.
-> * **Unset or empty:** step 2 performs a bounded **read** of that pointer, and step 3 — if it survives
->   the gate — writes to **the legacy path this bullet forbids by name**. The trigger for the
->   no-persistence envelope is therefore no longer *"variable unset"* but **"resolution failed"** (step
->   4: `HOME` unset, empty or relative). The two are no longer the same condition, and §5's
->   inert-gate mitigation (`:431`) must name step 2's *"no second store is created"* as the assertion
->   that now carries the anti-inertness burden.
+> *(Rewritten in round 23. The round-19b version of this note described a `$HOME` fallback step and a
+> "step 4", both of which the round-20 gate removed — it was left standing when §4.1's sibling enum note
+> was updated, so §4.1 carried **two** normative N1/N2 definitions at once. codex found it. That is the
+> same half-a-family mistake this campaign keeps recording: the fix is to derive the amendment sites by
+> grep, not by memory of which one I just edited.)*
+>
+> * **Set:** the resolution is **unchanged** — the host base, exactly as D′. Step 1 additionally writes
+>   **one** file outside it: the pointer, `${HOME}/.claude/unleashed-mail/base`, containing the base path
+>   and nothing else, and only when `HOME` is usable. *"only in the supplied host base"* is no longer
+>   literally true of the process's total writes, and is restated below.
+> * **Unset or empty:** step 2 performs one bounded, authenticated **read** of that pointer. If it
+>   authenticates, the base resolves to the value the authority published — **the same directory the
+>   hooks use**, not a second store. If it does not, step 3 is D′'s sentinel and **nothing is read or
+>   written anywhere**, exactly as this bullet has always required. There is no legacy-path branch.
+> * So the no-persistence trigger is no longer *"variable unset"* alone but **"variable unset **and** no
+>   authenticated pointer"**. §5's inert-gate mitigation is amended in place for this: a fixture that
+>   sets **either** the variable or a pointer no longer reproduces the defect.
 >
 > **The invariant that survives, and which N1/N2 now assert:** no state is written to any base other than
 > the one the resolution returns; the single exception is the pointer file; and when resolution fails,
@@ -305,7 +313,7 @@ D′ shipped in 2.7.0 and works exactly as specified. The specification is what 
 > non-hook-provisioned shell."* **That inference does not hold.** `precompact-snapshot.sh` has exactly one
 > executable invoker — `hooks/hooks.json:101`, the `PreCompact` hook — and `sessionstart-restore.sh`
 > exactly one, `hooks.json:113` under `SessionStart`. Every other occurrence is prose (`README.md:463`)
-> or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:84`) establishes that
+> or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:84-90`) establishes that
 > `CLAUDE_PLUGIN_DATA` **is** exported to hook invocations, `unleashed_base_ok` at
 > `precompact-snapshot.sh:53` is true whenever that script runs, and **the snapshot is written**. Both
 > round-20 arms independently re-verified this.
@@ -337,17 +345,27 @@ CLAUDE_PLUGIN_DATA = [UNSET]
 base=/dev/null/unresolved-plugin-base   ok=0
 ```
 
-Three consumer classes are affected, and none of them is the compaction snapshot:
+Two live consumer classes are affected, plus one prospective — and none is the compaction snapshot.
+*(Round 21 claimed three; codex #6 showed the middle one was asserted rather than traced, so it is
+withdrawn below rather than quietly re-counted.)*
 
 1. **Git hooks.** `scripts/pre-commit-checks.sh:14-18` states the condition in its own comment: a git
    hook does not inherit the variable, so *"the writes are a **harmless local no-op for the gate**"*.
-   Round 2 (`:224-229`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
+   Round 2 (`:280-286`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
    sound **for the gate's purposes**; what it did not license was generalising "harmless here" to every
    consumer. *(Round 21: 19b paraphrased this as "already documented as unreachable no-ops". The bytes
    say "a harmless local no-op **for the gate**" — the writes were never unreachable, only invisible to
    the gate. The paraphrase is corrected here and the distinction matters, because under step 2 they
    become visible to the gate with no export at all.)*
-2. **Hand-run `scripts/*.sh` and CI shells**, which have no hook environment at all.
+2. ~~**Hand-run `scripts/*.sh` and CI shells**, which have no hook environment at all.~~
+   **WITHDRAWN in round 23 (codex #6) — asserted, never traced.** Checked: CI runs the isolated harness
+   (`.github/workflows/plugin-ci.yml:201-203,423-429`), which **exports its own temporary**
+   `CLAUDE_PLUGIN_DATA` (`scripts/test-hooks.sh:31-35`), so CI is not affected; and the Bash-tool state
+   reader already **bridges the authoritative value explicitly** (`agents/swift-reviewer.md:180-193`).
+   Neither is a live harmed consumer. **A class with no traced member is not evidence**, and this is the
+   third motivation defect on this section — the two before it were a wrong consumer and a nonexistent
+   section, both of the same shape: a claim that reads as verified because it is specific. Withdrawn
+   rather than patched.
 3. **A model-written state path.** `docs/planning/DECISION_JOURNAL_PLAN.md:51` scopes the journal as
    *"written: at a checkpoint, by the model"* and `:64` puts *"the model-written write path"* in scope.
    **Stated honestly: on this branch that plan specifies no writer command, no invocation mechanism, and
@@ -380,27 +398,45 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
 
 ## The amendment — D″, a three-step resolution behind one guard
 
-> **Step 0 — validate `HOME` FIRST, before composing any path.**
-> `case "${HOME:-}" in /*) ;; *) → step 3 ;; esac`. A round-19b correction: steps 1 and 2 both name
-> `${HOME}/.claude/unleashed-mail/base`, and with the only `HOME` check on the old step 3, `HOME=""` —
-> *the value the TEST TRAP itself prescribes* — made the resolver compose and read `/.claude/…`, and the
-> publish would have attempted to **create `/.claude`**, which succeeds in a root-writable CI container.
-> It also restores the `${HOME:-}` guard `paths.sh:51` documents as load-bearing: a bare `${HOME}` under
-> the `set -u` every hook uses aborts the hook.
+> **Step 0 — `HOME` gates the POINTER PATH, never the resolution.**
+> `_UNLEASHED_HOME_OK` is set once: true iff `HOME` is non-empty and absolute
+> (`case "${HOME:-}" in /*) ;; *) … esac`). It decides only whether a `${HOME}`-rooted path may be
+> **composed, read or written**. It has **no** bearing on whether `CLAUDE_PLUGIN_DATA` resolves.
+>
+> **ROUND 23 — the round-21 wording of this guard was a fail-open → fail-closed inversion, and codex
+> caught it.** It read *"validate `HOME` FIRST … `*) → step 3`"*, which sent a shell with a **valid,
+> authoritative `CLAUDE_PLUGIN_DATA`** but an empty or relative `HOME` to the sentinel — discarding the
+> one value §4.2 calls *"the only authoritative identity"* because of an unrelated variable.
+> `scripts/lib/paths.sh:68-74` resolves every non-empty value without consulting `HOME` today, so that
+> would have silently invalidated D′ and N1's set-variable arm. **This is the third fail-open →
+> fail-closed inversion on this ticket** (round 17's unconditional source, round 18's agent fence), and
+> the first two were both caught by a reproduction rather than by review. The rule that prevents a
+> fourth: *the guard on a side effect must never be able to change the primary result.*
+>
+> The hazard it was written for is still real and is still closed: with `HOME=""` — *the value the TEST
+> TRAP itself prescribes* — the round-19b draft composed and read `/.claude/…`, and its publish would
+> have attempted to **create `/.claude`**, which succeeds in a root-writable CI container. Under the
+> corrected guard that publish is simply skipped. It also preserves the `${HOME:-}` form `paths.sh:51`
+> documents as load-bearing: a bare `${HOME}` under the `set -u` every hook uses aborts the hook.
 >
 > **zsh asymmetry, verified by execution (round 20, kimi #10):** `env -u HOME zsh -c …` **repopulates**
 > `HOME` from passwd, while bash leaves it unset. `HOME=""` and relative values fall through in both
 > shells. So `HOME=""` is the only portable spelling of "force the unresolved case" — a future zsh cell
 > that *unsets* `HOME` would silently test the passwd home instead of the guard.
 
-1. `CLAUDE_PLUGIN_DATA` non-empty → use it, `OK=1`, source `host-env`. **Additionally publish a pointer
-   file** `${HOME}/.claude/unleashed-mail/base` containing that absolute path — written atomically
+1. `CLAUDE_PLUGIN_DATA` non-empty → **use it, `OK=1`, source `host-env`. Unconditionally — this branch
+   never consults `HOME` and never fails.** D′'s set-variable behaviour is untouched.
+
+   *Then, as a **side effect that cannot affect the line above**:* if `_UNLEASHED_HOME_OK`, publish a
+   pointer file `${HOME}/.claude/unleashed-mail/base` containing that absolute path — written atomically
    (tmp + `mv` **in the same directory**), fully suppressed, `0600`, into a directory created `0700` by
    explicit `chmod`. Publish **unless** the pointer is already a regular non-symlink file whose content
    equals the value — a *type-and-content* test, not a content-only one, which would leave a symlink
    pointer with matching content permanently unrepaired by step 1 and permanently refused by step 2.
-2. else read that pointer. Accept only if it passes **full authentication** (below) → use it, `OK=1`,
-   source `pointer`.
+   If `_UNLEASHED_HOME_OK` is false, or the publish fails for any reason, **no `${HOME}` path is composed
+   or opened at all**, `_UNLEASHED_POINTER_STATE=failed`, and the resolution above still stands.
+2. else, **and only if `_UNLEASHED_HOME_OK`**, read that pointer. Accept only if it passes **full
+   authentication** (below) → use it, `OK=1`, source `pointer`.
 3. else sentinel, `OK=0`, source `unresolved`, one diagnostic. **D′'s fail-closed protocol byte for
    byte.**
 
@@ -422,14 +458,15 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:684`) and its matrix change (`:688-692`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:715-722`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:774`) and its matrix change (`:778-782`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:805-812`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
 **If the never-run-a-hook window must be covered**, both arms named the honest mechanism: an **explicit
 publish** — the installer or a first-run step writes the pointer deliberately — not a silent read-time
-fallback. That is out of scope here and is recorded as §8 Q5 rather than decided silently.
+fallback. That is out of scope here and is recorded as **§8 Q7** (added by this round) rather than decided
+silently. *(Round 21 cited "§8 Q5", which is N2 — the question did not exist. Round 23 adds it.)*
 
 ### Publish policy under multiple install ids — fail closed, do not merely refuse
 
@@ -442,9 +479,23 @@ built to kill it. So:
 
 * On a conflicting authoritative publication — a valid pointer already naming a **different existing
   directory** — the publisher **atomically marks the pointer conflicted** and emits the one diagnostic.
+* **The conflicted state is a defined wire form, and it is STICKY** (round 23, codex #4). It is the
+  single literal line `CONFLICTED` — chosen because it is not an absolute path, so every existing
+  authentication clause already rejects it, and a reader that has not been taught about conflicts still
+  fails closed rather than following it.
+* **Every publisher must preserve it until an operator removes it.** Step 1's skip rule is
+  "publish unless the pointer is a regular file whose content equals the value" — and `CONFLICTED`
+  equals no value, so as written the *next* authoritative hook would overwrite the marker and silently
+  restore last-writer-wins. So step 1 gains an explicit precondition: **if the pointer reads
+  `CONFLICTED`, do not publish, do not overwrite, emit nothing further.** N6 carries a
+  repeated-publisher mutant for exactly this.
 * **Step 2 treats a conflicted pointer as unauthenticated** and falls through to step 3 (sentinel,
   `OK=0`, diagnostic). A follower must never keep following a base the authority has disowned.
-* **Operator recovery is explicit and documented:** delete the pointer; the next hook republishes.
+* **Operator recovery, stated honestly:** deleting the pointer alone is *not* recovery — with two live
+  installations both still publishing, the next two hooks simply re-create the conflict. Recovery is
+  **remove or disable the competing installation, then delete the pointer**; the next hook republishes
+  cleanly. *(codex #4: the round-21 text said "delete the pointer; the next hook republishes", which is
+  true only in the single-install case that cannot produce a conflict in the first place.)*
 
 ### Step 2's authentication — the whole chain, not just the file
 
@@ -459,8 +510,20 @@ hold, and falls through to step 3 otherwise:
 * the pointer itself is a **regular file**, not a symlink, owned by the effective uid, mode `0600`;
 * it holds exactly one line: an absolute path, no trailing slash, no embedded NUL, naming an **existing
   directory**;
-* that **target** directory is owned by the effective uid and is not group- or world-writable;
+* **every component of the TARGET path** — not merely the target directory itself — exists, is owned by
+  the effective uid, is not group- or world-writable, and is **not a symlink**;
 * it is not marked conflicted.
+
+> **Why the whole target chain, and not just the target** (round 23, codex #5). The round-21 text called
+> this "the whole chain" while authenticating ancestors only from `${HOME}` down to the *pointer's*
+> parent, and checking the destination as a single directory. A group- or world-writable **intermediate**
+> ancestor of the target lets an attacker replace the validated directory *after* the check and redirect
+> the later open — and `scripts/sessionstart-restore.sh:32-33,53-67` opens snapshot content from that
+> pathname and feeds it to the model via `additionalContext`. So the residual is not state corruption, it
+> is **prompt injection with a TOCTOU window**. Validating every component closes the window to the
+> same-uid case, which is the trust assumption this plugin already makes everywhere else — **state that
+> assumption rather than leave it implicit**, and carry writable- and symlinked-target-ancestor mutants
+> in N6.
 
 A **pre-existing** `${HOME}/.claude/unleashed-mail` with loose permissions is **refused, not chmod'ed** —
 silently tightening a directory the user may have created is a surprise, and the fail-closed path is
@@ -541,7 +604,9 @@ is contradicted by the tree: `scripts/lib/hook-io.sh:266-269` defines `hook_emit
 `:275-278` `hook_emit_posttool_block()`, both in production use (`scripts/swift-build-verify.sh:71`,
 `scripts/swift-lint-check.sh:433`). The true statement is narrower: **`PostCompact` cannot inject
 context; `SessionStart` and `PostToolUse` can.** `SessionStart` is chosen over `PostToolUse(Bash)`
-because the notice is a once-per-session fact, not a per-call one; §8 Q6 records the alternative.
+because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (added by this round)
+records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
+another reference to a question that did not exist.)*
 
 This **amends §7's consumer row** (`:910`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
@@ -564,7 +629,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:684`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:774`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -585,7 +650,9 @@ must **prove the arms agree** rather than assume it.
 > promises *"All hook state is isolated in a temp CLAUDE_PLUGIN_DATA so the real ~/.claude is never
 > touched"*, `:33` exports the temp value, `:34-35` `rm -rf`s it on exit, and `HOME` is never set in the
 > file. Executed against a sandboxed HOME, a prototype left the pointer naming a **deleted** directory.
-> `test_reviewer_roster.py:41` and `test_shell_primitive_drift.py:101` have the same shape. **Sandbox
+> `test_reviewer_roster.py:41` has the same shape. `test_shell_primitive_drift.py:98-102` is a
+> **different** case — it sets `HOME=/probe` explicitly, so it does not inherit the developer's home, but
+> it still needs a temp `HOME` so a publish cannot create `/probe`. *(codex #8 — round 21 lumped them.)* **Sandbox
 > `HOME` in all three** — that is the three files listed above, not "two more harnesses" — and prove it:
 > *running the harness leaves `$HOME/.claude/unleashed-mail/base` byte-identical.*
 >
@@ -609,13 +676,36 @@ must **prove the arms agree** rather than assume it.
 authentication and refusal semantics** is added, because every obligation above is new and *"an
 obligation with no adversarial mutant can ship unproven"* is this plan's own round-7 lesson.
 
-**Mutant set** — each must make a case fail: publish-always (mtime changes on a no-change run);
-accept-a-symlink; accept-a-relative-path; accept-a-multi-line file; accept-a-non-existent target;
-**accept-a-group-writable containing directory**; **accept-a-group-writable target**; publish-over-a-
-different-id instead of marking conflicted; **follow-a-conflicted-pointer**; **compose-a-`${HOME}`-path-
-with-`HOME=""`**; **stamp `host-env` for a pointer resolution**. *(The last four are round-20 additions —
-codex #4, kimi #6. The provenance mutant matters most: stamping is the entire stated rationale for
-amending §4.1, and it had no case at all.)*
+**Mutant set — ONE MUTANT PER AUTHENTICATION CLAUSE, enumerated.** Round 22 (codex #7) found the
+round-21 set covered only some clauses while the text claimed *"each authentication clause refused
+independently"* — a generic sentence is not a mutant, and an unnamed mutation is one nobody writes.
+
+| # | mutation | discriminating case it must break |
+|---|---|---|
+| 1 | publish always (drop the type-and-content skip) | mtime unchanged on a no-change second run |
+| 2 | accept a symlink pointer | symlink pointer refused |
+| 3 | accept a relative path | `foo/bar` refused |
+| 4 | accept a multi-line file | two-line pointer refused |
+| 5 | accept a non-existent target | dangling path refused |
+| 6 | **accept a target that exists but is not a directory** | regular-file target refused |
+| 7 | **drop the pointer-owner check** | pointer owned by another uid refused |
+| 8 | **accept any pointer mode** | pointer at `0644` refused |
+| 9 | **drop the trailing-slash rejection** | `/a/b/` refused |
+| 10 | **drop the NUL rejection** | embedded-NUL pointer refused |
+| 11 | accept a group-writable pointer parent | `0775` parent refused |
+| 12 | accept a group-writable target | `0775` target refused |
+| 13 | **accept a group-writable target ANCESTOR** | safe target under a `0775` ancestor refused |
+| 14 | **accept a symlinked target ancestor** | symlinked ancestor refused |
+| 15 | publish over a different id instead of marking conflicted | pointer left `CONFLICTED` |
+| 16 | **let a later publisher overwrite `CONFLICTED`** | marker survives a second authoritative publish |
+| 17 | follow a conflicted pointer | resolves to sentinel, `OK=0` |
+| 18 | compose a `${HOME}` path with `HOME=""` | no `${HOME}`-rooted open attempted |
+| 19 | **let `HOME=""` suppress a valid `CLAUDE_PLUGIN_DATA`** | set variable still resolves, `OK=1` |
+| 20 | stamp `host-env` for a pointer resolution | record carries `base_resolution=pointer` |
+
+*(Rows 6-10, 13-14, 16 and 19 are round-23 additions. Row 19 is the one that matters most: it is the
+fail-open → fail-closed inversion codex found in round 22's own step-0 wording, and without a mutant
+nothing would have caught its return.)*
 
 **Cases** — each must fail when the fix is reverted:
 
@@ -647,7 +737,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:792` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:910` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -733,6 +823,23 @@ own explicit disposition in the same step — round 1 noted the draft left it un
 > ordering. kimi's round-20 note that the directory is **not empty** (21 files, including the divergent
 > marker that is §2's load-bearing evidence) is why the inverted ordering would have been mandatory had
 > the step survived — recorded so a future revival does not miss it.
+>
+> **ROUND 23 — the ORDERING is unchanged, but this section's SCOPE is not (codex #3).** D″ makes
+> `~/.claude/unleashed-mail` the **pointer's parent**, and §4.2a refuses to publish into a directory that
+> is group- or world-writable. Measured on this machine it is `drwxr-xr-x` (`0755`). So moving the 21
+> files out and stopping — which is all this section currently does — leaves an **emptied `0755`
+> directory that refuses every future publication**, permanently. The quarantine would complete, report
+> success, and leave D″ inert.
+>
+> Three additions, in this section rather than §4.2a because they are quarantine mechanics:
+> 1. **Move exactly the legacy inventory.** If an authenticated `base` pointer already exists in that
+>    directory it is **preserved in place**, never swept into the quarantine — the current "move the 21
+>    files" wording would carry it off and silently un-publish the machine.
+> 2. **Repair the parent**: after the move, remove and re-create the directory `0700`, or `chmod` it, as
+>    an explicit documented step. Not a side effect of the move.
+> 3. **Prove it end to end**: loose `0755` parent → quarantine → a subsequent publication **succeeds**.
+>    Asserting only that the files moved is the "recorded but never compared" defect this campaign has
+>    now hit four times.
 
 **Proof — N4 (strengthened in round 3):** asserting only that the fallback is unreadable is satisfied
 the moment D′'s guards land, **even if the quarantine never happens**. So N4 must also prove the move
@@ -1303,6 +1410,22 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    `UNLEASHED_ALLOW_LEGACY_BASE=1` opt-in would deliberately recreate the ambiguous second store; gemini
    noted a manual run then fails open and skips marker writes, which is how the git hooks already behave
    outside Claude Code.
+
+7. **Should the never-run-a-hook window be covered by an EXPLICIT publish?** — **OPEN, added round 23.**
+   Round 20 dropped the `$HOME` fallback, which leaves one uncovered case: a machine on which no plugin
+   hook has ever run has no pointer, so every non-hook shell fails closed. Both round-20 arms said that
+   if this must be covered, the honest mechanism is an **explicit publish** — the installer or a
+   first-run step writes the pointer deliberately — not a silent read-time fallback. Out of scope for
+   §4.2a; recorded here so it is not re-invented as a fallback. *(Round 21 cited this as "§8 Q5"; that
+   question is N2 and this one did not exist. The reference is the defect, not the idea.)*
+
+8. **Should the unavailable-state notice live on `SessionStart` or `PostToolUse(Bash)`?** — **OPEN,
+   added round 23.** §4.2a chooses `SessionStart` because the notice is a once-per-session fact.
+   `PostToolUse(Bash)` runs immediately after every Bash tool call — i.e. exactly where the unresolved
+   state is experienced — and can also address the model (`scripts/lib/hook-io.sh:266-269`). The
+   trade-off is timeliness against repetition. *(Round 21 cited this as "§8 Q6"; that question is D′'s
+   escape hatch. Same defect as Q7 above: a specific-looking reference to something that was never
+   written.)*
 
 **No open questions remain.** Round 4 returned `APPROVE_WITH_NOTES` from codex with no High or Medium
 findings; gemini's High was §7's incomplete consumer table, now closed.
