@@ -4,21 +4,28 @@
 exactly as specified; the specification is what is wrong. With `CLAUDE_PLUGIN_DATA` unset every writer
 returns early **in silence**, and the variable does not reach an ordinary shell — so any consumer
 outside a hook or MCP subprocess (the **Bash tool**, git hooks, CI, `scripts/*.sh` run by hand) can
-neither read nor write plugin state. **`COREDEV-2585` §4.5b is blocked on exactly this**: its journal has
-the *model* write checkpoints through the Bash tool, so every model-written checkpoint is a silent no-op
-while the hook-written half keeps working. §4.2a replaces the binary with a **four-step resolution whose
-new element is a pointer file** published by the side that knows the answer and read by the side that
-cannot: it derives nothing, so it does not import the registry/`CLAUDE_CONFIG_DIR`/cache ambiguity that
-killed the A+D hybrid in round 2, and it converges the non-hook shell on the **same** store the hooks use
+neither read nor write plugin state — git hooks (`scripts/pre-commit-checks.sh:14-18` documents the
+condition in its own comment), hand-run `scripts/*.sh`, and CI shells. §4.2a replaces the binary with a
+**three-step resolution whose new element is a pointer file** published by the side that knows the answer
+and read by the side that cannot: it derives nothing, so it does not import the
+registry/`CLAUDE_CONFIG_DIR`/cache ambiguity that killed the A+D hybrid in round 2 — a claim round 20
+attacked directly and could not break — and it converges the non-hook shell on the **same** store the hooks use
 rather than forking a second one. Re-measured: **three** bases exist on this machine, not two. Round 2's
 rejection of the hybrid was correct about `pre-commit-checks.sh` and was **over-generalised to every
-consumer**. **ROUND 19b — a pre-gate sweep corrected this section's own premise:** the first draft argued
-from the *compaction snapshot*, which is **wrong** — `precompact-snapshot.sh` runs only as the
-`PreCompact` hook (`hooks/hooks.json:101`), where the variable **is** set, so the snapshot is written.
-The maintainer's *"I don't want 0s"* report is therefore **not yet diagnosed** and §4.2a no longer claims
-to fix it; see §4.2a's round-19b note for the two candidate causes. §4.2a's step 3 is deliberately left
-to the gate. **§4.2a amends §4.1's enum, N1/N2, §4.3, §4.4 and §7's `sessionstart-restore.sh` row — each
-is called out in place; the D′ envelope otherwise stands.** Previously — **round 18: SECOND FULL DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE`) — AND THE SECOND TO FAIL REPRODUCTION.** The re-run at byte-identical bytes flipped to `REQUEST_CHANGES` and found a real **fail-open → fail-closed regression**: the agent fence has **no inline fallback**, so with `paths.sh` absent the round-17 helper never set `_UNLEASHED_BASE_OK` and round-17's "unset ⇒ unresolved" made the fence emit `NO CAPTURE` **on a valid base**. The helper now always establishes the flag and emits the single diagnostic; flag-branching is scoped to consumers whose control flow actually diverges. **Two double approvals, two reproduction failures, two sets of real defects.** See §27. Previously — **round 17 (both arms): the helper body I wrote in round 16 crashes in absent-file mode.** It sourced `paths.sh` **unconditionally** — Bash returns 1, zsh 127, the sentinel is never established, and an `errexit` caller terminates — contradicting §4.3's non-load-bearing contract that every shipped lib honours with a `[ -r … ] &&` guard four lines away in `marker.sh`. Also closed: **consumers now branch on `_UNLEASHED_BASE_OK`** to detect the unresolved state, which the plan had never specified while forbidding sentinel string comparison. See §26. Previously — **round 16: codex `APPROVE` (0 findings, SECOND consecutive) · gemini `REQUEST_CHANGES` ×1 — not a pass.** codex traced the corrected bridge end to end in **both shells**, including the empty-`$1` path. gemini's finding stands anyway: the helper's **body was never written down**, only derivable — so the four-line body is now in the plan, with the note that it needs **no conditional of its own** because `paths.sh`'s `:-` makes empty and unset the same branch. *codex asks whether a behaviour is derivable; gemini asks whether it is written. A specification needs the second.* See §25. Previously — **round 15 (codex `REQUEST_CHANGES` ×1; gemini arm did not run — quota): the bridge's self-location was Bash-only.** `${BASH_SOURCE[0]%/*}` fails in **zsh**, which is exactly the shell this repo documents for the agent-fence path. The fence now **passes the root as `$2`** and the helper does `. "$2/scripts/lib/paths.sh"` — cross-shell by construction. codex confirmed the substitution path and N5's allowlist sound. **Third round running in which my own response-to-a-finding mechanism was defective**, each time checkable against evidence already in this repo. See §24. Previously — **round 14 (both arms): the bridge helper I specified in round 13 COULD NOT WORK.** gemini: unbraced `$CLAUDE_PLUGIN_ROOT` is **unset** in a Bash-tool shell, so the `source` line would have crashed the fence. codex, deeper: **`${CLAUDE_PLUGIN_DATA}` inside a sourced `.sh` is not agent content**, gets no substitution, and the helper would export **empty** — re-creating this ticket's own defect. The fence now **passes the value in** (`source "${CLAUDE_PLUGIN_ROOT}/…/agent-env-bridge.sh" "${CLAUDE_PLUGIN_DATA}"`, both exact tokens in agent content), the helper takes `$1` and finds `paths.sh` via `${BASH_SOURCE[0]%/*}`, and **N5 retains the fence sites**. See §23. Previously — **round 13: codex `APPROVE` (0 findings, its first outright approve) · gemini `REQUEST_CHANGES` (2 High) — not a pass.** codex traced the whole plan clean. gemini found two **specification gaps** a mechanism trace cannot surface: the **bridge helper D′ requires was never specified** (now `scripts/lib/agent-env-bridge.sh`, with N5's allowlist gaining it and losing the two fence copies), and **§4.1's enum listed the state space of the REJECTED options** (`derived-registry`/`legacy-fallback` are unreachable under D′; it is now `host-env`/`unresolved`). See §22. Previously — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
+consumer**. **ROUND 20 GATED §4.2a: both arms `REQUEST_CHANGES`, and both answered the open question the
+same way — DROP the `$HOME` fallback step.** That step is gone in round 21, which *simplifies* the
+change: §4.3's mandate and §4.4's quarantine ordering now stand **unchanged**, the drift matrix keeps all
+four rows, and the resolution enum needs three values, not four. D″ is now **three steps behind one
+`HOME` guard**: the variable, else an authenticated pointer, else D′'s sentinel byte for byte. Two
+motivations were corrected along the way and both are recorded rather than quietly replaced — **19b:**
+the *compaction snapshot* argument was wrong (`precompact-snapshot.sh` runs only as the `PreCompact`
+hook, `hooks/hooks.json:101`, where the variable **is** set, so the snapshot is written), so the
+maintainer's *"I don't want 0s"* report is **not yet diagnosed** and this plan no longer claims to fix
+it; **21:** the replacement anchor was *also* wrong — it cited `COREDEV-2585` §4.5b, which **does not
+exist in this tree** (that plan is 567 lines here, `### 4.5` at `:195`, zero hits for `4.5b` or `Bash`;
+§4.5b lives only on the unmerged, ungated 2585 branch). The anchor is now three consumer classes cited
+from bytes present here. **§4.2a amends §4.1's enum, N1/N2, §5's inert-gate row and §7's
+`sessionstart-restore.sh` row — each called out in place; §4.3, §4.4 and the D′ envelope stand.** Previously — **round 18: SECOND FULL DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE`) — AND THE SECOND TO FAIL REPRODUCTION.** The re-run at byte-identical bytes flipped to `REQUEST_CHANGES` and found a real **fail-open → fail-closed regression**: the agent fence has **no inline fallback**, so with `paths.sh` absent the round-17 helper never set `_UNLEASHED_BASE_OK` and round-17's "unset ⇒ unresolved" made the fence emit `NO CAPTURE` **on a valid base**. The helper now always establishes the flag and emits the single diagnostic; flag-branching is scoped to consumers whose control flow actually diverges. **Two double approvals, two reproduction failures, two sets of real defects.** See §27. Previously — **round 17 (both arms): the helper body I wrote in round 16 crashes in absent-file mode.** It sourced `paths.sh` **unconditionally** — Bash returns 1, zsh 127, the sentinel is never established, and an `errexit` caller terminates — contradicting §4.3's non-load-bearing contract that every shipped lib honours with a `[ -r … ] &&` guard four lines away in `marker.sh`. Also closed: **consumers now branch on `_UNLEASHED_BASE_OK`** to detect the unresolved state, which the plan had never specified while forbidding sentinel string comparison. See §26. Previously — **round 16: codex `APPROVE` (0 findings, SECOND consecutive) · gemini `REQUEST_CHANGES` ×1 — not a pass.** codex traced the corrected bridge end to end in **both shells**, including the empty-`$1` path. gemini's finding stands anyway: the helper's **body was never written down**, only derivable — so the four-line body is now in the plan, with the note that it needs **no conditional of its own** because `paths.sh`'s `:-` makes empty and unset the same branch. *codex asks whether a behaviour is derivable; gemini asks whether it is written. A specification needs the second.* See §25. Previously — **round 15 (codex `REQUEST_CHANGES` ×1; gemini arm did not run — quota): the bridge's self-location was Bash-only.** `${BASH_SOURCE[0]%/*}` fails in **zsh**, which is exactly the shell this repo documents for the agent-fence path. The fence now **passes the root as `$2`** and the helper does `. "$2/scripts/lib/paths.sh"` — cross-shell by construction. codex confirmed the substitution path and N5's allowlist sound. **Third round running in which my own response-to-a-finding mechanism was defective**, each time checkable against evidence already in this repo. See §24. Previously — **round 14 (both arms): the bridge helper I specified in round 13 COULD NOT WORK.** gemini: unbraced `$CLAUDE_PLUGIN_ROOT` is **unset** in a Bash-tool shell, so the `source` line would have crashed the fence. codex, deeper: **`${CLAUDE_PLUGIN_DATA}` inside a sourced `.sh` is not agent content**, gets no substitution, and the helper would export **empty** — re-creating this ticket's own defect. The fence now **passes the value in** (`source "${CLAUDE_PLUGIN_ROOT}/…/agent-env-bridge.sh" "${CLAUDE_PLUGIN_DATA}"`, both exact tokens in agent content), the helper takes `$1` and finds `paths.sh` via `${BASH_SOURCE[0]%/*}`, and **N5 retains the fence sites**. See §23. Previously — **round 13: codex `APPROVE` (0 findings, its first outright approve) · gemini `REQUEST_CHANGES` (2 High) — not a pass.** codex traced the whole plan clean. gemini found two **specification gaps** a mechanism trace cannot surface: the **bridge helper D′ requires was never specified** (now `scripts/lib/agent-env-bridge.sh`, with N5's allowlist gaining it and losing the two fence copies), and **§4.1's enum listed the state space of the REJECTED options** (`derived-registry`/`legacy-fallback` are unreachable under D′; it is now `host-env`/`unresolved`). See §22. Previously — **round 12: FIRST DOUBLE APPROVAL (gemini `APPROVE` + codex `APPROVE_WITH_NOTES`) — AND IT DID NOT REPRODUCE.** Re-run at the **byte-identical** digest: gemini flipped to `REQUEST_CHANGES` and **found a real defect the approving run had certified clean** — five executable consumers (three log hooks, both capture hooks) had **no unresolved-base control flow at all**, sitting in a bullet list while step 5 demands one per consumer. All five are now table rows; the bullet list is **non-executable sites** only. codex held `APPROVE_WITH_NOTES` across both runs. **The maintainer's reproduce-at-the-same-digest rule paid for itself.** See §21. Previously — **round 11 gated: codex `APPROVE_WITH_NOTES` (1 Low) for the SECOND round running; gemini FAILED to emit a verdict line for the second round running — NOT A PASS.** codex traced all four directed checks clean: consumer scope complete, the mutator rule naming only real mutators, the envelope oracle holding for both new consumers, and N5 narrowed consistently through step 7. The one Low was terminology — `sessionstart-restore.sh` reads and deletes the snapshot, it does not write it. **gemini's failure is a CAPTURE failure, not a review failure** (a ~1 KB summary claiming it printed a critique it did not); both failures are on this ticket, the one where its answer is affirmative. See §20. Previously — **round 10 gated: codex `APPROVE_WITH_NOTES` (1 Low), gemini FAILED (no verdict line) — NOT A PASS.** The round-9 narrowing **held**: codex traced every production read back to an envelope return, found the envelope exhaustive and the `_UNLEASHED_BASE_OK` protocol correct, and raised only the CHANGELOG omission. gemini's arm wrote its critique to a file instead of stdout, so it must be re-run; its findings were triaged anyway and two were real — **there are no `context_snapshot*` writers** (that phrase is struck) and **`precompact-snapshot.sh`/`sessionstart-restore.sh` were absent from the consumer table** (both added). See §19. Previously — **round 9 gated** (**gemini `REQUEST_CHANGES` 5 High · codex `REQUEST_CHANGES` 1 High**). **Fourth consecutive round with a failed proof mechanism, so the claim is NARROWED rather than patched a fifth time.** codex **executed** a bypass with no lexical expansion at all (`n=CLAUDE_PLUGIN_; n="${n}DATA"; printenv "$n"`), proving path provenance is **not statically decidable in Bash**: N5 is now stated as a **lexical drift detector**, explicitly not a proof of accessor-only provenance — the §3.1 move from COREDEV-2497. The oracle asserts on the envelope's **printed return values** (readers' locals are invisible; `_context_round_advance` composes inline as a `python3` argv), and the one-diagnostic-per-process rule is guarded by the shared `_UNLEASHED_BASE_OK` flag so it holds with `paths.sh` absent. Two gemini Highs **rejected with reasons**. See §18. Previously — **round 8 gated** (**gemini `REQUEST_CHANGES` 5 High + 1 Medium · codex `REQUEST_CHANGES` 2 High**). **Round 7 rejected the canary as physically impossible; round 8 rejects its replacement as mechanically impossible** — a Bash shim cannot observe `read < "$path"` (the shell opens before the command runs) or pathname globbing. The oracle now asserts on the **composed path**, which is observable, and leans on the sentinel's executed `ENOTDIR` physics for the rest. **N5 is inverted from a shape blacklist to an enumerated allowlist** — both reviewers bypassed the round-7 predicate in one line each, and round 7's mutant used the one form it already caught. `_context_round_sweep` was missing from **both** the reader and mutator lists. See §17. Previously — **round 7 gated** (**gemini `REQUEST_CHANGES` 1 High + 1 Medium · codex
 `REQUEST_CHANGES` 1 High + 2 Medium**). **Round 6's sentinel holds; the two proofs built on it did not.**
 The planted canary was **physically impossible** — nothing can be created beneath `/dev/null`, so the
 `ENOTDIR` property that makes the sentinel safe also makes the canary unplantable — and N5 was a
@@ -176,16 +183,21 @@ diagnostic to the plugin's own log, and a field in the marker/log record naming 
 > diagnostic. Extra marker fields are
 > parser-safe (the reader selects named keys, `marker.sh:150`).
 >
-> **Round 19b — AMENDED BY §4.2a: the vocabulary is now four values.** Round 13's reasoning was sound
-> *for D′*, where the base resolves only when the variable is set. **D″ makes two further resolutions
-> reachable — a published pointer and the `$HOME` fallback — and both set `OK=1`, so both persist
-> records.** Left at two values, a record written from either would be stamped `host-env`: a record that
-> **lies about its provenance**, which is worse than the silence this section was written to fix, and is
-> this ticket's founding defect (§2) with the label now vouching for the wrong half. The vocabulary is
-> therefore `host-env` / `pointer` / `home-fallback` / `unresolved` (the third only if step 3 survives
-> the gate), carried by a fourth protocol variable `_UNLEASHED_BASE_SOURCE` set beside
-> `_UNLEASHED_BASE_OK` in every family file. `_UNLEASHED_BASE_OK` stays **binary** and stays the only
-> sanctioned resolved/unresolved test — consumers branch on it, never on the source enum.
+> **Round 19b, narrowed in round 21 — AMENDED BY §4.2a: the vocabulary is now THREE values.** Round 13's
+> reasoning was sound *for D′*, where the base resolves only when the variable is set. **D″ makes one
+> further resolution reachable — a published pointer — and it sets `OK=1`, so it persists records.** Left
+> at two values, such a record would be stamped `host-env`: a record that **lies about its provenance**,
+> which is worse than the silence this section was written to fix, and is this ticket's founding defect
+> (§2) with the label now vouching for the wrong half. The vocabulary is therefore
+> `host-env` / `pointer` / `unresolved`, carried by a fourth protocol variable `_UNLEASHED_BASE_SOURCE`
+> set beside `_UNLEASHED_BASE_OK` in each of the five shell family files. `_UNLEASHED_BASE_OK` stays
+> **binary** and stays the only sanctioned resolved/unresolved test — consumers branch on it, never on
+> the source enum.
+>
+> *(19b proposed a fourth value, `home-fallback`, for a `$HOME` fallback step. The round-20 gate dropped
+> that step on both arms, so the value is not needed. N6 carries a `stamp host-env for a pointer
+> resolution` mutant — round 20 found the provenance stamping had no adversarial case at all, though it
+> is this amendment's entire rationale.)*
 >
 > And note the limit: a diagnostic written *into the wrong store* cannot tell a reader looking in the
 > other one that it exists. The enum makes a found record self-describing; it does not make a missing
@@ -282,254 +294,360 @@ cache-root/`--plugin-dir` ambiguity in exchange for a contract that is not curre
 
 ### 4.2a — D″: the unresolved case is silent, and silence was not the goal (High) — **ROUND 19, NEW**
 
+**Round 20 gated this section and both arms returned `REQUEST_CHANGES`. Their findings are applied
+below as round 21, and the open question is CLOSED — see "Step 3 is dropped".**
+
 **Maintainer report, 2026-08-08:** *"please fix the compaction fall back safety, I don't want 0s."*
 D′ shipped in 2.7.0 and works exactly as specified. The specification is what needs amending.
 
 > **ROUND 19b — THE MOTIVATION THIS SECTION OPENED WITH WAS WRONG, AND IS REPLACED.** The first draft
 > argued from the compaction snapshot: *"the compaction snapshot … is therefore not written at all in any
-> non-hook-provisioned shell."* **That inference does not hold, and a pre-gate sweep found it three times
-> independently.** `precompact-snapshot.sh` has exactly one executable invoker —
-> `hooks/hooks.json:101`, the `PreCompact` hook — and `sessionstart-restore.sh` exactly one,
-> `hooks.json:113` under `SessionStart`. Every other occurrence in the tree is prose (`README.md:463`, the
-> hook table) or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:70-76`, gated)
-> establishes that `CLAUDE_PLUGIN_DATA` **is** exported to hook invocations, `unleashed_base_ok` at
-> `precompact-snapshot.sh:53` is true whenever that script runs, and **the snapshot is written**.
->
-> Worse, the evidence the draft offered for the claim was a *different consumer*: the `git commit`
-> diagnostic it quoted comes from `pre-commit-checks.sh` — the one consumer round 2 (`:224-229`)
-> explicitly ruled out because its writes are *"already documented as unreachable no-ops"*, which
-> `scripts/pre-commit-checks.sh:14` still says. **The section re-opened a gated decision using the very
-> example that decision was made about.**
+> non-hook-provisioned shell."* **That inference does not hold.** `precompact-snapshot.sh` has exactly one
+> executable invoker — `hooks/hooks.json:101`, the `PreCompact` hook — and `sessionstart-restore.sh`
+> exactly one, `hooks.json:113` under `SessionStart`. Every other occurrence is prose (`README.md:463`)
+> or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:84`) establishes that
+> `CLAUDE_PLUGIN_DATA` **is** exported to hook invocations, `unleashed_base_ok` at
+> `precompact-snapshot.sh:53` is true whenever that script runs, and **the snapshot is written**. Both
+> round-20 arms independently re-verified this.
 >
 > **The maintainer's report is therefore NOT yet diagnosed, and this section does not claim to fix it.**
-> Two candidate causes remain open and are cheap to separate; whoever implements this must do so first:
-> (a) `PreCompact` is not firing at all in the affected repository — note that `unleashed-mail` is
-> installed at **project** scope bound to the app repo, so no plugin hook fires in *this* repo or its
-> worktrees, which would produce "0s" with D′ entirely innocent; or (b) some consumer other than the two
-> snapshot scripts is the one being observed. **If (a), this is a hook-registration defect and belongs in
-> its own ticket, not here.**
+> Two candidate causes remain open: (a) `PreCompact` is not firing in the affected repository — the
+> `unleashed-mail` install is **project**-scoped and bound to the app repo, so no plugin hook fires in
+> *this* repo or its worktrees (kimi verified this in round 20 against `installed_plugins.json`), which
+> would produce "0s" with D′ entirely innocent; or (b) a consumer other than the two snapshot scripts is
+> being observed. **If (a), this is a hook-registration defect and belongs in its own ticket, not here.**
 
-**What D″ is actually for — the defect that IS verified.** Strip the misattribution and a real,
-reproduced defect remains, and it is the one that blocks another ticket:
+> **ROUND 21 — the round-19b re-anchoring was ALSO wrong, and both arms caught it.** 19b replaced the
+> compaction argument with *"`COREDEV-2585` §4.5b is blocked on exactly this"*. **In this tree there is
+> no §4.5b.** `docs/planning/DECISION_JOURNAL_PLAN.md` here is 567 lines, its sections are `### 4.1`–
+> `### 4.12` with no lettered subsections, `### 4.5` is at `:195`, and fixed-string greps for `4.5b` and
+> for `Bash` return **zero** hits. §4.5b exists only on the unmerged branch
+> `feat/COREDEV-2585-decision-journal`, which is **itself ungated**.
+>
+> **That is the draft's own defect committed one layer down** — anchoring to a consumer the reader cannot
+> verify — and it is the reason this note exists rather than a quiet edit. The corrected anchor is below,
+> and it cites only bytes present in this tree.
 
-`CLAUDE_PLUGIN_DATA` reaches hooks and MCP subprocesses but **not an ordinary shell** — the premise of
-this whole ticket (`scripts/lib/paths.sh:22-25`). Reproduced in a live Bash-tool call at `dbb1fb8`:
+**What D″ is actually for — anchored in this tree.** `CLAUDE_PLUGIN_DATA` reaches hooks and MCP
+subprocesses but **not an ordinary shell** (`scripts/lib/paths.sh:22-25`, and §1 `:77`). Reproduced in a
+live Bash-tool call at `dbb1fb8`:
 
 ```
 CLAUDE_PLUGIN_DATA = [UNSET]
 base=/dev/null/unresolved-plugin-base   ok=0
 ```
 
-**`COREDEV-2585` §4.5b is blocked on exactly this.** Its decision journal has the *model* write
-checkpoints by invoking a script through the ordinary `Bash` tool. Under D′ that path cannot write, so
-every model-written checkpoint is a silent no-op while the hook-written half keeps working — a
-half-populated journal that looks healthy. The same applies to git hooks, CI shells and any
-`scripts/*.sh` run by hand. **These are the consumers D″ is for.** They are not "unreachable no-ops":
-round 2's finding was correct about `pre-commit-checks.sh` and was **over-generalised to every consumer**
-— that generalisation is the error being corrected, and it is a narrower and better-evidenced claim than
-the one this section opened with.
+Three consumer classes are affected, and none of them is the compaction snapshot:
 
-**Do NOT simply restore the fallback.** The reason D′ exists is still true: the old expansion created a
-second store that never saw the first. Re-measured 2026-08-08 — there are **three** bases on this
+1. **Git hooks.** `scripts/pre-commit-checks.sh:14-18` states the condition in its own comment: a git
+   hook does not inherit the variable, so *"the writes are a **harmless local no-op for the gate**"*.
+   Round 2 (`:224-229`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
+   sound **for the gate's purposes**; what it did not license was generalising "harmless here" to every
+   consumer. *(Round 21: 19b paraphrased this as "already documented as unreachable no-ops". The bytes
+   say "a harmless local no-op **for the gate**" — the writes were never unreachable, only invisible to
+   the gate. The paraphrase is corrected here and the distinction matters, because under step 2 they
+   become visible to the gate with no export at all.)*
+2. **Hand-run `scripts/*.sh` and CI shells**, which have no hook environment at all.
+3. **A model-written state path.** `docs/planning/DECISION_JOURNAL_PLAN.md:51` scopes the journal as
+   *"written: at a checkpoint, by the model"* and `:64` puts *"the model-written write path"* in scope.
+   **Stated honestly: on this branch that plan specifies no writer command, no invocation mechanism, and
+   no writer exists in the tree** (`grep -rln journal scripts/` returns nothing). The concrete §4.5b
+   mechanism — a script the model invokes through the ordinary `Bash` tool — lives only on the unmerged,
+   ungated 2585 branch. **So this is a prospective consumer, not a live blocker**, and D″ must not be
+   justified by it. It is recorded because it shows the class is real and growing, not as evidence.
+
+**The load-bearing claim, and round 20's attempt on it.** kimi attacked the "derives nothing"
+distinction directly and **could not break it** for steps 1-2: the pointer imports the variable's value
+verbatim, so no registry / `CLAUDE_CONFIG_DIR` / cache-root / `--plugin-dir` ambiguity attaches to
+*reading* it, and a relocated config still converges because the pointer's **content**, not its location,
+carries the data dir. The distinction holds. Ambiguity re-enters only through the **publish policy** under
+multiple install ids — a policy hole, closed below, not a derivation.
+
+**Do NOT simply restore the fallback.** Re-measured 2026-08-08 — there are **three** bases on this
 machine, not two:
 
 | base | files | last write |
 |---|---|---|
 | `~/.claude/unleashed-mail` (whole tree; `.state` holds 20 of these) | 21 | **Jul 17 15:58** |
 | `~/.claude/plugins/data/unleashed-mail-npranson-unleashed-mail-plugin` | 76 | live |
-| `~/.claude/plugins/data/unleashed-mail-inline` | 1 | stray |
+| `~/.claude/plugins/data/unleashed-mail-inline` | 1 | stray — a hook once ran under this id |
 
 > Row 1 previously labelled `.state` while counting the whole tree. `.state` holds **20** files; the
-> 21st is `logs/build-log.jsonl`. The "frozen Jul 17" reading stands (newest write `15:58`); the
-> directory's own mtime is later because `.state` was touched by directory operations, not writes.
+> 21st is `logs/build-log.jsonl`. The "frozen Jul 17" reading stands (newest write `15:58`).
 
 That third directory is also why **option B (globbing) stays rejected**: two entries still match
-`unleashed-mail-*`, exactly as round 1 found.
+`unleashed-mail-*`, exactly as round 1 found — and it is why the publish policy below is fail-closed.
 
-**The amendment — D″, a four-step resolution, replacing D′'s binary.** The new element is step 2, and
-it is **not** any of A/B/C/D:
+## The amendment — D″, a three-step resolution behind one guard
 
-> **Step 0 — validate `HOME` FIRST, before composing any path.** `case "${HOME:-}" in /*) ;; *) → step 4
-> ;; esac`. This is a round-19b correction: steps 1 and 2 both name `${HOME}/.claude/unleashed-mail/base`
-> and the draft put the only `HOME` check on step 3, so with `HOME=""` — *the very value the TEST TRAP
-> below prescribes for forcing the unresolved case* — the resolver composed and read `/.claude/…`, and
-> step 1's publish would have attempted to **create `/.claude`**, which succeeds in a root-writable CI
-> container. That is the root-path composition class rounds 2 and 3 already spent themselves on. It also
-> restores the `${HOME:-}` guard `paths.sh:51` documents as load-bearing: a bare `${HOME}` under the
-> `set -u` every hook uses aborts the hook.
+> **Step 0 — validate `HOME` FIRST, before composing any path.**
+> `case "${HOME:-}" in /*) ;; *) → step 3 ;; esac`. A round-19b correction: steps 1 and 2 both name
+> `${HOME}/.claude/unleashed-mail/base`, and with the only `HOME` check on the old step 3, `HOME=""` —
+> *the value the TEST TRAP itself prescribes* — made the resolver compose and read `/.claude/…`, and the
+> publish would have attempted to **create `/.claude`**, which succeeds in a root-writable CI container.
+> It also restores the `${HOME:-}` guard `paths.sh:51` documents as load-bearing: a bare `${HOME}` under
+> the `set -u` every hook uses aborts the hook.
+>
+> **zsh asymmetry, verified by execution (round 20, kimi #10):** `env -u HOME zsh -c …` **repopulates**
+> `HOME` from passwd, while bash leaves it unset. `HOME=""` and relative values fall through in both
+> shells. So `HOME=""` is the only portable spelling of "force the unresolved case" — a future zsh cell
+> that *unsets* `HOME` would silently test the passwd home instead of the guard.
 
 1. `CLAUDE_PLUGIN_DATA` non-empty → use it, `OK=1`, source `host-env`. **Additionally publish a pointer
    file** `${HOME}/.claude/unleashed-mail/base` containing that absolute path — written atomically
    (tmp + `mv` **in the same directory**), fully suppressed, `0600`, into a directory created `0700` by
    explicit `chmod`. Publish **unless** the pointer is already a regular non-symlink file whose content
-   equals the value — a *type-and-content* test, not the draft's content-only one, which left a symlink
+   equals the value — a *type-and-content* test, not a content-only one, which would leave a symlink
    pointer with matching content permanently unrepaired by step 1 and permanently refused by step 2.
-2. else read that pointer. If it is **not a symlink** and holds a single absolute path naming an
-   existing directory → use it, `OK=1`, source `pointer`.
-3. else `${HOME}/.claude/unleashed-mail` → use it, `OK=1`, source `home-fallback`. **This is the step the
-   gate must decide; see the open question below.**
-4. else sentinel, `OK=0`, source `unresolved`, one diagnostic. **The genuinely unresolvable case keeps
-   D′'s fail-closed protocol byte for byte.**
+2. else read that pointer. Accept only if it passes **full authentication** (below) → use it, `OK=1`,
+   source `pointer`.
+3. else sentinel, `OK=0`, source `unresolved`, one diagnostic. **D′'s fail-closed protocol byte for
+   byte.**
 
-**Every new command runs at SOURCE time, in five files, and must not abort its caller.** The libs are
-sourced under `set -euo pipefail` by an already-gated test (`test_shell_primitive_drift.py:114`), and
-`paths.sh:17-20` forbids converting fail-open paths into a shared point of failure. Probed: a sourced
-file containing a bare `read -r _P < "$PTR"` **aborts an errexit sourcing shell** when the pointer lacks
-a trailing newline — the discriminating run with a trailing newline reached the marker, so the silence is
-a genuine abort, not a broken probe. **Rule:** no new command may appear as a bare statement; every one
-is inside an `if`/`&&` condition or terminated with `|| :`. The read takes its **group-level** redirect,
-`{ … } 2>/dev/null`, because in zsh no redirect ordering on the inner command suppresses an open failure:
+### Step 3 is DROPPED — the round-20 gate closed the open question
+
+Rounds 19/19b carried a fourth step: *"else `${HOME}/.claude/unleashed-mail` when `HOME` is absolute"*,
+deliberately left open. **Both round-20 arms independently answered DROP, with different reasoning, and
+that concordance is the decision.** Recorded because the reasoning constrains future rounds:
+
+* **codex** — step 3 recreates the pre-D′ split before first publication and reactivates the quarantined
+  legacy store, and is unnecessary once any authoritative hook has published. *"A project-scope
+  installation under which no hooks run is a registration defect, not justification for restoring an
+  ambiguous store globally."*
+* **kimi** — took the re-anchored motivation on its own terms and found step 3 **fails it**: a
+  model-written checkpoint made before the first hook run would land in `${HOME}/.claude/unleashed-mail`
+  and every one after it in the plugin data dir via step 2, so the store **splits by time** and neither
+  side can ever see the early half. Step 3 does not give a blocked consumer a degraded store — it gives
+  it *"a store that is guaranteed to become invisible to its own reader the moment the mechanism works."*
+  A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
+  orphanhood.
+
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:684`) and its matrix change (`:688-692`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:715-722`) stand as written;
+`test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
+19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
+
+**If the never-run-a-hook window must be covered**, both arms named the honest mechanism: an **explicit
+publish** — the installer or a first-run step writes the pointer deliberately — not a silent read-time
+fallback. That is out of scope here and is recorded as §8 Q5 rather than decided silently.
+
+### Publish policy under multiple install ids — fail closed, do not merely refuse
+
+Two ids exist on this machine, so *"the directory the hooks use"* is not unique. An unconditional
+publish makes the winner whichever hook wrote last. **But round 20 showed that merely refusing to
+publish is also wrong** (codex #2, kimi #2): publisher B would keep using its authoritative base B while
+every unset shell followed the retained pointer to A — hooks and shells permanently diverged, and
+**silent on the follower side**, which is this ticket's founding defect re-introduced by the mechanism
+built to kill it. So:
+
+* On a conflicting authoritative publication — a valid pointer already naming a **different existing
+  directory** — the publisher **atomically marks the pointer conflicted** and emits the one diagnostic.
+* **Step 2 treats a conflicted pointer as unauthenticated** and falls through to step 3 (sentinel,
+  `OK=0`, diagnostic). A follower must never keep following a base the authority has disowned.
+* **Operator recovery is explicit and documented:** delete the pointer; the next hook republishes.
+
+### Step 2's authentication — the whole chain, not just the file
+
+Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
+abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
+via `additionalContext` (§7 row `:910`), so a pointer naming attacker-writable storage is a
+**prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
+hold, and falls through to step 3 otherwise:
+
+* every component from `${HOME}` down to the pointer's parent exists, is owned by the effective uid, and
+  is **not** group- or world-writable;
+* the pointer itself is a **regular file**, not a symlink, owned by the effective uid, mode `0600`;
+* it holds exactly one line: an absolute path, no trailing slash, no embedded NUL, naming an **existing
+  directory**;
+* that **target** directory is owned by the effective uid and is not group- or world-writable;
+* it is not marked conflicted.
+
+A **pre-existing** `${HOME}/.claude/unleashed-mail` with loose permissions is **refused, not chmod'ed** —
+silently tightening a directory the user may have created is a surprise, and the fail-closed path is
+already correct. *(Measured 2026-08-08: `~/.claude/plugins` is `drwx------` but `~/.claude/unleashed-mail`
+is `drwxr-xr-x`, so on this machine the refusal branch is the one that fires until it is fixed — state
+that plainly rather than let an implementer discover it.)*
+
+### Source-time safety in five shell files
+
+Every new command runs at **source** time. The libs are sourced under `set -euo pipefail` by an
+already-gated test (`test_shell_primitive_drift.py:114`), and `paths.sh:17-20` forbids converting
+fail-open paths into a shared point of failure. Probed: a bare `read -r _P < "$PTR"` **aborts an errexit
+sourcing shell** when the pointer lacks a trailing newline; the discriminating run with a trailing
+newline reached the marker, so the silence is a genuine abort.
+
+**Rules — all three are load-bearing:**
+
+1. No new command may appear as a bare statement; each is inside an `if`/`&&` condition or terminated
+   with `|| :`.
+2. The read takes its **group-level** redirect, because in zsh no redirect ordering on the inner command
+   suppresses an open failure.
+3. **`nounset` discipline — round 20, kimi #7.** When the redirect fails, `read` never executes, so the
+   variables stay **unset**, and a following unguarded `"${_L1}"` kills a `set -euo pipefail` shell in
+   *both* shells (`_L1: unbound variable` / `_L1: parameter not set`). Every read target is
+   pre-initialised and every expansion uses `:-`. Rule 1 alone is **not** sufficient; this is the half an
+   implementer following only the written rule would miss.
 
 ```sh
+_L1=''; _L2=''
 { [ -L "$PTR" ] || { IFS= read -r _L1; IFS= read -r _L2; } < "$PTR"; } 2>/dev/null || :
+[ -n "${_L2:-}" ] && return 1   # a second line means it is not a single-line pointer
 ```
 
-**Multiple install ids — the publish needs a policy.** Two directories match `unleashed-mail-*` on this
-machine, so "the directory the hooks use" is not unique, and an unconditional publish makes the winner
-whichever hook wrote last — an invisible tie-break, strictly weaker than the explicit ambiguity for which
-option B is rejected two paragraphs above. **Refuse to publish when a valid pointer already names a
-different existing directory, and emit the one diagnostic.** Last-writer-wins is not acceptable here.
+### Observability — §4.1's enum no longer describes the state space
 
-**Observability — §4.1's enum no longer describes the state space (round 19b).** §4.1's round-13 note
-pins the vocabulary to `host-env` / `unresolved` *"and ONLY those"*, reasoning that under D′ everything
-else is unreachable. D″ makes two more resolutions reachable, and **both persist records** because both
-set `OK=1`. Left unamended, a record written from a pointer-resolved or `$HOME`-resolved shell would be
-stamped `host-env` — a record that *lies about its provenance*, which is worse than the silence §4.1 was
-written to fix, and is the founding defect of this ticket (`:122-124`) with the label now vouching for
-the wrong half. **This section therefore amends §4.1:** the vocabulary becomes
-`host-env` / `pointer` / `home-fallback` / `unresolved`, and the protocol gains a fourth shared variable
-`_UNLEASHED_BASE_SOURCE` carrying it, set beside `_UNLEASHED_BASE_OK` in all five family files.
-`_UNLEASHED_BASE_OK` stays binary and stays the only sanctioned resolved/unresolved test. Step 3, if it
-survives, emits a source-time diagnostic — it is "taking the fallback" in exactly the sense §4.1's title
-was written about — under §7's existing one-per-process cardinality rule.
+§4.1's round-13 note pins the vocabulary to `host-env` / `unresolved` *"and ONLY those"*, reasoning that
+under D′ everything else is unreachable. **D″ makes one further resolution reachable — a published
+pointer — and it sets `OK=1`, so it persists records.** Left unamended, such a record would be stamped
+`host-env`: a record that **lies about its provenance**, which is worse than the silence §4.1 was written
+to fix, and is this ticket's founding defect with the label vouching for the wrong half.
 
-**N1 and N2 are amended, not silently narrowed.** N1 says a set variable writes *"only in the supplied
-host base"*; step 1 writes the pointer outside it. N1 and N2 say an unset variable performs *"no reads
-and no writes anywhere — no legacy path"*; steps 2 and 3 do both, and `home-fallback` **is** the legacy
-path. The draft patched the *tests* to keep passing while leaving the normative text untouched — moving
-the oracle to fit the code. The invariant that actually survives, and which N1/N2 are restated to assert:
+**This section therefore amends §4.1:** the vocabulary becomes `host-env` / `pointer` / `unresolved`
+(no `home-fallback` — step 3 is dropped), carried by a fourth protocol variable
+`_UNLEASHED_BASE_SOURCE` set beside `_UNLEASHED_BASE_OK` in all five shell family files.
+`_UNLEASHED_BASE_OK` stays **binary** and stays the only sanctioned resolved/unresolved test — consumers
+branch on it, never on the source enum.
+
+### N1 and N2 are amended, not silently narrowed
+
+N1 says a set variable writes *"only in the supplied host base"*; step 1 writes the pointer outside it.
+The draft patched the *tests* to keep passing while leaving the normative text untouched — moving the
+oracle to fit the code. With step 3 dropped, the unset-case half of N1/N2 is **restored intact**: an
+unset variable with no valid pointer reads nothing and writes nothing. The invariant N1/N2 now assert:
 **no state is written to any base other than the one the resolution returns; the single exception is the
-pointer file, which carries the base path and nothing else; and the trigger for the no-persistence
-envelope is no longer "variable unset" but "resolution failed".**
+pointer file, which carries the base path and nothing else; and when resolution fails, nothing is read
+or written anywhere.**
 
-**Separately: make the silence audible — with a predicate that can fire.** The draft required
-`sessionstart-restore.sh` to emit `additionalContext` when `unleashed_base_ok` is false. **That predicate
-is unreachable in that hook:** it runs as a hook, so step 1 always resolves, and with step 3 present it
-resolves even without the variable. The line could essentially never be emitted, while the state the
-maintainer actually experiences — an ordinary Bash-tool shell writing nothing — is invisible to it.
-**Corrected predicate:** SessionStart announces when the **non-hook path** will fail — the pointer is
-absent, invalid, or could not be published — not when its own base is unresolved.
+§5's inert-gate mitigation (`:751`) is amended **in place**, not by reference — see the round-21 note
+there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
+true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
+
+### Make the silence audible — with a predicate that can fire
+
+The draft required `sessionstart-restore.sh` to emit `additionalContext` when `unleashed_base_ok` is
+false. **That predicate is unreachable in that hook:** it runs as a hook, so step 1 always resolves.
+Round 20 (codex #6) added that `sessionstart-restore.sh:16-18` sources `context.sh` before any consumer
+logic, so a source-time step 1 publishes there anyway — the hook cannot observe its own failure.
+
+**Decided, rather than left open:** the resolver exposes a source-time publish result
+`_UNLEASHED_POINTER_STATE` ∈ `created` | `current` | `conflict` | `failed`. `SessionStart` emits **one**
+non-blocking `additionalContext` line, still `exit 0`, when that value is `conflict` or `failed` — i.e.
+when the **non-hook path will fail** — and stays silent on `created`/`current`. This is a statement about
+the *other* shells, which is the state the maintainer actually experiences and which no hook could
+otherwise report.
 
 The draft's justification was also false. *"`SessionStart` is the only hook that can address the model"*
 is contradicted by the tree: `scripts/lib/hook-io.sh:266-269` defines `hook_emit_posttool_context()` and
 `:275-278` `hook_emit_posttool_block()`, both in production use (`scripts/swift-build-verify.sh:71`,
-`scripts/swift-lint-check.sh:433`). The true statement is narrower: **`PostCompact` cannot inject context;
-`SessionStart` and `PostToolUse` can.** `PostToolUse(Bash)` runs immediately after every Bash tool call —
-precisely where the unresolved state is experienced — and is the better home for this notice; the gate
-should say which it prefers.
+`scripts/swift-lint-check.sh:433`). The true statement is narrower: **`PostCompact` cannot inject
+context; `SessionStart` and `PostToolUse` can.** `SessionStart` is chosen over `PostToolUse(Bash)`
+because the notice is a once-per-session fact, not a per-call one; §8 Q6 records the alternative.
 
-This also **amends §7's consumer row** (`:580`), which currently requires both snapshot scripts to leave
-*"the hook's own output"* untouched on an unresolved base. `sessionstart-restore.sh` becomes the one
-consumer whose output does change; the row must say so rather than be contradicted in silence.
+This **amends §7's consumer row** (`:910`), which currently requires both snapshot scripts to leave
+*"the hook's own output"* untouched on an unresolved base.
 
-**The family is SIX files, not five.** `grep -rln '_UNLEASHED_BASE_RESOLVED' scripts/` returns
-`scripts/lib/paths.sh` plus the inline copies in `context.sh`, `marker.sh`, `log.sh` and
-`agent-env-bridge.sh` — **and `scripts/tests/test_plugin_state_base.py`**, which the draft's "five"
-silently dropped. More importantly the *resolver* grep is the wrong derivation for D″: step 1 makes every
-process that **sets** `CLAUDE_PLUGIN_DATA` a publisher, so the family must be derived with
-`grep -rln 'CLAUDE_PLUGIN_DATA' scripts/` as well. That finds two more affected harnesses (below). All of
-them must change together; fixing four of six is the sidecar-family mistake this campaign keeps making.
+### The implementing family is FIVE shell files — and the harnesses are a separate list
 
-> **TEST TRAP — read this before editing a single test.** Three separate hazards, and the draft named
-> only part of the first.
+*(Round 21, codex #5: 19b said "six", folding in `scripts/tests/test_plugin_state_base.py` because it
+matched the resolver grep. It is **Python**; it cannot be shell-sourced, so the obligation "each of the
+six family files sources cleanly under `set -euo pipefail`" was literally unsatisfiable. Deriving the
+family by grep was right; the conclusion drawn from it was not.)*
+
+**Implementing family (all five change together):** `scripts/lib/paths.sh` and the inline copies in
+`context.sh`, `marker.sh`, `log.sh`, `agent-env-bridge.sh`.
+
+**Affected test harnesses (a different list, derived by `grep -rln 'CLAUDE_PLUGIN_DATA' scripts/` —
+setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
+`scripts/tests/test_shell_primitive_drift.py`, `scripts/test-hooks.sh`,
+`scripts/tests/test_reviewer_roster.py`.
+
+**The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
+reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
+found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
+to kill, and §4.3's round-6 mandate (`:684`) requires that `paths.sh`'s absence change *who computes* the
+answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
+must **prove the arms agree** rather than assume it.
+
+> **TEST TRAP — read this before editing a single test.** Three hazards.
 >
-> **(a) Tests that would write into the developer's real `$HOME`.**
-> `scripts/tests/test_plugin_state_base.py` reaches the unresolved state by **simply not setting
-> `CLAUDE_PLUGIN_DATA`** while inheriting the real `HOME` (`run()` strips only `CLAUDE_PLUGIN_DATA`/
-> `CLAUDE_PLUGIN_ROOT`, `:28`). Under D″, cells `({}, "0", SENTINEL)` and
-> `({"CLAUDE_PLUGIN_DATA": ""}, "0", SENTINEL)` (`:39-40`) resolve via step 2 or 3 to `OK=1` — and then
-> `N2NoPersistence`'s four writers (`:91-96`) and every `N4` primitive (`:128-134`) would write into the
-> developer's real `~/.claude/unleashed-mail`. Force the unresolved state with `HOME=""`, and give every
-> resolved case a `tempfile.TemporaryDirectory()` `HOME`.
+> **(a) Tests that would write into the developer's real `$HOME`.** `test_plugin_state_base.py` reaches
+> the unresolved state by **simply not setting `CLAUDE_PLUGIN_DATA`** while inheriting the real `HOME`
+> (`run()` strips only `CLAUDE_PLUGIN_DATA`/`CLAUDE_PLUGIN_ROOT`, `:28`). Under D″ those cells resolve
+> via step 2 to `OK=1` whenever a pointer exists. **The rule is file-wide, not per-cell:** force every
+> unresolved case with `HOME=""`, and give every other case a `tempfile.TemporaryDirectory()` `HOME`.
+> Stated once so no enumeration can be incomplete — round 20 (kimi #9) showed the 19b enumeration had
+> missed `test_zsh_agrees_with_bash` (`:62-68`), `test_exactly_one_diagnostic_per_process` (`:70-80`),
+> `test_writes_really_happen_when_resolved` (`:117-122`) and `test_no_diagnostic_when_resolved`
+> (`:82-85`).
 >
-> **(b) The PUBLISH side, which the draft did not model at all.** Any process that sets
-> `CLAUDE_PLUGIN_DATA` and inherits the real `HOME` **clobbers the machine's live pointer** under step 1.
-> `scripts/test-hooks.sh` does exactly that: `:6` promises *"All hook state is isolated in a temp
-> CLAUDE_PLUGIN_DATA so the real ~/.claude is never touched"*, `:33` exports the temp value, `:34-35`
-> `rm -rf`s it on exit, and `HOME` is never set anywhere in the file. Executed against a sandboxed HOME,
-> a faithful prototype of steps 1-4 left the pointer naming a **deleted** directory, and the next
-> non-hook shell fell through to step 3. `scripts/tests/test_reviewer_roster.py` and
-> `test_shell_primitive_drift.py:101` have the same shape. **Sandbox `HOME` in all of them**, and prove
-> it: *running the harness leaves `$HOME/.claude/unleashed-mail/base` byte-identical.*
+> **(b) The PUBLISH side.** Any process that sets `CLAUDE_PLUGIN_DATA` and inherits the real `HOME`
+> **clobbers the machine's live pointer** under step 1. `scripts/test-hooks.sh` does exactly that: `:6`
+> promises *"All hook state is isolated in a temp CLAUDE_PLUGIN_DATA so the real ~/.claude is never
+> touched"*, `:33` exports the temp value, `:34-35` `rm -rf`s it on exit, and `HOME` is never set in the
+> file. Executed against a sandboxed HOME, a prototype left the pointer naming a **deleted** directory.
+> `test_reviewer_roster.py:41` and `test_shell_primitive_drift.py:101` have the same shape. **Sandbox
+> `HOME` in all three** — that is the three files listed above, not "two more harnesses" — and prove it:
+> *running the harness leaves `$HOME/.claude/unleashed-mail/base` byte-identical.*
 >
-> **(c) The drift test — the draft named the wrong symbol.** `EXPECTED`
-> (`test_shell_primitive_drift.py:92`) is the *legacy expansion string*, used only by
-> `test_legacy_expansion_survives_only_in_paths_sh` (`:118-144`), and **D″ does not change it** —
-> `unleashed_plugin_legacy_base` stays as it is. What breaks is **`MATRIX` (`:98-103`)**: row `:100`
-> (`HOME=/probe`, variable unset) and row `:102` (`HOME=/probe`, variable empty) both assert `SENTINEL`,
-> and under step 3 both resolve to `/probe/.claude/unleashed-mail` with `OK=1`. Those rows are iterated
-> by `test_matrix_with_paths_sh_present` (`:146`) and `_ABSENT` (`:153`) across three libs — **12 failing
-> subtests**. Row `:99` (HOME unset) stays `SENTINEL` via step 4; row `:101` is unaffected. If step 3 is
-> **dropped, all four rows stand unchanged.** Also: `test_legacy_expansion_survives_only_in_paths_sh`'s
-> docstring asserts *"under D′ an unresolved base must yield the sentinel, never a second store"* — step 3
-> makes that false in prose even though the constant still passes, so the docstring must be rewritten
-> rather than left to certify a property step 3 removes.
+> **(c) The drift test — the draft named the wrong symbol, and with step 3 dropped the answer changes.**
+> `EXPECTED` (`test_shell_primitive_drift.py:92`) is the *legacy expansion string*, used only by
+> `test_legacy_expansion_survives_only_in_paths_sh` (`:118-144`), and **D″ does not change it**. 19b
+> asserted that `MATRIX` rows `:100`/`:102` would flip; **with step 3 dropped they do not** — all four
+> rows stand, in both arms, and the 12 subtests do not change. What *does* need attention is that
+> `test_legacy_expansion_survives_only_in_paths_sh` states its premise in **two** places (round 20,
+> kimi #12): the docstring (`:119-129`) *and* the `assertEqual` failure message (`:134-138`). Under D″
+> with step 3 dropped that premise remains **true**, so both stand — but any future round that revives a
+> `$HOME` fallback must change both sites, not one.
 >
 > Also re-check `N5LexicalDrift.ALLOWLIST` (`:158-170`) for the pointer path's expansion sites, keep
 > `test_indirection_fails_closed` satisfied (no `${!` in a state library, `:201-211`), and add `/.claude`
 > to `test_nothing_is_created_at_root`'s watch set (`:111,114`).
 
-**Proof — and D″ needs an N-number of its own.** §6 declares the envelope as N1–N5, each with an
-adversarial mutant. The draft's proof paragraph claimed only that *"the D′ no-persistence envelope (`N2`,
-`N4`) still holds"* and left every genuinely new obligation homeless. **Name N6 — pointer publication and
-refusal semantics** — with its own mutant set: publish-always (mtime changes on a no-change run),
-accept-a-symlink, accept-a-relative-path, accept-a-multi-line file, accept-a-non-existent target,
-publish-over-a-different-id. Each case must fail when the fix is reverted:
+### Proof — N6, with the mutants round 20 found missing
+
+§6 declares the envelope as N1–N5, each with an adversarial mutant. **N6 — pointer publication,
+authentication and refusal semantics** is added, because every obligation above is new and *"an
+obligation with no adversarial mutant can ship unproven"* is this plan's own round-7 lesson.
+
+**Mutant set** — each must make a case fail: publish-always (mtime changes on a no-change run);
+accept-a-symlink; accept-a-relative-path; accept-a-multi-line file; accept-a-non-existent target;
+**accept-a-group-writable containing directory**; **accept-a-group-writable target**; publish-over-a-
+different-id instead of marking conflicted; **follow-a-conflicted-pointer**; **compose-a-`${HOME}`-path-
+with-`HOME=""`**; **stamp `host-env` for a pointer resolution**. *(The last four are round-20 additions —
+codex #4, kimi #6. The provenance mutant matters most: stamping is the entire stated rationale for
+amending §4.1, and it had no case at all.)*
+
+**Cases** — each must fail when the fix is reverted:
 
 step 1 → base is the variable's value **and** the pointer holds it; a second run with the same value
 performs **no write** (asserted by mtime); a symlink pointer with matching content **is** republished as
-a regular file; a second install id is **refused**, not overwritten; step 2 → variable unset, pointer
-present → base is the pointer's target, and **no second store is created** (it fails under D′, which
-resolves to the sentinel, and under the pre-D′ fallback, which resolves to `$HOME`); pointer is a
-**symlink** → refused; pointer holds a relative path, an empty string, two lines, or names a non-existent
-directory → refused; the containing directory is missing, not owned by the effective uid, or
-group/world-writable → refused, fall through; step 3 → `HOME` absolute, no pointer → `$HOME` base; step 4
-→ `HOME=""` → sentinel, `OK=0`, **exactly one** diagnostic, **no `${HOME}`-rooted open attempted at all**,
-and the D′ no-persistence envelope (`N2`, `N4`) still holds in full; each of the six family files sources
-cleanly under `set -euo pipefail` with the pointer absent, valid, malformed and unreadable, with
-`stderr == ""` in **both bash and zsh**; and the SessionStart notice fires on its corrected predicate.
+a regular file; a second install id leaves the pointer **marked conflicted**, not overwritten; step 2 →
+variable unset, valid pointer → base is the pointer's target, `_UNLEASHED_BASE_SOURCE=pointer`, and **no
+second store is created** (this fails under D′, which resolves to the sentinel, and under the pre-D′
+fallback, which resolves to `$HOME`); each authentication clause refused independently, including a
+**conflicted** pointer; step 3 → `HOME=""` → sentinel, `OK=0`, **exactly one** diagnostic, **no
+`${HOME}`-rooted open attempted at all**, and the D′ no-persistence envelope (`N2`, `N4`) holds in full;
+persisted records carry `base_resolution` matching the resolution that actually ran; and the SessionStart
+notice fires on `conflict`/`failed` and stays silent on `created`/`current`.
 
-**Open question this section cannot settle from inside itself — put to the reviewers.** **Step 3 is the
-contentious step, not step 2.** Step 2 provably converges on the existing store. Step 3 fires only when
-no pointer has ever been published — i.e. before any hook has run — and in that window it re-creates a
-second store, which is the exact defect this ticket exists to kill. Dropping step 3 (unset + no pointer →
-sentinel) preserves D′ completely and still fixes every case where a hook has run at least once.
+**Arm equivalence, across all five shell files** (round 20, kimi #8): the full pointer matrix
+(absent / valid / malformed / unreadable / conflicted × publish / refuse) runs with `paths.sh` **present
+and absent**, asserting identical `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK` and
+`_UNLEASHED_BASE_SOURCE` from every file. Each file must also source cleanly under `set -euo pipefail`
+in **both bash and zsh** in every cell.
 
-The pre-gate sweep added four pieces of evidence the drafters did not have. They are recorded here as
-**material for the decision, not as the decision** — settling it during implementation would invalidate
-the reviewed digest (`AGENT_CONTRACTS.md:92`), which is the rule §4.2 opened with.
+**Stderr is asserted per cell, not globally** (round 20, kimi #7): `stderr == ""` is required only in
+**resolved** cells. Steps 1-conflict and 3 mandate **exactly one** diagnostic, so a blanket empty-stderr
+assertion would contradict them — the draft's N6 clause did exactly that.
 
-1. **Step 3 has a measurable cost in already-gated tests; step 2 has none.** Keeping it flips 12
-   subtests in `test_shell_primitive_drift.py`'s `MATRIX` and requires rewriting
-   `test_legacy_expansion_survives_only_in_paths_sh`'s premise. Dropping it leaves all four rows intact.
-2. **Step 3 contradicts three gated statements that step 2 does not.** §4.3's round-6 resolution
-   (`:387-389`) — *"an unset or empty variable yields the poisoned sentinel, **never the legacy base**"*;
-   §4.3's mandated matrix change (`:393-397`), which requires the **opposite** of what step 3 needs; and
-   §4.4's quarantine (`:410-413`), whose premise is that the fallback path no longer resolves and whose
-   move is ordered *after* the resolver fix. If step 3 survives, **quarantine must move before it**, and
-   all three must be amended in the same edit.
-3. **On this machine step 3 does not create a new store — it re-animates the old one, and it is not
-   empty.** `~/.claude/unleashed-mail` holds 21 files including the divergent marker that is §2's
-   load-bearing High evidence. Step 3 makes those readable again by a live resolver.
-4. **Step 3 is not what unblocks `COREDEV-2585`, except in one window.** The blocked path is the Bash
-   tool, where the variable is unset; step 2 fixes it **as soon as any hook has published**. Step 3 only
-   covers the never-run-a-hook window. Note the complication: in *this* repository no plugin hook fires
-   at all (project-scope install bound to the app repo), so that window is not hypothetical here — but
-   that is arguably a fact about a mis-scoped install rather than a reason to re-create a second store
-   for every user.
+### Consumers whose behaviour changes, stated rather than discovered
 
-**Which is right is a judgement about how often that window is real, and the gate should decide it, not
-the implementer.**
+* **`scripts/pre-commit-checks.sh`** — under step 2 its marker writes become **visible to the gate** with
+  no export, so the §7 row's unresolved-base conditional stops firing. Its `:14-18` MAJ-6 comment is
+  falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
+  already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
+  step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:792` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -573,19 +691,17 @@ asserting it delegates when `paths.sh` is present.
 > `set` rows are unchanged. **N1/N2 must run the full cross-product** — `paths.sh` present *and* absent ×
 > variable set, unset and empty — six cells, not two.
 >
-> **Round 19b — §4.2a's step 3 REVERSES this mandate, and the conflict must be resolved by the gate, not
-> discovered in implementation.** Two statements above are contradicted by step 3, which resolves an
-> unset-or-empty variable to `${HOME}/.claude/unleashed-mail` whenever `HOME` is absolute:
+> **Round 21 — this section is UNCHANGED, and that is now a settled outcome rather than an open risk.**
+> Rounds 19/19b carried a fourth resolution step (`${HOME}/.claude/unleashed-mail` when `HOME` is
+> absolute) that would have reversed both statements above: it yields exactly the legacy base this
+> mandate forbids, and it requires the **opposite** expectation for two `MATRIX` rows. **The round-20
+> gate dropped that step — both arms independently — so nothing here changes.**
 >
-> * *"an unset or empty variable yields the poisoned sentinel (§7), **never the legacy base**"* — step 3
->   yields exactly the legacy base.
-> * the mandated matrix change — step 3 requires the **opposite** expectation for the two rows named.
->
-> Concretely, in `test_shell_primitive_drift.py` the affected rows are `MATRIX` `:100` (`HOME=/probe`,
-> variable unset) and `:102` (`HOME=/probe`, variable empty), **not** `EXPECTED` (`:92`), which is the
-> legacy expansion string and is unchanged by D″. Each row runs in both arms across three libs, so
-> **keeping step 3 flips 12 subtests and requires rewriting this mandate; dropping step 3 leaves this
-> section correct as written.** That asymmetry is recorded in §4.2a's open question as evidence.
+> Recorded because the cost was the evidence that settled it: the affected rows are `MATRIX` `:100`
+> (`HOME=/probe`, variable unset) and `:102` (`HOME=/probe`, variable empty) — **not** `EXPECTED`
+> (`:92`), which is the legacy expansion string and is untouched by D″. Each row runs in both arms across
+> three libs, so reviving a `$HOME` fallback in any future round costs **12 subtests** plus a rewrite of
+> this mandate. Under D″ as gated, all four rows stand.
 
 > **Load order is part of the mutation, not an implementation detail.** The sentinel must be injected
 > **after** `_UNLEASHED_PATHS_SH_LOADED=1` is set, or sourcing `paths.sh` overwrites it and the mutation
@@ -605,17 +721,18 @@ fallback path still resolves.
 preserving an **inventory and checksums** so nothing is lost. The one-file `-inline` residue needs its
 own explicit disposition in the same step — round 1 noted the draft left it undecided.
 
-> **Round 19b — §4.2a's step 3 invalidates this section's premise AND its ordering.** The premise above
-> is *"Leaving them in place conflicts with N4 **while the fallback path still resolves**"* — i.e. the
-> quarantine is safe *after* the resolver fix because the fallback no longer resolves. **Under step 3 the
-> fallback resolves again**, so quarantining after the resolver would move state a **live** resolver can
-> reach, and the directory is not inert: it holds 21 files including the divergent marker that is §2's
-> load-bearing High evidence.
+> **Round 21 — this section is UNCHANGED, premise and ordering both.** Rounds 19/19b carried a fourth
+> resolution step that would have made the fallback path resolve again, invalidating this section's
+> premise (*"Leaving them in place conflicts with N4 **while the fallback path still resolves**"*) and
+> **inverting its ordering** — the quarantine would have had to land *before* the resolver rather than
+> after, because it would otherwise be moving state a live resolver can reach. The two orderings are
+> mutually exclusive, so this could not be deferred.
 >
-> Therefore: **if step 3 survives the gate, the quarantine must land BEFORE §4.2a's resolver, not after**,
-> and this section's premise must be rewritten. **If step 3 is dropped, this section stands exactly as
-> written.** A second asymmetry for §4.2a's open question — and one that cannot be deferred, because the
-> two orderings are mutually exclusive.
+> **The round-20 gate dropped that step**, on both arms. Under D″ as gated, an unresolved base yields the
+> sentinel, this directory stays inert, and the quarantine keeps its original *after-the-resolver*
+> ordering. kimi's round-20 note that the directory is **not empty** (21 files, including the divergent
+> marker that is §2's load-bearing evidence) is why the inverted ordering would have been mandatory had
+> the step survived — recorded so a future revival does not miss it.
 
 **Proof — N4 (strengthened in round 3):** asserting only that the fallback is unreadable is satisfied
 the moment D′'s guards land, **even if the quarantine never happens**. So N4 must also prove the move
@@ -631,7 +748,8 @@ with its own inventory.
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
 | Auto-migration overwrites the newer of two divergent markers | Medium | §4.4 forbids auto-merge by default |
-| The gate goes inert: a test that sets `CLAUDE_PLUGIN_DATA` in its fixture proves nothing | **High** | **N2 must run the unset case**, which is the only case that reproduces the defect. `scripts/test-hooks.sh:33` exports it for isolation — a test inheriting that harness cannot see this bug |
+| The gate goes inert: a test that sets `CLAUDE_PLUGIN_DATA` in its fixture proves nothing | **High** | **N2 must run the unset case**, which is the only case that reproduces the defect. `scripts/test-hooks.sh:33` exports it for isolation — a test inheriting that harness cannot see this bug. **Round 21 (§4.2a):** under D″ "unset" is no longer sufficient on its own — an unset variable with a valid pointer *resolves*, via step 2. The unset case must therefore be run **with no pointer** to reproduce the defect, and it is now joined by step 2's own assertion, *"no second store is created"*, which carries the anti-inertness burden for the resolved-via-pointer path. A fixture that sets **either** the variable or a pointer proves nothing |
+| A harness that sets `CLAUDE_PLUGIN_DATA` clobbers the developer's real pointer | **High** | **Round 21 (§4.2a), new.** Step 1 makes every setter a publisher. `scripts/test-hooks.sh` promises isolation at `:6` but never sets `HOME`, so it would publish a pointer naming a directory its own EXIT trap deletes. `HOME` is sandboxed in all three affected harnesses, and N6 asserts the real pointer is byte-identical after a run |
 
 ## 6. Verification
 
