@@ -10,7 +10,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 
 ### v2.7.1
 
-- **Six review passes over the 2.7.0 permission and transcript surface (`COREDEV-2642`)** — 40+ findings
+- **Seven review passes over the 2.7.0 permission and transcript surface (`COREDEV-2642`)** — 40+ findings
   remediated, each with a proof that fails when the fix is reverted. The ones that changed observable
   behaviour: a prompt naming a path that merely *shares the checkout's prefix* (`…/Unleashed Mail` vs
   `…/Unleashed MailTests/…`) was silently rewritten to a path that does not exist, so the reviewer read

@@ -15,7 +15,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [2.7.1] — 2026-08-08
 
-Six successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof
+Seven successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof
 that fails when the fix is reverted.
 
 ### Fixed
