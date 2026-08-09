@@ -154,11 +154,16 @@ filesystem derivation. Two of them are not even reliable derivations:
 
 - `plan` is `ls -t "$_root"/docs/planning/*_PLAN.md | head -1` (`:29-37`) — the **newest plan by mtime**,
   not the plan being worked on. A `git checkout` or an unrelated `touch` re-orders it.
-- `round` is computed by an **inline** glob loop (`:41-52`) rather than the shared
-  `context_highest_round` (`scripts/lib/context.sh:196`), so it lacks that helper's `10#$n` decimal
-  normalization, its `??????*` >5-digit guard, and its zsh `NOMATCH` guard. Verified experimentally: with
-  `round-3`, `round-09` and `round-abc` present, the snapshot recorded `"round":"09"` — a leading-zero
-  **string** where the shared helper returns `9`.
+- ~~`round` is computed by an **inline** glob loop~~ — **STRUCK IN ROUND 2. This claim was false, and it
+  was false in a way worth recording.** Round 1 read `scripts/precompact-snapshot.sh:41-49` as the
+  implementation. It is a **comment describing the removal** of that inline loop by `COREDEV-2600`
+  (`cf2c44b`) — the comment even quotes the old defect (`round-09` recorded `"09"`), which is what round 1
+  then reported as current behaviour. The live computation is `:50-58` and calls the shared
+  `context_highest_round` at **`:56`** (`scripts/lib/context.sh:196`). Re-run with round 1's own fixture
+  (`round-3`, `round-09`, `round-abc`): the snapshot recorded **`"round":"9"`**, stderr empty, rc 0.
+  So the `10#` normalisation, the `??????*` digit cap and the zsh `NOMATCH` guard are all **already in
+  effect**, and there is nothing here for this ticket to fix. A plan that "verified experimentally" a
+  behaviour the tree had already fixed did not run the experiment it reported.
 
 **Fix.** Keep the mechanical hook for mechanical facts, and add a **model-written** path for reasoning.
 The division is the design:
@@ -320,7 +325,7 @@ nothing and logs once; it never guesses. Bumping `v` is a deliberate, documented
 | `ticket` | string | 32 chars, `[A-Z]+-[0-9]+` or `unknown` | pointer (§3) |
 | `slug` | string | 32 chars | from `context_branch_slug` — already PII-safe by construction (§1) |
 | `plan` | string | 200 chars, repo-relative | **pointer**, never plan content |
-| `round` | int | ≥ 0 | from the shared `context_highest_round`, not the inline scanner (§4.1) |
+| `round` | int | ≥ 0 | from the shared `context_highest_round` (`scripts/lib/context.sh:196`), which `precompact-snapshot.sh:56` already calls — §4.1's "inline scanner" is struck |
 | `reason` | string | **closed enum** (below) | the bounded half of the "enum + short free text" both reviewers asked for |
 | `note` | string | **200 chars**, redacted | the only free text. Cap matches the shipped precedent `scripts/permission-denied-log.sh:36` (verified: `REASON="${REASON:0:200}"`) |
 
@@ -407,7 +412,7 @@ and `journal-checkpoint.sh` reads that file. Three consequences, all deliberate:
 constrains `run` to `[A-Za-z0-9_-]{1,64}`, so the raw session id is normalised before it is stored. An
 exact-match rule is then only meaningful if the **same** normalisation is applied before comparing.
 The existing round-binding code is the cautionary example: `scripts/lib/context.sh:312` stores
-`sid` through `tr -cd 'A-Za-z0-9._-' | cut -c1-128`, while `:353-355` compares the **raw** environment
+`sid` through `tr -cd 'A-Za-z0-9._-' | cut -c1-128`, while `:353-356` compares the **raw** environment
 value against that stored form. A session id containing any character outside the charset — or longer
 than 128 — is therefore written in one form and looked up in another, and never matches itself.
 Demonstrated: a binding stored from `sess:with/odd chars` is unfindable by that same id. There it is
@@ -440,9 +445,18 @@ mkdir "<state>/journal-<repohash>.lock"      # atomic create-or-fail, POSIX, no 
 ```
 
 `mkdir` is the primitive because **`flock(1)` does not exist on macOS** and the repo has no locking
-primitive to reuse (verified: no `flock`, no lockfile, no `O_EXCL` mutex anywhere under `scripts/`).
-The holder writes its PID inside; acquisition spins with bounded backoff to a short deadline; a lock
-whose directory mtime exceeds a stale TTL is broken **once**, and the break is logged.
+primitive to reuse (verified: no `flock`, and no **process mutex** anywhere under `scripts/` — the ~8 `O_EXCL` uses
+there are single-file tmp/symlink safety, e.g. `scripts/pty-capture.py:1022`, `scripts/review-verdict.py:520`, not mutual exclusion).
+The holder writes its PID inside. **The numbers are literals, not adjectives** — an earlier draft said
+"bounded backoff to a short deadline" and "a stale TTL", which cannot be implemented from, and cannot be
+tested against:
+
+| constant | value | why |
+|---|---|---|
+| retry schedule | 10 attempts at **50 ms** | ~0.5 s total; a checkpoint is human-paced, so this is invisible in the normal case |
+| acquisition deadline | **500 ms** | after which the checkpoint fails non-zero rather than writing unlocked |
+| stale-lock TTL | **120 s** on the lock directory's mtime | far above any real checkpoint (which is milliseconds) and far below a session, so a `SIGKILL`ed holder self-heals within one interaction |
+| break behaviour | broken **once** per process, logged | a second break in the same process means the protocol is wrong, not that the lock is stale again |
 
 > **An earlier draft of this section exempted the append from the lock, and that was wrong twice
 > over.** It is recorded here rather than quietly deleted, because both errors are instructive and a
@@ -480,8 +494,8 @@ contention. A checkpoint that cannot take the lock exits non-zero and says so. L
 silently is the worst outcome available here; a noisy failure the model can retry is strictly better.
 
 **The writer is `python3`, not `bash`, and that is a correctness requirement.** Measured on macOS:
-`printf '%s\n' "$line" >> file` is atomic only up to **1024 bytes** — at 1025 bytes it tears (994 of
-1600 lines intact), identically in `sh`, `bash` and `zsh`, because the shell's stdio buffer is `BUFSIZ`.
+`printf '%s\n' "$line" >> file` is atomic only up to **1024 bytes** — at 1025 bytes it tears (**994 of 1600
+records torn**, against a clean control at 1024), identically in `sh`, `bash` and `zsh`, because the shell's stdio buffer is `BUFSIZ`.
 The §4.5a line cap is **also** 1024 bytes, so the two coincide *numerically* while being unrelated in
 kind — exactly the coincidence that invites someone to raise the cap and silently lose atomicity. The
 record is therefore written with a single `os.write()` from `python3`, which has no such bound, and
@@ -686,7 +700,7 @@ the read side, and both are required — the write guard alone would not protect
 older build.
 
 **Note for the reviewer — the precedent this plan cited for failing open does not support it.**
-Round 1 cited `scripts/lib/context.sh:353-355`, where session id is a soft discriminator. Codex finding
+Round 1 cited `scripts/lib/context.sh:353-356`, where session id is a soft discriminator. Codex finding
 3 pointed out the precedent is not equivalent because that code also keys on agent id, slug and a TTL.
 That is correct, and the citation is **withdrawn rather than reinterpreted** (see §4.5b).
 
@@ -778,7 +792,7 @@ reintroduces a path leak.
 
 **Note for the reviewer.** This code survived at least eight rounds of external PR review
 (`scripts/precompact-snapshot.sh:2`, COREDEV-2325 Item 5). Nearly every odd-looking construct — the
-redirect order, the feature-detected `stat` (`scripts/sessionstart-restore.sh:41-45`, which deliberately
+redirect order, the feature-detected `stat` (`scripts/sessionstart-restore.sh:43-47`, which deliberately
 rejects a `uname == Darwin` branch because not all BSDs report Darwin), the bash substring instead of
 `cut` — is a fix for a reviewer-found bug. A plan that "simplifies" any of them will be challenged, and
 should be.
@@ -834,13 +848,13 @@ nothing else. No new row, no new kill switch, no count edits. Both hooks already
 | A credential is pasted into rationale and survives | Medium | Only 4 credential shapes are covered; `ghp_`, `AKIA…`, `password=` are not. Nothing downstream scans a git-ignored file. Write-time instruction is the only control — say so. |
 | Journal grows unbounded over a long autonomous run | Medium | §4.10 self-compaction. Explicitly not `log_append`'s truncation. |
 | Restore injects noise instead of context after a corrupt write | Medium | §4.3 — emit nothing rather than an all-`unknown` hint, and retain the file as evidence. |
-| Run-scoping degrades to unkeyed with no JSON parser | Low | Documented fail-open (§4.9); matches the shipped precedent at `scripts/lib/context.sh:353-355`, where session id is a soft discriminator and never the primary key. |
+| Run-scoping degrades to unkeyed with no JSON parser | Low | Documented fail-open (§4.9); matches the shipped precedent at `scripts/lib/context.sh:353-356`, where session id is a soft discriminator and never the primary key. |
 | A worktree and its parent checkout keep separate journals | Medium | Correct for isolation, surprising for continuity. Stated in §4.5 rather than discovered later. |
 | Token budget overruns the ~1.5–2 k target | **Low — CLOSED** | Was Medium. Codex finding 6: a fixed *shape* does not bound tokens. §4.5a now sets an explicit **2048-byte serialized cap**, asserted by a test that fails if the constant is removed. O(1) in run length remains true by construction. |
 | **Lost update: concurrent writers each replace version N** | **Medium** | Codex finding 2. §4.5c holds **one** `mkdir` mutex across the whole checkpoint — `seq` allocation, append, `live-state` rewrite and self-compaction alike. An earlier draft exempted the append and was measurably wrong (489 records lost racing compaction); that draft and its refutation are kept in §4.5c so the exemption is not reinvented. Proved by concurrent-append, append-vs-compaction and two-writer cases. |
 | A `SIGKILL`ed mutex holder blocks writes until the stale TTL | Low | Accepted and stated (§4.5c). Because the lock now covers the append too, the consequence is a checkpoint that **fails loudly** during the stale window rather than one that writes unlocked — the failure the model can see and retry, chosen deliberately over the silent lost update. Liveness probing rejected as over-engineering for a single-user CLI — surfaced as §8 Q4 rather than decided silently. |
 | Adding `hook_io_read` gives `PreCompact` a JSON-engine dependency it does not have today | Low | Verified, not assumed: with `jq`/`python3`/`python` all shadowed, `precompact-snapshot.sh` still exits 0 and writes its snapshot. §4.5b states the regression rather than reusing the "python3 is already required" argument, which is true of the capture pipeline and false of this hook. |
-| Normalisation drift between the run-id writer and reader | Medium | The shipped round-binding code already has this bug (`context.sh:312` sanitizes, `:353-355` compares raw). §4.5b requires one shared normalise function called by both sides, proved with an id that normalisation changes. |
+| Normalisation drift between the run-id writer and reader | Medium | The shipped round-binding code already has this bug (`context.sh:312` sanitizes, `:353-356` compares raw). §4.5b requires one shared normalise function called by both sides, proved with an id that normalisation changes. |
 | `SessionStart` never fires, so no run id exists and the journal is inert | **Medium** | §4.5b fails closed by design. **This is not hypothetical** — a stale plugin registry was observed writing no plugin state for an entire session. Fail-closed is right, but the silence is the risk, not the inertness; §8 Q5 asks whether it needs a visible signal. |
 | Quarantine becomes an unbounded leak | Low | §4.10 bounds it by count **and** TTL. Either bound alone leaks — a count under a slow drip, a TTL under a fast one — which is why both are specified and both are proved. |
 | The `note` caps and the payload cap are jointly unsatisfiable at their maxima | Low | Deliberate: 10 × 200 chars exceeds 2048, so eviction (oldest first, recorded to the journal) makes the payload lossy rather than making a write fail. Stated in §8 Q6 rather than left for an implementer to discover. |
@@ -889,8 +903,20 @@ confusion has already cost this project a round.
 
 **Explicitly required by codex round-1 finding 6, so listed rather than implied:** concurrency cases
 (§4.5c), an explicit serialized-cap assertion per file (§4.5a), per-`kind` checkpoint wiring cases
-(§4.6), and positive controls on the redactor — which already exist for the boundary fixes and are
-**missing only for the invalid byte** (§7 step 0).
+(§4.6), and positive controls on the redactor — established by **mutation, not by reading test names**
+(§7 step 0): (b) and (c-order) are genuinely proved, (a) is proved by an absolute assertion rather than
+by the prose class round 1 cited, and (c-tr) is **unguarded**.
+
+**Assert absolute expected output, never agreement.** The redactor's parity suite is a **differential**
+gate: it compares the shell and Python implementations to each other, so a revert applied to **both**
+keeps them equal and passes. Every proof this ticket adds — redactor-adjacent or not — must assert the
+value it expects, not that two components agree. A test that can only see disagreement cannot see a
+shared mistake, and the shared mistake is the one a single canonical implementation makes.
+
+**Assert completeness before integrity in any concurrency case.** Carried from the measurement in
+§4.5c: the first harness built there capped its payload and silently wrote **zero bytes** at larger
+sizes, then reported `TORN=0` — a false pass indistinguishable from proof. Assert the expected line
+count **and** byte count first; only then believe a tearing or ordering number.
 
 ## 7. Implementation order
 
@@ -903,12 +929,33 @@ confusion has already cost this project a round.
    `name <2 replacement chars> [redacted-email] end` on **both** implementations, byte-identical, with
    **empty stderr**. The `redactor-equivalence` CI job is green.
 
-   **But one of the three fixes has no regression proof.** `mcp/review-synthesizer/redactor_fixture.py`
-   — the single canonical vector list — contains **no vector with an invalid UTF-8 byte** (exhaustive
-   search for `\xff`/`\xfe`/surrogates across the fixture, `test_redactor_parity.py` and
-   `redactor_model.py`: zero hits). The boundary fixes (a) and (b) *are* covered — `task-oriented`,
-   `~500ms` and the `sk-`/`pk_`/`~user/`/bearer/email positive controls are all present. So reverting
-   the `tr` locale/stderr fix would leave the suite **green**. The fix is correct and unguarded.
+   **But the proof coverage is uneven, and establishing that required mutation rather than reading.**
+   Each fix was reverted in a `/tmp` copy and the suite re-run:
+
+   | fix | reverted → suite | verdict |
+   |---|---|---|
+   | (b) tilde requires `/` | `FAILED (failures=9)` — `~500ms`, `~2x faster`, `~40 percent`, `~L147` (`tests/test_redactor_parity.py:126`) | **genuinely proved** |
+   | (c-order) fold-before-rules | `FAILED (failures=25)` — all 23 codepoints of `test_canonicalisation_closes_unicode_ws` (`:145`) | **genuinely proved** |
+   | (a) `sk-`/`pk_` boundary | `FAILED` ×2 — `test_asymmetric_boundary_policy` (`:94`, `orders_pk_customer_id_idx`) and `test_sequential_secret_passes` (`:102`) | **proved, but not by the class the plan cited** |
+   | (c-tr) `LC_ALL=C` on `tr` | suite stays **GREEN** | **UNGUARDED** |
+
+   **Two things round 1 got wrong here, and the second is structural.**
+
+   *First:* there is **no vector with an invalid UTF-8 byte** anywhere — exhaustive search across the
+   fixture, `test_redactor_parity.py` and `redactor_model.py` returns zero hits. The fix is load-bearing
+   at runtime (with `\xff` input under `LC_ALL=en_US.UTF-8`, dropping `LC_ALL=C` **silently truncates**;
+   the `2>/dev/null` only suppresses `tr: Illegal byte sequence`) — yet reverting it leaves the suite
+   green.
+
+   *Second, and this generalises past one fix:* **the parity suite is a DIFFERENTIAL gate and is blind
+   to any symmetric revert.** `task-oriented` exists only as a parity *vector*
+   (`redactor_fixture.py:59`, `redactor_model.py:77`) — there is no `assertEqual("task-oriented", …)`
+   anywhere. Under a both-sides revert it becomes `ta[redacted-secret]` on **both** engines, the two
+   still agree, and every parity assertion passes. (a) survives only because
+   `test_asymmetric_boundary_policy` asserts an **absolute expected output**. So §4.7's proof obligation
+   — "`task-oriented` surviving intact … must fail if the regex fix is reverted" — is **not satisfiable
+   by a parity vector at all**, and any new redactor proof this ticket relies on must assert an absolute
+   expected output, not agreement between two implementations that can be wrong together.
 
    This is exactly the sub-case codex round-1 finding 6 asked for ("the invalid-byte case as a
    shell-ingress test and a separate Python-ingress test proving replacement without truncation"), and
@@ -1054,11 +1101,11 @@ such rather than buried.
 | # | Round-1 codex finding | Where answered | How |
 |---|---|---|---|
 | 1 | Promises a schema, never defines one; no writer invocation, no run-id source | **§4.5a, §4.5b** | Full field table for both files — types, closed enums, per-field and whole-file byte caps, `v`, `id`, `seq`, ordering and dedup rules. Writer is `scripts/journal-checkpoint.sh` called via `Bash`; run id comes from a `SessionStart`-written `run-<repohash>.id`. |
-| 2 | Atomic write can still lose entries (concurrent read-modify-write) | **§4.5c** | Split by failure mode: the append needs no lock (single `write()` to `O_APPEND`); every read-modify-write takes a `mkdir` mutex (`flock` is absent on macOS). Lost-update **risk row added** (§5), concurrency cases specified. Also corrects a `PIPE_BUF` error the draft would have shipped. |
+| 2 | Atomic write can still lose entries (concurrent read-modify-write) | **§4.5c** | **One mutex across the whole checkpoint, the append included** (`flock` is absent on macOS, so `mkdir`). A mid-round draft exempted the append; it was reproduced as lossy (**489** records with a held fd, **160** with open-per-record) and is recorded in §4.5c so it is not reinvented. Lost-update **risk row added** (§5), concurrency cases specified. Also corrects a `PIPE_BUF` error and a shell-`>>` tearing bound the draft would have shipped. |
 | 3 | Run scoping unsound; empty ids must not degrade to unkeyed | **§4.9, §4.5b** | Fail-open **withdrawn**, not softened. Non-empty exact match required at *both* ends; no run id → no write and no restore. The `context.sh` precedent cited to justify failing open is withdrawn, because codex is right that it is not equivalent. |
 | 4 | Corrupt-payload retention not closed by the GC | **§4.3, §4.10** | Round-1 design **reversed**: quarantine to a private directory bounded by count *and* TTL, active path cleared. Codex's answer explicitly **overrides gemini's** §8 Q3 answer, and the case that would fail under the round-1 design is listed. |
 | 5 | Scope and ordering contradict themselves; baseline ambiguous; no event or kill switch named | **Header, §2, §4.6, §4.12** | The contradiction is resolved by **decoupling** — §4.6's "either order works" was the true half. Baseline measured, not predicted: `21/21/0/1`, 10 events, at `dbb1fb8`. **No new hook event**, so no kill switch is invented to satisfy a checklist. |
-| 6 | Mutation-proof suite incomplete | **§4.2, §4.5a, §4.5c, §4.6, §6, §7 step 0** | §4.2 now drives two **compactions**, not two checkpoints — round 1's proof could not fail while the defect stood. §§4.8–4.11 and §4.6 have concrete per-case proofs. Explicit serialized-cap assertions added. Redactor positive controls **verified present** for the boundary fixes and **found missing** for the invalid byte. |
+| 6 | Mutation-proof suite incomplete | **§4.2, §4.5a, §4.5c, §4.6, §6, §7 step 0** | §4.2 now drives two **compactions**, not two checkpoints — round 1's proof could not fail while the defect stood. §§4.8–4.11 and §4.6 have concrete per-case proofs. Explicit serialized-cap assertions added. Redactor controls established by **mutation**: (b) and (c-order) proved, (a) proved by an absolute assertion rather than the class round 1 cited, **(c-tr) unguarded**. §6 now also requires absolute-output assertions over parity ones, and completeness-before-integrity in concurrency cases. |
 
 **Gemini round-1 notes.** (1) split the redactor fixes — done, `COREDEV-2597`, landed. (2) bounded enum
 plus short capped free text — adopted in §4.5a. (3) retain the corrupt payload — **not adopted**;
@@ -1069,9 +1116,17 @@ disagreement is recorded rather than averaged.
 
 Each is real, each is out of scope, and each is recorded so it is not re-discovered:
 
-1. **`COREDEV-2597`'s invalid-UTF-8 fix has no regression proof** (§7 step 0). The fix is correct by
-   execution; no test fails if it is reverted. Test-only work against a landed ticket. **This is a
-   prerequisite for anything in this plan that writes rationale.**
+1. **`COREDEV-2597`'s invalid-UTF-8 fix has no regression proof** (§7 step 0). Established by mutation:
+   revert `LC_ALL=C` on the `tr` and the suite stays **green**, while the runtime behaviour silently
+   truncates on `\xff` under a UTF-8 locale. Needs a shell-ingress case and a separate Python-ingress
+   case, both asserting **absolute** output. Test-only work against a landed ticket. **Prerequisite for
+   anything in this plan that writes rationale.**
+   *Second, larger follow-up from the same investigation:* the redactor's parity suite is a
+   **differential** gate blind to symmetric reverts, so several vectors that look like positive controls
+   (`task-oriented`, `risk-assessment`, `disk-utilization`, `desk-checking` at `redactor_fixture.py:59`)
+   prove nothing on their own. Auditing which of 2597's vectors are absolute assertions and which are
+   parity-only is a `COREDEV-2597`-surface task, not this ticket's — but until it is done, "the redactor
+   is gated" means less than it sounds.
 2. **`AUTONOMOUS_END_TO_END_PLAN.md:18-20` still asserts the `2584 → 2585` chain** as "required, not a
    free choice". Now false. Must be corrected in **2584's own revision round** — that plan carries gate
    state, and editing a sibling's ordering claim outside its round is the drive-by edit this project
