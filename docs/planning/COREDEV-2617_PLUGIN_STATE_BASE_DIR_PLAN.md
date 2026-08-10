@@ -628,8 +628,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1393`) and its matrix change (`:1399-1403`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1426-1433`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1411`) and its matrix change (`:1417-1421`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1444-1451`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -675,8 +675,20 @@ ${HOME}/.claude/unleashed-mail/bases/.pub.<pid>.<uniq>.<key>  transient; outside
 ```
 
 **Invariant P — the name is a pure function of the bytes.** A per-character walk with **three disjoint
-markers**: `_` → `_u`, `/` → `_s`, upper-case `C` → `_c<lower(C)>`. The output therefore contains **no
-upper-case character**, so a case-insensitive volume has nothing to fold. No fork: the lower-casing is a
+markers**, plus a fourth for every byte outside printable ASCII: `_` → `_u`, `/` → `_s`, upper-case `C`
+→ `_c<lower(C)>`, and **any byte `>= 0x80` or `< 0x20` → `_x<two lower-case hex digits>`**. The output is
+therefore **pure lower-case-safe ASCII**: a case-insensitive volume has nothing to fold, a
+**normalization-insensitive volume has nothing to normalize**, and `${#_k}` counts bytes because every
+character is one byte.
+
+> **ROUND 34, codex High #1 — case was one member of the aliasing family, not the family.** Executed on
+> this volume: `caf\xc3\xa9` (NFC) and `cafe\xcc\x81` (NFD) are distinct byte strings, and creating both
+> as filenames yielded **one file**. Two bases that name genuinely different directories on a
+> normalization-sensitive target volume would therefore share one entry here — last-writer-wins, the
+> reader sees one authentic entry, and the conflict is never reported. The same fix closes the second
+> half of that finding: `${#_k}` was a **character** count, so a short string of multi-byte characters
+> could pass the `NAME_MAX` budget and still overflow it as a UTF-8 filename. With an ASCII-only output
+> the two counts coincide. No fork: the lower-casing is a
 `case` arm per letter, not `tr` and not bash-4's `${x,,}` (this repo's floor is bash 3.2.57).
 
 *(**Round 33 — this normative statement carried the round-30 two-pass form for THREE rounds** after
@@ -739,8 +751,10 @@ enumerates `base.*`, authenticates each, and:
 `HOME` is unusable never scans at all and takes step 3 with `POINTER_STATE=none` — the store was never
 consulted, so there is nothing to report. A **publisher** whose post-publish scan finds a failing entry
 reports `stale` (the bullet above is reader-framed "refuse"; a publisher has already resolved and does
-not refuse, but it must still report what it saw). A publisher whose **own entry vanishes between its
-write and its scan** reports `failed` — it cannot assert `created` for a file that is no longer there,
+not refuse, but it must still report what it saw). A publisher whose **own entry vanishes before its scan
+observes it** reports `failed` — **whether or not this process wrote it** (round 34, codex #4: the rule
+said "between its write and its scan", which does not cover the no-write `current` path, where an
+operator removing the entry left rule 0 to skip it and no exit mapped at all) — it cannot assert `created` for a file that is no longer there,
 and an operator deleting entries mid-publish is the one cause. *(§6 requires totality to be derived from
 the exit paths; the round-30 note claiming the enum was "re-derived from D″-pf's exit paths" overstated
 what was actually written down, which is exactly the class §6 exists to catch.)*
@@ -851,7 +865,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1664`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1699`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1077,7 +1091,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1492`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1510`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1112,7 +1126,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1664`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1699`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1133,7 +1147,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1393`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1411`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1263,8 +1277,12 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 82 | **use `mkdir -m 700 -p` to satisfy the exact-0700 store rule** | a pre-existing `0755` store is REFUSED, not silently accepted at the wrong mode |
 | 83 | **omit ancestor creation on a clean install** | a machine with no `~/.claude/unleashed-mail` publishes on first hook run |
 | 84 | **assert arm equivalence on three variables** | all five copies also agree on `_UNLEASHED_POINTER_STATE` |
+| 85 | **leave non-ASCII bytes unescaped in the encoder** | NFC and NFD spellings of one path produce DISTINCT entries on a normalization-insensitive volume |
+| 86 | **count characters rather than bytes in the `NAME_MAX` budget** | a short multi-byte key that overflows as UTF-8 reports `failed` |
+| 87 | **verify only N1–N5** | the pointer suite N6 is required, not optional |
+| 88 | **scope the vanished-own-entry exit to the write path** | the no-write `current` path also reports `failed` when its entry is removed before the scan |
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
-| 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
+| 65 | **let `agent-env-bridge.sh` stay D′-only** | with empty `$1`, `paths.sh` absent and one valid entry, the fifth copy RESOLVES it and reports all four protocol variables — not `OK=0` |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
 | 67 | **select the ACL enumerator with `command -v` instead of `uname -s` + absolute path** | publisher and reader agree under different `PATH`s |
 | 68 | **fall back to mode bits where no enumerator exists** | an unevaluable ACL condition REFUSES, it does not accept |
@@ -1358,7 +1376,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1664` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1699` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1508,7 +1526,7 @@ Baselines at `5a532b1`: `test-hooks.sh` **304**, synthesizer **222**, scripts **
 `21/21/0/1`, hook events **10**. Floors, not equalities — re-derive and print `pwd` +
 `git rev-parse HEAD` beside any measurement.
 
-Mutation proofs **N1–N5**, each shown failing before the fix and passing after. *(Round 7: this list
+Mutation proofs **N1–N6**, each shown failing before the fix and passing after. *(Round 34, codex #3: this operative line still said N1–N5 while the amendment below it says N1–N6, so **the entire pointer mutant suite could be omitted while satisfying the literal verification rule.** Rule versus note again — the eleventh instance, and in the section that exists to enforce the others.)* *(Round 7: this list
 said N1–N4, so N5 — the one purely structural check in the set, with no behavioural counterpart —
 carried no adversarial mutant and could have shipped unproven. Its mutant is specified in §7 step 5.)*
 
@@ -1574,18 +1592,35 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ] && [ -r "$2/scripts/lib/paths.sh" ]; then
        . "$2/scripts/lib/paths.sh"
    fi
-   # ALWAYS establish the flag — the fence has no inline fallback of its own, so if the
+   # ALWAYS establish the protocol — the fence has no inline fallback of its own, so if the
    # helper returns without setting it, "unset => unresolved" would fail the fence CLOSED
    # on a perfectly valid base. Round 18.
-   if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+   #
+   # ROUND 34 (codex High #2): this branch used to consult only CLAUDE_PLUGIN_DATA and set
+   # only _UNLEASHED_BASE_OK — i.e. it was D'-ONLY. With an empty $1, paths.sh absent and one
+   # valid entry in the store, this fifth copy failed closed while the other four resolved
+   # via the entry, which is the exact contradiction N6 row 65 claims to close. The inline
+   # fallback must therefore run the SAME three-step resolution the other four carry, and
+   # establish all FOUR protocol variables, not one.
+   if [ -z "${_UNLEASHED_BASE_RESOLVED:-}" ]; then
        if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
-           _UNLEASHED_BASE_OK=1
+           _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+           _UNLEASHED_BASE_OK=1; _UNLEASHED_BASE_SOURCE=host-env
+           _UNLEASHED_POINTER_STATE=none          # this copy never publishes; see below
        else
-           _UNLEASHED_BASE_OK=0
-           printf 'unleashed-mail: plugin data dir unresolved; no state will persist\n' >&2
+           # step 2: enumerate the store and apply the ORDERED reader rules 0-4, exactly as
+           # the other four copies do. Same predicate, same order, same enum.
+           <the shared three-step resolution, inline>
        fi
    fi
    ```
+
+   **This copy resolves but does not PUBLISH**, and that asymmetry is deliberate and stated: the fence
+   runs in a Bash-tool shell whose `$1` is substituted from agent content, so a publish here would write
+   an entry on behalf of a shell that is not an authoritative hook. It therefore reports
+   `_UNLEASHED_POINTER_STATE=none` on the resolved path. **Arm equivalence is asserted on the four
+   protocol variables for the READ path only**, which is the only path this copy has. N6 row 65 is
+   re-aimed at that, and row 84 covers the fourth variable.
 
    *(Round 17, BOTH arms: the round-16 body sourced `paths.sh` **unconditionally**. In the documented
    absent-file mode that emits a raw shell error — **Bash returns 1, zsh 127** (codex measured both) — the
