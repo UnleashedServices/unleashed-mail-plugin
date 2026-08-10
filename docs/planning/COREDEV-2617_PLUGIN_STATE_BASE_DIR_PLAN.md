@@ -612,8 +612,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1267`) and its matrix change (`:1273-1277`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1300-1307`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1311`) and its matrix change (`:1317-1321`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1344-1351`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -694,6 +694,16 @@ enumerates `base.*`, authenticates each, and:
 3. **exactly one** → resolve to it, `OK=1`, `SOURCE=pointer`, `POINTER_STATE=none`;
 4. **none** → step 3 verbatim — D′'s fail-closed protocol byte for byte, `POINTER_STATE=none`.
 
+**Three further exits, each stated rather than left to an implementer** (round 31c, kimi). A reader whose
+`HOME` is unusable never scans at all and takes step 3 with `POINTER_STATE=none` — the store was never
+consulted, so there is nothing to report. A **publisher** whose post-publish scan finds a failing entry
+reports `stale` (the bullet above is reader-framed "refuse"; a publisher has already resolved and does
+not refuse, but it must still report what it saw). A publisher whose **own entry vanishes between its
+write and its scan** reports `failed` — it cannot assert `created` for a file that is no longer there,
+and an operator deleting entries mid-publish is the one cause. *(§6 requires totality to be derived from
+the exit paths; the round-30 note claiming the enum was "re-derived from D″-pf's exit paths" overstated
+what was actually written down, which is exactly the class §6 exists to catch.)*
+
 > **ROUND 31 — THE RULES WERE UNORDERED AND TWO OF THEM OVERLAPPED** (codex High #5 and gemini #2,
 > concordant). One valid entry beside one malformed entry matched *both* "exactly one" and "any entry
 > fails authentication"; two valid plus one malformed matched both `conflict` and `stale`. **Branch order
@@ -714,10 +724,26 @@ enumerates `base.*`, authenticates each, and:
 > DIRECTORY, and the encoding is byte-injective — but **macOS is case-insensitive by default**, which
 > `.github/workflows/plugin-ci.yml:419` already recognises, so `/Data/A` and `/Data/a` alias to one
 > entry: last write wins, the reader sees one authentic entry, and the loser diverges silently. The
-> encoder therefore **case-folds nothing and escapes case**: an upper-case character is encoded as a
-> two-character sequence so that distinct bases remain distinct **as pathnames**, not merely as byte
-> strings. N6 carries a case-fold collision case, which row 44 — testing substitution order — does not
-> cover.)* **So the count of distinct bases IS the count of authenticating entries** —
+> encoder therefore **case-folds nothing and escapes case**, with THREE DISJOINT MARKERS after the
+> escape character:
+>
+> ```
+> _  ->  _u          /  ->  _s          upper-case C  ->  _c<lower(C)>
+> ```
+>
+> so the output contains **no upper-case character at all** and a case-insensitive volume has nothing to
+> fold. Decoding is unambiguous: after `_` exactly one of `u`, `s`, `c` can appear, and `c` consumes one
+> further character. The substitution is a per-character walk using parameter expansion — **no fork**,
+> which is why it is a walk rather than the two `${v//…}` passes it replaces.
+>
+> **The round-31 wording said only "a two-character sequence" and did not say WHICH — and the obvious
+> choice destroys Invariant P.** Executed: with upper-case `C` encoded as `_<lower(C)>`, the marker
+> collides with the existing escapes, and `/a_b` and `/aUb` both encode to `_sa_ub` while `/a/b` and
+> `/aSb` both encode to `_sa_sb`. **Two distinct bases sharing one entry name is last-writer-wins with no
+> detection — this ticket's founding defect, reintroduced by the fix for it.** The three-marker form
+> above was executed in `/bin/bash` and `/bin/zsh` on the collision set: identical output in both shells,
+> six of six distinct, zero upper-case characters emitted. N6 carries the case-fold collision case, which
+> row 44 — testing substitution order — does not cover.)* **So the count of distinct bases IS the count of authenticating entries** —
 > no accumulator, no delimiter, no pattern matching, and no dependence on what characters a path
 > contains. N6 mutates this back to string accumulation with a space-bearing and a glob-bearing base.
 
@@ -764,7 +790,14 @@ creates, 260 fails `ENAMETOOLONG`). The publisher checks `${#_k} + 5 <= 240` **b
 path**; over budget it writes nothing, reports `failed`, and emits one diagnostic naming the length.
 Without the pre-check the failure surfaces as a generic write error and leaves a tmp file behind.
 
-**Stale entries need a human, and that is stated rather than automated.** An install that is removed
+****Crash-orphaned temporaries are inert, and that is stated rather than assumed.** A publisher killed
+between creating `.pub.<pid>.<suffix>.<key>` and renaming it leaves that file behind forever. It is
+**outside the `base.*` glob by construction**, so no reader ever enumerates it and it can never be
+mistaken for an entry — but it accumulates. It is not reaped automatically, for the same reason stale
+entries are not: any age-based rule is the heuristic round 29 refuted, and being wrong here deletes a
+live publisher's in-flight write. N6 asserts an orphaned temporary does not change any resolution.
+
+**Stale entries need a human, and that is stated rather than automated.**** An install that is removed
 leaves its entry behind, and a reader then sees two entries and refuses. There is **no safe automatic
 reaper**: a time threshold is the heuristic round 29 already refuted, and being wrong here deletes a
 live install's entry. Recovery is `rm` of the obsolete entry, named in the conflict diagnostic.
@@ -774,7 +807,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1526`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1570`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -983,7 +1016,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:1354`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1398`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1018,7 +1051,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1526`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1570`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1039,7 +1072,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1267`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1311`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -1135,7 +1168,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 46 | **drop `no_nomatch` from the scan** — run in **each of the five family files** under zsh | an empty store does not terminate the sourcing shell, in all five arms |
 | 47 | **drop bash's literal-glob `[ -e ]` guard** | an empty store yields zero entries, not one named `base.*` |
 | 48 | **treat an enumerated-then-vanished entry as malformed** | operator deletion during a scan does not report `stale` |
-| 49 | **scan before publishing** | two publishers racing a first publication still leave a durable conflict |
+| 49 | **scan before publishing** | the racing publisher REPORTS `conflict`, not `created` — the durable file set is identical under both orders, so only the reported state discriminates |
 | 50 | **create the store `mkdir` then `chmod 700`** | no window exists in which another publisher observes `0755` |
 | 51 | **put the entries directly in `~/.claude/unleashed-mail`** | publication succeeds on a `0755` `~/.claude` (this machine today) |
 | 52 | **drop the NAME_MAX pre-check** | an over-long base reports `failed` and leaves no tmp file |
@@ -1150,6 +1183,9 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 61 | **reorder the reader rules so a good entry wins over a malformed one** | one valid + one malformed entry REFUSES |
 | 62 | **revert the temp name to `$$` alone** | two same-base publishers cannot open the same temp inode |
 | 63 | **case-fold the encoding** | `/Data/A` and `/Data/a` produce distinct entries on a case-insensitive volume |
+| 69 | **encode upper-case as `_<lower>` instead of `_c<lower>`** | `/a_b` vs `/aUb`, and `/a/b` vs `/aSb`, produce DISTINCT entries |
+| 70 | **let an orphaned `.pub.*` temporary be enumerated** | a crash-orphaned temporary changes no resolution |
+| 71 | **give the harness its own copy of the chain-walk predicate** | the fixture seam feeds the SAME accessor production uses |
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
 | 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
@@ -1184,8 +1220,18 @@ clean-install case; 37-39 codex's fencing and convergence Highs; 40 the concorda
 41 the notice half of it. **Rows 33-34 were also NOT EXECUTABLE as round 28 wrote them** (codex #5): they
 prescribed `/opt/claude/data` fixtures, which need root to create, while the verification runs
 unprivileged. They now name no fixed absolute path — the harness builds the off-`${HOME}` chain under a
-temporary root and injects the ownership/mode metadata through the same seam rows 27-28 already use, so
-the pair is runnable by an ordinary uid. An unrunnable mutant is a mutant that proves nothing, which is
+temporary root, so
+the pair is runnable by an ordinary uid.
+
+**Round 31c (kimi): "the same seam rows 27-28 already use" named a mechanism that does not exist.**
+Grepped: zero hits for any injection seam anywhere in this plan. Rows 27-28 need none — the real `/` and
+`/Users` are genuinely root-owned, so those cases run against the live filesystem — while rows 33-34 and
+the new off-`${HOME}` cases DO need root-owned components an unprivileged test cannot create. **So the
+seam is specified here rather than invoked:** the chain-walk predicate takes its per-component
+ownership/mode facts from a single accessor, and the harness substitutes a fixture table for that
+accessor. One accessor, used by production and by the harness, so a test cannot pass against a predicate
+production does not run. *(An appeal to a mechanism that does not exist is the same class as the four
+fabricated citations — specific enough to read as verified.)* An unrunnable mutant is a mutant that proves nothing, which is
 this plan's own round-8 lesson about the physically-impossible canary.)*
 
 *(Rows 33-34 are round-28 additions pinning the two halves of the trust anchor where the target does
@@ -1232,7 +1278,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1526` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1570` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
