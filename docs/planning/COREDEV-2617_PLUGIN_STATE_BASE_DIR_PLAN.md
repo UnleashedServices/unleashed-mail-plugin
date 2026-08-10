@@ -605,8 +605,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1139`) and its matrix change (`:1145-1149`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1172-1179`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1181`) and its matrix change (`:1187-1191`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1214-1221`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -731,7 +731,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1396`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1438`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -777,32 +777,70 @@ hold, and falls through to step 3 otherwise:
   > off-`${HOME}` target with a **user-writable intermediate** REFUSE case; without the second, the
   > empty-set reading would pass unnoticed.
   >
-  > **AUTHENTICATED IS NOT THE SAME AS USABLE — and round 28 conflated them** (round 29, gemini #1). The
-  > round-28 text accepted an all-root-owned target and added that it *"is not writable by this uid —
-  > which the follower discovers when its write fails"*. **That is the wrong contract.** Returning
-  > `OK=1` with `SOURCE=pointer` tells every consumer in the family that state may be persisted;
-  > `marker_write`, `log_append` and the snapshot writers then attempt writes that fail with unhandled
-  > errors, on a path the resolver has just certified. "The follower discovers when its write fails" is a
-  > description of the defect, not a design. **A target must additionally be writable by the effective
-  > uid; if it is not, authentication fails and the resolution falls to step 3** — sentinel, `OK=0`, one
-  > diagnostic, which is the state that honestly describes "no state can be persisted here". N6 carries a
-  > readable-but-unwritable target REFUSE case.
+  > **WRITABILITY IS NOT AUTHENTICATION — round 29's requirement is WITHDRAWN** (round 30, codex High #3
+  > accepted, gemini #1 refuted by measurement). Round 29 required the target to be writable by the
+  > effective uid, else fail closed, on gemini's reasoning that otherwise *"`marker_write`, `log_append`
+  > and the snapshot writers attempt writes that fail with unhandled errors"*. **Measured at `6911ec1`:
+  > they do not.** Every writer is already fail-open on write failure —
+  > `marker.sh:147` `mkdir -p "$dir" 2>/dev/null || return 0`, `:156` `printf … > "$tmp" … || { rm -f;
+  > return 0; }`, `:157` `mv … || { rm -f; return 0; }`, and `log.sh` the same on `mkdir`, the append and
+  > the rotate. An unwritable base therefore produces **silent no-ops**, not errors, not a crash, and not
+  > an aborted hook — the behaviour `paths.sh:17-20` mandates.
   >
-  > **macOS ACLs are OUT OF SCOPE, and that is a decision rather than an oversight** (round 29, codex
-  > High #3). The predicate tests ownership, mode bits and symlinks. On macOS — this plugin's primary
-  > platform — ACLs supplement the BSD permission bits, so a root-owned `0755` prefix carrying an ACL
-  > that grants another uid write access **passes every clause above** while that uid can still replace a
-  > validated descendant before the later open. The mode-bit test does not see it. Two honest options
-  > exist: enumerate ACLs during authentication, or state the limit. **This plan takes the second**, because
-  > the first requires a portable ACL query the shell family does not have (`ls -le` is BSD-only and
-  > unparsed anywhere in this repo), and a half-implemented ACL check would read as protection while
-  > providing none. **So the stated trust assumption is narrowed in place:** authentication defends
-  > against *same-uid accident and mode-bit misconfiguration*, and **does not defend against an attacker
-  > who already holds an ACL grant on an ancestor of the plugin data directory** — an attacker who, on
-  > this platform, already has write access to the user's files by other routes. This limit is recorded
-  > in §5's risk register rather than left to be rediscovered, and **COREDEV-2617a** is filed for the ACL
-  > enumeration. An unstated limit is the failure mode this ticket keeps hitting; a stated one is a
-  > boundary.
+  > codex's High #3 is nonetheless right, and sharper than the fix it prompted: writability was checked
+  > **at the wrong level** (writes land in `.state`, `logs` and `reviews`, per `marker_dir()`,
+  > `log_dir()` and `context_state_dir()`), and a base-level test is *"neither necessary nor sufficient"*
+  > — a `0555` base with good state directories is usable and would have been refused, while a writable
+  > base with an unwritable `.state` would have passed and still persisted nothing. **The correct
+  > conclusion is not a better usability predicate; it is that usability does not belong in
+  > authentication at all.** Authentication answers *may I trust this path* — ownership, symlinks, modes,
+  > the chain. Usability is answered correctly at each write site already, and any point-in-time `-w`
+  > check is a TOCTOU that proves nothing about the write that follows it.
+  >
+  > Two attempts to specify the usability predicate were built and both were broken by execution: one
+  > **refused the very case codex said must be accepted**, because `reviews` is created lazily by
+  > `scripts/capture-reviewer-verdict.sh` and is absent on any install that has never run a reviewer
+  > subagent; and under `umask 002` every creator in the write-set yields `0775`, so **the family
+  > bootstraps into a base its own rule then permanently refuses.** Two failed attempts at a predicate
+  > nothing needed is the signal that the requirement was wrong, not the predicate.
+  >
+  > **So: no writability clause.** N6 row 35 is re-aimed — an unwritable target **still resolves**, and
+  > its writes no-op silently rather than aborting the sourcing shell.
+
+  > **macOS ACLs — REFUSE ON A GRANTING ACE. Round 29's out-of-scoping is reversed** (round 30, codex
+  > High #4). Round 29 accepted ACLs as an unexamined limit, arguing an attacker holding a write-capable
+  > ACE on an ancestor *"already has access to the user's files by other routes"*. **That is false in
+  > general** — an ACE can be scoped to exactly one directory — and this plan itself calls
+  > pointer-following a prompt-injection path, so knowingly following a path another uid may replace
+  > contradicts its own threat model. Accepting was the wrong call.
+  >
+  > **But "any ACE ⇒ refuse" is also wrong, and measured so.** On this machine `ls -lde "$HOME"` shows
+  > `0: group:everyone deny delete` — a **deny** entry, which *restricts* access and makes the path
+  > safer. A blanket rule would refuse the maintainer's own home directory. The distinction is the rule:
+  >
+  > **Refuse if any component of either chain carries an `allow` ACE naming a principal other than the
+  > effective user. Ignore `deny` entries entirely** — they cannot grant the write this rule exists to
+  > prevent. Enumeration is `ls -lde` on Darwin (ACE lines are ` <n>: <principal> <allow|deny> <perms>`,
+  > so this is string matching, not ACL semantics); on other platforms `getfacl` where present.
+  >
+  > **Three constraints the previous attempt violated, each now binding.** (a) **The probe writes
+  > nothing.** The earlier spec probed by *writing into the attacker-chosen path*, contradicting N1/N2's
+  > *"when resolution fails, no plugin-state payload is read or written anywhere"*. (b) **The rule may
+  > not depend on any variable that differs between publisher and reader.** The earlier spec admitted a
+  > root conditional on `CLAUDE_CONFIG_DIR`; the publisher is a hook and the reader is a git hook, so it
+  > was measured to ACCEPT for the publisher and REFUSE for the reader — a pointer published silently
+  > that no reader can authenticate, which is verbatim the `0644` defect this plan already fixed by
+  > requiring **one predicate used by both sides**. (c) **Refusal is a resolution outcome, not a special
+  > case:** it falls to step 3 — sentinel, `OK=0`, `POINTER_STATE=stale`, one diagnostic — so it needs no
+  > new enum value and cannot collide with the conflict rule.
+  >
+  > **Where ACLs cannot be enumerated at all, the mode bits are authoritative and the plan says so.**
+  > `getfacl` is absent on this machine and CI runs Linux, where the harness exports its own
+  > `CLAUDE_PLUGIN_DATA` (`test-hooks.sh:31-35`) and never takes the pointer path — so failing closed
+  > there would cost nothing real but would also prove nothing. Stating the limit is the honest option,
+  > and **§5 carries it as a risk row rather than leaving it to be rediscovered.** N6 carries a granting-ACE
+  > REFUSE case, a deny-ACE ACCEPT case (without which the blanket rule regresses), and a case asserting
+  > the probe creates no file.
 * it is not marked conflicted.
 
 > **Why the whole target chain, and not just the target** (round 23, codex #5). The round-21 text called
@@ -879,7 +917,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:1226`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1268`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -914,7 +952,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1396`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1438`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -935,7 +973,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1139`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1181`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -1023,7 +1061,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 28 | **accept a group-writable system prefix** | writable `/` refused |
 | 33 | **accept an off-`${HOME}` target with a user-writable intermediate** | target under a `0777` ancestor refused |
 | 34 | **require euid ownership of an all-root off-`${HOME}` target** | an all-root-owned system target authenticates |
-| 35 | **accept a readable but UNWRITABLE target** | unwritable target ⇒ step 3, `OK=0` — not `OK=1` |
+| 35 | **refuse a readable but UNWRITABLE target** | unwritable target still resolves, `OK=1`; its writes no-op and the sourcing shell survives |
 | 42 | **accumulate distinct targets as a space-delimited string** | a base containing a space, and one containing a glob char, each counted as ONE distinct base |
 | 43 | **count entries without the name↔content check** | an entry whose name does not encode its content is refused, not counted |
 | 44 | **swap the encoder's substitution order** | `/a/b` and `/a_sb` produce DIFFERENT entry names |
@@ -1037,6 +1075,10 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 52 | **drop the NAME_MAX pre-check** | an over-long base reports `failed` and leaves no tmp file |
 | 53 | **let a publisher write an entry that is not its own key** | a publisher touches only `base.<key(its value)>` and its own tmp |
 | 54 | **remove the harness `HOME` sandbox** | the developer's real store is byte-identical after `test-hooks.sh` |
+| 55 | **ignore ACLs entirely** | a component carrying an `allow` ACE for another principal is REFUSED |
+| 56 | **refuse on any ACE, `deny` included** | `$HOME`'s real `group:everyone deny delete` still ACCEPTS |
+| 57 | **let the ACL probe write a test file** | refusal path creates nothing anywhere |
+| 58 | **admit a root conditional on `CLAUDE_CONFIG_DIR`** | publisher and reader reach the SAME verdict in different environments |
 
 > **ROUND 30 — THIRTEEN ROWS WERE RETIRED, AND WHY MATTERS AS MUCH AS WHICH.** Rows **15, 16, 17, 29,
 > 30, 31, 32, 36, 37, 38, 39, 40, 41** are gone. Every one of them mutated a mechanism D″-pf **deletes**:
@@ -1104,7 +1146,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1396` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1438` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1218,7 +1260,7 @@ with its own inventory.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| **The trust predicate does not see macOS ACLs** | **Medium** | **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
+| **ACLs cannot be enumerated on every platform** | **Low** | **Round 30 — round 29's blanket acceptance is REVERSED; only the unenumerable case remains a limit.** Darwin refuses any component carrying an `allow` ACE for another principal (`deny` ignored — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists the mode bits are authoritative and that is stated rather than hidden; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
 | The fix breaks the fail-open property of hooks | **High** | §4.3 keeps the absent-`paths.sh` fallback; A is rejected for the hook path |
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
