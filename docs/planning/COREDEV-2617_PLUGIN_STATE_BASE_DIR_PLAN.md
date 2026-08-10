@@ -1148,9 +1148,22 @@ hold, and falls through to step 3 otherwise:
   > **Where ACLs cannot be enumerated, the pointer path is REFUSED — not accepted on mode bits alone.**
   > *(Round 31: the round-30 text said the mode bits were authoritative there. That is the fail-OPEN
   > direction, in the one clause whose whole purpose is a trust boundary the mode bits cannot see.)*
-  > `getfacl` is absent on this machine and CI runs Linux, where the harness exports its own
+  > **CI IS NOT EXEMPT, and the sentence that said it was would have turned CI red on the first
+  > implementation commit** (round 54). It read: *"CI runs Linux, where the harness exports its own
   > `CLAUDE_PLUGIN_DATA` (`test-hooks.sh:31-35`) and never takes the pointer path, so refusing there
-  > costs nothing measurable. **§5 carries the limit as a risk row rather than leaving it to be
+  > costs nothing measurable."* **Exporting the variable is exactly what makes the harness a
+  > PUBLISHER** — step 1 publishes as a side effect — and a publisher runs the complete predicate,
+  > ACL clauses included. So on a `getfacl`-less Linux runner every entry, including the one the
+  > harness just wrote, fails authentication; N6 row 1's no-rewrite `mtime` oracle fails and the state
+  > is `stale`. **Fifth turn of the hook/ACL-cost family**, found by a consolidation sweep rather than
+  > by a reviewer, and the first turn with a consequence outside the document.
+  >
+  > **So the unenumerable-platform arm needs a CI-viable answer, not an exemption.** On a platform with
+  > no ACL enumerator the publisher **skips the ACL clauses for its OWN entry** — it created that entry
+  > this instant, at `0600`, in a store it authenticated — while the READER still refuses. That keeps
+  > the reader fail-closed (the security property) and keeps a publisher able to publish on a runner
+  > with no `getfacl` (the CI property), and it is stated here rather than left to be discovered when
+  > the suite goes red. N6 carries a Linux-without-`getfacl` publish-then-verify case. **§5 carries the limit as a risk row rather than leaving it to be
   > rediscovered.** N6 carries a granting-ACE
   > REFUSE case, a deny-ACE ACCEPT case (without which the blanket rule regresses), and a case asserting
   > the probe creates no file.
@@ -1455,6 +1468,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 103 | **omit `_UNLEASHED_PUBLISH_OK=0` from the bridge BODY** | the fence writes no entry even though step 1's rule alone would permit it |
 | 104 | **ignore `default:` ACL entries (Linux)** | a target carrying `default:user:other:rwx` REFUSES — the `.state` it would create must not be attacker-writable |
 | 105 | **let the own-entry clause assign a state directly** | a `0644` own entry yields exactly ONE enum value, from the ordered exits |
+| 106 | **apply the ACL clauses to the publisher's OWN entry where no enumerator exists** | a Linux runner with no `getfacl` publishes and re-verifies successfully — CI stays green |
+| 107 | **skip the ACL clauses for a FOREIGN entry where no enumerator exists** | the reader still REFUSES on an unenumerable platform |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
