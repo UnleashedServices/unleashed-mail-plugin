@@ -628,8 +628,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1350`) and its matrix change (`:1356-1360`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1383-1390`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1365`) and its matrix change (`:1371-1375`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1398-1405`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -665,7 +665,15 @@ ${HOME}/.claude/unleashed-mail/bases/base.<key>      key = an injective encoding
 ${HOME}/.claude/unleashed-mail/bases/.pub.<pid>.<uniq>.<key>  transient; outside the base.* glob by construction
 ```
 
-**Invariant P — the name is a pure function of the bytes.** `_k=${_v//_/_u}` then `_k=${_k//\//_s}`.
+**Invariant P — the name is a pure function of the bytes.** A per-character walk with **three disjoint
+markers**: `_` → `_u`, `/` → `_s`, upper-case `C` → `_c<lower(C)>`. The output therefore contains **no
+upper-case character**, so a case-insensitive volume has nothing to fold. No fork: the lower-casing is a
+`case` arm per letter, not `tr` and not bash-4's `${x,,}` (this repo's floor is bash 3.2.57).
+
+*(**Round 33 — this normative statement carried the round-30 two-pass form for THREE rounds** after
+round 31c proved it aliases. The 31c fix went into the note; the 32b fix that was meant to correct the
+rule **was discarded by an aborted edit script and I committed a message saying otherwise**. Both
+failures are the same one: the rule is the code block, not the paragraph under it.)*
 Escape the escape character **first**: measured, the swapped order maps both `/a/b` and `/a_sb` to
 `_usa_usb`, and a collision is two bases sharing one entry — last-writer-wins with no detection, the
 exact defect this design exists to remove. Two portability traps, both measured, both silent:
@@ -700,7 +708,11 @@ enumerates `base.*`, authenticates each, and:
 
 **The rules are ORDERED and the order is normative** — evaluate top to bottom, first match wins:
 
-1. **any entry fails authentication** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
+0. **an entry enumerated but gone when opened** → **skip it; it is not an entry.** *(This rule lived
+   only in prose below the list, so rule 1 matched the vanished entry first and an operator deleting a
+   stale entry mid-scan flipped a healthy store to `stale`. A rule that qualifies an ordered list must
+   live IN it.)*
+1. **any remaining entry fails authentication** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
    `POINTER_STATE=stale`, one diagnostic. *A malformed entry is never ignored in favour of a good one.*
 2. **two or more authenticating entries** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
    `POINTER_STATE=conflict`, one diagnostic naming **neither the targets nor the entry names, only how
@@ -785,7 +797,10 @@ the conflict to survive** — which is precisely why the sticky marker could be 
 **Enumeration is safe at source time in both shells — and this is the one construct that can kill the
 sourcing shell.** Measured: an unmatched `for _f in "$d"/base.*` under zsh 5.9 prints `no matches found`
 and **terminates the script**, which is every machine before its first publication. `setopt
-local_options no_nomatch` inside the scanning function suppresses it and zsh restores the option at
+local_options no_nomatch` — **guarded by `[ -n "${ZSH_VERSION:-}" ]`, because `setopt` is a zsh builtin
+and bash reports `command not found`, which under the `set -euo pipefail` these libs are sourced with
+aborts the sourcing shell in exactly the arm the guard protects** — inside the scanning function
+suppresses it, and zsh restores the option at
 function return — verified by execution, including that a later top-level glob still aborted, proving
 the option did not leak. bash instead leaves the pattern literal, so `[ -e "$_f" ] || continue` is
 required in **both** arms. **This ships in five copies, so N6 asserts the empty-store case under zsh for
@@ -827,7 +842,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1621`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1636`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1042,7 +1057,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1449`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1464`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1077,7 +1092,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1621`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1636`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1098,7 +1113,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1350`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1365`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1315,7 +1330,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1621` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1636` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
