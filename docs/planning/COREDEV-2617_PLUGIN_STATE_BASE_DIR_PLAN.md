@@ -386,11 +386,21 @@ cache-root/`--plugin-dir` ambiguity in exchange for a contract that is not curre
 > build it. Framing it honestly costs nothing and prevents the severity from doing argumentative work
 > the evidence cannot.
 >
-> **Acceptance criterion, so "done" is decidable rather than argued:** a shell with no
-> `CLAUDE_PLUGIN_DATA` and no hook environment resolves the *same* base a hook resolves, or fails
-> closed with one diagnostic and `OK=0` — with N6's mutant set green, and with **no change to D′'s
-> behaviour when the variable is set** (row 19 is the standing guard on that). Anything short of this
-> is not a partial success; it is the ambiguous second store this ticket exists to remove.
+> **Acceptance criterion, so "done" is decidable rather than argued.** All three conjuncts, not any one
+> of them:
+>
+> 1. **The capability works.** On a machine where an authoritative hook has published, a shell with no
+>    `CLAUDE_PLUGIN_DATA` and no hook environment resolves **the same base that hook resolves**.
+> 2. **It fails closed everywhere else.** With nothing published, or with a store the reader cannot
+>    authenticate, that shell reaches the sentinel with `OK=0` and one diagnostic.
+> 3. **D′ is untouched when the variable is set** (row 19 is the standing guard).
+>
+> …with N6's mutant set green.
+>
+> *(**Round 32c — the round-29 wording was a DISJUNCTION, and its second arm is D′'s shipped behaviour**,
+> so "done" was satisfiable by changing no code at all. A criterion written to make completion decidable
+> that is satisfied by the status quo is worse than none: it reads as a bar while certifying whatever
+> exists. Conjunction, and the first conjunct is the capability actually working.)*
 
 **Round 28 gated this section; both arms returned `REQUEST_CHANGES` and their findings are applied
 below as round 29.** Round 20's findings were applied as round 21, and its open question is CLOSED —
@@ -618,8 +628,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1334`) and its matrix change (`:1340-1344`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1367-1374`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1350`) and its matrix change (`:1356-1360`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1383-1390`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -652,7 +662,7 @@ Each publisher writes exactly one file:
 
 ```
 ${HOME}/.claude/unleashed-mail/bases/base.<key>      key = an injective encoding of the base value
-${HOME}/.claude/unleashed-mail/bases/.pub.<pid>.<key>  transient; outside the base.* glob by construction
+${HOME}/.claude/unleashed-mail/bases/.pub.<pid>.<uniq>.<key>  transient; outside the base.* glob by construction
 ```
 
 **Invariant P — the name is a pure function of the bytes.** `_k=${_v//_/_u}` then `_k=${_k//\//_s}`.
@@ -678,7 +688,7 @@ section, so there is nothing to serialise, nothing to release, and no trap.
 > **The temporary name must not use `$$` alone.** Measured: concurrent subshells inherit the **same
 > `$$`** in both bash and zsh, so two same-base publishers could open the same temp inode and one could
 > rename it away while the other was still writing — reintroducing the torn read the tmp+`mv` idiom
-> exists to prevent. The temp name is `.pub.<pid>.<monotonic-unique-suffix>.<key>`, where the suffix is
+> exists to prevent. The temp name is `.pub.<pid>.<uniq>.<key>`, where the suffix is
 > derived without a fork and without `$RANDOM` (absent in POSIX `sh`); a publisher that cannot obtain a
 > unique temp name **does not publish** and reports `failed`. N6 carries a same-base concurrent-publish
 > case and a mutant that reverts the temp name to `$$` alone.
@@ -693,7 +703,11 @@ enumerates `base.*`, authenticates each, and:
 1. **any entry fails authentication** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
    `POINTER_STATE=stale`, one diagnostic. *A malformed entry is never ignored in favour of a good one.*
 2. **two or more authenticating entries** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
-   `POINTER_STATE=conflict`, one diagnostic **naming the entries, never the raw targets** — §4.1 permits
+   `POINTER_STATE=conflict`, one diagnostic naming **neither the targets nor the entry names, only how
+   many entries disagree**, and telling the operator to list the store themselves. *(Round 32c: the
+   round-31 rule said "naming the entries, never the raw targets" — but Invariant P makes the entry name
+   a **lossless, trivially reversible** encoding of the absolute path (`_s` → `/`), so it leaks exactly
+   what naming the target would. The redaction was cosmetic and row 64's oracle passed on it.)* §4.1 permits
    the raw path only inside the control file and states it is never emitted to stderr, so a conflict
    message quoting two absolute paths would leak the username and hand attacker-controlled text to a
    terminal (round 31, codex #8). N6 carries a redaction mutant;
@@ -797,7 +811,7 @@ path**; over budget it writes nothing, reports `failed`, and emits one diagnosti
 Without the pre-check the failure surfaces as a generic write error and leaves a tmp file behind.
 
 ****Crash-orphaned temporaries are inert, and that is stated rather than assumed.** A publisher killed
-between creating `.pub.<pid>.<suffix>.<key>` and renaming it leaves that file behind forever. It is
+between creating `.pub.<pid>.<uniq>.<key>` and renaming it leaves that file behind forever. It is
 **outside the `base.*` glob by construction**, so no reader ever enumerates it and it can never be
 mistaken for an entry — but it accumulates. It is not reaped automatically, for the same reason stale
 entries are not: any age-based rule is the heuristic round 29 refuted, and being wrong here deletes a
@@ -813,7 +827,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1605`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1621`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1028,7 +1042,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1433`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1449`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1063,7 +1077,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1605`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1621`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1084,7 +1098,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1334`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1350`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1207,6 +1221,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 75 | **use the two-pass `${v//…}` encoder** (the pre-31c normative form) | `/Data/A` and `/Data/a` produce distinct entries |
 | 76 | **select the platform with a bare `uname`** | publisher and reader agree under different `PATH`s |
 | 77 | **move the vanished-entry skip below rule 1** | an operator deleting an entry mid-scan does not flip a healthy store to `stale` |
+| 78 | **satisfy the acceptance criterion with D′ unchanged** | conjunct 1 fails — a non-hook shell must resolve the SAME base a hook resolved |
+| 79 | **name entry names in the conflict diagnostic** | no path material, reversible or otherwise, reaches stderr |
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
 | 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
@@ -1299,7 +1315,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1605` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1621` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
