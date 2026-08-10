@@ -645,8 +645,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1536`) and its matrix change (`:1542-1546`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1569-1576`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1537`) and its matrix change (`:1543-1547`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1570-1577`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -825,7 +825,8 @@ what was actually written down, which is exactly the class §6 exists to catch.)
 >
 > so the output contains **no upper-case character at all** and a case-insensitive volume has nothing to
 > fold. Decoding is unambiguous: after `_` exactly one of `u`, `s`, `c` can appear, and `c` consumes one
-> further character. The substitution is a per-character walk using parameter expansion — **no fork**,
+> further character. The substitution is the walk **Invariant P defines** — see there, and nowhere else,
+> for whether it is a byte or character walk — using parameter expansion, **no fork**,
 > which is why it is a walk rather than the two `${v//…}` passes it replaces.
 >
 > **It is a BYTE walk, under `LC_ALL=C`, and both halves are load-bearing** (round 36, codex High #2).
@@ -920,7 +921,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1877`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1888`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1197,7 +1198,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1635`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1636`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1232,7 +1233,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1877`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1888`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1253,7 +1254,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1536`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1537`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1501,7 +1502,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1877` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1888` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1652,11 +1653,20 @@ Baselines at `5a532b1`: `test-hooks.sh` **304**, synthesizer **222**, scripts **
 `git rev-parse HEAD` beside any measurement.
 
 **Source-time budget (round 44).** The resolver is sourced by five libraries in every hook, so its cost
-is asserted, not assumed: **a HOOK resolution performs zero `ls -lde`/`getfacl` invocations** (it takes
-step 1 and never authenticates a store), and a **READER resolution stays under 50 ms wall-clock** on the
-reference machine with a two-entry store. A run outside the budget fails verification. *(Round 44: §4.2a
-promised "§6 carries a timing assertion … the reader path must stay under the budget §6 sets" and §6 set
-none — the fourth note in this document asserting content in another section that was never added.)*
+is asserted, not assumed — and it is **derived from the predicate rule, not stated independently of
+it**. A publisher runs the complete follower predicate, ACL clauses included (§4.2a), so a hook pays the
+ACL cost too; the budget therefore bounds **how many times** that walk runs, not whether it runs: **at
+most one ACL walk per PROCESS**, because the protocol variables are set once and the five sourced
+libraries share them. A **READER** resolution stays under 50 ms wall-clock on the reference machine with
+a two-entry store. A run outside the budget fails verification.
+
+> **ROUND 46 — the round-44 budget said "a HOOK resolution performs zero `ls -lde`/`getfacl`
+> invocations", re-asserting in §6 the exact claim round 40 withdrew in §4.2a.** Third occurrence of
+> this oscillation: round 35 asserted it, round 40 withdrew it, round 44 restored it one section away.
+> A budget stated independently of the rule it prices will drift from it; this one is now written as a
+> consequence of the rule. *(The superseded wording added "it takes step 1 and never authenticates a
+> store" — false, because a publisher authenticates the entry it is about to leave. Round 44's own note
+> stands: §4.2a had promised a §6 budget that §6 never set, the fourth such absent-edit claim.)*
 
 Mutation proofs **N1–N6**, each shown failing before the fix and passing after. *(Round 34, codex #3: this operative line still said N1–N5 while the amendment below it says N1–N6, so **the entire pointer mutant suite could be omitted while satisfying the literal verification rule.** Rule versus note again — the eleventh instance, and in the section that exists to enforce the others.)* *(Round 7: this list
 said N1–N4, so N5 — the one purely structural check in the set, with no behavioural counterpart —
@@ -1697,7 +1707,8 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    > design moved and the section that tells someone how to build it did not.)*
 
    **3a. The store and the encoder.** `bases/` created `0700`, ancestor created if missing; the
-   per-character walk with four markers (`_u`, `_s`, `_c`, `_x`); the `NAME_MAX` budget against the
+   walk **exactly as Invariant P defines it** (byte walk, `LC_ALL=C`, four markers); the `NAME_MAX`
+   budget against the
    **temp** name. Prove injectivity first — rows 43, 63, 69, 75, 85, 86 — because every later step
    assumes it.
 
