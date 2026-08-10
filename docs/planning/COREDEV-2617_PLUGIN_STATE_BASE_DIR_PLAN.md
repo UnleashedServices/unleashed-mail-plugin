@@ -659,8 +659,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1579`) and its matrix change (`:1585-1589`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1612-1619`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1584`) and its matrix change (`:1590-1594`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1617-1624`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -945,7 +945,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1938`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1943`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1118,13 +1118,18 @@ hold, and falls through to step 3 otherwise:
   >
   > **The cost is real and is stated rather than discovered.** One `uname` plus one `ls -lde` per
   > component of two chains is roughly a dozen forks **per resolution**, on the same source-time path
-  > where the encoder is forbidden a single fork. That asymmetry is deliberate — the encoder runs on
-  > every load in five files, whereas ACL enumeration runs only on the **reader** path, which is taken
-  > only when `CLAUDE_PLUGIN_DATA` is unset. **A hook pays the ACL cost too**, because it runs the same
-  > complete predicate before leaving an entry — the sentence that stood here said "a hook pays zero",
-  > which round 40 withdrew one paragraph above while leaving this copy asserting it. §6 carries a
-  > timing assertion so the claim is measured rather than asserted: the reader path must stay under the
-  > budget §6 sets, or the design is wrong about its own cost.
+  > where the encoder is forbidden a single fork. That asymmetry is deliberate: the encoder runs on
+  > **every load in five files**, whereas the ACL walk runs **once per process**, on **both** the
+  > publisher and the reader paths — a publisher authenticates the entry it is about to leave, so a hook
+  > pays it too. §6's budget is therefore stated for both paths, and is measured rather than asserted.
+  >
+  > *(Round 52, codex and gemini CONCORDANTLY: a third sentence in this paragraph still said "ACL
+  > enumeration runs only on the **reader** path, which is taken only when `CLAUDE_PLUGIN_DATA` is
+  > unset" — flatly contradicting the two sentences around it and licensing a publisher to skip ACL
+  > validation entirely. **Fourth recurrence of this one family.** Rounds 40, 46 and 48 each edited the
+  > sentences a reviewer cited and left the others in the same paragraph. The rule that follows from it
+  > is now applied here: when a finding names a contradiction, reconcile EVERY sentence in the enclosing
+  > block, not the two lines cited.)*
   >
   > Selecting on `uname -s` and invoking by absolute path makes the verdict a property of the **machine**
   > rather than of the invoking shell's environment, which is what "one predicate, both sides" requires.
@@ -1238,7 +1243,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1678`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1683`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1273,7 +1278,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1938`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1943`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1294,7 +1299,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1579`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1584`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1391,7 +1396,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 44 | ~~swap the encoder's substitution order~~ **RETIRED round 34 — equivalent mutant.** Executed against the per-character walk in both shells: reordering the `case` arms produced byte-identical output for all seven collision-set values, so the row passed with the mutation applied. Injectivity is covered by rows 43, 63, 69 and 75 |
 | 45 | **derive the key with command substitution** | the ENCODER forks zero times — scoped to the key derivation, not to the whole resolution, which forks for the ACL enumerator |
 | 46 | **drop `no_nomatch` from the scan** — run in **each of the five family files** under zsh | an empty store does not terminate the sourcing shell, in all five arms |
-| 47 | **drop bash's literal-glob `[ -e ]` guard** | an empty store yields zero entries **and no diagnostic** — the literal `base.*` must not reach rule 0, which would silently skip it and hide the missing guard |
+| 47 | ~~drop bash's literal-glob `[ -e ]` guard~~ **RETIRED round 52 — equivalent mutant.** Round 36 gave rule 0 the test `[ ! -L ] && [ ! -e ]`, which skips the unmatched literal `base.*` whether or not the guard is present, so the mutation changes no observable. Rule 0 now carries the obligation |
 | 48 | **treat an enumerated-then-vanished entry as malformed** | operator deletion during a scan does not report `stale` |
 | 49 | **scan before publishing** | the racing publisher REPORTS `conflict`, not `created` — the durable file set is identical under both orders, so only the reported state discriminates |
 | 50 | **create the store `mkdir` then `chmod 700`** | no window exists in which another publisher observes `0755` |
@@ -1430,7 +1435,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 83 | **omit ancestor creation on a clean install** | a machine with no `~/.claude/unleashed-mail` publishes on first hook run |
 | 84 | **assert arm equivalence on three variables** | all five copies also agree on `_UNLEASHED_POINTER_STATE` |
 | 85 | **leave non-ASCII bytes unescaped in the encoder** | NFC and NFD spellings of one path produce DISTINCT entries on a normalization-insensitive volume |
-| 86 | **count characters rather than bytes in the `NAME_MAX` budget** | a short multi-byte key that overflows as UTF-8 reports `failed` |
+| 86 | ~~count characters rather than bytes in the NAME_MAX budget~~ **RETIRED round 52 — equivalent mutant.** Invariant P guarantees an ASCII-only key, so character and byte counts necessarily coincide and the mutation is a no-op. The property it aimed at is now structural (the encoder cannot emit a multi-byte character), not testable by mutation |
 | 87 | **verify only N1–N5** | the pointer suite N6 is required, not optional |
 | 88 | **scope the vanished-own-entry exit to the write path** | the no-write `current` path also reports `failed` when its entry is removed before the scan |
 | 89 | **apply only the entry clauses in rules 1-3** | an entry whose TARGET chain fails is refused, not resolved |
@@ -1544,7 +1549,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1938` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1943` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
