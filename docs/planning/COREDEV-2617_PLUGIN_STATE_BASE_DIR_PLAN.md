@@ -612,8 +612,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1242`) and its matrix change (`:1248-1252`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1275-1282`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1267`) and its matrix change (`:1273-1277`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1300-1307`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -774,7 +774,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1501`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1526`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -864,7 +864,28 @@ hold, and falls through to step 3 otherwise:
   > **Refuse if any component of either chain carries an `allow` ACE naming a principal other than the
   > effective user. Ignore `deny` entries entirely** — they cannot grant the write this rule exists to
   > prevent. Enumeration is `ls -lde` on Darwin (ACE lines are ` <n>: <principal> <allow|deny> <perms>`,
-  > so this is string matching, not ACL semantics); on other platforms `getfacl` where present.
+  > so this is string matching, not ACL semantics).
+  >
+  > **The enumerator is selected by PLATFORM and invoked by ABSOLUTE PATH — never by tool discovery**
+  > (round 31, codex High #7). Two defects in the round-30 wording: *"`getfacl` where present"* left the
+  > non-Darwin grammar unspecified — **POSIX `getfacl` has no `allow`/`deny` tokens at all**, so a rule
+  > written in Darwin's vocabulary is undefined there — and *"where present"* resolves through `PATH`,
+  > which differs between a plugin hook and a git hook, so **one machine could reach two verdicts**,
+  > breaking the same-predicate constraint this section states two paragraphs below by way of its own
+  > enumerator.
+  >
+  > * **Darwin** (`uname -s` = `Darwin`): `/bin/ls -lde <path>`; refuse on an `allow` line whose
+  >   principal is not the effective user.
+  > * **Linux** (`uname -s` = `Linux`): `/usr/bin/getfacl -pc <path>`; the grammar is different and is
+  >   specified rather than assumed — refuse on any `user:<name>:` or `group:<name>:` entry carrying `w`
+  >   with `<name>` non-empty (a named principal beyond the owner and owning group), **and** a `mask::`
+  >   line permitting `w`.
+  > * **Any other platform, or the expected enumerator missing at its absolute path:** the condition is
+  >   **unevaluable**, so the pointer path is refused — sentinel, `OK=0`, `POINTER_STATE=stale`, one
+  >   diagnostic.
+  >
+  > Selecting on `uname -s` and invoking by absolute path makes the verdict a property of the **machine**
+  > rather than of the invoking shell's environment, which is what "one predicate, both sides" requires.
   >
   > **Three constraints the previous attempt violated, each now binding.** (a) **The probe writes
   > nothing.** The earlier spec probed by *writing into the attacker-chosen path*, contradicting N1/N2's
@@ -877,11 +898,13 @@ hold, and falls through to step 3 otherwise:
   > case:** it falls to step 3 — sentinel, `OK=0`, `POINTER_STATE=stale`, one diagnostic — so it needs no
   > new enum value and cannot collide with the conflict rule.
   >
-  > **Where ACLs cannot be enumerated at all, the mode bits are authoritative and the plan says so.**
+  > **Where ACLs cannot be enumerated, the pointer path is REFUSED — not accepted on mode bits alone.**
+  > *(Round 31: the round-30 text said the mode bits were authoritative there. That is the fail-OPEN
+  > direction, in the one clause whose whole purpose is a trust boundary the mode bits cannot see.)*
   > `getfacl` is absent on this machine and CI runs Linux, where the harness exports its own
-  > `CLAUDE_PLUGIN_DATA` (`test-hooks.sh:31-35`) and never takes the pointer path — so failing closed
-  > there would cost nothing real but would also prove nothing. Stating the limit is the honest option,
-  > and **§5 carries it as a risk row rather than leaving it to be rediscovered.** N6 carries a granting-ACE
+  > `CLAUDE_PLUGIN_DATA` (`test-hooks.sh:31-35`) and never takes the pointer path, so refusing there
+  > costs nothing measurable. **§5 carries the limit as a risk row rather than leaving it to be
+  > rediscovered.** N6 carries a granting-ACE
   > REFUSE case, a deny-ACE ACCEPT case (without which the blanket rule regresses), and a case asserting
   > the probe creates no file.
 * *(Round 31: a clause reading "it is not marked conflicted" stood here. The `CONFLICTED` wire form was deleted with the lock — conflict is now a property of the directory, derived at read time — so the clause had nothing to test.)*
@@ -960,7 +983,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:1329`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1354`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -995,7 +1018,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1501`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1526`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1016,7 +1039,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1242`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1267`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -1130,6 +1153,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
 | 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
+| 67 | **select the ACL enumerator with `command -v` instead of `uname -s` + absolute path** | publisher and reader agree under different `PATH`s |
+| 68 | **fall back to mode bits where no enumerator exists** | an unevaluable ACL condition REFUSES, it does not accept |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1207,7 +1232,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1501` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1526` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1321,7 +1346,7 @@ with its own inventory.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| **ACLs cannot be enumerated on every platform** | **Low** | **Round 30 — round 29's blanket acceptance is REVERSED; only the unenumerable case remains a limit.** Darwin refuses any component carrying an `allow` ACE for another principal (`deny` ignored — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists the mode bits are authoritative and that is stated rather than hidden; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
+| **ACLs cannot be enumerated on every platform** | **Low** | **Round 30 — round 29's blanket acceptance is REVERSED; only the unenumerable case remains a limit.** Darwin refuses any component carrying an `allow` ACE for another principal (`deny` ignored — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists **the pointer path is refused**, not accepted on mode bits alone *(round 31, codex #7 — the round-30 text had this fail OPEN)*; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
 | The fix breaks the fail-open property of hooks | **High** | §4.3 keeps the absent-`paths.sh` fallback; A is rejected for the hook path |
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
