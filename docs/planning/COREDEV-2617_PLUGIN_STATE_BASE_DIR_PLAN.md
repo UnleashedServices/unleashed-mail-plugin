@@ -628,8 +628,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1439`) and its matrix change (`:1445-1449`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1472-1479`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1443`) and its matrix change (`:1449-1453`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1476-1483`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -872,7 +872,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1727`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1755`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1115,7 +1115,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1538`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1542`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1150,7 +1150,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1727`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1755`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1171,7 +1171,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1439`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1443`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1394,7 +1394,11 @@ round-32 fix was itself half.)* Each file must also source cleanly under `set -e
 in **both bash and zsh** in every cell.
 
 **Stderr is asserted per cell, not globally** (round 20, kimi #7): `stderr == ""` is required only in
-**resolved** cells. Steps 1-conflict and 3 mandate **exactly one** diagnostic, so a blanket empty-stderr
+**resolved** cells **whose publish side effect also succeeded**. *(Round 35: a resolved cell CAN emit a
+diagnostic — the `NAME_MAX` over-budget path resolves via the variable, reports `failed`, and emits one
+line naming the length — so the unqualified form made the oracle unsatisfiable in exactly the case the
+diagnostic exists for. Resolution and publication are separate outcomes and the oracle must say which
+it constrains.)* Steps 1-conflict and 3 mandate **exactly one** diagnostic, so a blanket empty-stderr
 assertion would contradict them — the draft's N6 clause did exactly that.
 
 ### Consumers whose behaviour changes, stated rather than discovered
@@ -1404,7 +1408,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1727` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1755` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1585,6 +1589,30 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 1. **D′ is settled** (rounds 2-3, both reviewers; §8 Q1). Do **not** re-open it during implementation.
 2. Make the fallback observable (§4.1) and add N1.
 3. Implement the chosen resolution; add N2 with the **unset** case.
+
+   > **ROUND 35 — §7 HAD NO STEP FOR D″ AT ALL.** "The chosen resolution" was written for D′ in round 3
+   > and never revisited, so a plan specifying a per-publisher store, an encoder, ordered reader rules,
+   > a publish side effect, an ACL predicate and **92 mutants** carried an implementation order that
+   > never mentioned any of them. Steps 3a-3e are that order. *(Twelfth instance of the same class: the
+   > design moved and the section that tells someone how to build it did not.)*
+
+   **3a. The store and the encoder.** `bases/` created `0700`, ancestor created if missing; the
+   per-character walk with four markers (`_u`, `_s`, `_c`, `_x`); the `NAME_MAX` budget against the
+   **temp** name. Prove injectivity first — rows 43, 63, 69, 75, 85, 86 — because every later step
+   assumes it.
+
+   **3b. The shared predicate.** `_unleashed_auth_entry` composed with the target-chain clauses, ONE
+   function called by both publisher and reader, plus the ACL arm selected by `/usr/bin/uname -s`. Rows
+   55-58, 67, 68, 89-92.
+
+   **3c. The reader.** The scan (with the `ZSH_VERSION` guard) and ordered rules 0-4. Rows 46, 47, 48,
+   61, 77.
+
+   **3d. The publisher.** Publish-then-scan, the temp-name uniqueness, and the enum mapping over every
+   exit. Rows 42, 49, 50, 53, 62, 80-84, 88.
+
+   **3e. The five copies.** All four protocol variables established by each, `agent-env-bridge.sh`
+   included, and arm equivalence asserted across them. Rows 65, 73, 84.
    **Including the ONE explicit bridge D′ requires — round 13.** *(gemini: §4.2's option D and D′'s
    restatement both require "one documented bridge helper instead of per-agent copy-paste", and this step
    said only "implement the chosen resolution" — the bridge was never specified anywhere, while §7's N5
