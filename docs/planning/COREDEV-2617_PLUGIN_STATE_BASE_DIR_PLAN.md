@@ -226,7 +226,7 @@ diagnostic to the plugin's own log, and a field in the marker/log record naming 
 > written **only** where a record is written at all — which under D′ is nowhere, so in practice the enum
 > is always `host-env` in a persisted record and `unresolved` exists solely for the source-time
 > diagnostic. Extra marker fields are
-> parser-safe (the reader selects named keys, `marker.sh:150`).
+> parser-safe (the reader selects named keys, `marker.sh:180`).
 >
 > **Round 19b, narrowed in round 21 — AMENDED BY §4.2a: the vocabulary is now THREE values.** Round 13's
 > reasoning was sound *for D′*, where the base resolves only when the variable is set. **D″ makes one
@@ -820,19 +820,19 @@ publisher creates and owns, while the ancestors need only the general not-group-
 which `0755` satisfies. §4.4's quarantine sweep also stops colliding with live state: it moves *files*
 out of `~/.claude/unleashed-mail`, and `bases/` is a directory it never touches.
 
-**Name length is pre-checked.** `getconf NAME_MAX` is 255 here (measured: a 250-character suffix
+**Name length is pre-checked.** `getconf NAME_MAX /tmp` is 255 here — **the path argument is required; the bare command fails with `no such configuration parameter` (round 33b, kimi)** (measured: a 250-character suffix
 creates, 260 fails `ENAMETOOLONG`). The publisher checks `${#_k} + 5 <= 240` **before composing any
 path**; over budget it writes nothing, reports `failed`, and emits one diagnostic naming the length.
 Without the pre-check the failure surfaces as a generic write error and leaves a tmp file behind.
 
-****Crash-orphaned temporaries are inert, and that is stated rather than assumed.** A publisher killed
+**Crash-orphaned temporaries are inert, and that is stated rather than assumed.** A publisher killed
 between creating `.pub.<pid>.<uniq>.<key>` and renaming it leaves that file behind forever. It is
 **outside the `base.*` glob by construction**, so no reader ever enumerates it and it can never be
 mistaken for an entry — but it accumulates. It is not reaped automatically, for the same reason stale
 entries are not: any age-based rule is the heuristic round 29 refuted, and being wrong here deletes a
 live publisher's in-flight write. N6 asserts an orphaned temporary does not change any resolution.
 
-**Stale entries need a human, and that is stated rather than automated.**** An install that is removed
+**Stale entries need a human, and that is stated rather than automated.** An install that is removed
 leaves its entry behind, and a reader then sees two entries and refuses. There is **no safe automatic
 reaper**: a time threshold is the heuristic round 29 already refuted, and being wrong here deletes a
 live install's entry. Recovery is `rm` of the obsolete entry, named in the conflict diagnostic.
