@@ -641,8 +641,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1516`) and its matrix change (`:1522-1526`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1549-1556`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1531`) and its matrix change (`:1537-1541`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1564-1571`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -915,7 +915,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1845`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1865`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1025,16 +1025,27 @@ hold, and falls through to step 3 otherwise:
   > enumerator.
   >
   > * **Darwin** (`uname -s` = `Darwin`): `/bin/ls -lde <path>`; refuse on an `allow` line whose
-  >   principal is not the effective user **and whose permission set contains a mutating right**
-  >   (`write`, `add_file`, `add_subdirectory`, `delete`, `delete_child`, `writeattr`, `writeextattr`,
-  >   `chown`, **`writesecurity`**). *(Round 40, codex High #3: `writesecurity` was omitted and it is a
-  >   FAIL-OPEN omission — macOS defines it as the right to write ownership, mode **or ACL**, so a
-  >   principal holding it can simply grant itself `write` and the predicate would have accepted the
-  >   path. An enumerated allowlist of rights is only as good as its enumeration, which is why the list
-  >   is now stated as closed and N6 mutates the omission.)* *(Round 35: this refused on ANY `allow` ACE regardless of permission, while its own
-  >   rationale is write-only and the Linux arm already tests for `w`. A read-only inherited ACE is
-  >   common on MDM-managed macs, so the unqualified rule would permanently refuse a fleet machine —
-  >   the same overbreadth that made round 29 reject every real path and round 30 reject this one.)*
+  >   principal is not the effective user **and whose permission set is not wholly READ-ONLY**.
+  >
+  >   **THE LIST IS AN ALLOWLIST OF READ-ONLY RIGHTS, AND THAT INVERSION IS THE POINT** (round 42).
+  >   Refuse unless **every** right in the ACE is one of:
+  >
+  >   ```
+  >   execute  list  read  readattr  readextattr  readsecurity  search
+  >   ```
+  >
+  >   *(Rounds 40 and 41 each added a right to a mutating BLACKLIST — `writesecurity`, then a proposed
+  >   `append` — which is the shape that re-opens every round: a right I fail to enumerate is a right
+  >   that silently ACCEPTS. Inverted, a right I fail to enumerate REFUSES. The full vocabulary on this
+  >   machine is 17 rights (`man chmod`); seven are read-only and the allowlist names exactly those, so
+  >   the other ten and anything Apple adds later all refuse by construction.*
+  >
+  >   ***`append` was REFUTED by execution**, and the two arms disagreed about it: codex reported it
+  >   missing from the list, kimi reported it never appears literally. Measured —
+  >   `chmod +a "everyone allow append"` on a directory prints `allow add_subdirectory`, the composite
+  >   never surfacing, while `writesecurity` DOES print literally. So codex's instance was wrong and its
+  >   class was right, which is exactly why the fix is the inversion rather than another entry.)*
+  >
   > * **Linux** (`uname -s` = `Linux`): `/usr/bin/getfacl -pc <path>`; the grammar is different and is
   >   specified rather than assumed — refuse **iff both** hold: (a) at least one `user:<name>:` or
   >   `group:<name>:` entry with `<name>` non-empty carries `w`, **and** (b) the `mask::` line permits
@@ -1063,7 +1074,9 @@ hold, and falls through to step 3 otherwise:
   > component of two chains is roughly a dozen forks **per resolution**, on the same source-time path
   > where the encoder is forbidden a single fork. That asymmetry is deliberate — the encoder runs on
   > every load in five files, whereas ACL enumeration runs only on the **reader** path, which is taken
-  > only when `CLAUDE_PLUGIN_DATA` is unset, i.e. never in a hook. **A hook pays zero.** §6 carries a
+  > only when `CLAUDE_PLUGIN_DATA` is unset. **A hook pays the ACL cost too**, because it runs the same
+  > complete predicate before leaving an entry — the sentence that stood here said "a hook pays zero",
+  > which round 40 withdrew one paragraph above while leaving this copy asserting it. §6 carries a
   > timing assertion so the claim is measured rather than asserted: the reader path must stay under the
   > budget §6 sets, or the design is wrong about its own cost.
   >
@@ -1179,7 +1192,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1615`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1630`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1214,7 +1227,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1845`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1865`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1235,7 +1248,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1516`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1531`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1387,6 +1400,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 99 | **ignore `_UNLEASHED_PUBLISH_OK` in step 1** | the agent fence resolves without writing any entry |
 | 100 | **set `_UNLEASHED_PUBLISH_OK` after sourcing `paths.sh`** | the fence still writes nothing — the flag must precede the source |
 | 101 | **leave an existing `bases/` at `0755` unhandled by the reader rules** | a usable `HOME` with an unauthenticated STORE refuses as `stale`, not resolves |
+| 102 | **treat the ACL rights list as a mutating BLACKLIST** | a right absent from the list REFUSES; only the seven read-only rights accept |
+| 103 | **omit `_UNLEASHED_PUBLISH_OK=0` from the bridge BODY** | the fence writes no entry even though step 1's rule alone would permit it |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1481,7 +1496,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1845` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1865` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1640,7 +1655,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 > the `CONFLICTED`-skip path with no value, one bullet away. Both times the prose said the enum was
 > total. So totality is no longer a sentence: **every exit path of the publish routine **and of the reader**
 > must be enumerated, each mapped to exactly one enum value, and the mapping checked against the declared value
-> list.** An exit with no value, or a value not declared, fails verification. N6 rows 43, 59 and 60
+> list.** An exit with no value, or a value not declared, fails verification. N6 rows 59, 60 and 96
 > mutate the mapping in both directions — a value dropped from the declaration, and an exit assigned the
 > wrong value. *(Round 31, both arms concordantly: this cited rows 31-32 and 40-41, all four **retired**
 > with the lock in round 30, so the totality mandate was enforced by nothing. A citation to a deleted
@@ -1714,6 +1729,11 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 
    ```bash
    # agent-env-bridge.sh — $1 = CLAUDE_PLUGIN_DATA value, $2 = CLAUDE_PLUGIN_ROOT
+   # NON-AUTHORITATIVE: $1 is substituted from agent content, not exported by the host, so this
+   # shell must never publish. The flag is set BEFORE the source because paths.sh publishes at
+   # source time — after it, the entry is already written. (Round 42, codex High #1: the step-1
+   # RULE said the fence sets this "before sourcing" and this BODY never set it at all.)
+   _UNLEASHED_PUBLISH_OK=0
    export CLAUDE_PLUGIN_DATA="${1-}"          # empty is preserved, NOT unset: see below
    # GUARDED, exactly as marker.sh:21-24 guards it — paths.sh is an optimisation of
    # maintenance, NOT a load-bearing dependency (paths.sh:20), so an absent file must
