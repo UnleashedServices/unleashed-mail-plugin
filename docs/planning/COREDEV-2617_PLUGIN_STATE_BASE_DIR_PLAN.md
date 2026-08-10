@@ -628,8 +628,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1443`) and its matrix change (`:1449-1453`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1476-1483`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1468`) and its matrix change (`:1474-1478`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1501-1508`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -729,7 +729,13 @@ enumerates `base.*`, authenticates each, and:
 
 **The rules are ORDERED and the order is normative** — evaluate top to bottom, first match wins:
 
-0. **an entry enumerated but gone when opened** → **skip it; it is not an entry.** *(This rule lived
+0. **an entry enumerated but gone when opened — and NOT a symlink** → **skip it; it is not an entry.**
+   The test is `[ ! -L "$_f" ] && [ ! -e "$_f" ]`. *(Round 36, codex High #1: the rule tested `[ -e ]`
+   alone, and **`[ -e ]` is FALSE for a dangling symlink** — executed in bash 3.2.57 and zsh 5.9, both
+   report `-L=true -e=false`. So a store holding one authentic entry plus a dangling `base.*` symlink
+   **skipped the malformed entry and resolved the good one**, when malformed-first exists precisely to
+   refuse that store. A symlink is always an entry — a hostile one — never a vanished file. N6 row 2 is
+   re-aimed to make its symlink fixture DANGLING, the case that discriminates.)* *(This rule lived
    only in prose below the list, so rule 1 matched the vanished entry first and an operator deleting a
    stale entry mid-scan flipped a healthy store to `stale`. A rule that qualifies an ordered list must
    live IN it.)*
@@ -749,7 +755,12 @@ enumerates `base.*`, authenticates each, and:
 
 **Three further exits, each stated rather than left to an implementer** (round 31c, kimi). A reader whose
 `HOME` is unusable never scans at all and takes step 3 with `POINTER_STATE=none` — the store was never
-consulted, so there is nothing to report. A **publisher** whose post-publish scan finds a failing entry
+consulted, so there is nothing to report. **The publisher's post-scan exits are ORDERED, and the order is normative**: its own entry missing →
+`failed`; else any entry failing authentication → `stale`; else two or more authenticating →
+`conflict`; else `created`/`current` per the write decision. *(Round 36, codex High #4: `stale` and
+`failed` both applied when a publisher's own entry had vanished AND another was malformed, with no
+precedence — the same overlap the READER's rules were ordered to remove one section earlier, left
+unfixed on the publisher side.)* A **publisher** whose post-publish scan finds a failing entry
 reports `stale` (the bullet above is reader-framed "refuse"; a publisher has already resolved and does
 not refuse, but it must still report what it saw). A publisher whose **own entry vanishes before its scan
 observes it** reports `failed` — **whether or not this process wrote it** (round 34, codex #4: the rule
@@ -790,6 +801,17 @@ what was actually written down, which is exactly the class §6 exists to catch.)
 > fold. Decoding is unambiguous: after `_` exactly one of `u`, `s`, `c` can appear, and `c` consumes one
 > further character. The substitution is a per-character walk using parameter expansion — **no fork**,
 > which is why it is a walk rather than the two `${v//…}` passes it replaces.
+>
+> **It is a BYTE walk, under `LC_ALL=C`, and both halves are load-bearing** (round 36, codex High #2).
+> The rule said "per-character walk" while requiring two hex digits per non-ASCII **byte** and asserting
+> every output character is one byte — false for its own input: measured here, `é` is ONE character of
+> TWO bytes in both shells, so a character walk emits one unit where the rule demands two. And character
+> semantics are locale-dependent, so a key that depends on the ambient locale is not a pure function of
+> the bytes — Invariant P's premise. The resolver sets `LC_ALL=C` for the derivation and restores it
+> immediately, so it cannot leak into a consumer's environment. N6 requires bash and zsh to produce
+> **byte-identical keys for a non-ASCII path**. *(codex also reported that the two shells select
+> different units — `c3` versus code point `e9`. That did NOT reproduce here; both returned `c3 a9`. The
+> locale defect is real regardless of that particular divergence.)*
 >
 > **The round-31 wording said only "a two-character sequence" and did not say WHICH — and the obvious
 > choice destroys Invariant P.** Executed: with upper-case `C` encoded as `_<lower(C)>`, the marker
@@ -872,7 +894,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1755`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1788`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1115,7 +1137,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1542`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1567`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1150,7 +1172,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1755`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1788`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1171,7 +1193,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1443`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1468`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1236,7 +1258,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | # | mutation | discriminating case it must break |
 |---|---|---|
 | 1 | publish always (drop the type-and-content skip) | mtime unchanged on a no-change second run |
-| 2 | accept a symlink pointer | symlink pointer refused |
+| 2 | accept a symlink pointer — fixture must be a **DANGLING** symlink | a dangling `base.*` symlink REFUSES the store; it is not skipped as vanished |
 | 3 | accept a relative path | `foo/bar` refused |
 | 4 | accept a multi-line file | two-line pointer refused |
 | 5 | accept a non-existent target | dangling path refused |
@@ -1314,6 +1336,9 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 90 | **refuse on a read-only `allow` ACE (Darwin)** | an inherited read-only ACE, as MDM fleets carry, still ACCEPTS |
 | 91 | **treat the `mask::` clause as an independent trigger (Linux)** | a named grant the mask filters out still ACCEPTS |
 | 92 | **run the ACL enumeration on the hook path** | a hook resolution performs zero ACL forks |
+| 93 | **derive the key without pinning `LC_ALL=C`** | bash and zsh produce BYTE-IDENTICAL keys for a non-ASCII path |
+| 94 | **let `LC_ALL=C` leak past the derivation** | a consumer's locale is unchanged after the resolver runs |
+| 95 | **leave the publisher's post-scan exits unordered** | own-entry-missing plus another malformed entry reports `failed`, not `stale` |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1408,7 +1433,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1755` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1788` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1670,6 +1695,14 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
        fi
    fi
    ```
+
+   > **ROUND 36, codex High #3 — the paragraphs BELOW this body still described the D′-only behaviour
+   > the body was changed to remove**: empty and unset yield the sentinel, no persistent read, no helper
+   > conditional needed. An implementer following them reproduces exactly the failure row 65 exists to
+   > catch. **Thirteenth rule-versus-note instance, and the first INVERTED one — I fixed the rule and
+   > left the explanation.** Those sentences are struck; the body above is the rule. The publish
+   > exception is lifted into the operative step-1 statement too, since step 1 mandates publication for
+   > any non-empty value and this copy is an exception to it.
 
    **This copy resolves but does not PUBLISH**, and that asymmetry is deliberate and stated: the fence
    runs in a Bash-tool shell whose `$1` is substituted from agent content, so a publish here would write
