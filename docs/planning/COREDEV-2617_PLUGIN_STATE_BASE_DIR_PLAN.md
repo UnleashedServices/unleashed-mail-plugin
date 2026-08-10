@@ -326,10 +326,32 @@ cache-root/`--plugin-dir` ambiguity in exchange for a contract that is not curre
 > an empty/failed base **before composing any path**, and skip persistence rather than write. §7 lists
 > them, with the control-flow requirement for each.
 
-### 4.2a — D″: the unresolved case is silent, and silence was not the goal (High) — **ROUND 19, NEW**
+### 4.2a — D″: a pointer so non-hook shells can resolve the base — **PROSPECTIVE CAPABILITY, not a defect fix**
 
-**Round 20 gated this section and both arms returned `REQUEST_CHANGES`. Their findings are applied
-below as round 21, and the open question is CLOSED — see "Step 3 is dropped".**
+> **WHAT THIS SECTION IS, stated before anything else** (round 29, codex #7; maintainer approved).
+> Through round 28 this section was headed *"the unresolved case is silent, and silence was not the
+> goal (High)"* and read as the remedy for an observed failure. **It is not, and the evidence no longer
+> supports that framing.** Of the four motivations it has carried, three are withdrawn — the compaction
+> snapshot (refuted by code-reading in 19b and **by executing a compaction** in round 28), the
+> hand-run/CI shell class (withdrawn round 23, never traced), and a dependency on a section of another
+> plan that **does not exist in this tree**. The maintainer's "0s" report **remains undiagnosed**, and
+> nothing here claims to fix it. What survives is one live consumer class (git hooks, observed below)
+> whose writes the gate already treats as harmless, and one prospective consumer with no code yet.
+>
+> **So D″ is capability work: it makes the plugin's state base resolvable from shells that never
+> receive `CLAUDE_PLUGIN_DATA`.** That is a real and growing gap, and the maintainer has decided to
+> build it. Framing it honestly costs nothing and prevents the severity from doing argumentative work
+> the evidence cannot.
+>
+> **Acceptance criterion, so "done" is decidable rather than argued:** a shell with no
+> `CLAUDE_PLUGIN_DATA` and no hook environment resolves the *same* base a hook resolves, or fails
+> closed with one diagnostic and `OK=0` — with N6's mutant set green, and with **no change to D′'s
+> behaviour when the variable is set** (row 19 is the standing guard on that). Anything short of this
+> is not a partial success; it is the ambiguous second store this ticket exists to remove.
+
+**Round 28 gated this section; both arms returned `REQUEST_CHANGES` and their findings are applied
+below as round 29.** Round 20's findings were applied as round 21, and its open question is CLOSED —
+see "Step 3 is dropped".
 
 **Maintainer report, 2026-08-08:** *"please fix the compaction fall back safety, I don't want 0s."*
 D′ shipped in **2.6.5** (`CHANGELOG.md:1045-1049`) and remains in 2.7.x; it works exactly as
@@ -368,7 +390,7 @@ release — `CHANGELOG.md:238`.)*
 > | `PreCompact` ran | `PreCompact [bash "${CLAUDE_PLUGIN_ROOT}/scripts/precompact-snapshot.sh"] completed successfully` |
 > | it wrote the snapshot | `.state` directory `mtime` advanced to `22:34:04` — a create+unlink in that directory |
 > | `SessionStart` restored it | the `additionalContext` hint was delivered verbatim into the model's context |
-> | restore consumed it | no `work-context-snapshot-*` remains, per the `rm -f "$SNAP"` at `sessionstart-restore.sh:83` |
+> | restore consumed it | no `work-context-snapshot-*` remains, per the `rm -f "$SNAP"` at `sessionstart-restore.sh:85` |
 >
 > **This also confirms, by execution, the premise D′ rests on:** the snapshot landed **inside the plugin
 > data dir**, so `unleashed_base_ok` was true, so the hook really does receive `CLAUDE_PLUGIN_DATA`.
@@ -542,8 +564,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:982`) and its matrix change (`:988-992`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1015-1022`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1090`) and its matrix change (`:1096-1100`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1123-1130`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -592,36 +614,81 @@ built to kill it. So:
 
   **The lock, specified rather than cited.** `mkdir` is the primitive: POSIX requires it to fail if the
   path exists, and to do so atomically, which is what makes it usable as a mutex without `flock` (absent
-  on macOS by default). The holder removes the directory on completion. A lock whose directory `mtime` is
-  older than **60 s** is treated as abandoned and removed — a publisher only ever holds it for a `stat`,
-  a read and a `mv`, so a minute is several orders of magnitude of headroom, and the TTL exists solely so
-  a killed publisher cannot wedge publication permanently.
+  on macOS by default). The holder removes the directory on completion.
+
+  **Parent creation is ORDERED BEFORE acquisition** (round 29, gemini #2). On a machine where
+  `${HOME}/.claude/unleashed-mail` does not yet exist, `mkdir` of `.publish.lock` inside it returns
+  **`ENOENT`, not `EEXIST`** — and an implementation that treats every `mkdir` failure as "someone else
+  holds the lock" would report `contended` forever on a fresh install. **That is the first publication on
+  a new machine, i.e. the case the whole mechanism exists to serve.** So: create
+  `${HOME}/.claude/unleashed-mail` first, `0700` by explicit `chmod`, refusing a pre-existing directory
+  with looser modes per §4.4; only then acquire. The two `mkdir` failure modes are **distinguished**, and
+  `ENOENT` after parent creation is `failed`, never `contended`. N6 carries a clean-install first-publish
+  case and a mutant that collapses the two errno arms.
+
+  **Reclamation is FENCED, not timed** (round 29, codex High #2). The round-28 rule — *"a lock whose
+  directory `mtime` is older than 60 s is treated as abandoned and removed"* — **does not preserve mutual
+  exclusion, and the reasoning behind it was wrong in kind.** I argued a publisher holds the lock only
+  for a `stat`, a read and a `mv`, so a minute is "several orders of magnitude of headroom". Generosity is
+  not correctness: age is not evidence of abandonment (a suspended, paged-out or debugger-stopped holder
+  resumes and believes it still owns the lock), and worse, **two breakers can act on the same
+  observation** — breaker X stats the stale lock and removes it, publisher Y then creates a fresh one, and
+  breaker Z removes *Y's* lock on the strength of its own earlier stat. Two publishers then both believe
+  they hold it, which restores last-writer-wins and can erase a `CONFLICTED` marker.
+  >
+  > **The rule:** the lock directory carries a **fence token** — a file inside it naming the holder's
+  > boot-unique identity and creation time, written before the holder proceeds. A breaker must (a) read
+  > the token, (b) confirm the age threshold against **that token's** recorded time rather than the
+  > directory's `mtime`, and (c) remove the lock **only via a rename of the token-bearing directory to a
+  > breaker-unique name**, then verify it holds what it removed. A breaker whose rename fails lost the
+  > race and reports `contended` without removing anything. This makes reclamation a compare-and-swap
+  > rather than a timed delete. N6 carries a double-breaker case that must leave exactly one holder.
 
   A publisher that cannot take the lock **skips publication and leaves the resolution untouched** — it is
-  a side effect, and a side effect never blocks. It sets `_UNLEASHED_POINTER_STATE=contended`.
+  a side effect, and a side effect never blocks.
 
-  > **Why `contended` is its OWN value and not folded onto `failed`** (round 28). The round-25 text said
-  > the publisher "skips publication" without saying what state it reports, and the enum was
-  > `created | current | conflict | failed` — so an implementer had to pick. Both available answers are
-  > wrong: `failed` fires the `SessionStart` notice, turning a benign sub-second race between two hooks
-  > into a user-facing warning about an unavailable state that is in fact about to become available; and
-  > `current`/`created` would assert a pointer this process never verified or wrote. Contention means
-  > *"another publisher holds the lock right now"*, which is neither a failure nor a success, and the
-  > honest enum has a value for it. **The notice predicate stays `conflict | failed`** — `contended` is
-  > silent. N6 carries a mutant that maps contention onto `failed` and requires the notice to stay
-  > silent, and a second that removes the value entirely and requires the enum check to reject it.
+  > **`contended` is NOT unconditionally silent, and round 28's justification for making it so was
+  > wrong** (round 29, codex High #1). I wrote that contention is "a benign sub-second race … about to
+  > become available". **In the case the lock exists for, it is not.** With no pointer yet published and
+  > two publishers holding *different* authoritative bases: A takes the lock and publishes A; B loses the
+  > lock, reports a silent `contended`, and goes on using B. If B never publishes again — and nothing
+  > obliges it to — every unset shell follows A forever, hooks and shells diverge, and **no conflict is
+  > ever recorded**. That is precisely the divergence the publish policy above refuses to accept, arriving
+  > through the lock instead of through the pointer. `contended` being silent made it invisible as well.
+  >
+  > **The rule:** losing the lock does not discharge the publisher's obligation to converge. A publisher
+  > that reports `contended` **re-attempts the serialized read/compare once the lock clears**, within the
+  > same source-time window, bounded to a single retry so a side effect still cannot block. If the retry
+  > also cannot take the lock, the state is `contended` **and the notice predicate includes it**, because
+  > at that point the honest statement is not "someone else is publishing" but "this shell could not
+  > establish whether the pointer agrees with its own base". Silence is only correct when convergence is
+  > guaranteed, and one skipped attempt does not guarantee it. N6 carries a competing-target contention
+  > case that must end with either a published pointer or a recorded conflict — never with neither.
 
   N6 carries concurrent-first-publication and concurrent-post-conflict cases.
 * **The conflicted state is a defined wire form, and it is STICKY** (round 23, codex #4). It is the
   single literal line `CONFLICTED` — chosen because it is not an absolute path, so every existing
   authentication clause already rejects it, and a reader that has not been taught about conflicts still
   fails closed rather than following it.
-* **Every publisher must preserve it until an operator removes it.** Step 1's skip rule is
+* **Every publisher must preserve it until an operator removes it, and must REPORT it** (round 29,
+  codex #4 + gemini #3, concordant). Step 1's skip rule is
   "publish unless the pointer is a regular file whose content equals the value" — and `CONFLICTED`
   equals no value, so as written the *next* authoritative hook would overwrite the marker and silently
   restore last-writer-wins. So step 1 gains an explicit precondition: **if the pointer reads
-  `CONFLICTED`, do not publish, do not overwrite, emit nothing further.** N6 carries a
-  repeated-publisher mutant for exactly this.
+  `CONFLICTED`, do not publish and do not overwrite — and set `_UNLEASHED_POINTER_STATE=conflict`.** N6
+  carries a repeated-publisher mutant for exactly this.
+
+  > **Round 28 left this path with NO state value, and both arms found it.** The round-28 text ended
+  > *"emit nothing further"*, which an implementer reads as "assign nothing" — so `SessionStart`'s
+  > predicate had nothing to test and **the notice that exists to announce a conflicted pointer was
+  > exactly the one that could never fire**. Round 28 closed the contention hole in this same enum and
+  > missed its sibling one bullet away: **half-a-family, inside the fix for a half-a-family defect.** The
+  > enum's totality is therefore no longer asserted in prose — §6 requires every publish exit path to be
+  > enumerated against the enum, and N6 mutates each to the wrong value.
+  >
+  > *"Emit nothing further"* meant **no second diagnostic on stderr** — the one-diagnostic-per-process
+  > rule — and never meant "suppress the `SessionStart` notice". The two channels are separate and are
+  > now named separately wherever this rule appears.
 * **Step 2 treats a conflicted pointer as unauthenticated** and falls through to step 3 (sentinel,
   `OK=0`, diagnostic). A follower must never keep following a base the authority has disowned.
 * **Operator recovery, stated honestly:** deleting the pointer alone is *not* recovery — with two live
@@ -634,7 +701,7 @@ built to kill it. So:
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1227`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1347`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -676,11 +743,36 @@ hold, and falls through to step 3 otherwise:
   > walk the target chain from `/` downward, accept a leading run of components that are root-owned, not
   > group- or world-writable and not symlinks, and require **every component from the first non-system one
   > onward** to be euid-owned. Under `${HOME}` this reduces to exactly the rule above, so the two cases
-  > share one predicate rather than two. A target every one of whose components is root-owned (a
-  > system-wide install) is accepted and **is not writable by this uid** — which the follower discovers
-  > when its write fails, not by mis-trusting the path. N6 gains an off-`${HOME}` target ACCEPT case and
-  > an off-`${HOME}` target with a **user-writable intermediate** REFUSE case; without the second, the
+  > share one predicate rather than two. N6 gains an off-`${HOME}` target ACCEPT case and an
+  > off-`${HOME}` target with a **user-writable intermediate** REFUSE case; without the second, the
   > empty-set reading would pass unnoticed.
+  >
+  > **AUTHENTICATED IS NOT THE SAME AS USABLE — and round 28 conflated them** (round 29, gemini #1). The
+  > round-28 text accepted an all-root-owned target and added that it *"is not writable by this uid —
+  > which the follower discovers when its write fails"*. **That is the wrong contract.** Returning
+  > `OK=1` with `SOURCE=pointer` tells every consumer in the family that state may be persisted;
+  > `marker_write`, `log_append` and the snapshot writers then attempt writes that fail with unhandled
+  > errors, on a path the resolver has just certified. "The follower discovers when its write fails" is a
+  > description of the defect, not a design. **A target must additionally be writable by the effective
+  > uid; if it is not, authentication fails and the resolution falls to step 3** — sentinel, `OK=0`, one
+  > diagnostic, which is the state that honestly describes "no state can be persisted here". N6 carries a
+  > readable-but-unwritable target REFUSE case.
+  >
+  > **macOS ACLs are OUT OF SCOPE, and that is a decision rather than an oversight** (round 29, codex
+  > High #3). The predicate tests ownership, mode bits and symlinks. On macOS — this plugin's primary
+  > platform — ACLs supplement the BSD permission bits, so a root-owned `0755` prefix carrying an ACL
+  > that grants another uid write access **passes every clause above** while that uid can still replace a
+  > validated descendant before the later open. The mode-bit test does not see it. Two honest options
+  > exist: enumerate ACLs during authentication, or state the limit. **This plan takes the second**, because
+  > the first requires a portable ACL query the shell family does not have (`ls -le` is BSD-only and
+  > unparsed anywhere in this repo), and a half-implemented ACL check would read as protection while
+  > providing none. **So the stated trust assumption is narrowed in place:** authentication defends
+  > against *same-uid accident and mode-bit misconfiguration*, and **does not defend against an attacker
+  > who already holds an ACL grant on an ancestor of the plugin data directory** — an attacker who, on
+  > this platform, already has write access to the user's files by other routes. This limit is recorded
+  > in §5's risk register rather than left to be rediscovered, and **COREDEV-2617a** is filed for the ACL
+  > enumeration. An unstated limit is the failure mode this ticket keeps hitting; a stated one is a
+  > boundary.
 * it is not marked conflicted.
 
 > **Why the whole target chain, and not just the target** (round 23, codex #5). The round-21 text called
@@ -757,7 +849,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:1068`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1177`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -773,7 +865,7 @@ logic, so a source-time step 1 publishes there anyway — the hook cannot observ
 added round 28 — lock contention had no value and would have been folded onto `failed`, which fires the
 notice for a benign race; see the publish-policy section.)* `SessionStart` emits **one**
 non-blocking `additionalContext` line, still `exit 0`, when that value is `conflict` or `failed` — i.e.
-when the **non-hook path will fail** — and stays silent on `created`/`current`. This is a statement about
+when the **non-hook path will fail** — and stays silent on `created`/`current`/`contended` (`contended` only while a retry may still converge; see the publish policy). This is a statement about
 the *other* shells, which is the state the maintainer actually experiences and which no hook could
 otherwise report.
 
@@ -786,7 +878,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1227`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1347`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -807,7 +899,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:982`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1090`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -900,8 +992,24 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 30 | **drop the publication lock** | concurrent publishers cannot both write |
 | 31 | **map lock contention onto `failed`** | contended publish emits **no** `SessionStart` notice |
 | 32 | **delete `contended` from the enum** | a contended publish has a declared state to report |
-| 33 | **accept an off-`${HOME}` target with a user-writable intermediate** | `/opt/x` under a `0777` ancestor refused |
-| 34 | **require euid ownership of an all-root off-`${HOME}` target** | `/opt/claude/data`, all components root-owned, ACCEPTs |
+| 33 | **accept an off-`${HOME}` target with a user-writable intermediate** | target under a `0777` ancestor refused |
+| 34 | **require euid ownership of an all-root off-`${HOME}` target** | an all-root-owned system target authenticates |
+| 35 | **accept a readable but UNWRITABLE target** | unwritable target ⇒ step 3, `OK=0` — not `OK=1` |
+| 36 | **treat every `mkdir` failure as contention** | clean install (no parent dir) publishes, never reports `contended` |
+| 37 | **break a lock on directory `mtime` instead of the fence token** | a fresh lock taken after a stale read survives |
+| 38 | **let two breakers both reclaim** | double-breaker leaves exactly one holder |
+| 39 | **skip the single retry after losing the lock** | competing-target contention ends in a pointer or a conflict, never neither |
+| 40 | **assign no state on the `CONFLICTED`-skip path** | a preserved `CONFLICTED` marker reports `conflict` |
+| 41 | **exclude `contended` from the notice predicate after a failed retry** | the notice fires when convergence was not established |
+
+*(Rows 35-41 are round-29 additions. 35 is gemini's authenticated-but-unusable target; 36 its ENOENT
+clean-install case; 37-39 codex's fencing and convergence Highs; 40 the concordant untotal-enum finding;
+41 the notice half of it. **Rows 33-34 were also NOT EXECUTABLE as round 28 wrote them** (codex #5): they
+prescribed `/opt/claude/data` fixtures, which need root to create, while the verification runs
+unprivileged. They now name no fixed absolute path — the harness builds the off-`${HOME}` chain under a
+temporary root and injects the ownership/mode metadata through the same seam rows 27-28 already use, so
+the pair is runnable by an ordinary uid. An unrunnable mutant is a mutant that proves nothing, which is
+this plan's own round-8 lesson about the physically-impossible canary.)*
 
 *(Rows 31-34 are round-28 additions, and each pins a rule that this round found **undefined rather than
 wrong** — the two halves of the `contended` state, and the two halves of the trust anchor where the
@@ -928,7 +1036,7 @@ fallback, which resolves to `$HOME`); each authentication clause refused indepen
 **conflicted** pointer; step 3 → `HOME=""` → sentinel, `OK=0`, **exactly one** diagnostic, **no
 `${HOME}`-rooted open attempted at all**, and the D′ no-persistence envelope (`N2`, `N4`) holds in full;
 persisted records carry `base_resolution` matching the resolution that actually ran; and the SessionStart
-notice fires on `conflict`/`failed` and stays silent on `created`/`current`.
+notice fires on `conflict`/`failed` — and on `contended` once the single retry has also failed — and stays silent on `created`/`current`.
 
 **Arm equivalence, across all five shell files** (round 20, kimi #8): the full pointer matrix
 (absent / valid / malformed / unreadable / conflicted × publish / refuse) runs with `paths.sh` **present
@@ -947,7 +1055,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1227` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1347` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1061,6 +1169,7 @@ with its own inventory.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
+| **The trust predicate does not see macOS ACLs** | **Medium** | **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
 | The fix breaks the fail-open property of hooks | **High** | §4.3 keeps the absent-`paths.sh` fallback; A is rejected for the hook path |
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
@@ -1087,6 +1196,17 @@ Baselines at `5a532b1`: `test-hooks.sh` **304**, synthesizer **222**, scripts **
 Mutation proofs **N1–N5**, each shown failing before the fix and passing after. *(Round 7: this list
 said N1–N4, so N5 — the one purely structural check in the set, with no behavioural counterpart —
 carried no adversarial mutant and could have shipped unproven. Its mutant is specified in §7 step 5.)*
+
+> **ENUM TOTALITY IS DERIVED, NOT ASSERTED** (round 29). `_UNLEASHED_POINTER_STATE` has now been
+> incomplete **twice** — round 25 left lock contention with no value, and round 28's fix for that left
+> the `CONFLICTED`-skip path with no value, one bullet away. Both times the prose said the enum was
+> total. So totality is no longer a sentence: **every exit path of the publish routine must be
+> enumerated, each mapped to exactly one enum value, and the mapping checked against the declared value
+> list.** An exit with no value, or a value not declared, fails verification. N6 rows 31-32 and 40-41
+> mutate the mapping in both directions — a value dropped from the declaration, and an exit assigned the
+> wrong value. *(This is the same move as round 25's "the count is no longer asserted; the table is
+> derived from the clause list" — applied to the state space instead of the mutant set, for the same
+> reason: a claim of completeness that nobody can check is a claim that fails silently.)*
 
 > **Round 19b — the envelope becomes N1–N6.** §4.2a's first draft asserted only that *"the D′
 > no-persistence envelope (`N2`, `N4`) still holds in full"* and left every genuinely **new** obligation
@@ -1163,7 +1283,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    *(Round 18, from the REPRODUCTION run: this is the defect that made a double approval fail to
    reproduce, and it is a genuine regression I introduced. The three state libs each carry an **inline
    fallback**, so they always set the flag; **the agent fence does not** — it sources only the bridge
-   (`agents/swift-reviewer.md:247-249`). With `paths.sh` absent the round-17 helper exported the value and
+   (`agents/swift-reviewer.md:266-269`). With `paths.sh` absent the round-17 helper exported the value and
    returned **without setting `_UNLEASHED_BASE_OK`**, so the round-17 rule "unset ⇒ unresolved" made the
    fence emit `NO CAPTURE` **even when `$1` was set and the base was perfectly valid** — breaking the
    fail-open fallback §4.3 exists to protect. In the two empty-`$1` absent-file cells it also emitted **no
@@ -1220,11 +1340,11 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    | `pre-commit-checks.sh` — **`:47` and `:72` too** | round 3 listed only the **fail** cases (`:44`, `:69`); the **pass** cases were unguarded, so a *successful* run wrote to a root path |
    | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
    | *(historical — round 3 record, not control flow; the operative row is `reviewer-roster.sh` above)* | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
-   | `agents/swift-reviewer.md:247-249` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
+   | `agents/swift-reviewer.md:266-269` | **perform no filesystem read at all** and emit the existing `NO CAPTURE (unresolved)` result for **each** reviewer — the fence composes the path *and reads through it*, so "compose nothing" is not by itself a complete instruction. *(Rounds 3 and 4 both left this row restating that no control flow was supplied; round 5 supplies it.)* |
    | `build-failure-log.sh` (`:40`) · `stop-failure-log.sh` (`:36`) · `permission-denied-log.sh` (`:40`) | **round 12 — these three had no control flow at all.** Each calls `log_append` exactly once as its terminal action. On an unresolved base `log_append` is a **no-op returning 0** (§7's writing-primitive rule), so the hook's own behaviour is unchanged: it still exits 0 and still emits whatever the hook contract requires. **No per-script guard is needed or wanted** — adding one would duplicate the primitive's contract. Stated explicitly because "the primitive handles it" is a decision, not an omission |
    | `capture-reviewer-round-start.sh` (`:46`) | calls `context_review_round_bind`, whose unresolved contract is **print nothing, return 0**. The call site already discards stdout and forces success (`>/dev/null 2>&1 \|\| true`), so the hook is unaffected. **Fail-open**: a missing round binding degrades to inference, which is the documented fallback |
    | `capture-reviewer-verdict.sh` (`:45`, `:62`) | composes `ROOT="$(context_reviews_dir)"` — a **sentinel** path when unresolved. **Skip the capture entirely and exit 0**; do **not** attempt the write, and do not fail the reviewer's own run. `capture.py` composes only beneath this `ROOT`, so it is covered transitively (codex, round 11) |
-   | `precompact-snapshot.sh` (`:61`) · `sessionstart-restore.sh` (`:30`) | **round 10 — both were entirely absent from this table.** Each composes `SNAP="$(context_snapshot_path)"` and writes/reads the snapshot inline. On an unresolved base: **skip the snapshot write and the restore**, and leave every other behaviour (the hook's own output, its exit code) untouched. **Round 19b — §4.2a carves `sessionstart-restore.sh` out of "the hook's own output … untouched":** it is now the one consumer whose output *does* change, emitting a single non-blocking `additionalContext` line, still `exit 0`. Note the amended predicate — the line fires when the **non-hook path** will fail (pointer absent, invalid, or unpublishable), **not** when this hook's own base is unresolved, which in a hook is unreachable |
+   | `precompact-snapshot.sh` (`:64`) · `sessionstart-restore.sh` (`:32`) | **round 10 — both were entirely absent from this table.** Each composes `SNAP="$(context_snapshot_path)"` and writes/reads the snapshot inline. On an unresolved base: **skip the snapshot write and the restore**, and leave every other behaviour (the hook's own output, its exit code) untouched. **Round 19b — §4.2a carves `sessionstart-restore.sh` out of "the hook's own output … untouched":** it is now the one consumer whose output *does* change, emitting a single non-blocking `additionalContext` line, still `exit 0`. Note the amended predicate — the line fires when the **non-hook path** will fail — `conflict`, `failed`, or a `contended` that survived its retry — **not** when this hook's own base is unresolved, which in a hook is unreachable |
    | `scripts/test-hooks.sh` — **`:624`, `:796`**, and **`:446`** | the harness itself calls `context_snapshot_path`. N1/N2 must run with the variable **unset**, so **the test that verifies D′ could compose root paths**. Guard before the fixtures run. *(Round 7 adds `:446` — `[ -s "$CLAUDE_PLUGIN_DATA/logs/stop-gate.log" ]` composes from the raw variable directly, not through a resolver, so it is a third site of a different kind and the one that proves N5's old predicate was blind.)* |
    | `swift-reviewer.md:247` and the roster's `:53` | both **append to the resolver result** — an empty result composes a root path |
 
@@ -1410,7 +1530,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >   them.
    > - **Scan set includes the executable fences in `agents/**` and `skills/**`.** An agent body that
    >   tells the model to compose the path is the same defect shipped as prose, and
-   >   `agents/swift-reviewer.md:247-249` is already on §7's guard list for exactly that. The MAJ-6 bridge
+   >   `agents/swift-reviewer.md:266-269` is already on §7's guard list for exactly that. The MAJ-6 bridge
    >   at `swift-reviewer.md:176` and `:244` (`export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"`)
    >   **propagates** the variable and composes nothing — allowlisted by the predicate above, and named
    >   explicitly so a future edit that appends a suffix to it fails.
@@ -1804,7 +1924,7 @@ an approving pair that **reproduces**.
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
 | 1 | codex | **"guard at script entry" cannot hold D′** — the state libraries are *sourced* (`paths.sh:12-16`) and have **no entry**, so `marker_*`, `log_*` and `context_*` still compose for any caller; entry-only exits are also wrong for consumers whose primary behaviour must continue | **confirmed** — `marker.sh:33-34,117-127`, `log.sh:31-32,42-58`, `context.sh:39,54-55,190-191,267-286` | §7 moves the guard inside each **public primitive**, off one validated cached base |
-| 2 | codex | the `swift-reviewer.md` fence's row **restated that no control flow was supplied** rather than supplying it; the fence composes *and reads through* the path | **confirmed** — `agents/swift-reviewer.md:247-249` | the row now mandates no filesystem read and `NO CAPTURE (unresolved)` per reviewer |
+| 2 | codex | the `swift-reviewer.md` fence's row **restated that no control flow was supplied** rather than supplying it; the fence composes *and reads through* the path | **confirmed** — `agents/swift-reviewer.md:266-269` | the row now mandates no filesystem read and `NO CAPTURE (unresolved)` per reviewer |
 | 3 | codex | §13's round-4 digest was `e07fe1ec…`, the **round-3** freeze's value copied forward | **confirmed** — `51642a4`→`e07fe1ec`, `9548299`→`19fc4e43` | corrected in §13; the identical defect in `COREDEV-2605` §14 was fixed the same round |
 | 4 | codex | stale anchors: the final pre-commit exit is `:192`, the late lint marker `:425`, the build-log call `:65-66`; `:117` is the type check, `:118` the removal | **confirmed** by execution | all corrected |
 
@@ -2152,7 +2272,7 @@ codex had approved *twice*, having tabulated all eight shell × value × file-pr
 
 | # | from | finding | verified | fix |
 |---|---|---|---|---|
-| 1 | gemini *(reproduction)* | **the agent fence FAILS CLOSED on a valid base in absent-`paths.sh` mode.** The three state libs each carry an **inline fallback**, so they always set `_UNLEASHED_BASE_OK`. **The fence does not** — it sources only the bridge (`agents/swift-reviewer.md:247-249`). With `paths.sh` absent the round-17 helper exported the value and returned **without setting the flag**, so round 17's "unset ⇒ unresolved" made the fence emit `NO CAPTURE` **even when `$1` was set and the base was valid** | **confirmed** — a genuine fail-open→fail-closed regression, breaking exactly what §4.3 exists to protect | the helper now **always establishes the flag**, from the value it was handed, whether or not `paths.sh` loaded |
+| 1 | gemini *(reproduction)* | **the agent fence FAILS CLOSED on a valid base in absent-`paths.sh` mode.** The three state libs each carry an **inline fallback**, so they always set `_UNLEASHED_BASE_OK`. **The fence does not** — it sources only the bridge (`agents/swift-reviewer.md:266-269`). With `paths.sh` absent the round-17 helper exported the value and returned **without setting the flag**, so round 17's "unset ⇒ unresolved" made the fence emit `NO CAPTURE` **even when `$1` was set and the base was valid** | **confirmed** — a genuine fail-open→fail-closed regression, breaking exactly what §4.3 exists to protect | the helper now **always establishes the flag**, from the value it was handed, whether or not `paths.sh` loaded |
 | 2 | gemini *(reproduction)* | **"consumers branch on the flag" contradicts four rows of the consumer table**, which state the three log hooks and `capture-reviewer-round-start.sh` need **no per-script guard** because the primitive's no-op already suffices | **confirmed** — the round-17 sentence was unqualified | branching is scoped to the consumers whose control flow actually **diverges**; the no-guard rows are named as such |
 | 3 | gemini *(reproduction)* | **diagnostic cardinality breaks in absent-file mode** — in the two empty-`$1` absent-`paths.sh` cells **no diagnostic is emitted at all**, violating exactly-one-per-process | **confirmed** — same root cause as finding 1 | the helper emits the single diagnostic itself when it resolves unresolved |
 
