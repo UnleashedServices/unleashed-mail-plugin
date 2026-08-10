@@ -347,11 +347,42 @@ release — `CHANGELOG.md:238`.)*
 > round-20 arms independently re-verified this.
 >
 > **The maintainer's report is therefore NOT yet diagnosed, and this section does not claim to fix it.**
-> Two candidate causes remain open: (a) `PreCompact` is not firing in the affected repository — the
-> `unleashed-mail` install is **project**-scoped and bound to the app repo, so no plugin hook fires in
-> *this* repo or its worktrees (kimi verified this in round 20 against `installed_plugins.json`), which
-> would produce "0s" with D′ entirely innocent; or (b) a consumer other than the two snapshot scripts is
-> being observed. **If (a), this is a hook-registration defect and belongs in its own ticket, not here.**
+> Two candidate causes were left open: (a) `PreCompact` is not firing in the affected repository; or (b)
+> a consumer other than the two snapshot scripts is being observed.
+
+> **ROUND 28 — candidate (a) is REFUTED, by execution. The compaction chain works end to end.**
+> Round 20 recorded that *"the `unleashed-mail` install is **project**-scoped and bound to the app repo,
+> so no plugin hook fires in this repo or its worktrees"*, attributed to kimi's read of
+> `installed_plugins.json`. **That read saw one of two entries.** Re-measured 2026-08-09 against the same
+> file: `plugins["unleashed-mail@npranson-unleashed-mail-plugin"]` is an **array of two** installations —
+> a `"scope": "user"` entry with **no `projectPath`** (`installPath` …/`2.7.0`, `lastUpdated`
+> `2026-08-09T05:34:46.154Z`) *and* the `"scope": "project"` entry bound to the app repo. A user-scope
+> install is unbound, so **plugin hooks do fire here.**
+>
+> Then the chain was executed rather than argued about, by compacting a live session in this repo on
+> 2026-08-09 and recording the before-state first (**zero** snapshots had ever been written; newest
+> `.state` write `Jul 29 23:57`; repo hash `e7d5478ad109`):
+>
+> | link | observed |
+> |---|---|
+> | `PreCompact` ran | `PreCompact [bash "${CLAUDE_PLUGIN_ROOT}/scripts/precompact-snapshot.sh"] completed successfully` |
+> | it wrote the snapshot | `.state` directory `mtime` advanced to `22:34:04` — a create+unlink in that directory |
+> | `SessionStart` restored it | the `additionalContext` hint was delivered verbatim into the model's context |
+> | restore consumed it | no `work-context-snapshot-*` remains, per the `rm -f "$SNAP"` at `sessionstart-restore.sh:83` |
+>
+> **This also confirms, by execution, the premise D′ rests on:** the snapshot landed **inside the plugin
+> data dir**, so `unleashed_base_ok` was true, so the hook really does receive `CLAUDE_PLUGIN_DATA`.
+> §1's claim is no longer only a reading of the code.
+>
+> **What it means for this section.** The compaction motivation is now dead twice over — by code-reading
+> in 19b and by experiment here — and candidate (a) cannot be the explanation for the maintainer's
+> report. The honest position is that **the "0s" report remains undiagnosed**, and D″ is not justified by
+> it. What the run *did* expose is unrelated to D′: the restored hint named `ticket=unknown`,
+> `branch=b28b7af69320`, `plan=docs/planning/REVIEW_GATE_WAIVER_DECISION_PLAN.md` — every field correct
+> for the code (`context_branch_slug("main")` reproduces that hash exactly) and useless in fact, because
+> the session cwd was the main checkout while the work was in a worktree, and "newest `*_PLAN.md` by
+> mtime" ties across a fresh checkout. **That is a snapshot-payload defect, not a base-resolution one,
+> and it belongs in its own ticket.**
 
 > **ROUND 21 — the round-19b re-anchoring was ALSO wrong, and both arms caught it.** 19b replaced the
 > compaction argument with *"`COREDEV-2585` §4.5b is blocked on exactly this"*. **In this tree there is
@@ -498,8 +529,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:863`) and its matrix change (`:869-873`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:896-903`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:969`) and its matrix change (`:975-979`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1002-1009`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -520,13 +551,54 @@ built to kill it. So:
 * On a conflicting authoritative publication — a valid pointer already naming a **different existing
   directory** — the publisher **atomically marks the pointer conflicted** and emits the one diagnostic.
 * **The DECISION must be serialized, not merely the write** (round 25, codex #3). `tmp` + `mv` makes the
-  replacement atomic; it does not make *read → compare → write* atomic. Two publishers can both read
-  "absent" and then `mv` in turn, and one can decide to publish before another writes `CONFLICTED` and
-  then erase the marker after it. **Publication takes an exclusive lock** on
-  `${HOME}/.claude/unleashed-mail/.publish.lock` (`mkdir`-based, the same primitive §4.5c of the journal
-  plan settled on, with a stale-TTL) for the whole read/compare/write sequence; a publisher that cannot
-  take the lock **skips publication and leaves the resolution untouched** — it is a side effect, and a
-  side effect never blocks. N6 carries concurrent-first-publication and concurrent-post-conflict cases.
+  replacement atomic — the idiom this repo already uses at `scripts/lib/marker.sh:156`,
+  `scripts/lib/log.sh:87`, `scripts/lib/context.sh:319` and `scripts/precompact-snapshot.sh:75` — but it
+  does not make *read → compare → write* atomic. Two publishers can both read "absent" and then `mv` in
+  turn, and one can decide to publish before another writes `CONFLICTED` and then erase the marker after
+  it. **Publication takes an exclusive lock** on `${HOME}/.claude/unleashed-mail/.publish.lock` for the
+  whole read/compare/write sequence.
+
+  > **ROUND 28 — this lock was justified by a citation to a section that does not exist, and to a
+  > primitive this repo does not have.** The round-25 text called it *"`mkdir`-based, the same primitive
+  > §4.5c of the journal plan settled on"*. Measured in this tree: `DECISION_JOURNAL_PLAN.md` is 567
+  > lines, its sections are `### 4.1`–`### 4.12` with no lettered subsections, and fixed-string greps for
+  > `4.5c`, `publish.lock` and `mkdir` return **zero** hits each. `grep -rn` for `flock`, `.lock` or any
+  > `mkdir`-based lock across `scripts/` also returns **nothing**. So there is no §4.5c, and there is no
+  > existing lock primitive for this one to be *"the same"* as.
+  >
+  > **This is the FOURTH fabricated citation on this ticket** — §4.5b (round 21), §8 Q5 and §8 Q6 (round
+  > 23), and now §4.5c — every one of them specific enough to read as verified. It is also the second to
+  > borrow authority from the same unmerged plan. The lock is therefore stated below on its own
+  > authority, as something **this plan introduces**, with no inherited design behind it.
+  >
+  > It escaped the mechanical citation check because the reference **wrapped across a line break**
+  > between "journal" and "plan", and that check scanned raw text while the sibling family check scanned
+  > flattened text. I had fixed the wrapping class in one function and left the other stale — the
+  > half-a-family defect, in the checker built to catch half-a-family defects. Both now share one
+  > flattened form, and the adequacy seed wraps its citation exactly as a list continuation does.
+
+  **The lock, specified rather than cited.** `mkdir` is the primitive: POSIX requires it to fail if the
+  path exists, and to do so atomically, which is what makes it usable as a mutex without `flock` (absent
+  on macOS by default). The holder removes the directory on completion. A lock whose directory `mtime` is
+  older than **60 s** is treated as abandoned and removed — a publisher only ever holds it for a `stat`,
+  a read and a `mv`, so a minute is several orders of magnitude of headroom, and the TTL exists solely so
+  a killed publisher cannot wedge publication permanently.
+
+  A publisher that cannot take the lock **skips publication and leaves the resolution untouched** — it is
+  a side effect, and a side effect never blocks. It sets `_UNLEASHED_POINTER_STATE=contended`.
+
+  > **Why `contended` is its OWN value and not folded onto `failed`** (round 28). The round-25 text said
+  > the publisher "skips publication" without saying what state it reports, and the enum was
+  > `created | current | conflict | failed` — so an implementer had to pick. Both available answers are
+  > wrong: `failed` fires the `SessionStart` notice, turning a benign sub-second race between two hooks
+  > into a user-facing warning about an unavailable state that is in fact about to become available; and
+  > `current`/`created` would assert a pointer this process never verified or wrote. Contention means
+  > *"another publisher holds the lock right now"*, which is neither a failure nor a success, and the
+  > honest enum has a value for it. **The notice predicate stays `conflict | failed`** — `contended` is
+  > silent. N6 carries a mutant that maps contention onto `failed` and requires the notice to stay
+  > silent, and a second that removes the value entirely and requires the enum check to reject it.
+
+  N6 carries concurrent-first-publication and concurrent-post-conflict cases.
 * **The conflicted state is a defined wire form, and it is STICKY** (round 23, codex #4). It is the
   single literal line `CONFLICTED` — chosen because it is not an absolute path, so every existing
   authentication clause already rejects it, and a reader that has not been taught about conflicts still
@@ -549,7 +621,7 @@ built to kill it. So:
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1108`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1214`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -574,6 +646,28 @@ hold, and falls through to step 3 otherwise:
   > plugin's threat model is same-uid, stated in the clause below. Everything from `${HOME}` down must be
   > euid-owned. N6 carries both a root-owned-prefix ACCEPT case and a writable-system-prefix REFUSE
   > case, so neither half can regress unnoticed.
+  >
+  > **ROUND 28 — that anchor is defined only for paths that pass through `${HOME}`, and the TARGET need
+  > not.** The pointer's own chain is under `${HOME}` by construction, so the rule is total there. The
+  > target chain is the value `CLAUDE_PLUGIN_DATA` held, and this plan already records
+  > (`CLAUDE_CONFIG_DIR`, cache-root and `--plugin-dir` in the load-bearing-claim paragraph above) that
+  > the data dir is relocatable. For a target such as `/opt/claude/data`, **no component is at or below
+  > `${HOME}`** — so "everything from `${HOME}` down must be euid-owned" quantifies over the empty set,
+  > every component falls into the "system prefix" arm, and the euid-ownership requirement silently
+  > disappears from the target chain altogether. The rule is not wrong there; it is **absent**, and an
+  > implementer would have to invent it. That is the same shape as the round-25 defect it is written
+  > underneath — a rule stated for the case in front of me and left undefined for the neighbouring one.
+  >
+  > **Completed:** the anchor is *the first component at or below `${HOME}` if the path passes through
+  > `${HOME}`; otherwise the first component that is **not** euid-owned-safe as a system prefix* — i.e.
+  > walk the target chain from `/` downward, accept a leading run of components that are root-owned, not
+  > group- or world-writable and not symlinks, and require **every component from the first non-system one
+  > onward** to be euid-owned. Under `${HOME}` this reduces to exactly the rule above, so the two cases
+  > share one predicate rather than two. A target every one of whose components is root-owned (a
+  > system-wide install) is accepted and **is not writable by this uid** — which the follower discovers
+  > when its write fails, not by mis-trusting the path. N6 gains an off-`${HOME}` target ACCEPT case and
+  > an off-`${HOME}` target with a **user-writable intermediate** REFUSE case; without the second, the
+  > empty-set reading would pass unnoticed.
 * it is not marked conflicted.
 
 > **Why the whole target chain, and not just the target** (round 23, codex #5). The round-21 text called
@@ -650,7 +744,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:949`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1055`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -662,7 +756,9 @@ Round 20 (codex #6) added that `sessionstart-restore.sh:16-18` sources `context.
 logic, so a source-time step 1 publishes there anyway — the hook cannot observe its own failure.
 
 **Decided, rather than left open:** the resolver exposes a source-time publish result
-`_UNLEASHED_POINTER_STATE` ∈ `created` | `current` | `conflict` | `failed`. `SessionStart` emits **one**
+`_UNLEASHED_POINTER_STATE` ∈ `created` | `current` | `conflict` | `contended` | `failed`. *(`contended`
+added round 28 — lock contention had no value and would have been folded onto `failed`, which fires the
+notice for a benign race; see the publish-policy section.)* `SessionStart` emits **one**
 non-blocking `additionalContext` line, still `exit 0`, when that value is `conflict` or `failed` — i.e.
 when the **non-hook path will fail** — and stays silent on `created`/`current`. This is a statement about
 the *other* shells, which is the state the maintainer actually experiences and which no hook could
@@ -677,7 +773,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1108`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1214`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -698,7 +794,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:863`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:969`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -789,6 +885,16 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 28 | **accept a group-writable system prefix** | writable `/` refused |
 | 29 | **skip publication using the weaker regular-file test** | `0644` pointer ⇒ `failed`, not `current` |
 | 30 | **drop the publication lock** | concurrent publishers cannot both write |
+| 31 | **map lock contention onto `failed`** | contended publish emits **no** `SessionStart` notice |
+| 32 | **delete `contended` from the enum** | a contended publish has a declared state to report |
+| 33 | **accept an off-`${HOME}` target with a user-writable intermediate** | `/opt/x` under a `0777` ancestor refused |
+| 34 | **require euid ownership of an all-root off-`${HOME}` target** | `/opt/claude/data`, all components root-owned, ACCEPTs |
+
+*(Rows 31-34 are round-28 additions, and each pins a rule that this round found **undefined rather than
+wrong** — the two halves of the `contended` state, and the two halves of the trust anchor where the
+target does not pass through `${HOME}`. Rows 33 and 34 are a matched pair for the same reason as 27/28:
+row 34 alone would be satisfied by an anchor that never requires euid ownership off-`${HOME}`, which is
+precisely the empty-set reading being closed.)*
 
 *(Rows 6-10, 13-14, 16 and 19 are round-23 additions; rows 21-30 are round-25 additions after codex #7
 showed the "one mutant per clause" claim was still false — four clauses had no row, and the asserted
@@ -828,7 +934,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1108` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1214` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1510,8 +1616,8 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    §4.2a; recorded here so it is not re-invented as a fallback. *(Round 21 cited this as "§8 Q5"; that
    question is N2 and this one did not exist. The reference is the defect, not the idea.)*
 
-8. **Should the unavailable-state notice live on `SessionStart` or `PostToolUse(Bash)`?** — **OPEN,
-   added round 23; **ANSWERED in round 25 — `SessionStart`.**]** §4.2a chooses it because the notice is a
+8. **Should the unavailable-state notice live on `SessionStart` or `PostToolUse(Bash)`?** — added round
+   23; **ANSWERED in round 25 — `SessionStart`.** §4.2a chooses it because the notice is a
    once-per-session fact, and the predicate is exactly `conflict | failed`. Recorded as answered rather
    than left `OPEN`, because §4.2a said "Decided, rather than left open" while this row said `OPEN` and
    §8 closed with "No open questions remain" — three statements, no two agreeing (codex #10).
