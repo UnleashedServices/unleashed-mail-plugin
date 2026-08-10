@@ -283,8 +283,8 @@ not both hold. Restated:
 > grep, not by memory of which one I just edited.)*
 >
 > * **Set:** the resolution is **unchanged** — the host base, exactly as D′. Step 1 additionally writes
->   **one** file outside it: the pointer, `${HOME}/.claude/unleashed-mail/base`, containing the base path
->   and nothing else, and only when `HOME` is usable. *"only in the supplied host base"* is no longer
+>   **one** file outside it: its own entry `${HOME}/.claude/unleashed-mail/bases/base.<key>`, containing
+>   the base path and nothing else, and only when `HOME` is usable. *"only in the supplied host base"* is no longer
 >   literally true of the process's total writes, and is restated below.
 > * **Unset or empty:** step 2 performs one bounded, authenticated **read** of that pointer. If it
 >   authenticates, the base resolves to the value the authority published — **the same directory the
@@ -302,7 +302,7 @@ not both hold. Restated:
 >   sets **either** the variable or a pointer no longer reproduces the defect.
 >
 > **The invariant that survives, and which N1/N2 now assert:** no state is written to any base other than
-> the one the resolution returns; the single exception is the pointer file; and when resolution fails,
+> the one the resolution returns; the single exception is this publisher's own entry in the store; and when resolution fails,
 > **no plugin-state payload is read or written anywhere** — the bounded pointer read being the one
 > exception, since an invalid pointer cannot be rejected without reading it.
 
@@ -564,14 +564,21 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
 1. `CLAUDE_PLUGIN_DATA` non-empty → **use it, `OK=1`, source `host-env`. Unconditionally — this branch
    never consults `HOME` and never fails.** D′'s set-variable behaviour is untouched.
 
-   *Then, as a **side effect that cannot affect the line above**:* if `_UNLEASHED_HOME_OK`, publish a
-   pointer file `${HOME}/.claude/unleashed-mail/base` containing that absolute path — written atomically
-   (tmp + `mv` **in the same directory**), fully suppressed, `0600`, into a directory created `0700` by
-   explicit `chmod`. Publish **unless** the pointer is already a regular non-symlink file whose content
-   equals the value — a *type-and-content* test, not a content-only one, which would leave a symlink
-   pointer with matching content permanently unrepaired by step 1 and permanently refused by step 2.
-   If `_UNLEASHED_HOME_OK` is false, or the publish fails for any reason, **no `${HOME}` path is composed
-   or opened at all**, `_UNLEASHED_POINTER_STATE=failed`, and the resolution above still stands.
+   *Then, as a **side effect that cannot affect the line above**:* if `_UNLEASHED_HOME_OK`, publish
+   **this publisher's own entry** `${HOME}/.claude/unleashed-mail/bases/base.<key>`, where `<key>` is the
+   injective encoding of that absolute path — written atomically (tmp + `mv` **in the same directory**),
+   fully suppressed, `0600`, into a store created by a single `mkdir -m 700`. Publish **unless** the entry
+   already authenticates under the shared predicate **and** its content equals the value — the complete
+   reader predicate, not a weaker type-and-content test, so a `0644` or symlinked entry is repaired rather
+   than reported `current` and then refused by step 2. If `_UNLEASHED_HOME_OK` is false, or the publish
+   fails for any reason, **no `${HOME}` path is composed or opened at all**,
+   `_UNLEASHED_POINTER_STATE=failed`, and the resolution above still stands.
+
+   *(**Round 31 — this step still described the SINGLETON pointer for a full round after round 30
+   replaced it**, so the operative algorithm and its own store disagreed. codex High #2. It is the fifth
+   half-a-family on this ticket and the largest: a redesign applied to one section and not propagated.
+   Every site naming the old single `base` file is corrected in the same commit, derived by grep rather
+   than recalled.)*
 
    **`created` and `current` must mean the FOLLOWER can use it** (round 25, codex #5). The skip test and
    the follower's test were different, so a pointer at mode `0644` — a regular non-symlink file with
@@ -605,8 +612,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1181`) and its matrix change (`:1187-1191`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1214-1221`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1242`) and its matrix change (`:1248-1252`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1275-1282`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -652,20 +659,49 @@ was executed in both and produced identical output. Derivation is a plain assign
 `k="$(...)"` — command substitution forks, and this runs at source time in every hook.
 
 **Why this removes the lock rather than hiding it.** Different base values produce different keys,
-therefore different paths, therefore **no two publishers ever write the same file**. There is no
-critical section, so there is nothing to serialise, nothing to release, and no trap. A publisher
-touches only `base.<key(its own value)>` and its own `.pub.<pid>.<key>`.
+therefore different paths, therefore **no two publishers holding DIFFERENT bases ever write the same
+file** — and it is only *different* bases that a lock was ever needed to arbitrate. There is no critical
+section, so there is nothing to serialise, nothing to release, and no trap.
+
+> **Two publishers holding the SAME base do target the same entry, and that is safe — but the round-30
+> wording claimed more than it could** (round 31, codex High #3). It said *"no two publishers ever write
+> the same file"*, without the qualifier; same-base publishers necessarily converge on one name. That is
+> harmless because the bytes are identical and `mv` is atomic, so either order yields the same content —
+> **but it must be stated, not hidden by an over-strong claim.**
+>
+> **The temporary name must not use `$$` alone.** Measured: concurrent subshells inherit the **same
+> `$$`** in both bash and zsh, so two same-base publishers could open the same temp inode and one could
+> rename it away while the other was still writing — reintroducing the torn read the tmp+`mv` idiom
+> exists to prevent. The temp name is `.pub.<pid>.<monotonic-unique-suffix>.<key>`, where the suffix is
+> derived without a fork and without `$RANDOM` (absent in POSIX `sh`); a publisher that cannot obtain a
+> unique temp name **does not publish** and reports `failed`. N6 carries a same-base concurrent-publish
+> case and a mutant that reverts the temp name to `$$` alone.
 
 **Conflict is a property of the directory, read at resolution time.** It is not a state one publisher
 writes for another to find, so the `CONFLICTED` wire form, its stickiness rule, the
 preserve-the-marker precondition, and operator-recovery-by-deletion all **go away**. A reader
 enumerates `base.*`, authenticates each, and:
 
-* **two or more authenticating entries** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
-  `POINTER_STATE=conflict`, one diagnostic naming both targets;
-* **exactly one** → resolve to it, `OK=1`, `SOURCE=pointer`;
-* **none** → step 3 verbatim — D′'s fail-closed protocol byte for byte;
-* **any entry that fails authentication** → refuse: `POINTER_STATE=stale`, one diagnostic naming it.
+**The rules are ORDERED and the order is normative** — evaluate top to bottom, first match wins:
+
+1. **any entry fails authentication** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
+   `POINTER_STATE=stale`, one diagnostic. *A malformed entry is never ignored in favour of a good one.*
+2. **two or more authenticating entries** → refuse: sentinel, `OK=0`, `SOURCE=unresolved`,
+   `POINTER_STATE=conflict`, one diagnostic **naming the entries, never the raw targets** — §4.1 permits
+   the raw path only inside the control file and states it is never emitted to stderr, so a conflict
+   message quoting two absolute paths would leak the username and hand attacker-controlled text to a
+   terminal (round 31, codex #8). N6 carries a redaction mutant;
+3. **exactly one** → resolve to it, `OK=1`, `SOURCE=pointer`, `POINTER_STATE=none`;
+4. **none** → step 3 verbatim — D′'s fail-closed protocol byte for byte, `POINTER_STATE=none`.
+
+> **ROUND 31 — THE RULES WERE UNORDERED AND TWO OF THEM OVERLAPPED** (codex High #5 and gemini #2,
+> concordant). One valid entry beside one malformed entry matched *both* "exactly one" and "any entry
+> fails authentication"; two valid plus one malformed matched both `conflict` and `stale`. **Branch order
+> therefore decided the resolution**, and it could differ between the five family copies — five
+> implementations of one rule, disagreeing, which is precisely the drift §4.3 exists to prevent.
+> Malformed-first is the fail-closed order: a store containing anything the reader cannot authenticate is
+> not a store it should resolve from, however many good entries sit beside the bad one. N6 mutates the
+> order and requires the one-valid-one-malformed case to refuse.
 
 > **COUNT ENTRIES, NEVER ACCUMULATE TARGET STRINGS** (round 30, correctness judge). The candidate
 > design counted distinct targets with a space-delimited accumulator tested by
@@ -674,7 +710,14 @@ enumerates `base.*`, authenticates each, and:
 > so two different bases could be counted as one, **reproducing this ticket's founding defect inside
 > the mechanism built to remove it.** It is also unnecessary. Invariant P plus the name↔content check
 > means two entries with **different names necessarily hold different values**, and directory entries
-> are distinct by definition. **So the count of distinct bases IS the count of authenticating entries** —
+> are distinct by definition. *(Round 31, codex High #1: "distinct by definition" is true of the
+> DIRECTORY, and the encoding is byte-injective — but **macOS is case-insensitive by default**, which
+> `.github/workflows/plugin-ci.yml:419` already recognises, so `/Data/A` and `/Data/a` alias to one
+> entry: last write wins, the reader sees one authentic entry, and the loser diverges silently. The
+> encoder therefore **case-folds nothing and escapes case**: an upper-case character is encoded as a
+> two-character sequence so that distinct bases remain distinct **as pathnames**, not merely as byte
+> strings. N6 carries a case-fold collision case, which row 44 — testing substitution order — does not
+> cover.)* **So the count of distinct bases IS the count of authenticating entries** —
 > no accumulator, no delimiter, no pattern matching, and no dependence on what characters a path
 > contains. N6 mutates this back to string accumulation with a space-bearing and a glob-bearing base.
 
@@ -731,7 +774,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1438`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1501`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -841,7 +884,7 @@ hold, and falls through to step 3 otherwise:
   > and **§5 carries it as a risk row rather than leaving it to be rediscovered.** N6 carries a granting-ACE
   > REFUSE case, a deny-ACE ACCEPT case (without which the blanket rule regresses), and a case asserting
   > the probe creates no file.
-* it is not marked conflicted.
+* *(Round 31: a clause reading "it is not marked conflicted" stood here. The `CONFLICTED` wire form was deleted with the lock — conflict is now a property of the directory, derived at read time — so the clause had nothing to test.)*
 
 > **Why the whole target chain, and not just the target** (round 23, codex #5). The round-21 text called
 > this "the whole chain" while authenticating ancestors only from `${HOME}` down to the *pointer's*
@@ -917,7 +960,7 @@ pointer file, which carries the base path and nothing else; and when resolution 
 payload is read or written anywhere** — the bounded pointer read being the one exception, since an
 invalid pointer cannot be rejected without reading it.**
 
-§5's inert-gate mitigation (`:1268`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1329`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -952,7 +995,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1438`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1501`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -973,7 +1016,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1181`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1242`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it.
 
@@ -1006,7 +1049,7 @@ must **prove the arms agree** rather than assume it.
 > **different** case — it sets `HOME=/probe` explicitly, so it does not inherit the developer's home, but
 > it still needs a temp `HOME` so a publish cannot create `/probe`. *(codex #8 — round 21 lumped them.)* **Sandbox
 > `HOME` in all three** — that is the three files listed above, not "two more harnesses" — and prove it:
-> *running the harness leaves `$HOME/.claude/unleashed-mail/base` byte-identical.*
+> *running the harness leaves `$HOME/.claude/unleashed-mail/bases/` byte-identical — every entry, and the set of entries.*
 >
 > **(c) The drift test — the draft named the wrong symbol, and with step 3 dropped the answer changes.**
 > `EXPECTED` (`test_shell_primitive_drift.py:92`) is the *legacy expansion string*, used only by
@@ -1079,6 +1122,23 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 56 | **refuse on any ACE, `deny` included** | `$HOME`'s real `group:everyone deny delete` still ACCEPTS |
 | 57 | **let the ACL probe write a test file** | refusal path creates nothing anywhere |
 | 58 | **admit a root conditional on `CLAUDE_CONFIG_DIR`** | publisher and reader reach the SAME verdict in different environments |
+| 59 | **drop a declared value from the enum** | every publish exit still maps to a declared value |
+| 60 | **assign a publish exit the wrong enum value** | each exit's value is the one §6's derivation gives |
+| 61 | **reorder the reader rules so a good entry wins over a malformed one** | one valid + one malformed entry REFUSES |
+| 62 | **revert the temp name to `$$` alone** | two same-base publishers cannot open the same temp inode |
+| 63 | **case-fold the encoding** | `/Data/A` and `/Data/a` produce distinct entries on a case-insensitive volume |
+| 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
+| 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
+| 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
+
+*(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
+31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
+because it reads as proof. 61 is the concordant precedence defect. 62-64 are codex's `$$`, case-fold and
+PII findings. 65 closes the fifth-copy contradiction: §7 makes `agent-env-bridge.sh` choose only the
+supplied value or the sentinel, which contradicts the five-copy mandate and the arm-equivalence
+requirement — with an authenticated entry, empty `$1` and `paths.sh` absent, that copy fails closed while
+the other four resolve. 66 restores the clean-install obligation that retired row 36 was carrying, since
+`mkdir -m 700 bases` does not create a missing parent.)*
 
 > **ROUND 30 — THIRTEEN ROWS WERE RETIRED, AND WHY MATTERS AS MUCH AS WHICH.** Rows **15, 16, 17, 29,
 > 30, 31, 32, 36, 37, 38, 39, 40, 41** are gone. Every one of them mutated a mechanism D″-pf **deletes**:
@@ -1118,11 +1178,12 @@ path, which is exactly what the round-23 rule did.)*
 
 **Cases** — each must fail when the fix is reverted:
 
-step 1 → base is the variable's value **and** the pointer holds it; a second run with the same value
-performs **no write** (asserted by mtime); a symlink pointer with matching content **is** republished as
-a regular file; a second install id leaves the pointer **marked conflicted**, not overwritten; step 2 →
-variable unset, valid pointer → base is the pointer's target, `_UNLEASHED_BASE_SOURCE=pointer`, and **no
-second store is created** (this fails under D′, which resolves to the sentinel, and under the pre-D′
+step 1 → base is the variable's value **and** this publisher's entry holds it; a second run with the same
+value performs **no write** (asserted by mtime); a symlinked or `0644` entry with matching content **is**
+republished as a conforming one; a second install id with a different base leaves **two entries**, which
+every reader resolves as a conflict — no publisher marks anything for another to find; step 2 →
+variable unset, exactly one authenticating entry → base is that entry's target,
+`_UNLEASHED_BASE_SOURCE=pointer`, and **no second store is created** (this fails under D′, which resolves to the sentinel, and under the pre-D′
 fallback, which resolves to `$HOME`); each authentication clause refused independently, including a
 **conflicted** pointer; step 3 → `HOME=""` → sentinel, `OK=0`, **exactly one** diagnostic, **no
 `${HOME}`-rooted open attempted at all**, and the D′ no-persistence envelope (`N2`, `N4`) holds in full;
@@ -1146,7 +1207,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1438` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1501` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1293,9 +1354,11 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 > the `CONFLICTED`-skip path with no value, one bullet away. Both times the prose said the enum was
 > total. So totality is no longer a sentence: **every exit path of the publish routine must be
 > enumerated, each mapped to exactly one enum value, and the mapping checked against the declared value
-> list.** An exit with no value, or a value not declared, fails verification. N6 rows 31-32 and 40-41
+> list.** An exit with no value, or a value not declared, fails verification. N6 rows 43, 59 and 60
 > mutate the mapping in both directions — a value dropped from the declaration, and an exit assigned the
-> wrong value. *(This is the same move as round 25's "the count is no longer asserted; the table is
+> wrong value. *(Round 31, both arms concordantly: this cited rows 31-32 and 40-41, all four **retired**
+> with the lock in round 30, so the totality mandate was enforced by nothing. A citation to a deleted
+> mutant is worse than none — it reads as proof.)* *(This is the same move as round 25's "the count is no longer asserted; the table is
 > derived from the clause list" — applied to the state space instead of the mutant set, for the same
 > reason: a claim of completeness that nobody can check is a claim that fails silently.)*
 
