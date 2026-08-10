@@ -294,7 +294,9 @@ not both hold. Restated:
 >   *(Round 25, codex #2: the round-23 wording said "nothing is read or written anywhere", which is
 >   **impossible** — an invalid pointer cannot be rejected without reading it, so the invariant
 >   contradicted step 2 in the same section. The bounded pointer read is the **one explicit exception**:
->   at most two lines from one fixed path, never repository or user content, and never anything that
+>   at most two lines from **each entry in one fixed directory** — bounded by the number of installed
+>   plugin ids, not by anything an attacker controls — never repository or user content, and never
+>   anything that
 >   reaches a consumer. Everything D′ meant by "no persistence" is preserved; the sentence was simply
 >   stronger than the truth. N1/N2/N6 oracles assert the narrowed form.)*
 > * So the no-persistence trigger is no longer *"variable unset"* alone but **"variable unset **and** no
@@ -488,7 +490,7 @@ important fact about this section**, and it is stated here rather than absorbed 
    > reading a comment** — which matters precisely because the three motivations beside it were all
    > retracted for being asserted rather than traced.
 
-   Round 2 (`:347-353`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
+   Round 2 (`:349-355`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
    sound **for the gate's purposes**; what it did not license was generalising "harmless here" to every
    consumer. *(Round 21: 19b paraphrased this as "already documented as unreachable no-ops". The bytes
    say "a harmless local no-op **for the gate**" — the writes were never unreachable, only invisible to
@@ -589,8 +591,12 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
    pointer it is about to leave in place — the no-write `current` path included — and sets `failed` if it
    would not authenticate.** One predicate, used by both sides; a second predicate is a second source of
    truth. N6 mutates the skip test to the weaker form and requires `failed`.
-2. else, **and only if `_UNLEASHED_HOME_OK`**, read that pointer. Accept only if it passes **full
-   authentication** (below) → use it, `OK=1`, source `pointer`.
+2. else, **and only if `_UNLEASHED_HOME_OK`**, **enumerate the store** `${HOME}/.claude/unleashed-mail/bases/`
+   and apply the **ordered** reader rules below — a failing entry refuses as `stale`, two or more
+   authenticating entries refuse as `conflict`, exactly one resolves (`OK=1`, source `pointer`), none
+   falls to step 3. *(Round 32: this step still said "read that pointer", a single file at a fixed path,
+   for two rounds after round 30 replaced it with per-publisher entries — the operative algorithm
+   disagreeing with its own store.)*
 3. else sentinel, `OK=0`, source `unresolved`, one diagnostic. **D′'s fail-closed protocol byte for
    byte.**
 
@@ -612,8 +618,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1311`) and its matrix change (`:1317-1321`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1344-1351`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1324`) and its matrix change (`:1330-1334`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1357-1364`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -807,7 +813,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1570`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1595`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1011,12 +1017,14 @@ N1 says a set variable writes *"only in the supplied host base"*; step 1 writes 
 The draft patched the *tests* to keep passing while leaving the normative text untouched — moving the
 oracle to fit the code. With step 3 dropped, the unset-case half of N1/N2 is **restored intact**: an
 unset variable with no valid pointer reads nothing and writes nothing. The invariant N1/N2 now assert:
-**no state is written to any base other than the one the resolution returns; the single exception is the
-pointer file, which carries the base path and nothing else; and when resolution fails, **no plugin-state
-payload is read or written anywhere** — the bounded pointer read being the one exception, since an
-invalid pointer cannot be rejected without reading it.**
+**no state is written to any base other than the one the resolution returns; the single exception is this
+publisher's own entry in the store, which carries the base path and nothing else; and when resolution
+fails, **no plugin-state payload is read or written anywhere** — the bounded read of the store's entries
+being the one exception, since an invalid entry cannot be rejected without reading it.**
+*(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
+swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1398`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1423`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1051,7 +1059,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1570`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1595`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1072,9 +1080,12 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1311`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1324`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
-must **prove the arms agree** rather than assume it.
+must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
+`_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
+the one round 31's ordered reader rules and the notice predicate both consume — so five copies could
+disagree about what to report while agreeing about what they resolved, and nothing would catch it.)*
 
 > **TEST TRAP — read this before editing a single test.** Three hazards.
 >
@@ -1186,6 +1197,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 69 | **encode upper-case as `_<lower>` instead of `_c<lower>`** | `/a_b` vs `/aUb`, and `/a/b` vs `/aSb`, produce DISTINCT entries |
 | 70 | **let an orphaned `.pub.*` temporary be enumerated** | a crash-orphaned temporary changes no resolution |
 | 71 | **give the harness its own copy of the chain-walk predicate** | the fixture seam feeds the SAME accessor production uses |
+| 72 | **let the quarantine remove and re-create `~/.claude/unleashed-mail`** | every entry under `bases/` survives the sweep byte-identical, and the entry SET is unchanged |
+| 73 | **omit `_UNLEASHED_POINTER_STATE` from arm equivalence** | all five copies report the SAME state for one store, not merely the same resolution |
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
 | 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
@@ -1278,7 +1291,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1570` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1595` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1365,22 +1378,34 @@ own explicit disposition in the same step — round 1 noted the draft left it un
 > marker that is §2's load-bearing evidence) is why the inverted ordering would have been mandatory had
 > the step survived — recorded so a future revival does not miss it.
 >
-> **ROUND 23 — the ORDERING is unchanged, but this section's SCOPE is not (codex #3).** D″ makes
-> `~/.claude/unleashed-mail` the **pointer's parent**, and §4.2a refuses to publish into a directory that
-> is group- or world-writable. Measured on this machine it is `drwxr-xr-x` (`0755`). So moving the 21
-> files out and stopping — which is all this section currently does — leaves an **emptied `0755`
-> directory that refuses every future publication**, permanently. The quarantine would complete, report
-> success, and leave D″ inert.
+> **ROUND 32 — THIS BLOCK WAS WRITTEN FOR THE SINGLETON POINTER AND WAS NEVER REVISITED. Its premise is
+> false, one of its three additions is now DESTRUCTIVE, and another cannot fail.** Proved mechanically:
+> `git log -L1368,1383:<plan>` returns a **single** commit, `938a97c` (round 23) — byte-identical since,
+> while round 30 deleted the singleton and round 31 propagated that to eight other sites. **Round 31
+> swept by grepping the deleted NAMES; this section names the same things in different words** ("the
+> pointer's parent", "that directory"), so grep passed over it — and `:48` went on asserting *"§4.3,
+> §4.4 and the D′ envelope stand."* **A section certified without being read.** Sixth half-a-family, and
+> the one that shows the propagation METHOD was inadequate, not just its coverage.
 >
-> Three additions, in this section rather than §4.2a because they are quarantine mechanics:
-> 1. **Move exactly the legacy inventory.** If an authenticated `base` pointer already exists in that
->    directory it is **preserved in place**, never swept into the quarantine — the current "move the 21
->    files" wording would carry it off and silently un-publish the machine.
-> 2. **Repair the parent**: after the move, remove and re-create the directory `0700`, or `chmod` it, as
->    an explicit documented step. Not a side effect of the move.
-> 3. **Prove it end to end**: loose `0755` parent → quarantine → a subsequent publication **succeeds**.
->    Asserting only that the files moved is the "recorded but never compared" defect this campaign has
->    now hit four times.
+> * **The premise is false.** `~/.claude/unleashed-mail` is no longer the pointer's parent; the store is
+>   `bases/` one level down, created `mkdir -m 700` by the publisher. The exact-`0700` rule applies only
+>   to `bases/`, and `0755` ancestors satisfy the general rule — measured ACCEPT on this machine's real
+>   modes, so the "emptied `0755` directory refuses every future publication, permanently" hazard this
+>   block was written for **cannot occur**.
+> * **Addition 2 is destructive and is DELETED.** *"After the move, remove and re-create the directory
+>   `0700`"* means `rm -rf ~/.claude/unleashed-mail && mkdir -m 700 …`, which deletes `bases/` and every
+>   published entry — **silently un-publishing the machine, verbatim the outcome addition 1 exists to
+>   prevent**, and falsifying this plan's own live invariant that the quarantine *"never touches"*
+>   `bases/`. No repair is needed at all now, so none is specified.
+> * **Addition 3 could not fail and is RE-AIMED.** *"Loose `0755` parent → quarantine → a subsequent
+>   publication succeeds"* passes identically before and after the quarantine, because publication
+>   already succeeds at `0755` — N6 row 51 requires exactly that. Reachability, not discrimination. It
+>   now asserts what the quarantine must actually preserve: **every entry under `bases/` is byte-identical
+>   across the sweep, and the set of entries is unchanged.**
+> * **Addition 1 survives, re-aimed.** It protected a file named `base`, which no longer exists. The
+>   sweep moves *files* out of `~/.claude/unleashed-mail`; `bases/` is a directory and is out of its
+>   reach structurally — but that is now stated as the reason rather than left to a clause that guards a
+>   deleted filename.
 
 **Proof — N4 (strengthened in round 3):** asserting only that the fallback is unreadable is satisfied
 the moment D′'s guards land, **even if the quarantine never happens**. So N4 must also prove the move
