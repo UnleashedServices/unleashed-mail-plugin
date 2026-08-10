@@ -618,8 +618,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1324`) and its matrix change (`:1330-1334`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1357-1364`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1334`) and its matrix change (`:1340-1344`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1367-1374`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -813,7 +813,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1595`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1605`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -923,6 +923,10 @@ hold, and falls through to step 3 otherwise:
   >   **unevaluable**, so the pointer path is refused — sentinel, `OK=0`, `POINTER_STATE=stale`, one
   >   diagnostic.
   >
+  > **`uname` is itself invoked as `/usr/bin/uname`** — round 32: selecting the platform with a bare
+  > `uname` would resolve through `PATH` and reintroduce, one level up, exactly the dependence codex
+  > High #7 removed from the enumerator.
+  >
   > Selecting on `uname -s` and invoking by absolute path makes the verdict a property of the **machine**
   > rather than of the invoking shell's environment, which is what "one predicate, both sides" requires.
   >
@@ -1024,7 +1028,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1423`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1433`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1059,7 +1063,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1595`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1605`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1080,7 +1084,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1324`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1334`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1199,6 +1203,10 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 71 | **give the harness its own copy of the chain-walk predicate** | the fixture seam feeds the SAME accessor production uses |
 | 72 | **let the quarantine remove and re-create `~/.claude/unleashed-mail`** | every entry under `bases/` survives the sweep byte-identical, and the entry SET is unchanged |
 | 73 | **omit `_UNLEASHED_POINTER_STATE` from arm equivalence** | all five copies report the SAME state for one store, not merely the same resolution |
+| 74 | **drop the `ZSH_VERSION` guard around `setopt`** | a bash arm sources cleanly under `set -euo pipefail`, with no `command not found` |
+| 75 | **use the two-pass `${v//…}` encoder** (the pre-31c normative form) | `/Data/A` and `/Data/a` produce distinct entries |
+| 76 | **select the platform with a bare `uname`** | publisher and reader agree under different `PATH`s |
+| 77 | **move the vanished-entry skip below rule 1** | an operator deleting an entry mid-scan does not flip a healthy store to `stale` |
 | 64 | **emit raw target paths in the conflict diagnostic** | no absolute path reaches stderr |
 | 65 | **let `agent-env-bridge.sh` stay D′-only** | the fifth copy resolves an authenticated entry like the other four |
 | 66 | **omit parent creation for a missing `~/.claude/unleashed-mail`** | a clean install publishes, and reports `failed` only on a real error |
@@ -1291,7 +1299,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1595` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1605` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
