@@ -2,6 +2,13 @@
 
 **Status:** Planning — **ROUND 34 OPEN: §4.2a is PROSPECTIVE CAPABILITY WORK, not a defect fix.**
 
+> **CORRECTION RULE (round 50).** A correction edits the **clause**; the note may only explain why.
+> Five times now a finding about a rule was answered by writing the fix into an explanatory
+> parenthetical while the operative sentence kept the old contract — the Linux ACL grammar, the
+> publisher's own-entry state, Invariant P's marker count, the bridge's empty-`$1` branch (twice). Each
+> read as fixed to me and as unfixed to a reviewer, because the reviewer codes the clause. **If a fix
+> cannot be expressed by changing the clause, it is not yet a fix.**
+>
 > **HEADER RULE (round 30).** This header may not assert a motivation, a consumer count, or a severity
 > that the section it summarises does not itself carry. It broke that rule twice: it said *"the
 > specification is what is wrong"* (defect framing) and *"the anchor is now three consumer classes"*
@@ -420,7 +427,7 @@ release — `CHANGELOG.md:238`.)*
 > non-hook-provisioned shell."* **That inference does not hold.** `precompact-snapshot.sh` has exactly one
 > executable invoker — `hooks/hooks.json:101`, the `PreCompact` hook — and `sessionstart-restore.sh`
 > exactly one, `hooks.json:113` under `SessionStart`. Every other occurrence is prose (`README.md:463`)
-> or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:129-135`) establishes that
+> or a file-presence check (`scripts/ci-load-check.sh:98-101`). Since §1 (`:136-142`) establishes that
 > `CLAUDE_PLUGIN_DATA` **is** exported to hook invocations, `unleashed_base_ok` at
 > `precompact-snapshot.sh:53` is true whenever that script runs, and **the snapshot is written**. Both
 > round-20 arms independently re-verified this.
@@ -504,7 +511,7 @@ important fact about this section**, and it is stated here rather than absorbed 
    > reading a comment** — which matters precisely because the three motivations beside it were all
    > retracted for being asserted rather than traced.
 
-   Round 2 (`:349-355`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
+   Round 2 (`:356-362`) rejected the A+D hybrid partly on this consumer's account, and that reasoning was
    sound **for the gate's purposes**; what it did not license was generalising "harmless here" to every
    consumer. *(Round 21: 19b paraphrased this as "already documented as unreachable no-ops". The bytes
    say "a harmless local no-op **for the gate**" — the writes were never unreachable, only invisible to
@@ -616,7 +623,10 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
    non-empty `CLAUDE_PLUGIN_DATA` without proving it absolute, so a relative value could be published and
    then refused by every reader. **So the publisher runs the COMPLETE follower authentication against the
    pointer it is about to leave in place — the no-write `current` path included — and sets `failed` if it
-   would not authenticate.** *(Round 48, codex High #2: this said the publisher "sets `failed`" if its own
+   would not authenticate — and the RESULTING STATE is whatever the ordered post-scan exits assign, not a
+   value chosen here.** *(Round 50: round 48 wrote this correction into the note below and left the
+   clause still saying "sets `failed`", so the overlap it was meant to remove survived in the operative
+   text. Round 48, codex High #2: the clause said the publisher "sets `failed`" if its own
    entry would not authenticate, while the ordered post-scan exits map **any** failing entry — its own
    included — to `stale`. A `0644` own entry satisfied both, so rows 59/60 had no unique expected value.
    The ordered list is authoritative: this clause supplies the OBLIGATION to authenticate, not a second
@@ -649,8 +659,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1550`) and its matrix change (`:1556-1560`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1583-1590`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1579`) and its matrix change (`:1585-1589`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1612-1619`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -696,9 +706,19 @@ ${HOME}/.claude/unleashed-mail/bases/.pub.<pid>.<uniq>.<key>  transient; outside
 ```
 
 **Invariant P — the name is a pure function of the bytes. THIS IS THE ONE DEFINITION OF THE ENCODER;
-every other mention in this document is a reference to it and adds nothing normative.** A **BYTE walk
-under `LC_ALL=C`** with **four disjoint markers**, plus a fourth for every byte outside printable ASCII: `_` → `_u`, `/` → `_s`, upper-case `C`
-→ `_c<lower(C)>`, and **any byte `>= 0x80` or `< 0x20` → `_x<two lower-case hex digits>`**. The output is
+every other mention in this document is a reference to it and adds nothing normative.** A **BYTE walk under `LC_ALL=C`** with **exactly four disjoint markers**:
+
+```
+_            -> _u
+/            -> _s
+upper C      -> _c<lower(C)>
+byte >=0x80 or <0x20 -> _x<two lower-case hex digits>
+```
+
+*(Round 50, codex High #3: this read "four disjoint markers, **plus a fourth** for every byte outside
+printable ASCII" — a leftover from when there were three, which made the RULE itself say four-or-five
+while the explanation said four. The markers are now a table, so the count is not restated in prose and
+cannot drift from it again.)* The output is
 therefore **pure lower-case-safe ASCII**: a case-insensitive volume has nothing to fold, a
 **normalization-insensitive volume has nothing to normalize**, and `${#_k}` counts bytes because every
 character is one byte.
@@ -925,7 +945,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1909`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1938`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1057,9 +1077,18 @@ hold, and falls through to step 3 otherwise:
   >   class was right, which is exactly why the fix is the inversion rather than another entry.)*
   >
   > * **Linux** (`uname -s` = `Linux`): `/usr/bin/getfacl -pc <path>`; the grammar is different and is
-  >   specified rather than assumed — refuse **iff both** hold: (a) at least one `user:<name>:` or
-  >   `group:<name>:` entry with `<name>` non-empty carries `w`, **and** (b) the `mask::` line permits
-  >   `w`. *(Round 35: "and a `mask::` line permitting `w`" was ambiguous between a second independent
+  >   specified rather than assumed — refuse **iff both** hold: (a) at least one
+  >   **`user:<name>:`, `group:<name>:`, `default:user:<name>:` or `default:group:<name>:`** entry with
+  >   `<name>` non-empty carries `w`, **and** (b) the corresponding `mask::` line — `mask::` for access
+  >   entries, `default:mask::` for default entries — permits `w`.
+  >
+  >   **The `default:` prefixes are part of the RULE, not of the note below it** (round 50, codex High
+  >   #1). Round 48 wrote the default-ACL correction into the explanatory parenthetical and left this
+  >   clause naming only `user:`/`group:`, so an implementer coding the grammar still refused on access
+  >   entries alone — the fix existed only in prose. **That is the fifth time a correction landed in a
+  >   note while the rule kept the old contract, and it happened in the round whose commit message was
+  >   about that very defect.** The discipline is therefore stated as a rule of this document: *a
+  >   correction edits the clause; the note may only explain why.* *(Round 35: "and a `mask::` line permitting `w`" was ambiguous between a second independent
   >   trigger and a conjunct of the first. It is a conjunct — a named grant the mask filters out confers
   >   nothing, so refusing on it would be the same overbreadth as the Darwin arm above. `default:`
   >   entries are **CHECKED with the same rule as access entries** — and the round-35 reasoning that
@@ -1209,7 +1238,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1649`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1678`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1244,7 +1273,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1909`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1938`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1265,7 +1294,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1550`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1579`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1515,7 +1544,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1909` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1938` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
