@@ -616,7 +616,11 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
    non-empty `CLAUDE_PLUGIN_DATA` without proving it absolute, so a relative value could be published and
    then refused by every reader. **So the publisher runs the COMPLETE follower authentication against the
    pointer it is about to leave in place — the no-write `current` path included — and sets `failed` if it
-   would not authenticate.** One predicate, used by both sides; a second predicate is a second source of
+   would not authenticate.** *(Round 48, codex High #2: this said the publisher "sets `failed`" if its own
+   entry would not authenticate, while the ordered post-scan exits map **any** failing entry — its own
+   included — to `stale`. A `0644` own entry satisfied both, so rows 59/60 had no unique expected value.
+   The ordered list is authoritative: this clause supplies the OBLIGATION to authenticate, not a second
+   mapping.)* One predicate, used by both sides; a second predicate is a second source of
    truth. N6 row 80 mutates the skip test to the weaker form and requires `failed`. *(Round 34: this cited a mutant that does not exist — row 29 carried it and was retired in round 30 with no replacement, so the obligation shipped citing proof that had been deleted. The plan's own words: a citation to a deleted mutant is worse than none, because it reads as proof.)*
 2. else, **and only if `_UNLEASHED_HOME_OK`**, **enumerate the store** `${HOME}/.claude/unleashed-mail/bases/`
    and apply the **ordered** reader rules below — a failing entry refuses as `stale`, two or more
@@ -645,8 +649,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1537`) and its matrix change (`:1543-1547`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1570-1577`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1550`) and its matrix change (`:1556-1560`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1583-1590`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -921,7 +925,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1888`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1909`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1058,8 +1062,15 @@ hold, and falls through to step 3 otherwise:
   >   `w`. *(Round 35: "and a `mask::` line permitting `w`" was ambiguous between a second independent
   >   trigger and a conjunct of the first. It is a conjunct — a named grant the mask filters out confers
   >   nothing, so refusing on it would be the same overbreadth as the Darwin arm above. `default:`
-  >   entries are **ignored**: they set inheritance for future children and grant nothing on the
-  >   directory itself; an anchored match at line start excludes them.)*
+  >   entries are **CHECKED with the same rule as access entries** — and the round-35 reasoning that
+  >   they "grant nothing on the directory itself" was wrong in a way that opened a live injection path
+  >   (round 48, codex High #1). A POSIX default ACL determines the ACCESS ACL of newly created
+  >   children, and this family CREATES children inside the target: `marker.sh:147` and
+  >   `precompact-snapshot.sh:63` both `mkdir -p` under it. So a target carrying
+  >   `default:user:attacker:rwx` with a permissive default mask authenticates cleanly, and the `.state`
+  >   directory it then creates is attacker-writable — after which snapshot content reaches the model
+  >   through `additionalContext`, which is exactly the prompt-injection path this section exists to
+  >   close. **Refuse on a `default:` entry granting a mutating right, exactly as for an access entry.**)*
   > * **Any other platform, or the expected enumerator missing at its absolute path:** the condition is
   >   **unevaluable**, so the pointer path is refused — sentinel, `OK=0`, `POINTER_STATE=stale`, one
   >   diagnostic.
@@ -1198,7 +1209,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1636`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1649`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1233,7 +1244,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1888`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1909`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1254,7 +1265,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1537`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1550`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1408,6 +1419,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 101 | **leave an existing `bases/` at `0755` unhandled by the reader rules** | a usable `HOME` with an unauthenticated STORE refuses as `stale`, not resolves |
 | 102 | **treat the ACL rights list as a mutating BLACKLIST** | a right absent from the list REFUSES; only the seven read-only rights accept |
 | 103 | **omit `_UNLEASHED_PUBLISH_OK=0` from the bridge BODY** | the fence writes no entry even though step 1's rule alone would permit it |
+| 104 | **ignore `default:` ACL entries (Linux)** | a target carrying `default:user:other:rwx` REFUSES — the `.state` it would create must not be attacker-writable |
+| 105 | **let the own-entry clause assign a state directly** | a `0644` own entry yields exactly ONE enum value, from the ordered exits |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1502,7 +1515,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1888` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1909` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
@@ -1628,7 +1641,7 @@ with its own inventory.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| **ACLs cannot be enumerated on every platform** | **Low** | **Round 30 — round 29's blanket acceptance is REVERSED; only the unenumerable case remains a limit.** Darwin refuses any component carrying an `allow` ACE that names another principal AND grants a mutating right (`deny` ignored, read-only `allow` accepted — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists **the pointer path is refused**, not accepted on mode bits alone *(round 31, codex #7 — the round-30 text had this fail OPEN)*; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
+| **ACLs cannot be enumerated on every platform** | **Low** | **Round 48 — the remaining limit is the unenumerable PLATFORM only. `default:` entries were a live injection path and are checked as of round 48.** Round 30 reversed round 29's blanket acceptance. Darwin refuses any component carrying an `allow` ACE that names another principal AND grants a mutating right (`deny` ignored, read-only `allow` accepted — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists **the pointer path is refused**, not accepted on mode bits alone *(round 31, codex #7 — the round-30 text had this fail OPEN)*; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
 | The fix breaks the fail-open property of hooks | **High** | §4.3 keeps the absent-`paths.sh` fallback; A is rejected for the hook path |
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
@@ -1809,8 +1822,16 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    `[ -r … ] && .` guard this now copies. I wrote a four-line body to close "the mechanism is unspecified"
    and omitted the one line that makes it safe.)*
 
-   **When `paths.sh` is absent** the helper's resolver is not defined — so the helper establishes the flag
-   **itself**, from the value it was handed, and emits the single diagnostic if unresolved.
+   **When `paths.sh` is absent** the helper's resolver is not defined — so the helper performs the
+   resolution **itself**, inline: a non-empty `$1` resolves to it (`host-env`); an empty or unset `$1`
+   **runs step 2 against the store**, falling to the sentinel only if step 2 resolves nothing, and
+   emitting the single diagnostic then. All four protocol variables are established either way.
+
+   > **ROUND 48, codex High #3 — this paragraph still said the helper derives the flag "from the value
+   > it was handed", i.e. D′-only.** Round 38 struck a DIFFERENT paragraph making the same claim and I
+   > treated the family as closed; this is its fourth site. Stated as a standing rule: **the bridge's
+   > inline fallback runs the same three-step resolution as the other four copies**, and any sentence
+   > implying it derives only from its argument contradicts it.
 
    *(Round 18, from the REPRODUCTION run: this is the defect that made a double approval fail to
    reproduce, and it is a genuine regression I introduced. The three state libs each carry an **inline
