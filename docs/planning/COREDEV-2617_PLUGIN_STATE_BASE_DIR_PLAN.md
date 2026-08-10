@@ -576,7 +576,20 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
 1. `CLAUDE_PLUGIN_DATA` non-empty → **use it, `OK=1`, source `host-env`. Unconditionally — this branch
    never consults `HOME` and never fails.** D′'s set-variable behaviour is untouched.
 
-   *Then, as a **side effect that cannot affect the line above**:* if `_UNLEASHED_HOME_OK`, publish
+   **EXCEPTION — a non-authoritative shell resolves but never publishes.** A shell whose
+   `CLAUDE_PLUGIN_DATA` was *substituted in* rather than *exported by the host* — the `agent-env-bridge`
+   fence, whose `$1` comes from agent content — sets `_UNLEASHED_PUBLISH_OK=0` **before** sourcing
+   `paths.sh`, and the publish side effect is skipped entirely, reporting
+   `_UNLEASHED_POINTER_STATE=none`. *(Round 40, codex High #2: rounds 36 and 38 both asserted this
+   exception was "lifted into the operative step-1 statement". **It was not — this is the third note in
+   this document claiming an edit that was never made.** And the mechanism as described could not have
+   worked anyway: the bridge exports the value and THEN sources `paths.sh`, so the shared resolver would
+   publish before any inline branch could report `none`. The suppression must therefore be set before
+   the source, which is why it is a variable and not a later decision — a non-authoritative Bash-tool
+   shell writing a durable publisher entry is precisely what this exception exists to prevent.)*
+
+   *Then, as a **side effect that cannot affect the line above**:* if `_UNLEASHED_HOME_OK`
+   **and `_UNLEASHED_PUBLISH_OK` is not 0**, publish
    **this publisher's own entry** `${HOME}/.claude/unleashed-mail/bases/base.<key>`, where `<key>` is the
    injective encoding of that absolute path — written atomically (tmp + `mv` **in the same directory**),
    fully suppressed, `0600`, into a store created by a single `mkdir -m 700`. Publish **unless** the entry
@@ -628,8 +641,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1479`) and its matrix change (`:1485-1489`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1512-1519`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1516`) and its matrix change (`:1522-1526`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1549-1556`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -728,6 +741,14 @@ preserve-the-marker precondition, and operator-recovery-by-deletion all **go awa
 enumerates `base.*`, authenticates each, and:
 
 **The rules are ORDERED and the order is normative** — evaluate top to bottom, first match wins:
+
+**Rule −1 comes first: authenticate the STORE, before any entry.** If `bases/` exists but is not a
+directory, is a symlink, is not euid-owned, or is not exactly `0700` → refuse: sentinel, `OK=0`,
+`SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. If it does not exist at all → rule 4 (step 3
+verbatim). *(Round 40, codex #4: rules 0-4 quantified only over ENTRIES, so a usable `HOME` with an
+existing `bases/` at mode `0755` — which the store rule says must be refused — matched no rule at all.
+An empty such store fell through to "none" and resolved as step 3 rather than refusing, and a populated
+one resolved from entries inside a directory the design had already declared untrustworthy.)*
 
 0. **an entry enumerated but gone when opened — and NOT a symlink** → **skip it; it is not an entry.**
    The test is `[ ! -L "$_f" ] && [ ! -e "$_f" ]`. *(Round 36, codex High #1: the rule tested `[ -e ]`
@@ -894,7 +915,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1808`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:1845`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1006,7 +1027,11 @@ hold, and falls through to step 3 otherwise:
   > * **Darwin** (`uname -s` = `Darwin`): `/bin/ls -lde <path>`; refuse on an `allow` line whose
   >   principal is not the effective user **and whose permission set contains a mutating right**
   >   (`write`, `add_file`, `add_subdirectory`, `delete`, `delete_child`, `writeattr`, `writeextattr`,
-  >   `chown`). *(Round 35: this refused on ANY `allow` ACE regardless of permission, while its own
+  >   `chown`, **`writesecurity`**). *(Round 40, codex High #3: `writesecurity` was omitted and it is a
+  >   FAIL-OPEN omission — macOS defines it as the right to write ownership, mode **or ACL**, so a
+  >   principal holding it can simply grant itself `write` and the predicate would have accepted the
+  >   path. An enumerated allowlist of rights is only as good as its enumeration, which is why the list
+  >   is now stated as closed and N6 mutates the omission.)* *(Round 35: this refused on ANY `allow` ACE regardless of permission, while its own
   >   rationale is write-only and the Linux arm already tests for `w`. A read-only inherited ACE is
   >   common on MDM-managed macs, so the unqualified rule would permanently refuse a fleet machine —
   >   the same overbreadth that made round 29 reject every real path and round 30 reject this one.)*
@@ -1025,6 +1050,14 @@ hold, and falls through to step 3 otherwise:
   > **`uname` is itself invoked as `/usr/bin/uname`** — round 32: selecting the platform with a bare
   > `uname` would resolve through `PATH` and reintroduce, one level up, exactly the dependence codex
   > High #7 removed from the enumerator.
+  >
+  > **The publisher runs the ACL clauses too — the "hooks pay zero" claim was wrong and is withdrawn**
+  > (round 40, codex High #1). The publisher must run the COMPLETE follower predicate, ACL clauses
+  > included, or it can leave an entry the reader will refuse — the `0644` defect in a new costume. So a
+  > hook pays the ACL cost as well, and row 92's "a hook resolution performs zero ACL forks" was a
+  > direct contradiction of the shared-predicate rule: obeying one falsifies the other. Row 92 is
+  > re-aimed at what is actually true — the ACL walk runs **once per resolution, not once per consumer**,
+  > because the protocol variables are set once per process.
   >
   > **The cost is real and is stated rather than discovered.** One `uname` plus one `ls -lde` per
   > component of two chains is roughly a dozen forks **per resolution**, on the same source-time path
@@ -1146,7 +1179,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1578`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1615`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1181,7 +1214,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1808`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:1845`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1202,7 +1235,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1479`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1516`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1307,7 +1340,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 52 | ~~drop the NAME_MAX pre-check~~ **SUPERSEDED by row 81** — the temp name is strictly longer and created first, so both halves of the old oracle held under the mutation |
 | 53 | **let a publisher write an entry that is not its own key** | a publisher touches only `base.<key(its value)>` and its own tmp |
 | 54 | **remove the harness `HOME` sandbox** | the developer's real store is byte-identical after `test-hooks.sh` |
-| 55 | **ignore ACLs entirely** | a component carrying an `allow` ACE for another principal is REFUSED |
+| 55 | **ignore ACLs entirely** | a component carrying an `allow` ACE that grants another principal a MUTATING right is REFUSED (a read-only `allow` is accepted — row 90) |
 | 56 | **refuse on any ACE, `deny` included** | `$HOME`'s real `group:everyone deny delete` still ACCEPTS |
 | 57 | **let the ACL probe write a test file** | refusal path creates nothing anywhere |
 | 58 | **admit a root conditional on `CLAUDE_CONFIG_DIR`** | publisher and reader reach the SAME verdict in different environments |
@@ -1344,12 +1377,16 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 89 | **apply only the entry clauses in rules 1-3** | an entry whose TARGET chain fails is refused, not resolved |
 | 90 | **refuse on a read-only `allow` ACE (Darwin)** | an inherited read-only ACE, as MDM fleets carry, still ACCEPTS |
 | 91 | **treat the `mask::` clause as an independent trigger (Linux)** | a named grant the mask filters out still ACCEPTS |
-| 92 | **run the ACL enumeration on the hook path** | a hook resolution performs zero ACL forks |
+| 92 | **re-run the ACL walk per consumer instead of once per process** | five sourced libraries in one process perform ONE ACL walk between them |
 | 93 | **derive the key without pinning `LC_ALL=C`** | bash and zsh produce BYTE-IDENTICAL keys for a non-ASCII path |
 | 94 | **let `LC_ALL=C` leak past the derivation** | a consumer's locale is unchanged after the resolver runs |
 | 95 | **leave the publisher's post-scan exits unordered** | own-entry-missing plus another malformed entry reports `failed`, not `stale` |
 | 96 | **enumerate publish exits only** | dropping `none` from the declaration FAILS, because reader rules 3-4 emit it |
 | 97 | **let the bridge's prose branch return the sentinel for empty `$1`** | empty `$1` + absent `paths.sh` + one valid entry resolves `OK=1` |
+| 98 | **omit `writesecurity` from the Darwin mutating-rights list** | an `allow writesecurity` ACE for another principal REFUSES |
+| 99 | **ignore `_UNLEASHED_PUBLISH_OK` in step 1** | the agent fence resolves without writing any entry |
+| 100 | **set `_UNLEASHED_PUBLISH_OK` after sourcing `paths.sh`** | the fence still writes nothing — the flag must precede the source |
+| 101 | **leave an existing `bases/` at `0755` unhandled by the reader rules** | a usable `HOME` with an unauthenticated STORE refuses as `stale`, not resolves |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1444,7 +1481,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1808` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1845` amended.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
