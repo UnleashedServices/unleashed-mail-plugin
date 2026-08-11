@@ -659,8 +659,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1599`) and its matrix change (`:1605-1609`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1632-1639`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1667`) and its matrix change (`:1673-1677`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:1700-1707`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -945,7 +945,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:1958`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2026`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1256,7 +1256,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:1698`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:1766`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1291,7 +1291,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:1958`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2026`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1312,7 +1312,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1599`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1667`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1564,7 +1564,75 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:1958` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2026` amended.
+
+### 4.2a-P — THE PRIMITIVES (how a POSIX shell actually learns each fact)
+
+> **WHY THIS SECTION EXISTS.** A consolidation of §4.2a into 102 single-statement rules was checked for
+> implementability, rule by rule, with one question: *could you write the shell from this statement
+> alone?* **51 of 80 passed. The 29 failures shared one shape — the plan specifies PREDICATES
+> completely and PRIMITIVES not at all.** Every clause said what must be true of a file; almost nothing
+> said how a shell learns it. Three of the gaps blocked §7 steps 3a, 3b and 3d outright, which is why
+> twenty-five gate rounds produced a document reviewers could argue about and nobody could build from.
+>
+> Each primitive below was **executed in `/bin/bash` 3.2.57 and `/bin/zsh` 5.9 on the reference
+> machine**, and the measured output is recorded with it. A primitive that has not been run is not a
+> primitive, it is a hope.
+
+**P-1 — Ownership by the effective uid: `[ -O <path> ]`.** Measured: works in **both** shells, **zero
+forks**. This is the answer everywhere a rule says "owned by the effective uid" (eleven rules depend on
+it). POSIX `test` has no such operator, but both shells in this family's support set implement `-O`, and
+this family targets bash and zsh — not POSIX `sh`.
+
+**P-2 — Mode bits.** There is no single fork-free answer, and the split is stated rather than papered
+over:
+* **zsh** — `zmodload zsh/stat; zstat -H h -- "$p"; mode=$(( ${h[mode]} & 511 ))`. **Zero forks.**
+* **bash** — no builtin exists, so **one fork**: `stat -f '%Lp' -- "$p"` on Darwin, `stat -c '%a' -- "$p"`
+  on Linux, selected by `/usr/bin/uname -s` and invoked by absolute path for the reason ACL-5 gives.
+  Measured: both return `750` for a `drwxr-x---` directory.
+* The budget in §6 counts this fork. A bash reader pays one `stat` per component; a zsh reader pays none.
+
+**P-3 — OCTAL LITERALS ARE NOT PORTABLE IN SHELL ARITHMETIC, and this would have corrupted every mode
+comparison silently.** Measured: `$((0777))` is **511 in bash** and **777 in zsh** — zsh reads a leading
+zero as decimal. `$((8#777))` is 511 in both, and plain `511` is 511 in both. **Every mask and every
+mode constant in this design is written `8#NNN` or in decimal; a bare `0NNN` inside `$(( ))` is
+forbidden.** The first `zstat` reading taken while writing this section returned `410` instead of `750`
+for exactly this reason, and it looked like a `zstat` bug rather than an arithmetic one.
+
+**P-4 — Creating a file at mode 0600 without `touch`, `chmod` or `mktemp`: `(umask 077; : > "$tmp")`.**
+Measured: yields `600` in **both** shells. The subshell scopes the `umask` change so it cannot leak to a
+consumer, and there is no create-then-`chmod` window for a concurrent publisher to observe — the window
+P-5 forbids for the store.
+
+**P-5 — Exclusive create (fail if the name exists): `set -C` (`noclobber`) plus a redirect.** Measured
+in both shells, on fresh names per shell: an existing file is **refused** and a new file is **created**.
+This is the primitive TMP-1 requires when it says the transient must be "created with an operation that
+fails if a file of that name already exists". `set -C` is scoped to the subshell that performs the
+creation, so it does not alter the sourcing shell's options.
+
+**P-6 — `<uniq>`: `$RANDOM`, which BOTH shells provide.** Measured: bash 3.2.57 and zsh 5.9 each return
+a value (`$RANDOM` is absent only from POSIX `sh`, which this family does not target — the plan's
+earlier "no `$RANDOM`" constraint was inherited from a POSIX framing that does not apply). `<uniq>` is
+therefore **`$RANDOM`, decimal, at most 5 digits**, which fixes the width the `NAME_MAX` budget needs:
+`len(".pub.") + len(pid) + 1 + 5 + 1 + len(key)`. On collision — detected by P-5 — the publisher retries
+with a fresh `$RANDOM` **at most three times**, then reports `failed`. `$$` alone is insufficient and
+the plan already proves it: concurrent subshells inherit one `$$`.
+
+**P-7 — Byte to two hex digits with no fork: `printf '%d' "'$c"`, masked, then `printf '%02x'`.**
+Measured across `\303 \251 \001 \037 \177 \377`: bash **sign-extends** (`ffffffffffffffc3` for `\303`)
+while zsh does not, so the mask is mandatory, not cosmetic:
+
+```sh
+n=$(printf '%d' "'$c"); n=$(( n & 255 )); printf '%02x' "$n"
+```
+
+With the mask, **both shells produce identical output for every byte tested** (`c3 a9 01 1f 7f ff`).
+`printf` is a builtin in both, and the arithmetic is builtin, so ENC-2's zero-fork requirement holds.
+
+> **What remains unmeasured, stated rather than implied.** P-2's Linux arm (`stat -c '%a'`) and the
+> `getfacl` grammar have not been executed on a Linux box — this machine is Darwin and has no
+> `getfacl`. They are specified from documentation, and §6's verification must run them on the CI
+> runner before either is treated as proved.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
