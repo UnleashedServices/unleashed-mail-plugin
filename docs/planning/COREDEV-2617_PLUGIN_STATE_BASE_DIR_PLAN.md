@@ -325,7 +325,7 @@ invalidate the reviewed digest (`AGENT_CONTRACTS.md:92`).
 |---|---|---|
 | **A** | Derive the id from `~/.claude/plugins/installed_plugins.json` (key `unleashed-mail@<marketplace>`, confirmed present) | adds a JSON parse to a **fail-open shell hook path**; needs a `jq`/`python3` dependency the hooks currently avoid |
 | **B** | Glob `~/.claude/plugins/data/unleashed-mail-*` | **ambiguous today** — two dirs match. Needs a tie-break, and picking wrong is silent |
-| **C** | Keep the env var authoritative; every non-hook entry point exports it | this is the **status quo workaround**, already copy-pasted into `agents/swift-reviewer.md:168-176` and `:239-244` (MAJ-6). Proven fragile: it requires every future call site to remember |
+| **C** | Keep the env var authoritative; every non-hook entry point exports it | this is the **status quo workaround**, already copy-pasted into `agents/swift-reviewer.md:180-193` and `:255-263` (MAJ-6). Proven fragile: it requires every future call site to remember |
 | **D** | Keep the env var authoritative but make the fallback **loud** (§4.1) and provide **one** documented bridge helper instead of per-agent copy-paste | smallest change; does not eliminate the split, makes it visible and recoverable |
 
 **ROUND 1 FINDING: no listed option satisfied N2, and D contradicted it outright.** §1 requires the base
@@ -529,7 +529,7 @@ important fact about this section**, and it is stated here rather than absorbed 
 3. **A model-written state path.** `docs/planning/DECISION_JOURNAL_PLAN.md:51` scopes the journal as
    *"written: at a checkpoint, by the model"* and `:64` puts *"the model-written write path"* in scope.
    **Stated honestly: on this branch that plan specifies no writer command, no invocation mechanism, and
-   no writer exists in the tree** (`grep -rln journal scripts/` returns nothing). The concrete §4.5b
+   no writer exists in the tree** (`grep -rln journal scripts/` now matches only `scripts/validate-plan-citations.py`, which READS this plan and writes no journal — the conclusion holds, but the evidence originally offered for it, that the grep returned nothing, no longer reproduces). The concrete §4.5b
    mechanism — a script the model invokes through the ordinary `Bash` tool — lives only on the unmerged,
    ungated 2585 branch. **So this is a prospective consumer, not a live blocker**, and D″ must not be
    justified by it. It is recorded because it shows the class is real and growing, not as evidence.
@@ -660,8 +660,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2003`) and its matrix change (`:2009-2013`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2036-2043`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2002`) and its matrix change (`:2008-2012`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2035-2042`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -946,7 +946,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2379`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2378`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1266,7 +1266,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2102`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2101`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1294,14 +1294,13 @@ otherwise report.
 
 The draft's justification was also false. *"`SessionStart` is the only hook that can address the model"*
 is contradicted by the tree: `scripts/lib/hook-io.sh:266-269` defines `hook_emit_posttool_context()` and
-`:275-278` `hook_emit_posttool_block()`, both in production use (`scripts/swift-build-verify.sh:71`,
-`scripts/swift-lint-check.sh:433`). The true statement is narrower: **`PostCompact` cannot inject
+`:275-278` `hook_emit_posttool_block()`. Both cited call sites in fact call the CONTEXT helper, not this one — `scripts/swift-build-verify.sh:71` is `hook_emit_posttool_context` — so "both in production use" was a claim about a function neither line calls. The true statement is narrower: **`PostCompact` cannot inject
 context; `SessionStart` and `PostToolUse` can.** `SessionStart` is chosen over `PostToolUse(Bash)`
 because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (added by this round)
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2379`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2378`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1322,7 +1321,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2003`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2002`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1581,7 +1580,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2379` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2378` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -2209,7 +2208,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
 
    Both placeholders are the **exact braced tokens**, which is the only form Claude Code substitutes, and
    both are in **agent content**, which is the only place it substitutes them
-   (`scripts/tests/test_doc_gates.py:39-47`; `agents/swift-reviewer.md:168-176` documents the same rule
+   (`scripts/tests/test_doc_gates.py:39-47`; `agents/swift-reviewer.md:180-193` documents the same rule
    for the current inline bridge). `agent-env-bridge.sh` takes the data value as **`$1`** and the plugin
    root as **`$2`**, exports the data value, then performs the shared source-time resolution.
 
@@ -2555,15 +2554,21 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    >   `[ -n "$X" ]` tests are allowlisted **as specific lines**, so a later edit that appends a suffix to
    >   one of them fails N5 until the allowlist is deliberately updated.
    > - **The four resolver definitions are the allowlist's core**, and the plan's "four accessors" is
-   >   correct as a count: `paths.sh:35` (canonical) plus the three **deliberate inline fallbacks** at
-   >   `marker.sh:29`, `log.sh:27` and `context.sh:36`. Those three are load-bearing by design, not drift
+   >   correct as a count: the canonical resolver in `paths.sh` plus the three **deliberate inline fallbacks**
+   >   in `marker.sh`, `log.sh` and `context.sh`. **The line numbers that stood here named the
+   >   `# shellcheck source=` directive above each fallback, not the fallback**, and §1's own round-30
+   >   correction already gave different numbers for the same three sites — two pins for one fact,
+   >   disagreeing. The allowlist is keyed by FILE in the shipped test, so no line number belongs here
+   >   at all. Those three are load-bearing by design, not drift
    >   — `paths.sh:11-20` explains that these libs are sourced standalone and that making them abort would
    >   convert three fail-open paths into one shared point of failure. N5 must pin them, **not** delete
    >   them.
    > - **Scan set includes the executable fences in `agents/**` and `skills/**`.** An agent body that
    >   tells the model to compose the path is the same defect shipped as prose, and
    >   `agents/swift-reviewer.md:266-269` is already on §7's guard list for exactly that. The MAJ-6 bridge
-   >   at `swift-reviewer.md:176` and `:244` (`export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"`)
+   >   in `swift-reviewer.md`'s two MAJ-6 fences — which pass the value as a bridge ARGUMENT, not as the
+   >   `export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"` line cited here, a spelling that exists
+   >   nowhere in `agents/`, `skills/` or `scripts/` at HEAD
    >   **propagates** the variable and composes nothing — allowlisted by the predicate above, and named
    >   explicitly so a future edit that appends a suffix to it fails.
    > - **Test fixtures are allowlisted by (file, reason), enumerated in the test source** — never by a
