@@ -659,8 +659,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1932`) and its matrix change (`:1938-1942`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:1965-1972`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:1969`) and its matrix change (`:1975-1979`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2002-2009`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -945,7 +945,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2291`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2328`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1256,7 +1256,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2031`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2068`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1291,7 +1291,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2291`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2328`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1312,7 +1312,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1932`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:1969`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1568,7 +1568,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2291` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2328` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1660,7 +1660,10 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 * **The byte-count check closes bash's half by construction** — the truncated read makes size (10) disagree with length+1 (5) — and it also closes `<path>\n\n` (4 vs 3), a missing trailing newline (11 vs 12) and a genuine second line (5 vs 3), in BOTH shells.
 * **zsh needs the explicit NUL test** because it keeps the NUL, so size and length+1 agree (10 = 10) and the byte check passes.
 * **bash must NOT run the NUL test.** `$(printf '\0')` is the EMPTY STRING in bash — command substitution strips NULs — so the pattern `*""*` matches everything and refuses every valid entry. Measured: the check written unguarded rejects a known-good entry in bash. It is guarded by `[ -n "${ZSH_VERSION:-}" ]`.
-* The size comes from the same accessor call as the mode (§4.2a-P P-2), so it costs no extra fork.
+* The size comes from the same accessor call as the mode (§4.2a-P P-2), so it costs no extra fork —
+  in BOTH arms, which P-2 previously satisfied in only one. The `${#line}` this size is compared
+  against is a BYTE count taken with `LC_ALL=C` in force (§4.2a-P P-2a); taken under a UTF-8 locale
+  it counts characters and this clause then rejects every valid non-ASCII entry.
 
 **ENT-3 — Name equals encoded content.** The entry authenticates only if `<store>/base.<key(L)>` — where L is the single line the file holds and `key()` is the Invariant P encoder — is byte-equal to the entry's own path. Because `key()` is injective over values, two entries with different names necessarily hold different values; therefore the count of distinct bases IS the count of authenticating entries. Neither reader nor publisher may accumulate target strings, delimit them, or pattern-match them to count distinct bases.
 
@@ -1841,13 +1844,47 @@ forks**. This is the answer everywhere a rule says "owned by the effective uid" 
 it). POSIX `test` has no such operator, but both shells in this family's support set implement `-O`, and
 this family targets bash and zsh — not POSIX `sh`.
 
-**P-2 — Mode bits.** There is no single fork-free answer, and the split is stated rather than papered
-over:
-* **zsh** — `zmodload zsh/stat; zstat -H h -- "$p"; mode=$(( ${h[mode]} & 511 ))`. **Zero forks.**
-* **bash** — no builtin exists, so **one fork**: `stat -f '%Lp' -- "$p"` on Darwin, `stat -c '%a' -- "$p"`
-  on Linux, selected by `/usr/bin/uname -s` and invoked by absolute path for the reason ACL-5 gives.
-  Measured: both return `750` for a `drwxr-x---` directory.
+**P-2 — Mode bits AND size, in one accessor call per component.** There is no single fork-free
+answer, and the split is stated rather than papered over. **Both arms yield the mode as an OCTAL
+STRING and the size as a decimal byte count**, so one comparison form works in both shells:
+* **zsh** — `zmodload zsh/stat; zstat -H h -- "$p"` then `printf -v m "%o" $(( ${h[mode]} & 511 ))`
+  and `s=${h[size]}`. **Zero forks.**
+* **bash** — no builtin exists, so **one fork**: `/usr/bin/stat -f '%Lp %z' -- "$p"` on Darwin,
+  `/usr/bin/stat -c '%a %s' -- "$p"` on Linux, selected by `/usr/bin/uname -s` and invoked by
+  absolute path for the reason ACL-5 gives.
+* **The `printf '%o'` in the zsh arm is load-bearing, not cosmetic, and its absence made the whole
+  authentication edifice uncodeable** — which is what round 63 measured. `zstat` returns mode as a
+  DECIMAL INTEGER while Darwin `stat -f '%Lp'` returns an OCTAL STRING: on the same `0700`
+  directory the arms as previously written returned **448** and **`700`**. No constant compares
+  equal to both — `[ "$m" = 700 ]` refuses a valid store under zsh, `[ "$m" -eq 448 ]` refuses it
+  under bash, and `$(( m == 8#700 ))` refuses under bash — so ST-3's exact-0700 and ENT-1's
+  exact-0600 could not be written at all. Re-measured with the `%o`: both arms return `600` and
+  size `2` for one 0600 file. Compare the octal STRING (`[ "$m" = 600 ]`); do not compare integers.
+* **The size comes from the SAME call in both arms**, which is what ENT-2 depends on. The previous
+  bash format (`'%Lp'`) returned no size at all while ENT-2 claimed it did.
+* **The Linux arm has still not been executed** — this machine is Darwin, where `/usr/bin/stat -c`
+  is `illegal option -- c` (executed). The previous text asserted that BOTH arms had been measured,
+  returning the same three digits for one directory — a MEASURED-CLAIM THIS SECTION'S OWN CLOSING
+  NOTE REFUTED, inside the section that exists to stop
+  exactly that. §6 must run the Linux arm on the CI runner before either arm is treated as proved
+  there.
 * The budget in §6 counts this fork. A bash reader pays one `stat` per component; a zsh reader pays none.
+
+**P-2a — Byte length of a shell string: `LC_ALL=C` in force, or the count is characters.** Measured
+on `/tmp/café`: `${#v}` is **9** under a UTF-8 locale and **10** under `LC_ALL=C`, in BOTH shells.
+ENT-2 compares a file's SIZE (always bytes) against `${#line} + 1`, so a `${#line}` taken outside
+`LC_ALL=C` compares bytes against characters and **rejects every otherwise-valid non-ASCII entry**.
+Every length this design compares against a byte count is therefore taken with `LC_ALL=C` in force,
+under ENC-3's save-and-restore discipline — which ENC-3 scopes to the key derivation alone, so the
+scope is stated again here rather than assumed to carry.
+
+**P-3a — The ACL principal name: `/usr/bin/id -un`, one fork.** ACL-2 refuses an `allow` ACE "whose
+principal is not the effective user", which needs the euid's NAME as a string to match against the
+enumerator's output; P-1's `[ -O ]` answers a different question and cannot supply it. Measured:
+`/usr/bin/id -un` returns `nick` in both shells, by absolute path, one fork, counted in BUD-1's
+per-resolution budget. **`$USER` may not be used**: it is inherited from the environment, and
+ACL-7 forbids a verdict that differs between a plugin hook and a git hook for the same machine
+state. The name is resolved ONCE per resolution, not once per component.
 
 **P-3 — OCTAL LITERALS ARE NOT PORTABLE IN SHELL ARITHMETIC, and this would have corrupted every mode
 comparison silently.** Measured: `$((0777))` is **511 in bash** and **777 in zsh** — zsh reads a leading
