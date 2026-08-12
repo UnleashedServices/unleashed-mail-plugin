@@ -85,7 +85,7 @@ see §11. N1 contradicted D′ and is rewritten; an empty base would have redire
 root; the consumer enumeration is now in the implementation order. Rounds 1-18 are in §10-§27.
 **Ticket:** `COREDEV-2617` (Epic `COREDEV-2485`) · §4.1-§4.4 **High** (the pre-D′ split, now shipped-fixed) · **§4.2a is prospective capability work, not a live defect** — see the HEADER RULE below
 **Last Updated:** 2026-08-10 (round 34 — the lock is deleted; per-publisher entries; see §4.2a)
-**Measured against:** HEAD `2ffe4b8`, worktree `.claude/worktrees/state-base`, plugin `2.7.1`. *(Round 34: this pinned `b2496a8` / a worktree that is not this one / plugin 2.6.4 — a **stale provenance pin naming content that is not here**, which is precisely the failure that voided round 33's gate when a prompt did the same thing.)*
+**Measured against:** HEAD `15e7794`, worktree `.claude/worktrees/state-base`, plugin `2.7.1`. *(Round 34: this pinned `b2496a8` / a worktree that is not this one / plugin 2.6.4 — a **stale provenance pin naming content that is not here**, which is precisely the failure that voided round 33's gate when a prompt did the same thing.)*
 
 ---
 
@@ -660,8 +660,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2000`) and its matrix change (`:2006-2010`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2033-2040`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2003`) and its matrix change (`:2009-2013`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2036-2043`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -946,7 +946,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2363`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2379`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1266,7 +1266,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2099`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2102`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1301,7 +1301,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2363`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2379`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1322,7 +1322,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2000`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2003`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1388,16 +1388,16 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 |---|---|---|
 | 1 | publish always (drop the COMPLETE-PREDICATE skip) | mtime unchanged on a no-change second run |
 | 2 | accept a symlink pointer — fixture must be a **DANGLING** symlink | a dangling `base.*` symlink REFUSES the store; it is not skipped as vanished |
-| 3 | accept a relative path | `foo/bar` refused |
-| 4 | accept a multi-line file | two-line pointer refused |
+| 3 | accept a relative path | an entry holding `foo/bar` yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic, and a conforming entry beside it does NOT win |
+| 4 | accept a multi-line ENTRY (ENT-2, reader side) | a two-line entry yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic, and a conforming entry beside it does NOT win |
 | 5 | accept a non-existent target | dangling path refused |
 | 6 | **accept a target that exists but is not a directory** | regular-file target refused |
 | 7 | **drop the pointer-owner check** | pointer owned by another uid refused |
-| 8 | **accept any pointer mode** | pointer at `0644` refused |
+| 8 | **accept any entry mode** | an entry at `0644` yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic, and a conforming entry beside it does NOT win |
 | 9 | **drop the trailing-slash rejection** | `/a/b/` refused |
 | 10 | **drop the NUL rejection** | embedded-NUL pointer refused |
 | 11 | ~~accept a group-writable pointer parent~~ **RETIRED round 66 — equivalent to row 22**, which covers the whole ancestor chain including the parent. N6-9 ordered this retirement and the row kept printing, so N6-1 read it as live |
-| 12 | accept a group-writable target | `0775` target refused |
+| 12 | accept a group-writable target | a `0775` target component yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic, and a conforming entry beside it does NOT win |
 | 13 | **accept a group-writable target ANCESTOR** | safe target under a `0775` ancestor refused |
 | 14 | **accept a symlinked target ancestor** | symlinked ancestor refused |
 | 18 | compose a `${HOME}` path with `HOME=""` | no `${HOME}`-rooted open attempted |
@@ -1484,6 +1484,9 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 109 | **derive the key before testing TGT-1** | an unpublishable value opens NOTHING under the store: no key, no ancestor creation, no temporary, no scan (PUB-9 E2) |
 | 110 | **refuse the store because it holds a path the `base.*` glob does not match** | a junk file or a subdirectory beside the entries does not deny the capability, while a DIRECTORY named `base.<k>` is a failing entry and does refuse (ST-1) |
 | 111 | **accept a symlinked ancestor of the store** | rule −1 and RD-10 clause (d) both refuse it, because both reference ST-4 rather than restating a shorter list |
+| 112 | **publish a base value containing a NEWLINE** | the value is UNPUBLISHABLE: no key is derived and nothing is opened under the store (PUB-9 E2), so no durable entry exists for readers to refuse. Row 4 is the READER-side multi-line entry and does not cover this — the publisher-side exclusion added in round 61 had no row at all |
+| 113 | **repair a `base.<key>` that is a symlink or a directory** | the publisher REFUSES: transient removed, nothing written, `failed` (ST-7). The measured alternative is `mv -f` depositing the transient outside the store through the link, or inside the directory |
+| 114 | **compare a mode with the low NINE bits** | a `chmod 1700` store and a `chmod 4600` entry are REFUSED, not accepted — the exact-mode clauses mean all twelve bits, and both P-2 arms reported `700`/`600` for those fixtures before round 66 |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1568,7 +1571,7 @@ in **both bash and zsh** in every cell.
 diagnostic — the `NAME_MAX` over-budget path resolves via the variable, reports `failed`, and emits one
 line naming the length — so the unqualified form made the oracle unsatisfiable in exactly the case the
 diagnostic exists for. Resolution and publication are separate outcomes and the oracle must say which
-it constrains.)* Steps 1-conflict and 3 mandate **exactly one** diagnostic, so a blanket empty-stderr
+it constrains.)* Step 3 mandates **exactly one** diagnostic and step-1-conflict mandates **NONE** — a publisher that observes `conflict` has already resolved and is silent (PUB-11), while a READER that refuses on `conflict` emits one line, so the same word carries opposite oracles on the two paths (AE-2). A blanket empty-stderr
 assertion would contradict them — the draft's N6 clause did exactly that.
 
 ### Consumers whose behaviour changes, stated rather than discovered
@@ -1578,7 +1581,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2363` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2379` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1757,7 +1760,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **PUB-8 — Publish-then-scan ordering.** The publisher completes its write-or-skip decision FIRST and only afterwards scans the store. Scanning before publishing is forbidden: publishing first puts every process's own entry into the set that process observes. One residual is accepted: under strict interleaving, publisher A may publish and scan before publisher B publishes at all, so A's process reports `created`; the conflict is nonetheless durable in the file set, so every later process of either install reports it. Nothing is recorded, marked, or handed to another process for a conflict to survive — conflict is a property of the store directory's contents, derived at resolution time. There is no `CONFLICTED` wire form, no stickiness rule, no preserve-the-marker precondition, and no operator-recovery-by-deletion protocol.
 
-**PUB-9 — Ordered publish exit mapping.** Every exit of the publish routine maps to exactly one `_UNLEASHED_POINTER_STATE` value. The exits are evaluated in this order, first match wins: (E0) `_UNLEASHED_PUBLISH_OK` is `0` — the publish is skipped entirely, nothing is composed or opened, no scan → `none`; (E1) `_UNLEASHED_HOME_OK` is false — no `${HOME}`-rooted path is composed or opened at all, no scan → `failed`; (E2) this process's own base value is NOT PUBLISHABLE — it fails a clause of TGT-1: not absolute, a trailing slash, an embedded NUL, an embedded newline, or not naming an existing directory — so no key is derived, nothing is composed or opened under the store, and no scan runs → `failed`; (E3) the `NAME_MAX` budget for `.pub.<pid>.<uniq>.<key>` cannot be satisfied — either it is exceeded, or `/usr/bin/getconf` is absent, exits nonzero, or emits anything that is not a decimal number, which FAILS CLOSED and is not treated as an unlimited budget — nothing written → `failed`; (E4) a missing ancestor cannot be created, or `bases/` or an ancestor of it fails ST-3 or ST-4 — whether it pre-existed or this publisher has just created it, since a freshly created store can inherit a default ACL that fails ST-3 — nothing written → `failed`; (E5) no unique temporary name can be obtained — nothing written → `failed`; (E6) the temporary's creation or write, or the `mv`, fails for any reason, INCLUDING ST-7's refusal to repair a `base.<key>` that exists and is not a regular non-symlink file → `failed`; (E7) otherwise the write-or-skip has completed, and the publisher scans the store and applies the ORDERED post-scan exits below. E1 through E6 are stated in execution order and all map to `failed`, so their relative order does not affect the mapping; E0 outranks E1, and E7 is reachable only when no earlier exit matched. *(Round 61: E2 was missing. PUB-7 states the TGT-1 precondition and gives it the state `failed`, but this list — which calls itself exhaustive — did not carry it, so the one exit that writes nothing and derives no key was the one an implementer building from the list would not have.)* The post-scan exits are themselves ORDERED, first match wins: (P1) this process's own entry is missing → `failed`, whether or not this process wrote it; (P2) else any remaining entry, this process's own included, fails authentication → `stale`; (P3) else two or more entries authenticate → `conflict`; (P4) else `created` if this process wrote the entry, `current` if it skipped the write. The scan applies the same ordered reader rules the reader applies, including the vanished-entry skip: an entry enumerated but gone when opened and NOT a symlink is skipped and is not an entry, so it is never treated as malformed; a `base.*` symlink, dangling or not, is a failing entry. A publisher does not refuse — it has already resolved — it reports what it saw.
+**PUB-9 — Ordered publish exit mapping.** Every exit of the publish routine maps to exactly one `_UNLEASHED_POINTER_STATE` value. The exits are evaluated in this order, first match wins: (E0) `_UNLEASHED_PUBLISH_OK` is `0` — the publish is skipped entirely, nothing is composed or opened, no scan → `none`; (E1) `_UNLEASHED_HOME_OK` is false — no `${HOME}`-rooted path is composed or opened at all, no scan → `failed`; (E2) this process's own base value is NOT PUBLISHABLE — it fails a clause of TGT-1, which this exit references and does not enumerate, for the reason PUB-7 gives one clause above — so no key is derived, nothing is composed or opened under the store, and no scan runs → `failed`; (E3) the `NAME_MAX` budget for `.pub.<pid>.<uniq>.<key>` cannot be satisfied — either it is exceeded, or `/usr/bin/getconf` is absent, exits nonzero, or emits anything that is not a decimal number, which FAILS CLOSED and is not treated as an unlimited budget — nothing written → `failed`; (E4) a missing ancestor cannot be created, or `bases/` or an ancestor of it fails ST-3 or ST-4 — whether it pre-existed or this publisher has just created it, since a freshly created store can inherit a default ACL that fails ST-3 — nothing written → `failed`; (E5) no unique temporary name can be obtained — nothing written → `failed`; (E6) the temporary's creation or write, or the `mv`, fails for any reason, INCLUDING ST-7's refusal to repair a `base.<key>` that exists and is not a regular non-symlink file → `failed`; (E7) otherwise the write-or-skip has completed, and the publisher scans the store and applies the ORDERED post-scan exits below. E1 through E6 are stated in execution order and all map to `failed`, so their relative order does not affect the mapping; E0 outranks E1, and E7 is reachable only when no earlier exit matched. *(Round 61: E2 was missing. PUB-7 states the TGT-1 precondition and gives it the state `failed`, but this list — which calls itself exhaustive — did not carry it, so the one exit that writes nothing and derives no key was the one an implementer building from the list would not have.)* The post-scan exits are themselves ORDERED, first match wins: (P1) this process's own entry is missing → `failed`, whether or not this process wrote it; (P2) else any remaining entry, this process's own included, fails authentication → `stale`; (P3) else two or more entries authenticate → `conflict`; (P4) else `created` if this process wrote the entry, `current` if it skipped the write. The scan applies the same ordered reader rules the reader applies, including the vanished-entry skip: an entry enumerated but gone when opened and NOT a symlink is skipped and is not an entry, so it is never treated as malformed; a `base.*` symlink, dangling or not, is a failing entry. A publisher does not refuse — it has already resolved — it reports what it saw.
 
 **PUB-10 — Pointer-state enum and totality.** `_UNLEASHED_POINTER_STATE` ∈ {`created`, `current`, `conflict`, `stale`, `failed`, `none`} and nothing else. It is set exactly once per process: by the publish routine on the step-1 path, and by the reader on the step-2/step-3 path. Totality is DERIVED, not asserted: every exit path of the publish routine AND of the reader is enumerated, each mapped to exactly one value, and the mapping checked against this declared list; an exit with no value, or a value not declared, fails verification. Consumers partition the enum as `conflict`/`stale`/`failed` versus `created`/`current`/`none`: the SessionStart notice emits one non-blocking `additionalContext` line, still exiting 0, when the value is `conflict`, `stale` or `failed`, and stays silent on `created`, `current` and `none`.
 
@@ -1813,11 +1816,11 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **N6-2 — Table derived, no counts.** The mutant table is DERIVED from the clause list and must be re-derived whenever a clause changes. No prose anywhere in this plan may state a mutant COUNT — not in §4.2a, not in §6, not in §7, not in a note. A count that is wrong and a count that has been corrected are the same defect: the number is deleted, never fixed, because the next change re-introduces the drift.
 
-**N6-3 — Every obligation carries a mutant.** Every normative obligation in §4.2a carries at least one named, executable, discriminating mutant row, and every individual authentication clause carries exactly one mutant of its own. A generic sentence such as "each authentication clause is refused independently" is not a mutant; an unnamed mutation is one nobody writes; a mutant that cannot fail reads exactly like a mutant that passes; and an unrunnable mutant proves nothing. Obligations that presently have no row and require one: the SessionStart notice predicate (its only mutant was deleted with no replacement); the per-cell stderr scoping; the no-bare-statement, group-level-redirect and nounset source-time rules; the exactly-one-unresolved-diagnostic-per-process cardinality across all five family files with `paths.sh` absent; and the per-family-file quantification of reader rules −1 and 0.
+**N6-3 — Every obligation carries a mutant.** Every normative obligation in §4.2a carries at least one named, executable, discriminating mutant row, and every individual authentication clause carries exactly one mutant of its own. A generic sentence such as "each authentication clause is refused independently" is not a mutant; an unnamed mutation is one nobody writes; a mutant that cannot fail reads exactly like a mutant that passes; and an unrunnable mutant proves nothing. Obligations that presently have no row and require one — **and this list is itself re-derived from the table each round, because it went stale twice while reading as authoritative**: the SessionStart notice predicate (its only mutant was deleted with no replacement); the per-cell stderr scoping; the no-bare-statement, group-level-redirect and nounset source-time rules; the exactly-one-unresolved-diagnostic-per-process cardinality across all five family files with `paths.sh` absent; and the per-family-file quantification of reader rules −1 and 0.
 
 **N6-4 — No duplicate rows.** No two live rows may name the same mutation with the same discriminating case; a duplicate adds no evidence and inflates the table's apparent coverage. Applied: rows 73 and 84 are one mutation (arm equivalence must also assert `_UNLEASHED_POINTER_STATE`) — keep 73, delete 84, and repair every §7 step that cites 84. Rows 66 and 83 are one mutation with one fixture (omit ancestor creation on a clean install) — keep 66, delete 83, and repair the §7 step that cites 83. Rows 65 and 97 name one fixture and one oracle (empty `$1` + `paths.sh` absent + one valid entry ⇒ resolves `OK=1`), and 97 mutates the bridge's PROSE, which cannot be executed — keep 65, which mutates the body, and delete 97.
 
-**N6-5 — One implementation step per row.** Every live row is assigned to exactly ONE implementation step, so the step that builds a clause also builds its proof; no row may appear under two steps (row 84 is currently listed under both 3d and 3e) and no live row may be left unassigned. Assignment by category: encoder and injectivity rows, including the no-fork, `LC_ALL=C`-pin and `LC_ALL`-leak rows (45, 93, 94) → 3a; entry-clause, chain-clause and ACL rows, including the whole authentication block (1-14, 21-28, 33-35), 76 and 111 → 3b; the scan and the ordered reader rules, including 74 and the store-refusal rows 101 and 110 → 3c; publisher, temp-name, NAME_MAX, publisher-diagnostic and enum-mapping rows, including 59, 60, 95, 96, 105, 108 and 109 → 3d; five-copy and bridge rows, including 99, 100 and 103 → 3e. Rows proving harness or quarantine obligations (54, 71, 72) are assigned to the steps that build the harness `HOME` sandbox and the §4.4 quarantine, which §7 must therefore have. Rows proving §6 obligations rather than implementation clauses — the acceptance criterion (78) and the N1–N6 envelope (87) — are assigned to §6, not to §7.
+**N6-5 — One implementation step per row.** Every live row is assigned to exactly ONE implementation step, so the step that builds a clause also builds its proof; no row may appear under two steps (row 84 is currently listed under both 3d and 3e) and no live row may be left unassigned. Assignment by category: encoder and injectivity rows, including the no-fork, `LC_ALL=C`-pin and `LC_ALL`-leak rows (45, 93, 94) → 3a; entry-clause, chain-clause and ACL rows, including the authentication block (**2**-14, 21-28, 33-35), 76 and 111 → 3b — **row 1 is excluded deliberately**: it mutates the publisher's write-or-skip decision, which step 3d builds, and the range that swept it in here assigned it to two steps at once, which the next sentence of this rule forbids; the scan and the ordered reader rules, including 74 and the store-refusal rows 101 and 110 → 3c; publisher, temp-name, NAME_MAX, publisher-diagnostic and enum-mapping rows, including 59, 60, 95, 96, 105, 108 and 109 → 3d; five-copy and bridge rows, including 99, 100 and 103 → 3e. Rows proving harness obligations (54, 71) are assigned to **§7 step 3f**, and the quarantine row (72) to **§7 step 6**. Both steps must EXIST for that assignment to mean anything: before round 66 these rows pointed at "the steps that build the harness `HOME` sandbox", and §7 had no such step, so two live rows were owned by nobody while the sentence read as though they were assigned. Rows proving §6 obligations rather than implementation clauses — the acceptance criterion (78) and the N1–N6 envelope (87) — are assigned to §6, not to §7.
 
 **N6-6 — Store-level discriminating outcomes.** An authentication-clause mutant's discriminating case must name the STORE-LEVEL outcome the ordered reader rules produce, never merely "refused" and never "skip the bad entry". For any entry that fails the complete predicate that outcome is: the whole store is refused — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — and a good entry sitting beside the failing one must NOT win. Every row still written for the singleton pointer (oracles of the form "`foo/bar` refused", "two-line pointer refused", "pointer at 0644 refused", "0775 target refused") must be re-aimed on the template of row 2: "a dangling `base.*` symlink REFUSES the store; it is not skipped as vanished."
 
@@ -2341,6 +2344,19 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    Bash-only array in a zsh context. Each was checkable against evidence already in this repository. *(gemini, round 14: "share one code path" was stated without a mechanism, so an
    implementer had to choose between duplicating `paths.sh` — contradicting the claim — and inventing
    `BASH_SOURCE` resolution the plan never mentions.)*
+
+   **3f. The harness seams.** The two seams every cell above depends on, which had mutant rows and no
+   step. (i) The **`HOME` sandbox** PUB-12 and HAR-1 require: each cell runs in a fresh shell with
+   `HOME` pointed at a scratch directory, so no cell reads or writes the developer's real
+   `~/.claude/unleashed-mail/bases/`, and the `HOME`-unusable cell sets `HOME=""` rather than
+   unsetting it, because zsh repopulates an unset `HOME` from passwd while bash leaves it unset.
+   (ii) The **single-accessor fixture seam**: every mode, size and owner assertion goes through the
+   ONE P-2 call, so a fixture cannot pass by consulting a different accessor than the implementation
+   uses — the defect that let a nine-bit comparison read as an exact-mode test. The mutant rows are
+   the ones N6-5 assigns to this step. *(Round 66: N6-5 assigned rows 54 and 71 to "the steps that
+   build the harness `HOME` sandbox", and §7 had no such step — two live rows owned by nobody, in a
+   sentence that read as though they were assigned.)*
+
 4. Add N3's delegation test, preserving the absent-`paths.sh` fallback.
 5. **Enumerate and guard every consumer** before quarantine, each with its **required control flow** —
    round 2 found §9 claiming they were enumerated while §7 never acted on them, and round 3 established
