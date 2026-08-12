@@ -605,7 +605,8 @@ That third directory is also why **option B (globbing) stays rejected**: two ent
    injective encoding of that absolute path — written atomically (tmp + `mv` **in the same directory**),
    fully suppressed, `0600`, into a store created by a single `mkdir -m 700`. Publish **unless** the entry
    already authenticates under the shared predicate **and** its content equals the value — the complete
-   reader predicate, not a weaker type-and-content test, so a `0644` or symlinked entry is repaired rather
+   reader predicate, not a weaker type-and-content test, so a `0644` REGULAR NON-SYMLINK entry is
+   repaired rather
    than reported `current` and then refused by step 2. If `_UNLEASHED_HOME_OK` is false, or the publish
    fails for any reason, **no `${HOME}` path is composed or opened at all**,
    `_UNLEASHED_POINTER_STATE=failed`, and the resolution above still stands.
@@ -659,8 +660,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:1969`) and its matrix change (`:1975-1979`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2002-2009`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2000`) and its matrix change (`:2006-2010`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2033-2040`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -945,7 +946,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2331`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2363`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1030,7 +1031,16 @@ hold, and falls through to step 3 otherwise:
   >
   > **But "any ACE ⇒ refuse" is also wrong, and measured so.** On this machine `ls -lde "$HOME"` shows
   > `0: group:everyone deny delete` — a **deny** entry, which *restricts* access and makes the path
-  > safer. A blanket rule would refuse the maintainer's own home directory. The distinction is the rule:
+  > safer. A blanket rule would refuse the maintainer's own home directory. **ACL-1..ACL-5 are the
+  > rule and this paragraph states none of it.** What follows was a platform-independent SUMMARY
+  > introduced with the words "the distinction is the rule" — the gloss cited AS the rule, which is
+  > what ACL-1 forbids by name. Its own disclaimer ("the per-platform arms below are the definition")
+  > does not save it: ACL-1 bans the RESTATEMENT, not merely its normativity, because an implementer
+  > who codes the summary never reaches the arms. On Linux the summary is not merely different but
+  > UNDEFINED — POSIX `getfacl` emits no `allow`/`deny` token at all, as this document says a few
+  > lines below — so coding it finds zero `allow` ACEs and the ACL clause silently NO-OPS on the CI
+  > platform. Where it is decidable it inverts ACL-3, which ACCEPTS `user:bob:rw-` under `mask::r--`.
+  > The superseded summary read:
   >
   > **Refuse if any component of either chain carries an `allow` ACE that names a principal other than
   > the effective user AND grants a MUTATING right** — the per-platform arms below are the definition,
@@ -1256,7 +1266,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2068`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2099`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1291,7 +1301,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2331`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2363`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1312,7 +1322,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:1969`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2000`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1386,7 +1396,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 8 | **accept any pointer mode** | pointer at `0644` refused |
 | 9 | **drop the trailing-slash rejection** | `/a/b/` refused |
 | 10 | **drop the NUL rejection** | embedded-NUL pointer refused |
-| 11 | accept a group-writable pointer parent | `0775` parent refused |
+| 11 | ~~accept a group-writable pointer parent~~ **RETIRED round 66 — equivalent to row 22**, which covers the whole ancestor chain including the parent. N6-9 ordered this retirement and the row kept printing, so N6-1 read it as live |
 | 12 | accept a group-writable target | `0775` target refused |
 | 13 | **accept a group-writable target ANCESTOR** | safe target under a `0775` ancestor refused |
 | 14 | **accept a symlinked target ancestor** | symlinked ancestor refused |
@@ -1394,11 +1404,11 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 19 | **let `HOME=""` suppress a valid `CLAUDE_PLUGIN_DATA`** | set variable still resolves, `OK=1` |
 | 20 | stamp `host-env` for a pointer resolution | record carries `base_resolution=pointer` |
 | 21 | **drop the owner check on a pointer-path ANCESTOR** | ancestor owned by another uid refused |
-| 22 | **accept a writable INTERMEDIATE pointer ancestor** (row 11 covers only the parent) | `0775` grandparent refused |
+| 22 | **accept a writable ancestor anywhere in the entry chain** (this row covers the WHOLE chain, parent included; row 11 was retired into it) | a `0775` grandparent yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic |
 | 23 | **drop the target's own owner check** | target owned by another uid refused |
 | 24 | **drop the owner check on a target ANCESTOR** | target ancestor owned by another uid refused |
 | 25 | **accept a SYMLINKED TARGET itself** (row 14 covers only an ancestor) | symlinked target refused |
-| 26 | **accept a pointer parent at `0755`** | exact-`0700` parent rule enforced |
+| 26 | **accept a store at `0755`** | the store-level outcome, not the rule name: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, exactly one diagnostic — N6-6 requires the oracle to name what the RESOLUTION does, because "rule enforced" is satisfied by any refusal anywhere |
 | 27 | **require euid ownership ABOVE the trust anchor** | root-owned `/`, `/Users` still ACCEPT |
 | 28 | **accept a group-writable system prefix** | writable `/` refused |
 | 33 | **accept an off-`${HOME}` target with a user-writable intermediate** | target under a `0777` ancestor refused |
@@ -1417,7 +1427,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 52 | ~~drop the NAME_MAX pre-check~~ **SUPERSEDED by row 81** — the temp name is strictly longer and created first, so both halves of the old oracle held under the mutation |
 | 53 | **let a publisher write an entry that is not its own key** | a publisher touches only `base.<key(its value)>` and its own tmp |
 | 54 | **remove the harness `HOME` sandbox** | the developer's real store is byte-identical after `test-hooks.sh` |
-| 55 | **ignore ACLs entirely** | a component carrying an `allow` ACE that grants another principal a MUTATING right is REFUSED (a read-only `allow` is accepted — row 90) |
+| 55 | **ignore ACLs entirely** | a component that the PLATFORM ARM refuses — Darwin: an `allow` ACE for another principal naming any right outside ACL-2's seven-right allowlist; Linux: ACL-3's named grant AND mask conjunct — is REFUSED, while a read-only `allow` is accepted (row 90) and a named grant the Linux mask filters out is accepted (row 91). The oracle names the ARMS because a mutating-right formulation is the gloss ACL-1 forbids, and on the Linux fixture it asserted the OPPOSITE of live row 91 for one machine state |
 | 56 | **refuse on any ACE, `deny` included** | `$HOME`'s real `group:everyone deny delete` still ACCEPTS |
 | 57 | **let the ACL probe write a test file** | refusal path creates nothing anywhere |
 | 58 | **admit a root conditional on `CLAUDE_CONFIG_DIR`** | publisher and reader reach the SAME verdict in different environments |
@@ -1533,7 +1543,7 @@ path, which is exactly what the round-23 rule did.)*
 **Cases** — each must fail when the fix is reverted:
 
 step 1 → base is the variable's value **and** this publisher's entry holds it; a second run with the same
-value performs **no write** (asserted by mtime); a symlinked or `0644` entry with matching content **is**
+value performs **no write** (asserted by mtime); a `0644` REGULAR entry with matching content **is**
 republished as a conforming one; a second install id with a different base leaves **two entries**, which
 every reader resolves as a conflict — no publisher marks anything for another to find; step 2 →
 variable unset, exactly one authenticating entry → base is that entry's target,
@@ -1568,7 +1578,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2331` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2363` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1677,7 +1687,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **ACL-1 — ACL arms are the definition.** The ACL condition on a component is decided ONLY by the per-platform arms ACL-2 (Darwin), ACL-3 (Linux) and ACL-4 (any other platform, or a missing enumerator). There is no platform-independent ACL rule: the summary sentence "refuse if any component carries an `allow` ACE naming a principal other than the effective user and granting a mutating right" is a gloss, is NOT normative, and may not be implemented, cited as the rule, or restated in any risk row or summary section. On EVERY platform, `deny` entries are ignored entirely — a component is never refused on account of a `deny` entry.
 
-**ACL-2 — Darwin ACL arm.** When `/usr/bin/uname -s` outputs `Darwin`, enumerate a component's ACL with `/bin/ls -lde <path>`. Each ACE line has the form ` <n>: <principal> <allow|deny> <perms>`; this arm is string matching over those lines, not ACL semantics. For each `allow` ACE whose principal is not the effective user, REFUSE the component unless EVERY right named in that ACE is one of exactly these seven: `execute`, `list`, `read`, `readattr`, `readextattr`, `readsecurity`, `search`. This is an ALLOWLIST — a right that is not in the list REFUSES. A blacklist of mutating rights is forbidden, in any form.
+**ACL-2 — Darwin ACL arm.** When `/usr/bin/uname -s` outputs `Darwin`, enumerate a component's ACL with `/bin/ls -lde <path>`. Each ACE line has the form ` <n>: <principal> [inherited] <allow|deny> <perms>`, where the `inherited` token is PRESENT ON EVERY INHERITED ACE and absent otherwise — measured: a directory under a parent carrying `+a "staff allow list,search,file_inherit,directory_inherit"` prints ` 0: group:staff inherited allow list,search,file_inherit,directory_inherit`, so a positional parser that expects `allow|deny` as the third field sees `inherited` there and matches nothing, FAILING OPEN on precisely the ACEs an MDM-managed fleet propagates. The arm must locate the `allow`/`deny` token rather than assume its position. `<perms>` is a COMMA-JOINED list that mixes rights with INHERITANCE FLAGS: `file_inherit`, `directory_inherit`, `limit_inherit` and `only_inherit` are flags, not rights, and are excluded from the allowlist test — without that exclusion the same inherited read-only ACE REFUSES, killing the capability on every Mac that inherits ACLs, which is the opposite failure and is what row 90 forbids. This arm is string matching over those lines, not ACL semantics. For each `allow` ACE whose principal is not the effective user, REFUSE the component unless EVERY right named in that ACE is one of exactly these seven: `execute`, `list`, `read`, `readattr`, `readextattr`, `readsecurity`, `search`. This is an ALLOWLIST — a right that is not in the list REFUSES. A blacklist of mutating rights is forbidden, in any form.
 
 **ACL-3 — Linux ACL arm.** When `/usr/bin/uname -s` outputs `Linux`, enumerate a component's ACL with `/usr/bin/getfacl -pc <path>`. REFUSE the component IFF BOTH hold: (a) at least one entry of the form `user:<name>:`, `group:<name>:`, `default:user:<name>:` or `default:group:<name>:`, with `<name>` non-empty, carries `w`; AND (b) the corresponding mask line permits `w` — `mask::` for access entries, `default:mask::` for default entries. The mask condition is a CONJUNCT of (a), never an independent trigger. `default:` entries are checked by exactly the same rule as access entries.
 
@@ -1739,7 +1749,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **PUB-4 — What a publish writes.** A publish creates exactly one DURABLE file: `${HOME}/.claude/unleashed-mail/bases/base.<key>`, where `<key>` is K(v), the injective key the encoder rule (Invariant P) defines over the bytes of THIS process's own absolute base value v. Its content is that absolute path followed by exactly one `\n` and no other bytes, and its mode is exactly 0600. It is written by creating a temporary file in the SAME directory as the entry and then renaming that temporary onto the entry path with `mv`. The temporary is created with mode 0600 at creation time — a mode-setting creation, never a bare redirect under the ambient umask — because `mv` preserves the temporary's mode and an entry at 0644 or 0664 fails the publisher's own authentication check. The temporary is named `.pub.<pid>.<uniq>.<key>`, carrying the same `<key>` as the entry it becomes; `<uniq>` is derived without a fork and without `$RANDOM` in POSIX `sh`; this family targets bash and zsh, both of which provide it (§4.2a-P P-6), so `<uniq>` IS `$RANDOM` and its width is bounded at five decimal digits. `$$` alone is not a sufficient temporary name: concurrent subshells inherit the same `$$` in both bash and zsh. The `.pub.` prefix places every temporary outside the `base.*` glob by construction, so no reader ever enumerates one; a temporary orphaned by a killed publisher changes no resolution and no reported state, and is never reaped automatically. A publisher touches no path in the store other than its own `base.<key>` and its own temporary: it never creates, modifies, renames or deletes another publisher's entry, and never writes state on another publisher's behalf. Two publishers holding the SAME base value converge on one entry name; that is safe and must not be guarded against, because the bytes are identical and `mv` is atomic.
 
-**PUB-5 — Store and ancestor creation.** The store is `${HOME}/.claude/unleashed-mail/bases/`. Before creating it, the publisher creates every missing ancestor of it — `${HOME}/.claude`, then `${HOME}/.claude/unleashed-mail` — at mode 0700 when this publisher creates it; an ancestor that already exists is accepted under the general rule (exists, owned by the effective uid, not group- or world-writable), which 0755 satisfies, and is never chmod'ed. The exact-0700 requirement applies to `bases/` alone. `bases/` is created by a SINGLE `mkdir -m 700 "${HOME}/.claude/unleashed-mail/bases"`. `-p` may not be used: `mkdir -m 700 -p` silently succeeds over a pre-existing directory without applying the mode. `mkdir` followed by `chmod` may not be used: it opens a window in which another publisher stats a 0755 store and spuriously refuses. A pre-existing `bases/` that is not exactly mode 0700, is not a directory, is a symlink, or is not owned by the effective uid is REFUSED — never chmod'ed and never repaired — and the publisher writes nothing.
+**PUB-5 — Store and ancestor creation.** The store is `${HOME}/.claude/unleashed-mail/bases/`. Before creating it, the publisher creates every missing ancestor of it — `${HOME}/.claude`, then `${HOME}/.claude/unleashed-mail` — at mode 0700 when this publisher creates it; an ancestor that already exists is accepted only if it satisfies **ST-4 in full**, which this clause references and does not enumerate — the three-clause list that stood here dropped ST-4's not-a-symlink and ACL clauses, so a symlinked `~/.claude` was accepted here and refused by the reader, and is never chmod'ed. The exact-0700 requirement applies to `bases/` alone. `bases/` is created by a SINGLE `mkdir -m 700 "${HOME}/.claude/unleashed-mail/bases"`. `-p` may not be used: `mkdir -m 700 -p` silently succeeds over a pre-existing directory without applying the mode. `mkdir` followed by `chmod` may not be used: it opens a window in which another publisher stats a 0755 store and spuriously refuses. A pre-existing `bases/` that is not exactly mode 0700, is not a directory, is a symlink, or is not owned by the effective uid is REFUSED — never chmod'ed and never repaired — and the publisher writes nothing.
 
 **PUB-6 — Temp-name NAME_MAX pre-check.** Before creating any file in the store, the publisher checks the length of the LONGEST name it will create — the temporary `.pub.<pid>.<uniq>.<key>`, never the shorter final `base.<key>` — against `NAME_MAX` for the filesystem holding the store. The length is 7 + len(`<pid>`) + len(`<uniq>`) + len(`<key>`) bytes; len(`<key>`) may be measured with `${#_k}` because the key is ASCII-only, and len(`<pid>`) and len(`<uniq>`) are bounded so that the budget is computable. `NAME_MAX` is obtained by invoking `getconf` BY ABSOLUTE PATH (not through `PATH`) with a mandatory directory argument — `getconf NAME_MAX` with no path fails with "no such configuration parameter" — and the directory passed is the store itself when it exists, otherwise its nearest existing ancestor. Over budget: the publisher writes nothing, sets `_UNLEASHED_POINTER_STATE=failed`, and emits exactly one diagnostic naming the length.
 
@@ -1813,13 +1823,13 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **N6-7 — ACL rows state allowlist.** Every mutant row and every risk-register restatement of the Darwin ACL clause states it as an ALLOWLIST: a component is REFUSED when an `allow` ACE naming a principal other than the effective user carries ANY right outside the seven read-only rights `execute`, `list`, `read`, `readattr`, `readextattr`, `readsecurity`, `search`. The mutating-right BLACKLIST phrasing — "refused when an `allow` ACE grants another principal a mutating right" — is forbidden wherever it appears, including row 55's oracle and §5's ACL risk row, because a right nobody enumerated must REFUSE rather than accept.
 
-**N6-8 — Complete-predicate publish skip.** The publisher skips its write only when its own entry already satisfies the COMPLETE follower predicate — the entry clauses, the entry-chain clauses, the target-chain clauses and the ACL clauses — AND its content equals the base value. The weaker type-and-content test is forbidden. Every row naming that skip must name the complete-predicate test: row 1's mutation is "drop the complete-predicate skip" with the oracle "mtime unchanged on a no-change second run", and row 80's is "skip publication on the weaker type-and-content test" with the oracle "a `0644` or symlinked entry with matching content is REPUBLISHED, and reports `created`, never `current`". Two rows may not present two different skip tests.
+**N6-8 — Complete-predicate publish skip.** The publisher skips its write only when its own entry already satisfies the COMPLETE follower predicate — the entry clauses, the entry-chain clauses, the target-chain clauses and the ACL clauses — AND its content equals the base value. The weaker type-and-content test is forbidden. Every row naming that skip must name the complete-predicate test: row 1's mutation is "drop the complete-predicate skip" with the oracle "mtime unchanged on a no-change second run", and row 80's is "skip publication on the weaker type-and-content test" with the oracle "a `0644` REGULAR NON-SYMLINK entry with matching content is REPUBLISHED, and reports `created`, never `current`; a SYMLINKED `base.<key>` is refused by ST-7 and reports `failed`". Two rows may not present two different skip tests.
 
 **N6-9 — Equivalent mutants retired.** A row whose mutation produces no observable difference under the current clause set is RETIRED — struck in place with its reason recorded beside it — and is not a member of the live set. Any parenthetical in another row that cites a retired row must be re-pointed at a live one in the same edit. Applied: row 11 ("accept a group-writable pointer parent | 0775 parent refused") is an equivalent mutant, because the entry's parent is the store `bases/`, which must be exactly `0700` and which the store-authentication rule refuses at any other mode, so dropping the general not-group-or-world-writable test on that one component changes nothing observable; row 22's parenthetical "(row 11 covers only the parent)" must then cite row 26, and row 26 must state its store-level outcome rather than only "exact-0700 parent rule enforced".
 
 **N6-10 — Mutants runnable unprivileged.** Every mutant must be runnable by an unprivileged uid; no row may prescribe a fixture that requires root, such as a real `/opt/claude/data`. Off-`${HOME}` chains are built by the harness under a temporary root, and no row names a fixed absolute path it cannot create. The mechanism is specified rather than appealed to: the chain-walk predicate takes its per-component ownership and mode facts from a SINGLE accessor, and the harness substitutes a fixture table for that accessor — one accessor used by production and by the harness, so a test cannot pass against a predicate production does not run.
 
-**N6-11 — Required executable cases.** N6 carries executable CASES in addition to mutants, and each case must fail when the fix is reverted. Required cases: step 1 — the base is the variable's value and this publisher's entry holds it; a second run with the same value performs NO write, asserted by mtime; a symlinked or `0644` entry with matching content IS republished as a conforming one; a second install id with a different base leaves TWO entries, which every reader resolves as a conflict. Step 2 — variable unset with exactly one authenticating entry resolves to that entry's target with `_UNLEASHED_BASE_SOURCE=pointer` and NO second store created; each authentication clause refused independently, including a conflicted STORE (two authenticating entries; there is no per-entry conflicted state). Step 3 — `HOME=""` yields the sentinel, `OK=0`, exactly one diagnostic, no `${HOME}`-rooted open attempted at all, and the no-persistence envelope holding in full. Persisted records carry `base_resolution` matching the resolution that actually ran. The SessionStart notice fires on `conflict`/`stale`/`failed` and stays silent on `created`/`current`/`none`. Two publishers holding the SAME base racing on one entry name converge on identical bytes, with no torn read and no lost write. On a platform with no ACL enumerator, a publisher publishes and re-verifies its own entry successfully while a reader still REFUSES a foreign entry. The empty-store case is asserted under zsh for each of the five family files independently.
+**N6-11 — Required executable cases.** N6 carries executable CASES in addition to mutants, and each case must fail when the fix is reverted. Required cases: step 1 — the base is the variable's value and this publisher's entry holds it; a second run with the same value performs NO write, asserted by mtime; a `0644` REGULAR NON-SYMLINK entry with matching content IS republished as a conforming one, while a SYMLINKED `base.<key>` is NOT — ST-7 refuses it, nothing is written and the state is `failed`, a separate required case carrying the opposite oracle; a second install id with a different base leaves TWO entries, which every reader resolves as a conflict. Step 2 — variable unset with exactly one authenticating entry resolves to that entry's target with `_UNLEASHED_BASE_SOURCE=pointer` and NO second store created; each authentication clause refused independently, including a conflicted STORE (two authenticating entries; there is no per-entry conflicted state). Step 3 — `HOME=""` yields the sentinel, `OK=0`, exactly one diagnostic, no `${HOME}`-rooted open attempted at all, and the no-persistence envelope holding in full. Persisted records carry `base_resolution` matching the resolution that actually ran. The SessionStart notice fires on `conflict`/`stale`/`failed` and stays silent on `created`/`current`/`none`. Two publishers holding the SAME base racing on one entry name converge on identical bytes, with no torn read and no lost write. On a platform with no ACL enumerator, a publisher publishes and re-verifies its own entry successfully while a reader still REFUSES a foreign entry. The empty-store case is asserted under zsh for each of the five family files independently.
 
 ### How to use this section
 
@@ -1841,33 +1851,54 @@ An implementer codes from here and from nowhere else: if an obligation is not st
 
 **P-1 — Ownership by the effective uid: `[ -O <path> ]`.** Measured: works in **both** shells, **zero
 forks**. This is the answer everywhere a rule says "owned by the effective uid" (eleven rules depend on
-it). POSIX `test` has no such operator, but both shells in this family's support set implement `-O`, and
+it) — **and NOWHERE ELSE. It is a one-bit answer about the EFFECTIVE uid and cannot identify any other
+owner**: `[ -O / ]` is false for the root-owned `/` and equally false for a directory owned by uid 502,
+so ANCHOR-1's "owned by uid 0" is NOT decidable with it. That question is answered by the uid field
+P-2 returns. POSIX `test` has no such operator, but both shells in this family's support set implement `-O`, and
 this family targets bash and zsh — not POSIX `sh`.
 
-**P-2 — Mode bits AND size, in one accessor call per component.** There is no single fork-free
-answer, and the split is stated rather than papered over. **Both arms yield the mode as an OCTAL
-STRING and the size as a decimal byte count**, so one comparison form works in both shells:
-* **zsh** — `zmodload zsh/stat; zstat -H h -- "$p"` then `printf -v m "%o" $(( ${h[mode]} & 511 ))`
-  and `s=${h[size]}`. **Zero forks.**
-* **bash** — no builtin exists, so **one fork**: `/usr/bin/stat -f '%Lp %z' -- "$p"` on Darwin,
-  `/usr/bin/stat -c '%a %s' -- "$p"` on Linux, selected by `/usr/bin/uname -s` and invoked by
-  absolute path for the reason ACL-5 gives.
-* **The `printf '%o'` in the zsh arm is load-bearing, not cosmetic, and its absence made the whole
-  authentication edifice uncodeable** — which is what round 63 measured. `zstat` returns mode as a
-  DECIMAL INTEGER while Darwin `stat -f '%Lp'` returns an OCTAL STRING: on the same `0700`
-  directory the arms as previously written returned **448** and **`700`**. No constant compares
-  equal to both — `[ "$m" = 700 ]` refuses a valid store under zsh, `[ "$m" -eq 448 ]` refuses it
-  under bash, and `$(( m == 8#700 ))` refuses under bash — so ST-3's exact-0700 and ENT-1's
-  exact-0600 could not be written at all. Re-measured with the `%o`: both arms return `600` and
-  size `2` for one 0600 file. Compare the octal STRING (`[ "$m" = 600 ]`); do not compare integers.
-* **The size comes from the SAME call in both arms**, which is what ENT-2 depends on. The previous
-  bash format (`'%Lp'`) returned no size at all while ENT-2 claimed it did.
+**P-2 — Mode, size AND owning uid, in ONE lstat call per component.** There is no single fork-free
+answer, and the split is stated rather than papered over. Every clause of this design that asks a
+question about a component — its mode, its byte size, who owns it — is answered by this ONE call,
+and the three facts come back together:
+* **zsh** — `zmodload zsh/stat; zstat -L -H h -- "$p"`, then `printf -v m "%04o" $(( ${h[mode]} &
+  4095 ))`, `s=${h[size]}`, `u=${h[uid]}`. **Zero forks.**
+* **bash** — no builtin exists, so **one fork**: `/usr/bin/stat -f '%p %z %u' -- "$p"` on Darwin,
+  where the mode is the LAST FOUR octal digits of the first field. On Linux the same three facts
+  must come from one `/usr/bin/stat -c` call in the same order; the exact format is NOT stated
+  here because it has not been executed (see below). The platform is selected by `/usr/bin/uname
+  -s` and the binary invoked by absolute path, for the reason ACL-5 gives.
+* **`-L` ON THE ZSH ARM IS LOAD-BEARING: without it the two arms measure DIFFERENT FILES.**
+  Measured on one symlink-to-a-0700-directory: the bash arm returned `755 9` — the LINK's own mode
+  and the length of its target string — while `zstat` without `-L` returned mode `700`, size `64`,
+  the TARGET's. On a DANGLING symlink the bash arm SUCCEEDS (`755 12`) and `zstat` without `-L`
+  FAILS outright. `zstat -L` reproduces the bash answer exactly in both cases. `/usr/bin/stat` is
+  lstat by default; `zstat` follows by default. Every clause here that says "not a symlink",
+  "owned by", or "mode exactly" means the PATH ITSELF, so both arms must be lstat — and the
+  dangling-symlink case is mutant row 2's own fixture, where the previous text would have made
+  one shell refuse and the other abort.
+* **THE MASK IS TWELVE BITS, NOT NINE, AND THE DARWIN FORMAT HAD TO CHANGE WITH IT.** An "exact
+  mode" means all twelve bits. Measured: a `chmod 4600` file has `%p` = `104600`, yet the previous
+  arms reported `600` (Darwin `%Lp`) and `600` (zsh masked with 511) — so a SETUID entry satisfied
+  "mode exactly 0600" in both shells, and a `chmod 1700` store satisfied "exactly 0700" (`%p`
+  `41700`, `%Lp` `700`). `%Lp` strips the high bits exactly as `& 511` does, which is why widening
+  only the zsh mask would have CREATED a divergence rather than closing one. With `%p` last-four
+  against `& 4095` printed `%04o`, both arms return `0700` / `1700` / `0600` / `4600` on those same
+  fixtures — measured, agreeing on every one. Compare the four-digit octal STRING; never compare
+  integers, and never write a bare `0NNN` inside `$(( ))` (P-3).
+* **THE OWNING UID COMES FROM THIS CALL TOO, WHICH IS WHAT MAKES ANCHOR-1 CODEABLE AT ALL.** P-1's
+  `[ -O ]` answers only "owned by the EFFECTIVE uid" and returns FALSE for a root-owned component
+  and for a component owned by any other uid alike — measured, `[ -O / ]` is false — so ANCHOR-1's
+  "owned by uid 0" test could not be written from the previous primitives at all. Both arms already
+  had the fact and neither exposed it: `${h[uid]}` is populated (measured `0` for `/`) and
+  `/usr/bin/stat -f '%u'` returns `0`. It costs no extra fork because it rides the same call.
+* **The size comes from the SAME call in both arms**, which is what ENT-2 depends on.
 * **The Linux arm has still not been executed** — this machine is Darwin, where `/usr/bin/stat -c`
-  is `illegal option -- c` (executed). The previous text asserted that BOTH arms had been measured,
-  returning the same three digits for one directory — a MEASURED-CLAIM THIS SECTION'S OWN CLOSING
-  NOTE REFUTED, inside the section that exists to stop
-  exactly that. §6 must run the Linux arm on the CI runner before either arm is treated as proved
-  there.
+  is `illegal option -- c` (executed). What §6 must verify on the CI runner is not a format string
+  but a PROPERTY: one lstat call returning the twelve mode bits as four octal digits, the size in
+  bytes, and the owning uid, agreeing digit-for-digit with the zsh arm on the fixtures above —
+  including setuid, setgid and sticky. Until that runs, no Linux format is stated here, because a
+  format written from documentation is what produced every defect this rule has had.
 * The budget in §6 counts this fork. A bash reader pays one `stat` per component; a zsh reader pays none.
 
 **P-2a — Byte length of a shell string: `LC_ALL=C` in force, or the count is characters.** Measured
@@ -2060,7 +2091,7 @@ with its own inventory.
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| **ACLs cannot be enumerated on every platform** | **Low** | **Round 48 — the remaining limit is the unenumerable PLATFORM only. `default:` entries were a live injection path and are checked as of round 48.** Round 30 reversed round 29's blanket acceptance. Darwin refuses any component carrying an `allow` ACE that names another principal AND grants a mutating right (`deny` ignored, read-only `allow` accepted — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists **the pointer path is refused**, not accepted on mode bits alone *(round 31, codex #7 — the round-30 text had this fail OPEN)*; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
+| **ACLs cannot be enumerated on every platform** | **Low** | **Round 48 — the remaining limit is the unenumerable PLATFORM only. `default:` entries were a live injection path and are checked as of round 48.** Round 30 reversed round 29's blanket acceptance. Darwin refuses per ACL-2 — an `allow` ACE for another principal naming ANY right outside its seven-right read-only allowlist — which this row references and does not restate. The mutating-right formulation that stood here is the blacklist N6-7 forbids **by naming this very row**, and it fails open in a measured way: `chmod +a "everyone allow append"` prints `allow add_subdirectory` (executed), a token on nobody's list of mutating rights, so the component passes and another uid can create children in it (`deny` ignored, read-only `allow` accepted — measured, `$HOME` here carries `group:everyone deny delete`). Where no enumerator exists **the pointer path is refused**, not accepted on mode bits alone *(round 31, codex #7 — the round-30 text had this fail OPEN)*; CI is unaffected because the harness exports its own `CLAUDE_PLUGIN_DATA` and never takes the pointer path. *(Superseded round-29 text follows.)* **Accepted limit, stated not hidden** (round 29, codex High #3). Authentication tests ownership, mode bits and symlinks; a macOS ACL can grant another uid write access to a root-owned `0755` ancestor and pass every clause. Defended: same-uid accident and mode-bit misconfiguration. **Not** defended: an attacker already holding an ACL grant on an ancestor of the data dir — who, on this platform, already has write access to the user's files by other routes. Enumerating ACLs needs a portable query the shell family does not have (`ls -le` is BSD-only and parsed nowhere here), and a half-implemented check would read as protection while providing none. Tracked as **COREDEV-2617a**; §4.2a states the limit in place |
 | The fix breaks the fail-open property of hooks | **High** | §4.3 keeps the absent-`paths.sh` fallback; A is rejected for the hook path |
 | A derivation picks the wrong id where two exist | **High** | §2 measured two on this machine; B is called out as ambiguous rather than assumed safe |
 | The change looks correct because all four libs still agree | **High** | §3 — agreement is what hid this. N3 compares to `unleashed_plugin_base()`, not to peers |
@@ -2235,7 +2266,8 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    an entry on behalf of a shell that is not an authoritative hook. It therefore reports
    `_UNLEASHED_POINTER_STATE=none` on the resolved path. **Arm equivalence is asserted on the four
    protocol variables for the READ path only**, which is the only path this copy has. N6 row 65 is
-   re-aimed at that, and row 84 covers the fourth variable.
+   re-aimed at that, and it covers the fourth variable too — row 84, which used to be cited here, is
+   struck as a duplicate of row 73.
 
    *(Round 17, BOTH arms: the round-16 body sourced `paths.sh` **unconditionally**. In the documented
    absent-file mode that emits a raw shell error — **Bash returns 1, zsh 127** (codex measured both) — the
