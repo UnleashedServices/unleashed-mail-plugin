@@ -524,7 +524,8 @@ important fact about this section**, and it is stated here rather than absorbed 
    become visible to the gate with no export at all.)*
 2. ~~**Hand-run `scripts/*.sh` and CI shells**, which have no hook environment at all.~~
    **WITHDRAWN in round 23 (codex #6) — asserted, never traced.** Checked: CI runs the isolated harness
-   (`.github/workflows/plugin-ci.yml:201-203,423-429`), which **exports its own temporary**
+   (`.github/workflows/plugin-ci.yml:201-203`; the `:423-429` block cited alongside it reports the
+   `sed`/`tr` implementation under test and is evidence about the ENGINE, not about harness isolation), which **exports its own temporary**
    `CLAUDE_PLUGIN_DATA` (`scripts/test-hooks.sh:31-35`), so CI is not affected; and the Bash-tool state
    reader already **bridges the authoritative value explicitly** (`agents/swift-reviewer.md:180-193`).
    Neither is a live harmed consumer. **A class with no traced member is not evidence**, and this is the
@@ -665,8 +666,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2158`) and its matrix change (`:2164-2168`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2191-2198`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2146`) and its matrix change (`:2152-2156`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2179-2186`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -845,7 +846,8 @@ what was actually written down, which is exactly the class §6 exists to catch.)
 > means two entries with **different names necessarily hold different values**, and directory entries
 > are distinct by definition. *(Round 31, codex High #1: "distinct by definition" is true of the
 > DIRECTORY, and the encoding is byte-injective — but **macOS is case-insensitive by default**, which
-> `.github/workflows/plugin-ci.yml:419` already recognises, so `/Data/A` and `/Data/a` alias to one
+> `.github/workflows/plugin-ci.yml`'s macOS matrix leg runs on (no line in that file ASSERTS the
+> case-insensitivity; the runner simply has it), so `/Data/A` and `/Data/a` alias to one
 > entry: last write wins, the reader sees one authentic entry, and the loser diverges silently. The
 > encoder therefore **case-folds nothing and escapes case**, with THREE DISJOINT MARKERS after the
 > escape character:
@@ -954,7 +956,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2535`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2523`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1274,7 +1276,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2257`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2245`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1308,7 +1310,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2535`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2523`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1329,7 +1331,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2158`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2146`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1504,6 +1506,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 122 | **ignore UNNAMED default ACL entries on Linux** | THREE fixtures, all `0700` and euid-owned: `default:group::rwx` with NO `default:mask::`; `default:group::rwx` under `default:mask::rwx`; and `default:other::rwx` under `default:mask::r-x`. All three REFUSE — the first because an absent mask masks nothing, the third because the mask does not apply to the OTHER class at all. Under the mutation each authenticates and every consumer-created child inherits group- or other-write, since Linux seeds a new object's access ACL from the parent's default ACL rather than from `umask`. Row 104 covers a NAMED default user and cannot discriminate any of them. Linux-only; gated on the CI probe |
 | 120 | **apply the ACL clauses at PUB-7's target-chain check on an enumerator-less platform** | a publisher on a box with no enumerator PUBLISHES and reports `created`; under the mutation it reports `failed` at E2. Row 106 covers only own-entry authentication and cannot discriminate this site |
 | 121 | **apply the ACL clauses at PUB-9 E4's store-and-ancestor check on an enumerator-less platform** | same fixture, same oracle, different exit — under the mutation the publisher fails at E4 instead. AUTH-1(h) enumerates FOUR carve-out evaluations — the own-entry pair (i)/(ii), E4's store chain (iii) and PUB-7's target chain (iv) — and rows 106, 120 and 121 pin them, row 106 covering the own-entry pair with its two-publish oracle |
+| 125 | **roll back ancestors created before a later failure** | with `.claude` creatable and `unleashed-mail` creation failing, the publisher reports `failed` and LEAVES `.claude` in place — ST-3/ST-4 forbid the plugin removing directories, so a rollback deletes paths it has no right to delete. Row 124 covers creation before validating an already-hostile prefix and cannot discriminate failure AFTER a first safe creation |
 | 124 | **create a missing store ancestor before authenticating the existing prefix** | with `HOME` a SYMLINK to another tree and `.claude` absent, the publisher creates NOTHING and reports `failed`; under the mutation `mkdir` runs through the symlink and leaves a directory outside the store, which ACL-6's "the refusal path creates no file anywhere" forbids. Rows 111 and 121 test chain REFUSAL, not the write-before-validation ORDER, and cannot discriminate this |
 | 123 | **read an entry with plain `read` instead of `IFS= read -r`** | an entry holding `/tmp/a\b ` (backslash, trailing space — both permitted by TGT-1) authenticates and resolves; under the mutation the read yields `/tmp/ab`, ENT-3's name↔content check fails, and the store is `stale` forever. Measured: plain `read` transforms it in BOTH shells. Row 4 is the multi-line case and cannot discriminate this |
 | 119 | **spell a concatenation `out="$out[$c]"` instead of `out="${out}${c}"`** | every family file sources cleanly under zsh; under the mutation zsh aborts with `bad math expression: operand expected at '/'` because `$out[` is an array subscript, while bash yields the literal `X[/]` and passes — so a bash-only cell cannot discriminate it and the oracle is the ZSH arm (FAM-5 clause 0) |
@@ -1603,7 +1606,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2535` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2523` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1724,7 +1727,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **ACL-5 — Enumerator selection and invocation.** The platform is selected by running `/usr/bin/uname -s` — by absolute path — and the enumerator for the selected platform is invoked by absolute path (`/bin/ls` on Darwin, `/usr/bin/getfacl` on Linux). Neither `command -v` nor a bare `uname`, `ls` or `getfacl` may be used for selection or invocation: both resolve through `PATH`, which differs between a plugin hook and a git hook.
 
-**ACL-6 — ACL probe writes nothing.** ACL evaluation writes nothing: it creates no file and writes no byte anywhere, and in particular never inside the path being validated. Authentication may not be established by attempting a write. The refusal path as a whole creates no file anywhere.
+**ACL-6 — ACL probe writes nothing, and a PRE-CREATION refusal creates nothing.** ACL evaluation writes nothing: it creates no file and writes no byte anywhere, and in particular never inside the path being validated. Authentication may not be established by attempting a write. **A refusal reached BEFORE any creation — which includes every refusal of an already-existing component, and therefore the symlinked-`HOME` case E4 orders validated first — creates no file anywhere.** *(Round 92, codex: this rule previously said the refusal path as a whole creates nothing, which flatly contradicted E4's one-at-a-time creation: with `.claude` created and `unleashed-mail` then failing, E4 requires `.claude` to remain and this rule required it never to have existed. E4's leave-in-place is deliberate — ST-3/ST-4 forbid the plugin removing directories, and a rollback would be the plugin deleting paths it does not own the right to delete — so the scope corrected here is ACL-6's, not E4's.)* Ancestors already created when a LATER creation or authentication fails are left in place per E4; they are `0700` and euid-owned, the next run reuses them, and nothing else in the store is touched.
 
 **ACL-7 — No environment-dependent verdict.** For a given absolute path, the predicate's verdict must be a property of the MACHINE. No branch of the predicate — ACL arm or any other clause — may be conditioned on an environment variable; in particular there is no conditional on `CLAUDE_CONFIG_DIR`. The publisher runs as a plugin hook and the reader typically as a git hook, and a predicate that reads their differing environments would accept for one and refuse for the other.
 
@@ -1885,22 +1888,7 @@ An implementer codes from here and from nowhere else: if an obligation is not st
 > opening with one.)* A primitive that has not been run is not a
 > primitive, it is a hope.
 
-**P-1 — Ownership by the effective uid: `[ -O <path> ]`.** Measured: works in **both** shells, **zero
-forks**. **It is NOT the accessor this design uses.** P-2 returns the owning uid from the same single `lstat`
-call that returns mode and size, and **every ownership question — "owned by the effective uid" and
-ANCHOR-1's "owned by uid 0" alike — is answered by comparing P-2's uid field**, so that one call per
-component remains one call and the §7 step-3f fixture seam sees every ownership decision. `[ -O ]` is
-recorded here because it is the obvious spelling, it is genuinely fork-free, and a reader of this
-section will reach for it: using it performs an ownership query OUTSIDE P-2, which bypasses the seam
-and breaks P-2's one-call-per-component property. The effective uid to compare against is `${EUID}` in
-bash and `${EUID}` in zsh — both shells define it, no fork — never `id -u`. *(Round 90, codex: P-1
-said `[ -O ]` was the answer everywhere, P-2 said ownership comes from its call, and N6-10 required a
-single accessor; an implementer had to choose which rule to violate.)* It is also
-**a one-bit answer about the EFFECTIVE uid and cannot identify any other owner**. It is a one-bit answer about the EFFECTIVE uid and cannot identify any other
-owner**: `[ -O / ]` is false for the root-owned `/` and equally false for a directory owned by uid 502,
-so ANCHOR-1's "owned by uid 0" is NOT decidable with it. That question is answered by the uid field
-P-2 returns. POSIX `test` has no such operator, but both shells in this family's support set implement `-O`, and
-this family targets bash and zsh — not POSIX `sh`.
+**P-1 — `[ -O <path> ]` is NOT the ownership accessor this design uses.** Measured: it works in **both** shells with **zero forks**, and it answers only one question — "is this owned by the EFFECTIVE uid?" It cannot identify any other owner: `[ -O / ]` is false for the root-owned `/` and equally false for a directory owned by uid 502, so ANCHOR-1's "owned by uid 0" is not decidable with it. **Every ownership question in this design — "owned by the effective uid" and "owned by uid 0" alike — is answered by comparing P-2's uid field against `${EUID}`**, which both shells define without a fork (measured; never `id -u`). That keeps P-2's one-lstat-call-per-component property true and lets §7 step 3f's fixture seam see every ownership decision; calling `[ -O ]` performs an ownership query OUTSIDE P-2 and bypasses both. It is recorded here only because it is the obvious spelling and a reader of this section will reach for it. *(Round 92: this rule is REWRITTEN WHOLE. Round 90 corrected it by prepending a new statement and left the old one below, producing a duplicated sentence and an unmatched `owner**` — in the primitives section implementers copy from. Second amendment, so the statement is replaced rather than spliced.)*
 
 **P-2 — Mode, size AND owning uid, in ONE lstat call per component.** There is no single fork-free
 answer, and the split is stated rather than papered over. Every clause of this design that asks a
