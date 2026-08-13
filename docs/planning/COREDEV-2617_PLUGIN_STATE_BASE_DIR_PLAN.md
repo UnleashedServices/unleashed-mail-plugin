@@ -665,8 +665,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2122`) and its matrix change (`:2128-2132`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2155-2162`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2124`) and its matrix change (`:2130-2134`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2157-2164`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -911,8 +911,10 @@ and bash reports `command not found`, which under the `set -euo pipefail` these 
 aborts the sourcing shell in exactly the arm the guard protects** — inside the scanning function
 suppresses it, and zsh restores the option at
 function return — verified by execution, including that a later top-level glob still aborted, proving
-the option did not leak. bash instead leaves the pattern literal, so `[ -e "$_f" ] || continue` is
-required in **both** arms. **This ships in five copies, so N6 asserts the empty-store case under zsh for
+the option did not leak. bash instead leaves the pattern literal, so a PRESENCE test is needed in both arms — the two-part
+`[ ! -L "$_f" ] && [ ! -e "$_f" ]` form RD-4 mandates, never the one-part `[ -e ]` this passage
+used to prescribe: `[ -e ]` is false for a dangling symlink, so the one-part form skips a hostile
+entry that must be refused (RD-4 forbids it by name).
 each of the five family files independently** — one passing arm is not evidence about the other four.
 
 **Enumerated-then-vanished is a SKIP, not a refusal.** Measured under an adversarial race — 8 concurrent
@@ -951,7 +953,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2498`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2500`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1271,7 +1273,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2221`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2223`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1305,7 +1307,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2498`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2500`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1326,7 +1328,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2122`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2124`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1592,7 +1594,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2498` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2500` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1725,7 +1727,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **RD-3 — Rule −1: store authentication.** Rule −1 authenticates the STORE before any entry is touched. The store is `${HOME}/.claude/unleashed-mail/bases/`. If it exists and any of the following holds — it is not a directory; it is a symlink (tested without following); it is not owned by the effective uid; its mode is not exactly 0700; **any component of PCH-1's walk over the store's own chain — `/` down to and including `bases/` — fails, under ST-4's clauses and ANCHOR-1's ownership rule, which this rule REFERENCES and does not restate. The walk starts at `/`, not at `${HOME}`: the earlier `${HOME}` bound dropped every component above it**; any component of the path from `${HOME}` down to and including it carries an ACL condition that fails **per ACL-1..ACL-5 — the whole and only statement of the ACL rules. This clause restates none of them: a platform-independent formulation disagrees with ACL-3 on Linux, where `user:bob:rw-` under `mask::r--` is ACCEPTED by ACL-3 and refused by the gloss** — then refuse: `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=stale`, exactly one diagnostic. If the store does not exist at all, evaluation proceeds to rule 4. Otherwise evaluation proceeds to rule 0. A store whose mode is not 0700 is REFUSED, never `chmod`'ed. The exact-0700 requirement applies to `bases/` alone; its ancestors (`${HOME}`, `~/.claude`, `~/.claude/unleashed-mail`) are held only to the general not-group-or-world-writable requirement, which 0755 satisfies. This rule is where the exact-0700 requirement FIRES FIRST, so an EMPTY store at the wrong mode refuses here instead of falling through to rule 4. It is not the only place the requirement is EVALUATED: RD-10 clause (d) requires `bases/` to satisfy ST-3 on every per-entry authentication, so a store whose mode changes mid-scan is caught there too. Both defer to ST-3 and neither restates it, so the two cannot disagree — which is why this is a second evaluation site and not a second statement. For ACLs this rule **references ACL-1..ACL-5 and states nothing of its own**: a platform-independent ACL sentence is a gloss ACL-1 forbids implementing, and it disagrees with ACL-3 on Linux (`user:bob:rw-` under `mask::r--` is accepted by ACL-3 and refused by the gloss).
 
-**RD-4 — Rule 0: vanished entry skip.** Rule 0: a candidate that is not a symlink AND does not exist when opened is SKIPPED — it is not an entry, and skipping it changes no protocol variable and produces no diagnostic. The test is exactly `[ ! -L "$_f" ] && [ ! -e "$_f" ]`, both parts required. A one-part `[ -e "$_f" ]` (or `[ -e "$_f" ] || continue`) test is prohibited anywhere in the reader: `[ -e ]` is false for a dangling symlink, so the one-part form skips a hostile entry that must be refused. A symlink is always an entry — a hostile one — is never skipped as vanished, and falls through to rule 1. Because the test is two-part it also disposes of bash's unmatched literal `base.*` pattern, so no separate existence guard exists anywhere else in the scan. Operator deletion of an entry during a scan therefore never flips a healthy store to `stale`.
+**RD-4 — Rule 0: vanished entry skip.** Rule 0: a candidate that is not a symlink AND does not exist when opened is SKIPPED — it is not an entry, and skipping it changes no protocol variable and produces no diagnostic. The test is exactly `[ ! -L "$_f" ] && [ ! -e "$_f" ]`, both parts required. A one-part `[ -e "$_f" ]` (or `[ -e "$_f" ] || continue`) test is prohibited anywhere in the reader: `[ -e ]` is false for a dangling symlink, so the one-part form skips a hostile entry that must be refused. A symlink is always an entry — a hostile one — is never skipped as vanished, and falls through to rule 1. Because the test is two-part it also disposes of bash's unmatched literal `base.*` pattern, so no separate existence guard exists anywhere else in the scan. Operator deletion of an entry during a scan therefore does not flip a healthy store to `stale` **when the deletion lands before the candidate is tested**. It is NOT unconditional, and the earlier "never" was: the test and the open are separate syscalls, so a deletion landing between them yields a failing authentication and `stale`. The window is inherent to a test-then-open sequence and is accepted; what is forbidden is claiming it away.
 
 **RD-5 — Rule 1: failed entry refuses.** Rule 1: if any entry surviving rule 0 fails the complete authentication predicate, refuse: `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=stale`, exactly one diagnostic. This fires however many entries authenticate beside the failing one: a malformed entry is never ignored in favour of a good one, and one valid plus one malformed entry refuses. A failing entry maps here and never to rule 4's `none`.
 
@@ -1831,7 +1833,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **N6-4 — No duplicate rows.** No two live rows may name the same mutation with the same discriminating case; a duplicate adds no evidence and inflates the table's apparent coverage. Applied: rows 73 and 84 are one mutation (arm equivalence must also assert `_UNLEASHED_POINTER_STATE`) — keep 73, delete 84, and repair every §7 step that cites 84. Rows 66 and 83 are one mutation with one fixture (omit ancestor creation on a clean install) — keep 66, delete 83, and repair the §7 step that cites 83. Rows 65 and 97 name one fixture and one oracle (empty `$1` + `paths.sh` absent + one valid entry ⇒ resolves `OK=1`), and 97 mutates the bridge's PROSE, which cannot be executed — keep 65, which mutates the body, and delete 97.
 
-**N6-5 — One implementation step per row.** Every live row is assigned to exactly ONE implementation step, so the step that builds a clause also builds its proof; no row may appear under two steps (row 84 is currently listed under both 3d and 3e) and no live row may be left unassigned. Assignment by category: encoder and injectivity rows, including the no-fork, `LC_ALL=C`-pin and `LC_ALL`-leak rows (45, 93, 94) → 3a; entry-clause, chain-clause and ACL rows, including the authentication block (**2**-14, 21-28, 33-35), 76 and 111 → 3b — **row 1 is excluded deliberately**: it mutates the publisher's write-or-skip decision, which step 3d builds, and the range that swept it in here assigned it to two steps at once, which the next sentence of this rule forbids; the scan and the ordered reader rules, including 74 and the store-refusal rows 101 and 110 → 3c; publisher, temp-name, NAME_MAX, publisher-diagnostic and enum-mapping rows, including 59, 60, 95, 96, 105, 108 and 109 → 3d; five-copy and bridge rows, including 99, 100 and 103 → 3e. Rows proving harness obligations (54, 71) are assigned to **§7 step 3f**, and the quarantine row (72) to **§7 step 6**. Both steps must EXIST for that assignment to mean anything: before round 66 these rows pointed at "the steps that build the harness `HOME` sandbox", and §7 had no such step, so two live rows were owned by nobody while the sentence read as though they were assigned. Rows proving §6 obligations rather than implementation clauses — the acceptance criterion (78) and the N1–N6 envelope (87) — are assigned to §6, not to §7.
+**N6-5 — One implementation step per row.** Every live row is assigned to exactly ONE implementation step, so the step that builds a clause also builds its proof; no row may appear under two steps (row 84 was listed under both 3d and 3e before it was struck as a duplicate of row 73) and no live row may be left unassigned. Assignment by category: encoder and injectivity rows, including the no-fork, `LC_ALL=C`-pin and `LC_ALL`-leak rows (45, 93, 94) → 3a; entry-clause, chain-clause and ACL rows, including the authentication block (**2**-14, 21-28, 33-35), 76 and 111 → 3b — **row 1 is excluded deliberately**: it mutates the publisher's write-or-skip decision, which step 3d builds, and the range that swept it in here assigned it to two steps at once, which the next sentence of this rule forbids; the scan and the ordered reader rules, including 74 and the store-refusal rows 101 and 110 → 3c; publisher, temp-name, NAME_MAX, publisher-diagnostic and enum-mapping rows, including 59, 60, 95, 96, 105, 108 and 109 → 3d; five-copy and bridge rows, including 99, 100 and 103 → 3e. Rows proving harness obligations (54, 71) are assigned to **§7 step 3f**, and the quarantine row (72) to **§7 step 6**. Both steps must EXIST for that assignment to mean anything: before round 66 these rows pointed at "the steps that build the harness `HOME` sandbox", and §7 had no such step, so two live rows were owned by nobody while the sentence read as though they were assigned. Rows proving §6 obligations rather than implementation clauses — the acceptance criterion (78) and the N1–N6 envelope (87) — are assigned to §6, not to §7.
 
 **N6-6 — Store-level discriminating outcomes.** An authentication-clause mutant's discriminating case must name the STORE-LEVEL outcome the ordered reader rules produce, never merely "refused" and never "skip the bad entry". For any entry that fails the complete predicate that outcome is: the whole store is refused — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — and a good entry sitting beside the failing one must NOT win. Every row still written for the singleton pointer (oracles of the form "`foo/bar` refused", "two-line pointer refused", "pointer at 0644 refused", "0775 target refused") must be re-aimed on the template of row 2: "a dangling `base.*` symlink REFUSES the store; it is not skipped as vanished."
 
