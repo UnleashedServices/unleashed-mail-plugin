@@ -665,8 +665,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2092`) and its matrix change (`:2098-2102`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2125-2132`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2122`) and its matrix change (`:2128-2132`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2155-2162`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -951,7 +951,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2468`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2498`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1271,7 +1271,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2191`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2221`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1305,7 +1305,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2468`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2498`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1326,7 +1326,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2092`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2122`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1592,7 +1592,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2468` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2498` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1673,7 +1673,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 ### Authentication
 
-**AUTH-1 — The one authentication predicate.** "Authenticates" / "fails authentication", wherever either phrase is used of a store entry, denotes ONE predicate over a single entry, implemented by ONE shell function that both the publisher and the reader call. A second predicate, or a weaker variant of it at any call site, is forbidden. An entry authenticates IF AND ONLY IF ALL of the following hold: (a) ENT-1, the file clauses on the entry file itself; (b) ENT-2, the exactly-one-line clause; (c) ENT-3, the name-equals-encoded-content clause; (d) TGT-1, the content clauses on the single line the entry holds; (e) PCH-1's component walk over the entry's OWN chain — every component from `/` down to and including the entry's parent directory `bases/`; (f) PCH-1's component walk over the TARGET chain — every component from `/` down to and including the directory named by the line; (g) ANCHOR-1's ownership rule, applied to each of those two chains; (h) ACL-1..ACL-5, applied to every component of BOTH chains. Failure of any single clause makes the entry a failing entry; there is no clause an implementation may apply on one side and not the other. **Clause (h) — the one sanctioned carve-out.** On a platform where the ACL condition is unevaluable, a PUBLISHER omits the ACL clauses when authenticating **its own entry**, on EVERY such authentication — the write-or-skip decision AND the post-scan re-verification of that same entry. No other clause may be omitted at any call site, and a READER never omits the ACL clauses. Scoping this carve-out to the write decision alone makes the post-scan re-verification unevaluable and returns `stale` on every enumerator-less runner, which is the CI-red defect §4.2a records as the fifth turn of the hook/ACL-cost family.
+**AUTH-1 — The one authentication predicate.** "Authenticates" / "fails authentication", wherever either phrase is used of a store entry, denotes ONE predicate over a single entry, implemented by ONE shell function that both the publisher and the reader call. A second predicate, or a weaker variant of it at any call site, is forbidden. An entry authenticates IF AND ONLY IF ALL of the following hold: (a) ENT-1, the file clauses on the entry file itself; (b) ENT-2, the exactly-one-line clause; (c) ENT-3, the name-equals-encoded-content clause; (d) TGT-1, the content clauses on the single line the entry holds; (e) PCH-1's component walk over the entry's OWN chain — every component from `/` down to and including the entry's parent directory `bases/`; (f) PCH-1's component walk over the TARGET chain — every component from `/` down to and including the directory named by the line; (g) ANCHOR-1's ownership rule, applied to each of those two chains; (h) ACL-1..ACL-5, applied to every component of BOTH chains. Failure of any single clause makes the entry a failing entry; there is no clause an implementation may apply on one side and not the other. **Clause (h) — the one sanctioned carve-out.** On a platform where the ACL condition is unevaluable **because no enumerator EXISTS for it** — never because a present enumerator failed, which may be failing precisely because the component is hostile — a PUBLISHER omits the ACL clauses when authenticating **its own entry**, on EVERY such authentication — the write-or-skip decision AND the post-scan re-verification of that same entry. No other clause may be omitted at any call site, and a READER never omits the ACL clauses. Scoping this carve-out to the write decision alone makes the post-scan re-verification unevaluable and returns `stale` on every enumerator-less runner, which is the CI-red defect §4.2a records as the fifth turn of the hook/ACL-cost family.
 
 **ENT-1 — Entry file clauses.** The entry file `<store>/base.<key>` must be a regular file, must NOT be a symbolic link, must be owned by the effective uid, and must be mode exactly `0600`. A `base.*` path that is a symbolic link — dangling or not — is a FAILING entry, never a vanished-entry skip. A `base.*` path that exists and is not a regular file (directory, FIFO, socket, device) is a failing entry.
 
@@ -1741,7 +1741,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **RD-11 — Count entries, never accumulate.** The count rules 2 and 3 test is the count of AUTHENTICATING ENTRIES, and that count is the count of distinct base values: directory entries are distinct by construction, and the injective encoder plus the name↔content check make two entries with different names necessarily hold different values. The reader never accumulates target strings — no space-delimited accumulator, and no `case " $_U_TARGETS " in *" $_L1 "*` membership test (an unquoted `case` pattern makes glob metacharacters in a path match as wildcards, and a base containing a space breaks the delimiting).
 
-**RD-12 — Bounded read of entries.** The reader's only read of content is bounded: at most two lines from each `base.*` entry in the one store directory, the second read only to detect its presence. Nothing else is read — never repository content, never user content, never anything that reaches a consumer or the model's context. Every read target is pre-initialised before the read and every later expansion of it uses `:-`; the redirect is taken at GROUP level, because in zsh no redirect ordering on the inner command suppresses an open failure; and the entry is `[ -L ]`-tested before the read so a symlink is never opened. The read is performed inside the shared authentication function, never as top-level source-time code in a sourced library.
+**RD-12 — Bounded read of entries, and NOTHING IS OPENED BEFORE ITS TYPE IS KNOWN.** **The entry's ENT-1 type clauses — regular file, not a symbolic link — are evaluated BEFORE any open, and a path that fails them is a failing entry that is never read.** `[ -L ]` alone is not sufficient and was the only guard this rule named: a FIFO is not a symlink, so it passed, and the redirect then BLOCKS FOREVER waiting for a writer — measured in bash 3.2.57 and zsh 5.9, `rc=124` at a 5-second timeout in both. Because the resolver runs at SOURCE TIME in every process that loads a family file, one FIFO named `base.*` in the store hangs every hook, permanently. ENT-1 already CLASSIFIES a FIFO as a failing entry; what was missing is the ORDER, and a classification that is applied after the open cannot prevent the hang. This is the reader-side twin of P-5's publisher hang: round 70 fixed the publisher and left the reader, so the same primitive defect survived in the other half of the family. The read itself is bounded: at most two lines from each `base.*` entry in the one store directory, the second read only to detect its presence. Nothing else is read — never repository content, never user content, never anything that reaches a consumer or the model's context. Every read target is pre-initialised before the read and every later expansion of it uses `:-`; the redirect is taken at GROUP level, because in zsh no redirect ordering on the inner command suppresses an open failure; and the entry is `[ -L ]`-tested before the read so a symlink is never opened. The read is performed inside the shared authentication function, never as top-level source-time code in a sourced library.
 
 **RD-13 — Reader diagnostics: one, stderr.** Every REFUSING reader exit — the HOME-unusable exit, rule −1, rule 1, rule 2 and rule 4 — emits exactly one diagnostic; rule 3 emits none, so a reader that resolves leaves stderr empty. Each diagnostic is a single bounded line on stderr; it is never written to the plugin's own log and is never persisted. Cardinality is a property of the resolution protocol, not of `paths.sh`: each family file emits only while `_UNLEASHED_BASE_OK` is still unset and sets it in the same step, so sourcing two or three libraries with `paths.sh` absent still yields exactly one diagnostic per process. A blanket "stderr is empty" assertion over unresolved cells is prohibited — it contradicts the one-diagnostic obligation of every refusing exit.
 
@@ -1799,7 +1799,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **FAM-6 — One stderr diagnostic per process.** Exactly ONE unresolved diagnostic per process, emitted at source time, on STDERR only — never into the plugin's own log, a marker, or any other persistent record, since a persisted diagnostic is itself the persistence an unresolved base forbids. When the base does not resolve, that single stderr line is the only output. Each family file emits it only when `_UNLEASHED_BASE_OK` is still unset and sets that flag in the same step, so the cardinality also holds in the absent-`paths.sh` mode, where two or three family files sourced into one process each take their own inline fallback. The guard is the shared flag, not the presence of a file: the flag lives in the sourcing shell, so the cardinality is a property of the resolution protocol rather than of the optional file.
 
-**FAM-7 — N5 expansion allowlist.** `N5LexicalDrift.ALLOWLIST` (`scripts/tests/test_shell_primitive_drift.py:158-170`) enumerates every permitted expansion of `CLAUDE_PLUGIN_DATA` as a specific file-and-line, and N5 fails on any expansion in the scan set that is not at an enumerated site — so appending a suffix to an allowlisted line fails N5 until the allowlist is deliberately updated. The allowlist must carry all five resolver definitions — `paths.sh:35`, `marker.sh:29`, `log.sh:27`, `context.sh:36` and every `CLAUDE_PLUGIN_DATA` expansion in `agent-env-bridge.sh`'s specified body — plus the two agent-fence substitution sites, which are the injection points and cannot be removed, plus the `export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"` propagation lines, which compose nothing. The scan set includes the executable fences under `agents/**` and `skills/**`. Test fixtures are allowlisted by (file, reason) enumerated in the test source, never by a `tests/` glob. N5 additionally fails on any `${!` or `eval` anywhere in the scan set that is not itself allowlisted, because indirection through a runtime-assembled name cannot be decided statically.
+**FAM-7 — N5 expansion allowlist.** `N5LexicalDrift.ALLOWLIST`, in `scripts/tests/test_plugin_state_base.py`, allowlists every permitted expansion of `CLAUDE_PLUGIN_DATA` **BY FILE** — the shipped test is `if rel in self.ALLOWLIST: continue` — and N5 fails on any expansion in the scan set outside an allowlisted FILE. It is NOT file-and-line, so appending a suffix to a line in an allowlisted file does NOT fail N5; any obligation resting on line granularity must be built, not assumed. *(Round 72: round 70 corrected this in the NOTE below and left the RULE stating the old design, citing `test_shell_primitive_drift.py:158-170` — real lines of the wrong file, which is why the citation read as verified. Fixing the note and not the rule is the failure this document has recorded against itself four times, and it happened again in the round that was fixing citations.)* The allowlist must carry all five resolver definitions — `paths.sh:35`, `marker.sh:29`, `log.sh:27`, `context.sh:36` and every `CLAUDE_PLUGIN_DATA` expansion in `agent-env-bridge.sh`'s specified body — plus the two agent-fence substitution sites, which are the injection points and cannot be removed, plus the `export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"` propagation lines, which compose nothing. The scan set includes the executable fences under `agents/**` and `skills/**`. Test fixtures are allowlisted by (file, reason) enumerated in the test source, never by a `tests/` glob. N5 additionally fails on any `${!` or `eval` anywhere in the scan set that is not itself allowlisted, because indirection through a runtime-assembled name cannot be decided statically.
 
 **AE-1 — Arm equivalence matrix — THE ONE STATEMENT OF THE CELL SET.** The full store matrix runs against each of the five family files: {store absent; store present but unauthenticated — a refusing mode, owner or type; **store present, authenticated and EMPTY**; exactly one authenticating entry; one malformed entry; one unreadable entry; **one authenticating entry PLUS one malformed**; two authenticating entries, i.e. a conflicted STORE; an entry enumerated then vanished mid-scan} × {`paths.sh` present, `paths.sh` absent} × {bash, zsh}. **No other rule states this set.** Two rules did, with different members: the empty-authenticated store and the one-valid-plus-one-malformed cell appeared in only one of them, and each is some row's DISCRIMINATING fixture — the second is row 61's, which proves rule 1 outranks rule 2, and a suite built from the other list would never run it. In every READ cell all five files must report identical `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`, `_UNLEASHED_BASE_SOURCE` and `_UNLEASHED_POINTER_STATE` — all four, not three. Publish-side outcomes are compared across the other four files only, because `agent-env-bridge.sh` never publishes and reports `_UNLEASHED_POINTER_STATE=none`; that carve-out is stated with the matrix itself, so the oracle is satisfiable by a correct implementation. Each file must also source cleanly under `set -euo pipefail` in both shells in every cell. "Conflicted" is a property of the store (two authenticating entries), never a state an individual entry carries.
 
@@ -1963,7 +1963,14 @@ wrong verdict: it HANGS the publisher, and the publish runs at SOURCE TIME in ev
 **Therefore the publisher tests presence with `[ -L "$p" ] || [ -e "$p" ]` and refuses any non-regular
 shape BEFORE it opens anything** — the same two-part test ST-7 uses, for the same reason. `set -C`
 remains as the race guard between that test and the create, which is all it can be: a check that
-blocks on the hostile input cannot be the primary defence. Same-uid interference is in-model here, per
+blocks on the hostile input cannot be the primary defence. **The residual is stated rather than
+claimed closed: if the name is ABSENT at the presence test and same-uid interference creates a FIFO
+there before the redirect runs, the open still blocks** — `set -C` refuses an existing file but cannot
+make an open non-blocking. Closing that window needs an `O_NONBLOCK` open, which no POSIX shell
+redirect offers, so it is an ACCEPTED LIMIT of the same-uid trust model THREAT-1 already states, not a
+defect to be papered over. The transient's name carries `$RANDOM`, so the window is not predictable to
+an attacker who cannot already read the process's memory; the DURABLE entry name is predictable, which
+is why the reader's type-before-open rule (RD-12) is the load-bearing defence and this one is not. Same-uid interference is in-model here, per
 ST-7's own rationale. *(Round 70, codex #3 asked whether this is exclusive-create for EVERY existing
 pathname; measuring the answer found the FIFO hang, which no arm had named.)*
 This is the primitive TMP-1 requires when it says the transient must be "created with an operation that
@@ -2031,6 +2038,29 @@ measured printed `/` before entering the loop, and the snippet transcribed into 
 that line — so the recorded output was the harness's, not the snippet's.** Measuring one artefact and
 publishing another is exactly the failure §4.2a-P exists to prevent, committed inside §4.2a-P. The text
 above was therefore re-measured by executing the block verbatim, not a function wrapped around it.)*
+
+**P-10 — Walking the BYTES of a string, and the `$var[` trap that breaks it in zsh.** The encoder walks
+its input byte by byte, and no primitive stated how. Measured identically in bash 3.2.57 and zsh 5.9,
+with `LC_ALL=C` in force (without it the count is CHARACTERS, per P-2a):
+
+```sh
+i=0; n=${#v}
+while [ "$i" -lt "$n" ]; do
+    c=${v:$i:1}
+    i=$(( i + 1 ))
+done
+```
+
+On `/a<c3><a9>b` both shells yield five single-byte elements and `n=5` — the two bytes of `é` are
+separate elements, which is what makes ENC-1's `_x<hh>` rule reachable.
+
+**The trap, found by executing this primitive rather than reading it: `"$out[$c]"` is ARRAY SUBSCRIPTING
+in zsh.** Appending with `out="$out[$c]"` — the obvious spelling — is `X[/]` in bash and a FATAL ERROR
+in zsh (`bad math expression: operand expected at '/'`), because zsh subscripts `$out` with `[$c]` and
+tries to evaluate `/` as arithmetic. **Every string concatenation in these five files therefore braces
+its expansions — `out="${out}${c}"` — never `"$out$c"` followed by a literal `[`.** Measured:
+`"${o}[${c}]"` yields `X[/]` in both shells. This is a whole-family hazard, not one site: any
+accumulator followed by a `[` is a zsh subscript.
 
 **P-9 — The nearest EXISTING ancestor, fork-free.** NM-1 and ENC-9 need `getconf NAME_MAX <dir>` against
 `bases/` *or its nearest existing ancestor while the store does not yet exist*, and no primitive said how
@@ -2457,7 +2487,7 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    | `swift-lint-check.sh` (`:425`) | skip persistence; **still emit** the model-visible block |
    | `swift-build-verify.sh` (`:65-66`) | skip the log; **still emit** the advisory |
    | `reviewer-roster.sh` (`:33`, `:53`, `:256`) | deliberately **fail-closed** — classify reviewers `UNATTRIBUTED` and exit **3**, never fail open |
-   | `stop-quality-marker-gate.sh` — **`:66`, `:74`, `:75`, `:117`, `:120`, `:123`, `:131-132`** | **the destructive ones.** `:66` composes `SENTINEL="$(marker_dir)/…"`; `:120` runs `mktemp "$(marker_dir)/.stopgate.XXXXXX"`; `:123` runs `mv -f "$_STMP" "$SENTINEL"`. On an unresolved base these **create and move files under `/.state/`**. Round 3 guarded only `:131-132`. Guard the whole script at entry |
+   | `stop-quality-marker-gate.sh` — **`:74`, `:129`, `:132`** | **the destructive ones.** `:74` composes `SENTINEL="$(marker_dir)/…"`; `:129` runs `mktemp "$(marker_dir)/.stopgate.XXXXXX"`; `:132` runs `mv -f "$_STMP" "$SENTINEL"`. On an unresolved base these **create and move files under `/.state/`**. Round 3 guarded only `:131-132`. Guard the whole script at entry |
    | `pre-commit-checks.sh` — **`:47` and `:72` too** | round 3 listed only the **fail** cases (`:44`, `:69`); the **pass** cases were unguarded, so a *successful* run wrote to a root path |
    | `swift-lint-check.sh` — **`:67` too** | the early syntax-error exit writes a marker before `:425` is reached |
    | *(historical — round 3 record, not control flow; the operative row is `reviewer-roster.sh` above)* | `reviewer-roster.sh:53` | `BASE="$(context_reviews_dir)/…"` composes `/reviews/…` and passes it to `context_latest_round_dir` (`:180`) — a root-directory **read** |
