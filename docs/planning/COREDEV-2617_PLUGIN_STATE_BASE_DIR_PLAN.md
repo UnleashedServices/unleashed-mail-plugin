@@ -665,8 +665,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2060`) and its matrix change (`:2066-2070`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2093-2100`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2092`) and its matrix change (`:2098-2102`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2125-2132`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -951,7 +951,7 @@ live install's entry. Recovery is `rm` of the obsolete entry, named in the confl
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2436`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2468`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1271,7 +1271,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2159`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2191`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1305,7 +1305,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2436`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2468`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1326,7 +1326,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2060`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2092`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1374,9 +1374,12 @@ disagree about what to report while agreeing about what they resolved, and nothi
 > with step 3 dropped that premise remains **true**, so both stand — but any future round that revives a
 > `$HOME` fallback must change both sites, not one.
 >
-> Also re-check `N5LexicalDrift.ALLOWLIST` (in `scripts/tests/test_plugin_state_base.py`, where that
-> class actually lives — it was cited against `test_shell_primitive_drift.py`, which exists but has
-> never held it) for the pointer path's expansion sites, keep
+> Also re-check `N5LexicalDrift.ALLOWLIST` — in `scripts/tests/test_plugin_state_base.py`, where that
+> class actually lives; it was cited against `test_shell_primitive_drift.py:158-170`, a file that
+> exists, has never held the class, and whose `:158-170` implements the absent-`paths.sh` matrix, so
+> the citation named real lines of the wrong file and read as verified. **No line number is given
+> here**, because the allowlist is keyed by FILE and a line pin is what went stale — for the pointer
+> path's expansion sites, keep
 > `test_indirection_fails_closed` satisfied (no `${!` in a state library, `:201-211`), and add `/.claude`
 > to `test_nothing_is_created_at_root`'s watch set (`:111,114`).
 
@@ -1493,6 +1496,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 112 | **publish a base value containing a NEWLINE** | the value is UNPUBLISHABLE: no key is derived and nothing is opened under the store (PUB-9 E2), so no durable entry exists for readers to refuse. Row 4 is the READER-side multi-line entry and does not cover this — the publisher-side exclusion added in round 61 had no row at all |
 | 113 | **repair a `base.<key>` that is a symlink or a directory** | THREE fixtures, because two of them are caught by a test the third is not: a symlink TO A DIRECTORY (the transient lands outside the store), a DIRECTORY (it lands inside it), and a **DANGLING symlink** — where `[ -e ]` is FALSE, so a one-part presence test does not fire at all and `mv -f` exits 0 having silently replaced the link (measured). All three must report `failed` with nothing written; an implementation using `[ -e ]` alone passes the first two and fails this one |
 | 114 | **compare a mode with the low NINE bits** | a `chmod 1700` store and a `chmod 4600` entry are REFUSED, not accepted — the exact-mode clauses mean all twelve bits, and both P-2 arms reported `700`/`600` for those fixtures before round 66 |
+| 115 | **skip P-4's post-create mode readback** | under a POSIX default ACL that grants beyond the umask, the transient is created at other than 0600 and the publisher REFUSES (`failed`, transient removed) instead of renaming it onto the entry. Linux-only fixture; runs once the CI probe has measured P-4 under `setfacl -d` |
+| 116 | **open the transient name before testing what is there** | a FIFO at the transient or entry name REFUSES; it does not hang. Measured: `set -C; : > fifo` never returns in either shell (`rc=124` at a 5s timeout), so an implementation that relies on `set -C` alone stops every hook at source time |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1587,7 +1592,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2436` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2468` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1700,7 +1705,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **ACL-3 — Linux ACL arm.** When `/usr/bin/uname -s` outputs `Linux`, enumerate a component's ACL with `/usr/bin/getfacl -pc <path>`. REFUSE the component IFF BOTH hold: (a) at least one entry of the form `user:<name>:`, `group:<name>:`, `default:user:<name>:` or `default:group:<name>:`, with `<name>` non-empty, carries `w`; AND (b) the corresponding mask line permits `w` — `mask::` for access entries, `default:mask::` for default entries. The mask condition is a CONJUNCT of (a), never an independent trigger. `default:` entries are checked by exactly the same rule as access entries.
 
-**ACL-4 — Unevaluable ACL platform.** On any platform that is neither Darwin nor Linux, when the selected platform's enumerator is absent from its absolute path, **or when that enumerator is present but does not produce a parseable answer — a non-zero exit, empty output, or a line that does not match the arm's stated grammar** — the ACL condition is UNEVALUABLE. The present-but-failing case is named explicitly because "missing binary" was the only stated trigger, leaving a tool that exits 1 with no verdict at all: an implementation could then treat its silence as "no ACEs found" and ACCEPT, which is the fail-open inversion this design has already produced four times. A READER refuses any component whose ACL condition is unevaluable — never accepts it on mode bits alone — and that refusal is an ordinary resolution outcome requiring no new enum value: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. A PUBLISHER omits the ACL clauses when, and only when, authenticating **its OWN entry — on every such authentication, the write-or-skip decision and the post-scan re-verification alike** (AUTH-1 clause (h)). Every other authentication a publisher performs applies the ACL clauses and refuses on an unevaluable component. **Consequence, stated here because it is a LIMIT and not a defect: on an unevaluable platform the capability is UNAVAILABLE.** The publisher writes and re-verifies its own entry, so a runner without an enumerator stays green, but no reader can ever consume that entry — a reader refuses every entry — and resolution on such a platform is exactly D′: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. BUD-5 conjunct 1 is scoped accordingly. **The reader is not given the publisher's exemption, and no later round may grant it.** The publisher's exemption is sound only because it is re-verifying bytes it wrote itself in this same process; a reader has no independent knowledge of the value, and ENT-3's name↔content check is SELF-CONSISTENT — whoever writes an entry writes both halves — so a reader exempted from the ACL clauses would accept an entry whose non-ACL clauses passed but whose components were never checked for a grant to another principal — and those clauses are the only ones that detect a component another principal can replace. That is mutant row 107, and it fails open.
+**ACL-4 — Unevaluable ACL platform.** On any platform that is neither Darwin nor Linux, when the selected platform's enumerator is absent from its absolute path, **or when that enumerator is present but does not produce a parseable answer — a non-zero exit, empty output, or an ACE LINE that does not match the arm's stated grammar**. "ACE line" is exact and load bearing: `/bin/ls -lde` prints a `drwxr-xr-x@ 2 nick wheel …` stat line FIRST and the numbered ACEs after it (measured), so a rule reading "any line that does not match" makes EVERY component unevaluable and the capability dies on Darwin. The arm consumes only the numbered ACE lines; the stat line, and any blank line, are not ACEs and are not evidence of an unparseable answer — the ACL condition is UNEVALUABLE. The present-but-failing case is named explicitly because "missing binary" was the only stated trigger, leaving a tool that exits 1 with no verdict at all: an implementation could then treat its silence as "no ACEs found" and ACCEPT, which is the fail-open inversion this design has already produced four times. A READER refuses any component whose ACL condition is unevaluable — never accepts it on mode bits alone — and that refusal is an ordinary resolution outcome requiring no new enum value: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. A PUBLISHER omits the ACL clauses when, and only when, authenticating **its OWN entry — on every such authentication, the write-or-skip decision and the post-scan re-verification alike** (AUTH-1 clause (h)) **AND the platform is unevaluable because no enumerator EXISTS for it**. The exemption does NOT extend to an enumerator that is present and merely failed: a tool that exits non-zero or prints an unparseable ACE line may be failing precisely because the component is hostile, so a publisher that skipped the clauses there would write an entry into a store it could not evaluate. That case refuses, on both sides. *(Round 70, codex #2: round 68 widened "unevaluable" to cover a failing tool without noticing that the exemption is scoped to the same word, which silently widened the exemption too.)* Every other authentication a publisher performs applies the ACL clauses and refuses on an unevaluable component. **Consequence, stated here because it is a LIMIT and not a defect: on an unevaluable platform the capability is UNAVAILABLE.** The publisher writes and re-verifies its own entry, so a runner without an enumerator stays green, but no reader can ever consume that entry — a reader refuses every entry — and resolution on such a platform is exactly D′: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. BUD-5 conjunct 1 is scoped accordingly. **The reader is not given the publisher's exemption, and no later round may grant it.** The publisher's exemption is sound only because it is re-verifying bytes it wrote itself in this same process; a reader has no independent knowledge of the value, and ENT-3's name↔content check is SELF-CONSISTENT — whoever writes an entry writes both halves — so a reader exempted from the ACL clauses would accept an entry whose non-ACL clauses passed but whose components were never checked for a grant to another principal — and those clauses are the only ones that detect a component another principal can replace. That is mutant row 107, and it fails open.
 
 **ACL-5 — Enumerator selection and invocation.** The platform is selected by running `/usr/bin/uname -s` — by absolute path — and the enumerator for the selected platform is invoked by absolute path (`/bin/ls` on Darwin, `/usr/bin/getfacl` on Linux). Neither `command -v` nor a bare `uname`, `ls` or `getfacl` may be used for selection or invocation: both resolve through `PATH`, which differs between a plugin hook and a git hook.
 
@@ -1812,7 +1817,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **BUD-5 — Acceptance criterion.** §4.2a is complete only when all three conjuncts hold together AND N6's live mutant set is green; any one conjunct alone is insufficient. (1) The capability works: on a machine where EXACTLY ONE authoritative install has published AND the ACL condition is evaluable — Darwin with `/bin/ls`, Linux with `/usr/bin/getfacl` — a shell with no `CLAUDE_PLUGIN_DATA` and no hook environment resolves the same base that a hook resolves. BOTH preconditions must be named, for the same reason: with two installs publishing every reader correctly refuses, and on a platform where the ACL condition is unevaluable every reader also correctly refuses (ACL-4), so without them conjunct 1 reports the capability broken exactly where the design is working. On an unevaluable platform the capability is unavailable by design and resolution degrades to D′; that is a PASS of this criterion, not a failure of it. (2) It fails closed everywhere else: with nothing published, or with a store the reader cannot authenticate, that shell reaches the sentinel with `OK=0` and exactly one diagnostic. (3) D′'s behaviour is unchanged whenever `CLAUDE_PLUGIN_DATA` is set.
 
-**BUD-6 — N1/N2 cell structure.** N1, N2 and N4 additionally gain the store × `HOME` dimensions; they are extended by this change rather than left as shipped. N1 and N2 run the full cross-product — `paths.sh` present and absent × `CLAUDE_PLUGIN_DATA` set, unset and empty: six cells, not two. Each cell starts a FRESH SHELL, sets the environment, and only then sources, because the cache is eager and process-stable and mutating the environment after sourcing tests the harness's ordering rather than the contract. Each cell exercises the marker, log AND context paths, not a single marker write. N1's set cell asserts the write lands only in the supplied host base and carries `base_resolution=host-env`; its unset and empty cells assert no reads and no writes anywhere — no legacy path, no root-derived path — a fail-open exit, and one bounded non-persistent stderr diagnostic.
+**BUD-6 — N1/N2 cell structure.** N1, N2 and N4 additionally gain the store × `HOME` dimensions; they are extended by this change rather than left as shipped. N1 and N2 run the full cross-product — `paths.sh` present and absent × `CLAUDE_PLUGIN_DATA` set, unset and empty: six cells, not two. Each cell starts a FRESH SHELL, sets the environment, and only then sources, because the cache is eager and process-stable and mutating the environment after sourcing tests the harness's ordering rather than the contract. Each cell exercises the marker, log AND context paths, not a single marker write. N1's set cell asserts the write lands only in the supplied host base and carries `base_resolution=host-env`; its unset and empty cells assert no PLUGIN-STATE reads and no writes anywhere — no legacy path, no root-derived path, nothing read from or written to a resolved base — a fail-open exit, and one bounded non-persistent stderr diagnostic. **The store scan is NOT one of those reads**, for the reason the unset/empty bullet of §4.1 now gives: it is the mechanism by which an unset shell learns the base, and forbidding it forbids the capability. *(Round 70: round 68b scoped the §4.1 bullet and left this one, so the rule still both required and prohibited the same read — the half-a-family shape, in the fix for a half-a-family defect.)*
 
 **BUD-7 — N2 inert-gate fixture.** N2's defect-reproducing fixture must set NEITHER `CLAUDE_PLUGIN_DATA` NOR any entry in the store: an unset variable with a valid entry RESOLVES via step 2, so a fixture supplying either one proves nothing and the gate goes inert. The resolved-via-store path carries its own anti-inertness assertion instead — that resolving through an entry creates NO second store. This amendment is made in place in §5's inert-gate risk row, not by reference from another section.
 
@@ -1947,8 +1952,20 @@ treated as proved. The subshell scopes the `umask` change so it cannot leak to a
 consumer, and there is no create-then-`chmod` window for a concurrent publisher to observe — the window
 P-5 forbids for the store.
 
-**P-5 — Exclusive create (fail if the name exists): `set -C` (`noclobber`) plus a redirect.** Measured
-in both shells, on fresh names per shell: an existing file is **refused** and a new file is **created**.
+**P-5 — Exclusive create (fail if the name exists): `set -C` (`noclobber`) plus a redirect — AFTER a
+presence test, never before one.** Measured in both shells, on fresh names per shell: a new file is
+**created**, and an existing regular file, an existing DIRECTORY, a symlink to a file and a DANGLING
+symlink are each **refused** with a non-zero status. **A FIFO is not refused: the redirect BLOCKS.**
+Measured with a 5-second timeout in both bash 3.2.57 and zsh 5.9, `set -C; : > thefifo` never
+returned (`rc=124` in both) — opening a FIFO for writing waits for a reader. That is worse than a
+wrong verdict: it HANGS the publisher, and the publish runs at SOURCE TIME in every process that sets
+`CLAUDE_PLUGIN_DATA` and loads a family file, so a single FIFO left in the store stops every hook.
+**Therefore the publisher tests presence with `[ -L "$p" ] || [ -e "$p" ]` and refuses any non-regular
+shape BEFORE it opens anything** — the same two-part test ST-7 uses, for the same reason. `set -C`
+remains as the race guard between that test and the create, which is all it can be: a check that
+blocks on the hostile input cannot be the primary defence. Same-uid interference is in-model here, per
+ST-7's own rationale. *(Round 70, codex #3 asked whether this is exclusive-create for EVERY existing
+pathname; measuring the answer found the FIFO hang, which no arm had named.)*
 This is the primitive TMP-1 requires when it says the transient must be "created with an operation that
 fails if a file of that name already exists". `set -C` is scoped to the subshell that performs the
 creation, so it does not alter the sourcing shell's options.
@@ -1985,17 +2002,35 @@ on EVERY component from `/` downwards, and no primitive said how to enumerate th
 in bash 3.2.57 and zsh 5.9, zero forks, including a path containing a space:
 
 ```sh
-acc=""; rest="${p#/}"                      # p is absolute; the root component is handled first
-while [ -n "$rest" ]; do
-    seg="${rest%%/*}"; acc="$acc/$seg"     # $acc is the component to test on this iteration
-    case "$rest" in *"/"*) rest="${rest#*/}" ;; *) rest="" ;; esac
+acc=""; rest="$p"                                  # p is absolute
+while :; do
+    case "$rest" in //*) rest="/${rest#//}"; continue ;; esac   # collapse repeated separators
+    printf '%s\n' "${acc:-/}"                      # THIS iteration's component; "" means /
+    [ -n "$rest" ] || break
+    rest="${rest#/}"                               # drop the leading separator
+    [ -n "$rest" ] || break                        # a trailing slash ends the walk
+    seg="${rest%%/*}"; acc="$acc/$seg"
+    case "$rest" in *"/"*) rest="/${rest#*/}" ;; *) rest="" ;; esac
 done
 ```
 
+Measured by executing THIS TEXT, in both shells, with identical results:
+`/` yields `/` alone; `/tmp` yields `/`, `/tmp`;
 `/Users/nick/.claude/unleashed-mail/bases` yields `/`, `/Users`, `/Users/nick`, `/Users/nick/.claude`,
-`/Users/nick/.claude/unleashed-mail`, `/Users/nick/.claude/unleashed-mail/bases`; `/` yields `/` alone;
+`/Users/nick/.claude/unleashed-mail`, `/Users/nick/.claude/unleashed-mail/bases`;
 `/a b/c-d` yields `/`, `/a b`, `/a b/c-d` — no word splitting, because every expansion is quoted and
-nothing is passed through `$( )`.
+nothing is passed through `$( )`; `/a//b` yields `/`, `/a`, `/a/b`; `/a///b//c` yields `/`, `/a`,
+`/a/b`, `/a/b/c`; and a trailing slash (`/a/b/c/`) ends the walk at `/a/b/c`.
+
+*(Round 70, agy and codex CONCORDANTLY. The previous snippet **never emitted `/` at all** — it began
+`rest="${p#/}"` and looped while `$rest` was non-empty, so for `p="/"` the loop body never ran and for
+any other path the walk started at the FIRST named component. `ANCHOR-1` is the rule that most needs
+the root tested, and this is the primitive an implementer copies. It also produced the invalid
+component `/a/` for `/a//b`, which `TGT-1` does not forbid. **The cause is worth naming: the harness I
+measured printed `/` before entering the loop, and the snippet transcribed into this section omitted
+that line — so the recorded output was the harness's, not the snippet's.** Measuring one artefact and
+publishing another is exactly the failure §4.2a-P exists to prevent, committed inside §4.2a-P. The text
+above was therefore re-measured by executing the block verbatim, not a function wrapped around it.)*
 
 **P-9 — The nearest EXISTING ancestor, fork-free.** NM-1 and ENC-9 need `getconf NAME_MAX <dir>` against
 `bases/` *or its nearest existing ancestor while the store does not yet exist*, and no primitive said how
@@ -2023,9 +2058,6 @@ always exists, so there is no unbounded loop on a pathological input.
 > happened**; the Darwin arms are executed and may be built now. Every defect P-2 has had came
 > from a format written from documentation, so this is the one place where a promise is replaced
 > by a runnable.
- — this machine is Darwin and has no
-> `getfacl`. They are specified from documentation, and §6's verification must run them on the CI
-> runner before either is treated as proved.
 
 ### 4.3 — The four copies should delegate, not duplicate (Medium)
 
