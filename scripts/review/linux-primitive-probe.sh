@@ -85,13 +85,32 @@ mk acl_named_w_mask_w   && /usr/bin/setfacl -m u:daemon:rw- acl_named_w_mask_w 2
 mk acl_named_w_mask_r   && /usr/bin/setfacl -m u:daemon:rw- acl_named_w_mask_r 2>/dev/null \
                         && /usr/bin/setfacl -m m::r-- acl_named_w_mask_r 2>/dev/null
 mk acl_default_named_w  && /usr/bin/setfacl -d -m u:daemon:rw- acl_default_named_w 2>/dev/null
-for d in acl_none acl_named_w_mask_w acl_named_w_mask_r acl_default_named_w; do
+# The UNNAMED default classes. These are the cases ACL-3 got wrong twice: the mask does NOT apply to
+# the `other` class at all, and a minimal default ACL may omit the mask entirely, so a rule that
+# conditions either on a mask fails OPEN and every child a consumer creates inherits the grant.
+mk acl_defgroup_nomask  && /usr/bin/setfacl -d -m g::rwx acl_defgroup_nomask 2>/dev/null
+mk acl_defgroup_mask_w  && /usr/bin/setfacl -d -m g::rwx acl_defgroup_mask_w 2>/dev/null \
+                        && /usr/bin/setfacl -d -m m::rwx acl_defgroup_mask_w 2>/dev/null
+mk acl_defother_w       && /usr/bin/setfacl -d -m o::rwx acl_defother_w 2>/dev/null \
+                        && /usr/bin/setfacl -d -m m::r-x acl_defother_w 2>/dev/null
+# Does a child actually inherit the grant? This is the consequence the rule exists to prevent, so
+# measure it rather than reasoning about it.
+for d in acl_defgroup_nomask acl_defother_w; do
+    ( umask 077; mkdir -p "$d/child" 2>/dev/null )
+    printf 'child of %s -> mode %s\n' "$d" "$(/usr/bin/stat -c '%a' -- "$d/child" 2>&1)"
+    /usr/bin/getfacl -pc "$d/child" 2>&1 | sed 's/^/    /'
+done
+for d in acl_none acl_named_w_mask_w acl_named_w_mask_r acl_default_named_w \
+         acl_defgroup_nomask acl_defgroup_mask_w acl_defother_w; do
     printf '%s (ACL-3 verdict: %s)\n' "$d" \
         "$(case $d in
              acl_none) echo ACCEPT ;;
              acl_named_w_mask_w) echo REFUSE ;;
              acl_named_w_mask_r) echo 'ACCEPT — the mask conjunct is NOT satisfied' ;;
              acl_default_named_w) echo 'REFUSE — default: entries are checked like access entries' ;;
+             acl_defgroup_nomask) echo 'REFUSE — unnamed owning-group default with NO mask; an absent mask masks nothing' ;;
+             acl_defgroup_mask_w) echo 'REFUSE — unnamed owning-group default, mask permits w' ;;
+             acl_defother_w) echo 'REFUSE UNCONDITIONALLY — the mask does not apply to the other class' ;;
            esac)"
     /usr/bin/getfacl -pc "$d" 2>&1 | sed 's/^/    /'
 done
