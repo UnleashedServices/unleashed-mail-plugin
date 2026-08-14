@@ -26,11 +26,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(ROOT, "lib")
 AUTH = os.path.join(LIB, "plugin-state-auth.sh")
 STORE = os.path.join(LIB, "plugin-state-store.sh")
+READER = os.path.join(LIB, "plugin-state-reader.sh")
 SHELLS = ("/bin/bash", "/bin/zsh")
 DARWIN = os.uname().sysname == "Darwin"
 
 
-def run_shell(shell, body, env=None, sources=(AUTH, STORE)):
+def run_shell(shell, body, env=None, sources=(AUTH, STORE, READER)):
     """Run `body` with the shipped libraries sourced. Returns (rc, stdout, stderr)."""
     src = "".join(f'. "{s}"\n' for s in sources) + body
     e = dict(os.environ)
@@ -374,6 +375,104 @@ class StoreCreation(unittest.TestCase):
                                  f"{shell}: the refusal path created a directory")
         finally:
             os.chmod(self.home, 0o700)
+
+
+@unittest.skipUnless(DARWIN, "the reader walks chains through the Darwin ACL arm")
+class ReaderOrderedRules(unittest.TestCase):
+    """RD-3..RD-9 — rules −1 through 4, IN ORDER.
+
+    Numbered from −1, not 0: RD-2 prohibits a "rules 0-4" enumeration because it silently drops the
+    store-authentication rule, and a reader that skips it examines entries inside a store it never
+    checked.
+    """
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="rd2617.", dir=os.path.expanduser("~/.claude"))
+        os.chmod(self.home, 0o700)
+        self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
+        self.target = os.path.join(self.home, "target")
+        os.makedirs(self.target); os.chmod(self.target, 0o700)
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _resolve(self, shell, setup=""):
+        body = (f'_unleashed_name_max "{self.store}" >/dev/null\n'
+                f'_unleashed_create_store "{self.store}" || exit 9\n'
+                f'{setup}\n'
+                f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"')
+        rc, out, err = run_shell(shell, body)
+        self.assertNotEqual(9, rc, f"{shell}: the store could not be created: {err}")
+        return out
+
+    #: `key` writes a well-formed entry: the target's encoded name, its single line, mode 0600.
+    ENTRY = ('_unleashed_key "{t}"; printf "%s\\n" "{t}" > "{s}/base.$_UNLEASHED_KEY"; '
+             'chmod 600 "{s}/base.$_UNLEASHED_KEY"')
+
+    def test_rule_4_empty_store_and_absent_store_both_yield_none(self):
+        for shell in SHELLS:
+            self.assertEqual("0 unresolved none", self._resolve(shell), f"{shell}: empty store")
+            self.assertEqual("0 unresolved none",
+                             self._resolve(shell, f'rm -rf "{self.home}/.claude"'),
+                             f"{shell}: absent store")
+
+    def test_rule_3_exactly_one_entry_resolves_silently(self):
+        for shell in SHELLS:
+            setup = self.ENTRY.format(t=self.target, s=self.store)
+            self.assertEqual("1 pointer none", self._resolve(shell, setup), f"{shell}")
+
+    def test_rule_2_two_authenticating_entries_conflict(self):
+        for shell in SHELLS:
+            t2 = os.path.join(self.home, "t2")
+            setup = (f'mkdir -p "{t2}"; chmod 700 "{t2}"\n'
+                     + self.ENTRY.format(t=self.target, s=self.store) + "\n"
+                     + self.ENTRY.format(t=t2, s=self.store))
+            self.assertEqual("0 unresolved conflict", self._resolve(shell, setup), f"{shell}")
+
+    def test_rule_1_one_failing_entry_refuses_the_whole_store(self):
+        # Fires HOWEVER MANY entries authenticate: a good entry beside a failing one must NOT win.
+        for shell in SHELLS:
+            setup = (self.ENTRY.format(t=self.target, s=self.store) + "\n"
+                     + f'chmod 644 "{self.store}"/base.*')
+            self.assertEqual("0 unresolved stale", self._resolve(shell, setup), f"{shell}: 0644 entry")
+
+    def test_rule_1_a_dangling_symlink_is_a_failing_entry_not_a_vanished_one(self):
+        # Rule 0's test is EXACTLY `[ ! -L ] && [ ! -e ]`. A one-part `[ -e ]` is FALSE for a dangling
+        # symlink, so it would SKIP a hostile entry that must be refused — which is why the one-part
+        # form is prohibited anywhere in the reader.
+        for shell in SHELLS:
+            setup = f'ln -s /nonexistent "{self.store}/base.dangling"'
+            self.assertEqual("0 unresolved stale", self._resolve(shell, setup), f"{shell}")
+
+    def test_rule_minus_1_a_non_conforming_store_refuses_before_any_entry(self):
+        for shell in SHELLS:
+            setup = (self.ENTRY.format(t=self.target, s=self.store) + "\n"
+                     + f'chmod 755 "{self.store}"')
+            self.assertEqual("0 unresolved stale", self._resolve(shell, setup),
+                             f"{shell}: a 0755 store must refuse even holding a valid entry")
+
+    def test_control_skipping_rule_minus_1_would_resolve_from_a_bad_store(self):
+        # The positive control for the rule whose omission RD-2 warns about: with rule −1 removed, a
+        # store at 0755 holding one valid entry RESOLVES, which is the whole point of numbering the
+        # rules from −1.
+        mutant = with_mutation(
+            '    if ! _unleashed_store_ok "$_rs_store"; then',
+            '    if false; then', path=READER)
+        try:
+            for shell in SHELLS:
+                setup = (self.ENTRY.format(t=self.target, s=self.store) + "\n"
+                         + f'chmod 755 "{self.store}"')
+                self.assertEqual("0 unresolved stale", self._resolve(shell, setup))
+                body = (f'_unleashed_name_max "{self.store}" >/dev/null\n'
+                        f'_unleashed_create_store "{self.store}" || exit 9\n{setup}\n'
+                        f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                        'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"')
+                rc, out, _ = run_shell(shell, body, sources=(AUTH, STORE, mutant))
+                self.assertEqual("1 pointer none", out,
+                                 f"{shell}: the CONTROL did not fail — rule −1 is not load-bearing here")
+        finally:
+            os.unlink(mutant)
 
 
 if __name__ == "__main__":
