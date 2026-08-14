@@ -677,8 +677,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2284`) and its matrix change (`:2290-2188`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2317-2218`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2302`) and its matrix change (`:2308-2312`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2335-2342`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -969,7 +969,7 @@ material.
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2667`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2687`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1289,7 +1289,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2383`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2401`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1322,7 +1322,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2667`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2687`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1343,7 +1343,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2284`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2302`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1545,6 +1545,8 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 144 | **locate the ACE verb by SCANNING instead of enforcing the grammar positionally — accept a second `allow` token, keeping only the field after the last one** | a component carrying `chmod +a "group:staff allow add_file"` where the enumerator line presents TWO verbs (`group:staff allow add_file allow list`) yields sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — the line does not match ACL-2's grammar, so ACL-4 makes the condition unevaluable. Under the mutation `add_file` is DISCARDED when the second verb resets the rights field, the ACE reads as read-only `list`, and the component is ACCEPTED. Measured in both shells against the round-112 primitive, which had exactly this defect |
 | 145 | **restore the empty-element skip in the rights layer** (`[ -n "$tok" ] || continue`) | a component whose ACE carries an EMPTY `<perms>` field yields the store-level refusal above; under the mutation no right is ever tested and the foreign `allow` ACE passes VACUOUSLY. Row 144 cannot discriminate this — it mutates verb LOCATION, not element handling — and the two defects have now occurred in consecutive rounds in the same primitive |
 | 146 | **accept an extra field between the principal and the verb** (anything, not only `inherited`) | a line `group:staff weird allow list` yields the store-level refusal; under the mutation the unknown field is ignored and the ACE is evaluated as though well-formed. Proves the grammar is enforced rather than merely stated, on the side ACL-4 governs |
+| 147 | **accept more than one `inherited` token before the verb, or `inherited` as field 1** | through §7 step 3f's ENUMERATOR-OUTPUT seam, a component whose ACE line reads `group:staff inherited inherited allow list` yields the store-level outcome — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — because the line does not match ACL-2's grammar and ACL-4 makes the condition unevaluable. Under the mutation the extra token is absorbed and the ACE is evaluated as well-formed. **That `/bin/ls -lde` does not emit this shape is NOT a reason to accept it**: ACL-4 makes any non-matching line unevaluable rather than ignorable, and an arm that predicts what a healthy enumerator emits is not enforcing a grammar |
+| 148 | **accept a RESERVED token in the `<perms>` slot** | through the same seam, a line `group:staff deny allow` yields the store-level refusal above. Under the mutation it parses as verb `deny` with rights `allow`, and ACL-1's ignore-every-`deny` rule then DISCARDS the whole line — so a two-verb line is accepted by being thrown away. Row 144 mutates the SECOND-FIELD check and cannot discriminate this, because here there is only one field after the verb |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1639,7 +1641,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2667` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2687` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1750,7 +1752,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **ACL-1 — ACL arms are the definition.** The ACL condition on a component is decided ONLY by the per-platform arms ACL-2 (Darwin), ACL-3 (Linux) and ACL-4 (any other platform, or a missing enumerator). There is no platform-independent ACL rule: the summary sentence "refuse if any component carries an `allow` ACE naming a principal other than the effective user and granting a mutating right" is a gloss, is NOT normative, and may not be implemented, cited as the rule, or restated in any risk row or summary section. On EVERY platform, `deny` entries are ignored entirely — a component is never refused on account of a `deny` entry.
 
-**ACL-2 — Darwin ACL arm.** When `/usr/bin/uname -s` outputs `Darwin`, enumerate a component's ACL with `/bin/ls -lde <path>`. Each ACE line has the form ` <n>: <principal> [inherited] <allow|deny> <perms>`, where the `inherited` token is PRESENT ON EVERY INHERITED ACE and absent otherwise — measured: a directory under a parent carrying `+a "staff allow list,search,file_inherit,directory_inherit"` prints ` 0: group:staff inherited allow list,search,file_inherit,directory_inherit`, so a positional parser that expects `allow|deny` as the third field sees `inherited` there and matches nothing, FAILING OPEN on precisely the ACEs an MDM-managed fleet propagates. The arm must locate the `allow`/`deny` token rather than assume its position. `<perms>` is a COMMA-JOINED list that mixes rights with INHERITANCE FLAGS: `file_inherit`, `directory_inherit`, `limit_inherit` and `only_inherit` are flags, not rights, and are excluded from the allowlist test — without that exclusion the same inherited read-only ACE REFUSES, killing the capability on every Mac that inherits ACLs, which is the opposite failure and is what row 90 forbids. This arm is string matching over those lines, not ACL semantics. For each `allow` ACE whose principal is not the effective user, REFUSE the component unless EVERY right named in that ACE is one of exactly these seven: `execute`, `list`, `read`, `readattr`, `readextattr`, `readsecurity`, `search`. This is an ALLOWLIST — a right that is not in the list REFUSES. A blacklist of mutating rights is forbidden, in any form.
+**ACL-2 — Darwin ACL arm.** When `/usr/bin/uname -s` outputs `Darwin`, enumerate a component's ACL with `/bin/ls -lde <path>`. Each ACE line has the form ` <n>: <principal> [inherited] <allow|deny> <perms>`, where the `inherited` token is PRESENT ON EVERY INHERITED ACE and absent otherwise — measured: a directory under a parent carrying `+a "staff allow list,search,file_inherit,directory_inherit"` prints ` 0: group:staff inherited allow list,search,file_inherit,directory_inherit`, so a positional parser that expects `allow|deny` as the third field sees `inherited` there and matches nothing, FAILING OPEN on precisely the ACEs an MDM-managed fleet propagates. The arm must locate the `allow`/`deny` token rather than assume its position — **and it must enforce EVERY SLOT of the grammar, not merely find the verb.** An ACE line matches IF AND ONLY IF, reading its fields left to right after the ` <n>: ` index: field 1 is the PRINCIPAL and is not `allow`, `deny` or `inherited`; then AT MOST ONE `inherited`; then EXACTLY ONE `allow` or `deny`; then EXACTLY ONE `<perms>` field, which is likewise none of `allow`, `deny` or `inherited`. **Any other shape — a second verb, a second `inherited`, an unknown field before the verb, a reserved token in the `<perms>` slot, a missing or empty `<perms>` — does NOT match, so ACL-4 governs, the condition is UNEVALUABLE and the component is REFUSED.** P-13 gives the executed primitive; this rule is where the obligation lives. *(Round 116, codex: the stricter grammar existed only in P-13 while THIS rule said merely to "locate" the verb — and §4.2a-S governs, so the positional grammar was not authoritative. A behavioural rule cannot live in the primitives section, which is the same finding round 86 made about TMP-1's retry bound.)* `<perms>` is a COMMA-JOINED list that mixes rights with INHERITANCE FLAGS: `file_inherit`, `directory_inherit`, `limit_inherit` and `only_inherit` are flags, not rights, and are excluded from the allowlist test — without that exclusion the same inherited read-only ACE REFUSES, killing the capability on every Mac that inherits ACLs, which is the opposite failure and is what row 90 forbids. This arm is string matching over those lines, not ACL semantics. For each `allow` ACE whose principal is not the effective user, REFUSE the component unless EVERY right named in that ACE is one of exactly these seven: `execute`, `list`, `read`, `readattr`, `readextattr`, `readsecurity`, `search`. This is an ALLOWLIST — a right that is not in the list REFUSES. A blacklist of mutating rights is forbidden, in any form.
 
 **ACL-3 — Linux ACL arm.** When `/usr/bin/uname -s` outputs `Linux`, enumerate a component's ACL with `/usr/bin/getfacl -pc <path>`. REFUSE the component if EITHER holds.
 **(a) MASKED CLASS — refused when the mask does not stop it.** An entry of the form `user:<name>:`, `group:<name>:`, `default:user:<name>:` or `default:group:<name>:` with `<name>` non-empty, **or an unnamed owning-group entry `group::` / `default:group::`**, carries `w`, AND either the corresponding mask line (`mask::` for access entries, `default:mask::` for default entries) permits `w`, **or there is NO corresponding mask line at all** — a minimal ACL may omit the mask, and an absent mask masks nothing.
@@ -1895,7 +1897,7 @@ Two facts about the shape of that cost, because they are properties of the RULES
 
 **N6-9 — Equivalent mutants retired.** A row whose mutation produces no observable difference under the current clause set is RETIRED — struck in place with its reason recorded beside it — and is not a member of the live set. Any parenthetical in another row that cites a retired row must be re-pointed at a live one in the same edit. Applied: row 11 ("accept a group-writable pointer parent | 0775 parent refused") is an equivalent mutant, because the entry's parent is the store `bases/`, which must be exactly `0700` and which the store-authentication rule refuses at any other mode, so dropping the general not-group-or-world-writable test on that one component changes nothing observable; row 22's parenthetical "(row 11 covers only the parent)" must then cite row 26, and row 26 must state its store-level outcome rather than only "exact-0700 parent rule enforced".
 
-**N6-10 — Mutants runnable unprivileged.** Every mutant must be runnable by an unprivileged uid; no row may prescribe a fixture that requires root, such as a real `/opt/claude/data`. Off-`${HOME}` chains are built by the harness under a temporary root, and no row names a fixed absolute path it cannot create. The mechanism is specified rather than appealed to: the chain-walk predicate takes its per-component ownership and mode facts from a SINGLE accessor, and the harness substitutes a fixture table for that accessor — one accessor used by production and by the harness, so a test cannot pass against a predicate production does not run. **The SAME single-accessor requirement covers the two PROBES, and for the same reason: the IDENTITY probe (`/usr/bin/id -un`, P-3a) and the `NAME_MAX` probe (`/usr/bin/getconf`, NM-1) are each reached through ONE accessor that production and the harness share, so a fixture can present a FAILED probe.** Both are invoked by absolute path, so no unprivileged harness can make either fail by manipulating `PATH`, and rows 131 and 133 would otherwise prescribe fixtures that cannot be built. *(Round 108, codex: this requirement existed only in §7 step 3f(iii), so two live rows depended on machinery §4.2a-S did not carry — and §4.2a-S claims an implementer needs nothing outside it.)*
+**N6-10 — Mutants runnable unprivileged.** Every mutant must be runnable by an unprivileged uid; no row may prescribe a fixture that requires root, such as a real `/opt/claude/data`. Off-`${HOME}` chains are built by the harness under a temporary root, and no row names a fixed absolute path it cannot create. The mechanism is specified rather than appealed to: the chain-walk predicate takes its per-component ownership and mode facts from a SINGLE accessor, and the harness substitutes a fixture table for that accessor — one accessor used by production and by the harness, so a test cannot pass against a predicate production does not run. **The SAME single-accessor requirement covers the two PROBES and the ACL ENUMERATOR, and for the same reason: the IDENTITY probe (`/usr/bin/id -un`, P-3a), the `NAME_MAX` probe (`/usr/bin/getconf`, NM-1) and the ENUMERATOR OUTPUT (`/bin/ls -lde` on Darwin, ACL-2/ACL-5) are each reached through ONE accessor that production and the harness share, so a fixture can present a FAILED probe or a MALFORMED ACE LINE.** **The enumerator-output seam is what makes the grammar rows runnable at all**: `chmod +a` followed by the mandatory absolute `/bin/ls -lde` CANNOT emit a duplicate verb, a duplicated `inherited`, an empty `<perms>` or an unknown pre-verb field, so without this seam those obligations could be unit-tested as strings but never produce N6-6's store-level tuple through the production resolver — the only outcome N6-6 accepts. *(Round 116, codex: N6-10 and §7 step 3f seamed component facts, `id -un` and `getconf`, and rows 144-146 needed a fourth seam that did not exist.)* Both are invoked by absolute path, so no unprivileged harness can make either fail by manipulating `PATH`, and rows 131 and 133 would otherwise prescribe fixtures that cannot be built. *(Round 108, codex: this requirement existed only in §7 step 3f(iii), so two live rows depended on machinery §4.2a-S did not carry — and §4.2a-S claims an implementer needs nothing outside it.)*
 
 **N6-11 — Required executable cases.** N6 carries executable CASES in addition to mutants, and each case must fail when the fix is reverted. Required cases: step 1 — the base is the variable's value and this publisher's entry holds it; a second run with the same value performs NO write, asserted by mtime; a `0644` REGULAR NON-SYMLINK entry with matching content IS republished as a conforming one, while a SYMLINKED `base.<key>` is NOT — ST-7 refuses it, nothing is written and the state is `failed`, a separate required case carrying the opposite oracle; a second install id with a different base leaves TWO entries, which every reader resolves as a conflict. Step 2 — variable unset with exactly one authenticating entry resolves to that entry's target with `_UNLEASHED_BASE_SOURCE=pointer` and NO second store created; each authentication clause refused independently, including a conflicted STORE (two authenticating entries; there is no per-entry conflicted state). Step 3 — `HOME=""` yields the sentinel, `OK=0`, exactly one diagnostic, no `${HOME}`-rooted open attempted at all, and the no-persistence envelope holding in full. Persisted records carry `base_resolution` matching the resolution that actually ran. The SessionStart notice fires on `conflict`/`stale`/`failed` and stays silent on `created`/`current`/`none`. Two publishers holding the SAME base racing on one entry name converge on identical bytes, with no torn read and no lost write. On a platform with no ACL enumerator, a publisher publishes and re-verifies its own entry successfully while a reader still REFUSES a foreign entry. The empty-store case is asserted under zsh for each of the five family files independently.
 
@@ -2138,19 +2140,16 @@ yields 4 fields, zsh 5.9 yields 1.** In zsh the whole line is then one token, no
 `allow`, every ACE is skipped and the component is ACCEPTED — the fail-open mutant row 139 pins.
 
 Both layers are peeled with parameter expansion instead, which behaves identically in both shells, and
-**the grammar is enforced POSITIONALLY rather than by scanning for a verb.** ACL-2's line form is
-exactly ` <n>: <principal> [inherited] <allow|deny> <perms>`, so: `<body>` is the line from the first
-`: ` onward (**ACL-4 selects WHICH lines reach this primitive** — only the numbered ACE lines; the stat
-line `/bin/ls -lde` prints first, and any blank line, never reach it and are not evidence of an
-unparseable answer); at most ONE verb token; EXACTLY ONE field after it; and nothing between the
-principal and the verb except the optional `inherited`. Any other shape does not match the grammar, so
-ACL-4 governs — the condition is UNEVALUABLE and the component is REFUSED. Repeated whitespace between
-fields is not meaningful and is skipped; an empty element in the rights list, an empty `<perms>` field,
-a second verb, an extra field, or an unknown field before the verb all REFUSE.
+**every SLOT of ACL-2's grammar is enforced — it is not enough to find the verb.** `<body>` is the line
+from the first `: ` onward (**ACL-4 selects WHICH lines reach this primitive** — only the numbered ACE
+lines; the stat line `/bin/ls -lde` prints first, and any blank line, never reach it and are not
+evidence of an unparseable answer). Field 1 is the principal; then at most ONE `inherited`; then
+EXACTLY ONE verb; then EXACTLY ONE `<perms>`, which may not itself be `allow`, `deny` or `inherited`.
+Repeated whitespace between fields is skipped. Every other shape REFUSES under ACL-4.
 
 ```sh
 body="${line#*: }"                              # ACL-4 has already selected the numbered ACE lines
-principal=""; verb=""; perms=""; n=0
+principal=""; verb=""; perms=""; inh=0; n=0
 rest="$body"
 while [ -n "$rest" ]; do
     tok="${rest%% *}"
@@ -2160,16 +2159,21 @@ while [ -n "$rest" ]; do
     if [ -z "$verb" ]; then
         case "$tok" in
             allow|deny) verb="$tok" ;;
-            *) if [ "$n" = 1 ]; then principal="$tok"
-               elif [ "$tok" != inherited ]; then return 1     # unknown field before the verb
-               fi ;;
+            inherited)  if [ "$n" = 1 ] || [ "$inh" = 1 ]; then return 1; fi
+                        inh=1 ;;                # `inherited` is optional, singular, and never field 1
+            *)          if [ "$n" = 1 ]; then principal="$tok"
+                        else return 1           # unknown field before the verb
+                        fi ;;
         esac
     else
-        [ -z "$perms" ] || return 1             # a SECOND field after the verb: a duplicate verb, or
-        perms="$tok"                            # a space inside <perms>
+        [ -z "$perms" ] || return 1             # a SECOND field after the verb
+        case "$tok" in
+            allow|deny|inherited) return 1 ;;   # a reserved token cannot BE the rights field
+        esac
+        perms="$tok"
     fi
 done
-[ -n "$verb" ] || return 1                      # no allow|deny token
+[ -n "$verb" ] || return 1
 [ -n "$principal" ] || return 1
 case "$perms" in
     ''|*,,*|,*|*,) return 1 ;;                  # empty, doubled, leading or trailing comma
@@ -2183,25 +2187,39 @@ while [ -n "$rest" ]; do
 done
 ```
 
-Measured by executing THIS TEXT in both shells, identical results in each row — the inputs are RAW
-lines, so the `<n>:` strip is exercised too:
+Measured by executing THIS TEXT in both shells, identical results in each row — RAW lines, so the
+`<n>:` strip is exercised too:
 
 | raw line | result |
 |---|---|
-| `drwxr-xr-x@ 2 nick wheel 64 … d` | never reaches this primitive — ACL-4 selects only numbered ACE lines |
-| ` 0: group:staff allow list,add_file` | verb `allow`, principal `group:staff`, rights `[list][add_file]` |
-| ` 0: group:staff inherited allow list,add_file,file_inherit` | rights `[list][add_file][file_inherit]` — the verb is field 3 here and field 2 on a plain ACE, which is why it is never located BY POSITION |
-| ` 0: user:nick allow write,delete` | parses; ACL-2 then exempts the effective user's own ACE |
-| ` 0: group:staff deny add_file,delete` | parses; ACL-1 then ignores every `deny` |
-| ` 0: group:staff` + 3 spaces + `allow` + 3 spaces + `list,read` | rights `[list][read]` — repeated spaces skipped |
+| ` 0: group:staff allow list,add_file` | OK |
+| ` 0: group:staff inherited allow list,add_file,file_inherit` | OK |
+| ` 0: user:nick allow write,delete` | OK — ACL-2 then exempts the effective user's own ACE |
+| ` 0: group:staff deny add_file,delete` | OK — ACL-1 then ignores every `deny` |
+| ` 10: group:staff allow list` | OK — a multi-digit index strips correctly |
+| ` 0: group:staff` + 3 spaces + `allow` + 3 spaces + `list,read` | OK — repeated spaces skipped |
+| ` 0: group:staff inherited inherited allow list` | **REFUSE** — `inherited` is singular |
+| ` 0: inherited allow list` | **REFUSE** — `inherited` is never field 1 |
+| ` 0: group:staff deny allow` | **REFUSE** — a reserved token in the `<perms>` slot |
+| ` 0: group:staff deny inherited` | **REFUSE** — same |
 | ` 0: group:staff allow write allow list` | **REFUSE** — a second field after the verb |
 | ` 0: group:staff allow list, write` | **REFUSE** — a space inside `<perms>` is the same shape |
 | ` 0: group:staff weird list` | **REFUSE** — unknown field before the verb |
 | ` 0: group:staff allow ` | **REFUSE** — empty `<perms>` |
-| ` 0: group:staff allow list,,read` | **REFUSE** — malformed `<perms>` (also `,list` and `list,`) |
+| ` 0: group:staff allow list,,read` | **REFUSE** — malformed `<perms>` (also `,list`, `list,`) |
 
-A principal CONTAINING a comma parses, and is then compared against `id -un`, which it cannot match —
-so it is treated as a foreign principal, fail-closed by construction, and is not forbidden here.
+A principal CONTAINING a comma parses, then cannot match `id -un`, so it is treated as a foreign
+principal — fail-closed by construction, and not forbidden here.
+
+*(Round 116, codex, THIRD consecutive round of fail-opens in this one primitive. Round 114's block
+constrained the verb and the rights field and left two slots free: unlimited pre-verb `inherited`
+tokens, and a rights slot that accepted a RESERVED token — so ` 0: group:staff deny allow` parsed as
+verb `deny`, perms `allow`, and ACL-1 then discarded the whole line. **agy saw the duplicate-`inherited`
+case in round 115 and dismissed it as having "no operational impact" because `/bin/ls -lde` does not
+emit it; that reasoning is wrong under ACL-4, which makes ANY non-matching line unevaluable rather than
+ignorable** — the arm's job is not to predict what a healthy enumerator emits. Each round tightened the
+slot that had just been exploited and left the next one; the grammar is now constrained at every slot
+at once.)*
 
 *(Round 114, agy and codex CONCORDANTLY, each having EXTRACTED AND RUN the round-112 block: it located
 the verb by SCANNING, so a second `allow` reset `perms` and the earlier field was silently DISCARDED —
@@ -2635,9 +2653,11 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    ONE P-2 call, so a fixture cannot pass by consulting a different accessor than the implementation
    uses — the defect that let a nine-bit comparison read as an exact-mode test.
    (iii) The **probe seam**, on the same single-accessor principle and for the same reason: the
-   IDENTITY probe (`/usr/bin/id -un`, P-3a) and the `NAME_MAX` probe (`/usr/bin/getconf`, NM-1) are
+   IDENTITY probe (`/usr/bin/id -un`, P-3a), the `NAME_MAX` probe (`/usr/bin/getconf`, NM-1) **and the
+   ACL ENUMERATOR'S OUTPUT** (`/bin/ls -lde`, ACL-2/ACL-5) are
    each reached through ONE accessor that production and the harness share, so a fixture can present
-   a FAILED probe. Both are invoked by absolute path, so no unprivileged harness can make either fail
+   a FAILED probe **or a MALFORMED ACE LINE, which rows 144-148 require and `chmod +a` cannot
+   produce**. Both are invoked by absolute path, so no unprivileged harness can make either fail
    by manipulating `PATH` — and without this seam rows 131 and 133 prescribe fixtures that cannot be
    built, which N6-10 forbids. *(Round 106, codex: 3f seamed P-2's accessor only, while round 104
    added a row whose fixture needs the identity probe to fail.)* The mutant rows are
