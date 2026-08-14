@@ -677,8 +677,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2319`) and its matrix change (`:2325-2329`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2352-2359`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2321`) and its matrix change (`:2327-2331`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2354-2361`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -969,7 +969,7 @@ material.
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2704`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2706`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1289,7 +1289,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2418`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2420`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1322,7 +1322,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2704`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2706`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1343,7 +1343,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2319`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2321`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1548,6 +1548,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 147 | **accept more than one `inherited` token before the verb, or `inherited` as field 1** | through §7 step 3f's ENUMERATOR-OUTPUT seam, a component whose ACE line reads `group:staff inherited inherited allow list` yields the store-level outcome — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — because the line does not match ACL-2's grammar and ACL-4 makes the condition unevaluable. Under the mutation the extra token is absorbed and the ACE is evaluated as well-formed. **That `/bin/ls -lde` does not emit this shape is NOT a reason to accept it**: ACL-4 makes any non-matching line unevaluable rather than ignorable, and an arm that predicts what a healthy enumerator emits is not enforcing a grammar |
 | 148 | **accept a RESERVED token in the `<perms>` slot** | through the same seam, a line `group:staff deny allow` yields the store-level refusal above. Under the mutation it parses as verb `deny` with rights `allow`, and ACL-1's ignore-every-`deny` rule then DISCARDS the whole line — so a two-verb line is accepted by being thrown away. Row 144 mutates the SECOND-FIELD check and cannot discriminate this, because here there is only one field after the verb |
 | 149 | **strip the ACE index by removing everything through the first `: ` without proving the prefix matched or is decimal** | through §7 step 3f's ENUMERATOR-OUTPUT seam, an answer containing ` 0:group:staff allow list` (no space after the colon) or ` x: group:staff allow list` (non-decimal index) yields the store-level outcome — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — because ACL-4 classifies the line as MALFORMED and a malformed line poisons the whole answer. Under the mutation both parse as valid ACEs: measured, the first yields `principal=0:group:staff` and the second `principal=group:staff`, and each is then evaluated as though well-formed. **Rows 144-148 constrain only POST-PREFIX slots and none can discriminate this** — the prefix is stripped before they see anything |
+| 150 | **skip ANY non-space line instead of only the first** | through the enumerator-output seam, an answer whose lines are the real stat line, one well-formed ACE, and then a third line that begins with no space (`garbage-after-stat`) yields the store-level outcome — sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic — because ACL-4 permits a non-space line ONLY as line 1 and any later one is MALFORMED, which poisons the whole answer. Under the mutation the third line is skipped as though it were another stat line and the component is ACCEPTED with an answer that was never fully parsed. **Rows 144-149 all mutate WITHIN a line and every one of them stays green under this defect**; this is the only row that mutates the ANSWER-level classification. Measured, both shells: line 1 skip, line 2 ACE, line 3 MALFORMED |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1642,7 +1643,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2704` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2706` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1760,7 +1761,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 **(b) UNMASKED CLASS — refused unconditionally.** `other::` or `default:other::` carries `w`. **The mask does NOT apply to the other class**, so a mask conjunct here can never fire and must not be written.
 `default:` entries are evaluated by exactly the same rule as access entries, and `deny` plays no part: POSIX ACLs have no deny token, which is why the platform-independent gloss ACL-1 forbids is not merely different here but UNDEFINED. **Why the unnamed classes are load-bearing:** Linux initialises a new object's access ACL from the parent's DEFAULT ACL and the creation mode, NOT from `umask`, so a `0700` euid-owned target carrying `default:group::rwx` would authenticate under a named-only rule while every `.state`, `logs` or `reviews` directory a consumer later creates beneath it inherits group-write — the fail-open P-4 guards for the publisher's transient and nothing guarded for consumer-created children. *(Round 84, agy and codex concordantly. This rule is REWRITTEN rather than amended: round 80 added the unnamed classes, round 82 split masked from unmasked, and each edit replaced the opening while leaving the previous clause standing further down — so the paragraph simultaneously refused and authenticated `default:group::rwx` with no mask. Splicing a rule I have already edited twice is what produced that; the whole statement is replaced here.)*
 
-**ACL-4 — Unevaluable ACL platform.** On any platform that is neither Darwin nor Linux, when the selected platform's enumerator is absent from its absolute path, **or when that enumerator is present but does not produce a parseable answer — a non-zero exit, empty output, or an ACE LINE that does not match the arm's stated grammar**. "ACE line" is exact and load bearing: `/bin/ls -lde` prints a `drwxr-xr-x@ 2 nick wheel …` stat line FIRST and the numbered ACEs after it (measured), so a rule reading "any line that does not match" makes EVERY component unevaluable and the capability dies on Darwin. **The enumerator's answer is classified as a WHOLE, line by line, into exactly four kinds, with no residual arm:** the FIRST line is the stat line (it does not begin with a space); a BLANK line; an ACE line, which is ` <decimal index>: ` followed by a body matching this rule's slot grammar; and ANYTHING ELSE, which is MALFORMED. The stat line and blank lines are skipped and are not evidence of an unparseable answer, **but a line that is neither of those and is not a well-formed ACE POISONS THE WHOLE ANSWER — the ACL condition is UNEVALUABLE and the component REFUSES.** There is deliberately no "skip what we do not recognise" arm: that arm is how a malformed prefix reached the field parser. **The index must be one or more DECIMAL digits and the delimiter exactly `: `** — measured, ` 0:group:staff allow list` (no space) and ` x: group:staff allow list` (non-decimal) both parsed as valid ACEs under the round-116 primitive, which stripped through the first `: ` without proving it had matched. *(Round 118, codex — the FOURTH consecutive round in which this arm failed open, and the first three fixes each constrained the slot just exploited and left the next. The rule is now a whole-line match rather than a sequence of slot checks, which is the shape that cannot leave a gap.)* The arm consumes only the numbered ACE lines; the stat line, and any blank line, are not ACEs and are not evidence of an unparseable answer — the ACL condition is UNEVALUABLE. The present-but-failing case is named explicitly because "missing binary" was the only stated trigger, leaving a tool that exits 1 with no verdict at all: an implementation could then treat its silence as "no ACEs found" and ACCEPT, which is the fail-open inversion this design has already produced four times. A READER refuses any component whose ACL condition is unevaluable — never accepts it on mode bits alone — and that refusal is an ordinary resolution outcome requiring no new enum value: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. **A PUBLISHER omits the ACL clauses only at the call sites AUTH-1 clause (h) ENUMERATES, and only when the platform is unevaluable because no enumerator EXISTS for it. This rule states no scope of its own: AUTH-1(h) is the single statement of the carve-out and this sentence references it.** The exemption never extends to an enumerator that is present and merely failed — a tool that exits non-zero or prints an unparseable ACE line may be failing precisely because the component is hostile — and never to a READER, for any entry. *(Round 78, codex and kimi concordantly: this is the FIFTH consecutive round in which the carve-out was corrected at one site and left at another, so it is no longer stated twice. Rounds 70, 72, 74 and 76 each edited one of the two and each left the other saying something different; point-fixing a rule that lives in two places has now failed four times, and the structural fix — one statement, everything else a reference — is the same one that closed the ACL gloss and the exit enumerations.)* *(Round 70, codex #2: round 68 widened "unevaluable" to cover a failing tool without noticing that the exemption is scoped to the same word, which silently widened the exemption too.)* Every other authentication a publisher performs applies the ACL clauses and refuses on an unevaluable component. **Consequence, stated here because it is a LIMIT and not a defect: on an unevaluable platform the capability is UNAVAILABLE.** The publisher writes and re-verifies its own entry, so a runner without an enumerator stays green, but no reader can ever consume that entry — a reader refuses every entry — and resolution on such a platform is exactly D′: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. BUD-5 conjunct 1 is scoped accordingly. **The reader is not given the publisher's exemption, and no later round may grant it.** The publisher's exemption is sound only because it is re-verifying bytes it wrote itself in this same process; a reader has no independent knowledge of the value, and ENT-3's name↔content check is SELF-CONSISTENT — whoever writes an entry writes both halves — so a reader exempted from the ACL clauses would accept an entry whose non-ACL clauses passed but whose components were never checked for a grant to another principal — and those clauses are the only ones that detect a component another principal can replace. That is mutant row 107, and it fails open.
+**ACL-4 — Unevaluable ACL platform.** On any platform that is neither Darwin nor Linux, when the selected platform's enumerator is absent from its absolute path, **or when that enumerator is present but does not produce a parseable answer — a non-zero exit, empty output, or an ACE LINE that does not match the arm's stated grammar**. "ACE line" is exact and load bearing: `/bin/ls -lde` prints a `drwxr-xr-x@ 2 nick wheel …` stat line FIRST and the numbered ACEs after it (measured), so a rule reading "any line that does not match" makes EVERY component unevaluable and the capability dies on Darwin. **The enumerator's answer is classified as a WHOLE, line by line, into exactly four kinds, with no residual arm:** the FIRST line is the stat line (it does not begin with a space); a BLANK line; an ACE line, which is ` <decimal index>: ` followed by a body matching this rule's slot grammar; and ANYTHING ELSE, which is MALFORMED. The stat line and blank lines are skipped and are not evidence of an unparseable answer, **but a line that is neither of those and is not a well-formed ACE POISONS THE WHOLE ANSWER — the ACL condition is UNEVALUABLE and the component REFUSES.** There is deliberately no "skip what we do not recognise" arm: that arm is how a malformed prefix reached the field parser. **The index must be one or more DECIMAL digits and the delimiter exactly `: `** — measured, ` 0:group:staff allow list` (no space) and ` x: group:staff allow list` (non-decimal) both parsed as valid ACEs under the round-116 primitive, which stripped through the first `: ` without proving it had matched. *(Round 120, codex: round 118's block returned 2 for EVERY non-space line without tracking its POSITION, so `stat-line` followed by `garbage` was accepted as an ACL-free answer. **I had already found and fixed this exact drift in my own step-3b draft one round earlier and did not carry the fix back to the plan** — fixing one member of a family and leaving the other is the failure this document has recorded against me more than any other. Measured, both shells: line 1 stat -> skip, line 2 ACE -> parsed, line 3 `garbage-after-stat` -> MALFORMED.)* *(Round 118, codex — the FOURTH consecutive round in which this arm failed open, and the first three fixes each constrained the slot just exploited and left the next. The rule is now a whole-line match rather than a sequence of slot checks, which is the shape that cannot leave a gap.)* The arm consumes only the numbered ACE lines; the stat line, and any blank line, are not ACEs and are not evidence of an unparseable answer — the ACL condition is UNEVALUABLE. The present-but-failing case is named explicitly because "missing binary" was the only stated trigger, leaving a tool that exits 1 with no verdict at all: an implementation could then treat its silence as "no ACEs found" and ACCEPT, which is the fail-open inversion this design has already produced four times. A READER refuses any component whose ACL condition is unevaluable — never accepts it on mode bits alone — and that refusal is an ordinary resolution outcome requiring no new enum value: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. **A PUBLISHER omits the ACL clauses only at the call sites AUTH-1 clause (h) ENUMERATES, and only when the platform is unevaluable because no enumerator EXISTS for it. This rule states no scope of its own: AUTH-1(h) is the single statement of the carve-out and this sentence references it.** The exemption never extends to an enumerator that is present and merely failed — a tool that exits non-zero or prints an unparseable ACE line may be failing precisely because the component is hostile — and never to a READER, for any entry. *(Round 78, codex and kimi concordantly: this is the FIFTH consecutive round in which the carve-out was corrected at one site and left at another, so it is no longer stated twice. Rounds 70, 72, 74 and 76 each edited one of the two and each left the other saying something different; point-fixing a rule that lives in two places has now failed four times, and the structural fix — one statement, everything else a reference — is the same one that closed the ACL gloss and the exit enumerations.)* *(Round 70, codex #2: round 68 widened "unevaluable" to cover a failing tool without noticing that the exemption is scoped to the same word, which silently widened the exemption too.)* Every other authentication a publisher performs applies the ACL clauses and refuses on an unevaluable component. **Consequence, stated here because it is a LIMIT and not a defect: on an unevaluable platform the capability is UNAVAILABLE.** The publisher writes and re-verifies its own entry, so a runner without an enumerator stays green, but no reader can ever consume that entry — a reader refuses every entry — and resolution on such a platform is exactly D′: sentinel, `OK=0`, `SOURCE=unresolved`, `POINTER_STATE=stale`, one diagnostic. BUD-5 conjunct 1 is scoped accordingly. **The reader is not given the publisher's exemption, and no later round may grant it.** The publisher's exemption is sound only because it is re-verifying bytes it wrote itself in this same process; a reader has no independent knowledge of the value, and ENT-3's name↔content check is SELF-CONSISTENT — whoever writes an entry writes both halves — so a reader exempted from the ACL clauses would accept an entry whose non-ACL clauses passed but whose components were never checked for a grant to another principal — and those clauses are the only ones that detect a component another principal can replace. That is mutant row 107, and it fails open.
 
 **ACL-5 — Enumerator selection and invocation.** The platform is selected by running `/usr/bin/uname -s` — by absolute path — and the enumerator for the selected platform is invoked by absolute path (`/bin/ls` on Darwin, `/usr/bin/getfacl` on Linux). **`/usr/bin/uname -s` RUNS AT MOST ONCE PER RESOLUTION, LAZILY, and its result is shared**: it is probed at the first point at which P-2's arm selection or this rule's enumerator selection needs it, both then read that same value, and it is NOT probed at all on a resolution that evaluates no component. **BUD-1's derived count is therefore exactly 0 or 1, and which one is DERIVED rather than chosen: 1 iff at least one component is evaluated, 0 otherwise** — so PUB-9's E0, a reader whose `HOME` is unusable, and a resolution that finds no store all derive 0. *(Round 114, codex: the round-112 wording said BOTH "exactly once per resolution" AND "computed at the first point either needs it", and those diverge precisely on the paths that touch no component — implementations probing zero or one produced identical protocol values and different counts, so the expected number was still not derivable end to end.)* *(Round 112, codex: P-2 selects the `stat` arm through `/usr/bin/uname` and this rule selects the enumerator through `/usr/bin/uname`, and NOTHING said the result was shared — so an implementation that probes once and one that probes twice both conformed, with different counts, and BUD-1's expected number could not be derived. The old prose said "one `uname` plus one `ls -lde` per component" and that frequency constraint was LOST when §4.2a-S became authoritative — the first rule found silently absent from S since it was written.)* **If `/usr/bin/uname -s` is absent, exits non-zero, or prints anything other than a recognised platform name, NO enumerator is selected and the ACL condition is UNEVALUABLE under ACL-4 — the component is REFUSED, and the publisher carve-out of AUTH-1(h) DOES NOT apply**, because that carve-out is for a platform where no enumerator EXISTS, and a failed or unrecognised probe is a platform whose enumerator is UNKNOWN. A probe that fails may be failing because the machine is hostile, which is the same reason clause (h) withholds itself from a present enumerator that failed. *(Round 112, codex: ACL-4 covered an absent or failing ENUMERATOR and nothing covered a failing SELECTOR, so an implementer had to invent both the outcome and whether the publisher exception applied.)* Neither `command -v` nor a bare `uname`, `ls` or `getfacl` may be used for selection or invocation: both resolve through `PATH`, which differs between a plugin hook and a git hook.
 
@@ -2141,62 +2142,63 @@ yields 4 fields, zsh 5.9 yields 1.** In zsh the whole line is then one token, no
 `allow`, every ACE is skipped and the component is ACCEPTED — the fail-open mutant row 139 pins.
 
 Both layers are peeled with parameter expansion instead, which behaves identically in both shells, and
-**every SLOT of ACL-2's grammar is enforced — it is not enough to find the verb.** `<body>` is the line
-from the first `: ` onward (**ACL-4 selects WHICH lines reach this primitive** — only the numbered ACE
-lines; the stat line `/bin/ls -lde` prints first, and any blank line, never reach it and are not
-evidence of an unparseable answer). Field 1 is the principal; then at most ONE `inherited`; then
+**every SLOT of ACL-2's grammar is enforced — it is not enough to find the verb.** `<body>` is the line from the first `: ` onward. **THE CALLER SELECTS NOTHING: it passes EVERY line of the answer, in order, with its 1-based number, and this primitive classifies each one** — a caller that filtered would have to classify in order to filter, which is the same work in two places and the boundary along which they would drift. *(Round 120, codex: the prose said ACL-4 selected which lines reached P-13 while the block itself classified them, so the caller's responsibility was stated two contradictory ways.)* Field 1 is the principal; then at most ONE `inherited`; then
 EXACTLY ONE verb; then EXACTLY ONE `<perms>`, which may not itself be `allow`, `deny` or `inherited`.
 Repeated whitespace between fields is skipped. Every other shape REFUSES under ACL-4.
 
 ```sh
-# ACL-4 classifies the WHOLE answer; this primitive both classifies a line and parses an ACE.
-case "$line" in
-    '')   return 2 ;;                           # BLANK: skipped, not evidence of anything
-    ' '*) : ;;                                  # an ACE line begins with a space
-    *)    return 2 ;;                           # the STAT line begins with its type character
+# THE CALLER PASSES EVERY LINE OF THE ANSWER, IN ORDER, WITH ITS 1-BASED NUMBER, AND THIS PRIMITIVE
+# CLASSIFIES IT. The caller selects nothing: a caller that filtered would have to classify to filter.
+case "$_u13_line" in
+    '')   return 2 ;;                           # BLANK: skipped at ANY position
+    ' '*) : ;;                                  # an ACE _u13_line begins with a space
+    *)    [ "$_u13_lineno" = 1 ] || return 1         # a LATER non-space _u13_line is MALFORMED
+          return 2 ;;                           # the stat _u13_line, and ONLY as _u13_line 1
 esac
-idx="${line# }"; idx="${idx%%:*}"               # the claimed index, up to the FIRST colon
-case "$idx" in ''|*[!0-9]*) return 1 ;; esac    # the index must be DECIMAL and non-empty
-rest="${line# }"; rest="${rest#"$idx"}"
-case "$rest" in ': '*) body="${rest#: }" ;; *) return 1 ;; esac   # delimiter is EXACTLY ": "
+_u13_idx="${_u13_line# }"; _u13_idx="${_u13_idx%%:*}"               # the claimed index, up to the FIRST colon
+case "$_u13_idx" in ''|*[!0-9]*) return 1 ;; esac    # the index must be DECIMAL and non-empty
+_u13_rest="${_u13_line# }"; _u13_rest="${_u13_rest#"$_u13_idx"}"
+case "$_u13_rest" in ': '*) _u13_body="${_u13_rest#: }" ;; *) return 1 ;; esac   # delimiter is EXACTLY ": "
 
-principal=""; verb=""; perms=""; inh=0; n=0
-rest="$body"
-while [ -n "$rest" ]; do
-    tok="${rest%% *}"
-    case "$rest" in *" "*) rest="${rest#* }" ;; *) rest="" ;; esac
-    [ -n "$tok" ] || continue                   # a repeated space is not a field
-    n=$(( n + 1 ))
-    if [ -z "$verb" ]; then
-        case "$tok" in
-            allow|deny) verb="$tok" ;;
-            inherited)  if [ "$n" = 1 ] || [ "$inh" = 1 ]; then return 1; fi
-                        inh=1 ;;                # optional, singular, never field 1
-            *)          if [ "$n" = 1 ]; then principal="$tok"
-                        else return 1           # unknown field before the verb
+_u13_principal=""; _u13_verb=""; _u13_perms=""; _u13_inh=0; _u13_n=0
+_u13_rest="$_u13_body"
+while [ -n "$_u13_rest" ]; do
+    _u13_tok="${_u13_rest%% *}"
+    case "$_u13_rest" in *" "*) _u13_rest="${_u13_rest#* }" ;; *) _u13_rest="" ;; esac
+    [ -n "$_u13_tok" ] || continue                   # a repeated space is not a field
+    _u13_n=$(( _u13_n + 1 ))
+    if [ -z "$_u13_verb" ]; then
+        case "$_u13_tok" in
+            allow|deny) _u13_verb="$_u13_tok" ;;
+            inherited)  if [ "$_u13_n" = 1 ] || [ "$_u13_inh" = 1 ]; then return 1; fi
+                        _u13_inh=1 ;;                # optional, singular, never field 1
+            *)          if [ "$_u13_n" = 1 ]; then _u13_principal="$_u13_tok"
+                        else return 1           # unknown field before the _u13_verb
                         fi ;;
         esac
     else
-        [ -z "$perms" ] || return 1             # a SECOND field after the verb
-        case "$tok" in
+        [ -z "$_u13_perms" ] || return 1             # a SECOND field after the _u13_verb
+        case "$_u13_tok" in
             allow|deny|inherited) return 1 ;;   # a reserved token cannot BE the rights field
         esac
-        perms="$tok"
+        _u13_perms="$_u13_tok"
     fi
 done
-[ -n "$verb" ] || return 1
-[ -n "$principal" ] || return 1
-case "$perms" in
+[ -n "$_u13_verb" ] || return 1
+[ -n "$_u13_principal" ] || return 1
+case "$_u13_perms" in
     ''|*,,*|,*|*,) return 1 ;;                  # empty, doubled, leading or trailing comma
 esac
 
-rest="$perms"                                   # layer 2: the comma-joined rights
-while [ -n "$rest" ]; do
-    tok="${rest%%,*}"
-    case "$rest" in *,*) rest="${rest#*,}" ;; *) rest="" ;; esac
-    # ... test $tok against ACL-2's seven-right allowlist ...
+_u13_rest="$_u13_perms"                                   # layer 2: the comma-joined rights
+while [ -n "$_u13_rest" ]; do
+    _u13_tok="${_u13_rest%%,*}"
+    case "$_u13_rest" in *,*) _u13_rest="${_u13_rest#*,}" ;; *) _u13_rest="" ;; esac
+    # ... test $_u13_tok against ACL-2's seven-right allowlist ...
 done
 ```
+**Every name in this block carries the `_u13_` prefix, because FAM-5 requires it and a template must obey its own rule.** The family files are SOURCED into a consumer's shell and a POSIX function has no locals, so a block written with bare `n`, `rest` and `body` imports those names into whatever sources it — and mutant row 143 exists for exactly that collision. *(Round 120: the block used bare names, and the very harness extracting it to verify this round collided on `n` — its line counter against the block's field index — printing line numbers 1, 3, 4 for three lines.)*
+
 
 **Return 2 means "not an ACE line, skip it"; return 1 means MALFORMED, which under ACL-4 poisons the
 whole answer. They are different outcomes and collapsing them is the defect this primitive has now had
@@ -2673,8 +2675,8 @@ carried no adversarial mutant and could have shipped unproven. Its mutant is spe
    IDENTITY probe (`/usr/bin/id -un`, P-3a), the `NAME_MAX` probe (`/usr/bin/getconf`, NM-1) **and the
    ACL ENUMERATOR'S OUTPUT** (`/bin/ls -lde`, ACL-2/ACL-5) are
    each reached through ONE accessor that production and the harness share, so a fixture can present
-   a FAILED probe **or a MALFORMED ACE LINE, which rows 144-148 require and `chmod +a` cannot
-   produce**. Both are invoked by absolute path, so no unprivileged harness can make either fail
+   a FAILED probe **or a MALFORMED ACE LINE or ANSWER, which rows 144-150 require and `chmod +a`
+   cannot produce**. Both are invoked by absolute path, so no unprivileged harness can make either fail
    by manipulating `PATH` — and without this seam rows 131 and 133 prescribe fixtures that cannot be
    built, which N6-10 forbids. *(Round 106, codex: 3f seamed P-2's accessor only, while round 104
    added a row whose fixture needs the identity probe to fail.)* The mutant rows are
