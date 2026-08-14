@@ -13,6 +13,43 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Added
+
+- **COREDEV-2617 §4.2a — the plugin-state base store.** A shell that never receives
+  `CLAUDE_PLUGIN_DATA` — a git hook, an ordinary terminal — can now discover the plugin-data base
+  anyway. Each publisher records its base in `~/.claude/unleashed-mail/bases/` under a name that is
+  an injective encoding of the value, so two publishers holding different bases never write the same
+  file and a disagreement surfaces as a visible `conflict` instead of a silent second directory.
+  Darwin arms only; the Linux arms remain deliberately unbuilt until
+  `scripts/review/linux-primitive-probe.sh` has been run on a Linux host and its output transcribed.
+  - `scripts/lib/plugin-state-store.sh` — the Invariant P key encoder (a single byte walk under
+    `LC_ALL=C`, four disjoint markers, zero forks), the nearest-existing-ancestor walk, the
+    `NAME_MAX` budget, and store creation in the order that validates the existing prefix *before*
+    creating anything.
+  - `scripts/lib/plugin-state-auth.sh` — the one authentication predicate both the reader and the
+    publisher call, the chain walk with its trust-anchor ownership rule, and the Darwin ACL arm.
+  - `scripts/lib/plugin-state-reader.sh` — the ordered reader rules −1 through 4.
+  - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
+  - `scripts/tests/test_plugin_state_store.py` — 28 tests that execute the shipped shell in **both**
+    bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
+
+### Changed
+
+- `scripts/lib/paths.sh` resolves in three steps: the environment variable wins and is the only
+  branch a publish is reachable from; otherwise the store is consulted; otherwise the pre-existing
+  unresolved envelope, unchanged.
+- `scripts/test-hooks.sh` disables publication (`_UNLEASHED_PUBLISH_OK=0`). It tests hooks, not
+  publication, and its temporary plugin-data directory lands under `/tmp`, which on Darwin is a
+  symlink to a world-writable directory — so the publisher correctly declines to publish there and
+  said so on stderr, inside assertions that require it to be empty.
+
+### Fixed
+
+- `scripts/lib/context.sh` derived its own directory *inside a function*, where `$0` is the function
+  name in zsh rather than the sourced file. The returned path lost `scripts/lib` — wrong by two
+  levels — on the very path the plugin documents for a zsh Bash tool. It is now captured at source
+  time.
+
 ## [2.7.1] — 2026-08-08
 
 Seven successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof

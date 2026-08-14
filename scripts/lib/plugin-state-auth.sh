@@ -58,9 +58,16 @@ _u_platform() {
 # principal NAMES at all, so it needs no principal and never runs this probe.
 # Resolved ONCE per resolution, never once per component. `$USER` may not be used: it is inherited
 # from the environment and ACL-7 forbids a verdict that differs between a plugin hook and a git hook.
+_u_identity_probe() {
+    /usr/bin/id -un 2>/dev/null
+}
+
 _u_principal() {
     [ -n "${_U_PRINCIPAL+set}" ] && return 0
-    _U_PRINCIPAL="$(/usr/bin/id -un 2>/dev/null)" || { unset _U_PRINCIPAL; return 1; }
+    # §7 step 3f(iii) — the IDENTITY-PROBE SEAM, same principle: `/usr/bin/id` is invoked by
+    # absolute path, so no unprivileged harness can make it fail by manipulating PATH, and a
+    # fixture presenting a FAILED probe is only reachable by redefining this accessor.
+    _U_PRINCIPAL="$(_u_identity_probe)" || { unset _U_PRINCIPAL; return 1; }
     # The obvious spelling of "a single non-empty line" is BROKEN and silently rejects everything:
     #     case "$v" in *"$(printf '\n')"*) ...
     # command substitution STRIPS trailing newlines, so `$(printf '\n')` is the EMPTY STRING and the
@@ -179,8 +186,23 @@ _u_acl_check_ace() {
 # The ACL condition on ONE component. 0 = accepted, non-zero = refused.
 # ACL-6: this writes nothing — it creates no file and no byte anywhere, and never inside the path
 # being validated. Authentication may not be established by attempting a write.
+# §7 step 3f(iv) — THE ENUMERATOR-OUTPUT SEAM. Production and the harness call the SAME accessor;
+# the harness makes a fixture available by REDEFINING this function after sourcing, which is why the
+# seam is a function and not an environment variable. ACL-7 forbids conditioning any branch of the
+# predicate on the environment — a verdict must be a property of the MACHINE — and an `if [ -n
+# "$SOME_VAR" ]` here would be exactly that. Redefinition changes which accessor exists, not what the
+# predicate consults.
+#
+# The seam is what makes the malformed-answer obligations RUNNABLE at all: `chmod +a` followed by
+# `/bin/ls -lde` cannot emit a duplicate verb, an empty rights field, a non-decimal index or a second
+# stat line, so without it those rows could be unit-tested as strings but never produce a
+# store-level outcome through the production resolver.
+_u_acl_enumerate() {
+    /bin/ls -lde -- "$1" 2>/dev/null
+}
+
 _u_acl_ok() {
-    _u_acl_out="$(/bin/ls -lde -- "$1" 2>/dev/null)" || return 1   # a failed enumerator REFUSES
+    _u_acl_out="$(_u_acl_enumerate "$1")" || return 1   # a failed enumerator REFUSES
     printf '%s\n' "$_u_acl_out" | _u_acl_answer_ok
 }
 

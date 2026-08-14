@@ -565,6 +565,103 @@ class PublisherAndEndToEnd(unittest.TestCase):
                     'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_BASE_RESOLVED"')
             rc, out, err = run_shell(shell, body)
             self.assertEqual(f"1 pointer {self.base}", out, f"{shell}: {err}")
+@unittest.skipUnless(DARWIN, "drives the Darwin ACL arm through step 3f's seams")
+class MutantRowsThroughTheProductionResolver(unittest.TestCase):
+    """§7 step 3f — the seams, and the rows they make runnable.
+
+    N6-6 requires a mutant's discriminating case to name the STORE-LEVEL outcome the ordered reader
+    rules produce, never merely "refused". A malformed ACE line cannot be produced with `chmod +a`
+    and `/bin/ls -lde`, so before the enumerator-output seam existed these obligations could be
+    unit-tested as strings but never driven through the production resolver. They can now.
+
+    The seam is a FUNCTION the harness redefines, not an environment variable: ACL-7 requires a
+    component's verdict to be a property of the MACHINE, and an `if [ -n "$SOMEVAR" ]` inside the
+    predicate would be exactly the environment dependence it forbids.
+    """
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="seam2617.", dir=os.path.expanduser("~/.claude"))
+        os.chmod(self.home, 0o700)
+        self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
+        self.base = os.path.join(self.home, "base")
+        os.makedirs(self.base); os.chmod(self.base, 0o700)
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _resolve_with_answer(self, shell, answer):
+        """Publish a valid entry, then make every component's ACL answer `answer`, then READ."""
+        override = ('_u_acl_enumerate() { printf %b ' + repr(answer).replace("'", '"') + '; }\n')
+        body = (f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
+                'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
+                'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                + override +
+                f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"')
+        rc, out, err = run_shell(shell, body)
+        return out
+
+    #: A healthy answer for a euid-owned component with no ACEs.
+    HEALTHY = "drwx------@ 2 nick staff 64 Aug 14 d\n"
+
+    def test_the_seam_itself_does_not_change_a_healthy_resolution(self):
+        # The control for the seam: with a WELL-FORMED substituted answer the store still resolves.
+        # Without this, every row below would "pass" against a seam that broke resolution outright.
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            self.assertEqual("1 pointer none", self._resolve_with_answer(shell, self.HEALTHY),
+                             f"{shell}: the seam broke a healthy resolution")
+
+    def test_malformed_answers_yield_the_store_level_refusal(self):
+        # Each of these is a mutant row's fixture, and each now produces N6-6's store-level tuple
+        # through the PRODUCTION resolver rather than being asserted against the parser in isolation.
+        cases = {
+            "a duplicate verb":            "drwx------@ 2 n s 64 d\n 0: group:staff allow write list\n",
+            "an empty rights field":       "drwx------@ 2 n s 64 d\n 0: group:staff allow \n",
+            "a reserved token as rights":  "drwx------@ 2 n s 64 d\n 0: group:staff deny allow\n",
+            "a duplicated `inherited`":    "drwx------@ 2 n s 64 d\n 0: group:staff inherited inherited allow list\n",
+            "a non-decimal index":         "drwx------@ 2 n s 64 d\n x: group:staff allow list\n",
+            "no delimiter after the index":"drwx------@ 2 n s 64 d\n 0:group:staff allow list\n",
+            "a later non-space line":      "drwx------@ 2 n s 64 d\n 0: group:staff allow list\ngarbage\n",
+            "no stat line at all":         " 0: group:staff allow list\n",
+            "an empty answer":             "",
+        }
+        for shell in SHELLS:
+            for name, answer in cases.items():
+                shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+                self.assertEqual("0 unresolved stale", self._resolve_with_answer(shell, answer),
+                                 f"{shell}: {name} must poison the answer and refuse the store")
+
+    def test_a_failed_identity_probe_refuses(self):
+        # The identity-probe seam. P-3a: a FAILED probe refuses publisher and reader alike, with no
+        # carve-out — that carve-out is for a platform where no enumerator EXISTS, and a probe that
+        # failed may be failing because the machine is hostile.
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            body = (f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
+                    'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
+                    'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                    '_u_identity_probe() { return 1; }\n'
+                    f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                    'printf "%s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_POINTER_STATE"')
+            rc, out, _ = run_shell(shell, body)
+            self.assertEqual("0 stale", out, f"{shell}: a failed identity probe must refuse")
+
+    def test_a_failed_name_max_probe_refuses_the_publish(self):
+        # The NAME_MAX-probe seam, and PUB-9 E3's fail-closed obligation, which had no mutant at all
+        # until the seam existed. Both a FAILING probe and a NON-NUMERIC one must refuse: the numeric
+        # guard is not redundant, because `[ 42 -gt "" ]` is status 2 in bash (whose `if` then takes
+        # the ELSE branch and PROCEEDS) and status 0 in zsh.
+        for probe, label in (("return 1", "a failing probe"), ("printf notanumber", "a non-numeric probe")):
+            for shell in SHELLS:
+                shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+                body = (f'_u_name_max_probe() {{ {probe}; }}\n'
+                        f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
+                        'printf "%s" "$_UNLEASHED_POINTER_STATE"')
+                rc, out, _ = run_shell(shell, body)
+                self.assertEqual("failed", out, f"{shell}: {label} must fail closed")
+                self.assertFalse(os.path.exists(self.store),
+                                 f"{shell}: {label} must create nothing")
 
 
 if __name__ == "__main__":

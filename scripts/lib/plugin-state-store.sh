@@ -103,10 +103,16 @@ _unleashed_nearest_existing() {
 # `[ 42 -gt "" ]` is status 2 in bash 3.2.57 — so an `if` takes the ELSE branch and a publisher would
 # PROCEED — and status 0 in zsh 5.9, so it would refuse. The same code, opposite outcomes, which is
 # why the value is validated before it is ever compared.
+_u_name_max_probe() {
+    /usr/bin/getconf NAME_MAX "$1" 2>/dev/null
+}
+
 _unleashed_name_max() {
     _unleashed_nearest_existing "$1"
     # The directory operand is MANDATORY: the bare command exits 64. Absolute path, never via PATH.
-    _nm_v="$(/usr/bin/getconf NAME_MAX "$_UNLEASHED_NEAREST" 2>/dev/null)" || return 1
+    # §7 step 3f(iii) — the NAME_MAX-PROBE SEAM, a function so a harness can present a FAILED or
+    # non-numeric probe by redefining it. `getconf` is invoked by absolute path, so PATH cannot.
+    _nm_v="$(_u_name_max_probe "$_UNLEASHED_NEAREST")" || return 1
     case "$_nm_v" in
         ''|*[!0-9]*) return 1 ;;
     esac
