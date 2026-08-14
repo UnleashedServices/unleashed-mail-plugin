@@ -167,6 +167,9 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_reviewer_roster.py": "sets it for a fixture",
         "scripts/pre-commit-checks.sh": "comments only",
         "agents/swift-reviewer.md": "MAJ-6 bridge injection sites — the substitution points",
+        "scripts/validate-plan-citations.py": "a citation-assertion PATTERN, not an expansion — the "
+                                              "linter searches the PLAN for this text and never "
+                                              "reads the variable",
     }
 
     def test_identifier_appears_only_at_approved_sites(self):

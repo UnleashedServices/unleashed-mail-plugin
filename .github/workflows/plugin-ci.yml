@@ -60,7 +60,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -243,7 +243,7 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
       - name: bind-prompt.py real invocation on 3.9
         # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
         # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
