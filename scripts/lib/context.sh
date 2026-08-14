@@ -31,8 +31,13 @@
 #
 # The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
 # or three libs sourced in one shell would otherwise each emit one.
+# Captured at SOURCE TIME and unconditionally, because it is needed whether or not paths.sh was
+# already loaded — and because the expansion below is only cross-shell AT TOP LEVEL. Inside a
+# function bash keeps BASH_SOURCE[0] as the defining file while zsh sets `$0` to the FUNCTION
+# NAME (FUNCTION_ARGZERO, on by default), so the same line resolves to the caller's CWD there.
+_UNLEASHED_CONTEXT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _UNLEASHED_CONTEXT_LIB_DIR="."
 if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-    _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+    _upb_d="$_UNLEASHED_CONTEXT_LIB_DIR"
     # shellcheck source=scripts/lib/paths.sh
     [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
 fi
@@ -248,11 +253,13 @@ _context_round_sweep() {
 
 # Locate the synthesizer package (capture.py + schema.py) relative to this lib, so the producer can
 # REUSE capture.is_final_capture for its advance decision (single-sourcing that subtle predicate).
-# BASH_SOURCE[0] is this file even inside a function (defining file). $0 fallback for non-bash sourcing.
+# Uses the SOURCE-TIME capture. The previous version derived the directory INSIDE this function
+# and its comment claimed the `$0` fallback covered non-bash sourcing — it does not. Measured:
+# in zsh `$0` inside a function is the FUNCTION NAME, so `dirname` gave `.`, `cd . && pwd` gave
+# the CALLER'S CWD, and the returned path lost `scripts/lib` — wrong by two levels. That path is
+# reachable: swift-reviewer sources this lib ALONE into a zsh Bash tool.
 _context_capture_dir() {
-    local d
-    d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || d="."
-    printf '%s/../../mcp/review-synthesizer' "$d"
+    printf '%s/../../mcp/review-synthesizer' "$_UNLEASHED_CONTEXT_LIB_DIR"
 }
 
 # Should the producer ADVANCE past `$2` (the highest existing round) for `$3` (agent), or REUSE it?

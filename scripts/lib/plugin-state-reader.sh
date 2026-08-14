@@ -165,7 +165,13 @@ _unleashed_unresolved() {
     _UNLEASHED_POINTER_STATE="$1"
     if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
         _UNLEASHED_BASE_DIAGNOSED=1
-        printf 'unleashed-mail: %s; plugin state will not be read or written this run\n' "$2" >&2
+        # THE PREFIX IS SUPPLIED BY THE CALLER and this file never names the environment variable.
+        # That is a separation of concerns, not a workaround: the reader knows about the STORE,
+        # and which variable was unset is `paths.sh`'s business. It also keeps N5's lexical drift
+        # check tight — a new primitive that spells the identifier would have to be allowlisted,
+        # and N5 exists precisely to stop a new primitive re-deriving the base.
+        printf 'unleashed-mail: %s%s; plugin state will not be read or written this run\n' \
+            "${_UNLEASHED_UNRESOLVED_PREFIX:-}" "$2" >&2
     fi
     return 0
 }

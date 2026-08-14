@@ -31,6 +31,16 @@ ROUND_START="$_DIR/capture-reviewer-round-start.sh"   # COREDEV-2326 SubagentSta
 # Isolated, throwaway plugin-data dir for markers/logs/sentinels.
 TMPROOT="$(mktemp -d 2>/dev/null || mktemp -d -t hooktests)"
 export CLAUDE_PLUGIN_DATA="$TMPROOT/data"
+
+# COREDEV-2617 PUB-9 E0 — publishing OFF for this harness. This suite tests HOOKS, not publication,
+# and many of its cases assert that a hook's stderr is empty. `mktemp -d` lands under /tmp, which on
+# Darwin is a symlink to a 1777 directory, so the target chain legitimately does NOT authenticate and
+# the publisher would emit its one PUB-11 line into every one of those assertions. That is the
+# publisher behaving correctly on a world-writable path, not a defect — a REAL plugin-data directory
+# (`~/.claude/plugins/data`) authenticates, verified — so the harness turns the side effect off
+# rather than the diagnostic. `plugin-state` publication has its own suite,
+# scripts/tests/test_plugin_state_store.py.
+export _UNLEASHED_PUBLISH_OK=0
 cleanup() { rm -rf "$TMPROOT" 2>/dev/null || true; }
 trap cleanup EXIT
 

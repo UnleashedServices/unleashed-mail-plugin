@@ -63,15 +63,86 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
         printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
     }
 
-    # Eager, source-time resolution. Sets the three protocol variables exactly once per process.
+    # ── COREDEV-2617 §4.2a — the store, and why this is not just the D′ expansion ─────────────────
+    # D′ made an unset variable resolve to the sentinel. That is safe but it is not a CAPABILITY: a
+    # git hook or an ordinary terminal, which never receive the variable, still cannot find the base.
+    # §4.2a adds the store — each publisher records its base under a name that is an injective
+    # encoding of the value, so a reader can discover it and a disagreement is visible as a conflict
+    # rather than as a silent second directory.
+    #
+    # The machinery lives in `plugin-state-{auth,store,reader,publisher}.sh`, NOT inline here, and it
+    # is sourced independently of this file. That matters: the other family files must be able to
+    # resolve from the store when THIS file cannot be located, so the machinery cannot hang off it.
+    # If the machinery itself is missing, the resolution degrades to the D′ envelope — sentinel,
+    # `OK=0`, one diagnostic — which is exactly the pre-2617 behaviour and is never worse than it.
+    # THE DIRECTORY IS CAPTURED AT SOURCE TIME, NOT INSIDE THE FUNCTION, AND THAT IS LOAD-BEARING.
+    # `${BASH_SOURCE[0]:-$0}` is cross-shell at TOP LEVEL — measured: bash sets BASH_SOURCE to the
+    # sourced file and zsh sets `$0` to it, so `dirname` is correct in both, for absolute, relative
+    # and nested-source invocations alike. INSIDE A FUNCTION the two diverge: bash's BASH_SOURCE[0]
+    # is still the defining file, while zsh sets `$0` to the FUNCTION NAME (FUNCTION_ARGZERO, on by
+    # default). Measured: the first version of this loader ran that expansion inside the function,
+    # resolved its directory to `.`, found none of the four libraries, and silently degraded zsh to
+    # the D′ envelope — the variable-set branch reported `none` instead of `created` and a subsequent
+    # reader resolved nothing, while bash did the right thing.
+    _UNLEASHED_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _UNLEASHED_LIB_DIR="."
+
+    _unleashed_load_state_machinery() {
+        [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
+        _UNLEASHED_STATE_LOADED=1
+        _usm_d="$_UNLEASHED_LIB_DIR"
+        for _usm_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+            if [ -r "$_usm_d/$_usm_f.sh" ]; then
+                # shellcheck source=/dev/null
+                . "$_usm_d/$_usm_f.sh"
+            else
+                _UNLEASHED_STATE_RC=1
+                return 1
+            fi
+        done
+        _UNLEASHED_STATE_RC=0
+        return 0
+    }
+
+    # PUB-2's precondition, computed once: HOME must be non-empty AND absolute. Every expansion of
+    # HOME on this path uses `${HOME:-}` so a missing HOME under `set -u` never aborts a hook.
+    _unleashed_home_ok() {
+        case "${HOME:-}" in
+            /*) return 0 ;;
+            *)  return 1 ;;
+        esac
+    }
+
+    # Eager, source-time resolution. Sets the four protocol variables exactly once per process.
     unleashed_resolve_base() {
         [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0        # already resolved in this shell
         if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+            # Step 1 — the variable wins, and it is the ONLY branch from which a publish is
+            # reachable (PUB-1). The publish is a side effect of having resolved, never a condition
+            # of it: whatever it reports, this shell's base is the variable's value.
             _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
             _UNLEASHED_BASE_OK=1
+            _UNLEASHED_BASE_SOURCE='env'
+            _UNLEASHED_POINTER_STATE=none
+            if [ "${_UNLEASHED_PUBLISH_OK:-1}" != 0 ] && _unleashed_home_ok \
+               && _unleashed_load_state_machinery; then
+                _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
+                # The publish sets POINTER_STATE and may set SOURCE; the resolved value is unchanged.
+                _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+                _UNLEASHED_BASE_OK=1
+            fi
+        elif _unleashed_home_ok && _unleashed_load_state_machinery; then
+            # Step 2 — the store. The ordered reader rules set all four variables and emit at most
+            # one diagnostic; rule 3 emits none, because a resolution is the ordinary case.
+            # THIS file owns the wording about the environment variable — the reader is told the
+            # prefix and never names it, which keeps N5's allowlist tight.
+            _UNLEASHED_UNRESOLVED_PREFIX='CLAUDE_PLUGIN_DATA is unset and '
+            _unleashed_read_store "${HOME:-}/.claude/unleashed-mail/bases"
         else
+            # Step 3 — the D′ envelope: no variable, and no store to consult.
             _UNLEASHED_BASE_RESOLVED="$_UNLEASHED_BASE_SENTINEL"
             _UNLEASHED_BASE_OK=0
+            _UNLEASHED_BASE_SOURCE=unresolved
+            _UNLEASHED_POINTER_STATE=none
             if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
                 _UNLEASHED_BASE_DIAGNOSED=1
                 printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
