@@ -27,11 +27,12 @@ LIB = os.path.join(ROOT, "lib")
 AUTH = os.path.join(LIB, "plugin-state-auth.sh")
 STORE = os.path.join(LIB, "plugin-state-store.sh")
 READER = os.path.join(LIB, "plugin-state-reader.sh")
+PUB = os.path.join(LIB, "plugin-state-publisher.sh")
 SHELLS = ("/bin/bash", "/bin/zsh")
 DARWIN = os.uname().sysname == "Darwin"
 
 
-def run_shell(shell, body, env=None, sources=(AUTH, STORE, READER)):
+def run_shell(shell, body, env=None, sources=(AUTH, STORE, READER, PUB)):
     """Run `body` with the shipped libraries sourced. Returns (rc, stdout, stderr)."""
     src = "".join(f'. "{s}"\n' for s in sources) + body
     e = dict(os.environ)
@@ -473,6 +474,97 @@ class ReaderOrderedRules(unittest.TestCase):
                                  f"{shell}: the CONTROL did not fail — rule −1 is not load-bearing here")
         finally:
             os.unlink(mutant)
+@unittest.skipUnless(DARWIN, "the publisher walks chains through the Darwin ACL arm")
+class PublisherAndEndToEnd(unittest.TestCase):
+    """PUB-4, PUB-7, PUB-9, ST-7, TMP-1, P-4 — and the capability itself.
+
+    The end-to-end test is the ticket: a shell that never receives the plugin-data variable
+    discovers the base anyway, from what a publisher recorded.
+    """
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="pb2617.", dir=os.path.expanduser("~/.claude"))
+        os.chmod(self.home, 0o700)
+        self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
+        self.base = os.path.join(self.home, "base")
+        os.makedirs(self.base); os.chmod(self.base, 0o700)
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _publish(self, shell, value=None, extra=""):
+        v = value if value is not None else self.base
+        body = (f'{extra}\n_unleashed_publish "{self.store}" "{v}" 2>/dev/null\n'
+                'printf "%s" "$_UNLEASHED_POINTER_STATE"')
+        rc, out, err = run_shell(shell, body)
+        return out
+
+    def test_first_publish_creates_one_entry_at_0600_named_for_its_content(self):
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            self.assertEqual("created", self._publish(shell), f"{shell}")
+            entries = [f for f in os.listdir(self.store) if f.startswith("base.")]
+            self.assertEqual(1, len(entries), f"{shell}: PUB-4 allows AT MOST ONE durable file")
+            path = os.path.join(self.store, entries[0])
+            self.assertEqual(0o600, os.stat(path).st_mode & 0o777, f"{shell}")
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(self.base + "\n", fh.read(), f"{shell}")
+            self.assertEqual([], [f for f in os.listdir(self.store) if f.startswith(".pub.")],
+                             f"{shell}: a transient was left behind")
+
+    def test_second_publish_writes_nothing_and_reports_current(self):
+        # PUB-4 and row 1: on the no-write path a publish creates NO durable file. Proved by mtime,
+        # because "reports current" is satisfiable by a publisher that rewrites an identical file.
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            self._publish(shell)
+            entry = os.path.join(self.store, [f for f in os.listdir(self.store)
+                                              if f.startswith("base.")][0])
+            before = os.stat(entry).st_mtime_ns
+            self.assertEqual("current", self._publish(shell), f"{shell}")
+            self.assertEqual(before, os.stat(entry).st_mtime_ns, f"{shell}: the entry was rewritten")
+
+    def test_a_second_base_value_yields_conflict(self):
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            other = os.path.join(self.home, "other")
+            os.makedirs(other, exist_ok=True); os.chmod(other, 0o700)
+            self._publish(shell)
+            self.assertEqual("conflict", self._publish(shell, other), f"{shell}")
+
+    def test_e2_an_unpublishable_value_writes_nothing_at_all(self):
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            self.assertEqual("failed", self._publish(shell, "relative/path"), f"{shell}")
+            self.assertFalse(os.path.exists(self.store),
+                             f"{shell}: E2 must compose and open NOTHING under the store")
+
+    def test_a_newline_bearing_value_is_refused_and_an_ordinary_one_is_not(self):
+        # Both halves matter. The first version of this check spelled the newline
+        # `*"$(printf '\n')"*`, and command substitution STRIPS trailing newlines — so the pattern
+        # was the EMPTY STRING, matched everything, and refused every ordinary path. A test for the
+        # refusal alone would have passed against that defect.
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            self.assertEqual("created", self._publish(shell), f"{shell}: an ordinary base must publish")
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            body = ('v="$(printf %b "/tmp/a\\nb")"\n'
+                    f'_unleashed_publish "{self.store}" "$v" 2>/dev/null\n'
+                    'printf "%s" "$_UNLEASHED_POINTER_STATE"')
+            rc, out, _ = run_shell(shell, body)
+            self.assertEqual("failed", out, f"{shell}: a newline-bearing base must refuse")
+
+    def test_end_to_end_a_reader_with_no_variable_resolves_the_publishers_base(self):
+        """THE CAPABILITY. This is what COREDEV-2617 is for."""
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+            body = (f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
+                    'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
+                    'unset _UNLEASHED_BASE_DIAGNOSED\n'
+                    f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                    'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_BASE_RESOLVED"')
+            rc, out, err = run_shell(shell, body)
+            self.assertEqual(f"1 pointer {self.base}", out, f"{shell}: {err}")
 
 
 if __name__ == "__main__":
