@@ -51,6 +51,14 @@ case "$OUT" in
         exit 1 ;;
 esac
 mkdir -p "$(dirname -- "$OUT")" || exit 1
+# OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
+# checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
+# temporary worktree — where the later grep/wc could not find it, the run would end EFFORT=UNKNOWN
+# / exit 4, and cleanup would delete the only capture (codex, PR #67).
+case "$OUT" in
+    /*) : ;;
+    *)  OUT="$(cd "$(dirname -- "$OUT")" && pwd)/$(basename -- "$OUT")" || exit 1 ;;
+esac
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"

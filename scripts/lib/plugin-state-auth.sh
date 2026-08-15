@@ -44,9 +44,8 @@ _u_stat() {
 # NO enumerator, which is the condition AUTH-1(h)'s publisher carve-out is for.
 # BUD-1 derives this count as 0 or 1: one iff at least one component is evaluated.
 _u_platform() {
-    # Same rule as `_u_principal`: cached under a flag only THIS function sets, never on the
-    # variable's presence — a pre-set `_U_PLATFORM=Darwin` from the sourcing shell must not
-    # select an arm the machine does not have.
+    # Cached only within ONE resolution — see `_u_probes_reset` above for why an inherited flag
+    # or value is never honoured.
     [ "${_U_PLATFORM_PROBED:-}" = 1 ] && return "${_U_PLATFORM_RC:-0}"
     _U_PLATFORM_PROBED=1
     _U_PLATFORM="$(/usr/bin/uname -s 2>/dev/null)" || { _U_PLATFORM=""; _U_PLATFORM_RC=1; return 1; }
@@ -66,15 +65,25 @@ _u_identity_probe() {
     /usr/bin/id -un 2>/dev/null
 }
 
+# ── The probe caches, and why NO inherited state is honoured ──────────────────────────────────────
+# These libs are SOURCED into a consumer's shell, so ANY variable — the principal, the platform,
+# and any flag that says "already probed" — may already exist there: inherited, exported, or set
+# by a hostile caller. Round one of this defect trusted the VALUE's presence (a pre-set
+# `_U_PRINCIPAL=daemon` was accepted and would have exempted a foreign `user:daemon` ACE); round
+# two moved the trust to a FLAG — and a pre-set `_U_PRINCIPAL_PROBED=1` beside the value bypassed
+# the probe just as completely (codex, PR #67, twice; both reproduced). A cache key a caller can
+# set is not a cache key. So the caches are RESET at every resolution entry point —
+# `_unleashed_read_store` and `_unleashed_publish` call `_u_probes_reset` first — and the flags
+# below mean only "probed DURING this resolution". A caller-set flag is discarded before it can
+# be consulted; a caller-set value is overwritten by the probe.
+_u_probes_reset() {
+    unset _U_PRINCIPAL _U_PRINCIPAL_PROBED _U_PLATFORM _U_PLATFORM_PROBED _U_PLATFORM_RC
+}
+
 _u_principal() {
-    # THE CACHE IS AN INTERNAL FLAG, NOT THE VALUE'S PRESENCE. These libs are SOURCED into a
-    # consumer's shell, so `_U_PRINCIPAL` may already exist there — inherited, exported, or set by
-    # a hostile caller — and a presence check would ACCEPT it without ever running `id -un`. An
-    # injected value equal to a foreign `user:<name>` ACE's principal would then be treated as the
-    # effective user, that principal's `allow` rights exempted, and a chain authenticated that must
-    # be refused (codex, PR #67; reproduced: pre-set `_U_PRINCIPAL=daemon` survived this function).
-    # The probe result is cached under a flag ONLY this function sets, and the value is
-    # re-derived whenever that flag is absent, whatever the variable currently holds.
+    # Cached only within ONE resolution: the entry points reset this flag before any walk begins,
+    # so honouring it here cannot honour a caller's. P-3a: resolved once per resolution, not per
+    # component.
     [ "${_U_PRINCIPAL_PROBED:-}" = 1 ] && return 0
     # §7 step 3f(iii) — the IDENTITY-PROBE SEAM, same principle: `/usr/bin/id` is invoked by
     # absolute path, so no unprivileged harness can make it fail by manipulating PATH, and a

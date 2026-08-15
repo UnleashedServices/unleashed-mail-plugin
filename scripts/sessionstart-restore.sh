@@ -35,21 +35,30 @@ esac
 # {created, current, none} — `none` is also unresolved, and is deliberately quiet, because a
 # machine that has never published is the ordinary first-run case and not a fault. ONE line,
 # non-blocking, exit 0 regardless; the notice does not depend on a snapshot existing.
+# The notice is CAPTURED, not emitted-and-exited: a hook run emits ONE additionalContext object, and
+# an environment-backed publisher observing `conflict` still has a usable base — so a fresh
+# snapshot must still be restored (and deleted) beneath a persistent conflict, or every session
+# would repeat the warning while post-compaction context was never delivered (codex, PR #67). The
+# notice is prepended to whatever this hook would otherwise say, and emitted alone only when the
+# snapshot paths below have nothing to add.
+STORE_NOTICE=""
 case "${_UNLEASHED_POINTER_STATE:-none}" in
     conflict|stale|failed)
-        hook_emit_session_context "unleashed-mail plugin state: the base store is ${_UNLEASHED_POINTER_STATE} — shells that do not receive the plugin-data environment (git hooks, plain terminals) cannot resolve plugin state until it is repaired. Inspect ~/.claude/unleashed-mail/bases/ (a conflict is two entries naming different bases; remove the stale one)."
-        exit 0 ;;
+        STORE_NOTICE="unleashed-mail plugin state: the base store is ${_UNLEASHED_POINTER_STATE} — shells that do not receive the plugin-data environment (git hooks, plain terminals) cannot resolve plugin state until it is repaired. Inspect ~/.claude/unleashed-mail/bases/ (a conflict is two entries naming different bases; remove the stale one). " ;;
 esac
+# Every silent exit below becomes "emit the notice, then exit" when a notice is pending.
+_ss_exit() { [ -n "$STORE_NOTICE" ] && hook_emit_session_context "${STORE_NOTICE% }"; exit 0; }
 
-# COREDEV-2617 / D': nothing was persisted, so there is nothing to restore. Exit 0 silently.
-unleashed_base_ok || exit 0
+# COREDEV-2617 / D': nothing was persisted, so there is nothing to restore. Exit 0 silently —
+# carrying the store notice if one is pending.
+unleashed_base_ok || _ss_exit
 SNAP="$(context_snapshot_path)"   # per-checkout snapshot (repo-hash namespaced)
-[ -f "$SNAP" ] || exit 0
+[ -f "$SNAP" ] || _ss_exit
 
 # Freshness via the snapshot FILE's mtime (BSD/GNU split). Stale (>=600s) -> silent exit,
 # leaving the file for the next PreCompact to overwrite. Fail-open on any clock/stat error.
 NOW="$(date +%s 2>/dev/null)" || NOW=0
-case "$NOW" in ''|*[!0-9]*|0) exit 0 ;; esac
+case "$NOW" in ''|*[!0-9]*|0) _ss_exit ;; esac
 # Feature-detect the mtime flavor rather than branching on `uname == Darwin`: BSD stat (macOS,
 # FreeBSD, NetBSD — not all report "Darwin") uses `-f %m`, GNU stat uses `-c %Y`. Probe `-f %m`
 # first (it errors out on GNU because `%m` is treated as a missing file operand) and fall back to
@@ -59,10 +68,10 @@ if stat -f %m "$SNAP" >/dev/null 2>&1; then
 else
     MTIME="$(stat -c %Y "$SNAP" 2>/dev/null)"
 fi
-case "$MTIME" in ''|*[!0-9]*) exit 0 ;; esac
+case "$MTIME" in ''|*[!0-9]*) _ss_exit ;; esac
 AGE=$(( NOW - MTIME ))
-[ "$AGE" -ge 0 ] 2>/dev/null || exit 0
-[ "$AGE" -lt 600 ] || exit 0
+[ "$AGE" -ge 0 ] 2>/dev/null || _ss_exit
+[ "$AGE" -lt 600 ] || _ss_exit
 
 # Read one snapshot field (jq -> python3), defaulting to "unknown".
 _snap_field() {
@@ -93,7 +102,7 @@ HINT="Context restored after compaction — resume prior work: ticket=${TICKET},
 HINT="$(hook_redact_pii "$HINT")"
 HINT="${HINT:0:400}"   # bash substring (char-aware, no cut subprocess / BSD `cut -c` quirk)
 
-hook_emit_session_context "$HINT"
+hook_emit_session_context "${STORE_NOTICE}${HINT}"
 
 # Restore exactly once.
 rm -f "$SNAP" 2>/dev/null || true

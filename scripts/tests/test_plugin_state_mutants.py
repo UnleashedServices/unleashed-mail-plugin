@@ -1623,7 +1623,7 @@ class RowsChunk3(unittest.TestCase):
         try:
             for shell in SHELLS:
                 rc, out, err = run_shell(shell, body, env=env, sources=(PATHS_C3,))
-                self.assertEqual(f"1 env none|{self.target}", out,
+                self.assertEqual(f"1 host-env none|{self.target}", out,
                                  f"{shell}: spec must resolve from the set variable: {err}")
                 rc, out, err = run_shell(shell, body, env=env, sources=(mutant,))
                 self.assertEqual("0 unresolved none|" + self.SENTINEL, out,
@@ -2547,7 +2547,7 @@ class RowsChunk4(unittest.TestCase):
                             '_UNLEASHED_STATE_LOADED=1; _UNLEASHED_STATE_RC=0\n'
                             f'. "{paths_file}"\n' + self.OUTP)
                     rc, out, err = run_shell(shell, body)
-                    self.assertEqual("1 env created", out, f"{shell}: {err}")
+                    self.assertEqual("1 host-env created", out, f"{shell}: {err}")
                     direct = [f for f in os.listdir(um) if f.startswith("base.")]
                     if not is_mutant:
                         self.assertTrue(os.path.isdir(self.store), f"{shell}: bases/ missing")
@@ -2607,7 +2607,7 @@ class RowsChunk4(unittest.TestCase):
                     os.makedirs(cfg)
                     os.chmod(cfg, 0o700)
                     pub = family(shell, paths_file, self.target, cfg_set=True)
-                    self.assertEqual("1 env created", pub, f"{shell}: publish failed")
+                    self.assertEqual("1 host-env created", pub, f"{shell}: publish failed")
                     v_env = family(shell, paths_file, None, cfg_set=True)
                     v_noenv = family(shell, paths_file, None, cfg_set=False)
                     if not is_mutant:
@@ -2800,11 +2800,11 @@ class RowsChunk4(unittest.TestCase):
                             f'. "{paths_file}"\n' + self.OUTP)
                     rc, out, err = run_shell(shell, body)
                     if not is_mutant:
-                        self.assertEqual("1 env none", out, f"{shell}: {err}")
+                        self.assertEqual("1 host-env none", out, f"{shell}: {err}")
                         self.assertFalse(os.path.exists(self.store),
                                          f"{shell}: the fence wrote an entry")
                     else:
-                        self.assertEqual("1 env created", out,
+                        self.assertEqual("1 host-env created", out,
                                          f"{shell}: the CONTROL did not fail — the fence is not consulted")
                         self.assertEqual(1, len([f for f in os.listdir(self.store)
                                                  if f.startswith("base.")]), f"{shell}")
@@ -2837,7 +2837,7 @@ class RowsChunk4(unittest.TestCase):
                             f'v="$(printf %b "{self.home}/a\\nb")"\n'
                             f'_unleashed_publish "{self.store}" "$v"\n' + self.OUTP)
                     rc, out, err = run_shell(shell, body, sources=srcs)
-                    self.assertEqual("1 env failed", out, f"{shell}: {err}")
+                    self.assertEqual("1 host-env failed", out, f"{shell}: {err}")
                     self.assertEqual(1, len(self._diags(err)), f"{shell}: diagnostic count")
                     if not is_mutant:
                         self.assertIn("contains a newline", err, f"{shell}")
@@ -3259,9 +3259,16 @@ class RowsChunk5(unittest.TestCase):
     # ── row 43 ────────────────────────────────────────────────────────────────────────────────────
     def test_row_043_an_entry_whose_name_does_not_encode_its_content_is_not_counted(self):
         """Row 43: a misnamed entry yields stale; a conforming entry beside it does not win and the misnamed one is NOT counted toward the conflict tally."""
+        # The misnamed entry's NAME must be at least as long as its content: the reader now bounds
+        # the entry size by its key length BEFORE opening it (a valid key is always >= its value,
+        # since `/` -> `_s`), so a short fake name like `base.zzz` is refused by that bound and
+        # ENT-3 is never reached — the mutant dropping ENT-3 then changes nothing, and the row
+        # cannot fail. The real key with one character altered has the right length and is still
+        # not the encoding of the content, which isolates ENT-3.
         setup = (self.ENTRY.format(t=self.target, s=self.store)
-                 + f'printf "%s\\n" "{self.target}" > "{self.store}/base.zzz-not-the-key"; '
-                 + f'/bin/chmod 600 "{self.store}/base.zzz-not-the-key"')
+                 + f'_unleashed_key "{self.target}"; wrong="${{_UNLEASHED_KEY%?}}9"; '
+                 + f'printf "%s\\n" "{self.target}" > "{self.store}/base.$wrong"; '
+                 + f'/bin/chmod 600 "{self.store}/base.$wrong"')
         # ENT-3 dropped. BOTH entries hold the SAME value, so under the mutant the misnamed one is
         # COUNTED and the tally reads two distinct bases where one exists -> `conflict`. That is the
         # exact corruption ENT-3 prevents: counting entries only counts VALUES because the name is

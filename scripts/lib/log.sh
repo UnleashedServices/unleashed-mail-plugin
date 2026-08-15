@@ -48,7 +48,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
-        _UNLEASHED_BASE_SOURCE='env'
+        _UNLEASHED_BASE_SOURCE='host-env'
         _UNLEASHED_POINTER_STATE=none
         # PUB-1: this file is one of the four PUBLISHING family files, and the publish is reachable
         # ONLY from this branch. The publish is a side effect of having resolved, never a condition.

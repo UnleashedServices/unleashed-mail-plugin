@@ -70,6 +70,7 @@ _unleashed_write_transient() {
 # EXIT STATUS, never their output; they are invoked BY ABSOLUTE PATH, as every read probe is.
 _unleashed_publish() {
     _pb_store="$1"; _pb_value="$2"; _pb_wrote=0
+    _u_probes_reset                                  # no inherited probe state is honoured
 
     # E2 — the precondition. The publisher publishes NOTHING unless its own value satisfies TGT-1 in
     # full AND the TARGET CHAIN authenticates. No key is derived and nothing is opened under the
@@ -165,7 +166,7 @@ _unleashed_publish() {
 _unleashed_pub_state() {
     _UNLEASHED_BASE_RESOLVED="$_pb_value"
     _UNLEASHED_BASE_OK=1
-    _UNLEASHED_BASE_SOURCE='env'
+    _UNLEASHED_BASE_SOURCE='host-env'
     _UNLEASHED_POINTER_STATE="$1"
     return 0
 }
@@ -177,7 +178,7 @@ _unleashed_pub_state() {
 _unleashed_pub_failed() {
     _UNLEASHED_BASE_RESOLVED="$_pb_value"
     _UNLEASHED_BASE_OK=1
-    _UNLEASHED_BASE_SOURCE='env'
+    _UNLEASHED_BASE_SOURCE='host-env'
     _UNLEASHED_POINTER_STATE=failed
     printf 'unleashed-mail: plugin-state publication failed: %s\n' "$1" >&2
     return 0

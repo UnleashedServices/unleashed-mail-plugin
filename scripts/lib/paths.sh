@@ -121,7 +121,7 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
             # of it: whatever it reports, this shell's base is the variable's value.
             _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
             _UNLEASHED_BASE_OK=1
-            _UNLEASHED_BASE_SOURCE='env'
+            _UNLEASHED_BASE_SOURCE='host-env'
             _UNLEASHED_POINTER_STATE=none
             # PUB-9's exits, in order: E0 (publishing disabled) -> `none`; E1 (HOME unusable) ->
             # `failed` WITH its one diagnostic — an unavailable publication must not read as one that

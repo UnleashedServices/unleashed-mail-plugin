@@ -37,6 +37,18 @@ _unleashed_auth_entry() {
     # (2) the byte count catches a mid-line or leading NUL in BASH (which truncates at the NUL, so
     # the file is longer than the line), (3) the zsh-only NUL test catches the same in ZSH (which
     # keeps the NUL, so the byte count matches).
+    # THE READ IS BOUNDED BEFORE IT HAPPENS. ENT-2 requires size == len(line)+1 and ENT-3 requires
+    # the NAME to be the encoded CONTENT — so a valid entry's byte size can never exceed the length
+    # of its own key: every marker the encoder emits is at least as long as the byte it encodes,
+    # so len(value) <= len(key). An entry larger than len(key)+1 cannot authenticate whatever it
+    # holds, and is refused from `_U_SIZE` (already fetched by P-2) WITHOUT being opened. Without
+    # this, a 0600 owner-created or corrupted `base.*` with a huge or sparse payload and no newline
+    # makes `read` consume the whole file first — and this runs at SOURCE TIME in every hook and
+    # SessionStart, so one such entry hangs all of them (codex, PR #67). The name is used as the
+    # bound because it is the one fact about the file that cannot be forged without also failing
+    # ENT-3.
+    _ae_name="${_ae_p##*/}"; _ae_name="${_ae_name#base.}"
+    [ "$_U_SIZE" -le "$(( ${#_ae_name} + 1 ))" ] || return 1
     IFS= read -r _ae_line < "$_ae_p" || return 1     # (1)
     # (2) is a BYTE comparison, and `${#var}` counts CHARACTERS under a UTF-8 locale — so a base
     # such as `/café` reads as 14 characters against a 15-byte line, the equality fails, and every
@@ -133,6 +145,7 @@ _unleashed_store_ok() {
 # is the ordinary case and must be silent.
 _unleashed_read_store() {
     _rs_store="$1"
+    _u_probes_reset                                  # no inherited probe state is honoured
 
     if [ ! -e "$_rs_store" ] && [ ! -L "$_rs_store" ]; then
         _unleashed_unresolved none "the plugin-state store does not exist"     # rule 4

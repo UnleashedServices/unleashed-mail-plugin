@@ -68,7 +68,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
-        _UNLEASHED_BASE_SOURCE='env'
+        _UNLEASHED_BASE_SOURCE='host-env'
         _UNLEASHED_POINTER_STATE=none
     else
         _ueb_home_ok=0
