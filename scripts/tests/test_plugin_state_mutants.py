@@ -18,7 +18,7 @@ import tempfile
 import unittest
 
 from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
+                                     SHELLS, DARWIN, scratch_home)
 
 # ==================================================================================================
 # Chunk 1
@@ -37,8 +37,6 @@ import subprocess
 import tempfile
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 #: Same shape as ReaderOrderedRules.ENTRY — a well-formed entry: encoded name, one line, 0600.
 ENTRY = ('_unleashed_key "{t}"; printf "%s\\n" "{t}" > "{s}/base.$_UNLEASHED_KEY"; '
@@ -63,8 +61,7 @@ class RowsChunk1(unittest.TestCase):
 
     def setUp(self):
         # A scratch HOME under ~/.claude so every chain authenticates (§7 step 3f(i)).
-        self.home = tempfile.mkdtemp(prefix="rows1.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rows1.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.base = os.path.join(self.home, "base")
         os.makedirs(self.base)
@@ -773,8 +770,6 @@ import subprocess
 import tempfile
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 
 @unittest.skipUnless(DARWIN, "every row drives the Darwin chain authenticator")
@@ -785,8 +780,7 @@ class RowsChunk2(unittest.TestCase):
         # A scratch HOME under ~/.claude, like the rest of the suite: /tmp is sticky/other-writable,
         # so PCH-1 would refuse every chain rooted there and each test would fail for a fixture
         # reason that reads exactly like a code reason (§7 step 3f(i)).
-        self.home = tempfile.mkdtemp(prefix="rc2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rc2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.base = os.path.join(self.home, "base")
         os.makedirs(self.base)
@@ -1437,8 +1431,6 @@ import threading
 import time
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 #: Row 19's obligation lives in the family resolver, not the four state libs.
 PATHS_C3 = os.path.join(os.path.dirname(AUTH), "paths.sh")
@@ -1475,8 +1467,7 @@ class RowsChunk3(unittest.TestCase):
 
     def setUp(self):
         # A scratch HOME so no test reads or writes the developer's real store (§7 step 3f(i)).
-        self.home = tempfile.mkdtemp(prefix="rc3.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rc3.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.target = os.path.join(self.home, "target")
         os.makedirs(self.target)
@@ -2328,8 +2319,6 @@ import shutil
 import tempfile
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 #: The five-copy family files (rows 51/58/92/99 constrain the shipped wiring, which exists).
 LIBDIR = os.path.dirname(AUTH)
@@ -2356,8 +2345,7 @@ class RowsChunk4(unittest.TestCase):
     def setUp(self):
         # A scratch HOME under ~/.claude so no test reads or writes the developer's real store
         # (§7 step 3f(i)); the family-file tests re-point $HOME here, never at the real one.
-        self.home = tempfile.mkdtemp(prefix="rc4.2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rc4.2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.target = os.path.join(self.home, "target")
         os.makedirs(self.target)
@@ -3137,8 +3125,6 @@ import shutil
 import tempfile
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 #: The fifth resolver copy (FAM-1) — row 65's subject. It lives beside the four state libs.
 BRIDGE_C5 = os.path.join(os.path.dirname(AUTH), "agent-env-bridge.sh")
@@ -3154,8 +3140,7 @@ class RowsChunk5(unittest.TestCase):
     def setUp(self):
         # A scratch HOME under ~/.claude so every chain walked is 0700 and euid-owned (§7 step 3f(i))
         # and no test reads or writes the developer's real store.
-        self.home = tempfile.mkdtemp(prefix="rows5.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rows5.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.target = os.path.join(self.home, "target")
         os.makedirs(self.target)
@@ -3764,8 +3749,6 @@ import shutil
 import tempfile
 import unittest
 
-from test_plugin_state_store import (run_shell, with_mutation, AUTH, STORE, READER, PUB,
-                                     SHELLS, DARWIN)
 
 #: Protocol-variable reset between two resolutions in ONE body (§7 step 3f).
 RESET_C6 = ('unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE '
@@ -3794,8 +3777,7 @@ class RowsChunk6(unittest.TestCase):
     def setUp(self):
         # A scratch HOME under ~/.claude (§7 step 3f(i)): /tmp is 1777, so a chain under it could
         # never authenticate and every fixture would be stale for the WRONG reason.
-        self.home = tempfile.mkdtemp(prefix="rows2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rows2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.base = os.path.join(self.home, "base")
         os.makedirs(self.base)

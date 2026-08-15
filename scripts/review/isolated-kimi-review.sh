@@ -53,9 +53,18 @@ esac
 mkdir -p "$(dirname -- "$OUT")" || exit 1
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=scripts/review/tree-fingerprint.sh
+. "${SCRIPT_DIR}/tree-fingerprint.sh"
 
-# Fingerprint the REAL tree before handing anything to the reviewer.
-BEFORE="$(git status --porcelain | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)"
+# Fingerprint the REAL tree before handing anything to the reviewer — CONTENT-AWARE, through the
+# shared helper the agy and codex harnesses use, not a hash of `git status --porcelain` lines.
+# A status-line hash cannot see a reviewer changing the CONTENT of a file that was already `M`
+# when the harness started: BEFORE and AFTER stay identical and the round reads as clean. The
+# helper includes `git diff HEAD` precisely for that case (PR #63 recheck, P1; codex, PR #67).
+if ! BEFORE="$(tree_fingerprint "$REPO")"; then
+    echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2; exit 1
+fi
 
 TREE="$(mktemp -d "${TMPDIR:-/tmp}/kimi-review.XXXXXX")" || exit 1
 cleanup() {
@@ -68,12 +77,20 @@ git worktree add --detach "$TREE/tree" "$COMMIT" >/dev/null 2>&1 || {
     echo "worktree add failed for $COMMIT" >&2; exit 1; }
 [ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
 BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
+# The disposable checkout's FULL status, untracked files expanded, so that a reviewer which
+# IMPLEMENTS the plan — creating or editing any file other than the plan itself — voids the round.
+# Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to catch:
+# the plan is untouched, the review looks clean, and six scripts have been rewritten beside it.
+TREE_BASELINE="$(git -C "$TREE/tree" status --porcelain --untracked-files=all 2>/dev/null || true)"
 
 ( cd "$TREE/tree" && timeout "$TIMEOUT" kimi -p "$(cat "$REPO/$PROMPT_REL")" --output-format text ) > "$OUT" 2>&1
 STATUS=$?
 
 AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
-AFTER="$(git status --porcelain | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)"
+if ! AFTER="$(tree_fingerprint "$REPO")"; then
+    echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2; exit 3
+fi
+TREE_AFTER="$(git -C "$TREE/tree" status --porcelain --untracked-files=all 2>/dev/null || true)"
 
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "ROUND VOID: the real worktree was mutated during the review" >&2
@@ -84,10 +101,24 @@ if [ "$BASIS" != "$AFTER_BASIS" ]; then
     echo "ROUND VOID: the reviewer modified the staged plan — COREDEV-2607 signature" >&2
     exit 3
 fi
+if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
+    echo "ROUND VOID: the reviewer wrote inside the disposable checkout — COREDEV-2607 signature" >&2
+    printf '%s\n' "$TREE_AFTER" | diff - <(printf '%s\n' "$TREE_BASELINE") | sed 's/^/  /' >&2 || :
+    exit 3
+fi
 
-# Effort assertion, from the wire log of the session this run created. `session.resume_hint` in the
-# transcript names the session; the newest wire.jsonl is the one this run just wrote.
-WIRE="$(ls -t "$HOME"/.kimi-code/sessions/*/session_*/agents/main/wire.jsonl 2>/dev/null | head -1)"
+# Effort assertion, from the wire log of THE SESSION THIS RUN CREATED — resolved from the session id
+# the transcript itself carries, never from global mtime. The newest wire.jsonl on disk belongs to
+# whichever Kimi session wrote last: a concurrent session, or an older one if this invocation died
+# before creating its own — either would certify THIS review as `max` on another session's evidence.
+# No session id in the transcript means no evidence, and the assertion fails closed below.
+SESSION_ID="$(grep -m1 -oE 'session_[0-9a-f-]{36}' "$OUT" 2>/dev/null || true)"
+WIRE=""
+if [ -n "$SESSION_ID" ]; then
+    for _w in "$HOME"/.kimi-code/sessions/*/"$SESSION_ID"/agents/main/wire.jsonl; do
+        [ -r "$_w" ] && { WIRE="$_w"; break; }
+    done
+fi
 EFFORTS=""
 [ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
     | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"

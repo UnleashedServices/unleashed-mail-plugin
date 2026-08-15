@@ -42,6 +42,23 @@ def run_shell(shell, body, env=None, sources=(AUTH, STORE, READER, PUB)):
     return p.returncode, p.stdout, p.stderr
 
 
+
+def scratch_home(prefix):
+    """A fresh scratch HOME for one test, under a chain that AUTHENTICATES.
+
+    The fixture must sit under `~/.claude` rather than `/tmp`: on Darwin `/tmp` is a symlink to a
+    1777 directory, so any store rooted there is refused by PCH-1's world-writable clause and every
+    chain-walk assertion would fail for the wrong reason. `~/.claude` may not exist yet on a clean
+    CI runner or a new developer machine — `tempfile.mkdtemp(dir=...)` then raises FileNotFoundError
+    before a single assertion runs (gemini, PR #67) — so it is created here, at 0700, which is what
+    the chain walk requires of a euid-owned ancestor anyway.
+    """
+    claude_dir = os.path.expanduser("~/.claude")
+    os.makedirs(claude_dir, mode=0o700, exist_ok=True)
+    home = tempfile.mkdtemp(prefix=prefix, dir=claude_dir)
+    os.chmod(home, 0o700)
+    return home
+
 def with_mutation(old, new, path=AUTH):
     """A copy of `path` with one exact substitution — the positive control's mechanism.
 
@@ -343,8 +360,7 @@ class StoreCreation(unittest.TestCase):
 
     def setUp(self):
         # A scratch HOME so no test reads or writes the developer's real store (§7 step 3f(i)).
-        self.home = tempfile.mkdtemp(prefix="store2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("store2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
 
     def tearDown(self):
@@ -388,8 +404,7 @@ class ReaderOrderedRules(unittest.TestCase):
     """
 
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="rd2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("rd2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.target = os.path.join(self.home, "target")
         os.makedirs(self.target); os.chmod(self.target, 0o700)
@@ -483,8 +498,7 @@ class PublisherAndEndToEnd(unittest.TestCase):
     """
 
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="pb2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("pb2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.base = os.path.join(self.home, "base")
         os.makedirs(self.base); os.chmod(self.base, 0o700)
@@ -580,8 +594,7 @@ class MutantRowsThroughTheProductionResolver(unittest.TestCase):
     """
 
     def setUp(self):
-        self.home = tempfile.mkdtemp(prefix="seam2617.", dir=os.path.expanduser("~/.claude"))
-        os.chmod(self.home, 0o700)
+        self.home = scratch_home("seam2617.")
         self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
         self.base = os.path.join(self.home, "base")
         os.makedirs(self.base); os.chmod(self.base, 0o700)
