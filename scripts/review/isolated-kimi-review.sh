@@ -44,29 +44,46 @@ PLAN_REL="docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 cd "$REPO" || exit 1
 [ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
-# BIND THE PROMPT NOW — the very first thing, before any fingerprint. The prompt is a git-ignored
+# THE PRIVATE SCRATCH DIRECTORY COMES FIRST — before the prompt snapshot it holds and before the live
+# fingerprint below (a TMPDIR inside the repository would otherwise put a new untracked directory into
+# AFTER that BEFORE never saw — the agy and codex harnesses create theirs first for the same reason).
+TREE="$(mktemp -d "${TMPDIR:-/tmp}/kimi-review.XXXXXX")" || exit 1
+cleanup() {
+    rm -rf "$TREE" 2>/dev/null || :
+}
+trap cleanup EXIT INT TERM HUP
+
+# BIND THE PROMPT NOW — before any fingerprint, ONCE, BYTE-PRESERVING. The prompt is a git-ignored
 # file, so the live-tree fingerprint cannot see it change; reading it at LAUNCH time meant an edit
 # made between the fingerprint and the launch reached the reviewer while the round read clean, and
-# nothing recorded which bytes were reviewed (codex, PR #67 pass 9). So: the bytes are captured HERE,
-# their digest is what the summary line reports as PROMPT=, the reviewer receives exactly these bytes,
-# and the source file is re-hashed after the run — a prompt that changed underneath the round voids it,
-# as the staged plan does, because the round's basis must survive the round.
-PROMPT_TEXT="$(cat "$REPO/$PROMPT_REL")" || { echo "prompt unreadable: $REPO/$PROMPT_REL" >&2; exit 1; }
+# nothing recorded which bytes were reviewed (codex, PR #67 pass 9). The first fix captured the text
+# and then HASHED THE SOURCE FILE THROUGH A SECOND OPEN — a change between the two left the reviewer
+# with A and the digest describing B; and command substitution strips trailing newlines, so the file's
+# digest never matched the argument the reviewer actually received (codex, PR #67 pass 10). So: ONE
+# `cp` of the source into the private directory is the snapshot; the reviewer's argument is derived
+# from that snapshot and nothing else; PROMPT= is the digest OF THE ARGUMENT BYTES; and after the run
+# the source file is compared byte-for-byte with the snapshot — a prompt that changed underneath the
+# round voids it, as the staged plan does, because the round's basis must survive the round.
+PROMPT_SNAP="$TREE/prompt.snapshot"
+cp -- "$REPO/$PROMPT_REL" "$PROMPT_SNAP" || { echo "prompt unreadable: $REPO/$PROMPT_REL" >&2; exit 1; }
+PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
 [ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
+PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
 
 mkdir -p "$(dirname -- "$OUT")" || exit 1
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
 # checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
 # temporary worktree — where the later grep/wc could not find it, the run would end EFFORT=UNKNOWN
 # / exit 4, and cleanup would delete the only capture (codex, PR #67).
-case "$OUT" in
-    /*) : ;;
-    *)  OUT="$(cd "$(dirname -- "$OUT")" && pwd)/$(basename -- "$OUT")" || exit 1 ;;
-esac
-# THE /tmp REFUSAL IS APPLIED TO THE CANONICAL PATH, AFTER absolutising — a relative operand
-# with parent traversal (`../../tmp/kimi.txt`) does not match `/tmp/*` before normalisation and
-# resolves to `/tmp/kimi.txt` after it, defeating the guard exactly where it matters (codex,
-# PR #67). `pwd` also resolves `/tmp` -> `/private/tmp` on Darwin, so both spellings are covered.
+# EVERY operand — relative OR absolute — has its parent resolved PHYSICALLY (`cd -P … && pwd -P`):
+# an absolute `/repo/../../tmp/x` or a parent that is a symlink into /tmp did not match the guard
+# below while the capture was physically written there (codex, PR #67 pass 10 — reproduced); the
+# earlier fix normalised relative operands only, and with a logical `pwd`.
+OUT="$(CDPATH='' cd -P -- "$(dirname -- "$OUT")" 2>/dev/null && pwd -P)/$(basename -- "$OUT")" || exit 1
+# THE /tmp REFUSAL IS APPLIED TO THE PHYSICAL PATH — a relative operand with parent traversal
+# (`../../tmp/kimi.txt`) does not match `/tmp/*` before normalisation and resolves to `/tmp/kimi.txt`
+# after it, defeating the guard exactly where it matters (codex, PR #67). `pwd -P` also resolves
+# `/tmp` -> `/private/tmp` on Darwin, so both spellings are covered.
 case "$OUT" in
     /tmp/*|/private/tmp/*)
         echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
@@ -74,7 +91,6 @@ case "$OUT" in
 esac
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
-PROMPT_SHA="$(_sha256 "$REPO/$PROMPT_REL")"
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/review/tree-fingerprint.sh
 . "${SCRIPT_DIR}/tree-fingerprint.sh"
@@ -87,12 +103,6 @@ SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 if ! BEFORE="$(tree_fingerprint "$REPO")"; then
     echo "GATE FAILED — could not fingerprint the live checkout before the review" >&2; exit 1
 fi
-
-TREE="$(mktemp -d "${TMPDIR:-/tmp}/kimi-review.XXXXXX")" || exit 1
-cleanup() {
-    rm -rf "$TREE" 2>/dev/null || :
-}
-trap cleanup EXIT INT TERM HUP
 
 # A PRIVATE clone of the reviewed commit — never a linked worktree, whose `.git` file points into the
 # maintainer's real repository so every git operation the reviewer runs lands there (see
@@ -123,8 +133,9 @@ PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
     kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null 2>&1
 STATUS=$?
 
-# The prompt file must still be the bytes this round was launched with (its digest is on the summary line).
-AFTER_PROMPT_SHA="$(_sha256 "$REPO/$PROMPT_REL" 2>/dev/null || echo MISSING)"
+# The prompt file must still be the bytes this round was launched with — compared byte-for-byte with
+# the snapshot the reviewer's argument was derived from (PROMPT= on the summary line is that argument's digest).
+if cmp -s -- "$REPO/$PROMPT_REL" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
 
 AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
@@ -149,7 +160,7 @@ if [ "$BASIS" != "$AFTER_BASIS" ]; then
     echo "ROUND VOID: the reviewer modified the staged plan — COREDEV-2607 signature" >&2
     exit 3
 fi
-if [ "$PROMPT_SHA" != "$AFTER_PROMPT_SHA" ]; then
+if [ "$PROMPT_INTACT" != 1 ]; then
     echo "ROUND VOID: the prompt file changed during the review — the round's basis did not survive it" >&2
     exit 3
 fi

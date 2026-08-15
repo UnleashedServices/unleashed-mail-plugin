@@ -53,8 +53,23 @@ tree_fingerprint() {
     # pass 8 — reproduced).
     git -C "$1" rev-parse HEAD 2>/dev/null || return 1
     git -C "$1" status --porcelain 2>/dev/null || return 1
-    printf '\036\n'   # a record separator so status and diff cannot alias across the boundary
-    git -C "$1" diff HEAD 2>/dev/null || return 1
+    printf '\036\n'   # a record separator so the halves cannot alias across the boundary
+    # THE CONTENT OF EVERY TRACKED FILE, HASHED — NOT `git diff HEAD`. Both `status` and `diff` consult
+    # the live INDEX, and a reviewer that can address the live checkout can switch that index off for a
+    # file: `git -C <live> update-index --assume-unchanged f` then edit `f` leaves status and diff EMPTY
+    # while HEAD stands still — the fingerprint was identical before and after and the round certified
+    # a modified real worktree (codex, PR #67 pass 10 — reproduced). `git ls-files` still LISTS such a
+    # file (the flag hides changes, not membership), so its working-tree bytes are hashed directly:
+    # type, mode, size and sha256 per path (a deleted or replaced file records as such), paths JSON-
+    # encoded as in disposable_fingerprint. This is strictly stronger than `diff HEAD` (which it
+    # replaces): a content, mode or type change to any tracked file moves it, index flags or not.
+    _tracked_content_fingerprint "$1" || return 1
+    printf '\036\n'
+    # THE EXCLUSION METADATA A REVIEWER COULD USE TO HIDE AN UNTRACKED FILE FROM `status`: the repo's
+    # own `.git/info/exclude` and `.git/config` (`core.excludesFile`) — tracked `.gitignore` files are
+    # already covered above. RESIDUAL, stated: a global excludes file outside the repository is not.
+    _u_hash_if_present "$1/.git/info/exclude" || return 1
+    _u_hash_if_present "$1/.git/config" || return 1
     # THE ONE GITIGNORED PATH THAT IS GATE-BEARING. `docs/planning/.verdicts/` holds the Combined-verdict
     # artefact the plan gate READS, and it is ignored at the repo root — so a reviewer with a shell that
     # wrote a forged approval there was invisible to both halves above (adversarial verification, PR #67
@@ -63,10 +78,79 @@ tree_fingerprint() {
     # ignored paths (`__pycache__`, the transcript state tree when it sits inside the checkout) are NOT
     # included: the harness's own python and allocator write there between the before and after calls,
     # and a guard that voids every honest round is one that gets switched off. That residual is stated.
-    if [ -d "$1/docs/planning/.verdicts" ]; then
+    # The ROOT of `.verdicts` is recorded by its OWN lstat — type, mode, and a link's target — and not
+    # only its children: `[ -d ]` follows a symlink, and a reviewer that replaced the directory with a
+    # symlink to an identical copy left the walk unchanged, while every no-follow verdict operation
+    # afterwards refuses the link and the gate stays unusable until repaired (codex, PR #67 pass 10;
+    # with this repository's own `.verdicts/` ignore rule the swap also surfaced as `?? docs/` in the
+    # status half, but the fingerprint must not depend on the spelling of an ignore rule).
+    if [ -e "$1/docs/planning/.verdicts" ] || [ -L "$1/docs/planning/.verdicts" ]; then
         printf '\036\n'
-        disposable_fingerprint "$1/docs/planning/.verdicts" || return 1
+        _u_lstat_record "$1/docs/planning/.verdicts" || return 1
+        if [ -d "$1/docs/planning/.verdicts" ]; then
+            disposable_fingerprint "$1/docs/planning/.verdicts" || return 1
+        fi
     fi
+}
+
+# One line per TRACKED path (git ls-files -z): type, mode, size, sha256 (or link target / MISSING),
+# JSON-encoded path. Fails closed if the listing or any read fails.
+_tracked_content_fingerprint() {
+    # python runs the listing itself (checked), so a failed `git ls-files` FAILS this probe rather than
+    # yielding an empty list that reads as "no tracked files".
+    python3 - "$1" <<'PY' || return 1
+import hashlib, json, os, stat, subprocess, sys
+root = sys.argv[1]
+r = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True)
+if r.returncode != 0:
+    sys.exit(1)
+out = []
+for raw in r.stdout.split(b"\0"):
+    if not raw:
+        continue
+    rel = os.fsdecode(raw)
+    full = os.path.join(root, rel)
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        out.append("MISSING %s" % json.dumps(rel)); continue
+    mode = "%04o" % stat.S_IMODE(st.st_mode)
+    if stat.S_ISLNK(st.st_mode):
+        out.append("L %s %s -> %s" % (mode, json.dumps(rel), json.dumps(os.readlink(full))))
+    elif stat.S_ISREG(st.st_mode):
+        h = hashlib.sha256()
+        with open(full, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 16), b""):
+                h.update(chunk)
+        out.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), json.dumps(rel)))
+    else:
+        out.append("O %s %s" % (mode, json.dumps(rel)))
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+PY
+}
+
+# `<label> sha256` for a file that exists, `<label> ABSENT` otherwise; a present-but-unreadable file fails.
+_u_hash_if_present() {
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        printf '%s ' "$1"
+        python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null || return 1
+    else
+        printf '%s ABSENT\n' "$1"
+    fi
+}
+
+# The lstat record of ONE path (not descended): type, mode, and a link's target, JSON-encoded.
+_u_lstat_record() {
+    python3 - "$1" <<'PY' || return 1
+import json, os, stat, sys
+p = sys.argv[1]; st = os.lstat(p); mode = "%04o" % stat.S_IMODE(st.st_mode)
+if stat.S_ISLNK(st.st_mode):
+    print("ROOT L %s %s -> %s" % (mode, json.dumps(p), json.dumps(os.readlink(p))))
+elif stat.S_ISDIR(st.st_mode):
+    print("ROOT D %s %s" % (mode, json.dumps(p)))
+else:
+    print("ROOT O %s %s" % (mode, json.dumps(p)))
+PY
 }
 
 # Build a PRIVATE disposable checkout of commit $2 of the repository at $1, at path $3 (must not exist).

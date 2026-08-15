@@ -62,6 +62,18 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Tenth review pass (codex) — four findings, three reproduced, one closed on principle.** The
+  live-checkout fingerprint no longer trusts the live index: `git diff HEAD` (which
+  `update-index --assume-unchanged` / `--skip-worktree` silence) is replaced by a per-tracked-file
+  content probe (type/mode/size/sha256, JSON paths, fail-closed on a failed listing), plus the
+  repo's own `.git/info/exclude` and `.git/config`, and the `.verdicts` root's own lstat (a symlink
+  swap of the directory is recorded even under an ignore rule that would hide it from `status`).
+  The kimi harness snapshots the prompt ONCE (`cp` into its private directory, created before any
+  fingerprint), derives the reviewer's argument from that snapshot alone, reports `PROMPT=` as the
+  digest of the ARGUMENT bytes (the file's digest differs by the trailing newlines command
+  substitution strips), and compares the live file byte-for-byte with the snapshot after the run;
+  and it canonicalises every transcript operand physically (`cd -P`/`pwd -P`) before the `/tmp`
+  refusal — an absolute `/repo/../../tmp/x` or a symlinked parent had slipped past it.
 - **Ninth review pass (codex) — four findings, each reproduced.** `disposable_fingerprint`'s
   serialisation is injective (path and link-target fields JSON-encoded): a reviewer that deleted
   `b` and renamed `a` to `a<newline><b's record>` produced a byte-identical fingerprint. The kimi
