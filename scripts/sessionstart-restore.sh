@@ -17,16 +17,6 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=scripts/lib/context.sh
 . "$_DIR/lib/context.sh"
 
-[ "${UNLEASHED_COMPACT_RESTORE:-on}" = "off" ] && exit 0
-
-hook_io_read
-
-SOURCE="$(hook_str source)"
-case "$SOURCE" in
-    compact|resume|startup) ;;
-    *) exit 0 ;;
-esac
-
 # COREDEV-2617 §4.2a SS-1 — the SessionStart notice, BEFORE the snapshot-only early exits below.
 # The resolver now records `conflict`, `stale` and `failed`, and publishers observing `conflict` or
 # `stale` are deliberately SILENT — so this hook is the one place the documented "visible conflict"
@@ -48,6 +38,22 @@ case "${_UNLEASHED_POINTER_STATE:-none}" in
 esac
 # Every silent exit below becomes "emit the notice, then exit" when a notice is pending.
 _ss_exit() { [ -n "$STORE_NOTICE" ] && hook_emit_session_context "${STORE_NOTICE% }"; exit 0; }
+
+# THE NOTICE COMES BEFORE THE KILL SWITCH AND BEFORE THE SOURCE FILTER. Both used to `exit 0` above
+# it, so a valid SessionStart with `source=clear` — and any run with restore switched off — never
+# reached the notice, and `conflict`/`stale`/`failed` stayed invisible on exactly those sessions
+# although SS-1's six-value partition has no source restriction (codex, PR #67 pass 9). The kill
+# switch disables snapshot RESTORATION, not the store notice.
+[ "${UNLEASHED_COMPACT_RESTORE:-on}" = "off" ] && _ss_exit
+
+hook_io_read
+
+SOURCE="$(hook_str source)"
+case "$SOURCE" in
+    compact|resume|startup) ;;
+    *) _ss_exit ;;
+esac
+
 
 # COREDEV-2617 / D': nothing was persisted, so there is nothing to restore. Exit 0 silently —
 # carrying the store notice if one is pending.

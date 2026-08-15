@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 112 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 113 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,15 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Ninth review pass (codex) — four findings, each reproduced.** `disposable_fingerprint`'s
+  serialisation is injective (path and link-target fields JSON-encoded): a reviewer that deleted
+  `b` and renamed `a` to `a<newline><b's record>` produced a byte-identical fingerprint. The kimi
+  harness binds its prompt: bytes captured before any fingerprint, `PROMPT=<digest>` on the summary
+  line, and a prompt file that changes during the round voids it (the prompt is git-ignored, so no
+  tree fingerprint could see it). The SessionStart store notice is evaluated before the hook's
+  source filter and kill switch, so `conflict`/`stale`/`failed` reach `clear` sessions too.
+  `validate-plan-citations.py --fix-citations` exits non-zero when an anchor is unresolved instead
+  of reporting a repair it did not make. Row 165; a first test file for the kimi harness.
 - **Eighth review pass (codex) — three findings, each reproduced.** The live-checkout fingerprint the
   three review harnesses compare around a round now includes the resolved HEAD: `status` and
   `diff HEAD` are both empty before and after a clean commit made mid-round, so an author who edited

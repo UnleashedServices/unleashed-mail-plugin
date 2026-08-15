@@ -44,6 +44,15 @@ PLAN_REL="docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 cd "$REPO" || exit 1
 [ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
+# BIND THE PROMPT NOW — the very first thing, before any fingerprint. The prompt is a git-ignored
+# file, so the live-tree fingerprint cannot see it change; reading it at LAUNCH time meant an edit
+# made between the fingerprint and the launch reached the reviewer while the round read clean, and
+# nothing recorded which bytes were reviewed (codex, PR #67 pass 9). So: the bytes are captured HERE,
+# their digest is what the summary line reports as PROMPT=, the reviewer receives exactly these bytes,
+# and the source file is re-hashed after the run — a prompt that changed underneath the round voids it,
+# as the staged plan does, because the round's basis must survive the round.
+PROMPT_TEXT="$(cat "$REPO/$PROMPT_REL")" || { echo "prompt unreadable: $REPO/$PROMPT_REL" >&2; exit 1; }
+[ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 
 mkdir -p "$(dirname -- "$OUT")" || exit 1
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
@@ -65,6 +74,7 @@ case "$OUT" in
 esac
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+PROMPT_SHA="$(_sha256 "$REPO/$PROMPT_REL")"
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/review/tree-fingerprint.sh
 . "${SCRIPT_DIR}/tree-fingerprint.sh"
@@ -110,8 +120,11 @@ PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # No `--allocated`: this harness takes an <out-transcript> path it creates itself, not a leaf
 # reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist.
 ( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
-    kimi -p "$(cat "$REPO/$PROMPT_REL")" --output-format text ) >/dev/null 2>&1
+    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null 2>&1
 STATUS=$?
+
+# The prompt file must still be the bytes this round was launched with (its digest is on the summary line).
+AFTER_PROMPT_SHA="$(_sha256 "$REPO/$PROMPT_REL" 2>/dev/null || echo MISSING)"
 
 AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
@@ -136,6 +149,10 @@ if [ "$BASIS" != "$AFTER_BASIS" ]; then
     echo "ROUND VOID: the reviewer modified the staged plan — COREDEV-2607 signature" >&2
     exit 3
 fi
+if [ "$PROMPT_SHA" != "$AFTER_PROMPT_SHA" ]; then
+    echo "ROUND VOID: the prompt file changed during the review — the round's basis did not survive it" >&2
+    exit 3
+fi
 if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
     echo "ROUND VOID: the reviewer left edits inside the disposable checkout — COREDEV-2607 signature" >&2
     printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' >&2 || :
@@ -158,8 +175,8 @@ EFFORTS=""
 [ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
     | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"
 
-printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s EFFORT=%s\n' \
-    "$STATUS" "$(wc -c < "$OUT" | tr -d ' ')" "${BASIS:0:12}" "${EFFORTS:-UNKNOWN}"
+printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s\n' \
+    "$STATUS" "$(wc -c < "$OUT" | tr -d ' ')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" "${EFFORTS:-UNKNOWN}"
 
 if [ "$EFFORTS" != "max," ]; then
     echo "EFFORT NOT ASSERTED AS max (saw: ${EFFORTS:-none}) — this run is not evidence about max" >&2

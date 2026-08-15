@@ -416,7 +416,17 @@ def main():
             print(f"  STALE RULE  {u}")
         if not changed and not unresolved:
             print("  no citation changes needed")
-        # Fall through to a normal lint — the repair is VERIFIED, not announced.
+        # Fall through to a normal lint — the repair is VERIFIED, not announced. But an UNRESOLVED anchor
+        # (zero or several matches) is a repair that did NOT happen: the citation may still point at
+        # one line that matches, so the lint below passes and a caller reads "fixed" off exit 0 (codex,
+        # PR #67 pass 9). Lint first for the report, then fail regardless.
+        if unresolved:
+            problems, checked = lint(a.plan, a.repo)
+            for p in problems:
+                print(f"  - {p}")
+            print(f"PLAN CITATION REPAIR FAILED — {len(unresolved)} anchor(s) unresolved; nothing rewritten "
+                  f"for them ({checked} assertions linted)")
+            sys.exit(1)
     problems, checked = lint(a.plan, a.repo)
     if problems:
         print(f"PLAN LINT FAILED — {len(problems)} problem(s), {checked} assertions\n")

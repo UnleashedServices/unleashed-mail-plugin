@@ -10,7 +10,7 @@ campaign's findings file rather than faked here.
 Assembled from six parallel drafting agents; every row carries the run evidence its drafter measured,
 and THIS suite's own run is the gate — the evidence informed assembly, it is not the verification.
 Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file;
-rows 163-164 (PR #67, codex pass 8) joined that class.
+rows 163-164 (PR #67, codex pass 8) and row 165 (PR #67, codex pass 9) joined that class.
 """
 
 import os
@@ -4469,11 +4469,13 @@ import unittest
 FAMILY_P7 = ("paths.sh", "marker.sh", "log.sh", "context.sh", "agent-env-bridge.sh")
 MACHINERY_P7 = ("plugin-state-auth.sh", "plugin-state-store.sh",
                 "plugin-state-reader.sh", "plugin-state-publisher.sh")
+#: The SessionStart hook (row 165) — a bash script that sources `lib/` relative to ITS OWN directory.
+SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh")
 
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164."""
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -5129,6 +5131,86 @@ class RowsPass7(unittest.TestCase):
         finally:
             os.unlink(mutant)
 
+    # ── row 165 ───────────────────────────────────────────────────────────────────────────────
+
+    def _hook(self, script, source, extra_env=None):
+        """Run the SessionStart hook once: HOME = the scratch, `CLAUDE_PLUGIN_DATA` = t1, stdin = the
+        SessionStart JSON. Returns (rc, stdout, stderr). bash only — the hook is a bash script."""
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("_UNLEASHED") and k not in ("CLAUDE_PLUGIN_DATA", "UNLEASHED_COMPACT_RESTORE",
+                                                               "HOOK_STDIN", "_HOOK_IO_READ_DONE")}
+        env.update({"HOME": self.home, "CLAUDE_PLUGIN_DATA": self.target})
+        env.update(extra_env or {})
+        p = subprocess.run(["/bin/bash", script], input=json.dumps({"source": source}),
+                           capture_output=True, text=True, env=env, timeout=30)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_row_165_the_sessionstart_notice_is_evaluated_before_the_source_filter(self):
+        """Row 165: a store in `conflict` (two entries): the SessionStart hook run with `{"source":"clear"}`, with `{"source":"weird"}` and with `{"source":"clear"}` + `UNLEASHED_COMPACT_RESTORE=off` — the specification emits the notice (`base store is conflict`) on every one; under the mutation (the source filter's branch back to a bare `exit 0`) `clear` and `weird` are silent. A `created` store stays silent on `clear` in both builds. The hook is bash; the helper publish runs in bash."""
+        # THE MUTANT MUST FIND `lib/`: the hook resolves `_DIR` from its own `BASH_SOURCE[0]` and sources
+        # `$_DIR/lib/hook-io.sh` + `$_DIR/lib/context.sh`, so a mutant copy left where with_mutation puts it
+        # would fail to load the resolver, see `none`, and be silent for the WRONG reason. The copy is
+        # placed at `<scratch>/scripts/sessionstart-restore.sh` with `<scratch>/scripts/lib` a SYMLINK to
+        # the real lib — `cd "$(dirname …)" && pwd` does not resolve the link, so `$_DIR/lib/…` reads
+        # through it (measured). The kill-switch cell PROVES the machinery loaded under the mutant: its
+        # `_ss_exit` is untouched by this mutation and it emits the notice only if the resolver saw the
+        # conflict. Measured (bash): spec `clear`/`weird`/`off` all carry `base store is conflict`, `created`
+        # on `clear` prints nothing; mutant `clear` and `weird` print NOTHING, `off` still carries the notice.
+        t2 = os.path.join(self.home, "target2")
+        os.makedirs(t2)
+        os.chmod(t2, 0o700)
+        mut_root = os.path.join(self.home, "mut", "scripts")
+        os.makedirs(mut_root)
+        lib_link = os.path.join(mut_root, "lib")
+        os.symlink(LIBDIR, lib_link)
+        mutant_tmp = with_mutation('    *) _ss_exit ;;\n', '    *) exit 0 ;;\n', path=SESSIONSTART_P7)
+        mutant = os.path.join(mut_root, "sessionstart-restore.sh")
+        shutil.move(mutant_tmp, mutant)
+        publish_t2 = (f'export HOME="{self.home}"\n'
+                      f'_unleashed_publish "{self.store}" "{t2}"\n' + self.OUTP)
+        NOTICE = "base store is conflict"
+        try:
+            self._row_165_cells(SESSIONSTART_P7, mutant, publish_t2, NOTICE)
+        finally:
+            # BEFORE tearDown: its chmod sweep FOLLOWS a directory symlink and would set the REAL
+            # scripts/lib to 0700 (measured — it did, once). The link is removed here, first.
+            os.unlink(lib_link)
+
+    def _row_165_cells(self, shipped, mutant, publish_t2, NOTICE):
+        for script, is_mutant in ((shipped, False), (mutant, True)):
+            tag = "mutant" if is_mutant else "shipped"
+            # (a) CONFLICT: t2 already published; the hook's own resolver publishes t1 beside it.
+            self._wipe()
+            rc, out, err = run_shell("/bin/bash", publish_t2)
+            self.assertEqual("1 host-env created", out, f"{tag}: the fixture store could not be seeded: {err!r}")
+            results = {}
+            for cell, source, extra in (("clear", "clear", None), ("weird", "weird", None),
+                                        ("off", "clear", {"UNLEASHED_COMPACT_RESTORE": "off"})):
+                rc, out, err = self._hook(script, source, extra)
+                self.assertEqual(0, rc, f"{tag} {cell}: the hook did not exit 0: {err!r}")
+                self.assertNotIn("command not found", err, f"{tag} {cell}: the hook did not find its lib/: {err!r}")
+                results[cell] = out
+            entries = sorted(f for f in os.listdir(self.store) if f.startswith("base."))
+            self.assertEqual(2, len(entries), f"{tag}: the store is not in conflict (two entries): {entries}")
+            # The kill-switch cell is untouched by the mutation: it carries the notice in BOTH builds,
+            # which is also the proof that the resolver loaded and observed the conflict under the mutant.
+            self.assertIn(NOTICE, results["off"], f"{tag} off: {results['off']!r}")
+            self.assertIn('"hookEventName":"SessionStart"', results["off"], f"{tag} off: {results['off']!r}")
+            if not is_mutant:
+                self.assertIn(NOTICE, results["clear"], f"{tag} clear: the notice never reached a `clear` session: {results['clear']!r}")
+                self.assertIn(NOTICE, results["weird"], f"{tag} weird: the notice never reached an unknown source: {results['weird']!r}")
+            else:
+                self.assertEqual("", results["clear"],
+                                 f"{tag} clear: the CONTROL did not fail — the bare `exit 0` still emitted: {results['clear']!r}")
+                self.assertEqual("", results["weird"],
+                                 f"{tag} weird: the CONTROL did not fail — the bare `exit 0` still emitted: {results['weird']!r}")
+            # (b) CREATED: no store at all, so the hook's publish creates it fresh — silent on `clear` in both builds.
+            self._wipe()
+            rc, out, err = self._hook(script, "clear")
+            self.assertEqual(0, rc, f"{tag} created: {err!r}")
+            self.assertEqual("", out, f"{tag} created: a `created` store must stay silent on `clear`: {out!r}")
+            entries = [f for f in os.listdir(self.store) if f.startswith("base.")]
+            self.assertEqual(1, len(entries), f"{tag} created: the hook did not publish exactly one entry: {entries}")
 
 
 if __name__ == "__main__":

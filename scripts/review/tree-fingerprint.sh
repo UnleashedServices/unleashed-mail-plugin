@@ -113,9 +113,13 @@ disposable_checkout() {
 # the maintainer; while a reviewer that DELETES or REPOINTS `.git` has still written inside the checkout
 # and is caught. RESIDUAL, stated: an edit that is REVERTED before the run ends (edit; `git checkout
 # --`) leaves no trace here; this detects edits that SURVIVE the run.
+# THE SERIALISATION IS INJECTIVE: path and link-target fields are JSON-encoded (pure ASCII, quoted,
+# escaped). A line-oriented record with a RAW path was not — a reviewer that deleted `b` and renamed
+# `a` to `a<newline><b's whole record>` produced byte-identical output, and the before/after gate in
+# all three harnesses accepted the altered checkout (codex, PR #67 pass 9 — reproduced).
 disposable_fingerprint() {
     python3 - "$1" <<'PY' || return 1
-import hashlib, os, stat, sys
+import hashlib, json, os, stat, sys
 root = sys.argv[1]
 if not os.path.isdir(root):
     sys.exit(1)
@@ -132,18 +136,19 @@ for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         rel = os.path.relpath(full, root)
         st = os.lstat(full)
         mode = "%04o" % stat.S_IMODE(st.st_mode)
+        q = json.dumps(rel)                       # ensure_ascii: one unambiguous, newline-free token
         if stat.S_ISLNK(st.st_mode):
-            lines.append("L %s %s -> %s" % (mode, rel, os.readlink(full)))
+            lines.append("L %s %s -> %s" % (mode, q, json.dumps(os.readlink(full))))
         elif stat.S_ISDIR(st.st_mode):
-            lines.append("D %s %s" % (mode, rel))
+            lines.append("D %s %s" % (mode, q))
         elif stat.S_ISREG(st.st_mode):
             h = hashlib.sha256()
             with open(full, "rb") as fh:
                 for chunk in iter(lambda: fh.read(1 << 16), b""):
                     h.update(chunk)
-            lines.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), rel))
+            lines.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), q))
         else:
-            lines.append("O %s %s" % (mode, rel))
+            lines.append("O %s %s" % (mode, q))
 sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
 PY
 }
