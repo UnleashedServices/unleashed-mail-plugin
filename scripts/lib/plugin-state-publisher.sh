@@ -33,7 +33,11 @@
 # "Three attempts" is the whole budget, not three retries after an initial try.
 _unleashed_transient_name() {
     _tn_store="$1"; _tn_key="$2"; _tn_try=0
-    while [ "$_tn_try" -lt 3 ]; do
+    # $3 = the number of attempts THIS call may make (default 3). The publisher passes 1 and owns
+    # the three-attempt budget itself, so that a create-race loss and a presence-test hit share
+    # ONE budget rather than three-times-three.
+    _tn_max="${3:-3}"
+    while [ "$_tn_try" -lt "$_tn_max" ]; do
         _tn_try=$(( _tn_try + 1 ))
         _tn_p="$_tn_store/.pub.$$.${RANDOM}.$_tn_key"
         # TYPE BEFORE OPEN, then `set -C`. Both are required and neither is sufficient: `set -C`
@@ -55,9 +59,13 @@ _unleashed_transient_name() {
 # `(umask 077; : > "$tmp")` in a SUBSHELL so the caller's umask is untouched. The mode is READ BACK,
 # because a POSIX default ACL on the parent supplies permissions umask does not mask — reachable on
 # a store ACL-3 accepts — and a transient that is not exactly 0600 becomes an entry that is not.
+# Returns 0 on success, 1 on a write/mode failure (E6), and 2 when the EXCLUSIVE CREATE itself
+# lost a race — the name existed by the time `set -C` opened it. The caller treats 2 as "this
+# attempt is consumed, try the next name", because two publishers can pass the presence test
+# on one name and only one create can win; the loser still has attempts left (codex, PR #67).
 _unleashed_write_transient() {
     _wt_p="$1"; _wt_value="$2"
-    ( set -C; umask 077; : > "$_wt_p" ) 2>/dev/null || return 1
+    ( set -C; umask 077; : > "$_wt_p" ) 2>/dev/null || return 2
     printf '%s\n' "$_wt_value" > "$_wt_p" 2>/dev/null || return 1
     _u_stat "$_wt_p" || return 1
     [ "$_U_MODE" = 0600 ] || return 1                 # E6: readback, not assumption
@@ -136,11 +144,23 @@ _unleashed_publish() {
         if { [ -L "$_pb_entry" ] || [ -e "$_pb_entry" ]; } && [ ! -f "$_pb_entry" ]; then
             _unleashed_pub_failed "the plugin-state entry exists and is not a regular file"; return 0
         fi
-        _unleashed_transient_name "$_pb_store" "$_pb_key" || {
-            _unleashed_pub_failed "no unique transient name within three attempts"; return 0; }
-        if ! _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; then
+        # TMP-1's THREE attempts cover the presence test AND the exclusive create together: a name
+        # that passes the test but loses the create race is a consumed attempt, not E6.
+        # _pb_wrc: 0 written · 1 a real E6 · 2 "no usable name this attempt" (presence hit OR a lost
+        # create race — the SAME outcome, so both leave 2 and both consume one of the three attempts).
+        # It starts at 2, so three misses of either kind end as E5, never as a spurious E6.
+        _pb_try=0; _pb_wrc=2
+        while [ "$_pb_try" -lt 3 ]; do
+            _pb_try=$(( _pb_try + 1 ))
+            _unleashed_transient_name "$_pb_store" "$_pb_key" 1 || { _pb_wrc=2; continue; }
+            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; _pb_wrc=$?
+            [ "$_pb_wrc" = 2 ] || break                    # 0 = written, 1 = a real E6
+        done
+        if [ "$_pb_wrc" = 2 ]; then
+            _unleashed_pub_failed "no unique transient name within three attempts"; return 0   # E5
+        elif [ "$_pb_wrc" != 0 ]; then
             /bin/rm -f "$_UNLEASHED_TRANSIENT" >/dev/null 2>&1      # ST-7: best effort
-            _unleashed_pub_failed "the plugin-state transient could not be written at 0600"; return 0
+            _unleashed_pub_failed "the plugin-state transient could not be written at 0600"; return 0   # E6
         fi
         # The rename is what makes publication atomic — `mv` in the SAME directory, so no reader that
         # has already seen the entry observes it absent.

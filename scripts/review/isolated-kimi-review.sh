@@ -45,11 +45,6 @@ REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >
 cd "$REPO" || exit 1
 [ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
 
-case "$OUT" in
-    /tmp/*|/private/tmp/*)
-        echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
-        exit 1 ;;
-esac
 mkdir -p "$(dirname -- "$OUT")" || exit 1
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
 # checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
@@ -58,6 +53,15 @@ mkdir -p "$(dirname -- "$OUT")" || exit 1
 case "$OUT" in
     /*) : ;;
     *)  OUT="$(cd "$(dirname -- "$OUT")" && pwd)/$(basename -- "$OUT")" || exit 1 ;;
+esac
+# THE /tmp REFUSAL IS APPLIED TO THE CANONICAL PATH, AFTER absolutising — a relative operand
+# with parent traversal (`../../tmp/kimi.txt`) does not match `/tmp/*` before normalisation and
+# resolves to `/tmp/kimi.txt` after it, defeating the guard exactly where it matters (codex,
+# PR #67). `pwd` also resolves `/tmp` -> `/private/tmp` on Darwin, so both spellings are covered.
+case "$OUT" in
+    /tmp/*|/private/tmp/*)
+        echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
+        exit 1 ;;
 esac
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }

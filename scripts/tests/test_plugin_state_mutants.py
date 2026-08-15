@@ -638,8 +638,8 @@ class RowsChunk1(unittest.TestCase):
         # ENT-2/ENT-3 fail and the store refuses a healthy entry. Row 4 is the multi-line case and
         # cannot discriminate this single-line transformation.
         mutant = with_mutation(
-            '    IFS= read -r _ae_line < "$_ae_p" || return 1     # (1)\n',
-            '    read _ae_line < "$_ae_p" || return 1     # (1)\n',
+            '    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)\n',
+            '    { read _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)\n',
             path=READER)
         weird = os.path.join(self.home, "a\\b ")           # backslash, trailing space
         os.makedirs(weird)
@@ -1275,8 +1275,8 @@ class RowsChunk2(unittest.TestCase):
         # (`read` drops the NUL: size = len+1 = ${#line}+1) and RESOLVES; zsh keeps the NUL and
         # still refuses on the byte count, so the zsh cells cannot discriminate — by the row's own
         # design the discriminating cell is bash.
-        mutant = with_mutation('IFS= read -r _ae_line < "$_ae_p" || return 1',
-                               'IFS= read -r _ae_line < "$_ae_p" || :', path=READER)
+        mutant = with_mutation('{ IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1',
+                               '{ IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || :', path=READER)
         try:
             key = self._key(self.base)
             body = self.TUPLE.format(s=self.store)
@@ -3553,8 +3553,11 @@ class RowsChunk5(unittest.TestCase):
         # the publisher will draw the same sequence (measured in both shells). The first three
         # candidates are pre-created; the fourth is left free so a four-attempt implementation
         # PUBLISHES where a three-attempt one takes E5 — row 116's no-hang oracle passes both.
-        mutant = with_mutation('while [ "$_tn_try" -lt 3 ]; do',
-                               'while [ "$_tn_try" -lt 4 ]; do', path=PUB)
+        # TMP-1's TOTAL is now owned by the publisher's outer loop (the name helper is called with
+        # a budget of 1 per attempt so a create-race loss and a presence hit share ONE budget); the
+        # fourth attempt is therefore granted THERE.
+        mutant = with_mutation('        while [ "$_pb_try" -lt 3 ]; do',
+                               '        while [ "$_pb_try" -lt 4 ]; do', path=PUB)
         body = ('RANDOM=42\n'
                 'r1=$RANDOM; r2=$RANDOM; r3=$RANDOM; r4=$RANDOM\n'
                 'for r in "$r2" "$r3" "$r4"; do [ "$r1" = "$r" ] && exit 97; done\n'

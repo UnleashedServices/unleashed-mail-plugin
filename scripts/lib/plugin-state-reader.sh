@@ -49,7 +49,14 @@ _unleashed_auth_entry() {
     # ENT-3.
     _ae_name="${_ae_p##*/}"; _ae_name="${_ae_name#base.}"
     [ "$_U_SIZE" -le "$(( ${#_ae_name} + 1 ))" ] || return 1
-    IFS= read -r _ae_line < "$_ae_p" || return 1     # (1)
+    # THE REDIRECT LIVES ON AN ENCLOSING GROUP, NOT ON `read`. If the entry vanishes or is replaced
+    # between the stat above and this open, the SHELL reports the failed redirect — before `read`
+    # ever runs, so a `2>/dev/null` on `read` itself does not reach it (measured, both shells).
+    # That message names the path, and a `base.*` name is a LOSSLESS encoding of the target it
+    # points at — so it would leak path material AND add an unbounded second line beside the one
+    # sanitised diagnostic FAM-6 permits (codex, PR #67). The group's stderr is suppressed as a
+    # whole; a failed open is then simply a failed entry.
+    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)
     # (2) is a BYTE comparison, and `${#var}` counts CHARACTERS under a UTF-8 locale — so a base
     # such as `/café` reads as 14 characters against a 15-byte line, the equality fails, and every
     # non-ASCII base marks its own store `stale` (codex, PR #67; reproduced in both shells under
