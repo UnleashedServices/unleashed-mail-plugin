@@ -37,16 +37,46 @@ fi
 # the flag, the consumer rule "unset ⇒ unresolved" would make the fence report NO CAPTURE on a
 # PERFECTLY VALID base. That fail-open → fail-closed inversion is what COREDEV-2617's round-18
 # reproduction caught; it must not be re-introduced here.
+# The bridge is the FIFTH resolver copy (FAM-1) and it NEVER PUBLISHES (PUB-1) — but row 65 requires
+# it to READ: with empty $1, paths.sh absent, and one valid entry in the store, the fence must
+# resolve that entry and report all four protocol variables, not report OK=0. It locates the
+# machinery through $2, the plugin root the fence passes in, because neither CLAUDE_PLUGIN_ROOT nor
+# BASH_SOURCE exists in a zsh Bash-tool shell.
+_ueb_state_load() {
+    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
+    _UNLEASHED_STATE_LOADED=1
+    _UNLEASHED_STATE_RC=1
+    # $1 here is the PLUGIN ROOT the caller passes — the function's own parameter, not the
+    # file's; the file-level $2 is forwarded at the call site below.
+    for _ueb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+        [ -r "${1-}/scripts/lib/$_ueb_f.sh" ] || return 1
+        # shellcheck source=/dev/null
+        . "${1-}/scripts/lib/$_ueb_f.sh"
+    done
+    _UNLEASHED_STATE_RC=0
+    return 0
+}
 if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
+        _UNLEASHED_BASE_SOURCE='env'
+        _UNLEASHED_POINTER_STATE=none
     else
-        _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
-        _UNLEASHED_BASE_OK=0
-        if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
-            _UNLEASHED_BASE_DIAGNOSED=1
-            printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+        _ueb_home_ok=0
+        case "${HOME:-}" in /*) _ueb_home_ok=1 ;; esac
+        if [ "$_ueb_home_ok" = 1 ] && _ueb_state_load "${2-}"; then
+            _UNLEASHED_UNRESOLVED_PREFIX='CLAUDE_PLUGIN_DATA is unset and '
+            _unleashed_read_store "${HOME:-}/.claude/unleashed-mail/bases"
+        else
+            _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
+            _UNLEASHED_BASE_OK=0
+            _UNLEASHED_BASE_SOURCE=unresolved
+            _UNLEASHED_POINTER_STATE=none
+            if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+                _UNLEASHED_BASE_DIAGNOSED=1
+                printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+            fi
         fi
     fi
 fi

@@ -27,16 +27,55 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
     # shellcheck source=scripts/lib/paths.sh
     [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
 fi
+# COREDEV-2617 §4.2a: the fallback is the FULL three-step resolution, not the D′ two-step — this is
+# one of the five resolver copies FAM-1 names, and arm equivalence (rows 99/100/103) requires all
+# five to report ALL FOUR protocol variables identically in every cell. The machinery loads from
+# this file's own directory; when it is absent the resolution degrades to the D′ envelope, which is
+# never worse than the pre-2617 behaviour.
+_upb_state_load() {
+    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
+    _UNLEASHED_STATE_LOADED=1
+    _UNLEASHED_STATE_RC=1
+    for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+        [ -r "${_upb_d:-.}/$_upb_f.sh" ] || return 1
+        # shellcheck source=/dev/null
+        . "${_upb_d:-.}/$_upb_f.sh"
+    done
+    _UNLEASHED_STATE_RC=0
+    return 0
+}
 if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
+        _UNLEASHED_BASE_SOURCE='env'
+        _UNLEASHED_POINTER_STATE=none
+        # PUB-1: this file is one of the four PUBLISHING family files, and the publish is reachable
+        # ONLY from this branch. The publish is a side effect of having resolved, never a condition.
+        case "${HOME:-}" in /*)
+            if [ "${_UNLEASHED_PUBLISH_OK:-1}" != 0 ] && _upb_state_load; then
+                _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
+                _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+                _UNLEASHED_BASE_OK=1
+            fi ;;
+        esac
     else
-        _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
-        _UNLEASHED_BASE_OK=0
-        if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
-            _UNLEASHED_BASE_DIAGNOSED=1
-            printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+        _upb_home_ok=0
+        case "${HOME:-}" in /*) _upb_home_ok=1 ;; esac
+        if [ "$_upb_home_ok" = 1 ] && _upb_state_load; then
+            # Step 2 — the store, through the ordered reader rules. The prefix keeps the D′ wording
+            # contract; the reader itself never names the environment variable.
+            _UNLEASHED_UNRESOLVED_PREFIX='CLAUDE_PLUGIN_DATA is unset and '
+            _unleashed_read_store "${HOME:-}/.claude/unleashed-mail/bases"
+        else
+            _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
+            _UNLEASHED_BASE_OK=0
+            _UNLEASHED_BASE_SOURCE=unresolved
+            _UNLEASHED_POINTER_STATE=none
+            if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+                _UNLEASHED_BASE_DIAGNOSED=1
+                printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+            fi
         fi
     fi
 fi
