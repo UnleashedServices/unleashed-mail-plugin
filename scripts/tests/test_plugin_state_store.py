@@ -194,7 +194,20 @@ class DarwinAclArm(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        shutil.rmtree(cls.tmp, ignore_errors=True)
+        # `deny_w` carries a `deny delete` ACE, so a plain rmtree cannot unlink it and, with
+        # ignore_errors, said nothing: measured, EVERY run left one `acl2617.*/deny_w` behind in
+        # $TMPDIR (77 of them on one machine). Strip every ACL top-down and restore 0700 first,
+        # then remove LOUDLY — a leftover is a harness defect, not something to hide.
+        subprocess.run(["/bin/chmod", "-N", cls.tmp], check=False, capture_output=True)
+        for root, dirs, files in os.walk(cls.tmp):
+            for name in dirs + files:
+                p = os.path.join(root, name)
+                subprocess.run(["/bin/chmod", "-N", p], check=False, capture_output=True)
+                try:
+                    os.chmod(p, 0o700)
+                except OSError:
+                    pass
+        shutil.rmtree(cls.tmp)
 
     def _verdict(self, shell, path, lib=AUTH):
         rc, out, _ = run_shell(shell, f'_u_principal; _u_acl_ok "{path}" && printf accept || printf refuse',

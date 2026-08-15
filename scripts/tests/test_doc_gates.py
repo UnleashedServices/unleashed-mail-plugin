@@ -699,9 +699,14 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
     def test_the_wrapper_asserts_the_tree_is_unchanged(self):
         with open(self.WRAPPER, encoding="utf-8") as fh:
             src = fh.read()
-        self.assertIn("git status --porcelain", src, "must fingerprint the tree")
+        self.assertIn("tree_fingerprint \"$REPO\"", src, "must fingerprint the live tree")
         self.assertIn("exit 3", src, "a tree mutation must VOID the round with a distinct exit code")
-        self.assertIn("worktree add --detach", src, "must review a disposable detached checkout")
+        # A PRIVATE clone, never `git worktree add` — a linked worktree's `.git` points into the
+        # maintainer's real repository, and the reviewer's git operations landed there (PR #67 pass 6).
+        self.assertIn('disposable_checkout "$REPO" "$SHA"', src, "must review a private disposable checkout")
+        self.assertNotIn("worktree add", src, "a linked worktree hands the reviewer the real .git")
+        self.assertIn('disposable_fingerprint "$TREE"', src,
+                      "the disposable checkout must be compared by CONTENT, not by git status")
 
     def test_the_wrapper_guards_against_a_truncated_prompt(self):
         """A guard-only prompt wasted two review rounds; the reviewer's reply read like a wording

@@ -65,7 +65,15 @@ bash scripts/test-hooks.sh                                         # hook stdin-
 python3 -m unittest discover -s mcp/review-synthesizer/tests       # bundled MCP suite
 python3 -m unittest discover -s scripts/tests                      # scripts suite (review-verdict gate)
 shellcheck -s bash -S warning scripts/*.sh scripts/lib/*.sh scripts/review/*.sh .githooks/pre-commit
+python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md   # line-pinned citations rot when files shift
+git diff --check "$(git merge-base origin/main HEAD)" HEAD                                              # whitespace, as CI checks it
+python3 scripts/review/generate-callers-exemptions.py && git diff --exit-code -- scripts/review/callers-scan-exemptions.tsv
 ```
+
+**Run the whole list, not the first six** — CI's `validate` job was red on PR #67 for two review passes
+because the plan-citation linter (added there in the same PR) was never part of the local gate, and
+the local suite kept passing while a shifted line pin failed the linter's own self-test.
 
 The pre-commit hook (`.githooks/pre-commit`; install with `git config core.hooksPath .githooks`) runs the
 version-sync/assembly/hooks validators + an **advisory** secret/PII pattern scan over all staged text files

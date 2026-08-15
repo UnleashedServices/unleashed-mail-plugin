@@ -48,6 +48,97 @@ tree_fingerprint() {
     git -C "$1" status --porcelain 2>/dev/null || return 1
     printf '\036\n'   # a record separator so status and diff cannot alias across the boundary
     git -C "$1" diff HEAD 2>/dev/null || return 1
+    # THE ONE GITIGNORED PATH THAT IS GATE-BEARING. `docs/planning/.verdicts/` holds the Combined-verdict
+    # artefact the plan gate READS, and it is ignored at the repo root — so a reviewer with a shell that
+    # wrote a forged approval there was invisible to both halves above (adversarial verification, PR #67
+    # pass 6). Only the synthesis step writes it, after both arms have landed, so during a round it must
+    # not change. Fingerprinted by CONTENT through the same helper the disposable checkout uses. Other
+    # ignored paths (`__pycache__`, the transcript state tree when it sits inside the checkout) are NOT
+    # included: the harness's own python and allocator write there between the before and after calls,
+    # and a guard that voids every honest round is one that gets switched off. That residual is stated.
+    if [ -d "$1/docs/planning/.verdicts" ]; then
+        printf '\036\n'
+        disposable_fingerprint "$1/docs/planning/.verdicts" || return 1
+    fi
+}
+
+# Build a PRIVATE disposable checkout of commit $2 of the repository at $1, at path $3 (must not exist).
+#
+# NOT `git worktree add`. A linked worktree's `.git` is a FILE pointing INTO THE MAINTAINER'S REAL
+# REPOSITORY, and every git operation a shell-capable reviewer runs inside it lands there: `git config
+# core.hooksPath` from the disposable checkout wrote the LIVE repo's `.git/config`, so the maintainer's
+# next real commit would have run a reviewer-planted hook; `git commit`/`git stash`/`update-ref` wrote
+# refs and objects into the shared database (the "dangling commits survive" note the agy harness carried
+# was this same class); and repointing the `.git` file made every later `git status` answer about a
+# DIFFERENT repository (adversarial verification, PR #67 pass 6 — reproduced). A `git clone --local`
+# would HARDLINK the object files, and a hardlinked object rewritten in the clone is rewritten in the
+# source; `--shared` publishes the source's path in `objects/info/alternates`. So: `git init`, then FETCH
+# the one commit over the local transport (upload-pack on the source is read-only; a detached source
+# HEAD is advertised, so the harnesses' `git rev-parse HEAD` is always fetchable — measured), then a
+# detached checkout. No remote, no alternates, no hardlinks; `FETCH_HEAD` — the one file that names the
+# source path — is removed. The reviewer's git is fully usable and fully private. Measured: 3.8 MB and
+# under a second for this repository.
+disposable_checkout() {
+    _dc_repo="$1"; _dc_sha="$2"; _dc_dest="$3"
+    [ ! -e "$_dc_dest" ] || return 1
+    git init -q -- "$_dc_dest" >/dev/null 2>&1 || return 1
+    git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
+    git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
+    rm -f "$_dc_dest/.git/FETCH_HEAD"
+    [ "$(git -C "$_dc_dest" rev-parse HEAD 2>/dev/null)" = "$_dc_sha" ] || return 1
+}
+
+# Content fingerprint of a DISPOSABLE checkout rooted at $1 — every path beneath it except `.git`,
+# with its type, permission bits, size and content hash (the target, for a symlink), one line per
+# entry, sorted. Compared for EQUALITY around the reviewer's run; a `diff` of the two outputs is the
+# report.
+#
+# NEVER `git status`. Status is METADATA THE REVIEWER CONTROLS: after editing a file a reviewer can
+# `git commit` it (status clean), `git update-index --assume-unchanged`/`--skip-worktree` it (hidden),
+# drop a nested self-ignoring `.gitignore` or an `info/exclude` rule beside new files (not `??`), or
+# `git stash` (working files revert; the edits live on in the reviewer's private clone). Every one of
+# those passed the previous status-based probe (adversarial verification, PR #67 pass 6 — reproduced),
+# and a probe that FAILED (`.git` deleted) had already been turned into an empty baseline by `|| true`
+# in one harness (codex, PR #67). Hashing the bytes of what is actually in the tree is not something the
+# reviewer can talk git out of. `.git` is recorded as an ENTRY — its type, and its bytes when it is a
+# gitfile — but NOT descended: git's own bookkeeping (the `index` stat cache on every `git status` the
+# reviewer runs) would void every honest round, and in a PRIVATE checkout nothing under `.git` can reach
+# the maintainer; while a reviewer that DELETES or REPOINTS `.git` has still written inside the checkout
+# and is caught. RESIDUAL, stated: an edit that is REVERTED before the run ends (edit; `git checkout
+# --`) leaves no trace here; this detects edits that SURVIVE the run.
+disposable_fingerprint() {
+    python3 - "$1" <<'PY' || return 1
+import hashlib, os, stat, sys
+root = sys.argv[1]
+if not os.path.isdir(root):
+    sys.exit(1)
+lines = []
+for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    if dirpath == root:
+        # `.git` is listed as an entry below but never descended.
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        if ".git" not in filenames and os.path.lexists(os.path.join(root, ".git")):
+            filenames = filenames + [".git"]
+    dirnames.sort()
+    for name in sorted(dirnames + filenames):
+        full = os.path.join(dirpath, name)
+        rel = os.path.relpath(full, root)
+        st = os.lstat(full)
+        mode = "%04o" % stat.S_IMODE(st.st_mode)
+        if stat.S_ISLNK(st.st_mode):
+            lines.append("L %s %s -> %s" % (mode, rel, os.readlink(full)))
+        elif stat.S_ISDIR(st.st_mode):
+            lines.append("D %s %s" % (mode, rel))
+        elif stat.S_ISREG(st.st_mode):
+            h = hashlib.sha256()
+            with open(full, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 16), b""):
+                    h.update(chunk)
+            lines.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), rel))
+        else:
+            lines.append("O %s %s" % (mode, rel))
+sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
+PY
 }
 
 # Print the human-readable summary of what changed between two fingerprints, to stderr.

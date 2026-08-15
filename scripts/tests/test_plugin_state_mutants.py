@@ -787,7 +787,21 @@ class RowsChunk2(unittest.TestCase):
         os.chmod(self.base, 0o700)
 
     def tearDown(self):
-        shutil.rmtree(self.home, ignore_errors=True)
+        # Row 56 puts a REAL `group:everyone deny delete` ACE on `base`; rmtree cannot unlink it
+        # and, with ignore_errors, said nothing — measured, every run left `~/.claude/rc2617.*/base`
+        # behind (42 on one machine). Strip every ACL and restore 0700 first, then remove LOUDLY.
+        if DARWIN:
+            for root, dirs, _files in os.walk(self.home):
+                for d in dirs:
+                    subprocess.run(["/bin/chmod", "-N", os.path.join(root, d)],
+                                   check=False, capture_output=True)
+        for root, dirs, _files in os.walk(self.home):
+            for d in dirs:
+                try:
+                    os.chmod(os.path.join(root, d), 0o700)
+                except OSError:
+                    pass
+        shutil.rmtree(self.home)
 
     # ── shared fixture fragments ──────────────────────────────────────────────────────────────────
     #: Create the store chain, refusing loudly if that fails — a broken fixture must not read as a
@@ -2334,7 +2348,7 @@ SENTINEL = "/dev/null/unresolved-plugin-base"
 
 @unittest.skipUnless(DARWIN, "the Darwin ACL arm; the Linux arms are unmeasured by design")
 class RowsChunk4(unittest.TestCase):
-    """Mutant-table rows 4, 10, 42, 51, 58, 64, 70, 76, 92, 99, 112, 119, 126, 132, 138, 144, 151."""
+    """Mutant-table rows 4, 10, 42, 51, 58, 64, 70, 76, 92, 99, 112, 119, 126, 132, 138, 144, 151, 153, 154, 155."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -2977,9 +2991,11 @@ class RowsChunk4(unittest.TestCase):
 
     def test_row_138_cleanup_rm_via_path(self):
         """Row 138: after a failed E6 publish no .pub.* name remains, the store stays writable so the unmutated /bin/rm genuinely succeeds, and a FAILED removal changes nothing a reader sees."""
-        # E6 is forced on a WRITABLE store with RLIMIT_FSIZE(0) + SIGXFSZ ignored: the zero-byte
-        # transient create succeeds, the value write fails (measured: printf rc=1, size 0, rm
-        # still succeeds), so the cleanup site runs. The mutation invokes that rm through PATH,
+        # E6 is forced on a WRITABLE store with RLIMIT_FSIZE(0): the zero-byte transient create
+        # succeeds and the value write fails with EFBIG (measured: printf rc=1, size 0, rm still
+        # succeeds), so the cleanup site runs. The create-and-write subshell IGNORES SIGXFSZ
+        # itself so the limit surfaces as EFBIG and not as a signal death; the fixture's
+        # `trap "" XFSZ` is belt-and-braces. The mutation invokes that rm through PATH,
         # where a shim that exits non-zero without removing leaves the transient behind. TMP-2
         # keeps transients outside the base.* glob, so the reader outcome is identical either
         # way and the oracle is the FILE's presence.
@@ -3019,6 +3035,218 @@ class RowsChunk4(unittest.TestCase):
                                      f"{shell}: an orphaned transient changed what a reader sees")
         finally:
             os.unlink(mutant)
+
+    # ── row 153 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_153_value_written_through_a_second_open(self):
+        """Row 153: the value is written THROUGH the descriptor the exclusive create returned; a symlink substituted at the transient's name the instant it exists leaves the victim UNTOUCHED, and the two-open mutant overwrites it."""
+        # The interleaving is deterministic, not raced: a DEBUG trap on the publishing shell fires
+        # before every simple command and substitutes a symlink to the victim the first time an EMPTY
+        # regular transient exists — that is, after the create and before the write, in both builds.
+        # bash needs `set -T` (functrace) or the trap is not inherited by functions and subshells;
+        # zsh's fires inside the create-and-write subshell (measured, both shells: spec victim intact
+        # rc=1, mutant victim overwritten). The `! -L` guard stops the trap re-firing on its own link.
+        # Both builds report `failed` — the P-4 readback of the substituted symlink refuses at E6 and
+        # the ST-7 cleanup removes the link — so the oracle is the VICTIM's content, not the state.
+        mutant = with_mutation(
+            "    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0\n"
+            '      # zsh 5.9 CLOBBER_EMPTY lets `>` overwrite an EMPTY existing file even under noclobber — a\n'
+            "      # consumer's setopt would turn this exclusive create into a write-through; pinned off here.\n"
+            '      [ -n "${ZSH_VERSION:-}" ] && setopt no_clobber_empty 2>/dev/null\n'
+            '      { _wt_opened=1; printf \'%s\\n\' "$_wt_value" >&9 || exit 1; } 9>"$_wt_p" \\\n'
+            '          || { [ "$_wt_opened" = 0 ] && exit 2; exit 1; }\n'
+            '      exit 0 ) >/dev/null 2>&1\n'
+            '    case $? in\n'
+            '        0) ;;\n'
+            '        # The open was refused. A LOST RACE is the case where the name now EXISTS — another\n'
+            '        # publisher, or same-uid interference, got there first — and only that case is 2. A refusal\n'
+            '        # with the name still ABSENT (ENOSPC, EROFS, EACCES, EIO) is a creation FAILURE, which PUB-9\n'
+            '        # E6 covers by its letter ("the temporary\'s creation or write … fails for any reason"); it\n'
+            "        # must not spend TMP-1's attempts and end as E5, whose diagnostic would name the wrong exit.\n"
+            '        2) if [ -L "$_wt_p" ] || [ -e "$_wt_p" ]; then return 2; fi; return 1 ;;\n'
+            '        *) return 1 ;;\n'
+            '    esac\n',
+            '    ( set -C; umask 077; : > "$_wt_p" ) 2>/dev/null || return 2\n'
+            '    printf \'%s\\n\' "$_wt_value" > "$_wt_p" 2>/dev/null || return 1\n',
+            path=PUB)
+        victim = os.path.join(self.home, "victim")
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    self._wipe()
+                    with open(victim, "w", encoding="utf-8") as fh:
+                        fh.write("VICTIM\n")
+                    body = (self._mkstore()
+                            + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                            + 'trap \'if [ -n "${_UNLEASHED_TRANSIENT:-}" ] && [ -f "$_UNLEASHED_TRANSIENT" ] '
+                              '&& [ ! -L "$_UNLEASHED_TRANSIENT" ] && [ ! -s "$_UNLEASHED_TRANSIENT" ]; then '
+                              '/bin/rm -f "$_UNLEASHED_TRANSIENT"; '
+                              f'/bin/ln -s "{victim}" "$_UNLEASHED_TRANSIENT"; fi\' DEBUG\n'
+                            + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                            + 'trap - DEBUG\n'
+                              'printf "STATE=%s" "$_UNLEASHED_POINTER_STATE"')
+                    rc, out, err = run_shell(shell, body, sources=srcs)
+                    with open(victim, encoding="utf-8") as fh:
+                        got = fh.read()
+                    self.assertIn("STATE=failed", out,
+                                  f"{shell}: the substituted symlink was not refused at E6: {out!r} {err!r}")
+                    if not is_mutant:
+                        self.assertEqual("VICTIM\n", got,
+                                         f"{shell}: the write FOLLOWED a symlink substituted after the create")
+                        # E6 publishes nothing: the refused readback never reaches the rename.
+                        bases = [f for f in os.listdir(self.store) if f.startswith("base.")]
+                        self.assertEqual([], bases, f"{shell}: E6 left a base.* entry behind: {bases}")
+                    else:
+                        self.assertEqual(self.target + "\n", got,
+                                         f"{shell}: the CONTROL did not fail — the fixture never interleaved "
+                                         f"between the mutant's two opens: {got!r}")
+                    pubs = [f for f in os.listdir(self.store) if f.startswith(".pub.")]
+                    self.assertEqual([], pubs, f"{shell}: the substituted link survived the E6 cleanup")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 154 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_154_refused_create_name_exists_is_a_lost_race(self):
+        """Row 154: an exclusive create refused because the name now EXISTS is a LOST RACE — the attempt is consumed and the next name tried, so three plants end as E5 with THREE planted files; the mutant reports the FIRST refusal as E6 after ONE planted file."""
+        # The interleaving is deterministic, not raced: a DEBUG trap on the publishing shell
+        # (`set -T` in bash so functions and subshells inherit it) plants an empty 0600 regular file
+        # at the transient's name the instant `_wt_p` equals `_UNLEASHED_TRANSIENT` and the name is
+        # still absent — true only AFTER TMP-1's presence test has passed and BEFORE the `9>` open.
+        # Measured, both shells: the plant lands in the publishing shell itself, before the
+        # create-and-write subshell is entered (`_wt_opened` still unset), so `set -C` refuses the
+        # open and the name exists. The trap plants ONCE per name: without that guard the mutant's
+        # ST-7 cleanup removes the planted file, the condition holds again, and the trap plants a
+        # SECOND time on the same name after the exit was already taken (measured: 2 plants, 1
+        # orphan). Both builds report `failed`; the oracle is the diagnostic's text and the count
+        # of planted files — the counter file, because E6's cleanup unlinks what it planted.
+        # (A `$RANDOM` repeat across the three draws would spend an attempt on the presence test
+        # without a plant; two equal 16-bit draws in three is a ~1e-4 event, not a flake source.)
+        mutant = with_mutation(
+            '        2) if [ -L "$_wt_p" ] || [ -e "$_wt_p" ]; then return 2; fi; return 1 ;;\n',
+            '        2) return 1 ;;\n',
+            path=PUB)
+        plants = os.path.join(self.home, "plants")
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    self._wipe()
+                    if os.path.exists(plants):
+                        os.unlink(plants)
+                    body = (self._mkstore()
+                            # A SEEDED $RANDOM makes the three transient names a fixed, distinct sequence in
+                            # both shells (row 116 does the same); unseeded, a ~1e-4 repeat would spend an
+                            # attempt on the presence test without firing the trap and skew the count.
+                            + 'RANDOM=2617\n'
+                            + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                            + 'trap \'if [ -n "${_wt_p:-}" ] && [ "$_wt_p" = "${_UNLEASHED_TRANSIENT:-}" ] '
+                              '&& [ "$_wt_p" != "${_t154_last:-}" ] '
+                              '&& [ ! -e "$_wt_p" ] && [ ! -L "$_wt_p" ]; then '
+                              '_t154_last="$_wt_p"; (umask 077; : > "$_wt_p"); '
+                              f'printf "%s\\n" "$_wt_p" >> "{plants}"; fi\' DEBUG\n'
+                            + f'_unleashed_publish "{self.store}" "{self.target}"\n'
+                            + 'trap - DEBUG\n'
+                              'printf "STATE=%s" "$_UNLEASHED_POINTER_STATE"')
+                    rc, out, err = run_shell(shell, body, sources=srcs)
+                    self.assertIn("STATE=failed", out, f"{shell}: not `failed`: {out!r} {err!r}")
+                    diags = self._diags(err)
+                    self.assertEqual(1, len(diags), f"{shell}: not exactly one diagnostic: {err!r}")
+                    planted = []
+                    if os.path.exists(plants):
+                        with open(plants, encoding="utf-8") as fh:
+                            planted = [l for l in fh.read().splitlines() if l]
+                    pubs = sorted(f for f in os.listdir(self.store) if f.startswith(".pub."))
+                    bases = [f for f in os.listdir(self.store) if f.startswith("base.")]
+                    self.assertEqual([], bases, f"{shell}: a failed publish left a base.* entry: {bases}")
+                    if not is_mutant:
+                        # E5: three names, each planted once, each refused as a lost race.
+                        self.assertIn("no unique transient name", diags[0],
+                                      f"{shell}: the exhausted lost races were not E5: {diags[0]!r}")
+                        self.assertEqual(3, len(planted),
+                                         f"{shell}: the trap did not plant three times: {planted}")
+                        self.assertEqual(sorted(os.path.basename(p) for p in planted), pubs,
+                                         f"{shell}: the store does not hold exactly the three plants: {pubs}")
+                    else:
+                        # E6 after the FIRST refusal — and its cleanup unlinks the one plant.
+                        self.assertIn("could not be written at 0600", diags[0],
+                                      f"{shell}: the CONTROL did not fail — the refusal was not E6: {diags[0]!r}")
+                        self.assertEqual(1, len(planted),
+                                         f"{shell}: the CONTROL did not stop at one plant: {planted}")
+                        self.assertEqual([], pubs, f"{shell}: E6's cleanup left a transient: {pubs}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 155 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_155_refused_create_name_absent_is_e6(self):
+        """Row 155: an exclusive create refused while the name stays ABSENT (the store made 0500, EACCES) is E6 on the FIRST attempt — one diagnostic naming the 0600 write, no transient anywhere; the mutant spends all three attempts on it and surfaces as E5."""
+        # Row 154's trap condition, but the trap makes the STORE unwritable instead of planting a
+        # file: the `9>` open is refused and the name stays absent. Once per name, as in row 154,
+        # so the marker file counts names, not DEBUG firings; the mutant consumes three names and
+        # the marker holds three, the specification stops at one. `_wipe` runs with the store back
+        # at 0700, restored in a `finally`, so the harness leaves nothing behind.
+        mutant = with_mutation(
+            '        2) if [ -L "$_wt_p" ] || [ -e "$_wt_p" ]; then return 2; fi; return 1 ;;\n',
+            '        2) return 2 ;;\n',
+            path=PUB)
+        fired = os.path.join(self.home, "fired")
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    if os.path.isdir(self.store):
+                        os.chmod(self.store, 0o700)
+                    self._wipe()
+                    if os.path.exists(fired):
+                        os.unlink(fired)
+                    body = (self._mkstore()
+                            # A SEEDED $RANDOM makes the three transient names a fixed, distinct sequence in
+                            # both shells (row 116 does the same); unseeded, a ~1e-4 repeat would spend an
+                            # attempt on the presence test without firing the trap and skew the count.
+                            + 'RANDOM=2617\n'
+                            + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                            + 'trap \'if [ -n "${_wt_p:-}" ] && [ "$_wt_p" = "${_UNLEASHED_TRANSIENT:-}" ] '
+                              '&& [ "$_wt_p" != "${_t155_last:-}" ] '
+                              '&& [ ! -e "$_wt_p" ] && [ ! -L "$_wt_p" ]; then '
+                              f'_t155_last="$_wt_p"; /bin/chmod 500 "{self.store}"; '
+                              f'printf "%s\\n" "$_wt_p" >> "{fired}"; fi\' DEBUG\n'
+                            + f'_unleashed_publish "{self.store}" "{self.target}"\n'
+                            + 'trap - DEBUG\n'
+                              'printf "STATE=%s" "$_UNLEASHED_POINTER_STATE"')
+                    try:
+                        rc, out, err = run_shell(shell, body, sources=srcs)
+                        names = []
+                        if os.path.exists(fired):
+                            with open(fired, encoding="utf-8") as fh:
+                                names = [l for l in fh.read().splitlines() if l]
+                        self.assertTrue(names, f"{shell}: the trap never fired inside the write")
+                        self.assertEqual(0o500, os.stat(self.store).st_mode & 0o777,
+                                         f"{shell}: the store was not made unwritable")
+                        self.assertIn("STATE=failed", out, f"{shell}: not `failed`: {out!r} {err!r}")
+                        diags = self._diags(err)
+                        self.assertEqual(1, len(diags), f"{shell}: not exactly one diagnostic: {err!r}")
+                        pubs = [f for f in os.listdir(self.store) if f.startswith(".pub.")]
+                        self.assertEqual([], pubs, f"{shell}: a transient exists under a refused create: {pubs}")
+                        if not is_mutant:
+                            self.assertIn("could not be written at 0600", diags[0],
+                                          f"{shell}: a refusal with the name absent was not E6: {diags[0]!r}")
+                            self.assertEqual(1, len(names),
+                                             f"{shell}: E6 did not stop at the first attempt: {names}")
+                        else:
+                            self.assertIn("no unique transient name", diags[0],
+                                          f"{shell}: the CONTROL did not fail — the refusal was not spent as E5: "
+                                          f"{diags[0]!r}")
+                            self.assertEqual(3, len(names),
+                                             f"{shell}: the CONTROL did not consume three attempts: {names}")
+                    finally:
+                        if os.path.isdir(self.store):
+                            os.chmod(self.store, 0o700)
+        finally:
+            os.unlink(mutant)
+            if os.path.isdir(self.store):
+                os.chmod(self.store, 0o700)
 
     # ── row 144 ───────────────────────────────────────────────────────────────────────────────
 

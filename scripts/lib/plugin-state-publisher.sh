@@ -14,7 +14,7 @@
 #   E3 the NAME_MAX budget cannot be satisfied  -> failed
 #   E4 the store chain cannot be made or fails  -> failed
 #   E5 no unique transient name in THREE total attempts      -> failed
-#   E6 the transient write or the rename fails  -> failed
+#   E6 the transient creation, write or rename fails -> failed
 #   E7 otherwise: scan, and take the ordered POST-SCAN exits
 # and the post-scan exits, also ordered:
 #   P1 our own entry is missing   -> failed      (whether or not this process wrote it)
@@ -56,17 +56,58 @@ _unleashed_transient_name() {
 }
 
 # ── P-4 — create the transient at exactly 0600, without touch, chmod or mktemp ────────────────────
-# `(umask 077; : > "$tmp")` in a SUBSHELL so the caller's umask is untouched. The mode is READ BACK,
-# because a POSIX default ACL on the parent supplies permissions umask does not mask — reachable on
-# a store ACL-3 accepts — and a transient that is not exactly 0600 becomes an entry that is not.
-# Returns 0 on success, 1 on a write/mode failure (E6), and 2 when the EXCLUSIVE CREATE itself
-# lost a race — the name existed by the time `set -C` opened it. The caller treats 2 as "this
-# attempt is consumed, try the next name", because two publishers can pass the presence test
-# on one name and only one create can win; the loser still has attempts left (codex, PR #67).
+# THE EXCLUSIVE CREATE AND THE CONTENT WRITE ARE ONE OPEN. The redirection `9>"$tmp"` under `set -C`
+# IS the exclusive create, and the value is written THROUGH descriptor 9 — never through the pathname
+# a second time. The previous shape created with `set -C; : > tmp` and wrote with a SECOND plain `>`
+# on the same pathname, and that second open had none of the first one's protection: same-uid
+# interference replacing the transient between the two opens with a symlink made the write FOLLOW it
+# and overwrite the target (reproduced, both shells), and a FIFO there would block every hook at
+# source time. With the write bound to the descriptor the create returned there is no second open to
+# substitute (codex, PR #67; mutant row 153 substitutes a symlink the instant the empty transient
+# exists and asserts the victim is untouched).
+# `umask 077` and `set -C` are scoped by the SUBSHELL so neither leaks to the consumer. The mode is
+# READ BACK, because a POSIX default ACL on the parent supplies permissions umask does not mask —
+# reachable on a store ACL-3 accepts — and a transient that is not exactly 0600 becomes an entry
+# that is not.
+# Returns 0 on success, 2 when the EXCLUSIVE CREATE itself was refused AND the name exists — it
+# existed by the time `set -C` opened it, a lost race — and 1 for EVERYTHING ELSE: a refusal that
+# leaves the name absent (ENOSPC, EROFS, EACCES — a creation failure, PUB-9 E6 by its letter), a
+# write error, a mode readback that is not 0600, or the subshell dying mid-write. `exit 2` is
+# reachable ONLY on the branch where the redirection failed and the body never ran (`_wt_opened`
+# is still 0), so no created-but-unwritten transient can be reported as a lost race — with ONE
+# bounded exception, stated rather than hidden: if the descriptor table is exhausted the file is
+# created and the dup onto 9 fails, the presence test then sees the name and reports 2, and up to
+# three empty transients remain — outside `base.*` (TMP-2), harmless to every reader. SIGXFSZ is
+# IGNORED INSIDE the subshell so a size limit surfaces as EFBIG (printf rc 1 → E6) and not as a
+# signal: measured, zsh does not carry an ignored SIGXFSZ from the caller into a subshell, and when
+# the subshell dies of the signal bash reports the child's death ON THE CALLER'S STDERR — a second,
+# unbounded line beside PUB-11's one diagnostic — while the `2>&1` on the subshell covers only
+# the subshell's own streams. Mutant row 138 caught the first draft of this function reporting the
+# size-limit case as a lost race and leaving three empty transients behind. The
+# caller treats 2 as "this attempt is consumed, try the next name", because two publishers can pass
+# the presence test on one name and only one create can win; the loser still has attempts left
+# (codex, PR #67). The subshell's own stdout goes to /dev/null as well: measured, bash's `printf`
+# builtin flushes the value it failed to write to the RESTORED stdout after an EFBIG error — a line
+# on a hook's stdout — and nothing on this path may reach the caller's streams (PUB-11).
 _unleashed_write_transient() {
     _wt_p="$1"; _wt_value="$2"
-    ( set -C; umask 077; : > "$_wt_p" ) 2>/dev/null || return 2
-    printf '%s\n' "$_wt_value" > "$_wt_p" 2>/dev/null || return 1
+    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0
+      # zsh 5.9 CLOBBER_EMPTY lets `>` overwrite an EMPTY existing file even under noclobber — a
+      # consumer's setopt would turn this exclusive create into a write-through; pinned off here.
+      [ -n "${ZSH_VERSION:-}" ] && setopt no_clobber_empty 2>/dev/null
+      { _wt_opened=1; printf '%s\n' "$_wt_value" >&9 || exit 1; } 9>"$_wt_p" \
+          || { [ "$_wt_opened" = 0 ] && exit 2; exit 1; }
+      exit 0 ) >/dev/null 2>&1
+    case $? in
+        0) ;;
+        # The open was refused. A LOST RACE is the case where the name now EXISTS — another
+        # publisher, or same-uid interference, got there first — and only that case is 2. A refusal
+        # with the name still ABSENT (ENOSPC, EROFS, EACCES, EIO) is a creation FAILURE, which PUB-9
+        # E6 covers by its letter ("the temporary's creation or write … fails for any reason"); it
+        # must not spend TMP-1's attempts and end as E5, whose diagnostic would name the wrong exit.
+        2) if [ -L "$_wt_p" ] || [ -e "$_wt_p" ]; then return 2; fi; return 1 ;;
+        *) return 1 ;;
+    esac
     _u_stat "$_wt_p" || return 1
     [ "$_U_MODE" = 0600 ] || return 1                 # E6: readback, not assumption
     return 0

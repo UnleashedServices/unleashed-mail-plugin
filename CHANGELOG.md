@@ -32,8 +32,11 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     publisher call, the chain walk with its trust-anchor ownership rule, and the Darwin ACL arm.
   - `scripts/lib/plugin-state-reader.sh` — the ordered reader rules −1 through 4.
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
-  - `scripts/tests/test_plugin_state_store.py` — 28 tests that execute the shipped shell in **both**
-    bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
+  - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
+    in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 103 rows
+    executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
+    shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
 ### Changed
 
@@ -44,9 +47,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   publication, and its temporary plugin-data directory lands under `/tmp`, which on Darwin is a
   symlink to a world-writable directory — so the publisher correctly declines to publish there and
   said so on stderr, inside assertions that require it to be empty.
+- **The three review-isolation harnesses (`isolated-agy-review.sh`, `isolated-codex-review.sh`,
+  `isolated-kimi-review.sh`) review a PRIVATE clone and compare it by CONTENT.** The disposable
+  checkout was a `git worktree add` — a linked worktree whose `.git` points into the maintainer's
+  real repository, so a shell-capable reviewer's `git config core.hooksPath`, `git commit` or
+  `git stash` landed in the live `.git` — and the "did the reviewer write anything" probe was
+  `git status`, which is metadata the reviewer controls (commit it, `--assume-unchanged` it, drop
+  a nested self-ignoring `.gitignore`, repoint `.git`); every one of those passed. The checkout is
+  now `git init` + a fetch of the one commit (no remote, no alternates, no hardlinks — the
+  reviewer's git is usable and fully private), and both harness probes hash every path's bytes
+  through the shared `disposable_fingerprint`, failing closed when the tree cannot be read. The
+  live-checkout fingerprint additionally covers the gate-bearing, git-ignored
+  `docs/planning/.verdicts/`. (PR #67 review pass 6, and its adversarial verification.)
 
 ### Fixed
 
+- `plugin-state-publisher.sh` wrote the transient in TWO opens — an exclusive create, then a plain
+  `>` on the same pathname to write the value — and the second open had none of the first one's
+  protection: a symlink substituted between them was followed and its target overwritten (both
+  shells). The value is now written through the descriptor the exclusive create returned; a
+  refused create with the name present is a lost race (one TMP-1 attempt), with the name absent
+  it is E6; `SIGXFSZ` is ignored inside the subshell so a size limit is `EFBIG` and not a signal
+  death bash reports on the caller's stderr; zsh's `CLOBBER_EMPTY` is pinned off. Mutant rows
+  153–155 execute the three outcomes. (PR #67 review pass 6.)
 - `scripts/lib/context.sh` derived its own directory *inside a function*, where `$0` is the function
   name in zsh rather than the sourced file. The returned path lost `scripts/lib` — wrong by two
   levels — on the very path the plugin documents for a zsh Bash tool. It is now captured at source

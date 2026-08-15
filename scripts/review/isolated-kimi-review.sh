@@ -80,20 +80,28 @@ fi
 
 TREE="$(mktemp -d "${TMPDIR:-/tmp}/kimi-review.XXXXXX")" || exit 1
 cleanup() {
-    git worktree remove --force "$TREE/tree" >/dev/null 2>&1 || :
     rm -rf "$TREE" 2>/dev/null || :
 }
 trap cleanup EXIT INT TERM HUP
 
-git worktree add --detach "$TREE/tree" "$COMMIT" >/dev/null 2>&1 || {
-    echo "worktree add failed for $COMMIT" >&2; exit 1; }
+# A PRIVATE clone of the reviewed commit — never a linked worktree, whose `.git` file points into the
+# maintainer's real repository so every git operation the reviewer runs lands there (see
+# disposable_checkout in tree-fingerprint.sh; adversarial verification, PR #67 pass 6).
+SHA="$(git rev-parse --verify "${COMMIT}^{commit}" 2>/dev/null)" || {
+    echo "not a commit: $COMMIT" >&2; exit 1; }
+disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
+    echo "could not build the private review checkout for $COMMIT" >&2; exit 1; }
 [ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
 BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
-# The disposable checkout's FULL status, untracked files expanded, so that a reviewer which
-# IMPLEMENTS the plan — creating or editing any file other than the plan itself — voids the round.
-# Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to catch:
-# the plan is untouched, the review looks clean, and six scripts have been rewritten beside it.
-TREE_BASELINE="$(git -C "$TREE/tree" status --porcelain --untracked-files=all 2>/dev/null || true)"
+# The disposable checkout's CONTENT fingerprint — every path, hashed — so that a reviewer which
+# IMPLEMENTS the plan and leaves any file created or edited other than the plan itself voids the
+# round. Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to
+# catch: the plan is untouched, the review looks clean, and six scripts have been rewritten beside it.
+# NOT `git status`: that is metadata the reviewer controls (commit, assume-unchanged, a nested
+# `.gitignore`, a repointed `.git`) — see disposable_fingerprint. FAIL CLOSED if the probe fails.
+if ! TREE_BASELINE="$(disposable_fingerprint "$TREE/tree")"; then
+    echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2; exit 1
+fi
 
 # Through the repository's pty-capture.py --timeout, as the agy and codex harnesses are: `timeout`
 # is GNU coreutils and is NOT on stock macOS, so a bare `timeout` exits 127 before Kimi starts and
@@ -109,7 +117,15 @@ AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
     echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2; exit 3
 fi
-TREE_AFTER="$(git -C "$TREE/tree" status --porcelain --untracked-files=all 2>/dev/null || true)"
+# FAIL CLOSED if the post-review probe itself fails. `|| true` turned a failed `git status` — a
+# reviewer that deleted or corrupted the disposable checkout's `.git` file and then wrote whatever it
+# liked — into an EMPTY string, which equals a clean baseline, so all three mutation checks passed
+# and the round certified arbitrary writes: precisely what this gate exists to reject (codex, PR #67).
+# The probe no longer consults git at all, but a tree that cannot be READ is still not evidence.
+if ! TREE_AFTER="$(disposable_fingerprint "$TREE/tree")"; then
+    echo "ROUND VOID: the disposable checkout could not be re-read after the review — it is not evidence" >&2
+    exit 3
+fi
 
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "ROUND VOID: the real worktree was mutated during the review" >&2
@@ -121,8 +137,8 @@ if [ "$BASIS" != "$AFTER_BASIS" ]; then
     exit 3
 fi
 if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
-    echo "ROUND VOID: the reviewer wrote inside the disposable checkout — COREDEV-2607 signature" >&2
-    printf '%s\n' "$TREE_AFTER" | diff - <(printf '%s\n' "$TREE_BASELINE") | sed 's/^/  /' >&2 || :
+    echo "ROUND VOID: the reviewer left edits inside the disposable checkout — COREDEV-2607 signature" >&2
+    printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' >&2 || :
     exit 3
 fi
 

@@ -2,7 +2,7 @@
 """The Gemini arm must review the bytes its `.plan` sidecar attests to.
 
 THE FINDING (PR #63 recheck, P1). `isolated-agy-review.sh` builds its review tree with
-`git worktree add --detach "$SCR/tree" "$(git rev-parse HEAD)"`, so `agy` reads the **committed** plan.
+a PRIVATE clone of `$(git rev-parse HEAD)` (`disposable_checkout`), so `agy` reads the **committed** plan.
 `bind-prompt.py` hashes the **working-tree** plan into `<transcript>.plan`. When the plan has
 uncommitted edits — the normal state during the documented review iteration — the transcript approves
 the committed version while the artifact records it as evidence for the edited one. Two correct
@@ -448,7 +448,7 @@ printf 'VERDICT: APPROVE\\n'
         result = self.capture("12")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         combined = result.stdout + result.stderr
-        self.assertIn("WROTE inside the disposable checkout", combined)
+        self.assertIn("left edits inside the disposable checkout", combined)
         self.assertIn("IMPLEMENTATION_NOTES.txt", combined)
 
     def test_a_reviewer_editing_an_ALREADY_DIRTY_tracked_file_voids_the_round(self):
@@ -517,12 +517,17 @@ printf 'VERDICT: APPROVE\\n'
         compared against the non-empty baseline produced an empty `DIRTY`, and the round returned 0
         with `VERDICT: APPROVE`. The basis files stay byte-identical throughout, so the content checks
         see nothing either — this is the only guard positioned to notice.
+
+        The detector no longer consults git at all (PR #67 pass 6: status is metadata the reviewer
+        controls), and the checkout is a PRIVATE clone whose `.git` is a directory — so the reviewer
+        that breaks it must `rm -rf`, and what catches it is the content fingerprint, which records
+        `.git` as an entry: deleting it is a write inside the checkout, and the round is void.
         """
-        self.install_stub(self.MUTATING_STUB % 'rm -f "$tree/.git"')
+        self.install_stub(self.MUTATING_STUB % 'rm -rf "$tree/.git"')
         result = self.capture("18")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
-        self.assertIn("could not read the disposable checkout's status",
-                      result.stdout + result.stderr)
+        self.assertIn("left edits inside the disposable checkout", result.stdout + result.stderr)
+        self.assertIn(".git", result.stdout + result.stderr, "the deleted entry must be named")
 
     def test_a_reviewer_that_BREAKS_THE_LIVE_checkout_voids_the_round(self):
         """The LIVE-checkout half — `tree_fingerprint` suppressed both probes (PR #63 recheck, P1).

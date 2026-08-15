@@ -64,15 +64,17 @@ printf 'dangling     -c %%a %%s: %s   exit=%s   (must SUCCEED; zstat without -L 
 printf '\n'
 
 # ---------------------------------------------------------------- P-4 under a POSIX default ACL
-# The claim under test: `(umask 077; : > tmp)` yields 0600. A DEFAULT ACL on the parent supplies
-# permissions umask does not mask, and ACL-3 ACCEPTS a store carrying only an unnamed default entry,
-# so this combination is reachable on a store the design considers valid.
+# The claim under test: P-4's ONE-OPEN create-and-write — `( umask 077; set -C; printf ... >&9 ) 9>tmp`
+# — yields 0600 (the shipped shape since PR #67 pass 6; the retired `(umask 077; : > tmp)` was two
+# opens). A DEFAULT ACL on the parent supplies permissions umask does not mask, and ACL-3 ACCEPTS a
+# store carrying only an unnamed default entry, so this combination is reachable on a store the design
+# considers valid.
 printf -- '--- P-4 under a POSIX default ACL (the case ACL-3 accepts) ---\n'
 mkdir -p acldir && chmod 0700 acldir
 if /usr/bin/setfacl -d -m group::r-- acldir 2>/dev/null; then
-    ( umask 077; : > acldir/tmp )
-    printf 'default:group::r-- set; (umask 077; : > tmp) yields mode %s\n' \
-        "$(/usr/bin/stat -c '%a' -- acldir/tmp 2>&1)"
+    ( umask 077; set -C; { printf '%s\n' probe >&9; } 9>acldir/tmp ) >/dev/null 2>&1
+    printf 'default:group::r-- set; P-4 one-open create-and-write yields mode %s, content %s\n' \
+        "$(/usr/bin/stat -c '%a' -- acldir/tmp 2>&1)" "$(cat acldir/tmp 2>&1)"
     printf 'getfacl of the parent:\n'; /usr/bin/getfacl -pc acldir 2>&1 | sed 's/^/  /'
     printf 'getfacl of the new file:\n'; /usr/bin/getfacl -pc acldir/tmp 2>&1 | sed 's/^/  /'
 else

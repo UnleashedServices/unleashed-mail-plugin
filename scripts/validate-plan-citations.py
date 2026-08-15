@@ -318,7 +318,14 @@ SEEDS = [
     ("cite-external", lambda s: s.replace("## 5. Risk register",
                                           "* a lock, the same primitive §4.9z of the journal\n"
                                           "  plan settled on, is taken.\n\n## 5. Risk register", 1)),
-    ("cite-file", lambda s: s.replace('at `sessionstart-restore.sh:85`', 'at `sessionstart-restore.sh:83`', 1)),
+    # CONTENT-RELATIVE, not a hard-coded line: the seed anchored on `:85` for as long as that was the pin,
+    # and when the pin was relocated to follow the script the seed silently found nothing — CI red on
+    # PR #67 for two passes with "ANCHOR NOT FOUND", which is this self-test doing its job one level up.
+    # And it must land on a line the checker REJECTS: an offset that happened to hit a second copy of the
+    # expected content would report "NOT DETECTED — check is decorative" and blame the checker for a
+    # coincidence in the seed. Line 0 is outside every file, so the checker rejects it unconditionally.
+    ("cite-file", lambda s: re.sub(r"(at `sessionstart-restore\.sh:)(\d+)`",
+                                   lambda m: f"{m.group(1)}0`", s, count=1)),
     # The seed value must be one the plan does NOT declare. It was `contended` until that value was
     # declared for real, at which point the seed went quiet and the check looked healthy while proving
     # nothing — a seed sharing vocabulary with the document under test has an expiry date.
