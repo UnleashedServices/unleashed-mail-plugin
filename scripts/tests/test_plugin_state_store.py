@@ -690,6 +690,7 @@ class MutantRowsThroughTheProductionResolver(unittest.TestCase):
                                  f"{shell}: {label} must create nothing")
 
 
+@unittest.skipUnless(DARWIN, "the publish and read cells walk chains through the Darwin arm; on Linux every cell is `failed`/`stale` by design (CI, PR #67 pass 7 — the class shipped without this skip and the validate job went red)")
 class SourcedUnderErrexit(unittest.TestCase):
     """The family sourced under `set -eu` reaches its next statement in every publish/read cell.
 
