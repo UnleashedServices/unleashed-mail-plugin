@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 110 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 112 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Eighth review pass (codex) — three findings, each reproduced.** The live-checkout fingerprint the
+  three review harnesses compare around a round now includes the resolved HEAD: `status` and
+  `diff HEAD` are both empty before and after a clean commit made mid-round, so an author who edited
+  and committed while the arms ran left the fingerprint identical (rule: an author commit voids the
+  round). The publisher's ST-7 presence test tests `-L` independently of `-f` (which follows a
+  link): a `base.<key>` symlink to a regular file was `mv -f`'d over and reported `created`. The
+  reader's rule 4 ("the store does not exist at all") is decided by a walk from `/`, not by `-e` on
+  the full path: a store hidden behind an unsearchable ancestor was reported `none` (silent) instead
+  of rule −1's `stale` (which fires the SessionStart notice). Rows 163–164; a harness test for the
+  mid-round commit.
 - **Seventh review pass (codex) — five findings, and what executing them uncovered.**
   - The family's "already resolved / already loaded / already sourced" guards were bare flags
     (`_UNLEASHED_BASE_OK`, `_UNLEASHED_STATE_LOADED`, `_UNLEASHED_PATHS_SH_LOADED`) that a child

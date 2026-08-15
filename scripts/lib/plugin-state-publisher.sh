@@ -184,9 +184,13 @@ _unleashed_publish() {
     if _unleashed_auth_entry "$_pb_entry"; then
         _pb_wrote=0
     else
-        # ST-7 — if anything is PRESENT at base.<key> and is not a regular non-symlink file, the
-        # publisher does not attempt repair: it writes nothing and reports `failed`.
-        if { [ -L "$_pb_entry" ] || [ -e "$_pb_entry" ]; } && [ ! -f "$_pb_entry" ]; then
+        # ST-7 — if anything is PRESENT at base.<key> and is not a regular NON-SYMLINK file, the
+        # publisher does not attempt repair: it writes nothing and reports `failed`. The symlink test is
+        # INDEPENDENT of the type test: `-f` FOLLOWS a link, so a `base.<key>` symlink to a regular
+        # file passed `[ ! -f ]` and the publisher `mv -f`'d its transient over the link and reported
+        # `created` — a silent repair of exactly the shape ST-7 forbids (codex, PR #67 pass 8 —
+        # reproduced, both shells).
+        if [ -L "$_pb_entry" ] || { [ -e "$_pb_entry" ] && [ ! -f "$_pb_entry" ]; }; then
             _unleashed_pub_failed "the plugin-state entry exists and is not a regular file"; return 0
         fi
         # TMP-1's THREE attempts cover the presence test AND the exclusive create together: a name

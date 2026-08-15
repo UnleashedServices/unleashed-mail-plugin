@@ -129,11 +129,12 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
             cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
         )
 
-    def capture(self, round_value: str):
+    def capture(self, round_value: str, script: Path = CAPTURE, env: dict | None = None):
+        """One capture round; `script`/`env` let a control run a MUTANT copy of the review scripts."""
         return subprocess.run(
-            ["bash", str(CAPTURE), "COREDEV-9999", round_value,
+            ["bash", str(script), "COREDEV-9999", round_value,
              ".agy-prompt-COREDEV-9999r1.md", "docs/planning/FEATURE_PLAN.md", "90"],
-            cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
+            cwd=self.root, env=env or self.env, capture_output=True, text=True, check=False, input="",
         )
 
     def test_the_reviewer_reads_the_uncommitted_bytes_the_binding_names(self):
@@ -543,6 +544,70 @@ printf 'VERDICT: APPROVE\\n'
         result = self.capture("19")
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn("could not fingerprint the live checkout", result.stdout + result.stderr)
+
+    def test_a_clean_commit_in_the_live_repo_during_the_review_voids_the_round(self):
+        """A CLEAN commit in the LIVE checkout mid-round left the fingerprint byte-identical (PR #67 pass 8).
+
+        `tree_fingerprint` was `status --porcelain` + `diff HEAD`, and BOTH are empty before and after
+        a clean commit — the working tree matches the (new) HEAD — so an author who edited and committed
+        while the arms ran passed the "an author commit voids the round" rule the harnesses print. The
+        resolved commit is part of the checkout's identity, so `rev-parse HEAD` now LEADS the fingerprint.
+
+        The live checkout starts CLEAN (the setUp edit is committed first) and the stub makes an EMPTY
+        commit in it by absolute path — the purest form of the blind spot: no status line, no diff hunk,
+        only HEAD moves. Then the POSITIVE CONTROL: the same round through a copy of `scripts/review` +
+        `scripts/pty-capture.py` (the harness sources `tree-fingerprint.sh` from its OWN directory) whose
+        `tree-fingerprint.sh` has the HEAD probe removed — the round PASSES, which is the deletion test
+        for the fix. Measured: spec rc 3 + `MUTATED the working tree`; control rc 0, `TREE=clean`.
+        """
+        # CLEAN in git's terms: the fixture keeps its stubs and its XDG state INSIDE the repo, so
+        # without an ignore rule those two are `??` lines before the run and `.stubs/agy` is ` M`
+        # after `install_stub` — dirt the fixture owns, not the scenario. Ignored, then committed.
+        (self.root / ".gitignore").write_text(".stubs/\nstate/\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
+        subprocess.run(["git", "commit", "-qm", "clean"], cwd=self.root, check=True)
+
+        def git(*args: str) -> str:
+            return subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True,
+                                  check=True).stdout
+
+        self.assertEqual("", git("status", "--porcelain"), "the fixture must start clean")
+        self.install_stub(self.MUTATING_STUB
+                          % f'git -C "{self.root}" -c user.email=r@r -c user.name=r '
+                            f'commit -q --allow-empty -m mid-round')
+        head_before = git("rev-parse", "HEAD")
+        result = self.capture("21")
+        self.assertNotEqual(head_before, git("rev-parse", "HEAD"),
+                            "the stub did not commit — the fixture no longer reproduces the scenario")
+        self.assertEqual("", git("status", "--porcelain"),
+                         "the commit was not clean — a status line moved, so this is not the blind spot")
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn("MUTATED the working tree", result.stdout + result.stderr)
+
+        # POSITIVE CONTROL — the same round with the HEAD probe deleted from a mutant copy of the
+        # review scripts, laid out as the harness expects (`scripts/review/*`, `scripts/pty-capture.py`;
+        # `allocate-transcript.sh`'s `../lib` is redirected to the real one via UNLEASHED_LIB_DIR).
+        mutant_root = Path(tempfile.mkdtemp(prefix="agy-mutant-scripts-"))
+        self.addCleanup(shutil.rmtree, mutant_root, ignore_errors=True)
+        shutil.copytree(REPO / "scripts" / "review", mutant_root / "scripts" / "review",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy2(REPO / "scripts" / "pty-capture.py", mutant_root / "scripts" / "pty-capture.py")
+        fingerprint = mutant_root / "scripts" / "review" / "tree-fingerprint.sh"
+        head_probe = '    git -C "$1" rev-parse HEAD 2>/dev/null || return 1\n'
+        text = fingerprint.read_text(encoding="utf-8")
+        self.assertEqual(1, text.count(head_probe), "the HEAD probe is not where the control expects it")
+        fingerprint.write_text(text.replace(head_probe, "", 1), encoding="utf-8")
+        env = dict(self.env, UNLEASHED_LIB_DIR=str(REPO / "scripts" / "lib"))
+        head_before = git("rev-parse", "HEAD")
+        control = self.capture("22", script=mutant_root / "scripts" / "review" / "capture-gemini-review.sh",
+                               env=env)
+        self.assertNotEqual(head_before, git("rev-parse", "HEAD"), "the control's stub did not commit")
+        self.assertEqual(0, control.returncode,
+                         "the CONTROL did not pass — something other than the HEAD probe caught the "
+                         "commit, so this test does not prove the probe is load-bearing: "
+                         + control.stdout + control.stderr)
+        self.assertNotIn("MUTATED", control.stdout + control.stderr)
+        self.assertIn("TREE=clean", control.stdout, control.stdout + control.stderr)
 
     def test_a_reviewer_that_tampers_with_its_prompt_voids_the_round(self):
         """The old diff EXCLUDED the prompt's basename, so prompt tampering was invisible by

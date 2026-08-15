@@ -192,6 +192,30 @@ _unleashed_store_ok() {
     return 0
 }
 
+# ── RD-8: "does not exist AT ALL" ────────────────────────────────────────────────────────────────
+# True iff the store is genuinely absent: walking its path from `/` down, every prefix that exists is a
+# searchable directory and the first missing component is simply missing. `[ ! -e store ]` alone is
+# NOT that test — it is also false when an ANCESTOR exists but cannot be searched (`~/.claude` at
+# 0600), and that store is not absent, it is HIDDEN: rule −1's chain walk is what must judge it, and it
+# refuses (`stale`, so the SessionStart repair notice fires) where rule 4 would have said `none` and
+# stayed silent (codex, PR #67 pass 8 — reproduced). A prefix that exists as a symlink, a non-directory,
+# or an unsearchable directory therefore returns 1 here and falls through to rule −1.
+_unleashed_store_absent() {
+    _sa_rest="${1#/}"; _sa_p=""
+    while [ -n "$_sa_rest" ]; do
+        case "$_sa_rest" in
+            */*) _sa_c="${_sa_rest%%/*}"; _sa_rest="${_sa_rest#*/}" ;;
+            *)   _sa_c="$_sa_rest"; _sa_rest="" ;;
+        esac
+        [ -n "$_sa_c" ] || continue
+        _sa_p="$_sa_p/$_sa_c"
+        [ -L "$_sa_p" ] && return 1                            # exists as a symlink → not absent
+        [ -e "$_sa_p" ] || return 0                            # this component is missing → absent
+        { [ -d "$_sa_p" ] && [ -x "$_sa_p" ]; } || return 1    # exists, but not a searchable directory
+    done
+    return 1                                                   # the store exists
+}
+
 # ── The ordered reader ────────────────────────────────────────────────────────────────────────────
 # Sets the four protocol variables and emits AT MOST ONE diagnostic. Rule 3 emits NONE — a resolution
 # is the ordinary case and must be silent.
@@ -199,7 +223,7 @@ _unleashed_read_store() {
     _rs_store="$1"
     _u_probes_reset                                  # no inherited probe state is honoured
 
-    if [ ! -e "$_rs_store" ] && [ ! -L "$_rs_store" ]; then
+    if _unleashed_store_absent "$_rs_store"; then
         _unleashed_unresolved none "the plugin-state store does not exist"     # rule 4
         return 0
     fi

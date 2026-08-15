@@ -9,7 +9,8 @@ campaign's findings file rather than faked here.
 
 Assembled from six parallel drafting agents; every row carries the run evidence its drafter measured,
 and THIS suite's own run is the gate — the evidence informed assembly, it is not the verification.
-Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file.
+Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file;
+rows 163-164 (PR #67, codex pass 8) joined that class.
 """
 
 import os
@@ -3739,7 +3740,7 @@ class RowsChunk5(unittest.TestCase):
         # dangling symlink, so the one-part mutant lets `mv -f` silently replace the link (measured)
         # while still refusing the first two fixtures.
         mutant = with_mutation(
-            'if { [ -L "$_pb_entry" ] || [ -e "$_pb_entry" ]; } && [ ! -f "$_pb_entry" ]; then',
+            'if [ -L "$_pb_entry" ] || { [ -e "$_pb_entry" ] && [ ! -f "$_pb_entry" ]; }; then',
             'if [ -e "$_pb_entry" ] && [ ! -f "$_pb_entry" ]; then', path=PUB)
         pub = (f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
                'printf "%s" "$_UNLEASHED_POINTER_STATE"')
@@ -4472,7 +4473,7 @@ MACHINERY_P7 = ("plugin-state-auth.sh", "plugin-state-store.sh",
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162."""
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -5003,6 +5004,130 @@ class RowsPass7(unittest.TestCase):
         finally:
             for m in (m_marker, m_log, m_ctx):
                 os.unlink(m)
+
+    # ── row 163 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_163_a_hidden_store_is_rule_minus_one_not_rule_four(self):
+        """Row 163: the store exists with one authenticating entry and `${HOME}/.claude` is `chmod 600` (exists, not searchable): the specification takes rule −1 — `stale`, one diagnostic, `OK=0` — because the store is HIDDEN, not absent; under `[ ! -e ] && [ ! -L ]` on the full path the reader reports `none` ("does not exist") — the outcome SessionStart's repair notice does not fire on. A genuinely absent store (`unleashed-mail/` missing under a searchable `.claude`) reports `none` in BOTH builds. Both shells."""
+        # `[ -e ]` and `[ -L ]` both need SEARCH permission on every ancestor to answer, so on a
+        # 0600 `.claude` they are both false for a store that exists — "absent" and "hidden" are
+        # indistinguishable to the full-path test, and only RD-8's walk (which stops at the first
+        # component that exists but is not a searchable directory) tells them apart. The store and
+        # its entry are built with `.claude` searchable, then `.claude` is closed and REOPENED in a
+        # finally so the scratch home can be swept. Measured, both shells: spec hidden
+        # `0 unresolved stale` + one diagnostic naming "not usable"; mutant hidden
+        # `0 unresolved none` + one diagnostic naming "does not exist"; absent `0 unresolved none`
+        # under both builds.
+        mutant = with_mutation(
+            '    if _unleashed_store_absent "$_rs_store"; then\n',
+            '    if [ ! -e "$_rs_store" ] && [ ! -L "$_rs_store" ]; then\n',
+            path=READER)
+        claude_dir = os.path.join(self.home, ".claude")
+        read = (f'export HOME="{self.home}"\n'
+                f'_unleashed_read_store "{self.store}"\n' + self.OUTP)
+        try:
+            for shell in SHELLS:
+                for reader, is_mutant in ((READER, False), (mutant, True)):
+                    srcs = (AUTH, STORE, reader, PUB)
+                    self._wipe()
+                    rc, out, err = run_shell(shell, f'export HOME="{self.home}"\n' + self._mkstore()
+                                             + self._entry(), sources=srcs)
+                    self.assertEqual(0, rc, f"{shell}: the fixture store could not be built: {err!r}")
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    # (a) HIDDEN: the store exists, its grandparent is not searchable.
+                    os.chmod(claude_dir, 0o600)
+                    try:
+                        rc, out, err = run_shell(shell, read, sources=srcs)
+                    finally:
+                        os.chmod(claude_dir, 0o700)
+                    diags = self._diags(err)
+                    self.assertEqual(1, len(diags), f"{tag}: not one diagnostic: {err!r}")
+                    self.assertNotIn(self.home, err, f"{tag}: the diagnostic leaked a path")
+                    if not is_mutant:
+                        self.assertEqual("0 unresolved stale", out,
+                                         f"{tag}: a hidden store was not refused by rule -1: {out!r} {err!r}")
+                        self.assertIn("is not usable", diags[0], f"{tag}: not rule -1's line: {diags[0]!r}")
+                    else:
+                        self.assertEqual("0 unresolved none", out,
+                                         f"{tag}: the CONTROL did not fail — the full-path test told "
+                                         f"a hidden store from an absent one: {out!r} {err!r}")
+                        self.assertIn("does not exist", diags[0], f"{tag}: not rule 4's line: {diags[0]!r}")
+                    # The store was never touched by either build: still one entry, still 0700.
+                    self.assertEqual(1, len([f for f in os.listdir(self.store) if f.startswith("base.")]), tag)
+                    # (b) genuinely ABSENT: `unleashed-mail/` missing under a searchable `.claude`.
+                    shutil.rmtree(os.path.join(claude_dir, "unleashed-mail"))
+                    rc, out, err = run_shell(shell, read, sources=srcs)
+                    self.assertEqual("0 unresolved none", out, f"{tag}: an absent store is rule 4: {out!r} {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: not one diagnostic: {err!r}")
+                    self.assertIn("does not exist", err, f"{tag}: {err!r}")
+        finally:
+            os.unlink(mutant)
+            if os.path.isdir(claude_dir):
+                os.chmod(claude_dir, 0o700)
+
+    # ── row 164 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_164_a_symlink_at_base_key_is_refused_not_repaired(self):
+        """Row 164: `base.<key>` is a SYMLINK to a regular `0600` file elsewhere holding the publisher's own base: the specification refuses at ST-7 — `failed`, one diagnostic, the symlink UNTOUCHED, no transient left; under `[ ! -f ]` alone (`-f` FOLLOWS the link) the publisher `mv -f`s its transient over the link and reports `created`, and `base.<key>` is now a regular file. Both shells."""
+        # THE GUARD IS REACHED: a symlink entry fails ENT-1 in `_unleashed_auth_entry` (the
+        # write-or-skip test before ST-7), so the publisher takes the write branch and ST-7 is the
+        # next test — the specification's diagnostic is ST-7's own line ("exists and is not a
+        # regular file"), which is the proof. Row 113 pins the symlink-to-DIRECTORY, directory and
+        # DANGLING shapes; only this row pins the shape `[ ! -f ]` cannot see — a link to a regular
+        # file. Measured, both shells: spec `1 host-env failed`, one diagnostic, link intact, no
+        # `.pub.*`; mutant `1 host-env created`, no diagnostic, `base.<key>` a regular file, the
+        # linked-to file untouched either way (mv replaces the link, not what it points at).
+        mutant = with_mutation(
+            '        if [ -L "$_pb_entry" ] || { [ -e "$_pb_entry" ] && [ ! -f "$_pb_entry" ]; }; then\n',
+            '        if { [ -L "$_pb_entry" ] || [ -e "$_pb_entry" ]; } && [ ! -f "$_pb_entry" ]; then\n',
+            path=PUB)
+        elsewhere = os.path.join(self.home, "elsewhere")
+        real = os.path.join(elsewhere, "real")
+        publish = (f'export HOME="{self.home}"\n'
+                   f'_unleashed_publish "{self.store}" "{self.target}"\n' + self.OUTP)
+        try:
+            for shell in SHELLS:
+                for pub, is_mutant in ((PUB, False), (mutant, True)):
+                    srcs = (AUTH, STORE, READER, pub)
+                    self._wipe()
+                    shutil.rmtree(elsewhere, ignore_errors=True)
+                    rc, key, err = run_shell(shell, f'export HOME="{self.home}"\n' + self._mkstore()
+                                             + f'_unleashed_key "{self.target}"\nprintf "%s" "$_UNLEASHED_KEY"',
+                                             sources=srcs)
+                    self.assertEqual(0, rc, f"{shell}: the fixture store could not be built: {err!r}")
+                    self.assertTrue(key, f"{shell}: no key derived")
+                    os.makedirs(elsewhere, mode=0o700)
+                    with open(real, "w", encoding="utf-8") as fh:
+                        fh.write(self.target + "\n")               # the publisher's OWN base value
+                    os.chmod(real, 0o600)
+                    entry = os.path.join(self.store, "base." + key)
+                    os.symlink(real, entry)
+                    rc, out, err = run_shell(shell, publish, sources=srcs)
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    diags = self._diags(err)
+                    pubs = [f for f in os.listdir(self.store) if f.startswith(".pub.")]
+                    self.assertEqual([], pubs, f"{tag}: a transient was left behind: {pubs}")
+                    with open(real, encoding="utf-8") as fh:
+                        self.assertEqual(self.target + "\n", fh.read(), f"{tag}: the linked-to file was written")
+                    if not is_mutant:
+                        self.assertEqual("1 host-env failed", out, f"{tag}: ST-7 did not refuse: {out!r} {err!r}")
+                        self.assertEqual(1, len(diags), f"{tag}: not one diagnostic: {err!r}")
+                        self.assertIn("exists and is not a regular file", diags[0],
+                                      f"{tag}: not ST-7's line — the guard was not what refused: {diags[0]!r}")
+                        self.assertNotIn(self.home, err, f"{tag}: the diagnostic leaked a path")
+                        self.assertTrue(os.path.islink(entry), f"{tag}: the symlink at base.<key> was replaced")
+                        self.assertEqual(real, os.readlink(entry), f"{tag}: the link was re-pointed")
+                    else:
+                        self.assertEqual("1 host-env created", out,
+                                         f"{tag}: the CONTROL did not fail — `[ ! -f ]` alone refused "
+                                         f"the link: {out!r} {err!r}")
+                        self.assertEqual([], diags, f"{tag}: {err!r}")
+                        self.assertFalse(os.path.islink(entry), f"{tag}: the link survived the mutant's mv -f")
+                        self.assertTrue(os.path.isfile(entry), f"{tag}: base.<key> is not a regular file")
+                        with open(entry, encoding="utf-8") as fh:
+                            self.assertEqual(self.target + "\n", fh.read(), f"{tag}: not the transient's bytes")
+        finally:
+            os.unlink(mutant)
 
 
 

@@ -45,6 +45,13 @@
 #
 # Returns non-zero when either probe fails; callers treat that as a void round, never as a clean tree.
 tree_fingerprint() {
+    # HEAD FIRST. `status --porcelain` and `diff HEAD` are both EMPTY before and after a clean commit
+    # made during the review — the working tree matches the (new) HEAD — so an author who edited and
+    # committed while the arms ran left the fingerprint byte-identical, and the round certified a review
+    # of a repository that had changed under it, contrary to the "an author commit voids the round"
+    # rule the harnesses print. The resolved commit is part of the checkout's identity (codex, PR #67
+    # pass 8 — reproduced).
+    git -C "$1" rev-parse HEAD 2>/dev/null || return 1
     git -C "$1" status --porcelain 2>/dev/null || return 1
     printf '\036\n'   # a record separator so status and diff cannot alias across the boundary
     git -C "$1" diff HEAD 2>/dev/null || return 1
@@ -152,6 +159,14 @@ tree_fingerprint_report() {
     if [ -n "$_tf_new" ]; then
         printf '%s\n' "$_tf_new" >&2
     else
-        printf '(no new status line — the CONTENT of an already-modified tracked file changed)\n' >&2
+        # No new status line: either the CONTENT of an already-modified file changed, or — the case a
+        # clean commit mid-round produces — HEAD itself moved. Say which, from the fingerprint's own
+        # first line ($3 = the HEAD recorded before the run, when the caller has it).
+        if [ -n "${3:-}" ] && [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
+            printf '(no new status line — HEAD moved from %s to %s: a commit was made during the review)\n' \
+                "$3" "$(git -C "$1" rev-parse HEAD 2>/dev/null)" >&2
+        else
+            printf '(no new status line — the CONTENT of an already-modified tracked file changed)\n' >&2
+        fi
     fi
 }

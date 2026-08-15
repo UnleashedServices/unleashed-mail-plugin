@@ -162,7 +162,9 @@ if ! AFTER="$(tree_fingerprint "$REPO")"; then
 fi
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "GATE FAILED — the reviewer MUTATED the real working tree during the review:" >&2
-    tree_fingerprint_report "$REPO" "$BEFORE_STATUS"
+    # The first line of the fingerprint is the pre-run HEAD; `$'\n'`, not `\n` — inside a pattern `\n`
+    # is a literal `n` (measured: it stripped at the first `n` of the status text).
+    tree_fingerprint_report "$REPO" "$BEFORE_STATUS" "${BEFORE%%$'\n'*}"
     exit 3
 fi
 if [ -n "$PLAN_REL" ]; then
