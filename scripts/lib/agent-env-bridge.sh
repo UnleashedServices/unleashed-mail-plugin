@@ -22,6 +22,14 @@
 #
 # $1 = CLAUDE_PLUGIN_DATA value (may be empty)   $2 = CLAUDE_PLUGIN_ROOT
 
+# THE BRIDGE NEVER PUBLISHES (PUB-1), AND THIS IS THE STATEMENT THAT MAKES IT TRUE — placed FIRST,
+# before the value is exported and before paths.sh is sourced, because paths.sh publishes EAGERLY
+# at source time when the value is non-empty. The value the fence passes in is whatever the agent
+# content substituted — not necessarily authoritative, and possibly stale — so letting it publish
+# could create a durable SECOND entry and leave every ordinary reader in `conflict`; even the
+# normal case would perform the publication walk and could emit failure output into the agent's
+# shell (codex, PR #67). PUB-9 E0 maps this to `none`, which is exactly what a bridge should report.
+_UNLEASHED_PUBLISH_OK=0
 export CLAUDE_PLUGIN_DATA="${1-}"          # empty is PRESERVED, not unset — see below
 
 # Prefer the shared resolver so the bridge and the libs run one code path. GUARDED: paths.sh is an

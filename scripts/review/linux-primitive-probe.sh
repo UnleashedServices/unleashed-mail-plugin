@@ -54,8 +54,13 @@ printf 'If it does not, the plan must use `%%f` (hex st_mode) masked to 12 bits,
 printf -- '--- P-2 lstat semantics (must NOT follow the link, to match zstat -L) ---\n'
 printf 'link_to_dir  -c %%a %%s: %s   (a followed stat would report the DIRECTORY 700)\n' \
     "$(/usr/bin/stat -c '%a %s' -- link_to_dir 2>&1)"
+# stat is run SEPARATELY and its status saved first: a `$?` passed as the next printf argument
+# reports the status of the command BEFORE the printf, not of the stat inside `$(...)`, so a
+# failing dangling-symlink stat — the exact behaviour this line exists to measure — would still
+# print exit=0 and the Linux arm would be designed from wrong evidence (codex, PR #67).
+_dg_out="$(/usr/bin/stat -c '%a %s' -- dangling 2>&1)"; _dg_rc=$?
 printf 'dangling     -c %%a %%s: %s   exit=%s   (must SUCCEED; zstat without -L fails here)\n' \
-    "$(/usr/bin/stat -c '%a %s' -- dangling 2>&1)" "$?"
+    "$_dg_out" "$_dg_rc"
 printf '\n'
 
 # ---------------------------------------------------------------- P-4 under a POSIX default ACL

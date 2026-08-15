@@ -27,6 +27,20 @@ case "$SOURCE" in
     *) exit 0 ;;
 esac
 
+# COREDEV-2617 §4.2a SS-1 — the SessionStart notice, BEFORE the snapshot-only early exits below.
+# The resolver now records `conflict`, `stale` and `failed`, and publishers observing `conflict` or
+# `stale` are deliberately SILENT — so this hook is the one place the documented "visible conflict"
+# actually reaches a person (codex, PR #67: nothing else in production read the state). The
+# predicate is exactly SS-1's six-value partition: notice on {conflict, stale, failed}, silence on
+# {created, current, none} — `none` is also unresolved, and is deliberately quiet, because a
+# machine that has never published is the ordinary first-run case and not a fault. ONE line,
+# non-blocking, exit 0 regardless; the notice does not depend on a snapshot existing.
+case "${_UNLEASHED_POINTER_STATE:-none}" in
+    conflict|stale|failed)
+        hook_emit_session_context "unleashed-mail plugin state: the base store is ${_UNLEASHED_POINTER_STATE} — shells that do not receive the plugin-data environment (git hooks, plain terminals) cannot resolve plugin state until it is repaired. Inspect ~/.claude/unleashed-mail/bases/ (a conflict is two entries naming different bases; remove the stale one)."
+        exit 0 ;;
+esac
+
 # COREDEV-2617 / D': nothing was persisted, so there is nothing to restore. Exit 0 silently.
 unleashed_base_ok || exit 0
 SNAP="$(context_snapshot_path)"   # per-checkout snapshot (repo-hash namespaced)

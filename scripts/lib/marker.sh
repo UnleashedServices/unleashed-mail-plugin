@@ -54,13 +54,20 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
         _UNLEASHED_POINTER_STATE=none
         # PUB-1: this file is one of the four PUBLISHING family files, and the publish is reachable
         # ONLY from this branch. The publish is a side effect of having resolved, never a condition.
-        case "${HOME:-}" in /*)
-            if [ "${_UNLEASHED_PUBLISH_OK:-1}" != 0 ] && _upb_state_load; then
-                _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
-                _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
-                _UNLEASHED_BASE_OK=1
-            fi ;;
-        esac
+        # PUB-9 E0 -> `none` silent; E1 (HOME unusable) -> `failed` with its diagnostic; else publish.
+        if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then
+            :
+        else
+            case "${HOME:-}" in
+                /*) if _upb_state_load; then
+                        _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
+                        _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+                        _UNLEASHED_BASE_OK=1
+                    fi ;;
+                *)  _UNLEASHED_POINTER_STATE=failed
+                    printf 'unleashed-mail: plugin-state publication failed: HOME is empty or not absolute\n' >&2 ;;
+            esac
+        fi
     else
         _upb_home_ok=0
         case "${HOME:-}" in /*) _upb_home_ok=1 ;; esac

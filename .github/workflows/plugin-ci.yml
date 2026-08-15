@@ -198,6 +198,16 @@ jobs:
         id: hooks_manifest
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
 
+      # COREDEV-2617: the plan-citation linter was only BYTE-COMPILED here, so a stale `:N`, an
+      # undeclared enum value or an inconsistent phrase family stayed green as long as the Python
+      # parsed — defeating the reason the validator exists (codex, PR #67). Both modes run: the
+      # self-test proves the linter can fail, then it lints the plan it guards.
+      - name: Plan-citation linter (self-test + the COREDEV-2617 plan)
+        id: plan_lint
+        run: |
+          python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+          python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+
       - name: Hook stdin-simulation tests (COREDEV-2324)
         id: hook_tests
         run: bash scripts/test-hooks.sh

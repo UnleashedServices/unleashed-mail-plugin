@@ -2149,7 +2149,7 @@ class RowsChunk3(unittest.TestCase):
         # probe by neutering the ACL clause when the principal cannot be resolved — fail-open.
         pre = "_u_identity_probe() { return 1; }"
         mutant = with_mutation(
-            '    [ -n "${_U_PRINCIPAL+set}" ] || _u_principal || return 1',
+            '    _u_principal || return 1',
             '    if ! { [ -n "${_U_PRINCIPAL+set}" ] || _u_principal; }; then\n'
             '        _u_acl_ok() { return 0; }\n'
             '    fi',
@@ -2385,7 +2385,7 @@ class RowsChunk4(unittest.TestCase):
         # The mutation drops ENT-2 clause (2), the byte-count check — the only clause that sees
         # the second line, since `read` stops at the first newline in both shells.
         mutant = with_mutation(
-            '    [ "$_U_SIZE" = "$(( ${#_ae_line} + 1 ))" ] || return 1                     # (2)',
+            '    [ "$_U_SIZE" = "$(( _ae_bytes + 1 ))" ] || return 1                        # (2)',
             '    :                                                                          # (2)',
             path=READER)
         two_line = (f'_unleashed_key "{self.target}"\n'
@@ -2429,7 +2429,7 @@ class RowsChunk4(unittest.TestCase):
         # because the fail-open path differs: bash's truncated line matches the PLAIN key, zsh's
         # kept-NUL line matches the _x00-suffixed key (ENC-1: bytes < 0x20 encode as _x<hh>).
         m1 = with_mutation(
-            '    [ "$_U_SIZE" = "$(( ${#_ae_line} + 1 ))" ] || return 1                     # (2)',
+            '    [ "$_U_SIZE" = "$(( _ae_bytes + 1 ))" ] || return 1                        # (2)',
             '    :                                                                          # (2)',
             path=READER)
         mutant = with_mutation(
@@ -2783,9 +2783,10 @@ class RowsChunk4(unittest.TestCase):
         """Row 99: with _UNLEASHED_PUBLISH_OK=0 the agent fence resolves without writing any entry."""
         # PUB-1/step 1: the publish is a side effect of having resolved, and the fence turns the
         # side effect off — never the resolution. The mutation ignores the fence.
+        # The fence is PUB-9's E0 branch; the mutation makes E0 unreachable so the publish runs.
         mutant = with_mutation(
-            '            if [ "${_UNLEASHED_PUBLISH_OK:-1}" != 0 ] && _unleashed_home_ok \\',
-            '            if _unleashed_home_ok \\',
+            '            if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then',
+            '            if false; then',
             path=PATHS_C4)
         try:
             for shell in SHELLS:
@@ -3637,7 +3638,7 @@ class RowsChunk5(unittest.TestCase):
         ACL answer replaced by the fixture (§7 step 3f(iv))."""
         body = (f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
                 'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
-                'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL _U_PRINCIPAL_PROBED\n'
                 '_u_acl_enumerate() { printf %b \'' + answer_esc + '\'; }\n'
                 f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
                 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" '
@@ -4131,7 +4132,7 @@ class RowsChunk6(unittest.TestCase):
         # walk raises the `ls -lde` count too, so an enumerator-counting harness would pass that
         # row while counting no `id` at all — the defect round 110 fixed in BUD-1.
         cnt = os.path.join(self.home, "idprobe-count")
-        m1 = with_mutation('    [ -n "${_U_PRINCIPAL+set}" ] && return 0', '    :', path=AUTH)
+        m1 = with_mutation('    [ "${_U_PRINCIPAL_PROBED:-}" = 1 ] && return 0', '    :', path=AUTH)
         m2 = with_mutation('        _u_stat "$_u_ac_c" || return 1                  # must exist',
                            '        _u_principal || return 1\n'
                            '        _u_stat "$_u_ac_c" || return 1                  # must exist',

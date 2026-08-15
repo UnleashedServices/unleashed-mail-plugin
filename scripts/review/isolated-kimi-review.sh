@@ -83,7 +83,14 @@ BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
 # the plan is untouched, the review looks clean, and six scripts have been rewritten beside it.
 TREE_BASELINE="$(git -C "$TREE/tree" status --porcelain --untracked-files=all 2>/dev/null || true)"
 
-( cd "$TREE/tree" && timeout "$TIMEOUT" kimi -p "$(cat "$REPO/$PROMPT_REL")" --output-format text ) > "$OUT" 2>&1
+# Through the repository's pty-capture.py --timeout, as the agy and codex harnesses are: `timeout`
+# is GNU coreutils and is NOT on stock macOS, so a bare `timeout` exits 127 before Kimi starts and
+# the harness captures nothing (codex, PR #67). The wrapper also owns the allocated transcript leaf.
+PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
+# No `--allocated`: this harness takes an <out-transcript> path it creates itself, not a leaf
+# reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist.
+( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
+    kimi -p "$(cat "$REPO/$PROMPT_REL")" --output-format text ) >/dev/null 2>&1
 STATUS=$?
 
 AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"

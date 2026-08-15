@@ -123,8 +123,15 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
             _UNLEASHED_BASE_OK=1
             _UNLEASHED_BASE_SOURCE='env'
             _UNLEASHED_POINTER_STATE=none
-            if [ "${_UNLEASHED_PUBLISH_OK:-1}" != 0 ] && _unleashed_home_ok \
-               && _unleashed_load_state_machinery; then
+            # PUB-9's exits, in order: E0 (publishing disabled) -> `none`; E1 (HOME unusable) ->
+            # `failed` WITH its one diagnostic — an unavailable publication must not read as one that
+            # was deliberately disabled (codex, PR #67); otherwise publish, which sets the state.
+            if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then
+                :                                            # E0: none, silent
+            elif ! _unleashed_home_ok; then
+                _UNLEASHED_POINTER_STATE=failed              # E1
+                printf 'unleashed-mail: plugin-state publication failed: HOME is empty or not absolute\n' >&2
+            elif _unleashed_load_state_machinery; then
                 _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
                 # The publish sets POINTER_STATE and may set SOURCE; the resolved value is unchanged.
                 _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"

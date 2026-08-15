@@ -44,7 +44,11 @@ _u_stat() {
 # NO enumerator, which is the condition AUTH-1(h)'s publisher carve-out is for.
 # BUD-1 derives this count as 0 or 1: one iff at least one component is evaluated.
 _u_platform() {
-    [ -n "${_U_PLATFORM+set}" ] && return "${_U_PLATFORM_RC:-0}"
+    # Same rule as `_u_principal`: cached under a flag only THIS function sets, never on the
+    # variable's presence — a pre-set `_U_PLATFORM=Darwin` from the sourcing shell must not
+    # select an arm the machine does not have.
+    [ "${_U_PLATFORM_PROBED:-}" = 1 ] && return "${_U_PLATFORM_RC:-0}"
+    _U_PLATFORM_PROBED=1
     _U_PLATFORM="$(/usr/bin/uname -s 2>/dev/null)" || { _U_PLATFORM=""; _U_PLATFORM_RC=1; return 1; }
     case "$_U_PLATFORM" in
         Darwin|Linux) _U_PLATFORM_RC=0 ;;
@@ -63,7 +67,15 @@ _u_identity_probe() {
 }
 
 _u_principal() {
-    [ -n "${_U_PRINCIPAL+set}" ] && return 0
+    # THE CACHE IS AN INTERNAL FLAG, NOT THE VALUE'S PRESENCE. These libs are SOURCED into a
+    # consumer's shell, so `_U_PRINCIPAL` may already exist there — inherited, exported, or set by
+    # a hostile caller — and a presence check would ACCEPT it without ever running `id -un`. An
+    # injected value equal to a foreign `user:<name>` ACE's principal would then be treated as the
+    # effective user, that principal's `allow` rights exempted, and a chain authenticated that must
+    # be refused (codex, PR #67; reproduced: pre-set `_U_PRINCIPAL=daemon` survived this function).
+    # The probe result is cached under a flag ONLY this function sets, and the value is
+    # re-derived whenever that flag is absent, whatever the variable currently holds.
+    [ "${_U_PRINCIPAL_PROBED:-}" = 1 ] && return 0
     # §7 step 3f(iii) — the IDENTITY-PROBE SEAM, same principle: `/usr/bin/id` is invoked by
     # absolute path, so no unprivileged harness can make it fail by manipulating PATH, and a
     # fixture presenting a FAILED probe is only reachable by redefining this accessor.
@@ -77,6 +89,7 @@ _u_principal() {
     case "$_U_PRINCIPAL" in
         ''|*"$_u_pr_nl"*) unset _U_PRINCIPAL; return 1 ;;
     esac
+    _U_PRINCIPAL_PROBED=1
     return 0
 }
 
@@ -211,12 +224,24 @@ _u_acl_ok() {
 # must exist, not be a symbolic link, not be group- or other-writable, satisfy ANCHOR-1's ownership
 # rule and satisfy the ACL condition. Neither chain carries a clause the other lacks.
 _unleashed_auth_chain() {
+    # THIS BUILD IS DARWIN-ONLY, AND SAYS SO RATHER THAN IMPLYING OTHERWISE. AUTH-1(h) grants a
+    # PUBLISHER a carve-out on a platform where no enumerator EXISTS (a successful `uname` naming
+    # neither Darwin nor Linux); the reader never gets it. Honouring that needs a publisher/reader
+    # role threaded through this walk, and it is DELIBERATELY DEFERRED with the Linux arms — plan
+    # rows 106/107/120/121 are recorded as unbuildable under this scope for exactly that reason.
+    # So every non-Darwin outcome refuses uniformly here, publisher and reader alike, and
+    # `_u_platform`'s distinct "no enumerator" status is kept ONLY so the future carve-out has
+    # something to branch on. codex (PR #67, #6) is right that the surrounding contract describes a
+    # carve-out this branch does not honour; the resolution is to state the gap, not to build the
+    # carve-out into an arm that has no enumerator to guard.
     _u_platform
     case "$?" in
         0) [ "$_U_PLATFORM" = Darwin ] || return 1 ;;   # Linux arms are not built (§4.2a-P)
-        *) return 1 ;;                                  # failed or enumerator-less: UNEVALUABLE
+        *) return 1 ;;   # a FAILED probe (1) or an ENUMERATOR-LESS platform (2): both refuse
     esac
-    [ -n "${_U_PRINCIPAL+set}" ] || _u_principal || return 1
+    # `_u_principal` decides for itself whether it is cached (on ITS OWN flag); a presence test on
+    # the variable here would re-open the pre-set-value bypass that codex found (PR #67, #5).
+    _u_principal || return 1
 
     _u_ac_in_prefix=1                  # ANCHOR-1: we begin inside the SYSTEM PREFIX run
     _u_ac_acc=""; _u_ac_rest="$1"

@@ -607,7 +607,7 @@ class MutantRowsThroughTheProductionResolver(unittest.TestCase):
         override = ('_u_acl_enumerate() { printf %b ' + repr(answer).replace("'", '"') + '; }\n')
         body = (f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
                 'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
-                'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL _U_PRINCIPAL_PROBED\n'
                 + override +
                 f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
                 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"')
@@ -653,7 +653,7 @@ class MutantRowsThroughTheProductionResolver(unittest.TestCase):
             shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
             body = (f'_unleashed_publish "{self.store}" "{self.base}" 2>/dev/null\n'
                     'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE\n'
-                    'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                    'unset _UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL _U_PRINCIPAL_PROBED\n'
                     '_u_identity_probe() { return 1; }\n'
                     f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
                     'printf "%s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_POINTER_STATE"')

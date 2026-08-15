@@ -38,7 +38,16 @@ _unleashed_auth_entry() {
     # the file is longer than the line), (3) the zsh-only NUL test catches the same in ZSH (which
     # keeps the NUL, so the byte count matches).
     IFS= read -r _ae_line < "$_ae_p" || return 1     # (1)
-    [ "$_U_SIZE" = "$(( ${#_ae_line} + 1 ))" ] || return 1                     # (2)
+    # (2) is a BYTE comparison, and `${#var}` counts CHARACTERS under a UTF-8 locale — so a base
+    # such as `/café` reads as 14 characters against a 15-byte line, the equality fails, and every
+    # non-ASCII base marks its own store `stale` (codex, PR #67; reproduced in both shells under
+    # C.UTF-8). The length is therefore taken under LC_ALL=C, with the caller's locale saved and
+    # restored exactly as ENC-3 requires of the encoder — an EMPTY LC_ALL is not an absent one.
+    if [ -n "${LC_ALL+set}" ]; then _ae_lc_set=1; _ae_lc_val="$LC_ALL"; else _ae_lc_set=0; fi
+    LC_ALL=C
+    _ae_bytes=${#_ae_line}
+    if [ "$_ae_lc_set" = 1 ]; then LC_ALL="$_ae_lc_val"; else unset LC_ALL; fi
+    [ "$_U_SIZE" = "$(( _ae_bytes + 1 ))" ] || return 1                        # (2)
     if [ -n "${ZSH_VERSION:-}" ]; then
         case "$_ae_line" in *$'\0'*) return 1 ;; esac                          # (3)
     fi
