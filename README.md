@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.7.1
+# UnleashedMail — Claude Code Plugin v2.8.0
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,20 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.0
+
+- **The plugin-state base store (`COREDEV-2617`)** — a shell that never receives `CLAUDE_PLUGIN_DATA`
+  (a git hook, an ordinary terminal, a zsh Bash tool) now discovers the plugin-data base from a store
+  each publisher records under `~/.claude/unleashed-mail/bases/`. Entry names are an injective
+  encoding of the base value, so different bases never collide and a disagreement surfaces as a
+  visible `conflict` rather than a silent second state directory. All five resolver copies
+  (`paths.sh`, `marker.sh`, `log.sh`, `context.sh`, `agent-env-bridge.sh`) consult it; the bridge
+  reads and never publishes. Darwin arms only — the Linux arms wait on the CI primitive probe.
+  Proved by **a mutant suite that RUNS the plan's obligation table**: 100 rows executed as
+  spec-vs-mutant tests in both bash 3.2.57 and zsh 5.9, on top of the 32 behavioural tests that
+  demonstrate the capability end to end. Also fixed en route: a pre-existing zsh path-derivation
+  defect in `context.sh` reachable from the swift-reviewer fence.
 
 ### v2.7.1
 

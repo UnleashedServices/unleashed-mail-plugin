@@ -13,6 +13,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-08-14
+
 ### Added
 
 - **COREDEV-2617 §4.2a — the plugin-state base store.** A shell that never receives
