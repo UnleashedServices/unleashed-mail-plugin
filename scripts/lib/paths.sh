@@ -38,6 +38,18 @@
 #                             never on a string comparison against the sentinel — otherwise a caller
 #                             could fake resolution by exporting the sentinel text.
 #   _UNLEASHED_BASE_DIAGNOSED  guards the ONE diagnostic per process.
+#   _UNLEASHED_BASE_PID       the pid of the process that resolved — THE once-per-process key.
+# NOTHING HERE IS KEYED ON A BARE FLAG, because a flag is inheritable and a function is not (codex,
+# PR #67 pass 7 — each of these was reproduced): a child process that inherited
+# `_UNLEASHED_BASE_OK=1` alone skipped resolution and `marker_dir` returned `/.state` — the ROOT
+# path D′ exists to prevent; an inherited `_UNLEASHED_STATE_LOADED=1` made the loader report the
+# machinery present in a shell where `_unleashed_read_store` was undefined; an inherited
+# `_UNLEASHED_PATHS_SH_LOADED=1` made this file define nothing at all. So: "already sourced" is
+# `command -v` on a function this file defines; "machinery loaded" is `command -v` on its four
+# entry functions; "resolved in this process" is `_UNLEASHED_BASE_PID = $$` — a subshell shares
+# `$$` and the resolution, a child process has its own and resolves afresh, and an environment
+# cannot carry the right value by accident. The resolver RESETS `_UNLEASHED_BASE_DIAGNOSED` on
+# entry for the same reason: cache only on state the entry point itself resets.
 # EAGER: resolution runs at source time, in the sourcing shell — not on first use. A value first
 # assigned inside `$(marker_dir)` lives in that subshell and is gone on return, so a lazily-built
 # "cache" silently re-resolves on every call.
@@ -53,9 +65,9 @@
 # The poisoned sentinel. Literal, fixed and greppable — tests assert on this exact string.
 _UNLEASHED_BASE_SENTINEL='/dev/null/unresolved-plugin-base'
 
-# Idempotent: these libs are frequently sourced more than once in a single shell.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-    _UNLEASHED_PATHS_SH_LOADED=1
+# Idempotent: these libs are frequently sourced more than once in a single shell. Keyed on a
+# FUNCTION this file defines, not on a flag (see the protocol note above).
+if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
 
     # The pre-2617 expansion. Kept ONLY so the drift matrix can assert the legacy behaviour it
     # documents; no primitive calls it.
@@ -87,19 +99,20 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
     _UNLEASHED_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _UNLEASHED_LIB_DIR="."
 
     _unleashed_load_state_machinery() {
-        [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
-        _UNLEASHED_STATE_LOADED=1
+        # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+        # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+        # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+        # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+        if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+            && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+            return 0
+        fi
         _usm_d="$_UNLEASHED_LIB_DIR"
         for _usm_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
-            if [ -r "$_usm_d/$_usm_f.sh" ]; then
-                # shellcheck source=/dev/null
-                . "$_usm_d/$_usm_f.sh"
-            else
-                _UNLEASHED_STATE_RC=1
-                return 1
-            fi
+            [ -r "$_usm_d/$_usm_f.sh" ] || return 1
+            # shellcheck source=/dev/null
+            . "$_usm_d/$_usm_f.sh"
         done
-        _UNLEASHED_STATE_RC=0
         return 0
     }
 
@@ -114,7 +127,8 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
 
     # Eager, source-time resolution. Sets the four protocol variables exactly once per process.
     unleashed_resolve_base() {
-        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0        # already resolved in this shell
+        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process
+        _UNLEASHED_BASE_DIAGNOSED=                           # the entry point resets what it caches on
         if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
             # Step 1 — the variable wins, and it is the ONLY branch from which a publish is
             # reachable (PUB-1). The publish is a side effect of having resolved, never a condition
@@ -155,6 +169,7 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
                 printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
             fi
         fi
+        _UNLEASHED_BASE_PID=$$
         return 0
     }
 

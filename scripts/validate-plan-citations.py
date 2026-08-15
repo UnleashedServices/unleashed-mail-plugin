@@ -163,6 +163,19 @@ def check_internal(lines, body, start, end, problems):
     return checked
 
 
+_SENTENCE_END = re.compile(r"[.!?](?=\s)|\n\s*\n|\|")
+
+
+def _sentence_around(flat, start, end):
+    """The sentence of `flat` that contains [start, end): from the previous sentence end to the next."""
+    lo = 0
+    for m in _SENTENCE_END.finditer(flat, 0, start):
+        lo = m.end()
+    m = _SENTENCE_END.search(flat, end)
+    hi = m.start() if m else len(flat)
+    return flat[lo:hi]
+
+
 def check_external(text, repo, problems, flat):
     checked = 0
     for pat, relpath, label in EXTERNAL_RULES:
@@ -177,8 +190,12 @@ def check_external(text, repo, problems, flat):
             if re.search(rf"^#{{2,4}} {re.escape(sec)}[ .—-]", doc, re.M):
                 continue
             # A CORRECTION is not a claim. The plan deliberately records that §4.5b does NOT exist here;
-            # flagging that sentence forever is how a noisy gate becomes a disabled one.
-            ctx = flat[max(0, m.start() - 260): m.end() + 260]
+            # flagging that sentence forever is how a noisy gate becomes a disabled one. The exemption is
+            # scoped to THE SENTENCE THAT CONTAINS THE CITATION — a 260-character window let a negation in
+            # a NEIGHBOURING sentence launder an unrelated fabricated reference (`This old section does not
+            # exist. A separate rule relies on §9.9z …` passed; codex, PR #67 pass 7). A sentence ends at
+            # `.`/`!`/`?` followed by whitespace, at a blank line, or at a table-cell bar.
+            ctx = _sentence_around(flat, m.start(), m.end())
             if re.search(r"does not exist|does NOT exist|no §|there is\s+no|lives only on|unmerged|"
                          r"zero hits|not exist in this tree|prospective", ctx):
                 continue
@@ -318,6 +335,10 @@ SEEDS = [
     ("cite-external", lambda s: s.replace("## 5. Risk register",
                                           "* a lock, the same primitive §4.9z of the journal\n"
                                           "  plan settled on, is taken.\n\n## 5. Risk register", 1)),
+    # The laundering shape (codex, PR #67 pass 7): a negation in the NEIGHBOURING sentence.
+    ("cite-external", lambda s: s.replace("## 5. Risk register",
+                                          "This old section does not exist. A separate rule relies on "
+                                          "§9.9z of the journal plan.\n\n## 5. Risk register", 1)),
     # CONTENT-RELATIVE, not a hard-coded line: the seed anchored on `:85` for as long as that was the pin,
     # and when the pin was relocated to follow the script the seed silently found nothing — CI red on
     # PR #67 for two passes with "ANCHOR NOT FOUND", which is this self-test doing its job one level up.

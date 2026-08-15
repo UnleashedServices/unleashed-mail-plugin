@@ -97,8 +97,12 @@ _unleashed_write_transient() {
       [ -n "${ZSH_VERSION:-}" ] && setopt no_clobber_empty 2>/dev/null
       { _wt_opened=1; printf '%s\n' "$_wt_value" >&9 || exit 1; } 9>"$_wt_p" \
           || { [ "$_wt_opened" = 0 ] && exit 2; exit 1; }
-      exit 0 ) >/dev/null 2>&1
-    case $? in
+      exit 0 ) >/dev/null 2>&1 && _wt_rc=0 || _wt_rc=$?
+    # `&& … || _wt_rc=$?` rather than a bare subshell followed by `case $?`: these libraries are sourced
+    # into shells the plugin does not control, and under `set -e` a bare command's non-zero status
+    # ABORTS THE SOURCING SHELL before the next line can classify it — measured: `set -e; . paths.sh`
+    # with the store unwritable exited 2 with no diagnostic in both shells (codex, PR #67 pass 7).
+    case $_wt_rc in
         0) ;;
         # The open was refused. A LOST RACE is the case where the name now EXISTS — another
         # publisher, or same-uid interference, got there first — and only that case is 2. A refusal
@@ -194,7 +198,8 @@ _unleashed_publish() {
         while [ "$_pb_try" -lt 3 ]; do
             _pb_try=$(( _pb_try + 1 ))
             _unleashed_transient_name "$_pb_store" "$_pb_key" 1 || { _pb_wrc=2; continue; }
-            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; _pb_wrc=$?
+            # errexit-safe capture: a bare call that returns 1 or 2 would abort a `set -e` sourcer here.
+            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value" && _pb_wrc=0 || _pb_wrc=$?
             [ "$_pb_wrc" = 2 ] || break                    # 0 = written, 1 = a real E6
         done
         if [ "$_pb_wrc" = 2 ]; then

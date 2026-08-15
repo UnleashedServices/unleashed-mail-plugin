@@ -22,7 +22,9 @@
 #
 # The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
 # or three libs sourced in one shell would otherwise each emit one.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+# "paths.sh already sourced" is a FUNCTION it defines, never a flag an environment can carry
+# (codex, PR #67 pass 7 — see the protocol note in paths.sh).
+if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
     _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
     # shellcheck source=scripts/lib/paths.sh
     [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
@@ -33,18 +35,23 @@ fi
 # this file's own directory; when it is absent the resolution degrades to the D′ envelope, which is
 # never worse than the pre-2617 behaviour.
 _upb_state_load() {
-    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
-    _UNLEASHED_STATE_LOADED=1
-    _UNLEASHED_STATE_RC=1
+    # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+    # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+    # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+    # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+        && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+        return 0
+    fi
     for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
         [ -r "${_upb_d:-.}/$_upb_f.sh" ] || return 1
         # shellcheck source=/dev/null
         . "${_upb_d:-.}/$_upb_f.sh"
     done
-    _UNLEASHED_STATE_RC=0
     return 0
 }
-if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? — `$$`, never a flag
+    _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
@@ -85,6 +92,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
             fi
         fi
     fi
+    _UNLEASHED_BASE_PID=$$
 fi
 # The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
 # undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
@@ -110,27 +118,48 @@ log_dir() {
 # $1 = log basename (e.g. error-log.jsonl), $2 = the JSON line (no trailing newline),
 # $3 = max lines before rotation (default 500). On rotation the newest max/2 lines are
 # kept (so we don't rotate on every subsequent write). Fail-open, stderr-clean.
+#
+# COREDEV-2617 §4.2a: EVERY persisted record carries `base_resolution` naming the resolution that
+# actually ran (`host-env` | `pointer` | `unresolved`) — the markers, the round bindings and the
+# PreCompact snapshot stamp it where they build their record. Log records are built by four separate
+# producers (`stop-failure-log.sh`, `build-failure-log.sh`, `permission-denied-log.sh`,
+# `swift-build-verify.sh`), and none of them did, so a record written under a `pointer` resolution
+# was indistinguishable from one written under `host-env` (codex, PR #67 pass 7). The stamp is
+# applied HERE, in the one writer every producer goes through — a rule that lives in one producer
+# is a rule the next producer will not have — and it is applied only when the line is a JSON
+# object without the field already: the last `}` is the object's close (a JSON object line always
+# ends with it), the value is one of three fixed tokens, and an empty object takes no separator.
+# A line that is not an object is written unchanged; the producer owns its shape.
 log_append() {
     unleashed_base_ok || return 0        # D' (COREDEV-2617): unresolved base persists nothing.
-    local name="$1" line="$2" max="${3:-500}" dir="" path="" tmp="" keep="" n=""
+    local name="$1" line="$2" max="${3:-500}" dir="" _la_path="" tmp="" keep="" n="" body=""
     case "$max" in ''|*[!0-9]*) max=500 ;; esac
+    case "$line" in
+        *'"base_resolution"'*) : ;;                       # the producer stamped it itself
+        \{*\})
+            body="${line#\{}"; body="${body%\}}"
+            case "$body" in
+                *[!\ ]*) line="{${body},\"base_resolution\":\"${_UNLEASHED_BASE_SOURCE:-unresolved}\"}" ;;
+                *)       line="{\"base_resolution\":\"${_UNLEASHED_BASE_SOURCE:-unresolved}\"}" ;;
+            esac ;;
+    esac
     dir="$(log_dir)"
     mkdir -p "$dir" 2>/dev/null || return 0
-    path="$dir/$name"
+    _la_path="$dir/$name"
     # `2>/dev/null` BEFORE the `>>` so an OPEN failure (path is a dir / unwritable) is also
     # suppressed — bash applies redirects left-to-right, so a trailing `2>/dev/null` would NOT
     # catch the open error and the shell would print the full (PII-bearing) path to stderr.
-    printf '%s\n' "$line" 2>/dev/null >> "$path" || return 0
+    printf '%s\n' "$line" 2>/dev/null >> "$_la_path" || return 0
     # `2>/dev/null` BEFORE the `<` input redirect so an open-for-read failure (e.g. the file is
     # write-only) can't print the path to stderr either.
-    n="$(wc -l 2>/dev/null < "$path" | tr -d '[:space:]')"
+    n="$(wc -l 2>/dev/null < "$_la_path" | tr -d '[:space:]')"
     case "$n" in ''|*[!0-9]*) return 0 ;; esac
     if [ "$n" -gt "$max" ]; then
         keep=$(( max / 2 ))
         [ "$keep" -gt 0 ] || keep=1
-        tmp="${path}.tmp.$$"
-        if tail -n "$keep" "$path" 2>/dev/null > "$tmp"; then
-            mv "$tmp" "$path" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+        tmp="${_la_path}.tmp.$$"
+        if tail -n "$keep" "$_la_path" 2>/dev/null > "$tmp"; then
+            mv "$tmp" "$_la_path" 2>/dev/null || rm -f "$tmp" 2>/dev/null
         else
             rm -f "$tmp" 2>/dev/null
         fi

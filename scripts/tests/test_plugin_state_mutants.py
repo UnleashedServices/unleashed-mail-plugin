@@ -9,6 +9,7 @@ campaign's findings file rather than faked here.
 
 Assembled from six parallel drafting agents; every row carries the run evidence its drafter measured,
 and THIS suite's own run is the gate — the evidence informed assembly, it is not the verification.
+Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file.
 """
 
 import os
@@ -632,24 +633,29 @@ class RowsChunk1(unittest.TestCase):
     # ── row 123 ───────────────────────────────────────────────────────────────────────────────────
 
     def test_row_123_ifs_read_r_preserves_backslash_and_trailing_space(self):
-        """An entry holding backslash + trailing space resolves; plain `read` mangles it ⇒ stale."""
-        # TGT-1 permits both bytes. Measured (probe + this test): plain `read` yields the mangled
-        # value in BOTH shells — the backslash is eaten and the trailing space IFS-stripped — so
-        # ENT-2/ENT-3 fail and the store refuses a healthy entry. Row 4 is the multi-line case and
-        # cannot discriminate this single-line transformation.
+        """An entry holding backslash + trailing space resolves in both shells; in BASH a plain `read` mangles it ⇒ stale. The zsh arm reads raw bytes through `sysread` (ENT-2b) and has no `read` to mutate — its half asserts the SPEC only (plan row 160 records this consequence)."""
+        # TGT-1 permits both bytes. Measured (probe + this test): under bash's ENT-2b arm a plain
+        # `read -n … -u 9` yields the mangled value — the backslash is eaten and the trailing space
+        # IFS-stripped — so ENT-2/ENT-3 fail and the store refuses a healthy entry. Row 4 is the
+        # multi-line case and cannot discriminate this single-line transformation. zsh's arm has
+        # no `IFS= read -r` at all (`sysread` delivers the bytes untouched), so the mutation has
+        # no target there and both builds resolve; that half is the specification's behaviour only.
         mutant = with_mutation(
-            '    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)\n',
-            '    { read _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)\n',
+            'IFS= read -r -n "$_ae_bound" -u 9 _ae_line',
+            'read -n "$_ae_bound" -u 9 _ae_line',
             path=READER)
         weird = os.path.join(self.home, "a\\b ")           # backslash, trailing space
         os.makedirs(weird)
         os.chmod(weird, 0o700)
         try:
             for shell in SHELLS:
+                bash = shell.endswith("bash")
                 for srcs, want, want_diag in (
                         ((AUTH, STORE, READER, PUB), f"1 pointer none|{weird}", 0),
                         (self._sources(mutant, READER),
-                         "0 unresolved stale|/dev/null/unresolved-plugin-base", 1)):
+                         ("0 unresolved stale|/dev/null/unresolved-plugin-base" if bash
+                          else f"1 pointer none|{weird}"),
+                         1 if bash else 0)):
                     self._fresh()
                     body = ('_unleashed_key "$ROW123_T"\n'
                             f'printf "%s\\n" "$ROW123_T" > "{self.store}/base.$_UNLEASHED_KEY"\n'
@@ -1215,11 +1221,13 @@ class RowsChunk2(unittest.TestCase):
 
     # ── row 117 ───────────────────────────────────────────────────────────────────────────────────
     def test_row_117_the_readers_type_guard_keeps_a_fifo_from_hanging_the_process(self):
-        """Row 117: a FIFO named base.<k> yields stale + one diagnostic and the process EXITS; the symlink-only mutant blocks forever."""
+        """Row 117: a FIFO named base.<k> yields stale + one diagnostic and the process EXITS promptly in both shells; in BASH the symlink-only mutant blocks forever. zsh half subsumed by ENT-2b / row 160: its arm opens with `sysopen -o nonblock`, so a FIFO cannot hang zsh with or without the `[ -f ]` guard, and that half asserts the SPEC only."""
         # RD-12: the TYPE is established before anything is opened. The mutation reverts to the
-        # symlink-only pre-read guard, so the reader opens the FIFO and `read` blocks waiting for
-        # a writer that never comes — measured as a harness timeout in both shells. This is the
-        # READER's obligation: ST-7 keeps the PUBLISHER from such an entry independently (row 116).
+        # symlink-only pre-read guard, so bash's reader opens the FIFO (`9<`) and blocks waiting
+        # for a writer that never comes — measured as a harness timeout. In zsh ENT-2b's
+        # non-blocking open returns at once and `zstat -f` refuses the FIFO's type, so the mutant
+        # returns `stale` exactly as the specification does; the hang oracle is bash-only. This is
+        # the READER's obligation: ST-7 keeps the PUBLISHER from such an entry independently (row 116).
         mutant = with_mutation('    [ -f "$_ae_p" ] || return 1', '    :', path=READER)
         try:
             setup = self.ENTRY.format(t=self.base, s=self.store)
@@ -1228,9 +1236,18 @@ class RowsChunk2(unittest.TestCase):
             ) + self.TUPLE.format(s=self.store)
             for shell in SHELLS:
                 self._fresh()
-                rc, out, err = run_shell(shell, body)
+                # The specification must RETURN — a hang here is the defect, so it runs under the
+                # same timeout the mutant does.
+                src = "".join(f'. "{s}"\n' for s in (AUTH, STORE, READER, PUB)) + body
+                try:
+                    p = subprocess.run([shell, "-c", src], capture_output=True, text=True, timeout=5)
+                    out, err = p.stdout, p.stderr
+                except subprocess.TimeoutExpired:
+                    self.fail(f"{shell}: the SHIPPED reader hung on the FIFO")
                 self.assertEqual("0 unresolved stale", out, f"{shell}: shipped: {err}")
                 self.assertEqual(1, len(err.strip().splitlines()), f"{shell}: one diagnostic")
+                if not shell.endswith("bash"):
+                    continue                    # zsh: no hang either way — see the docstring
                 self._fresh()
                 src = "".join(f'. "{s}"\n' for s in (AUTH, STORE, mutant, PUB)) + body
                 try:
@@ -1289,8 +1306,11 @@ class RowsChunk2(unittest.TestCase):
         # (`read` drops the NUL: size = len+1 = ${#line}+1) and RESOLVES; zsh keeps the NUL and
         # still refuses on the byte count, so the zsh cells cannot discriminate — by the row's own
         # design the discriminating cell is bash.
-        mutant = with_mutation('{ IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1',
-                               '{ IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || :', path=READER)
+        # The bash arm's read is bound to descriptor 9 (ENT-2b); the mutation swallows the read's
+        # status inside that arm so `_ae_ok=1` is reached whether or not a newline was seen.
+        mutant = with_mutation('&& IFS= read -r -n "$_ae_bound" -u 9 _ae_line && _ae_ok=1',
+                               '&& { IFS= read -r -n "$_ae_bound" -u 9 _ae_line || :; } && _ae_ok=1',
+                               path=READER)
         try:
             key = self._key(self.base)
             body = self.TUPLE.format(s=self.store)
@@ -2755,7 +2775,7 @@ class RowsChunk4(unittest.TestCase):
         # is identical on both shell arms — a publisher cell would fail this row against a
         # CORRECT implementation (BUD-1), so the fixture is reader-only.
         mutant = with_mutation(
-            '        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0        # already resolved in this shell',
+            '        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process',
             '        :                                                   # re-resolve per consumer',
             path=PATHS_C4)
         cnt = os.path.join(self.home, "cnt")
@@ -3048,24 +3068,23 @@ class RowsChunk4(unittest.TestCase):
         # rc=1, mutant victim overwritten). The `! -L` guard stops the trap re-firing on its own link.
         # Both builds report `failed` — the P-4 readback of the substituted symlink refuses at E6 and
         # the ST-7 cleanup removes the link — so the oracle is the VICTIM's content, not the state.
+        # The OLD text is the SHIPPED create-and-write block, sliced from the CURRENT file between
+        # two anchors — the subshell's opening line and the `esac` that closes its status `case` —
+        # so a comment or capture rewrite inside the block cannot silently strand this row on a
+        # pattern that no longer matches (it drifted twice on PR #67). Both anchors must be unique.
+        with open(PUB, encoding="utf-8") as fh:
+            pub_text = fh.read()
+        head_153 = "    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0\n"
+        tail_153 = '    esac\n'
+        self.assertEqual(1, pub_text.count(head_153), "row 153: the subshell's opening line is not unique")
+        start_153 = pub_text.index(head_153)
+        end_153 = pub_text.index(tail_153, start_153) + len(tail_153)
+        old_153 = pub_text[start_153:end_153]
+        self.assertEqual(1, pub_text.count(old_153), "row 153: the sliced block is not unique")
+        self.assertIn('9>"$_wt_p"', old_153)
+        self.assertIn('case $_wt_rc in', old_153)
         mutant = with_mutation(
-            "    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0\n"
-            '      # zsh 5.9 CLOBBER_EMPTY lets `>` overwrite an EMPTY existing file even under noclobber — a\n'
-            "      # consumer's setopt would turn this exclusive create into a write-through; pinned off here.\n"
-            '      [ -n "${ZSH_VERSION:-}" ] && setopt no_clobber_empty 2>/dev/null\n'
-            '      { _wt_opened=1; printf \'%s\\n\' "$_wt_value" >&9 || exit 1; } 9>"$_wt_p" \\\n'
-            '          || { [ "$_wt_opened" = 0 ] && exit 2; exit 1; }\n'
-            '      exit 0 ) >/dev/null 2>&1\n'
-            '    case $? in\n'
-            '        0) ;;\n'
-            '        # The open was refused. A LOST RACE is the case where the name now EXISTS — another\n'
-            '        # publisher, or same-uid interference, got there first — and only that case is 2. A refusal\n'
-            '        # with the name still ABSENT (ENOSPC, EROFS, EACCES, EIO) is a creation FAILURE, which PUB-9\n'
-            '        # E6 covers by its letter ("the temporary\'s creation or write … fails for any reason"); it\n'
-            "        # must not spend TMP-1's attempts and end as E5, whose diagnostic would name the wrong exit.\n"
-            '        2) if [ -L "$_wt_p" ] || [ -e "$_wt_p" ]; then return 2; fi; return 1 ;;\n'
-            '        *) return 1 ;;\n'
-            '    esac\n',
+            old_153,
             '    ( set -C; umask 077; : > "$_wt_p" ) 2>/dev/null || return 2\n'
             '    printf \'%s\\n\' "$_wt_value" > "$_wt_p" 2>/dev/null || return 1\n',
             path=PUB)
@@ -4427,6 +4446,564 @@ class RowsChunk6(unittest.TestCase):
                     self.assertEqual(want, out, f"{shell}: {err}")
         finally:
             os.unlink(mutant)
+
+
+# ==================================================================================================
+# Pass 7 — rows 156-162 (PR #67, codex pass 7)
+# ==================================================================================================
+# The seven rows codex's seventh pass added: three inheritable-flag guards (156-158), the errexit
+# path through the publish (159), the entry read through a SECOND open of its pathname (160), the
+# log stamp (161) and zsh's special parameters in the family writers (162). Every row was RUN
+# against the shipped build and its mutant in both shells before assembly; the run below is the gate.
+
+import json
+import os
+import shutil
+import subprocess
+import stat as statmod
+import unittest
+
+
+#: The five resolver copies FAM-1 names, and the four machinery files each of them loads.
+FAMILY_P7 = ("paths.sh", "marker.sh", "log.sh", "context.sh", "agent-env-bridge.sh")
+MACHINERY_P7 = ("plugin-state-auth.sh", "plugin-state-store.sh",
+                "plugin-state-reader.sh", "plugin-state-publisher.sh")
+
+
+@unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
+class RowsPass7(unittest.TestCase):
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162."""
+
+    #: The store-level outcome, N6-6's tuple.
+    OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
+
+    def setUp(self):
+        # A scratch HOME under ~/.claude (§7 step 3f(i)) so the chain authenticates and no test
+        # reads or writes the developer's real store; every fixture re-points $HOME here.
+        self.home = scratch_home("rp7.2617.")
+        self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
+        self.target = os.path.join(self.home, "target")
+        os.makedirs(self.target)
+        os.chmod(self.target, 0o700)
+
+    def tearDown(self):
+        os.chmod(self.home, 0o700)
+        for dirpath, dirnames, _ in os.walk(self.home):
+            for d in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, d), 0o700)
+                except OSError:
+                    pass
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    # ── shared scaffolding ────────────────────────────────────────────────────────────────────
+
+    def _wipe(self):
+        shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+
+    def _mkstore(self):
+        return (f'_unleashed_name_max "{self.store}" >/dev/null || exit 9\n'
+                f'_unleashed_create_store "{self.store}" || exit 9\n')
+
+    def _entry(self, t=None):
+        t = t or self.target
+        return (f'_unleashed_key "{t}"\n'
+                f'printf "%s\\n" "{t}" > "{self.store}/base.$_UNLEASHED_KEY"\n'
+                f'/bin/chmod 600 "{self.store}/base.$_UNLEASHED_KEY"\n')
+
+    @staticmethod
+    def _diags(err):
+        """Diagnostic lines — the one-diagnostic clauses count these, never raw stderr bytes."""
+        return [l for l in err.splitlines() if l.startswith("unleashed-mail:")]
+
+    def _shadow(self, name, files):
+        """A plugin root holding ONLY `files` under scripts/lib — {basename: source path}.
+
+        The family files locate paths.sh and the machinery from their OWN directory, so a mutant
+        copy must sit BESIDE byte-identical copies of everything else it loads (row 46 does the
+        same); a mutant left in the temp dir with_mutation returns would degrade to the D′ envelope
+        for the wrong reason — the machinery it could not find — and the row would not be testing
+        its mutation.
+        """
+        root = os.path.join(self.home, name)
+        sl = os.path.join(root, "scripts", "lib")
+        os.makedirs(sl)
+        for base, src in files.items():
+            shutil.copy(src, os.path.join(sl, base))
+        return root
+
+    @staticmethod
+    def _slice(path, head, tail, after_head=False):
+        """The CURRENT text of `path` from the unique `head` through the first `tail` after it.
+
+        Rows whose mutation replaces a whole block build the OLD text this way rather than from a
+        literal copy, so a comment or capture rewrite inside the block cannot strand the row on a
+        pattern that no longer matches (row 153 drifted twice on PR #67). The head must be unique
+        and so must the resulting slice — with_mutation asserts the latter again. `after_head`
+        starts the slice AFTER the head line, keeping that line in both builds.
+        """
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text.count(head) == 1, f"head anchor not unique in {path}: {head!r}"
+        start = text.index(head) + (len(head) if after_head else 0)
+        assert tail in text[start:], f"tail anchor not found after the head in {path}: {tail!r}"
+        end = text.index(tail, start) + len(tail)
+        old = text[start:end]
+        assert text.count(old) == 1, f"sliced block not unique in {path}"
+        return old
+
+    @staticmethod
+    def _run_with_timeout(shell, body, srcs, timeout=8):
+        """run_shell with a hang oracle: ('TIMEOUT', '', '') when the shell does not return."""
+        src = "".join(f'. "{s}"\n' for s in srcs) + body
+        try:
+            p = subprocess.run([shell, "-c", src], capture_output=True, text=True, timeout=timeout)
+            return p.returncode, p.stdout, p.stderr
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT", "", ""
+
+    # ── row 156 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_156_resolution_is_keyed_on_process_identity_not_an_inherited_flag(self):
+        """Row 156: `_UNLEASHED_BASE_OK=1` inherited by a CHILD shell that sources a resolver copy with the variable unset and no store — the specification resolves afresh (`_UNLEASHED_BASE_PID` ≠ `$$`): OK=0, the sentinel, `marker_dir` beneath the sentinel, ONE diagnostic; the flag-keyed mutant skips resolution, `_UNLEASHED_BASE_RESOLVED` stays UNSET and `marker_dir` prints `/.state` — the ROOT path. All five resolver copies, both shells."""
+        # Each copy's guard is exercised only where that copy is the resolver in force: paths.sh
+        # sourced directly; the four fallback copies sourced from a shadow root WITHOUT paths.sh
+        # (N1's "paths.sh absent" cell) so their own three-step resolution runs. With paths.sh
+        # beside them their guard is unreachable — paths.sh resolves first and sets the pid — and
+        # a mutant there could not fail. Measured, both shells, all five: spec `0|<sentinel>`
+        # (+ `<sentinel>/.state` for marker.sh) with one diagnostic; mutant `1|UNSET` (+ `/.state`)
+        # and no diagnostic at all.
+        old_paths = '        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process\n'
+        new_paths = '        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0   # already resolved in THIS process\n'
+        old_fam = ('if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     '
+                   '# resolved in THIS process? — `$$`, never a flag\n')
+        new_fam = ('if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then     '
+                   '# resolved in THIS process? — `$$`, never a flag\n')
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        for fam in FAMILY_P7:
+            is_paths = fam == "paths.sh"
+            mutant = with_mutation(old_paths if is_paths else old_fam,
+                                   new_paths if is_paths else new_fam,
+                                   path=os.path.join(LIBDIR, fam))
+            try:
+                spec_root = self._shadow(f"spec-{fam}", dict(machinery, **{fam: os.path.join(LIBDIR, fam)}))
+                mut_root = self._shadow(f"mut-{fam}", dict(machinery, **{fam: mutant}))
+                for shell in SHELLS:
+                    for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                        self._wipe()                                # no store anywhere under HOME
+                        f = os.path.join(root, "scripts", "lib", fam)
+                        src = (f'. "{f}" "" "{root}"' if fam == "agent-env-bridge.sh" else f'. "{f}"')
+                        body = ('unset CLAUDE_PLUGIN_DATA\n' + src + '\n'
+                                'printf "%s|%s" "${_UNLEASHED_BASE_OK-UNSET}" '
+                                '"${_UNLEASHED_BASE_RESOLVED-UNSET}"'
+                                + ('; printf "|%s" "$(marker_dir)"' if fam == "marker.sh" else ""))
+                        rc, out, err = run_shell(shell, body, sources=(),
+                                                 env={"HOME": self.home, "_UNLEASHED_BASE_OK": "1"})
+                        diags = self._diags(err)
+                        if not is_mutant:
+                            want = f"0|{SENTINEL}" + (f"|{SENTINEL}/.state" if fam == "marker.sh" else "")
+                            self.assertEqual(want, out, f"{shell} {fam}: {err!r}")
+                            self.assertEqual(1, len(diags), f"{shell} {fam}: not one diagnostic: {err!r}")
+                        else:
+                            want = "1|UNSET" + ("|/.state" if fam == "marker.sh" else "")
+                            self.assertEqual(want, out,
+                                             f"{shell} {fam}: the CONTROL did not fail — the inherited "
+                                             f"flag did not skip resolution: {out!r} {err!r}")
+                            self.assertEqual([], diags, f"{shell} {fam}: a skipped resolution diagnosed")
+                        self.assertFalse(os.path.exists(self.store), f"{shell} {fam}: a store appeared")
+            finally:
+                os.unlink(mutant)
+
+    # ── row 157 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_157_machinery_loaded_means_the_functions_exist_not_a_flag(self):
+        """Row 157: `_UNLEASHED_STATE_LOADED=1 _UNLEASHED_STATE_RC=0` inherited by a child that sources paths.sh with the variable unset — the specification loads the four libraries (keyed on `command -v` of their entry functions) and resolves (OK=0, the sentinel, one diagnostic, nothing `command not found`); the flag-keyed mutant reports the machinery present, the reader branch calls an undefined `_unleashed_read_store` — `command not found` on stderr, every protocol variable UNSET, and a `set -u` consumer aborts before its next statement. Both shells."""
+        mutant = with_mutation(
+            '        if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \\\n'
+            '            && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then\n'
+            '            return 0\n'
+            '        fi\n',
+            '        [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"\n',
+            path=PATHS_C4)
+        env = {"HOME": self.home, "_UNLEASHED_STATE_LOADED": "1", "_UNLEASHED_STATE_RC": "0"}
+        try:
+            machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+            spec_root = self._shadow("spec157", dict(machinery, **{"paths.sh": PATHS_C4}))
+            mut_root = self._shadow("mut157", dict(machinery, **{"paths.sh": mutant}))
+            for shell in SHELLS:
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    self._wipe()
+                    paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                    body = ('unset CLAUDE_PLUGIN_DATA\n'
+                            f'. "{paths}"\n'
+                            'printf "%s|%s|%s" "${_UNLEASHED_BASE_OK-UNSET}" '
+                            '"${_UNLEASHED_BASE_RESOLVED-UNSET}" "${_UNLEASHED_BASE_SOURCE-UNSET}"')
+                    rc, out, err = run_shell(shell, body, sources=(), env=env)
+                    # The `set -u` consumer: its next statement must be reached.
+                    body_u = ('set -u\nunset CLAUDE_PLUGIN_DATA\n'
+                              f'. "{paths}"\n'
+                              'printf "%s" "$_UNLEASHED_BASE_OK"; printf " END"')
+                    rc_u, out_u, err_u = run_shell(shell, body_u, sources=(), env=env)
+                    if not is_mutant:
+                        self.assertEqual(f"0|{SENTINEL}|unresolved", out, f"{shell}: {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{shell}: not one diagnostic: {err!r}")
+                        self.assertNotIn("command not found", err, f"{shell}: {err!r}")
+                        self.assertEqual((0, "0 END"), (rc_u, out_u), f"{shell}: set -u consumer: {err_u!r}")
+                    else:
+                        self.assertEqual("UNSET|UNSET|UNSET", out,
+                                         f"{shell}: the CONTROL did not fail — the inherited flag did "
+                                         f"not report the machinery loaded: {out!r} {err!r}")
+                        self.assertIn("command not found", err, f"{shell}: {err!r}")
+                        self.assertEqual([], self._diags(err), f"{shell}: {err!r}")
+                        self.assertNotEqual(0, rc_u, f"{shell}: the set -u consumer did not abort: {out_u!r}")
+                        self.assertNotIn("END", out_u, f"{shell}: the set -u consumer reached its next statement")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 158 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_158_paths_sh_body_is_guarded_on_a_function_not_an_inheritable_flag(self):
+        """Row 158: `_UNLEASHED_PATHS_SH_LOADED=1` inherited by a child that sources paths.sh — the specification defines its functions and resolves (`unleashed_plugin_base` prints the sentinel here); under the flag-keyed body guard the file defines NOTHING and `unleashed_plugin_base` is `command not found`. Both shells."""
+        mutant = with_mutation(
+            'if ! command -v unleashed_resolve_base >/dev/null 2>&1; then\n',
+            'if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then\n',
+            path=PATHS_C4)
+        env = {"HOME": self.home, "_UNLEASHED_PATHS_SH_LOADED": "1"}
+        try:
+            machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+            spec_root = self._shadow("spec158", dict(machinery, **{"paths.sh": PATHS_C4}))
+            mut_root = self._shadow("mut158", dict(machinery, **{"paths.sh": mutant}))
+            for shell in SHELLS:
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    self._wipe()
+                    paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                    body = ('unset CLAUDE_PLUGIN_DATA\n'
+                            f'. "{paths}"\n'
+                            'unleashed_plugin_base; printf "|%s|%s" "$?" "${_UNLEASHED_BASE_OK-UNSET}"')
+                    rc, out, err = run_shell(shell, body, sources=(), env=env)
+                    if not is_mutant:
+                        self.assertEqual(f"{SENTINEL}|0|0", out, f"{shell}: {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{shell}: not one diagnostic: {err!r}")
+                        self.assertNotIn("command not found", err, f"{shell}: {err!r}")
+                    else:
+                        self.assertEqual("|127|UNSET", out,
+                                         f"{shell}: the CONTROL did not fail — the inherited flag did "
+                                         f"not suppress the file's body: {out!r} {err!r}")
+                        self.assertIn("command not found", err, f"{shell}: {err!r}")
+                        self.assertEqual([], self._diags(err), f"{shell}: {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 159 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_159_the_transient_write_status_is_captured_errexit_safe(self):
+        """Row 159: the family sourced under `set -eu` with the transient's WRITE refused (RLIMIT_FSIZE 0: the exclusive create succeeds, the value write fails EFBIG — E6): the specification reports `failed` with its one diagnostic, cleans the transient up, and the sourcing shell REACHES its next statement; under the bare `cmd; _pb_wrc=$?` capture the shell EXITS non-zero at the call — before the diagnostic, before the cleanup, before `END`. Both shells."""
+        # The plan's reproduction made the store unwritable after E4; the create-refused shape is
+        # rows 154/155's fixture and needs a DEBUG trap. RLIMIT_FSIZE(0) reaches the same capture
+        # through E6 without one — row 138's fixture — and the create-and-write subshell already
+        # ignores SIGXFSZ so the limit surfaces as EFBIG (printf rc 1) and not as a signal death.
+        # Measured, both shells: spec `STATE=failed OK=1 … END`, rc 0, one diagnostic naming the
+        # 0600 write, no transient left; mutant rc 1 (the function's own return, the status the
+        # bare call hands errexit), EMPTY stdout, no diagnostic, and the transient orphaned because
+        # the E6 cleanup after the capture never ran. Nothing in the limited shell writes a FILE:
+        # its streams are run_shell's pipes and RLIMIT_FSIZE governs regular files only.
+        mutant = with_mutation(
+            '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value" && _pb_wrc=0 || _pb_wrc=$?\n',
+            '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; _pb_wrc=$?\n',
+            path=PUB)
+        try:
+            for shell in SHELLS:
+                for pub, is_mutant in ((PUB, False), (mutant, True)):
+                    self._wipe()
+                    body = ('set -eu\n'
+                            f'export HOME="{self.home}"\n'
+                            f'export CLAUDE_PLUGIN_DATA="{self.target}"\n'
+                            'trap "" XFSZ\nulimit -f 0\n'
+                            + "".join(f'. "{s}"\n' for s in (AUTH, STORE, READER, pub, PATHS_C4))
+                            + 'printf "STATE=%s OK=%s SRC=%s" "$_UNLEASHED_POINTER_STATE" '
+                              '"$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE"\n'
+                              'printf " END"')
+                    rc, out, err = run_shell(shell, body, sources=())
+                    diags = self._diags(err)
+                    pubs = ([f for f in os.listdir(self.store) if f.startswith(".pub.")]
+                            if os.path.isdir(self.store) else [])
+                    bases = ([f for f in os.listdir(self.store) if f.startswith("base.")]
+                             if os.path.isdir(self.store) else [])
+                    self.assertEqual([], bases, f"{shell}: E6 published an entry: {bases}")
+                    if not is_mutant:
+                        self.assertEqual(0, rc, f"{shell}: the sourcing shell did not survive: {err!r}")
+                        self.assertEqual("STATE=failed OK=1 SRC=host-env END", out, f"{shell}: {err!r}")
+                        self.assertEqual(1, len(diags), f"{shell}: not one diagnostic: {err!r}")
+                        self.assertIn("could not be written at 0600", diags[0], f"{shell}: not E6: {diags[0]!r}")
+                        self.assertEqual([], pubs, f"{shell}: the E6 cleanup left a transient: {pubs}")
+                    else:
+                        self.assertNotEqual(0, rc, f"{shell}: the CONTROL did not fail — the bare "
+                                                   f"capture did not abort the errexit sourcer: {out!r}")
+                        self.assertEqual("", out, f"{shell}: the shell reached a statement after the bare call")
+                        self.assertEqual([], diags, f"{shell}: the diagnostic was reached: {err!r}")
+                        self.assertEqual(1, len(pubs), f"{shell}: the aborted publish did not orphan its transient: {pubs}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 160 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_160_the_entry_is_read_through_the_descriptor_ent_2b_validated(self):
+        """Row 160: a DEBUG trap substitutes the entry the instant ENT-1 has validated it and before it is opened — a large regular file, a symlink to a foreign file, a vanished entry, and in zsh a FIFO: the specification refuses each as a failing entry (`stale`, ONE sanitised diagnostic naming no path) and returns promptly, its read bound to the descriptor it validated; under the second-open `read < "$p"` mutant the large file is READ — a large file whose FIRST LINE is a valid target RESOLVES (`1 pointer none`) although its size exceeds anything a valid entry can be, the row's plain 200 000-byte file reaches the byte-count clause with all 200 000 bytes, the foreign file's first line is consumed — and in zsh the FIFO BLOCKS the resolver. bash's FIFO case is P-5's stated residual and is not run. Both shells for the other cases."""
+        # THE INTERLEAVING IS DETERMINISTIC: the trap is keyed on `_ae_bound` being set — the
+        # assignment that immediately precedes the ENT-2b open in BOTH builds (the mutation keeps
+        # that line and replaces the arm after it) — and on the entry still being the small regular
+        # file ENT-1 validated, so it fires exactly once, after P-2's pathname stat and before any
+        # open; `set -T` in bash so the trap reaches into functions (rows 153-155 do the same).
+        # WHY THE DISCRIMINATING LARGE FILE CARRIES A VALID FIRST LINE: with the row's plain shape
+        # both builds end `stale` — the specification refuses on the descriptor's size, the mutant
+        # reads 200 000 bytes and fails clause (2) — so the RESULT cannot fail; the read itself is
+        # still observed (`${#_ae_line}` is 0 in the specification, 200 000 in the mutant). With a
+        # valid target as line 1 the mutant's second-open read passes clause (2) — `_U_SIZE` is
+        # the ORIGINAL entry's size, stat'ed on the pathname — and everything after it, and the
+        # store RESOLVES to a file that was never what ENT-1 validated. Measured, both shells.
+        old = self._slice(READER,
+                          '    _ae_bound=$(( ${#_ae_name} + 1 ))\n',
+                          '        [ "$_ae_ok" = 1 ] || return 1                                                      # (1)\n'
+                          '    fi\n',
+                          after_head=True)
+        self.assertTrue(old.startswith('    if [ -n "${ZSH_VERSION:-}" ]; then\n        zmodload zsh/system'), old[:80])
+        self.assertIn("sysopen", old)
+        self.assertIn('9<"$_ae_p"', old)
+        mutant = with_mutation(old, '    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1\n',
+                               path=READER)
+        big = os.path.join(self.home, "big")
+        with open("/etc/hosts", "rb") as fh:
+            hosts_first = len(fh.readline().rstrip(b"\n"))
+        substitutes = (
+            ("large",       f'/bin/mv -f "{big}" "$_ae_p"'),
+            ("large-plain", f'/bin/mv -f "{big}" "$_ae_p"'),
+            ("symlink",     '/bin/rm -f "$_ae_p"; /bin/ln -s /etc/hosts "$_ae_p"'),
+            ("vanished",    '/bin/rm -f "$_ae_p"'),
+            ("fifo",        '/bin/rm -f "$_ae_p"; /usr/bin/mkfifo "$_ae_p"'),
+        )
+
+        def unblock_fifo():
+            # A mutant killed at the timeout may leave a reader parked in open(2) on the FIFO;
+            # opening the write end releases it. ENXIO when nothing is parked there.
+            if os.path.isdir(self.store):
+                for f in os.listdir(self.store):
+                    p = os.path.join(self.store, f)
+                    if statmod.S_ISFIFO(os.lstat(p).st_mode):
+                        try:
+                            fd = os.open(p, os.O_WRONLY | os.O_NONBLOCK)
+                            os.close(fd)
+                        except OSError:
+                            pass
+
+        try:
+            for shell in SHELLS:
+                bash = shell.endswith("bash")
+                for case, sub in substitutes:
+                    if case == "fifo" and bash:
+                        continue                # P-5's residual: the shipped bash arm blocks too
+                    for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                            ((AUTH, STORE, mutant, PUB), True)):
+                        self._wipe()
+                        if case.startswith("large"):
+                            with open(big, "w", encoding="utf-8") as fh:
+                                if case == "large":
+                                    fh.write(self.target + "\n")
+                                fh.write("a" * 200000 + "\n")
+                            os.chmod(big, 0o600)
+                        body = (self._mkstore() + self._entry()
+                                + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                                + 'trap \'if [ -n "${_ae_bound:-}" ] && [ -z "${_t160_done:-}" ] '
+                                  '&& [ -f "${_ae_p:-}" ] && [ ! -L "$_ae_p" ] '
+                                  '&& [ "$(/usr/bin/stat -f %z "$_ae_p")" -lt 100 ]; then '
+                                  '_t160_done=1; ' + sub + '; fi\' DEBUG\n'
+                                + f'_unleashed_read_store "{self.store}"\n'
+                                + 'trap - DEBUG\n'
+                                + 'printf "%s %s %s %s|%s|%s" "$_UNLEASHED_BASE_OK" '
+                                  '"$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE" '
+                                  '"$_UNLEASHED_BASE_RESOLVED" "${#_ae_line}" "${_t160_done:-0}"')
+                        try:
+                            rc, out, err = self._run_with_timeout(shell, body, srcs)
+                        finally:
+                            unblock_fifo()
+                        tag = f"{shell} {case} {'mutant' if is_mutant else 'shipped'}"
+                        if is_mutant and case == "fifo":
+                            self.assertEqual("TIMEOUT", rc,
+                                             f"{tag}: the CONTROL did not block — the second open "
+                                             f"of the FIFO returned: {out!r} {err!r}")
+                            continue
+                        self.assertNotEqual("TIMEOUT", rc, f"{tag}: the resolver hung")
+                        stale = f"0 unresolved stale {SENTINEL}"
+                        if not is_mutant:
+                            self.assertEqual(f"{stale}|0|1", out,
+                                             f"{tag}: not refused as a failing entry, or the trap did "
+                                             f"not fire, or the substitute was READ: {out!r} {err!r}")
+                            lines = err.splitlines()
+                            self.assertEqual(1, len(lines), f"{tag}: not exactly one stderr line: {err!r}")
+                            self.assertTrue(lines[0].startswith("unleashed-mail:"), f"{tag}: {err!r}")
+                            self.assertNotIn(self.store, err, f"{tag}: the store path reached stderr")
+                            self.assertNotIn(self.target, err, f"{tag}: the target path reached stderr")
+                        elif case == "large":
+                            self.assertEqual(f"1 pointer none {self.target}|{len(self.target)}|1", out,
+                                             f"{tag}: the CONTROL did not fail — the substituted large "
+                                             f"file was not read through the second open: {out!r} {err!r}")
+                            self.assertEqual("", err, f"{tag}: {err!r}")
+                        elif case == "large-plain":
+                            self.assertEqual(f"{stale}|200000|1", out,
+                                             f"{tag}: the CONTROL did not READ the 200 000 bytes: {out!r}")
+                        elif case == "symlink":
+                            self.assertEqual(f"{stale}|{hosts_first}|1", out,
+                                             f"{tag}: the CONTROL did not read the foreign file's first line: {out!r}")
+                        else:                   # vanished: both builds refuse — not the discriminating case
+                            self.assertEqual(f"{stale}|0|1", out, f"{tag}: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 161 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_161_every_log_record_carries_base_resolution(self):
+        """Row 161: `log_append` fed the four producers' record shapes plus `{}` and `{  }` under `host-env` and under `pointer` (variable unset, one authenticating entry): every persisted line parses as JSON and carries `"base_resolution"` naming the resolution that ran; a pre-stamped line and a non-object line are written unchanged. With the writer's stamp removed the producer shapes persist WITHOUT the field, so a `pointer` record is indistinguishable from a `host-env` one. Both shells."""
+        # The four shapes are the producers' printf formats verbatim (stop-failure-log.sh,
+        # permission-denied-log.sh, build-failure-log.sh, swift-build-verify.sh). The stamp is
+        # exactly the `case "$line" in … esac` block in log_append and the mutation deletes it.
+        mutant = with_mutation(
+            '    case "$line" in\n'
+            '        *\'"base_resolution"\'*) : ;;                       # the producer stamped it itself\n'
+            '        \\{*\\})\n'
+            '            body="${line#\\{}"; body="${body%\\}}"\n'
+            '            case "$body" in\n'
+            '                *[!\\ ]*) line="{${body},\\"base_resolution\\":\\"${_UNLEASHED_BASE_SOURCE:-unresolved}\\"}" ;;\n'
+            '                *)       line="{\\"base_resolution\\":\\"${_UNLEASHED_BASE_SOURCE:-unresolved}\\"}" ;;\n'
+            '            esac ;;\n'
+            '    esac\n',
+            '', path=LOG)
+        shapes = (
+            '"$(printf \'{"ts":"%s","type":"%s"}\' "$(log_ts)" "unknown")"',
+            '"$(printf \'{"ts":"%s","tool":"%s","reason":%s}\' "$(log_ts)" "Bash" \'"denied"\')"',
+            '"$(printf \'{"ts":"%s","kind":"build","class":"%s","failed":true}\' "$(log_ts)" "xcodebuild-build")"',
+            '"$(printf \'{"ts":"%s","kind":"build","class":"%s","failed":false}\' "$(log_ts)" "swift-build")"',
+            "'{}'",
+            "'{  }'",
+        )
+        prestamped = '{"ts":"pre","base_resolution":"pre-stamped"}'
+        nonobject = "[1,2]"
+        try:
+            for shell in SHELLS:
+                for log, is_mutant in ((LOG, False), (mutant, True)):
+                    self._wipe()
+                    shutil.rmtree(os.path.join(self.target, "logs"), ignore_errors=True)
+                    # host-env FIRST: its publish is what gives the pointer run its one entry.
+                    for mode, want_tuple in (("host-env", "1 host-env created"), ("pointer", "1 pointer none")):
+                        setenv = (f'export HOME="{self.home}"\n'
+                                  + (f'export CLAUDE_PLUGIN_DATA="{self.target}"\n' if mode == "host-env"
+                                     else 'unset CLAUDE_PLUGIN_DATA\n'))
+                        calls = "".join(f'log_append {mode}.jsonl {s}\n' for s in shapes)
+                        calls += f"log_append {mode}.jsonl '{prestamped}'\nlog_append {mode}.jsonl '{nonobject}'\n"
+                        body = (setenv
+                                + "".join(f'. "{s}"\n' for s in (AUTH, STORE, READER, PUB, PATHS_C4, log))
+                                + calls + self.OUTP)
+                        rc, out, err = run_shell(shell, body, sources=())
+                        tag = f"{shell} {mode} {'mutant' if is_mutant else 'shipped'}"
+                        self.assertEqual(want_tuple, out, f"{tag}: {err!r}")
+                        self.assertEqual("", err, f"{tag}: {err!r}")
+                        p = os.path.join(self.target, "logs", f"{mode}.jsonl")
+                        self.assertTrue(os.path.exists(p), f"{tag}: nothing persisted")
+                        with open(p, encoding="utf-8") as fh:
+                            lines = fh.read().splitlines()
+                        self.assertEqual(len(shapes) + 2, len(lines), f"{tag}: {lines}")
+                        for line in lines[:len(shapes)]:
+                            d = json.loads(line)          # every producer line parses, both builds
+                            self.assertIsInstance(d, dict, f"{tag}: {line!r}")
+                            if not is_mutant:
+                                self.assertEqual(mode, d.get("base_resolution"),
+                                                 f"{tag}: unstamped or mis-stamped: {line!r}")
+                            else:
+                                self.assertNotIn("base_resolution", d,
+                                                 f"{tag}: the CONTROL did not fail — still stamped: {line!r}")
+                        self.assertEqual(prestamped, lines[len(shapes)], f"{tag}: a pre-stamped line was rewritten")
+                        self.assertEqual(nonobject, lines[len(shapes) + 1], f"{tag}: a non-object line was rewritten")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 162 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_162_family_writers_avoid_zsh_special_parameters(self):
+        """Row 162: under ZSH with the variable set, `marker_write lint fail; marker_status lint` prints `fail`, `log_append` persists its line, `context_review_round_bind` prints a round that `context_review_round_lookup` reads back, and PATH is intact afterwards (`command -v ls`); with the old `status`/`path` names restored in a writer, zsh reports `read-only variable: status` and the sourcing script STOPS at `marker_write` with nothing written, `local path` empties PATH inside `log_append` so `mkdir` is not found and its line is never persisted, and inside `context_review_round_bind` so its binding is never published and the lookup reads nothing. bash is unaffected by every one of these mutations — its half asserts the four builds behave identically, which is why every writer test until now passed."""
+        # One mutation per writer, each the CONSISTENT restore of the pre-fix names over that
+        # function's whole text (sliced from the current file): a `local` line mutated alone would
+        # leave `_mw_status` dangling and break BASH too, and the row's whole point is a defect
+        # bash cannot see. Measured: bash prints `ms=[fail] rb=[1] rl=[1] ls=[/bin/ls]` and
+        # persists all three under all four builds; zsh — spec identical to bash; marker mutant:
+        # `marker_write:2: read-only variable: status`, EMPTY stdout (zsh abandons the script,
+        # rc 0), no marker; log mutant: the tuple intact, no log file; context mutant: `rl=[]`,
+        # only a `.tmp.<pid>` under .state (its `mv` was not found either).
+        old_mw = self._slice(MARKER, "marker_write() {\n", "\n}\n")
+        self.assertIn("_mw_status", old_mw); self.assertIn("_mw_path", old_mw)
+        m_marker = with_mutation(old_mw, old_mw.replace("_mw_status", "status").replace("_mw_path", "path"),
+                                 path=MARKER)
+        old_la = self._slice(LOG, "log_append() {\n", "\n}\n")
+        self.assertIn("_la_path", old_la)
+        m_log = with_mutation(old_la, old_la.replace("_la_path", "path"), path=LOG)
+        old_rb = self._slice(CONTEXT, "context_review_round_bind() {\n", "\n}\n")
+        self.assertIn("_rb_path", old_rb)
+        m_ctx = with_mutation(old_rb, old_rb.replace("_rb_path", "path"), path=CONTEXT)
+        builds = (("shipped", (MARKER, LOG, CONTEXT)),
+                  ("marker",  (m_marker, LOG, CONTEXT)),
+                  ("log",     (MARKER, m_log, CONTEXT)),
+                  ("context", (MARKER, LOG, m_ctx)))
+        state = os.path.join(self.target, ".state")
+        logp = os.path.join(self.target, "logs", "r162.jsonl")
+        expect = "ms=[fail] rb=[1] rl=[1] ls=[/bin/ls]"
+        try:
+            for shell in SHELLS:
+                zsh = shell.endswith("zsh")
+                for build, fam in builds:
+                    self._wipe()
+                    for d in ("logs", ".state", "reviews"):
+                        shutil.rmtree(os.path.join(self.target, d), ignore_errors=True)
+                    body = (f'export HOME="{self.home}"\nexport CLAUDE_PLUGIN_DATA="{self.target}"\n'
+                            + "".join(f'. "{s}"\n' for s in (AUTH, STORE, READER, PUB, PATHS_C4) + fam)
+                            + 'marker_write lint fail\n'
+                              'ms="$(marker_status lint)"\n'
+                              'log_append r162.jsonl \'{"ts":"t"}\'\n'
+                              'rb="$(context_review_round_bind security-reviewer agent-162 sess-162)"\n'
+                              'rl="$(context_review_round_lookup security-reviewer agent-162 sess-162)"\n'
+                              'printf "ms=[%s] rb=[%s] rl=[%s] ls=[%s]" "$ms" "$rb" "$rl" "$(command -v ls)"')
+                    rc, out, err = run_shell(shell, body, sources=())
+                    tag = f"{shell} {build}"
+                    markers = ([f for f in os.listdir(state) if f.startswith("quality-marker-lint-")]
+                               if os.path.isdir(state) else [])
+                    bindings = ([f for f in os.listdir(state)
+                                 if f.startswith("review-round-") and f.endswith(".json")]
+                                if os.path.isdir(state) else [])
+                    logged = os.path.exists(logp)
+                    if not zsh or build == "shipped":
+                        self.assertEqual(expect, out, f"{tag}: {err!r}")
+                        self.assertEqual("", err, f"{tag}: {err!r}")
+                        self.assertEqual(1, len(markers), f"{tag}: marker not written: {markers}")
+                        self.assertTrue(logged, f"{tag}: log line not persisted")
+                        self.assertEqual(1, len(bindings), f"{tag}: binding not published: {bindings}")
+                        with open(logp, encoding="utf-8") as fh:
+                            self.assertEqual({"ts": "t", "base_resolution": "host-env"}, json.loads(fh.read()))
+                    elif build == "marker":
+                        self.assertIn("read-only variable: status", err,
+                                      f"{tag}: the CONTROL did not fail — zsh accepted `local status`: {err!r}")
+                        self.assertEqual("", out, f"{tag}: the script survived the read-only assignment: {out!r}")
+                        self.assertEqual([], markers, f"{tag}: a marker was written: {markers}")
+                    elif build == "log":
+                        self.assertEqual(expect, out, f"{tag}: the other writers were disturbed: {out!r} {err!r}")
+                        self.assertFalse(logged, f"{tag}: the CONTROL did not fail — `local path` "
+                                                 f"did not empty PATH for the log writer")
+                    else:                       # context
+                        self.assertTrue(out.startswith("ms=[fail] rb=["), f"{tag}: {out!r} {err!r}")
+                        self.assertIn("rl=[] ls=[/bin/ls]", out,
+                                      f"{tag}: the CONTROL did not fail — the binding was published "
+                                      f"and read back, or PATH did not recover: {out!r}")
+                        self.assertEqual([], bindings, f"{tag}: a binding was published: {bindings}")
+                        self.assertIn("command not found", err, f"{tag}: {err!r}")
+        finally:
+            for m in (m_marker, m_log, m_ctx):
+                os.unlink(m)
+
 
 
 if __name__ == "__main__":

@@ -35,7 +35,8 @@ export CLAUDE_PLUGIN_DATA="${1-}"          # empty is PRESERVED, not unset — s
 # Prefer the shared resolver so the bridge and the libs run one code path. GUARDED: paths.sh is an
 # optimisation of maintenance, not a load-bearing dependency, and an unguarded `.` on a missing file
 # returns 1 in Bash / 127 in zsh and terminates an `errexit` caller.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ] && [ -r "$2/scripts/lib/paths.sh" ]; then
+# "paths.sh already sourced" is a FUNCTION it defines, never a flag (codex, PR #67 pass 7).
+if ! command -v unleashed_resolve_base >/dev/null 2>&1 && [ -r "$2/scripts/lib/paths.sh" ]; then
     # shellcheck source=scripts/lib/paths.sh
     . "$2/scripts/lib/paths.sh"
 fi
@@ -51,9 +52,14 @@ fi
 # machinery through $2, the plugin root the fence passes in, because neither CLAUDE_PLUGIN_ROOT nor
 # BASH_SOURCE exists in a zsh Bash-tool shell.
 _ueb_state_load() {
-    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
-    _UNLEASHED_STATE_LOADED=1
-    _UNLEASHED_STATE_RC=1
+    # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+    # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+    # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+    # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+        && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+        return 0
+    fi
     # $1 here is the PLUGIN ROOT the caller passes — the function's own parameter, not the
     # file's; the file-level $2 is forwarded at the call site below.
     for _ueb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
@@ -61,10 +67,10 @@ _ueb_state_load() {
         # shellcheck source=/dev/null
         . "${1-}/scripts/lib/$_ueb_f.sh"
     done
-    _UNLEASHED_STATE_RC=0
     return 0
 }
-if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? — `$$`, never a flag
+    _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
@@ -87,6 +93,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
             fi
         fi
     fi
+    _UNLEASHED_BASE_PID=$$
 fi
 
 # The sanctioned state test, for consumers that source only this bridge.

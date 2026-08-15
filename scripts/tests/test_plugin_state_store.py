@@ -690,5 +690,109 @@ class MutantRowsThroughTheProductionResolver(unittest.TestCase):
                                  f"{shell}: {label} must create nothing")
 
 
+class SourcedUnderErrexit(unittest.TestCase):
+    """The family sourced under `set -eu` reaches its next statement in every publish/read cell.
+
+    Plan §4.3: "each file must also source cleanly under `set -euo pipefail` in both bash and zsh in
+    every cell" — stated, and never executed on the PUBLISH path. Codex (PR #67 pass 7) found two bare
+    status captures in the publisher that aborted a `set -e` sourcer before the E5/E6 classification;
+    this is the sweep that would have caught them and that now guards the whole matrix. The positive
+    control is row 159's mutant: with the capture made a bare call, the E6 cell aborts.
+    """
+
+    def setUp(self):
+        self.home = scratch_home("eu.2617.")
+        self.libdir = os.path.join(self.home, "lib")
+        shutil.copytree(LIB, self.libdir)
+        self.store = os.path.join(self.home, "h", ".claude", "unleashed-mail", "bases")
+        for d in ("t", "t2"):
+            os.makedirs(os.path.join(self.home, d))
+            os.chmod(os.path.join(self.home, d), 0o700)
+        os.makedirs(os.path.join(self.home, "h"))
+        os.chmod(os.path.join(self.home, "h"), 0o700)
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _fresh(self):
+        shutil.rmtree(os.path.join(self.home, "h", ".claude"), ignore_errors=True)
+
+    def _store(self, mode=0o700):
+        os.makedirs(self.store, exist_ok=True)
+        for d in (os.path.join(self.home, "h", ".claude"), os.path.dirname(self.store)):
+            os.chmod(d, 0o700)
+        os.chmod(self.store, mode)
+
+    def _entry(self, target, mode=0o600):
+        r = subprocess.run(["/bin/bash", "-c",
+                            f'. "{AUTH}"; . "{STORE}"; _unleashed_key "{target}"; printf %s "$_UNLEASHED_KEY"'],
+                           capture_output=True, text=True)
+        path = os.path.join(self.store, "base." + r.stdout)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(target + "\n")
+        os.chmod(path, mode)
+
+    def _run(self, shell, env_line, prefix, lib):
+        body = (f'set -eu; {env_line}; {prefix}; . "{self.libdir}/{lib}"; '
+                'echo "END OK=${_UNLEASHED_BASE_OK:-unset} ST=${_UNLEASHED_POINTER_STATE:-unset}"')
+        p = subprocess.run([shell, "-c", body], capture_output=True, text=True,
+                           env={k: v for k, v in os.environ.items()
+                                if not k.startswith("_UNLEASHED_") and k not in ("CLAUDE_PLUGIN_DATA",)})
+        return p.returncode, p.stdout, p.stderr
+
+    def _cells(self):
+        h, t, t2 = os.path.join(self.home, "h"), os.path.join(self.home, "t"), os.path.join(self.home, "t2")
+        set_env = f'export HOME="{h}" CLAUDE_PLUGIN_DATA="{t}"'
+        unset_env = f'export HOME="{h}"; unset CLAUDE_PLUGIN_DATA'
+        yield "set: created", (lambda: self._fresh()), set_env, ":", "paths.sh", "created"
+        yield "set: current", (lambda: (self._fresh(), self._store(), self._entry(t))), set_env, ":", "paths.sh", "current"
+        yield "set: conflict", (lambda: (self._fresh(), self._store(), self._entry(t2))), set_env, ":", "paths.sh", "conflict"
+        yield "set: E4 store mode", (lambda: (self._fresh(), self._store(0o500))), set_env, ":", "paths.sh", "failed"
+        yield "set: E6 fsize0", (lambda: (self._fresh(), self._store())), set_env, 'trap "" XFSZ; ulimit -f 0', "paths.sh", "failed"
+        yield "set: E1 HOME empty", (lambda: self._fresh()), f'export HOME="" CLAUDE_PLUGIN_DATA="{t}"', ":", "paths.sh", "failed"
+        yield "set: E0 disabled", (lambda: self._fresh()), set_env + " _UNLEASHED_PUBLISH_OK=0", ":", "paths.sh", "none"
+        yield "unset: D' envelope", (lambda: self._fresh()), unset_env, ":", "paths.sh", "none"
+        yield "unset: resolves", (lambda: (self._fresh(), self._store(), self._entry(t))), unset_env, ":", "paths.sh", "none"
+        yield "unset: conflict", (lambda: (self._fresh(), self._store(), self._entry(t), self._entry(t2))), unset_env, ":", "paths.sh", "conflict"
+        yield "unset: failing entry", (lambda: (self._fresh(), self._store(), self._entry(t, 0o644))), unset_env, ":", "paths.sh", "stale"
+        yield "unset: rule -1 store", (lambda: (self._fresh(), self._store(0o755))), unset_env, ":", "paths.sh", "stale"
+        for lib in ("marker.sh", "log.sh", "context.sh"):
+            yield f"unset: {lib}", (lambda: self._fresh()), unset_env, ":", lib, "none"
+            yield f"unset+entry: {lib}", (lambda: (self._fresh(), self._store(), self._entry(t))), unset_env, ":", lib, "none"
+            yield f"set: {lib}", (lambda: self._fresh()), set_env, ":", lib, "created"
+
+    def test_every_cell_reaches_its_next_statement_in_both_shells(self):
+        for shell in SHELLS:
+            for label, setup, env_line, prefix, lib, want_state in self._cells():
+                with self.subTest(shell=shell, cell=label):
+                    setup()
+                    rc, out, err = self._run(shell, env_line, prefix, lib)
+                    self.assertIn("END ", out, f"{label}: the sourcer did not reach its next statement "
+                                               f"(rc={rc}, stderr={err!r})")
+                    self.assertIn(f"ST={want_state}", out, f"{label}: {out!r} {err!r}")
+                    if os.path.exists(self.store):
+                        os.chmod(self.store, 0o700)
+
+    def test_positive_control_a_bare_status_capture_aborts_the_e6_cell(self):
+        """Row 159's mutant: the sourcer dies at the bare call, before the diagnostic (both shells)."""
+        mutant = with_mutation(
+            '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value" && _pb_wrc=0 || _pb_wrc=$?\n',
+            '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; _pb_wrc=$?\n',
+            path=PUB)
+        try:
+            shutil.copyfile(mutant, os.path.join(self.libdir, "plugin-state-publisher.sh"))
+            h, t = os.path.join(self.home, "h"), os.path.join(self.home, "t")
+            for shell in SHELLS:
+                with self.subTest(shell=shell):
+                    self._fresh(); self._store()
+                    rc, out, err = self._run(shell, f'export HOME="{h}" CLAUDE_PLUGIN_DATA="{t}"',
+                                             'trap "" XFSZ; ulimit -f 0', "paths.sh")
+                    self.assertNotEqual(0, rc, f"{shell}: the CONTROL did not fail — the bare capture "
+                                               f"survived errexit: {out!r} {err!r}")
+                    self.assertNotIn("END ", out)
+        finally:
+            os.unlink(mutant)
+
+
 if __name__ == "__main__":
     unittest.main()

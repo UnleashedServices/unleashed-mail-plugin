@@ -49,14 +49,59 @@ _unleashed_auth_entry() {
     # ENT-3.
     _ae_name="${_ae_p##*/}"; _ae_name="${_ae_name#base.}"
     [ "$_U_SIZE" -le "$(( ${#_ae_name} + 1 ))" ] || return 1
-    # THE REDIRECT LIVES ON AN ENCLOSING GROUP, NOT ON `read`. If the entry vanishes or is replaced
-    # between the stat above and this open, the SHELL reports the failed redirect — before `read`
-    # ever runs, so a `2>/dev/null` on `read` itself does not reach it (measured, both shells).
-    # That message names the path, and a `base.*` name is a LOSSLESS encoding of the target it
-    # points at — so it would leak path material AND add an unbounded second line beside the one
-    # sanitised diagnostic FAM-6 permits (codex, PR #67). The group's stderr is suppressed as a
-    # whole; a failed open is then simply a failed entry.
-    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1     # (1)
+    # ENT-2b — THE READ IS BOUND TO THE OBJECT THAT WAS VALIDATED. Everything above stat'ed the
+    # PATHNAME; a plain `read < "$p"` then opened the pathname a SECOND time, and same-uid interference
+    # substituting the entry between the two — a FIFO, whose read-open BLOCKS every hook at source
+    # time; a large regular file, which the pre-read size bound above never saw — was read instead of
+    # what was checked (codex, PR #67 pass 7). So the entry is opened ONCE, and type, size and owner
+    # are validated ON THE DESCRIPTOR before anything is read through it, with the read itself
+    # bounded to the largest size a valid entry can have. The two arms differ only in what the shell
+    # can do: zsh's `sysopen -o nonblock` never blocks on a FIFO and `zstat -f` reports the open
+    # object exactly (mode included); bash 3.2 has no non-blocking open, so a FIFO substituted in
+    # this window still blocks it — P-5's stated residual, mirrored here rather than claimed closed —
+    # while `/dev/fd/N` (measured on Darwin) reports the open object's TYPE, SIZE and UID but its
+    # MODE as the open flags, so mode stays validated on the pathname above and is not re-read.
+    _ae_bound=$(( ${#_ae_name} + 1 ))
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        zmodload zsh/system 2>/dev/null || return 1
+        # `sysopen` needs an explicit descriptor: allocate a free one, close it, reuse the number.
+        # THE STDERR REDIRECT SITS ON A GROUP: `exec {fd}<file 2>/dev/null` with no command applies
+        # EVERY redirection to the shell permanently — the first draft of this line silently sent the
+        # sourcing shell's stderr to /dev/null for the rest of the process (measured: xtrace went dark).
+        { exec {_ae_fd}</dev/null; } 2>/dev/null || return 1
+        exec {_ae_fd}<&-
+        sysopen -r -o nonblock -u "$_ae_fd" -- "$_ae_p" 2>/dev/null || return 1
+        _ae_ok=0; _ae_raw=""
+        # TYPE, UID and SIZE of the open object — the same three the bash arm validates through
+        # /dev/fd, and NOT the mode: ENT-1 owns the mode clause and validated it on the pathname, and
+        # a second copy here would MASK ENT-1's clause from its own mutant (rows 8 and 114 stopped
+        # discriminating under zsh when the first draft re-checked 0600 on the descriptor).
+        # shellcheck disable=SC2154  # _u_h is populated by `zstat -H`, a zsh builtin shellcheck cannot model
+        if zstat -f "$_ae_fd" -H _u_h 2>/dev/null \
+            && [ "$(( ${_u_h[mode]} & 8#170000 ))" = "$(( 8#100000 ))" ] \
+            && [ "${_u_h[uid]}" = "${EUID:-$(/usr/bin/id -u)}" ] \
+            && [ "${_u_h[size]}" -le "$_ae_bound" ]; then
+            _U_SIZE=${_u_h[size]}
+            # One bounded read; sysread returns 5 on an empty object.
+            if sysread -s "$_ae_bound" -i "$_ae_fd" _ae_raw 2>/dev/null; then _ae_ok=1; fi
+        fi
+        exec {_ae_fd}<&-
+        [ "$_ae_ok" = 1 ] || return 1
+        # THE LINE IS THE CONTENT UP TO THE FIRST NEWLINE, exactly what `IFS= read -r` delivers — so
+        # clause (2) below, and only clause (2), refuses a second line (row 4's mutant must be able
+        # to fail here as it does in bash); (1) is that a newline exists at all.
+        case "$_ae_raw" in *$'\n'*) _ae_line="${_ae_raw%%$'\n'*}" ;; *) return 1 ;; esac    # (1)
+    else
+        _ae_ok=0
+        # `2>/dev/null` on the OUTER group: a refused open reports on the shell's stderr BEFORE the
+        # inner group's own redirections apply, and that message names the path — a lossless encoding
+        # of the target (measured, both shells).
+        { { [ -f /dev/fd/9 ] && _u_stat /dev/fd/9 \
+              && [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] \
+              && [ "$_U_SIZE" -le "$_ae_bound" ] \
+              && IFS= read -r -n "$_ae_bound" -u 9 _ae_line && _ae_ok=1; } 9<"$_ae_p"; } 2>/dev/null
+        [ "$_ae_ok" = 1 ] || return 1                                                      # (1)
+    fi
     # (2) is a BYTE comparison, and `${#var}` counts CHARACTERS under a UTF-8 locale — so a base
     # such as `/café` reads as 14 characters against a 15-byte line, the equality fails, and every
     # non-ASCII base marks its own store `stale` (codex, PR #67; reproduced in both shells under

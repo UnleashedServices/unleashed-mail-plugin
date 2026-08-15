@@ -17,7 +17,7 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   visible `conflict` rather than a silent second state directory. All five resolver copies
   (`paths.sh`, `marker.sh`, `log.sh`, `context.sh`, `agent-env-bridge.sh`) consult it; the bridge
   reads and never publishes. Darwin arms only — the Linux arms wait on the CI primitive probe.
-  Proved by **a mutant suite that RUNS the plan's obligation table**: 103 rows executed as
+  Proved by **a mutant suite that RUNS the plan's obligation table**: 110 rows executed as
   spec-vs-mutant tests in both bash 3.2.57 and zsh 5.9, on top of the 32 behavioural tests that
   demonstrate the capability end to end. Also fixed en route: a pre-existing zsh path-derivation
   defect in `context.sh` reachable from the swift-reviewer fence.

@@ -171,6 +171,7 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_plugin_state_base.py": "this file",
         "scripts/tests/test_reviewer_roster.py": "sets it for a fixture",
         "scripts/tests/test_plugin_state_mutants.py": "sets/unsets it for fixtures — a test harness exercising the resolver, not a primitive re-deriving the base",
+        "scripts/tests/test_plugin_state_store.py": "sets/unsets it for the `set -eu` scenario sweep — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/pre-commit-checks.sh": "comments only",
         "agents/swift-reviewer.md": "MAJ-6 bridge injection sites — the substitution points",
         "scripts/validate-plan-citations.py": "a citation-assertion PATTERN, not an expansion — the "

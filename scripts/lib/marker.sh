@@ -24,7 +24,9 @@
 #
 # The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
 # or three libs sourced in one shell would otherwise each emit one.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+# "paths.sh already sourced" is a FUNCTION it defines, never a flag an environment can carry
+# (codex, PR #67 pass 7 — see the protocol note in paths.sh).
+if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
     _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
     # shellcheck source=scripts/lib/paths.sh
     [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
@@ -35,18 +37,23 @@ fi
 # this file's own directory; when it is absent the resolution degrades to the D′ envelope, which is
 # never worse than the pre-2617 behaviour.
 _upb_state_load() {
-    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
-    _UNLEASHED_STATE_LOADED=1
-    _UNLEASHED_STATE_RC=1
+    # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+    # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+    # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+    # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+        && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+        return 0
+    fi
     for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
         [ -r "${_upb_d:-.}/$_upb_f.sh" ] || return 1
         # shellcheck source=/dev/null
         . "${_upb_d:-.}/$_upb_f.sh"
     done
-    _UNLEASHED_STATE_RC=0
     return 0
 }
-if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? — `$$`, never a flag
+    _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
@@ -87,6 +94,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
             fi
         fi
     fi
+    _UNLEASHED_BASE_PID=$$
 fi
 # The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
 # undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
@@ -188,11 +196,11 @@ marker_path() {
 # status/kind are controlled tokens (no escaping needed). Fail-open on any error.
 marker_write() {
     unleashed_base_ok || return 0        # D' (COREDEV-2617): unresolved base persists nothing.
-    local kind="$1" status="$2" dir="" path="" tmp="" commit="" ts="" hash=""
+    local kind="$1" _mw_status="$2" dir="" _mw_path="" tmp="" commit="" ts="" hash=""
     dir="$(marker_dir)"
     mkdir -p "$dir" 2>/dev/null || return 0
-    path="$(marker_path "$kind")"
-    tmp="${path}.tmp.$$"
+    _mw_path="$(marker_path "$kind")"
+    tmp="${_mw_path}.tmp.$$"
     commit="$(git rev-parse --short HEAD 2>/dev/null)" || commit=""
     [ -n "$commit" ] || commit="unknown"
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
@@ -201,12 +209,12 @@ marker_write() {
     # ACTUALLY ran (`host-env` from the variable, `pointer` from the store) — plan row 20. Without it
     # a record cannot say which world wrote it, which is the provenance this ticket exists to give.
     printf '{"status":"%s","kind":"%s","ts":"%s","commit":"%s","repo_hash":"%s","base_resolution":"%s"}\n' \
-        "$status" "$kind" "$ts" "$commit" "$hash" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
-    mv "$tmp" "$path" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+        "$_mw_status" "$kind" "$ts" "$commit" "$hash" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+    mv "$tmp" "$_mw_path" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
     # On a pass, clear the Stop-gate's last-blocked sentinel so a later regression on
     # the same commit can block again (gemini PR #12) — but ONLY when no marker kind is
     # still failing, so a build pass can't unblock a still-failing lint marker (codex PR #12).
-    if [ "$status" = "pass" ]; then
+    if [ "$_mw_status" = "pass" ]; then
         local _k _any_fail=0
         for _k in lint build; do
             # Only a fail marker for THIS commit keeps the sentinel; a stale fail from
@@ -220,6 +228,9 @@ marker_write() {
             # payload, so it cannot target one session's file. Glob-clears every `…-<session>` sentinel plus
             # the legacy un-suffixed name. Without this, a session-suffixed sentinel would survive a pass and
             # a later same-session regression would wrongly pass.
+            # zsh aborts a command whose glob matches nothing (`nomatch`) — measured: `no matches found`
+            # and the rm never ran; a local option scoped to this function, exactly as the reader does.
+            [ -n "${ZSH_VERSION:-}" ] && setopt local_options no_nomatch
             rm -f "$dir/stop-last-blocked-${hash}" "$dir/stop-last-blocked-${hash}"-* 2>/dev/null || true
         fi
     fi
@@ -227,19 +238,26 @@ marker_write() {
 
 # Read one string field from a marker file. $1 = kind, $2 = field. Empty if absent.
 marker_field() {
-    local kind="$1" field="$2" path="" line=""
-    path="$(marker_path "$kind")"
-    [ -f "$path" ] || return 0
+    local kind="$1" field="$2" _mf_path="" line=""
+    _mf_path="$(marker_path "$kind")"
+    [ -f "$_mf_path" ] || return 0
     # Fast path: the marker is a known single-line JSON — parse with bash's built-in
     # regex to avoid spawning jq/python3 on every call (gemini PR #12, perf).
     # Anchor the key to a JSON delimiter ({ or ,) so searching "status" can't match
     # a future field like "custom_status" (gemini PR #12).
-    if read -r line < "$path" 2>/dev/null && [[ "$line" =~ [{,][[:space:]]*\"$field\":\"([^\"]+)\" ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
+    if read -r line < "$_mf_path" 2>/dev/null && [[ "$line" =~ [{,][[:space:]]*\"$field\":\"([^\"]+)\" ]]; then
+        # bash fills BASH_REMATCH; zsh fills `match` — under zsh BASH_REMATCH[1] was silently EMPTY, so
+        # every marker field read as absent from a zsh consumer (measured, PR #67 pass 7).
+        if [ -n "${ZSH_VERSION:-}" ]; then
+            # shellcheck disable=SC2154  # `match` is zsh's capture array
+            printf '%s' "${match[1]}"
+        else
+            printf '%s' "${BASH_REMATCH[1]}"
+        fi
         return 0
     fi
     if command -v jq >/dev/null 2>&1; then
-        jq -r --arg f "$field" '.[$f] // empty' "$path" 2>/dev/null
+        jq -r --arg f "$field" '.[$f] // empty' "$_mf_path" 2>/dev/null
     elif command -v python3 >/dev/null 2>&1; then
         python3 -c 'import json,sys
 try:
@@ -247,9 +265,9 @@ try:
     v=d.get(sys.argv[2],"")
     sys.stdout.write("" if v is None else str(v))
 except Exception:
-    pass' "$path" "$field" 2>/dev/null
+    pass' "$_mf_path" "$field" 2>/dev/null
     else
-        grep -o "\"$field\":\"[^\"]*\"" "$path" 2>/dev/null | head -1 | sed 's/.*:"//; s/"$//'
+        grep -o "\"$field\":\"[^\"]*\"" "$_mf_path" 2>/dev/null | head -1 | sed 's/.*:"//; s/"$//'
     fi
 }
 
@@ -258,9 +276,9 @@ marker_commit() { marker_field "$1" commit; }
 
 # Marker file mtime in epoch seconds — the freshness source of truth. 0 on error.
 marker_mtime() {
-    local path="" m=""
-    path="$(marker_path "$1")"
-    [ -f "$path" ] || { printf '0'; return 0; }
+    local _mm_path="" m=""
+    _mm_path="$(marker_path "$1")"
+    [ -f "$_mm_path" ] || { printf '0'; return 0; }
     # FEATURE-DETECT, do not branch on `uname` (COREDEV-2600 item 3). The old
     # `uname == Darwin` form assumed only Darwin has BSD `stat`, so on FreeBSD it took the GNU
     # branch, `stat -c %Y` failed, and this returned the `0` sentinel. Reproduced: with `uname`
@@ -269,7 +287,7 @@ marker_mtime() {
     # and SKIPS THE GATE ENTIRELY, so a platform quirk silently disabled a quality gate.
     # Same shape as `context.sh::_context_file_mtime`; the `${m:-0}` sentinel is marker.sh's own
     # contract and is preserved (context.sh returns "" instead — that difference is deliberate).
-    m="$(stat -f %m "$path" 2>/dev/null)" || m=""
-    [ -n "$m" ] || m="$(stat -c %Y "$path" 2>/dev/null)" || m=""
+    m="$(stat -f %m "$_mm_path" 2>/dev/null)" || m=""
+    [ -n "$m" ] || m="$(stat -c %Y "$_mm_path" 2>/dev/null)" || m=""
     printf '%s' "${m:-0}"
 }

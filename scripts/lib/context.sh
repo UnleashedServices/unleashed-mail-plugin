@@ -36,7 +36,9 @@
 # function bash keeps BASH_SOURCE[0] as the defining file while zsh sets `$0` to the FUNCTION
 # NAME (FUNCTION_ARGZERO, on by default), so the same line resolves to the caller's CWD there.
 _UNLEASHED_CONTEXT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _UNLEASHED_CONTEXT_LIB_DIR="."
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
+# "paths.sh already sourced" is a FUNCTION it defines, never a flag an environment can carry
+# (codex, PR #67 pass 7 — see the protocol note in paths.sh).
+if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
     _upb_d="$_UNLEASHED_CONTEXT_LIB_DIR"
     # shellcheck source=scripts/lib/paths.sh
     [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
@@ -47,18 +49,23 @@ fi
 # this file's own directory; when it is absent the resolution degrades to the D′ envelope, which is
 # never worse than the pre-2617 behaviour.
 _upb_state_load() {
-    [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"
-    _UNLEASHED_STATE_LOADED=1
-    _UNLEASHED_STATE_RC=1
+    # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+    # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+    # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+    # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+        && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+        return 0
+    fi
     for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
         [ -r "${_upb_d:-.}/$_upb_f.sh" ] || return 1
         # shellcheck source=/dev/null
         . "${_upb_d:-.}/$_upb_f.sh"
     done
-    _UNLEASHED_STATE_RC=0
     return 0
 }
-if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? — `$$`, never a flag
+    _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
@@ -99,6 +106,7 @@ if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
             fi
         fi
     fi
+    _UNLEASHED_BASE_PID=$$
 fi
 # The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
 # undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
@@ -347,7 +355,7 @@ context_review_round_bind() {
     # executes even when the write has already failed, so merely skipping the write would still
     # hand a consumer a round number that was never stored.
     unleashed_base_ok || return 0
-    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now path dir
+    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now _rb_path dir
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
     slug="$(context_branch_slug "$(context_branch)")"
     base="$(context_reviews_dir)/$slug"
@@ -363,16 +371,16 @@ context_review_round_bind() {
     # session_id is an opaque CC id; hard-restrict to a JSON-safe charset (and cap) so the bash-written
     # JSON can never be malformed by an unexpected value. agent is hook-allowlisted; slug is a safe token.
     sid="$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9._-' | cut -c1-128)"
-    path="$(context_round_binding_path "$agent_id")"
-    dir="$(dirname "$path")"
+    _rb_path="$(context_round_binding_path "$agent_id")"
+    dir="$(dirname "$_rb_path")"
     mkdir -p "$dir" 2>/dev/null || true
     _context_round_sweep "$dir" "${now:-0}"
     # COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
     if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s,"base_resolution":"%s"}\n' \
-        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$path.tmp.$$" 2>/dev/null; then
-        mv -f "$path.tmp.$$" "$path" 2>/dev/null || rm -f "$path.tmp.$$" 2>/dev/null
+        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$_rb_path.tmp.$$" 2>/dev/null; then
+        mv -f "$_rb_path.tmp.$$" "$_rb_path" 2>/dev/null || rm -f "$_rb_path.tmp.$$" 2>/dev/null
     else
-        rm -f "$path.tmp.$$" 2>/dev/null
+        rm -f "$_rb_path.tmp.$$" 2>/dev/null
     fi
     printf '%s' "$round"
 }
@@ -383,10 +391,10 @@ context_review_round_bind() {
 # Anything off -> nothing -> the caller leaves UNLEASHED_REVIEW_ROUND unset -> capture.py infers.
 # Stdlib python3 (already a hard capture dependency). $1 = agent_type, $2 = agent_id, $3 = session_id.
 context_review_round_lookup() {
-    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" path slug
+    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" _rl_path slug
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
-    path="$(context_round_binding_path "$agent_id")"
-    [ -f "$path" ] || return 0
+    _rl_path="$(context_round_binding_path "$agent_id")"
+    [ -f "$_rl_path" ] || return 0
     command -v python3 >/dev/null 2>&1 || return 0
     slug="$(context_branch_slug "$(context_branch)")"
     UNLEASHED_RB_AGENT="$agent" UNLEASHED_RB_SLUG="$slug" UNLEASHED_RB_SID="$sid" \
@@ -421,7 +429,7 @@ if ttl > 0 and now > 0 and isinstance(t, (int, float)) and not isinstance(t, boo
     if now - t > ttl:
         sys.exit(0)
 sys.stdout.write(str(r))
-' "$path" 2>/dev/null
+' "$_rl_path" 2>/dev/null
 }
 
 # Consume-once: delete a subagent's binding after its SubagentStop has read it (so a later duplicate

@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 103 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 110 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,35 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Seventh review pass (codex) — five findings, and what executing them uncovered.**
+  - The family's "already resolved / already loaded / already sourced" guards were bare flags
+    (`_UNLEASHED_BASE_OK`, `_UNLEASHED_STATE_LOADED`, `_UNLEASHED_PATHS_SH_LOADED`) that a child
+    process inherits from its environment without inheriting the functions or the meaning: an
+    inherited `_UNLEASHED_BASE_OK=1` alone made `marker_dir` return `/.state` — the root path D′
+    exists to prevent; an inherited `_UNLEASHED_STATE_LOADED=1` produced `command not found` and
+    every protocol variable unset. The keys are now process identity (`_UNLEASHED_BASE_PID = $$`)
+    and function presence, in all five resolver copies; the resolver resets its diagnostic guard
+    on entry.
+  - The publisher's two status captures were bare calls (`cmd; rc=$?`), which under `set -e` abort
+    the sourcing shell before the E5/E6 classification — measured: `set -e; . paths.sh` with the
+    store unwritable exited 2 with no diagnostic. Both are errexit-safe; a 48-scenario `set -eu`
+    sweep across publish/read/family passes in both shells.
+  - The reader opened the entry a SECOND time to read it after validating the pathname; a FIFO or a
+    large file substituted in between was read instead of what was checked. The entry is opened
+    once and validated on the descriptor before a bounded read (zsh: `sysopen -o nonblock` /
+    `zstat -f` / `sysread`; bash: `/dev/fd/N` + `read -n`, with the FIFO window stated as P-5's
+    residual).
+  - `log_append` stamps `base_resolution` on every JSON-object record — the four log producers
+    never did, so `pointer` and `host-env` records were indistinguishable.
+  - The plan-citation linter's negation exemption is scoped to the citing sentence (a 260-char
+    window let a neighbouring "does not exist" launder an unrelated fabricated reference).
+  - **Pre-existing zsh defects the new fixtures exposed:** `log_append`, `marker_write`,
+    `marker_field`, `marker_mtime`, `context_review_round_bind` and `_lookup` declared `path`
+    (zsh's `PATH`-tied array — the function's `PATH` became empty and `mkdir` was not found, so
+    `log_append` had been a silent no-op under zsh since it was written) or `status` (read-only in
+    zsh — `marker_write` aborted); `marker_write`'s sentinel glob aborted under zsh's `nomatch`;
+    `marker_field` read captures from `BASH_REMATCH`, which zsh does not fill. All fixed; the writers
+    now behave identically in both shells. Mutant rows 156–162.
 - `plugin-state-publisher.sh` wrote the transient in TWO opens — an exclusive create, then a plain
   `>` on the same pathname to write the value — and the second open had none of the first one's
   protection: a symlink substituted between them was followed and its target overwritten (both
