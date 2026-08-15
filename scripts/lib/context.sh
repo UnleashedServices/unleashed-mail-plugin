@@ -367,8 +367,9 @@ context_review_round_bind() {
     dir="$(dirname "$path")"
     mkdir -p "$dir" 2>/dev/null || true
     _context_round_sweep "$dir" "${now:-0}"
-    if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s}\n' \
-        "$round" "$agent" "$slug" "$sid" "${now:-0}" > "$path.tmp.$$" 2>/dev/null; then
+    # COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
+    if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s,"base_resolution":"%s"}\n' \
+        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$path.tmp.$$" 2>/dev/null; then
         mv -f "$path.tmp.$$" "$path" 2>/dev/null || rm -f "$path.tmp.$$" 2>/dev/null
     else
         rm -f "$path.tmp.$$" 2>/dev/null

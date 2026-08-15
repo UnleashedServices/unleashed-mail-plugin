@@ -104,8 +104,15 @@ _unleashed_publish() {
 
     # E3 — the budget, BEFORE the store is created: the probe comes first so a name that cannot fit
     # never causes a directory to be made.
-    if ! _unleashed_name_max "$_pb_store" || ! _unleashed_budget_ok "$_pb_key"; then
-        _unleashed_pub_failed "the entry name exceeds NAME_MAX for this filesystem"; return 0
+    # Two DIFFERENT failures, reported as what they are: a probe that could not answer is not a
+    # name that is too long, and a user cannot act on the wrong one (codex, PR #67). Both fail
+    # closed; the over-budget line carries the attempted and allowed lengths so the path can be
+    # shortened by a known amount.
+    if ! _unleashed_name_max "$_pb_store"; then
+        _unleashed_pub_failed "the NAME_MAX probe (/usr/bin/getconf) failed or returned a non-number"; return 0
+    fi
+    if ! _unleashed_budget_ok "$_pb_key"; then
+        _unleashed_pub_failed "the entry name would be $(( 7 + ${#$} + 5 + ${#_pb_key} )) bytes; NAME_MAX here is $_UNLEASHED_NAME_MAX"; return 0
     fi
 
     # E4 — the store chain, in PUB-9's three-step order. Ancestors this publisher already created are

@@ -197,8 +197,11 @@ marker_write() {
     [ -n "$commit" ] || commit="unknown"
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
     hash="$(marker_repo_hash)"
-    printf '{"status":"%s","kind":"%s","ts":"%s","commit":"%s","repo_hash":"%s"}\n' \
-        "$status" "$kind" "$ts" "$commit" "$hash" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+    # COREDEV-2617 §4.2a: every persisted record carries `base_resolution` naming the resolution that
+    # ACTUALLY ran (`host-env` from the variable, `pointer` from the store) — plan row 20. Without it
+    # a record cannot say which world wrote it, which is the provenance this ticket exists to give.
+    printf '{"status":"%s","kind":"%s","ts":"%s","commit":"%s","repo_hash":"%s","base_resolution":"%s"}\n' \
+        "$status" "$kind" "$ts" "$commit" "$hash" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
     mv "$tmp" "$path" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
     # On a pass, clear the Stop-gate's last-blocked sentinel so a later regression on
     # the same commit can block again (gemini PR #12) — but ONLY when no marker kind is

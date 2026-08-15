@@ -1909,12 +1909,12 @@ class RowsChunk3(unittest.TestCase):
                 shutil.rmtree(os.path.join(self.home, ".claude"))
                 state, err = self._publish(shell, value)
                 self.assertEqual("failed", state, f"{shell}: spec")
-                self.assertIn("exceeds NAME_MAX", err, f"{shell}: E3 is the exit that must fire")
+                self.assertIn("NAME_MAX here is", err, f"{shell}: E3 is the exit that must fire")
                 self.assertFalse(os.path.exists(os.path.join(self.home, ".claude")),
                                  f"{shell}: E3 comes BEFORE store creation — nothing may exist")
                 state, err = self._publish(shell, value, sources=(AUTH, mutant, READER, PUB))
                 self.assertEqual("failed", state, f"{shell}: mutant still fails, later")
-                self.assertNotIn("exceeds NAME_MAX", err,
+                self.assertNotIn("NAME_MAX here is", err,
                                  f"{shell}: the MUTANT must sail past E3 or this row cannot fail")
                 self.assertTrue(os.path.isdir(self.store),
                                 f"{shell}: the MUTANT must have created the store E3 forbids")

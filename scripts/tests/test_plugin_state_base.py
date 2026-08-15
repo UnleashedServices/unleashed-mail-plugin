@@ -27,6 +27,11 @@ def run(script, env=None, shell="bash", libdir=None):
     """Run `script` in a fresh shell with a clean environment."""
     e = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT")}
     e["_LIBDIR"] = libdir or LIB
+    # COREDEV-2617 §4.2a: these cells source family libs with the variable SET, which publishes
+    # into ${HOME}/.claude/unleashed-mail/bases/. This suite tests the D′ envelope, not the store,
+    # so publication is off — a real HOME must never receive an entry from a test cell (codex,
+    # PR #67). Cells that need to assert on the store set _UNLEASHED_PUBLISH_OK themselves.
+    e.setdefault("_UNLEASHED_PUBLISH_OK", "0")
     e.update(env or {})
     return subprocess.run([shell, "-c", script], capture_output=True, text=True, env=e)
 
