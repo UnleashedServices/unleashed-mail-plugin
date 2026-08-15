@@ -13,7 +13,8 @@ Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the
 rows 163-164 (PR #67, codex pass 8), row 165 (PR #67, codex pass 9), rows 166-168 (PR #67, codex
 pass 11), row 169 (external audit of PR #67, finding 1) and row 170 (PR #67, codex pass 12 — which also
 RESHAPED rows 158 and 167: paths.sh's definition block is now unconditional, so those mutations ADD a
-guard where the specification has none) joined that class.
+guard where the specification has none) and row 171 (PR #67, codex pass 13 — a component that APPEARED
+between E4's steps (i) and (ii)) joined that class.
 """
 
 import os
@@ -4513,7 +4514,7 @@ SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170."""
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -5613,6 +5614,99 @@ class RowsPass7(unittest.TestCase):
                                          f"did not run the inherited one: {out!r} {err!r}")
         finally:
             os.unlink(mutant)
+
+
+    # ── row 171 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The step-(ii) "present now" clause of `_unleashed_create_store` — the block that decides whether
+    #: a component present at (ii) was WALKED by (i) or APPEARED since. Head and tail are unique in the
+    #: shipped file; the slice is asserted unique again by `_slice` and by with_mutation.
+    ROW_171_HEAD = '            case "$_UNLEASHED_NEAREST" in\n'
+    ROW_171_TAIL = '            esac\n'
+
+    def test_row_171_a_component_present_at_step_ii_is_not_authenticated_by_being_present(self):
+        """Row 171: `.claude` is ABSENT when E4 step (i) authenticates the nearest existing ancestor; a DEBUG trap plants it as a SYMLINK to an outside directory the instant (i) has completed and before (ii) reaches the component: the specification refuses (non-zero) with the outside directory EMPTY — the newly present component is authenticated with the no-follow chain predicate before anything is created beneath it; under the mutation (a present component is treated as already authenticated, `case … esac` → `:`) the next component `unleashed-mail` is created THROUGH the link inside the outside directory and only (iii) reports the failure. A normal creation (no trap) succeeds in both builds. Both shells."""
+        # THE INTERLEAVING IS DETERMINISTIC, NOT RACED (rows 153/160's shape): the trap fires before
+        # every simple command; its condition is satisfied for the first time before (ii)'s first
+        # `[ -d "$_cs_d" ]` — `_cs_top` and `_UNLEASHED_NEAREST` are set, `_cs_d` is `.claude` (so (i)
+        # has RETURNED, successfully: a refusing (i) never reaches the loop and the link is never
+        # planted, which the WHERE= assertion would report), `.claude` still absent — so (i) walked
+        # `<home>` (asserted: NEAREST == home) and (ii) finds `.claude` present, a symlink `-d` follows.
+        # `set -T` in bash so the trap reaches into the function. Measured, both shells: spec rc=1,
+        # `<outside>` empty, `.claude` the planted link, WHERE=<home>/.claude; mutant rc=1,
+        # `<outside>/unleashed-mail` a 0700 directory — the refusal path itself created outside the
+        # store. The oracle is the OUTSIDE directory, not the status: both builds return 1, the
+        # mutant's from (iii) after the damage is done.
+        old = self._slice(STORE, self.ROW_171_HEAD, self.ROW_171_TAIL)
+        self.assertIn('"$_cs_d"|"$_cs_d"/*) : ;;', old)
+        self.assertIn('*) _unleashed_auth_chain "$_cs_d" || return 1 ;;', old)
+        self.assertEqual(4, len(old.splitlines()), old)
+        mutant = with_mutation(old, '            :\n', path=STORE)
+        outside = os.path.join(self.home, "outside")
+        top = os.path.join(self.home, ".claude")
+        leak = os.path.join(outside, "unleashed-mail")
+        os.makedirs(outside, mode=0o700)
+        os.chmod(outside, 0o700)
+
+        def reset():
+            if os.path.islink(top):
+                os.unlink(top)
+            self._wipe()
+            for f in os.listdir(outside):
+                shutil.rmtree(os.path.join(outside, f), ignore_errors=True)
+
+        trapped = ('unset _cs_top _cs_d _UNLEASHED_NEAREST _t171_done _t171_where\n'
+                   '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                   'trap \'if [ -z "${_t171_done:-}" ] && [ -n "${_cs_top:-}" ] && [ -n "${_cs_d:-}" ] '
+                   '&& [ -n "${_UNLEASHED_NEAREST:-}" ] && [ ! -e "$_cs_top" ]; then '
+                   f'_t171_done=1; _t171_where="$_cs_d"; /bin/ln -s "{outside}" "$_cs_top"; fi\' DEBUG\n'
+                   f'_unleashed_create_store "{self.store}"; _t171_rc=$?\n'
+                   'trap - DEBUG\n'
+                   'printf "RC=%s NEAREST=%s WHERE=%s" "$_t171_rc" "$_UNLEASHED_NEAREST" "$_t171_where"')
+        normal = f'_unleashed_create_store "{self.store}"; printf "RC=%s" "$?"'
+        try:
+            for shell in SHELLS:
+                for store_lib, is_mutant in ((STORE, False), (mutant, True)):
+                    srcs = (AUTH, store_lib, READER, PUB)
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    reset()
+                    rc, out, err = run_shell(shell, trapped, sources=srcs)
+                    self.assertEqual(0, rc, f"{tag}: the fixture shell failed: {err!r}")
+                    self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                    # The fixture interleaved where the row says: (i) walked <home> with .claude
+                    # absent, and the link is what (ii) then found.
+                    self.assertEqual(f"RC=1 NEAREST={self.home} WHERE={top}", out,
+                                     f"{tag}: E4 did not refuse, (i) did not walk the scratch home with "
+                                     f".claude absent, or the link was not planted as (ii) reached `.claude` "
+                                     f"— the fixture is not the finding: {out!r} {err!r}")
+                    self.assertTrue(os.path.islink(top),
+                                    f"{tag}: the trap never planted the link — the fixture did not interleave")
+                    self.assertEqual(outside, os.readlink(top), f"{tag}: the link points elsewhere")
+                    created = sorted(os.listdir(outside))
+                    if not is_mutant:
+                        self.assertEqual([], created,
+                                         f"{tag}: the refusal path created OUTSIDE the store through the "
+                                         f"planted link: {created}")
+                    else:
+                        self.assertTrue(os.path.isdir(leak) and not os.path.islink(leak),
+                                        f"{tag}: the CONTROL did not fail — the mutant did not create "
+                                        f"`unleashed-mail` through the link: {created}")
+                        self.assertEqual(0o700, statmod.S_IMODE(os.stat(leak).st_mode),
+                                        f"{tag}: not the store's mkdir -m 700 that made it")
+                    # A normal creation succeeds in BOTH builds — the mutation removes a check, it
+                    # does not break the store.
+                    reset()
+                    rc, out, err = run_shell(shell, normal, sources=srcs)
+                    self.assertEqual(0, rc, f"{tag}: normal creation shell failed: {err!r}")
+                    self.assertEqual("RC=0", out, f"{tag}: a normal creation did not succeed: {out!r} {err!r}")
+                    self.assertTrue(os.path.isdir(self.store) and not os.path.islink(top),
+                                    f"{tag}: the store was not created")
+                    self.assertEqual(0o700, statmod.S_IMODE(os.stat(self.store).st_mode), f"{tag}: store mode")
+                    self.assertEqual([], os.listdir(outside), f"{tag}: a normal creation wrote outside")
+        finally:
+            os.unlink(mutant)
+            if os.path.islink(top):
+                os.unlink(top)
 
 
 if __name__ == "__main__":

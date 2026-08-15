@@ -23,6 +23,11 @@ The tracked set is the UNION of the index and HEAD's tree (codex, PR #67 pass 11
 `ls-files` derives membership from the mutable index, so a committed-and-ignored path staged for
 deletion (`git rm --cached`) vanished from the listing while `status` stayed `D  path` before and after
 its working-tree file was rewritten. The control — the union's `ls-tree` half removed — must NOT move.
+
+The ANCESTOR DIRECTORIES of every tracked path are recorded by lstat — type and mode — before the leaves
+(codex, PR #67 pass 13 — reproduced): `git status` says nothing about a directory's own metadata, so a
+probe that hashed only the leaves certified a live tree whose `scripts/` had been `chmod 777`ed. The
+control — the directory block removed, the leaf loop kept — must NOT move.
 """
 
 from __future__ import annotations
@@ -298,6 +303,65 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
                          "the CONTROL (index-only membership) told the trees apart — the rewrite is visible "
                          "to something other than the HEAD-tree half, so this test does not prove that half")
         self.assertNotIn(' "f.txt"\n', b2, b2)
+
+    # The directory block of the tracked-content probe — from the ancestor set through the `D` record;
+    # the leaf loop that follows it (and the `out = []` it shares) stays in the control.
+    DIR_BLOCK_HEAD = "dirs = set()\n"
+    DIR_BLOCK_TAIL = '        out.append("D %s %s" % (mode, json.dumps(rel)))\n'
+
+    def _dir_block(self):
+        """The CURRENT text of the directory block, sliced between two unique anchors of the shipped helper."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.DIR_BLOCK_HEAD), "the directory block's head is not unique")
+        start = text.index(self.DIR_BLOCK_HEAD)
+        self.assertIn(self.DIR_BLOCK_TAIL, text[start:], "the directory block's tail is not after its head")
+        end = text.index(self.DIR_BLOCK_TAIL, start) + len(self.DIR_BLOCK_TAIL)
+        block = text[start:end]
+        self.assertEqual(1, text.count(block), "the sliced directory block is not unique")
+        self.assertIn("out = []\n", block, "the block should carry the shared `out = []` — the control re-adds it")
+        self.assertIn('out.append("MISSING-DIR %s"', block)
+        self.assertIn('out.append("DL %s %s -> %s"', block)
+        # The leaf loop is OUTSIDE the slice, so the control still hashes every tracked file.
+        self.assertIn("for raw in sorted(names):\n", text[end:], "the leaf loop must follow the block")
+        return block
+
+    def _directory_mode_change(self, helper):
+        """`scripts/f.sh` committed; B; `chmod 777 scripts`; A. Returns (B, A, pre-chmod mode as `%04o`).
+        The premise is asserted: `status` is blind to the directory's mode before and after."""
+        self._fresh_repo({"scripts/f.sh": "#!/bin/sh\n"})
+        scripts = os.path.join(self.repo, "scripts")
+        self.assertTrue(os.path.isdir(scripts) and not os.path.islink(scripts))
+        pre = "%04o" % (os.lstat(scripts).st_mode & 0o7777)
+        self.assertNotEqual("0777", pre, "the fixture's directory already carries the mode the change applies")
+        before = self._fp(helper)
+        os.chmod(scripts, 0o777)
+        self.assertEqual("0777", "%04o" % (os.lstat(scripts).st_mode & 0o7777))
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"status sees the directory chmod — the fixture is not the finding: {st.stdout!r}")
+        after = self._fp(helper)
+        return before, after, pre
+
+    def test_a_tracked_directorys_mode_change_moves_the_fingerprint(self):
+        before, after, pre = self._directory_mode_change(HELPER)
+        self.assertNotEqual(before, after,
+                            "`chmod 777 scripts` left the LIVE fingerprint byte-identical — only the leaves were hashed")
+        self.assertIn(f'\nD {pre} "scripts"\n', before,
+                      f"no `D {pre} \"scripts\"` record (the directory's actual pre-chmod mode) before: {before!r}")
+        self.assertIn('\nD 0777 "scripts"\n', after, f"no `D 0777 \"scripts\"` record after: {after!r}")
+        self.assertNotIn('\nD 0777 "scripts"\n', before)
+        # The directory record precedes the leaves it encloses.
+        self.assertLess(after.index('D 0777 "scripts"'), after.index(' "scripts/f.sh"\n'), after)
+        self.assertIn(' "scripts/f.sh"\n', before, before)                 # the leaf is still hashed
+        # The control: the directory block removed, the leaf loop kept — compares EQUAL (measured).
+        mutant = self._mutant(self._dir_block(), "out = []\n", "tree-fingerprint-no-dir-block.sh")
+        b2, a2, _ = self._directory_mode_change(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (leaves only) told the trees apart — the chmod is visible to something "
+                         "other than the directory record, so this test does not prove that record")
+        self.assertNotIn(' "scripts"\n', b2, b2)                            # no directory record at all …
+        self.assertIn(' "scripts/f.sh"\n', b2, b2)                          # … but the leaf loop survived
 
     def test_verdicts_root_type_is_recorded(self):
         before, after = self._verdicts_swap(HELPER)

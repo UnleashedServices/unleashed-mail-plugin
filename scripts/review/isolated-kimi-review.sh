@@ -75,7 +75,20 @@ PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
 [ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
 
-mkdir -p "$(dirname -- "$OUT")" || exit 1
+# NOTHING IS CREATED BEFORE THE OPERAND IS CONTAINED. The parent used to be `mkdir -p`'d first, so a
+# refused operand (`$REPO/new/nested/kimi.txt`, or a parent symlinked into the checkout or its .git)
+# left its missing components created inside the protected tree before the refusal (codex, PR #67 pass
+# 13). The physical path is computed WITHOUT creating anything — the nearest EXISTING ancestor is resolved
+# with `cd -P`, the missing tail is re-appended — the refusals are applied to that, and only then is the
+# parent created.
+_out_dir="$(dirname -- "$OUT")"; _out_missing=""
+while [ ! -d "$_out_dir" ]; do
+    _out_missing="$(basename -- "$_out_dir")/$_out_missing"
+    _out_parent="$(dirname -- "$_out_dir")"
+    [ "$_out_parent" != "$_out_dir" ] || { echo "cannot resolve the transcript's parent: $OUT" >&2; exit 1; }
+    _out_dir="$_out_parent"
+done
+OUT="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)/${_out_missing}$(basename -- "$OUT")" || exit 1
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
 # checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
 # temporary worktree — where the later grep/wc could not find it, the run would end EFFORT=UNKNOWN
@@ -84,7 +97,7 @@ mkdir -p "$(dirname -- "$OUT")" || exit 1
 # an absolute `/repo/../../tmp/x` or a parent that is a symlink into /tmp did not match the guard
 # below while the capture was physically written there (codex, PR #67 pass 10 — reproduced); the
 # earlier fix normalised relative operands only, and with a logical `pwd`.
-OUT="$(CDPATH='' cd -P -- "$(dirname -- "$OUT")" 2>/dev/null && pwd -P)/$(basename -- "$OUT")" || exit 1
+# (OUT is already physical — see the resolution above, which created nothing.)
 # THE /tmp REFUSAL IS APPLIED TO THE PHYSICAL PATH — a relative operand with parent traversal
 # (`../../tmp/kimi.txt`) does not match `/tmp/*` before normalisation and resolves to `/tmp/kimi.txt`
 # after it, defeating the guard exactly where it matters (codex, PR #67). `pwd -P` also resolves
@@ -104,6 +117,8 @@ case "$OUT" in
         echo "refusing to write the transcript inside the live checkout ($REPO_P) — it is the tree the round is compared against" >&2
         exit 1 ;;
 esac
+# Only NOW — every refusal has been applied to the physical operand — is the parent created.
+mkdir -p "$(dirname -- "$OUT")" || exit 1
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 # shellcheck source=scripts/review/tree-fingerprint.sh

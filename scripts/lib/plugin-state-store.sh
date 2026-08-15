@@ -156,7 +156,19 @@ _unleashed_create_store() {
 
     for _cs_d in "$_cs_top" "$_cs_mid" "$_cs_store"; do            # (ii)
         if [ -d "$_cs_d" ]; then
-            continue                   # authenticated by (i), or by an earlier iteration
+            # PRESENT NOW. Covered by (i) only if it is a prefix of — or is — the nearest existing
+            # ancestor (i) walked; a component that was ABSENT at (i) and is present now APPEARED in
+            # between, and `-d` FOLLOWS a symlink: an interfering same-uid process planted `.claude` as a
+            # symlink to an outside directory after (i), this branch skipped it as "authenticated", and
+            # the next iteration ran `mkdir unleashed-mail` THROUGH the link — a directory created outside
+            # the store by the refusal path itself, before (iii) noticed the link (codex, PR #67 pass 13
+            # — reproduced, both shells). So a newly present component is authenticated with the same
+            # no-follow chain predicate BEFORE anything is created beneath it; a symlink fails it (PCH-1).
+            case "$_UNLEASHED_NEAREST" in
+                "$_cs_d"|"$_cs_d"/*) : ;;                              # walked by (i)
+                *) _unleashed_auth_chain "$_cs_d" || return 1 ;;       # appeared since (i): E4 unless it authenticates
+            esac
+            continue
         fi
         if /bin/mkdir -m 700 "$_cs_d" 2>/dev/null; then
             :

@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 118 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 119 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Thirteenth review pass (codex) — four findings, each reproduced.** Store creation (E4 step ii)
+  authenticates a component that is present but was absent at step (i) before creating anything
+  beneath it — a symlink planted in between had the next `mkdir` create a directory outside the store
+  (row 171). The live fingerprint records the lstat of every tracked path's ancestor directories
+  (`chmod 777 scripts` was invisible). The kimi harness computes the transcript's physical path
+  without creating anything and applies every refusal before its first `mkdir` (a refused operand
+  used to leave its parents behind, even through a symlink into `.git`). The plan-citation linter's
+  negation exemption is asymmetric — post-position negations belong to the citation they follow,
+  pre-position forms must sit immediately before it — so one negation no longer exempts two
+  references in one sentence; codex's example is a self-test seed.
 - **Twelfth review pass (codex) — four findings, each reproduced.** `paths.sh`'s definitions are
   now unconditional (bash `set -a` exports every function, so "the complete API is present" was
   satisfied by an inherited namespace carrying an attacker's resolver — the guard skipped the

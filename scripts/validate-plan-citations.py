@@ -166,18 +166,36 @@ def check_internal(lines, body, start, end, problems):
 _SENTENCE_END = re.compile(r"[.!?](?=\s)|\n\s*\n|\|")
 
 
-def _sentence_around(flat, start, end):
-    """The sentence of `flat` that contains [start, end): from the previous sentence end to the next."""
+def _sentence_around(flat, start, end, other_spans=()):
+    """The text a negation may sit in to correct the citation at [start, end) — ASYMMETRIC, as grammar
+    is: a POST-position negation ("does not exist", "unmerged", …) belongs to the citation it FOLLOWS,
+    from the citation's end to the next citation or the sentence's end; a PRE-position form ("no §",
+    "there is no") must sit in the 40 characters immediately BEFORE the citation, after any previous
+    citation. A whole-sentence window let one negation exempt two references in one sentence, and a
+    symmetric clause split still handed the text BETWEEN two citations to both of them
+    (`§9.9z … does not exist, but this rule relies on §9.8z …`; codex, PR #67 passes 7 and 13)."""
     lo = 0
     for m in _SENTENCE_END.finditer(flat, 0, start):
         lo = m.end()
     m = _SENTENCE_END.search(flat, end)
     hi = m.start() if m else len(flat)
-    return flat[lo:hi]
+    for s, e in other_spans:
+        if e <= start and e > lo:
+            lo = e
+        if s >= end and s < hi:
+            hi = s
+    post = flat[end:hi]
+    pre = flat[max(lo, start - 40):start]
+    return post, pre
+
+
+_POST_NEGATION = re.compile(r"does not exist|does NOT exist|lives only on|unmerged|zero hits|not exist in this tree|prospective")
+_PRE_NEGATION = re.compile(r"no §|there is\s+no|there was\s+no")
 
 
 def check_external(text, repo, problems, flat):
     checked = 0
+    all_spans = sorted(mm.span() for pat, _r, _l in EXTERNAL_RULES for mm in re.finditer(pat, flat))
     for pat, relpath, label in EXTERNAL_RULES:
         for m in re.finditer(pat, flat):
             sec = m.group(1)
@@ -195,9 +213,8 @@ def check_external(text, repo, problems, flat):
             # a NEIGHBOURING sentence launder an unrelated fabricated reference (`This old section does not
             # exist. A separate rule relies on §9.9z …` passed; codex, PR #67 pass 7). A sentence ends at
             # `.`/`!`/`?` followed by whitespace, at a blank line, or at a table-cell bar.
-            ctx = _sentence_around(flat, m.start(), m.end())
-            if re.search(r"does not exist|does NOT exist|no §|there is\s+no|lives only on|unmerged|"
-                         r"zero hits|not exist in this tree|prospective", ctx):
+            post, pre = _sentence_around(flat, m.start(), m.end(), [sp for sp in all_spans if sp != m.span()])
+            if _POST_NEGATION.search(post) or _PRE_NEGATION.search(pre):
                 continue
             problems.append(f"[cite-external] §{sec} of the {label} does NOT exist in this tree ({relpath})")
     declared = {m.group(1) for m in re.finditer(r"^(\d+)\. ", text, re.M)}
@@ -339,6 +356,11 @@ SEEDS = [
     ("cite-external", lambda s: s.replace("## 5. Risk register",
                                           "This old section does not exist. A separate rule relies on "
                                           "§9.9z of the journal plan.\n\n## 5. Risk register", 1)),
+    # The second laundering shape (codex, PR #67 pass 13): one negation, TWO references in one sentence —
+    # the negation belongs to §9.9z, and §9.8z must still be detected.
+    ("cite-external", lambda s: s.replace("## 5. Risk register",
+                                          "§9.9z of the journal plan does not exist, but this rule relies "
+                                          "on §9.8z of the journal plan.\n\n## 5. Risk register", 1)),
     # CONTENT-RELATIVE, not a hard-coded line: the seed anchored on `:85` for as long as that was the pin,
     # and when the pin was relocated to follow the script the seed silently found nothing — CI red on
     # PR #67 for two passes with "ANCHOR NOT FOUND", which is this self-test doing its job one level up.

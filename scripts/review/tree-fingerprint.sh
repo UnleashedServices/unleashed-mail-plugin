@@ -112,7 +112,27 @@ names = set(x for x in r.stdout.split(b"\0") if x)
 r2 = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
 if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure
     names.update(x for x in r2.stdout.split(b"\0") if x)
+# THE ANCESTOR DIRECTORIES OF EVERY TRACKED PATH, BY LSTAT — mode and type. `git status` says nothing
+# about a directory's own metadata, and hashing only the leaves left `chmod 777 scripts` invisible: the
+# round certified a live tree whose formerly protected directory was now world-writable (codex, PR #67
+# pass 13 — reproduced). Directories are recorded once each, before the leaves.
+dirs = set()
+for raw in names:
+    p = os.path.dirname(os.fsdecode(raw))
+    while p:
+        dirs.add(p); p = os.path.dirname(p)
 out = []
+for rel in sorted(dirs):
+    full = os.path.join(root, rel)
+    try:
+        st = os.lstat(full)
+    except FileNotFoundError:
+        out.append("MISSING-DIR %s" % json.dumps(rel)); continue
+    mode = "%04o" % stat.S_IMODE(st.st_mode)
+    if stat.S_ISLNK(st.st_mode):
+        out.append("DL %s %s -> %s" % (mode, json.dumps(rel), json.dumps(os.readlink(full))))
+    else:
+        out.append("D %s %s" % (mode, json.dumps(rel)))
 for raw in sorted(names):
     rel = os.fsdecode(raw)
     full = os.path.join(root, rel)

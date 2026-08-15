@@ -18,6 +18,13 @@ THE PROMPT OPERAND IS CONTAINED and the transcript never lands in the compared t
 each exit 1 with their own message BEFORE the reviewer runs — the stub leaves an invocation marker on
 every run, and these assert the marker is absent and the transcript was never created.
 
+AND A REFUSED TRANSCRIPT OPERAND CREATES NOTHING (codex, PR #67 pass 13): the parent used to be `mkdir -p`'d
+BEFORE the physical resolution and the refusals, so `<clone>/new/nested/kimi.txt` left `<clone>/new/nested/`
+inside the live tree and `<scratch>/other/link/deep/kimi.txt` (the link into `<clone>/.git`) left
+`<clone>/.git/deep/` — both invisible to `status`, which lists no empty directory. The physical path is now
+computed without creating anything; the control — the `mkdir -p` restored ahead of the resolution — is RUN
+on the same operands and does create them.
+
 THE EFFORT EVIDENCE IS BOUND TO THE ONE SESSION THE RUN CREATED (codex, PR #67 pass 11): the set
 difference of `$HOME/.kimi-code/sessions/*/session_*` before and after the run — never a session id read
 out of the transcript, which is reviewer-controlled text. Exactly one new session with a `max` wire log
@@ -304,6 +311,73 @@ class KimiHarnessMutationGates(unittest.TestCase):
         p, _ = self._run("clean", out=out)
         self._assert_refused_before_launch(p, out, "inside the live checkout")
 
+    # ── a refused transcript operand creates NOTHING (codex, PR #67 pass 13) ──────────────────
+
+    # The first line of the create-nothing resolution; the control puts the PREVIOUS `mkdir -p` of the
+    # operand's parent back in front of it, exactly where it used to run.
+    RESOLUTION_HEAD = '_out_dir="$(dirname -- "$OUT")"; _out_missing=""\n'
+    MKDIR_FIRST = 'mkdir -p "$(dirname -- "$OUT")" || exit 1\n'
+
+    def _mkdir_first_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.RESOLUTION_HEAD), "the resolution's head line is not unique")
+        # The shipped order: the parent is created AFTER the refusals, and only there.
+        self.assertEqual(1, text.count(self.MKDIR_FIRST), "the shipped harness should mkdir the parent exactly once")
+        self.assertLess(text.index(self.RESOLUTION_HEAD), text.index(self.MKDIR_FIRST),
+                        "the shipped harness creates the parent BEFORE resolving it — the control is the shipped build")
+        return self._laid_out_harness(text.replace(self.RESOLUTION_HEAD, self.MKDIR_FIRST + self.RESOLUTION_HEAD, 1))
+
+    def _refused_creates(self, out, probe, harness=HARNESS):
+        """Run with transcript operand `out`; assert it is refused as inside the live checkout, before the
+        reviewer, with no transcript. Returns whether `probe` (the first component the operand would have
+        created) exists afterwards — the ONLY thing that differs between the shipped build and the control."""
+        self.assertFalse(os.path.lexists(probe), f"the fixture pre-creates {probe}")
+        p, _ = self._run("clean", out=out, harness=harness)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        # `status` lists no EMPTY directory, so a created parent is invisible to it in both builds — the
+        # premise of the finding, asserted rather than assumed: the oracle must be the directory itself.
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"status sees the refused operand's parent: {st.stdout!r}")
+        return os.path.lexists(probe)
+
+    def test_a_refused_transcript_operand_creates_no_directories(self):
+        """`<clone>/new/nested/kimi.txt`: neither `new/` nor `new/nested/` exists after the refusal — the
+        physical path was computed by resolving the nearest EXISTING ancestor and re-appending the missing
+        tail, not by creating it. The control (`mkdir -p` restored ahead of the resolution) refuses with the
+        same message and the same status, and leaves `<clone>/new/nested/` behind (measured)."""
+        out = os.path.join(self.clone, "new", "nested", "kimi.txt")
+        probe = os.path.join(self.clone, "new")
+        self.assertFalse(self._refused_creates(out, probe),
+                         "the refusal left the operand's missing parents inside the live checkout")
+        self.assertFalse(os.path.lexists(os.path.join(self.clone, "new", "nested")))
+        control = self._mkdir_first_control()
+        self.assertTrue(self._refused_creates(out, probe, harness=control),
+                        "the CONTROL (parent created first) did not leave `new/` behind — the fixture is not the finding")
+        self.assertTrue(os.path.isdir(os.path.join(self.clone, "new", "nested")))
+
+    def test_a_symlinked_parent_into_dot_git_creates_nothing_there(self):
+        """`<scratch>/other/link -> <clone>/.git`; the operand `<scratch>/other/link/deep/kimi.txt` is lexically
+        outside the clone and physically inside its `.git`: refused, and `<clone>/.git/deep` does not exist —
+        an `mkdir -p` of the operand's parent would have created it THROUGH the link, in the repository
+        database, before the refusal (the control does — measured)."""
+        other = os.path.join(self.scratch, "other")
+        os.makedirs(other)
+        link = os.path.join(other, "link")
+        os.symlink(os.path.join(self.clone, ".git"), link)
+        self.assertTrue(os.path.islink(link) and os.path.isdir(link), "the fixture is not the finding")
+        out = os.path.join(link, "deep", "kimi.txt")
+        self.assertFalse(out.startswith(self.clone + os.sep), out)               # lexically outside …
+        self.assertEqual(os.path.join(os.path.realpath(self.clone), ".git", "deep"),
+                         os.path.dirname(os.path.realpath(out)))                  # … physically in .git
+        probe = os.path.join(self.clone, ".git", "deep")
+        self.assertFalse(self._refused_creates(out, probe),
+                         "the refusal created a directory inside the live checkout's .git through the link")
+        control = self._mkdir_first_control()
+        self.assertTrue(self._refused_creates(out, probe, harness=control),
+                        "the CONTROL (parent created first) did not create `.git/deep` — the fixture is not the finding")
+
     # ── the effort assertion is bound to the ONE session this run created ─────────────────────
 
     def test_exactly_one_new_session_with_a_max_wire_log_asserts_max(self):
@@ -362,6 +436,12 @@ class KimiHarnessMutationGates(unittest.TestCase):
         block = text[start:end]
         self.assertEqual(1, text.count(block), "the set-difference block is not unique")
         self.assertIn("NEW_SESSIONS", block)
+        return self._laid_out_harness(text.replace(block, self.TRANSCRIPT_GREP, 1))
+
+    def _laid_out_harness(self, text):
+        """`text` written as `<scratch>/scripts/review/isolated-kimi-review.sh`, beside copies of the helpers
+        the harness resolves from its OWN directory (`tree-fingerprint.sh`, `containment.py`) and under
+        `<scratch>/scripts/pty-capture.py`. One control per test: the directory must not pre-exist."""
         review_dir = os.path.join(self.scratch, "scripts", "review")
         os.makedirs(review_dir)
         for helper in ("tree-fingerprint.sh", "containment.py"):
@@ -369,7 +449,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         shutil.copy(os.path.join(REPO, "scripts", "pty-capture.py"), os.path.join(self.scratch, "scripts"))
         control = os.path.join(review_dir, "isolated-kimi-review.sh")
         with open(control, "w", encoding="utf-8") as fh:
-            fh.write(text.replace(block, self.TRANSCRIPT_GREP, 1))
+            fh.write(text)
         return control
 
     def test_the_control_with_the_transcript_grep_selection_certifies_the_quoted_session(self):
