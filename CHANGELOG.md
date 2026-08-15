@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 117 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 118 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Twelfth review pass (codex) — four findings, each reproduced.** `paths.sh`'s definitions are
+  now unconditional (bash `set -a` exports every function, so "the complete API is present" was
+  satisfied by an inherited namespace carrying an attacker's resolver — the guard skipped the
+  definitions and the eager call ran it); the family files source `paths.sh` unconditionally when
+  readable and define their fallback state test unconditionally. The agent bridge discards this
+  instance's resolution before resolving (sourced after another resolver it left
+  `_UNLEASHED_BASE_RESOLVED=A` beside `CLAUDE_PLUGIN_DATA=B`). The kimi harness contains its prompt
+  operand through the shared `containment.py` (a `../` traversal or an in-repo symlink sent any
+  readable file to the reviewer) and refuses a transcript inside the live checkout (the harness would
+  void its own round, or overwrite a tracked file). Row 170; rows 158/167 reshaped.
 - **External audit of PR #67 (review 4943022906) — the two findings its five had left open.** The
   audit was a body-only review with no inline threads, and the remediation loop triaged threads, so
   findings 1 and 5 were missed until asked about; findings 2, 3 and 4 had been fixed through the

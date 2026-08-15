@@ -39,14 +39,13 @@ if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
         *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;
     esac
 fi
-# "paths.sh already sourced" is the COMPLETE resolver API, never a flag an environment can carry
-# (codex, PR #67 passes 7 and 11 — see the protocol note in paths.sh).
-if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \
-    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1; }; then       # the COMPLETE resolver API, not one (exportable) function
-    _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
-    # shellcheck source=scripts/lib/paths.sh
-    [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
-fi
+# paths.sh is sourced UNCONDITIONALLY when readable — never behind "its API is already present":
+# bash `set -a` exports every function, so a present namespace can be an inherited one, attacker's
+# resolver included (codex, PR #67 pass 12). Sourcing it again is idempotent: it redefines its own
+# functions and resolves only if this instance has not (see the instance check above).
+_upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
+# shellcheck source=scripts/lib/paths.sh
+if [ -r "$_upb_d/paths.sh" ]; then . "$_upb_d/paths.sh"; fi
 # COREDEV-2617 §4.2a: the fallback is the FULL three-step resolution, not the D′ two-step — this is
 # one of the five resolver copies FAM-1 names, and arm equivalence (rows 99/100/103) requires all
 # five to report ALL FOUR protocol variables identically in every cell. The machinery loads from
@@ -111,6 +110,7 @@ if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in
         fi
     fi
     _UNLEASHED_BASE_PID=$$
+    _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"           # the environment this resolution was made under
     _unleashed_resolved_in_process() { :; }
     readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null       # the attribute no environment can carry across exec
 fi
@@ -118,9 +118,9 @@ fi
 # undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
 # fail-open -> fail-closed inversion is exactly what COREDEV-2617's round-18 reproduction caught in
 # the agent fence; it must not be re-introduced one layer down.
-if ! command -v unleashed_base_ok >/dev/null 2>&1; then
-    unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
-fi
+# Defined UNCONDITIONALLY: an imported (`set -a`-exported) copy must be replaced, not kept; when
+# paths.sh was sourced above this is the same one-line predicate again (codex, PR #67 pass 12).
+unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
 
 
 marker_base() {

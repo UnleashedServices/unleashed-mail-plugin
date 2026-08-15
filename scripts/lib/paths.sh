@@ -87,15 +87,15 @@ if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
     esac
 fi
 
-# Idempotent: these libs are frequently sourced more than once in a single shell. Keyed on the
-# COMPLETE resolver API being present, not on a flag and not on ONE function: bash `export -f` carries a
-# single function through the environment, and a guard on that one function skipped this whole block
-# in a shell where `unleashed_plugin_base` and `unleashed_base_ok` were undefined (codex, PR #67 pass
-# 11). If any of the six is missing the block runs and (re)defines them all — an imported copy of the
-# library's own function is replaced by the library's own definition, never trusted.
-if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \
-    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1 \
-    && command -v _unleashed_home_ok >/dev/null 2>&1 && command -v unleashed_plugin_legacy_base >/dev/null 2>&1; }; then
+# THE DEFINITIONS BELOW ARE UNCONDITIONAL — sourcing this file ALWAYS (re)defines every function it
+# owns. Every guard tried here trusted something an environment can carry: a flag (inheritable — pass
+# 7), one function (`export -f` — pass 11), and then "the complete API is present" — which bash `set -a`
+# also satisfies, because it exports every function defined while it is active, so a child inherited
+# all six names with an ATTACKER'S `unleashed_resolve_base` and the guard skipped the definitions and
+# the eager call ran the inherited code (codex, PR #67 pass 12 — reproduced: `_UNLEASHED_BASE_RESOLVED=
+# /attacker`). A namespace is never proof that THIS library populated it; redefining is idempotent and
+# cheap, and it replaces an imported copy of any of these functions with this file's own definition.
+{
 
     # The pre-2617 expansion. Kept ONLY so the drift matrix can assert the legacy behaviour it
     # documents; no primitive calls it.
@@ -199,6 +199,7 @@ if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed
             fi
         fi
         _UNLEASHED_BASE_PID=$$
+        _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"       # the environment this resolution was made under
         _unleashed_resolved_in_process() { :; }             # the marker a fork/subshell keeps and exec drops
         readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null     # the attribute NO environment carries (see top)
         return 0
@@ -215,8 +216,8 @@ if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed
         [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]
     }
 
-fi
-# EAGER — at source time, in the sourcing shell — and OUTSIDE the definition block, so a shell whose
-# functions arrived through the environment (bash `set -a` + exec) still resolves afresh here after
-# the instance check above discarded the inherited resolution. Fork-free when already resolved.
+}
+# EAGER — at source time, in the sourcing shell — after the definitions, which are always this file's.
+# Fork-free when already resolved in this instance (pid + marker function); the instance check above
+# discards a resolution that arrived through the environment.
 unleashed_resolve_base

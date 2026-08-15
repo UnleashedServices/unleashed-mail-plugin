@@ -43,7 +43,12 @@ PLAN_REL="docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 cd "$REPO" || exit 1
-[ -r "$PROMPT_REL" ] || { echo "prompt not readable: $REPO/$PROMPT_REL" >&2; exit 1; }
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# THE PROMPT OPERAND IS CONTAINED — the shared helper proves it is a non-symlink regular file inside the
+# repository and returns the resolved absolute path, which is the ONLY spelling used from here on. A bare
+# `[ -r "$PROMPT_REL" ]` followed `../secret.txt` and an in-repo symlink to any readable file, and sent
+# those bytes to the external reviewer as the prompt (codex, PR #67 pass 12).
+PROMPT_ABS="$(python3 "${SCRIPT_DIR}/containment.py" --tool isolated-kimi-review --label prompt --absolute -- "$PROMPT_REL")" || exit 1
 # THE PRIVATE SCRATCH DIRECTORY COMES FIRST — before the prompt snapshot it holds and before the live
 # fingerprint below (a TMPDIR inside the repository would otherwise put a new untracked directory into
 # AFTER that BEFORE never saw — the agy and codex harnesses create theirs first for the same reason).
@@ -65,7 +70,7 @@ trap cleanup EXIT INT TERM HUP
 # the source file is compared byte-for-byte with the snapshot — a prompt that changed underneath the
 # round voids it, as the staged plan does, because the round's basis must survive the round.
 PROMPT_SNAP="$TREE/prompt.snapshot"
-cp -- "$REPO/$PROMPT_REL" "$PROMPT_SNAP" || { echo "prompt unreadable: $REPO/$PROMPT_REL" >&2; exit 1; }
+cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || { echo "prompt unreadable: $PROMPT_ABS" >&2; exit 1; }
 PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
 [ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
@@ -89,9 +94,18 @@ case "$OUT" in
         echo "refusing to write the transcript under /tmp — macOS has destroyed campaign transcripts there" >&2
         exit 1 ;;
 esac
+# ...AND NEVER INSIDE THE LIVE CHECKOUT: the live fingerprint is taken before pty-capture creates or
+# overwrites the transcript, so a capture written into the compared tree voids an otherwise clean round
+# as a live-tree mutation the harness itself caused — and an operand naming a TRACKED file would be
+# overwritten before the void was reported (codex, PR #67 pass 12). Physical prefix, physical repo.
+REPO_P="$(CDPATH='' cd -P -- "$REPO" && pwd -P)" || exit 1
+case "$OUT" in
+    "$REPO_P"/*)
+        echo "refusing to write the transcript inside the live checkout ($REPO_P) — it is the tree the round is compared against" >&2
+        exit 1 ;;
+esac
 
 _sha256() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
-SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/review/tree-fingerprint.sh
 . "${SCRIPT_DIR}/tree-fingerprint.sh"
 
@@ -138,7 +152,7 @@ STATUS=$?
 
 # The prompt file must still be the bytes this round was launched with — compared byte-for-byte with
 # the snapshot the reviewer's argument was derived from (PROMPT= on the summary line is that argument's digest).
-if cmp -s -- "$REPO/$PROMPT_REL" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
+if cmp -s -- "$PROMPT_ABS" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
 
 AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then

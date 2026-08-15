@@ -11,7 +11,9 @@ Assembled from six parallel drafting agents; every row carries the run evidence 
 and THIS suite's own run is the gate — the evidence informed assembly, it is not the verification.
 Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file;
 rows 163-164 (PR #67, codex pass 8), row 165 (PR #67, codex pass 9), rows 166-168 (PR #67, codex
-pass 11) and row 169 (external audit of PR #67, finding 1) joined that class.
+pass 11), row 169 (external audit of PR #67, finding 1) and row 170 (PR #67, codex pass 12 — which also
+RESHAPED rows 158 and 167: paths.sh's definition block is now unconditional, so those mutations ADD a
+guard where the specification has none) joined that class.
 """
 
 import os
@@ -2804,9 +2806,18 @@ class RowsChunk4(unittest.TestCase):
             path=PATHS_C4)
         cnt = os.path.join(self.home, "cnt")
         derived = 2 * self._comps(self.store) + self._comps(self.target)
+        # THE MUTANT LIVES IN A SHADOW LIB, with the family files beside it: since PR #67 pass 12 every
+        # family file sources paths.sh UNCONDITIONALLY from its own directory, so a mutant paths.sh
+        # sourced first and then the REAL marker.sh would have the real paths.sh redefine the guard and
+        # the control could not fail (measured: 22 for both builds). Each build sources its own set.
+        shadow = os.path.join(self.home, "shadow"); shadow_lib = os.path.join(shadow, "scripts", "lib")
+        shutil.copytree(os.path.dirname(PATHS_C4), shadow_lib)
+        shutil.copyfile(mutant, os.path.join(shadow_lib, "paths.sh"))
         try:
             for shell in SHELLS:
-                for paths_file, is_mutant in ((PATHS_C4, False), (mutant, True)):
+                for is_mutant in (False, True):
+                    lib = shadow_lib if is_mutant else os.path.dirname(PATHS_C4)
+                    root = shadow if is_mutant else ROOT2
                     self._wipe()
                     body = (self._mkstore() + self._entry()
                             + f'export HOME="{self.home}"\n'
@@ -2815,11 +2826,11 @@ class RowsChunk4(unittest.TestCase):
                             '_UNLEASHED_STATE_LOADED=1; _UNLEASHED_STATE_RC=0\n'
                             f': > "{cnt}"\n'
                             '_u_acl_enumerate() { printf x >> "' + cnt + '"; /bin/ls -lde -- "$1" 2>/dev/null; }\n'
-                            f'. "{paths_file}"\n'
-                            f'. "{MARKER}"\n'
-                            f'. "{CONTEXT}"\n'
-                            f'. "{LOG}"\n'
-                            f'. "{BRIDGE_C4}" "" "{ROOT2}"\n'
+                            f'. "{lib}/paths.sh"\n'
+                            f'. "{lib}/marker.sh"\n'
+                            f'. "{lib}/context.sh"\n'
+                            f'. "{lib}/log.sh"\n'
+                            f'. "{lib}/agent-env-bridge.sh" "" "{root}"\n'
                             # One primitive use per consumer library, through the shared resolver.
                             + 'unleashed_plugin_base >/dev/null\n' * 5
                             + self.OUTP)
@@ -2830,8 +2841,11 @@ class RowsChunk4(unittest.TestCase):
                         self.assertEqual(derived, n,
                                          f"{shell}: {n} enumerator calls, derived {derived}")
                     else:
-                        self.assertEqual(6 * derived, n,
-                                         f"{shell}: the CONTROL did not fail — the walk is not re-run per consumer")
+                        # More than ONE walk, in whole walks: 10× here (the eager resolve of every
+                        # re-sourced paths.sh plus the five primitive calls) — the exact multiple depends
+                        # on how many family files re-source paths.sh, the claim does not.
+                        self.assertGreater(n, derived, f"{shell}: the CONTROL did not fail — the walk is not re-run per consumer")
+                        self.assertEqual(0, n % derived, f"{shell}: {n} enumerator calls is not a whole number of walks of {derived}")
         finally:
             os.unlink(mutant)
 
@@ -4499,7 +4513,7 @@ SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169."""
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -4578,6 +4592,38 @@ class RowsPass7(unittest.TestCase):
         old = text[start:end]
         assert text.count(old) == 1, f"sliced block not unique in {path}"
         return old
+
+    #: paths.sh's definition block is a BARE `{ … }` group (PR #67 pass 12) — every guard tried on it
+    #: trusted something an environment can carry. The head of the paragraph that says so, the
+    #: group's opening line, and its closing line before the eager call: rows 158/167/170 WRAP the
+    #: block in the guard each row names, so the mutation ADDS a guard where the specification has none.
+    DEFS_HEAD = "# THE DEFINITIONS BELOW ARE UNCONDITIONAL"
+    DEFS_OPEN = "\n{\n"
+    DEFS_CLOSE = "}\n# EAGER — at source time"
+
+    def _guarded_paths(self, guard):
+        """A copy of paths.sh whose definition block is wrapped in `guard` … `fi`.
+
+        Two substitutions on the same copy, both anchored on the CURRENT file: the opening `{` —
+        sliced from the paragraph head through the brace, so the paragraph's wording is asserted
+        present but not repeated here — becomes the guard line, and the closing `}` before the
+        eager `unleashed_resolve_base` call becomes `fi`. The eager call stays OUTSIDE the guarded
+        region, exactly as the shipped call stays outside the group, so under a satisfied guard it
+        runs whatever `unleashed_resolve_base` the shell already had — nothing (rows 158/167) or an
+        inherited one (row 170). Both shells must parse the result. The caller unlinks it.
+        """
+        opening = self._slice(PATHS_C4, self.DEFS_HEAD, self.DEFS_OPEN)
+        self.assertTrue(opening.endswith("\n{\n"), opening[-60:])
+        self.assertTrue(guard.startswith("if ") and guard.endswith("; then\n"), guard)
+        first = with_mutation(opening, opening[:-len("{\n")] + guard, path=PATHS_C4)
+        try:
+            mutant = with_mutation(self.DEFS_CLOSE, "fi\n# EAGER — at source time", path=first)
+        finally:
+            os.unlink(first)
+        for shell in SHELLS:
+            p = subprocess.run([shell, "-n", mutant], capture_output=True, text=True)
+            self.assertEqual(0, p.returncode, f"{shell}: the guarded mutant does not parse: {p.stderr!r}")
+        return mutant
 
     @staticmethod
     def _run_with_timeout(shell, body, srcs, timeout=8):
@@ -4692,18 +4738,14 @@ class RowsPass7(unittest.TestCase):
     # ── row 158 ───────────────────────────────────────────────────────────────────────────────
 
     def test_row_158_paths_sh_body_is_guarded_on_a_function_not_an_inheritable_flag(self):
-        """Row 158: `_UNLEASHED_PATHS_SH_LOADED=1` inherited by a child that sources paths.sh — the specification defines its functions and resolves (`unleashed_plugin_base` prints the sentinel here); under the flag-keyed body guard the file defines NOTHING and `unleashed_plugin_base` is `command not found`. Both shells."""
-        # The body guard is the COMPLETE six-function API test (PR #67 pass 11) — sliced from the
-        # CURRENT file, first line through `; }; then`, so a reordered clause cannot strand the row.
-        # The eager `unleashed_resolve_base` call now sits OUTSIDE the block, so under the mutant it
-        # is the first `command not found` (at source time) and the primitive the second — measured.
-        guard = self._slice(PATHS_C4,
-                            'if ! { command -v unleashed_resolve_base >/dev/null 2>&1 '
-                            '&& command -v unleashed_plugin_base >/dev/null 2>&1 \\\n',
-                            '; }; then\n')
-        self.assertEqual(3, guard.count("\n"), guard)
-        self.assertIn("unleashed_plugin_legacy_base", guard)
-        mutant = with_mutation(guard, 'if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then\n', path=PATHS_C4)
+        """Row 158: `_UNLEASHED_PATHS_SH_LOADED=1` inherited by a child that sources paths.sh — the specification (whose definition block is UNCONDITIONAL) defines its functions and resolves (`unleashed_plugin_base` prints the sentinel here); under the mutation — a flag guard WRAPPED around the definition block — the file defines NOTHING and `unleashed_plugin_base` is `command not found`. Both shells. (Reshaped in pass 12: the mutation ADDS a guard where the specification has none.)"""
+        # The mutant wraps the bare `{ … }` definition group in `if [ -z "$FLAG" ]; then … fi`
+        # (`_guarded_paths`, anchored on the CURRENT file's paragraph head, brace and closing line).
+        # The eager `unleashed_resolve_base` call sits OUTSIDE the group in both builds, so under
+        # the mutant it is the first `command not found` (at source time) and the primitive the
+        # second — measured, both shells: spec `<sentinel>|0|0` + one diagnostic; mutant `|127|UNSET`,
+        # two `command not found`, no diagnostic.
+        mutant = self._guarded_paths('if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then\n')
         env = {"HOME": self.home, "_UNLEASHED_PATHS_SH_LOADED": "1"}
         try:
             machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
@@ -5338,18 +5380,12 @@ class RowsPass7(unittest.TestCase):
     # ── row 167 ───────────────────────────────────────────────────────────────────────────────
 
     def test_row_167_the_paths_sh_body_guard_is_the_complete_api_not_one_exportable_function(self):
-        """Row 167: a bash parent sources paths.sh and `export -f unleashed_resolve_base`; a child sources paths.sh — the specification (the guard tests all six functions) defines the whole API: `unleashed_plugin_base` prints the sentinel (variable unset, no store) or the base (variable set), `unleashed_base_ok` is defined; under the mutation (the guard on that ONE function) the block is skipped, the imported resolver runs alone — `command not found` on stderr — and `unleashed_plugin_base` is undefined: EMPTY output, `unleashed_base_ok` UNDEFINED. bash only: zsh cannot export functions."""
+        """Row 167: a bash parent sources paths.sh and `export -f unleashed_resolve_base`; a child sources paths.sh — the specification (unconditional definitions) defines the whole API: `unleashed_plugin_base` prints the sentinel (variable unset, no store) or the base (variable set), `unleashed_base_ok` is defined; under the mutation — a one-function guard WRAPPED around the definition block — the block is skipped, the imported resolver runs alone from the eager call — `command not found` on stderr — and `unleashed_plugin_base` is undefined: EMPTY output, `unleashed_base_ok` UNDEFINED. bash only: zsh cannot export functions. (Reshaped in pass 12: the mutation ADDS the guard.)"""
         # Measured: spec `<sentinel>|defined` (unset cell) and `<target>|defined` (set cell), no
         # `command not found`; mutant `|UNDEFINED` in both cells, and in the unset cell the imported
         # resolver's `_unleashed_home_ok` is `command not found` at source time (the set cell's E0
         # fence returns before it, and the primitive's own 127 is silenced by the cell's redirect).
-        guard = self._slice(PATHS_C4,
-                            'if ! { command -v unleashed_resolve_base >/dev/null 2>&1 '
-                            '&& command -v unleashed_plugin_base >/dev/null 2>&1 \\\n',
-                            '; }; then\n')
-        self.assertIn("unleashed_base_ok", guard)
-        mutant = with_mutation(guard, 'if ! command -v unleashed_resolve_base >/dev/null 2>&1; then\n',
-                               path=PATHS_C4)
+        mutant = self._guarded_paths('if ! command -v unleashed_resolve_base >/dev/null 2>&1; then\n')
         try:
             machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
             spec_root = self._shadow("spec167", dict(machinery, **{"paths.sh": PATHS_C4}))
@@ -5507,6 +5543,74 @@ class RowsPass7(unittest.TestCase):
                             self.assertEqual(2, len(diags), f"{tag}: not one diagnostic per refusing entry point: {err!r}")
                             self.assertFalse(os.path.exists(pubstore), f"{tag}: the refusing publisher created the store")
                         self.assertNotIn(self.store, err, f"{tag}: the store path reached stderr")
+        finally:
+            os.unlink(mutant)
+
+
+    # ── row 170 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The complete-API guard the definition block carried before PR #67 pass 12 — restored verbatim
+    #: as row 170's mutation. bash `set -a` exports every function defined while it is active, so
+    #: "all six names are present" is satisfiable by an environment.
+    ROW_170_GUARD = (
+        'if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \\\n'
+        '    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1 \\\n'
+        '    && command -v _unleashed_home_ok >/dev/null 2>&1 && command -v unleashed_plugin_legacy_base >/dev/null 2>&1; }; then\n')
+    #: The attacker: the resolver and the primitive REDEFINED in the parent while `set -a` is still
+    #: on, so bash exports them beside the four genuine names the earlier source already exported.
+    ROW_170_ATTACKER = (
+        'unleashed_resolve_base() { _UNLEASHED_BASE_RESOLVED=/attacker; _UNLEASHED_BASE_OK=1; '
+        '_UNLEASHED_BASE_SOURCE=host-env; _UNLEASHED_POINTER_STATE=none; _UNLEASHED_BASE_PID=$$; '
+        '_unleashed_resolved_in_process() { :; }; }; '
+        'unleashed_plugin_base() { printf /attacker; }')
+
+    def test_row_170_the_definition_block_is_unconditional_not_guarded_on_the_complete_api(self):
+        """Row 170: a bash parent under `set -a` sources paths.sh (a genuine base in `CLAUDE_PLUGIN_DATA`, E0), then REDEFINES `unleashed_resolve_base` and `unleashed_plugin_base` to answer `/attacker` — all six API names are now exported — and `exec`s a child that sources paths.sh (and, separately, marker.sh) with the genuine base still in its environment: the specification prints the genuine base — the child's definitions are its own and the imported ones are replaced; under the mutation (the six-function guard restored around the block) the block is skipped, the EAGER call — outside the block in both builds — runs the INHERITED resolver, and the child prints `/attacker`. bash only: zsh's `set -a` exports no functions, so its child never holds the imported API (measured: `<b>` in both builds)."""
+        # THE MECHANISM IS IN THE ORACLE: each cell prints the value the child INHERITED (the parent's
+        # genuine resolution — `<b>`, made before the attacker was defined), then the primitive, then
+        # `_UNLEASHED_BASE_RESOLVED` after sourcing. Measured, bash: spec `<b>|<b>|<b>` in both cells;
+        # mutant `<b>|/attacker|/attacker` in both — the resolved value CHANGED inside the child, so
+        # the inherited resolver RAN there, and it can only have run from paths.sh's eager call, which
+        # sits outside the guarded region. marker.sh sources paths.sh unconditionally from its own
+        # directory, so its cell runs against a shadow lib whose paths.sh is the mutant (row 156's
+        # shape); with the variable set and E0 no cell touches the store or loads the machinery.
+        b = os.path.join(self.home, "base-b")
+        os.makedirs(b)
+        mutant = self._guarded_paths(self.ROW_170_GUARD)
+        try:
+            machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+            fam = {"paths.sh": PATHS_C4, "marker.sh": os.path.join(LIBDIR, "marker.sh")}
+            spec_root = self._shadow("spec170", dict(machinery, **fam))
+            mut_root = self._shadow("mut170", dict(machinery, **dict(fam, **{"paths.sh": mutant})))
+            for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                marker = os.path.join(root, "scripts", "lib", "marker.sh")
+                for cell, hook in (("paths.sh", f'. "{paths}"; printf "%s|%s" "$(unleashed_plugin_base)" '
+                                                '"$_UNLEASHED_BASE_RESOLVED"'),
+                                   ("marker.sh", f'. "{marker}"; printf "%s|%s" "$(marker_base)" '
+                                                 '"$_UNLEASHED_BASE_RESOLVED"')):
+                    self._wipe()
+                    body = (f'set -a; export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{b}" _UNLEASHED_PUBLISH_OK=0; '
+                            f'. "{paths}"; {self.ROW_170_ATTACKER}; set +a; '
+                            f'exec /bin/bash -c \'printf "%s|" "$_UNLEASHED_BASE_RESOLVED"; {hook}\'')
+                    rc, out, err = self._row_166_cell("/bin/bash", body)
+                    tag = f"{'mutant' if is_mutant else 'shipped'} {cell}"
+                    self.assertEqual(0, rc, f"{tag}: rc {rc}: {err!r}")
+                    self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                    self.assertEqual([], self._diags(err), f"{tag}: a resolved base diagnosed: {err!r}")
+                    self.assertFalse(os.path.exists(self.store), f"{tag}: E0 wrote a store")
+                    self.assertTrue(out.startswith(f"{b}|"),
+                                    f"{tag}: the child did not inherit the parent's genuine resolution — "
+                                    f"the fixture is not the finding: {out!r}")
+                    if not is_mutant:
+                        self.assertEqual(f"{b}|{b}|{b}", out,
+                                         f"{tag}: the child kept an imported definition or an imported "
+                                         f"resolution: {out!r} {err!r}")
+                    else:
+                        self.assertEqual(f"{b}|/attacker|/attacker", out,
+                                         f"{tag}: the CONTROL did not fail — under the restored complete-API "
+                                         f"guard the child still defined its own resolver, or the eager call "
+                                         f"did not run the inherited one: {out!r} {err!r}")
         finally:
             os.unlink(mutant)
 

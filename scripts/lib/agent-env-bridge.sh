@@ -31,6 +31,18 @@
 # shell (codex, PR #67). PUB-9 E0 maps this to `none`, which is exactly what a bridge should report.
 _UNLEASHED_PUBLISH_OK=0
 export CLAUDE_PLUGIN_DATA="${1-}"          # empty is PRESERVED, not unset — see below
+# THE BRIDGE CHANGES THE ENVIRONMENT, SO IT DISCARDS THIS INSTANCE'S RESOLUTION WHEN THE VALUE IT
+# ESTABLISHES DIFFERS FROM THE ONE THAT RESOLUTION WAS MADE UNDER. Sourced after any resolver had
+# already run in the same shell, it exported the fence's value while the pid + marker guard treated
+# the earlier resolution as current — `CLAUDE_PLUGIN_DATA=B` beside `_UNLEASHED_BASE_RESOLVED=A`, and
+# the fence read the wrong capture and roster state (codex, PR #67 pass 12 — reproduced). Only a
+# DIFFERENT value invalidates: an unconditional re-resolution doubled the ACL walk whenever the bridge
+# was sourced beside another resolver with the same environment (row 92 / BUD-1 caught it). The marker
+# function and pid are cleared (the readonly instance stamp is this instance's and stays), and paths.sh's
+# eager resolve below runs again from the value just exported.
+if command -v _unleashed_resolved_in_process >/dev/null 2>&1 && [ "${_UNLEASHED_BASE_ENV-}" != "${CLAUDE_PLUGIN_DATA:-}" ]; then
+    unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=
+fi
 
 # Prefer the shared resolver so the bridge and the libs run one code path. GUARDED: paths.sh is an
 # optimisation of maintenance, not a load-bearing dependency, and an unguarded `.` on a missing file
@@ -50,9 +62,9 @@ if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
         *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;
     esac
 fi
-# "paths.sh already sourced" is the COMPLETE resolver API, never a flag (codex, PR #67 passes 7 and 11).
-if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \
-    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1; } && [ -r "$2/scripts/lib/paths.sh" ]; then
+# paths.sh is sourced UNCONDITIONALLY when readable — a present API can be an inherited one under bash
+# `set -a` (codex, PR #67 pass 12); sourcing it again is idempotent.
+if [ -r "$2/scripts/lib/paths.sh" ]; then
     # shellcheck source=scripts/lib/paths.sh
     . "$2/scripts/lib/paths.sh"
 fi
@@ -110,11 +122,12 @@ if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in
         fi
     fi
     _UNLEASHED_BASE_PID=$$
+    _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"           # the environment this resolution was made under
     _unleashed_resolved_in_process() { :; }
     readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null       # the attribute no environment can carry across exec
 fi
 
 # The sanctioned state test, for consumers that source only this bridge.
-if ! command -v unleashed_base_ok >/dev/null 2>&1; then
-    unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
-fi
+# Defined UNCONDITIONALLY: an imported (`set -a`-exported) copy must be replaced, not kept (codex,
+# PR #67 pass 12).
+unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }

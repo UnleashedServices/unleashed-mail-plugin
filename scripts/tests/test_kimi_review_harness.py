@@ -13,6 +13,11 @@ transcript operand that only PHYSICALLY resolves under /tmp — `..` traversal i
 symlinked parent — is refused; and a live tracked file hidden with `update-index --assume-unchanged`
 before it is edited still voids the round.
 
+THE PROMPT OPERAND IS CONTAINED and the transcript never lands in the compared tree (codex, PR #67 pass
+12): `../secret.txt`, an in-repo symlink to `/etc/hosts`, and a transcript path inside the live checkout
+each exit 1 with their own message BEFORE the reviewer runs — the stub leaves an invocation marker on
+every run, and these assert the marker is absent and the transcript was never created.
+
 THE EFFORT EVIDENCE IS BOUND TO THE ONE SESSION THE RUN CREATED (codex, PR #67 pass 11): the set
 difference of `$HOME/.kimi-code/sessions/*/session_*` before and after the run — never a session id read
 out of the transcript, which is reviewer-controlled text. Exactly one new session with a `max` wire log
@@ -47,6 +52,9 @@ NEW_SESSION_2 = "session_33333333-3333-4333-8333-333333333333"
 
 KIMI_STUB = f"""#!/usr/bin/env bash
 # cwd = the harness's DISPOSABLE checkout; $KIMI_STUB_CLONE = the live fixture repository.
+# EVERY invocation leaves a marker under the scratch, whatever the mode: an operand the harness must
+# refuse is refused BEFORE the reviewer is launched, and "the stub did not run" is asserted on this file.
+printf '%s\\n' "$$" >> "$KIMI_STUB_SCRATCH/kimi-invoked"
 case "${{KIMI_STUB_MODE:-clean}}" in
   clean) ;;
   gitkill)       rm -rf .git; echo x > IMPLEMENTED.sh ;;
@@ -122,12 +130,16 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.env["KIMI_STUB_SCRATCH"] = self.scratch
         self.prompt = prompt
 
-    def _run(self, mode, out=None, harness=HARNESS):
+    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md"):
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
         env = dict(self.env, KIMI_STUB_MODE=mode)
-        p = subprocess.run(["bash", harness, ".review-prompt-x.md", out, "HEAD", "60"],
+        p = subprocess.run(["bash", harness, prompt, out, "HEAD", "60"],
                            cwd=self.clone, env=env, capture_output=True, text=True, check=False, input="")
         return p, out
+
+    def _stub_ran(self):
+        """True when the stub `kimi` was invoked at least once during this test (its marker file exists)."""
+        return os.path.exists(os.path.join(self.scratch, "kimi-invoked"))
 
     def _wire(self, wd, session):
         """The wire-log path of `session` under `wd` in the SCRATCH home."""
@@ -148,7 +160,9 @@ class KimiHarnessMutationGates(unittest.TestCase):
         return p
 
     def test_clean_run_passes_every_gate_and_stops_only_at_the_effort_assertion(self):
+        self.assertFalse(self._stub_ran(), "the invocation marker pre-exists — the refusal tests' oracle is void")
         p, out = self._run("clean")
+        self.assertTrue(self._stub_ran(), "the stub ran but left no marker — the refusal tests could not tell")
         self.assertEqual(4, p.returncode, f"clean: rc {p.returncode}\n{p.stdout}{p.stderr}")
         self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN$")
         self.assertIn("EFFORT NOT ASSERTED", p.stderr)
@@ -251,6 +265,45 @@ class KimiHarnessMutationGates(unittest.TestCase):
         with open(os.path.join(self.clone, "README.md"), "rb") as fh:
             self.assertTrue(fh.read().endswith(b"x\n"), "the stub's edit did not land in the live README.md")
 
+    # ── the operands are contained BEFORE the reviewer runs (codex, PR #67 pass 12) ───────────
+
+    def _assert_refused_before_launch(self, p, out, message):
+        self.assertEqual(1, p.returncode, f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn(message, p.stderr, p.stderr)
+        self.assertNotIn("TREE=clean", p.stdout, "a refused operand printed the clean summary")
+        self.assertFalse(self._stub_ran(), "the reviewer was launched on a refused operand")
+        self.assertFalse(os.path.lexists(out), f"the refused run created the transcript: {out}")
+
+    def test_a_prompt_operand_that_traverses_out_of_the_repo_is_refused(self):
+        """`../secret.txt` — a readable regular file one level ABOVE the clone (`<scratch>/secret.txt`):
+        a bare `[ -r ]` followed it and sent its bytes to the reviewer as the prompt. The containment
+        helper resolves it outside the repository root and refuses; nothing downstream runs."""
+        secret = os.path.join(self.scratch, "secret.txt")
+        with open(secret, "w", encoding="utf-8") as fh:
+            fh.write("this file lives outside the fixture repository\n" * 5)
+        self.assertEqual(os.path.dirname(self.clone), os.path.dirname(secret))
+        self.assertTrue(os.path.isfile(os.path.join(self.clone, "..", "secret.txt")), "the fixture is not the finding")
+        p, out = self._run("clean", prompt="../secret.txt")
+        self._assert_refused_before_launch(p, out, "outside the repository")
+
+    def test_a_prompt_operand_that_is_a_symlink_is_refused(self):
+        """`.link-prompt.md -> /etc/hosts` INSIDE the clone: lexically in-repo, readable, non-empty —
+        and a symbolic link, which the containment helper refuses before resolving anything else."""
+        link = os.path.join(self.clone, ".link-prompt.md")
+        os.symlink("/etc/hosts", link)
+        self.assertTrue(os.path.islink(link) and os.path.isfile(link), "the fixture is not the finding: /etc/hosts unreadable")
+        p, out = self._run("clean", prompt=".link-prompt.md")
+        self._assert_refused_before_launch(p, out, "symbolic link")
+
+    def test_a_transcript_inside_the_live_checkout_is_refused(self):
+        """A transcript operand physically INSIDE the live checkout (`<clone>/docs/planning/.verdicts/kimi.txt`)
+        would be written into the very tree the round is fingerprinted against — voiding a clean round as a
+        live mutation the harness itself caused, and overwriting a tracked file if one were named."""
+        out = os.path.join(self.clone, "docs", "planning", ".verdicts", "kimi.txt")
+        self.assertFalse(os.path.lexists(out))
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+
     # ── the effort assertion is bound to the ONE session this run created ─────────────────────
 
     def test_exactly_one_new_session_with_a_max_wire_log_asserts_max(self):
@@ -296,8 +349,10 @@ class KimiHarnessMutationGates(unittest.TestCase):
 
     def _control_harness(self):
         """A copy of the harness with the transcript-grep selection in place of the set difference, laid
-        out as `<scratch>/scripts/review/isolated-kimi-review.sh` beside `tree-fingerprint.sh` and under
-        `<scratch>/scripts/pty-capture.py` — the harness resolves both from its OWN directory."""
+        out as `<scratch>/scripts/review/isolated-kimi-review.sh` beside `tree-fingerprint.sh` and
+        `containment.py` (the prompt-operand gate, PR #67 pass 12 — the control must reach the reviewer,
+        so it needs the same helpers beside it) and under `<scratch>/scripts/pty-capture.py` — the
+        harness resolves all three from its OWN directory."""
         with open(HARNESS, encoding="utf-8") as fh:
             text = fh.read()
         self.assertEqual(1, text.count(self.SET_DIFFERENCE_HEAD), "the set-difference head is not unique")
@@ -309,7 +364,8 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertIn("NEW_SESSIONS", block)
         review_dir = os.path.join(self.scratch, "scripts", "review")
         os.makedirs(review_dir)
-        shutil.copy(os.path.join(REPO, "scripts", "review", "tree-fingerprint.sh"), review_dir)
+        for helper in ("tree-fingerprint.sh", "containment.py"):
+            shutil.copy(os.path.join(REPO, "scripts", "review", helper), review_dir)
         shutil.copy(os.path.join(REPO, "scripts", "pty-capture.py"), os.path.join(self.scratch, "scripts"))
         control = os.path.join(review_dir, "isolated-kimi-review.sh")
         with open(control, "w", encoding="utf-8") as fh:
