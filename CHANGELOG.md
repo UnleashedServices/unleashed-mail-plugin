@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 113 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 117 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,32 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **External audit of PR #67 (review 4943022906) — the two findings its five had left open.** The
+  audit was a body-only review with no inline threads, and the remediation loop triaged threads, so
+  findings 1 and 5 were missed until asked about; findings 2, 3 and 4 had been fixed through the
+  overlapping codex threads. (1) The ACL principal is now resolved by NAME and by UUID
+  (`/usr/bin/dsmemberutil getuuid -U <name>`, one fork per resolution, fail-closed to "no self
+  UUID"): on hosts where `ls -lde` renders the effective user's own ACE as a bare UUID, that ACE was
+  refused as foreign and the publisher reported `failed`; a bare UUID equal to the resolved UUID is
+  now self, every other bare UUID stays foreign (row 129 refined, row 169). The Darwin ACL fixture
+  fails loudly if `chmod +a` fails and asserts the ACE landed. (5) A two-process acceptance test:
+  a hook-shaped process publishes through the real `marker_write`, a fresh standalone process
+  reads and writes through the same entry points into ONE file, through `paths.sh` and each
+  fallback copy, both shells; and set-publisher → unset-reader agreement through every resolver
+  copy. The audit's macOS PR-gate recommendation is a billing decision left to the maintainer.
+- **Eleventh review pass (codex) — five findings, each reproduced.** The once-per-process key
+  gains what no environment carries: `exec` keeps `$$` and an `allexport` wrapper carries every
+  variable (in bash, every function) across it, so an exec'd hook kept the wrapper's stale base;
+  resolution now stamps `readonly _UNLEASHED_BASE_INSTANCE`, and each sourcing discards a value that
+  arrived without the attribute (`declare -p`/`typeset -p` show `-r` only in the setting instance).
+  `paths.sh`'s definition guard requires the complete resolver API, not one `export -f`-able
+  function. The reader binds the opened entry to the INODE ENT-1 validated (bash `/dev/fd/N`
+  reports it; zsh `zstat -f`), so a same-uid `0644` copy with valid content is refused without a
+  second mode check that would mask ENT-1's mutants. The live fingerprint hashes the union of
+  HEAD-tracked and index-tracked paths (a staged-deleted, ignored file's edits were invisible). The
+  kimi harness binds its effort evidence to the ONE session directory created during the run — set
+  difference before/after — never to an id read out of reviewer-controlled transcript text. Rows
+  166–168.
 - **Tenth review pass (codex) — four findings, three reproduced, one closed on principle.** The
   live-checkout fingerprint no longer trusts the live index: `git diff HEAD` (which
   `update-index --assume-unchanged` / `--skip-worktree` silence) is replaced by a per-tracked-file

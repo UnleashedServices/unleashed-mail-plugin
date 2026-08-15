@@ -62,6 +62,7 @@ _unleashed_auth_entry() {
     # while `/dev/fd/N` (measured on Darwin) reports the open object's TYPE, SIZE and UID but its
     # MODE as the open flags, so mode stays validated on the pathname above and is not re-read.
     _ae_bound=$(( ${#_ae_name} + 1 ))
+    _ae_ino="$_U_INO"                       # the inode ENT-1 validated; the opened object must BE it
     if [ -n "${ZSH_VERSION:-}" ]; then
         zmodload zsh/system 2>/dev/null || return 1
         # `sysopen` needs an explicit descriptor: allocate a free one, close it, reuse the number.
@@ -77,7 +78,13 @@ _unleashed_auth_entry() {
         # a second copy here would MASK ENT-1's clause from its own mutant (rows 8 and 114 stopped
         # discriminating under zsh when the first draft re-checked 0600 on the descriptor).
         # shellcheck disable=SC2154  # _u_h is populated by `zstat -H`, a zsh builtin shellcheck cannot model
+        # THE OPENED OBJECT IS THE VALIDATED OBJECT: same inode as ENT-1 stat'ed. That binds every
+        # clause ENT-1 validated on the pathname — mode included — to the descriptor without a second
+        # copy of any of them (a second mode check here masked ENT-1's own mutants, rows 8/114); a
+        # same-uid replacement of any kind, mode or content, is a different inode and is refused
+        # (codex, PR #67 pass 11).
         if zstat -f "$_ae_fd" -H _u_h 2>/dev/null \
+            && [ "${_u_h[inode]}" = "$_ae_ino" ] \
             && [ "$(( ${_u_h[mode]} & 8#170000 ))" = "$(( 8#100000 ))" ] \
             && [ "${_u_h[uid]}" = "${EUID:-$(/usr/bin/id -u)}" ] \
             && [ "${_u_h[size]}" -le "$_ae_bound" ]; then
@@ -97,6 +104,7 @@ _unleashed_auth_entry() {
         # inner group's own redirections apply, and that message names the path — a lossless encoding
         # of the target (measured, both shells).
         { { [ -f /dev/fd/9 ] && _u_stat /dev/fd/9 \
+              && [ "$_U_INO" = "$_ae_ino" ] \
               && [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] \
               && [ "$_U_SIZE" -le "$_ae_bound" ] \
               && IFS= read -r -n "$_ae_bound" -u 9 _ae_line && _ae_ok=1; } 9<"$_ae_p"; } 2>/dev/null

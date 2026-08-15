@@ -18,6 +18,11 @@ fingerprint byte-identical; the probe now hashes every `git ls-files` path's wor
 moves the fingerprint even when the ignore rule hides the swap from `status`. And a listing that FAILS
 fails the probe — never an empty tree. Each has a control: the pre-fix probe (`git diff HEAD`) and a
 copy without the root lstat are RUN and must NOT tell the trees apart.
+
+The tracked set is the UNION of the index and HEAD's tree (codex, PR #67 pass 11 — reproduced):
+`ls-files` derives membership from the mutable index, so a committed-and-ignored path staged for
+deletion (`git rm --cached`) vanished from the listing while `status` stayed `D  path` before and after
+its working-tree file was rewritten. The control — the union's `ls-tree` half removed — must NOT move.
 """
 
 from __future__ import annotations
@@ -248,6 +253,51 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         self.assertEqual("", st.stdout, "the swap must be invisible to `status` — the fixture is not the finding")
         after = self._fp(helper)
         return before, after
+
+    # The HEAD-tree half of the tracked-path union — the `ls-tree` call and the lines that fold it in.
+    LS_TREE_UNION = ('r2 = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], '
+                     'capture_output=True)\n'
+                     'if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure\n'
+                     '    names.update(x for x in r2.stdout.split(b"\\0") if x)\n')
+
+    def _staged_deletion_of_an_ignored_path(self, helper):
+        """`f.txt` committed AND ignored (`.gitignore` lists it; it was added with `-f`); `git rm --cached
+        f.txt`; B; rewrite f.txt; A. Returns (B, A). The premise is asserted: `ls-files` no longer lists
+        the path and `status` reads `D  f.txt` — and only that — both before and after the rewrite."""
+        self._fresh_repo({".gitignore": "f.txt\n"})          # `add -A` skipped the ignored f.txt …
+        self._git("add", "-f", "f.txt")                       # … so it is forced in and committed
+        self._git("commit", "-qm", "track the ignored file")
+        listed = subprocess.run(["git", "-C", self.repo, "ls-files"], capture_output=True, text=True, check=True)
+        self.assertIn("f.txt", listed.stdout.split(), "the fixture must start with f.txt TRACKED")
+        self._git("rm", "--cached", "-q", "f.txt")
+        listed = subprocess.run(["git", "-C", self.repo, "ls-files"], capture_output=True, text=True, check=True)
+        self.assertNotIn("f.txt", listed.stdout.split(), "`rm --cached` must drop f.txt from the index listing")
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("D  f.txt\n", st.stdout, f"the fixture is not the finding: {st.stdout!r}")
+        before = self._fp(helper)
+        with open(os.path.join(self.repo, "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write("REWRITTEN\n")
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("D  f.txt\n", st.stdout,
+                         f"status must be blind to the rewrite (ignored + staged deletion): {st.stdout!r}")
+        after = self._fp(helper)
+        return before, after
+
+    def test_a_staged_deletion_of_an_ignored_path_is_still_hashed(self):
+        before, after = self._staged_deletion_of_an_ignored_path(HELPER)
+        self.assertNotEqual(before, after,
+                            "the rewrite of a committed-and-ignored file staged for deletion left the LIVE "
+                            "fingerprint byte-identical — membership came from the index alone")
+        self.assertIn(' "f.txt"\n', before, before)           # HEAD's tree still names it, so it is hashed
+        # The control: the union WITHOUT its `ls-tree` half — index membership only — compares EQUAL (measured).
+        mutant = self._mutant(self.LS_TREE_UNION, "", "tree-fingerprint-no-ls-tree.sh")
+        b2, a2 = self._staged_deletion_of_an_ignored_path(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (index-only membership) told the trees apart — the rewrite is visible "
+                         "to something other than the HEAD-tree half, so this test does not prove that half")
+        self.assertNotIn(' "f.txt"\n', b2, b2)
 
     def test_verdicts_root_type_is_recorded(self):
         before, after = self._verdicts_swap(HELPER)

@@ -35,8 +35,24 @@ export CLAUDE_PLUGIN_DATA="${1-}"          # empty is PRESERVED, not unset — s
 # Prefer the shared resolver so the bridge and the libs run one code path. GUARDED: paths.sh is an
 # optimisation of maintenance, not a load-bearing dependency, and an unguarded `.` on a missing file
 # returns 1 in Bash / 127 in zsh and terminates an `errexit` caller.
-# "paths.sh already sourced" is a FUNCTION it defines, never a flag (codex, PR #67 pass 7).
-if ! command -v unleashed_resolve_base >/dev/null 2>&1 && [ -r "$2/scripts/lib/paths.sh" ]; then
+# THE INSTANCE CHECK — once per sourcing, before anything trusts a resolution it may have inherited.
+# `exec` keeps `$$`, an `allexport` wrapper carries every variable across it, and in bash `set -a`
+# carries every FUNCTION too — so after such a wrapper the exec'd hook held a matching pid, the marker
+# function, and the wrapper's stale base (codex, PR #67 pass 11 — reproduced). What NO environment
+# carries is a variable's READONLY attribute: `declare -p` / `typeset -p` show `-r` only in the shell
+# instance that set it (measured: `declare -rx` becomes `declare -x` across exec in bash, `export -r`
+# becomes `export` in zsh; a subshell keeps it). Resolution sets `readonly _UNLEASHED_BASE_INSTANCE`;
+# a value present WITHOUT the attribute is inherited, and the inherited resolution is discarded here.
+# One `declare -p` capture per SOURCING — the per-call guard below stays fork-free.
+if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+    case "$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )" in
+        "declare -"*r*" _UNLEASHED_BASE_INSTANCE="*|"typeset -"*r*" _UNLEASHED_BASE_INSTANCE="*|"export -"*r*" _UNLEASHED_BASE_INSTANCE="*|"readonly "*) : ;;
+        *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;
+    esac
+fi
+# "paths.sh already sourced" is the COMPLETE resolver API, never a flag (codex, PR #67 passes 7 and 11).
+if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \
+    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1; } && [ -r "$2/scripts/lib/paths.sh" ]; then
     # shellcheck source=scripts/lib/paths.sh
     . "$2/scripts/lib/paths.sh"
 fi
@@ -69,7 +85,7 @@ _ueb_state_load() {
     done
     return 0
 }
-if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? — `$$`, never a flag
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in_process >/dev/null 2>&1; then   # pid + marker function
     _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
@@ -94,6 +110,8 @@ if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     # resolved in THIS process? 
         fi
     fi
     _UNLEASHED_BASE_PID=$$
+    _unleashed_resolved_in_process() { :; }
+    readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null       # the attribute no environment can carry across exec
 fi
 
 # The sanctioned state test, for consumers that source only this bridge.

@@ -175,7 +175,12 @@ class DarwinAclArm(unittest.TestCase):
             os.makedirs(p, exist_ok=True)
             os.chmod(p, 0o700)
             for a in acls:
-                subprocess.run(["/bin/chmod", "+a", a, p], check=False)
+                # FAIL LOUDLY, and PROVE the ACE landed: with `check=False` a failed `chmod +a` left the
+                # fixture unarmed and every assertion on it vacuous (external audit of PR #67, finding 1).
+                subprocess.run(["/bin/chmod", "+a", a, p], check=True)
+                shown = subprocess.run(["/bin/ls", "-lde", p], capture_output=True, text=True, check=True).stdout
+                who, verb = a.split(" ")[0], a.split(" ")[1]          # `group:staff deny …` / `user:x allow …`
+                assert f"{who} {verb} " in shown, f"ACE not installed on {p}: {shown!r}"
             return p
         cls.none = mk("none")
         cls.other_w = mk("other_w", "group:staff allow write,delete")
@@ -793,6 +798,80 @@ class SourcedUnderErrexit(unittest.TestCase):
                     self.assertNotIn("END ", out)
         finally:
             os.unlink(mutant)
+
+
+@unittest.skipUnless(DARWIN, "walks chains through the Darwin arm; on Linux every cell is `failed`/`stale` by design")
+class TwoProcessAcceptance(unittest.TestCase):
+    """The Jira acceptance flows the external audit of PR #67 (finding 5) said were unproved:
+
+    (a) the SAME real `marker_write` reached through a hook-shaped process (the variable set) and then
+        through a fresh STANDALONE process (no variable, a different pid) lands in ONE file at ONE path;
+    (b) a value published in the SET process is recovered identically by a fresh UNSET process, through
+        `paths.sh` and through each family file's own fallback with `paths.sh` absent, in both shells.
+
+    Every earlier test either published and read inside ONE shell, or exercised the resolver copies with
+    a pre-built store; none crossed a process boundary through the writers' real entry points.
+    """
+
+    def setUp(self):
+        self.home = scratch_home("twop.2617.")
+        self.base = os.path.join(self.home, "plugin-data")
+        os.makedirs(self.base); os.chmod(self.base, 0o700)
+        os.makedirs(os.path.join(self.home, "h")); os.chmod(os.path.join(self.home, "h"), 0o700)
+        self.absent = os.path.join(self.home, "lib-no-paths")
+        shutil.copytree(LIB, self.absent); os.remove(os.path.join(self.absent, "paths.sh"))
+
+    def tearDown(self):
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _proc(self, shell, libdir, lib, body, set_var):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("_UNLEASHED_") and k != "CLAUDE_PLUGIN_DATA"}
+        env["HOME"] = os.path.join(self.home, "h")
+        if set_var:
+            env["CLAUDE_PLUGIN_DATA"] = self.base
+        p = subprocess.run([shell, "-c", f'. "{libdir}/{lib}"; {body}'], capture_output=True, text=True, env=env)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_hook_shaped_then_standalone_marker_write_land_in_one_file(self):
+        for shell in SHELLS:
+            for libdir, label in ((LIB, "paths.sh present"), (self.absent, "paths.sh absent")):
+                with self.subTest(shell=shell, resolver=label):
+                    shutil.rmtree(os.path.join(self.home, "h", ".claude"), ignore_errors=True)
+                    shutil.rmtree(os.path.join(self.base, ".state"), ignore_errors=True)
+                    # Process 1: hook-shaped — the variable is set; this publishes the base to the store.
+                    rc, out, err = self._proc(shell, libdir, "marker.sh",
+                                              'marker_write lint pass; printf "%s|%s" "$(marker_path lint)" "$_UNLEASHED_POINTER_STATE"', True)
+                    p1_path, p1_state = out.split("|")
+                    self.assertEqual("created", p1_state, f"{shell}/{label}: hook-shaped process did not publish: {err!r}")
+                    # Process 2: standalone — no variable, a fresh pid; the SAME entry points.
+                    rc, out, err = self._proc(shell, libdir, "marker.sh",
+                                              'printf "%s|%s|%s" "$(marker_path lint)" "$(marker_status lint)" "$_UNLEASHED_BASE_SOURCE"; marker_write build fail', False)
+                    p2_path, p2_status, p2_source = out.split("|")
+                    self.assertEqual(p1_path, p2_path, f"{shell}/{label}: two processes composed different marker paths")
+                    self.assertEqual("pass", p2_status, f"{shell}/{label}: the standalone process did not read the hook's marker: {err!r}")
+                    self.assertEqual("pointer", p2_source)
+                    state_dirs = [d for d in (os.path.join(self.base, ".state"),) if os.path.isdir(d)]
+                    self.assertEqual(1, len(state_dirs), "exactly one .state directory, under the published base")
+                    names = sorted(os.listdir(state_dirs[0]))
+                    self.assertTrue(any(n.startswith("quality-marker-lint-") for n in names) and
+                                    any(n.startswith("quality-marker-build-") for n in names),
+                                    f"{shell}/{label}: both writers must land in the one directory: {names}")
+                    self.assertFalse(os.path.exists(os.path.join(self.home, "h", ".claude", "unleashed-mail", ".state")),
+                                     "no second store under HOME")
+
+    def test_set_publisher_then_unset_reader_agree_through_every_resolver_copy(self):
+        for shell in SHELLS:
+            shutil.rmtree(os.path.join(self.home, "h", ".claude"), ignore_errors=True)
+            rc, out, err = self._proc(shell, LIB, "paths.sh", 'printf "%s|%s" "$_UNLEASHED_BASE_RESOLVED" "$_UNLEASHED_POINTER_STATE"', True)
+            resolved, state = out.split("|")
+            self.assertEqual((self.base, "created"), (resolved, state), f"{shell}: {err!r}")
+            for libdir, label in ((LIB, "paths.sh"), (self.absent, "fallback")):
+                for lib in ("paths.sh", "marker.sh", "log.sh", "context.sh"):
+                    if label == "fallback" and lib == "paths.sh":
+                        continue
+                    with self.subTest(shell=shell, resolver=label, lib=lib):
+                        rc, out, err = self._proc(shell, libdir, lib, 'printf "%s|%s|%s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_BASE_RESOLVED"', False)
+                        self.assertEqual(f"1|pointer|{self.base}", out, f"{shell}/{label}/{lib}: {err!r}")
 
 
 if __name__ == "__main__":

@@ -27,13 +27,16 @@ _u_stat() {
         zstat -L -H _u_h -- "$1" 2>/dev/null || return 1
         # shellcheck disable=SC2154
         printf -v _U_MODE "%04o" $(( ${_u_h[mode]} & 4095 ))
-        _U_SIZE=${_u_h[size]}; _U_UID=${_u_h[uid]}
+        _U_SIZE=${_u_h[size]}; _U_UID=${_u_h[uid]}; _U_INO=${_u_h[inode]}
     else
-        # Darwin: `%p` is the full mode; the twelve bits are its LAST FOUR octal digits.
-        _u_st_raw="$(/usr/bin/stat -f '%p %z %u' -- "$1" 2>/dev/null)" || return 1
+        # Darwin: `%p` is the full mode; the twelve bits are its LAST FOUR octal digits. `%i` is the
+        # inode — ENT-2b binds the OPENED object to it (measured: /dev/fd/N reports the open object's
+        # inode, size and uid, but its mode as the open flags and its device as fdesc's).
+        _u_st_raw="$(/usr/bin/stat -f '%p %z %u %i' -- "$1" 2>/dev/null)" || return 1
         [ -n "$_u_st_raw" ] || return 1
         _U_MODE="${_u_st_raw%% *}"; _U_MODE="${_U_MODE: -4}"
-        _u_st_rest="${_u_st_raw#* }"; _U_SIZE="${_u_st_rest%% *}"; _U_UID="${_u_st_rest##* }"
+        _u_st_rest="${_u_st_raw#* }"; _U_SIZE="${_u_st_rest%% *}"
+        _u_st_rest="${_u_st_rest#* }"; _U_UID="${_u_st_rest%% *}"; _U_INO="${_u_st_rest##* }"
     fi
     return 0
 }
@@ -64,6 +67,16 @@ _u_platform() {
 _u_identity_probe() {
     /usr/bin/id -un 2>/dev/null
 }
+# THE EFFECTIVE USER'S UUID, the second half of P-3a. `/bin/ls -lde` renders an ACE's principal as
+# `user:<name>` when the system can resolve the identity and as a BARE UUID when it cannot — and on
+# some hosts (a mobile or directory account) the EFFECTIVE USER'S OWN ACE renders as the UUID. A parser
+# that treated every bare UUID as foreign refused a legitimate self-ACE and an authoritative publisher
+# reported `failed` (external audit of PR #67, finding 1). Resolved ONCE per resolution, by absolute
+# path, one fork; anything but a single well-formed UUID leaves it EMPTY, and an empty value means "no
+# bare UUID is self" — fail closed, exactly as before.
+_u_identity_uuid_probe() {
+    /usr/bin/dsmemberutil getuuid -U "$1" 2>/dev/null
+}
 
 # ── The probe caches, and why NO inherited state is honoured ──────────────────────────────────────
 # These libs are SOURCED into a consumer's shell, so ANY variable — the principal, the platform,
@@ -77,7 +90,7 @@ _u_identity_probe() {
 # below mean only "probed DURING this resolution". A caller-set flag is discarded before it can
 # be consulted; a caller-set value is overwritten by the probe.
 _u_probes_reset() {
-    unset _U_PRINCIPAL _U_PRINCIPAL_PROBED _U_PLATFORM _U_PLATFORM_PROBED _U_PLATFORM_RC
+    unset _U_PRINCIPAL _U_PRINCIPAL_UUID _U_PRINCIPAL_PROBED _U_PLATFORM _U_PLATFORM_PROBED _U_PLATFORM_RC
 }
 
 _u_principal() {
@@ -97,6 +110,12 @@ _u_principal() {
 '
     case "$_U_PRINCIPAL" in
         ''|*"$_u_pr_nl"*) unset _U_PRINCIPAL; return 1 ;;
+    esac
+    # The UUID: accepted only in the exact 8-4-4-4-12 hex shape, ONE line; anything else is "none".
+    _U_PRINCIPAL_UUID="$(_u_identity_uuid_probe "$_U_PRINCIPAL")" || _U_PRINCIPAL_UUID=""
+    case "$_U_PRINCIPAL_UUID" in
+        [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]-[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) : ;;
+        *) _U_PRINCIPAL_UUID="" ;;
     esac
     _U_PRINCIPAL_PROBED=1
     return 0
@@ -188,10 +207,14 @@ _u_acl_answer_ok() {                                            # stdin: the enu
 _u_acl_check_ace() {
     [ "$_u13_verb" = allow ] || return 0
     case "$_u13_principal" in
-        user:*) _u_acl_who="${_u13_principal#user:}" ;;
-        *)      _u_acl_who="" ;;      # a `group:` or UNTYPED principal is another principal: a bare
-    esac                              # UUID is an identity the system could not resolve, and the
-    [ "$_u_acl_who" = "$_U_PRINCIPAL" ] && return 0             # fail-closed reading is the only safe one
+        user:*) _u_acl_who="${_u13_principal#user:}"; [ "$_u_acl_who" = "$_U_PRINCIPAL" ] && return 0 ;;
+        group:*) : ;;                 # a `group:` principal is another principal
+        *)  # UNTYPED: a bare UUID. It is SELF iff it equals the effective user's RESOLVED UUID (P-3a's
+            # second probe, non-empty) — the rendering some hosts give the effective user's own ACE.
+            # Any other bare UUID is an identity the system could not resolve, and the fail-closed
+            # reading — foreign — is the only safe one (row 129; external audit of PR #67, finding 1).
+            [ -n "${_U_PRINCIPAL_UUID:-}" ] && [ "$_u13_principal" = "$_U_PRINCIPAL_UUID" ] && return 0 ;;
+    esac
     _u_acl_r_rest="$_u13_perms"
     while [ -n "$_u_acl_r_rest" ]; do
         _u_acl_r="${_u_acl_r_rest%%,*}"

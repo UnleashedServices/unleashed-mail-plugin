@@ -129,6 +129,9 @@ fi
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # No `--allocated`: this harness takes an <out-transcript> path it creates itself, not a leaf
 # reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist.
+# THE SESSIONS THAT EXIST BEFORE THE RUN — the effort assertion below binds to the ONE session this
+# invocation creates, by set difference, never to an identifier read out of the transcript.
+SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 ( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
     kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null 2>&1
 STATUS=$?
@@ -175,12 +178,18 @@ fi
 # whichever Kimi session wrote last: a concurrent session, or an older one if this invocation died
 # before creating its own — either would certify THIS review as `max` on another session's evidence.
 # No session id in the transcript means no evidence, and the assertion fails closed below.
-SESSION_ID="$(grep -m1 -oE 'session_[0-9a-f-]{36}' "$OUT" 2>/dev/null || true)"
+# BOUND TO THE SESSION CREATED DURING THIS INVOCATION — the set difference of session directories
+# before and after the run — and to nothing read out of the transcript: the earlier "first
+# `session_<uuid>` in the transcript" was reviewer-controlled text, so a run whose output QUOTED an older
+# session's id (a resume hint, an old transcript) selected that session's wire log and could certify
+# this run as `max` on another run's evidence (codex, PR #67 pass 11). Exactly ONE new session is the
+# only shape that is evidence; zero (the CLI created none) or several (a concurrent run) fail closed.
+SESSIONS_AFTER="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
+NEW_SESSIONS="$(printf '%s\n' "$SESSIONS_AFTER" | grep -vxF -- "$SESSIONS_BEFORE" | grep -v '^$' || true)"
 WIRE=""
-if [ -n "$SESSION_ID" ]; then
-    for _w in "$HOME"/.kimi-code/sessions/*/"$SESSION_ID"/agents/main/wire.jsonl; do
-        [ -r "$_w" ] && { WIRE="$_w"; break; }
-    done
+if [ "$(printf '%s\n' "$NEW_SESSIONS" | grep -c .)" = 1 ]; then
+    _w="$NEW_SESSIONS/agents/main/wire.jsonl"
+    [ -r "$_w" ] && WIRE="$_w"
 fi
 EFFORTS=""
 [ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \

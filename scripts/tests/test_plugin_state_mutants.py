@@ -10,7 +10,8 @@ campaign's findings file rather than faked here.
 Assembled from six parallel drafting agents; every row carries the run evidence its drafter measured,
 and THIS suite's own run is the gate — the evidence informed assembly, it is not the verification.
 Rows 156-162 (PR #67, codex pass 7) were added afterwards as `RowsPass7`, at the end of the file;
-rows 163-164 (PR #67, codex pass 8) and row 165 (PR #67, codex pass 9) joined that class.
+rows 163-164 (PR #67, codex pass 8), row 165 (PR #67, codex pass 9), rows 166-168 (PR #67, codex
+pass 11) and row 169 (external audit of PR #67, finding 1) joined that class.
 """
 
 import os
@@ -675,12 +676,16 @@ class RowsChunk1(unittest.TestCase):
 
     def test_row_129_untyped_uuid_principal_is_another_principal(self):
         """An allow ACE with an unresolved bare-UUID principal and mutating rights ⇒ stale."""
-        # ACL-2/P-3a: only `user:<us>` is us; an identity the system could not resolve must not be
-        # proof of ownership. The mutant reads ANY untyped principal as the effective user and the
-        # component accepts.
+        # ACL-2/P-3a: only `user:<us>` — or a bare UUID EQUAL to the effective user's resolved UUID
+        # (row 169; external audit of PR #67, finding 1) — is us; an identity the system could not
+        # resolve must not be proof of ownership. The fixture's UUID is not the effective user's, so
+        # the UUID-self clause misses and the specification refuses. The mutant reads ANY bare UUID
+        # as the effective user (the clause replaced by an unconditional `return 0`) and the
+        # component accepts. Anchored on the CURRENT clause line, whole.
         mutant = with_mutation(
-            '        *)      _u_acl_who="" ;;      # a `group:` or UNTYPED principal is another principal: a bare\n',
-            '        *)      _u_acl_who="$_U_PRINCIPAL" ;;      # a `group:` or UNTYPED principal is another principal: a bare\n',
+            '            [ -n "${_U_PRINCIPAL_UUID:-}" ] && [ "$_u13_principal" = "$_U_PRINCIPAL_UUID" ] '
+            '&& return 0 ;;\n',
+            '            return 0 ;;\n',
             path=AUTH)
         answer = ("drwx------@ 2 n s 64 d\n"
                   " 0: ABCDEFAB-CDEF-ABCD-CDEF-ABCDEFABCDEF allow write,delete\n")
@@ -1577,6 +1582,19 @@ class RowsChunk3(unittest.TestCase):
     STALE = "0 unresolved stale|/dev/null/unresolved-plugin-base"
     SENTINEL = "/dev/null/unresolved-plugin-base"
 
+    @staticmethod
+    def _slice_lines(path, head, tail):
+        """The CURRENT text of `path` from the unique `head` through the first `tail` after it."""
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text.count(head) == 1, f"head anchor not unique in {path}: {head!r}"
+        start = text.index(head)
+        assert tail in text[start:], f"tail anchor not found after the head in {path}: {tail!r}"
+        end = text.index(tail, start) + len(tail)
+        old = text[start:end]
+        assert text.count(old) == 1, f"sliced block not unique in {path}"
+        return old
+
     def _resolved(self):
         return f"1 pointer none|{self.target}"
 
@@ -2306,12 +2324,13 @@ class RowsChunk3(unittest.TestCase):
         # the walk's remaining-path state; the zsh arm uses the `zstat` builtin, never touches the
         # name, and is untouched. The assertions compare the ARMS to each other, not one arm to a
         # constant — that is what makes this row's class expensive and this test able to see it.
-        mutant = with_mutation(
-            '        _u_st_rest="${_u_st_raw#* }"; _U_SIZE="${_u_st_rest%% *}"; '
-            '_U_UID="${_u_st_rest##* }"',
-            '        _u_ac_rest="${_u_st_raw#* }"; _U_SIZE="${_u_ac_rest%% *}"; '
-            '_U_UID="${_u_ac_rest##* }"',
-            path=AUTH)
+        # The bash arm's parse is two lines since `%i`/`_U_INO` joined the record (PR #67 pass 11);
+        # the scratch is renamed on BOTH, sliced from the CURRENT file so a field added to the
+        # record cannot strand the row on a stale spelling (it did, once).
+        parse = self._slice_lines(AUTH, '        _u_st_rest="${_u_st_raw#* }"; _U_SIZE="${_u_st_rest%% *}"\n',
+                                  '_U_INO="${_u_st_rest##* }"\n')
+        self.assertEqual(2, parse.count("\n"), parse)
+        mutant = with_mutation(parse, parse.replace("_u_st_rest", "_u_ac_rest"), path=AUTH)
         try:
             self._fresh_store()
             self._write_entry(self.target)
@@ -2775,9 +2794,13 @@ class RowsChunk4(unittest.TestCase):
         # measured at the enumerator-output seam (one invocation per component evaluated), which
         # is identical on both shell arms — a publisher cell would fail this row against a
         # CORRECT implementation (BUD-1), so the fixture is reader-only.
+        # The once-per-process guard is pid + the marker FUNCTION (PR #67 pass 11) — anchored on the
+        # CURRENT guard line, whole, so a comment or clause rewrite cannot strand the row on a
+        # pattern that no longer matches (this row was stranded once, on the pid-only spelling).
         mutant = with_mutation(
-            '        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process',
-            '        :                                                   # re-resolve per consumer',
+            '        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && command -v _unleashed_resolved_in_process '
+            '>/dev/null 2>&1 && return 0\n',
+            '        :                                                   # re-resolve per consumer\n',
             path=PATHS_C4)
         cnt = os.path.join(self.home, "cnt")
         derived = 2 * self._comps(self.store) + self._comps(self.target)
@@ -2930,8 +2953,8 @@ class RowsChunk4(unittest.TestCase):
         m = with_mutation('_U_PLATFORM="$(/usr/bin/uname -s 2>/dev/null)"',
                           '_U_PLATFORM="$(/usr/bin/uname -s >/dev/null 2>&1)"', path=AUTH)
         for old, new in (
-                ("/usr/bin/stat -f '%p %z %u' -- \"$1\" 2>/dev/null",
-                 "/usr/bin/stat -f '%p %z %u' -- \"$1\" >/dev/null 2>&1"),
+                ("/usr/bin/stat -f '%p %z %u %i' -- \"$1\" 2>/dev/null",      # `%i`: PR #67 pass 11
+                 "/usr/bin/stat -f '%p %z %u %i' -- \"$1\" >/dev/null 2>&1"),
                 ('/usr/bin/id -un 2>/dev/null', '/usr/bin/id -un >/dev/null 2>&1'),
                 ('/bin/ls -lde -- "$1" 2>/dev/null', '/bin/ls -lde -- "$1" >/dev/null 2>&1')):
             m2 = with_mutation(old, new, path=m)
@@ -4459,6 +4482,7 @@ class RowsChunk6(unittest.TestCase):
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import stat as statmod
@@ -4475,7 +4499,7 @@ SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165."""
+    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -4576,12 +4600,14 @@ class RowsPass7(unittest.TestCase):
         # a mutant there could not fail. Measured, both shells, all five: spec `0|<sentinel>`
         # (+ `<sentinel>/.state` for marker.sh) with one diagnostic; mutant `1|UNSET` (+ `/.state`)
         # and no diagnostic at all.
-        old_paths = '        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process\n'
-        new_paths = '        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0   # already resolved in THIS process\n'
-        old_fam = ('if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ]; then     '
-                   '# resolved in THIS process? — `$$`, never a flag\n')
-        new_fam = ('if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then     '
-                   '# resolved in THIS process? — `$$`, never a flag\n')
+        # The CURRENT guards (pid + the marker function, PR #67 pass 11) are the anchors — the whole
+        # guard clause, without the trailing comment on the family lines, which differs per file.
+        old_paths = ('        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && command -v _unleashed_resolved_in_process '
+                     '>/dev/null 2>&1 && return 0\n')
+        new_paths = '        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0\n'
+        old_fam = ('if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in_process '
+                   '>/dev/null 2>&1; then')
+        new_fam = 'if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then'
         machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
         for fam in FAMILY_P7:
             is_paths = fam == "paths.sh"
@@ -4667,10 +4693,17 @@ class RowsPass7(unittest.TestCase):
 
     def test_row_158_paths_sh_body_is_guarded_on_a_function_not_an_inheritable_flag(self):
         """Row 158: `_UNLEASHED_PATHS_SH_LOADED=1` inherited by a child that sources paths.sh — the specification defines its functions and resolves (`unleashed_plugin_base` prints the sentinel here); under the flag-keyed body guard the file defines NOTHING and `unleashed_plugin_base` is `command not found`. Both shells."""
-        mutant = with_mutation(
-            'if ! command -v unleashed_resolve_base >/dev/null 2>&1; then\n',
-            'if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then\n',
-            path=PATHS_C4)
+        # The body guard is the COMPLETE six-function API test (PR #67 pass 11) — sliced from the
+        # CURRENT file, first line through `; }; then`, so a reordered clause cannot strand the row.
+        # The eager `unleashed_resolve_base` call now sits OUTSIDE the block, so under the mutant it
+        # is the first `command not found` (at source time) and the primitive the second — measured.
+        guard = self._slice(PATHS_C4,
+                            'if ! { command -v unleashed_resolve_base >/dev/null 2>&1 '
+                            '&& command -v unleashed_plugin_base >/dev/null 2>&1 \\\n',
+                            '; }; then\n')
+        self.assertEqual(3, guard.count("\n"), guard)
+        self.assertIn("unleashed_plugin_legacy_base", guard)
+        mutant = with_mutation(guard, 'if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then\n', path=PATHS_C4)
         env = {"HOME": self.home, "_UNLEASHED_PATHS_SH_LOADED": "1"}
         try:
             machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
@@ -4764,14 +4797,19 @@ class RowsPass7(unittest.TestCase):
         # valid target as line 1 the mutant's second-open read passes clause (2) — `_U_SIZE` is
         # the ORIGINAL entry's size, stat'ed on the pathname — and everything after it, and the
         # store RESOLVES to a file that was never what ENT-1 validated. Measured, both shells.
+        # The slice starts after `_ae_bound=` (the trap's key, kept in both builds) and so takes the
+        # `_ae_ino=` capture (PR #67 pass 11) along with the two arms: the mutant reads through a
+        # second open and validates NOTHING on a descriptor, so it has no inode to bind to either.
         old = self._slice(READER,
                           '    _ae_bound=$(( ${#_ae_name} + 1 ))\n',
                           '        [ "$_ae_ok" = 1 ] || return 1                                                      # (1)\n'
                           '    fi\n',
                           after_head=True)
-        self.assertTrue(old.startswith('    if [ -n "${ZSH_VERSION:-}" ]; then\n        zmodload zsh/system'), old[:80])
+        self.assertTrue(old.startswith('    _ae_ino="$_U_INO"'), old[:80])
+        self.assertIn('    if [ -n "${ZSH_VERSION:-}" ]; then\n        zmodload zsh/system', old)
         self.assertIn("sysopen", old)
         self.assertIn('9<"$_ae_p"', old)
+        self.assertNotIn("_ae_bytes", old, "the slice ran past the arms into clause (2)")
         mutant = with_mutation(old, '    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1\n',
                                path=READER)
         big = os.path.join(self.home, "big")
@@ -5211,6 +5249,266 @@ class RowsPass7(unittest.TestCase):
             self.assertEqual("", out, f"{tag} created: a `created` store must stay silent on `clear`: {out!r}")
             entries = [f for f in os.listdir(self.store) if f.startswith("base.")]
             self.assertEqual(1, len(entries), f"{tag} created: the hook did not publish exactly one entry: {entries}")
+
+    # ── row 166 ───────────────────────────────────────────────────────────────────────────────
+
+    #: Row 166's exec'd resolver copies and the base primitive each exposes. agent-env-bridge.sh
+    #: takes positional arguments and is not sourced by an exec'd hook shell, so it is not run here.
+    ROW_166 = (("paths.sh", "unleashed_plugin_base"), ("marker.sh", "marker_base"),
+               ("log.sh", "log_base"), ("context.sh", "context_base"))
+
+    def _row_166_cell(self, shell, body):
+        """One wrapper shell. The environment carries NONE of the protocol variables in: what the
+        exec'd shell inherits must come from the wrapper's own `set -a`, or the row measures the
+        test runner's environment. Returns (rc, stdout, stderr)."""
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("_UNLEASHED") and k != "CLAUDE_PLUGIN_DATA"}
+        p = subprocess.run([shell, "-c", body], capture_output=True, text=True, env=env, timeout=30)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_row_166_an_inherited_resolution_is_discarded_by_the_readonly_instance_check(self):
+        """Row 166: a wrapper shell under `set -a` sources a resolver copy with `CLAUDE_PLUGIN_DATA=<a>`, sets `<b>` and `exec`s a hook shell that sources the same file — the specification resolves afresh (the hook prints `<b>`) in both shells; under the mutation (the readonly-attribute instance check removed) the bash hook keeps `<a>` — bash's `set -a` exported the marker function too, and pid + function alone are satisfied across `exec`. A subshell prints `<a>` and a fork+exec child prints `<b>` in BOTH builds. zsh cannot carry a function across `exec`, so its mutant hook already resolves afresh on the pid + function key: the zsh half asserts `<b>` in both builds and does not discriminate (measured; the plan row's parenthesis names bash as the carrier)."""
+        # THE MUTATION is the whole instance-check block — `if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]`
+        # through its `fi` — sliced from the CURRENT file. Each copy is exercised where it is the
+        # resolver in force (row 156's shape): paths.sh with the machinery beside it; the family
+        # files from a shadow root WITHOUT paths.sh, so their own instance check and fallback guard
+        # run rather than paths.sh's. `_UNLEASHED_PUBLISH_OK=0`: E0, so no cell writes a store.
+        # Measured, all four files: bash exec spec `b` / mutant `a`; zsh exec `b` / `b`; subshell
+        # `a` / `a` (the readonly attribute survives a fork, and so do `$$` and the function);
+        # fork+exec child `b` / `b` (a fresh pid resolves afresh from its own environment).
+        a = os.path.join(self.home, "base-a")
+        b = os.path.join(self.home, "base-b")
+        os.makedirs(a)
+        os.makedirs(b)
+        head = 'if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then\n'
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        for fam, prim in self.ROW_166:
+            src = os.path.join(LIBDIR, fam)
+            block = self._slice(src, head, '    esac\nfi\n')
+            self.assertIn("declare -p _UNLEASHED_BASE_INSTANCE", block, block)
+            self.assertIn("unset -f _unleashed_resolved_in_process", block, block)
+            mutant = with_mutation(block, "", path=src)
+            try:
+                # machinery + THIS file only: paths.sh is present exactly when it is the file under test.
+                spec_root = self._shadow(f"spec166-{fam}", dict(machinery, **{fam: src}))
+                mut_root = self._shadow(f"mut166-{fam}", dict(machinery, **{fam: mutant}))
+                for shell in SHELLS:
+                    bash = shell.endswith("bash")
+                    for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                        f = os.path.join(root, "scripts", "lib", fam)
+                        hook = f'. "{f}"; printf %s "$({prim})"'
+                        wrap = (f'set -a; export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{a}" '
+                                f'_UNLEASHED_PUBLISH_OK=0; . "{f}"; set +a; export CLAUDE_PLUGIN_DATA="{b}"; ')
+                        cells = {
+                            "exec":     wrap + f"exec {shell} -c '{hook}'",
+                            "subshell": wrap + f"( {hook} )",
+                            # no `set -a`: plain exports, a NEW process (fork+exec), same file.
+                            "forkexec": (f'export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{a}" '
+                                         f'_UNLEASHED_PUBLISH_OK=0; . "{f}"; export CLAUDE_PLUGIN_DATA="{b}"; '
+                                         f"{shell} -c '{hook}'"),
+                        }
+                        for cell, body in cells.items():
+                            self._wipe()
+                            rc, out, err = self._row_166_cell(shell, body)
+                            tag = f"{fam} {shell} {'mutant' if is_mutant else 'shipped'} {cell}"
+                            self.assertEqual(0, rc, f"{tag}: rc {rc}: {err!r}")
+                            self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                            self.assertEqual([], self._diags(err), f"{tag}: a resolved base diagnosed: {err!r}")
+                            self.assertFalse(os.path.exists(self.store), f"{tag}: E0 wrote a store")
+                            if cell == "subshell":
+                                self.assertEqual(a, out, f"{tag}: a subshell is the same instance and keeps "
+                                                         f"its resolution in both builds: {out!r}")
+                            elif cell == "forkexec":
+                                self.assertEqual(b, out, f"{tag}: a fresh process resolves afresh from its "
+                                                         f"own environment in both builds: {out!r}")
+                            elif not is_mutant:
+                                self.assertEqual(b, out, f"{tag}: the exec'd hook kept the wrapper's stale "
+                                                         f"base — the inherited resolution was trusted: {out!r} {err!r}")
+                            elif bash:
+                                self.assertEqual(a, out, f"{tag}: the CONTROL did not fail — without the "
+                                                         f"instance check the exec'd bash hook still resolved "
+                                                         f"afresh: {out!r} {err!r}")
+                            else:
+                                # zsh: no function crosses exec, so pid + function already miss and the
+                                # mutant resolves afresh too — asserted, not claimed as discrimination.
+                                self.assertEqual(b, out, f"{tag}: {out!r} {err!r}")
+            finally:
+                os.unlink(mutant)
+
+    # ── row 167 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_167_the_paths_sh_body_guard_is_the_complete_api_not_one_exportable_function(self):
+        """Row 167: a bash parent sources paths.sh and `export -f unleashed_resolve_base`; a child sources paths.sh — the specification (the guard tests all six functions) defines the whole API: `unleashed_plugin_base` prints the sentinel (variable unset, no store) or the base (variable set), `unleashed_base_ok` is defined; under the mutation (the guard on that ONE function) the block is skipped, the imported resolver runs alone — `command not found` on stderr — and `unleashed_plugin_base` is undefined: EMPTY output, `unleashed_base_ok` UNDEFINED. bash only: zsh cannot export functions."""
+        # Measured: spec `<sentinel>|defined` (unset cell) and `<target>|defined` (set cell), no
+        # `command not found`; mutant `|UNDEFINED` in both cells, and in the unset cell the imported
+        # resolver's `_unleashed_home_ok` is `command not found` at source time (the set cell's E0
+        # fence returns before it, and the primitive's own 127 is silenced by the cell's redirect).
+        guard = self._slice(PATHS_C4,
+                            'if ! { command -v unleashed_resolve_base >/dev/null 2>&1 '
+                            '&& command -v unleashed_plugin_base >/dev/null 2>&1 \\\n',
+                            '; }; then\n')
+        self.assertIn("unleashed_base_ok", guard)
+        mutant = with_mutation(guard, 'if ! command -v unleashed_resolve_base >/dev/null 2>&1; then\n',
+                               path=PATHS_C4)
+        try:
+            machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+            spec_root = self._shadow("spec167", dict(machinery, **{"paths.sh": PATHS_C4}))
+            mut_root = self._shadow("mut167", dict(machinery, **{"paths.sh": mutant}))
+            child = ('printf "%s|%s" "$(unleashed_plugin_base 2>/dev/null)" '
+                     '"$(command -v unleashed_base_ok >/dev/null && echo defined || echo UNDEFINED)"')
+            for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                for cell, pre, want in (("unset", "unset CLAUDE_PLUGIN_DATA\n", SENTINEL),
+                                        ("set", f'export CLAUDE_PLUGIN_DATA="{self.target}" '
+                                                '_UNLEASHED_PUBLISH_OK=0\n', self.target)):
+                    self._wipe()
+                    body = (pre + f'. "{paths}"\n'
+                            'export -f unleashed_resolve_base\n'
+                            f"/bin/bash -c '. \"{paths}\"; {child}'")
+                    rc, out, err = run_shell("/bin/bash", body, sources=(), env={"HOME": self.home})
+                    tag = f"{'mutant' if is_mutant else 'shipped'} {cell}"
+                    if not is_mutant:
+                        self.assertEqual(f"{want}|defined", out, f"{tag}: {err!r}")
+                        self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                    else:
+                        self.assertEqual("|UNDEFINED", out,
+                                         f"{tag}: the CONTROL did not fail — the one-function guard still "
+                                         f"defined the API in the child: {out!r} {err!r}")
+                        if cell == "unset":
+                            self.assertIn("command not found", err, f"{tag}: {err!r}")
+                    self.assertFalse(os.path.exists(self.store), f"{tag}: a store appeared")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 168 ───────────────────────────────────────────────────────────────────────────────
+
+    def test_row_168_the_opened_entry_must_be_the_inode_ent_1_validated(self):
+        """Row 168: a DEBUG trap (`set -T` in bash) replaces the entry with a 0644 COPY of itself — same bytes, same size, same owner, a different inode — the instant ENT-1 has validated it and before ENT-2b opens it: the specification refuses (`stale`, one sanitised diagnostic) because the opened inode is not the validated one; under the mutation (the inode clause removed from BOTH arms) type, uid and size all still match on the descriptor, the copy authenticates and the store RESOLVES to a world-readable entry (`1 pointer none`). Row 160's large-file substitution stays refused under this mutant in both builds — its size differs. Both shells."""
+        # THE INTERLEAVING IS DETERMINISTIC (row 160's shape): keyed on `_ae_bound` being set — the
+        # line before `_ae_ino=` — and a once-flag, the trap fires before `_ae_ino="$_U_INO"` runs;
+        # `_U_INO` is ENT-1's pathname stat, untouched by the cp/chmod/mv, so `_ae_ino` is the
+        # ORIGINAL inode in both builds and the open that follows finds the copy. Measured, both
+        # shells: spec `0 unresolved stale <sentinel>` and the entry is 0644 afterwards (the
+        # substitution happened); mutant `1 pointer none <target>`, empty stderr.
+        m1 = with_mutation('            && [ "${_u_h[inode]}" = "$_ae_ino" ] \\\n', '', path=READER)
+        m2 = with_mutation('              && [ "$_U_INO" = "$_ae_ino" ] \\\n', '', path=m1)
+        with open(m2, encoding="utf-8") as fh:
+            self.assertNotIn('"$_ae_ino"', fh.read(), "an inode clause survived the double mutation")
+        copy = ('/bin/cp "$_ae_p" "$_ae_p.n"; /bin/chmod 644 "$_ae_p.n"; /bin/mv -f "$_ae_p.n" "$_ae_p"')
+        big = os.path.join(self.home, "big")
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, m2, PUB), True)):
+                    self._wipe()
+                    body = (self._mkstore() + self._entry()
+                            + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                            + 'trap \'if [ -n "${_ae_bound:-}" ] && [ -z "${_t168_done:-}" ] '
+                              '&& [ -f "${_ae_p:-}" ]; then _t168_done=1; ' + copy + '; fi\' DEBUG\n'
+                            + f'_unleashed_read_store "{self.store}"\n'
+                            + 'trap - DEBUG\n'
+                            + 'printf "%s %s %s %s|%s|%s" "$_UNLEASHED_BASE_OK" '
+                              '"$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE" '
+                              '"$_UNLEASHED_BASE_RESOLVED" "${_t168_done:-0}" '
+                              f'"$(/usr/bin/stat -f %Lp "{self.store}"/base.* 2>/dev/null)"')
+                    rc, out, err = self._run_with_timeout(shell, body, srcs)
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    self.assertNotEqual("TIMEOUT", rc, f"{tag}: the resolver hung")
+                    if not is_mutant:
+                        self.assertEqual(f"0 unresolved stale {SENTINEL}|1|644", out,
+                                         f"{tag}: not refused, or the trap did not fire, or the copy was "
+                                         f"not what was opened: {out!r} {err!r}")
+                        diags = self._diags(err)
+                        self.assertEqual(1, len(diags), f"{tag}: not one diagnostic: {err!r}")
+                        self.assertEqual(1, len(err.splitlines()), f"{tag}: {err!r}")
+                        self.assertNotIn(self.store, err, f"{tag}: the store path reached stderr")
+                        self.assertNotIn(self.target, err, f"{tag}: the target path reached stderr")
+                    else:
+                        self.assertEqual(f"1 pointer none {self.target}|1|644", out,
+                                         f"{tag}: the CONTROL did not fail — without the inode clause the "
+                                         f"0644 copy did not authenticate: {out!r} {err!r}")
+                        self.assertEqual("", err, f"{tag}: {err!r}")
+                # Row 160's discriminating substitute — a 0600 file whose first line is the target
+                # followed by 200 000 bytes — stays refused under THIS mutant: its size exceeds the
+                # bound ENT-2b still validates on the descriptor. The inode clause is not what refuses it.
+                self._wipe()
+                with open(big, "w", encoding="utf-8") as fh:
+                    fh.write(self.target + "\n" + "a" * 200000 + "\n")
+                os.chmod(big, 0o600)
+                body = (self._mkstore() + self._entry()
+                        + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                        + 'trap \'if [ -n "${_ae_bound:-}" ] && [ -z "${_t168_done:-}" ] '
+                          '&& [ -f "${_ae_p:-}" ] && [ "$(/usr/bin/stat -f %z "$_ae_p")" -lt 100 ]; then '
+                          f'_t168_done=1; /bin/mv -f "{big}" "$_ae_p"; fi\' DEBUG\n'
+                        + f'_unleashed_read_store "{self.store}"\n'
+                        + 'trap - DEBUG\n'
+                        + 'printf "%s %s %s|%s|%s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_POINTER_STATE" '
+                          '"$_UNLEASHED_BASE_RESOLVED" "${#_ae_line}" "${_t168_done:-0}"')
+                rc, out, err = self._run_with_timeout(shell, body, (AUTH, STORE, m2, PUB))
+                self.assertEqual(f"0 stale {SENTINEL}|0|1", out,
+                                 f"{shell} mutant, row 160's large file: not refused on size alone: {out!r} {err!r}")
+        finally:
+            os.unlink(m1)
+            os.unlink(m2)
+
+    # ── row 169 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The UUID-self clause of `_u_acl_check_ace` — the one line row 169 removes and row 129 inverts.
+    UUID_SELF_CLAUSE = ('            [ -n "${_U_PRINCIPAL_UUID:-}" ] && [ "$_u13_principal" = "$_U_PRINCIPAL_UUID" ] '
+                        '&& return 0 ;;\n')
+
+    def test_row_169_a_bare_uuid_equal_to_the_effective_users_resolved_uuid_is_self(self):
+        """Row 169: the enumerator seam presents ` 0: <UUID> allow write` where `<UUID>` is `/usr/bin/dsmemberutil getuuid -U "$(/usr/bin/id -un)"` on THIS host — a mutating right, so a FOREIGN reading refuses: the specification treats it as SELF and the component AUTHENTICATES (the store resolves `1 pointer none`; the publisher publishes `created`); under the mutation (the UUID-self clause removed — every bare UUID foreign, the pre-audit behaviour) it REFUSES (`0 unresolved stale`, `failed`, one diagnostic). A DIFFERENT UUID with the same right refuses in BOTH builds (row 129). Both shells. Skipped, never faked, on a host whose `dsmemberutil` returns no 8-4-4-4-12 UUID."""
+        # THE UUID IS PROBED AT TEST TIME by the same absolute-path command the library's own probe
+        # runs, so the fixture is the effective user's rendering on this machine and not a constant.
+        # Measured, both shells: spec own-UUID `1 pointer none` / `created`, no diagnostic; mutant
+        # own-UUID `0 unresolved stale` / `failed`, one diagnostic; foreign UUID refuses in both builds.
+        try:
+            user = subprocess.run(["/usr/bin/id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
+            probe = subprocess.run(["/usr/bin/dsmemberutil", "getuuid", "-U", user],
+                                   capture_output=True, text=True, check=False)
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            self.skipTest(f"the effective user's UUID cannot be probed on this host: {exc}")
+        uuid = probe.stdout.strip()
+        if probe.returncode != 0 or not re.fullmatch(r"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", uuid):
+            self.skipTest(f"dsmemberutil returned no 8-4-4-4-12 UUID for the effective user: {probe.stdout!r} {probe.stderr!r}")
+        foreign = "ABCDEFAB-CDEF-ABCD-CDEF-ABCDEFABCDEF"
+        self.assertNotEqual(uuid.upper(), foreign)
+        mutant = with_mutation(self.UUID_SELF_CLAUSE, '            : ;;\n', path=AUTH)
+        pubstore = os.path.join(self.home, "pub", "bases")
+        reset = ('unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE '
+                 '_UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n')
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((mutant, STORE, READER, PUB), True)):
+                    for who, principal in (("own", uuid), ("foreign", foreign)):
+                        self._wipe()
+                        shutil.rmtree(os.path.join(self.home, "pub"), ignore_errors=True)
+                        body = (self._mkstore() + self._entry() + reset
+                                + seam(f"drwx------@ 2 n s 64 d\n 0: {principal} allow write\n")
+                                + f'_unleashed_read_store "{self.store}"\n' + self.OUTP
+                                + '\n' + reset
+                                + f'_unleashed_publish "{pubstore}" "{self.target}"\n'
+                                + 'printf "|%s" "$_UNLEASHED_POINTER_STATE"')
+                        rc, out, err = run_shell(shell, body, sources=srcs, env={"HOME": self.home})
+                        tag = f"{shell} {'mutant' if is_mutant else 'shipped'} {who}"
+                        diags = self._diags(err)
+                        if who == "own" and not is_mutant:
+                            self.assertEqual("1 pointer none|created", out,
+                                             f"{tag}: the effective user's own UUID was read as FOREIGN: {out!r} {err!r}")
+                            self.assertEqual([], diags, f"{tag}: {err!r}")
+                            self.assertTrue(os.path.isdir(pubstore), f"{tag}: the publisher did not publish")
+                        else:
+                            self.assertEqual("0 unresolved stale|failed", out,
+                                             (f"{tag}: the CONTROL did not fail — without the UUID-self clause the "
+                                              f"own UUID still authenticated: {out!r} {err!r}") if who == "own" else
+                                             f"{tag}: a foreign UUID with a mutating right authenticated: {out!r} {err!r}")
+                            self.assertEqual(2, len(diags), f"{tag}: not one diagnostic per refusing entry point: {err!r}")
+                            self.assertFalse(os.path.exists(pubstore), f"{tag}: the refusing publisher created the store")
+                        self.assertNotIn(self.store, err, f"{tag}: the store path reached stderr")
+        finally:
+            os.unlink(mutant)
 
 
 if __name__ == "__main__":

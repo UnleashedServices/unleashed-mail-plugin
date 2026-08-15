@@ -38,7 +38,13 @@
 #                             never on a string comparison against the sentinel — otherwise a caller
 #                             could fake resolution by exporting the sentinel text.
 #   _UNLEASHED_BASE_DIAGNOSED  guards the ONE diagnostic per process.
-#   _UNLEASHED_BASE_PID       the pid of the process that resolved — THE once-per-process key.
+#   _UNLEASHED_BASE_PID       the pid of the process that resolved — half of the once-per-process key;
+#                             the other half is the FUNCTION `_unleashed_resolved_in_process`, defined
+#                             at resolution time and never at definition time. `exec` keeps `$$` and
+#                             an `allexport` wrapper carries every variable across it, so a hook exec'd
+#                             after such a wrapper inherited a matching PID and the wrapper's stale base
+#                             (codex, PR #67 pass 11 — reproduced); functions do not cross exec, so the
+#                             marker function is what a fresh shell instance cannot have inherited.
 # NOTHING HERE IS KEYED ON A BARE FLAG, because a flag is inheritable and a function is not (codex,
 # PR #67 pass 7 — each of these was reproduced): a child process that inherited
 # `_UNLEASHED_BASE_OK=1` alone skipped resolution and `marker_dir` returned `/.state` — the ROOT
@@ -65,9 +71,31 @@
 # The poisoned sentinel. Literal, fixed and greppable — tests assert on this exact string.
 _UNLEASHED_BASE_SENTINEL='/dev/null/unresolved-plugin-base'
 
-# Idempotent: these libs are frequently sourced more than once in a single shell. Keyed on a
-# FUNCTION this file defines, not on a flag (see the protocol note above).
-if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
+# THE INSTANCE CHECK — once per sourcing, before anything trusts a resolution it may have inherited.
+# `exec` keeps `$$`, an `allexport` wrapper carries every variable across it, and in bash `set -a`
+# carries every FUNCTION too — so after such a wrapper the exec'd hook held a matching pid, the marker
+# function, and the wrapper's stale base (codex, PR #67 pass 11 — reproduced). What NO environment
+# carries is a variable's READONLY attribute: `declare -p` / `typeset -p` show `-r` only in the shell
+# instance that set it (measured: `declare -rx` becomes `declare -x` across exec in bash, `export -r`
+# becomes `export` in zsh; a subshell keeps it). Resolution sets `readonly _UNLEASHED_BASE_INSTANCE`;
+# a value present WITHOUT the attribute is inherited, and the inherited resolution is discarded here.
+# One `declare -p` capture per SOURCING — the per-call guard below stays fork-free.
+if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+    case "$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )" in
+        "declare -"*r*" _UNLEASHED_BASE_INSTANCE="*|"typeset -"*r*" _UNLEASHED_BASE_INSTANCE="*|"export -"*r*" _UNLEASHED_BASE_INSTANCE="*|"readonly "*) : ;;
+        *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;
+    esac
+fi
+
+# Idempotent: these libs are frequently sourced more than once in a single shell. Keyed on the
+# COMPLETE resolver API being present, not on a flag and not on ONE function: bash `export -f` carries a
+# single function through the environment, and a guard on that one function skipped this whole block
+# in a shell where `unleashed_plugin_base` and `unleashed_base_ok` were undefined (codex, PR #67 pass
+# 11). If any of the six is missing the block runs and (re)defines them all — an imported copy of the
+# library's own function is replaced by the library's own definition, never trusted.
+if ! { command -v unleashed_resolve_base >/dev/null 2>&1 && command -v unleashed_plugin_base >/dev/null 2>&1 \
+    && command -v unleashed_base_ok >/dev/null 2>&1 && command -v _unleashed_load_state_machinery >/dev/null 2>&1 \
+    && command -v _unleashed_home_ok >/dev/null 2>&1 && command -v unleashed_plugin_legacy_base >/dev/null 2>&1; }; then
 
     # The pre-2617 expansion. Kept ONLY so the drift matrix can assert the legacy behaviour it
     # documents; no primitive calls it.
@@ -127,7 +155,8 @@ if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
 
     # Eager, source-time resolution. Sets the four protocol variables exactly once per process.
     unleashed_resolve_base() {
-        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && return 0   # already resolved in THIS process
+        # already resolved in THIS shell instance: same pid AND the marker function this instance defined
+        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && command -v _unleashed_resolved_in_process >/dev/null 2>&1 && return 0
         _UNLEASHED_BASE_DIAGNOSED=                           # the entry point resets what it caches on
         if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
             # Step 1 — the variable wins, and it is the ONLY branch from which a publish is
@@ -170,6 +199,8 @@ if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
             fi
         fi
         _UNLEASHED_BASE_PID=$$
+        _unleashed_resolved_in_process() { :; }             # the marker a fork/subshell keeps and exec drops
+        readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null     # the attribute NO environment carries (see top)
         return 0
     }
 
@@ -184,5 +215,8 @@ if ! command -v unleashed_resolve_base >/dev/null 2>&1; then
         [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]
     }
 
-    unleashed_resolve_base        # EAGER — at source time, in the sourcing shell.
 fi
+# EAGER — at source time, in the sourcing shell — and OUTSIDE the definition block, so a shell whose
+# functions arrived through the environment (bash `set -a` + exec) still resolves afresh here after
+# the instance check above discarded the inherited resolution. Fork-free when already resolved.
+unleashed_resolve_base

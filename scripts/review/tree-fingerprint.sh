@@ -101,13 +101,19 @@ _tracked_content_fingerprint() {
     python3 - "$1" <<'PY' || return 1
 import hashlib, json, os, stat, subprocess, sys
 root = sys.argv[1]
+# THE UNION of index-tracked and HEAD-tracked paths: `ls-files` derives membership from the mutable
+# INDEX, so a path staged for deletion (`git rm --cached`) and ignored was omitted while status stayed
+# `D  path` before and after a reviewer rewrote its working-tree file (codex, PR #67 pass 11 —
+# reproduced). HEAD's tree cannot be edited without moving HEAD, which the first line records.
 r = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True)
 if r.returncode != 0:
     sys.exit(1)
+names = set(x for x in r.stdout.split(b"\0") if x)
+r2 = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
+if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure
+    names.update(x for x in r2.stdout.split(b"\0") if x)
 out = []
-for raw in r.stdout.split(b"\0"):
-    if not raw:
-        continue
+for raw in sorted(names):
     rel = os.fsdecode(raw)
     full = os.path.join(root, rel)
     try:
