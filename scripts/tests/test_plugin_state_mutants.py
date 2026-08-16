@@ -387,12 +387,30 @@ class RowsChunk1(unittest.TestCase):
         # ACL-5/PUB-11: the enumerator is chosen by `uname -s` and invoked by ABSOLUTE PATH. The
         # mutant selects it through `command -v`, so a PATH entry decides which tool answers — a
         # publisher and a reader running under different PATHs then disagree about one machine.
-        mutant = with_mutation(
-            '_u_acl_enumerate() {\n    /bin/ls -lde -- "$1" 2>/dev/null\n}\n',
-            '_u_acl_enumerate() {\n'
+        #
+        # THE MUTATION COVERS BOTH SPELLINGS OF THE ENUMERATOR, and it must. PF-1 added a second one:
+        # `_u_chain_prefetch` runs `/bin/ls -lde -d` over the whole chain and `_u_acl_enumerate`
+        # serves that answer from the cache. Mutating only the per-path spelling left the batch on
+        # `/bin/ls`, every component hit the cache, `getfacl` was never reached and the two builds
+        # AGREED — a row that had stopped discriminating while still passing its own anchor check.
+        # So the PATH-selected enumerator is planted at both sites. With the fake `getfacl` on PATH
+        # the batch answers `garbage`, which names no component, so the ACL cache is discarded and
+        # every component falls through to the per-path mutant — which is the machine the row is
+        # about.
+        m1 = with_mutation(
+            '    /bin/ls -lde -- "$1" 2>/dev/null\n}\n',
             '    if command -v getfacl >/dev/null 2>&1; then getfacl -- "$1" 2>/dev/null; '
             'else /bin/ls -lde -- "$1" 2>/dev/null; fi\n}\n',
             path=AUTH)
+        mutant = with_mutation(
+            '    _u_cp_ls="$(/bin/ls -lde -d -- "$@" 2>/dev/null)" || _u_cp_ls=""\n',
+            '    if command -v getfacl >/dev/null 2>&1; then\n'
+            '        _u_cp_ls="$(getfacl -- "$@" 2>/dev/null)" || _u_cp_ls=""\n'
+            '    else\n'
+            '        _u_cp_ls="$(/bin/ls -lde -d -- "$@" 2>/dev/null)" || _u_cp_ls=""\n'
+            '    fi\n',
+            path=m1)
+        os.unlink(m1)
         fakebin = os.path.join(self.home, "fakebin")
         os.makedirs(fakebin)
         fake = os.path.join(fakebin, "getfacl")
@@ -2347,10 +2365,22 @@ class RowsChunk3(unittest.TestCase):
         # The bash arm's parse is two lines since `%i`/`_U_INO` joined the record (PR #67 pass 11);
         # the scratch is renamed on BOTH, sliced from the CURRENT file so a field added to the
         # record cannot strand the row on a stale spelling (it did, once).
+        # PF-1 CHANGED WHEN THAT ARM IS REACHED, not whether the collision would bite. The prefetch
+        # serves the walk's `_u_stat` calls from `_U_STAT_CACHE`, so on a chain the batch can
+        # describe, NEITHER arm's per-path parse runs mid-walk and the collision has nothing to
+        # overwrite — measured: with only the rename below, both mutant arms RESOLVED and this row
+        # stopped discriminating while still passing its own anchor check. The mutant therefore also
+        # turns the prefetch off, which is the condition under which the per-path parse is reached
+        # (an unbatchable component, a `stat` that could not answer). That second mutation is
+        # SHELL-AGNOSTIC — one call site, no arm mentions it — so the arm divergence the assertions
+        # below demand can still only come from the collision, and the oracle is unchanged: the two
+        # MUTANT ARMS are compared to each other, never to a constant.
         parse = self._slice_lines(AUTH, '        _u_st_rest="${_u_st_raw#* }"; _U_SIZE="${_u_st_rest%% *}"\n',
                                   '_U_INO="${_u_st_rest##* }"\n')
         self.assertEqual(2, parse.count("\n"), parse)
-        mutant = with_mutation(parse, parse.replace("_u_st_rest", "_u_ac_rest"), path=AUTH)
+        m1 = with_mutation(parse, parse.replace("_u_st_rest", "_u_ac_rest"), path=AUTH)
+        mutant = with_mutation('    _u_chain_prefetch "$1"\n', '    :\n', path=m1)
+        os.unlink(m1)
         try:
             self._fresh_store()
             self._write_entry(self.target)

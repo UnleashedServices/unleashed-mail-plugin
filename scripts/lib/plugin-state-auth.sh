@@ -10,6 +10,104 @@
 #
 # Every scratch variable carries its function's prefix (FAM-5); see plugin-state-store.sh for why.
 
+# ── PF-1 — the per-chain PREFETCH CACHE: the same calls, without the forks ────────────────────────
+# `_unleashed_auth_chain` learns about a component through exactly TWO accessors, and each of them
+# FORKS: `_u_stat` runs `/usr/bin/stat` and `_u_acl_enumerate` runs `/bin/ls -lde`. A nine-component
+# store chain is therefore eighteen processes, and a reader walks THREE chains per resolution — a
+# reader authenticates 24 components and a publish 45. Measured on this machine (medians of 20
+# INTERLEAVED runs of `. scripts/lib/marker.sh` under a scratch HOME — the two builds alternate, so
+# machine drift lands on both — bash 3.2.57 / zsh 5.9), before this change and after it:
+#     no store, nothing to authenticate ....   8.1 /  8.3 ms bash,   9.1 /  9.1 ms zsh   (the floor)
+#     store present, reader path .......... 246.8 /139.7 ms bash,  144.1 /105.5 ms zsh   1.77x / 1.37x
+#     publish, entry already current ...... 685.3 /353.8 ms bash,  371.0 /256.9 ms zsh   1.94x / 1.44x
+# It is NOT the 5-10x the fork count suggests, and the reason is MEASURED rather than argued: with
+# `_u_acl_ok`'s body replaced by `return 0` — every enumeration, every parse and both of its
+# subshells gone — the bash reader still costs 74.5 ms against this build's 132.6 ms in the same
+# regime, so what is left is not `stat` and `ls`. It is `_u_acl_ok`'s own shape: a command
+# substitution and a pipeline, two SUBSHELL forks per component (measured at 0.69 ms and 1.09 ms in
+# bash 3.2 with builtins on both ends), and neither can go without changing `_u_acl_answer_ok`'s
+# stdin contract, which is out of this change's scope.
+#
+# What is removed is the FORK, never the CALL. `_u_chain_prefetch` runs ONE `/usr/bin/stat` and ONE
+# `/bin/ls -lde -d` over every component of the chain that is about to be walked and parses both into
+# two caches; each accessor consults its cache FIRST and, on a miss for ANY reason whatsoever, runs
+# exactly the command it runs today. Three properties are load-bearing, and each is a property of
+# WHERE the lookup sits rather than a claim about this implementation:
+#   * THE ACCESSORS REMAIN THE SEAMS. §7 step 3f(iii)/(iv) present a fixture by REDEFINING `_u_stat`
+#     or `_u_acl_enumerate`, and a redefinition replaces the very body the cache lookup lives in — so
+#     a fixture still decides the predicate completely and the prefetched record is simply never read.
+#   * THE CALL COUNT IS UNCHANGED. Every obligation that counts calls to either accessor counts the
+#     same number after this change; only what happens inside the accessor differs.
+#   * A MISS IS THE SHIPPED CODE PATH, byte for byte. Every guard below therefore fails onto
+#     CORRECTNESS rather than onto speed: a component the batch could not describe is fetched exactly
+#     as it was before, one fork at a time.
+#
+# THE CACHE IS PER CHAIN — not per process, and not per resolution. `_u_chain_prefetch` rebuilds both
+# caches from empty every time it runs, and `_u_probes_reset` clears them at each resolution entry
+# point for the same reason the principal/platform/euid caches are cleared there: these libraries are
+# SOURCED into a consumer's shell, so a caller can pre-set ANY variable, and a cache a caller can seed
+# is not a cache. Between the two, a cached record can only ever have been written by the prefetch of
+# the chain being walked right now.
+#
+# WHY NO `_u_stat` OUTSIDE A WALK CAN COLLIDE WITH A STALE RECORD. Every path a prefetch caches is a
+# component of a chain, and every chain's terminal component is `-d`-tested by its caller before
+# `_unleashed_auth_chain` is entered (`_unleashed_nearest_existing`, the three `[ -d ]` guards in
+# `_unleashed_create_store`, `_unleashed_store_ok`, `_unleashed_auth_entry`'s TGT-1 clause and the
+# publisher's E2 clause), and an interior component must be a directory to have children. The
+# `_u_stat` calls that happen OUTSIDE a walk are all on REGULAR FILES — the entry (`[ -f ]` first),
+# its ENT-2c re-test, `/dev/fd/9`, and the publisher's transient — so none of them can name a cached
+# path, and each one still forks exactly as it does today.
+# BOTH CACHES CARRY THE SAME FRAMING, and it is not `<path><TAB><fields>`: a record keyed by a
+# leading path is claimed by a PREFIX test, and a prefix test cannot be made exact when one key may
+# be an ancestor of another. The framing is instead
+#
+#     <NL> <RS> <path> <NL> <payload line> <NL> [<payload line> <NL>]...
+#
+# repeated, with a leading <NL> so that EVERY header is preceded by one, <RS> = `\001`. A lookup is
+# then the three parameter expansions in the getters below and it is EXACT, because:
+#   * <RS> occurs in the cache ONLY at the start of a header. A component containing `\001` or a
+#     newline abandons the batch entirely (see `_u_chain_prefetch`), the stat payload is four numeric
+#     fields, and no line `/bin/ls -lde` prints can begin with `\001` — its first line begins with
+#     `ls -l`'s TYPE character and every later line with a space.
+#   * `<NL><RS><path><NL>` therefore occurs iff a header for EXACTLY that path was written, so the
+#     match is on the whole path between two delimiters, never on a prefix or a suffix of one.
+#   * components are distinct strings, so distinct headers.
+# The separators are ANSI-C literals rather than a `printf -v` because a literal is a constant and a
+# builtin call is not — NOT because the builtin was slow: measured over 4000 calls in bash 3.2, the
+# `printf -v` form cost 0.0114 ms against 0.0102 ms for these literals and a 0.0089 ms empty-function
+# floor, which is 0.0012 ms and is not a reason for anything. `$'\001'` is understood by both target
+# shells (measured: length 1 in bash 3.2.57 and zsh 5.9).
+# THEY ARE SET UNCONDITIONALLY, every call. A "already derived" flag, or trusting a value that is
+# already there, would put the cache's framing under a caller's control — the same defect that a
+# pre-set `_U_PRINCIPAL_PROBED` was.
+_u_pf_sep() {
+    _u_pf_nl='
+'
+    _u_pf_rs=$'\001'
+}
+
+# A `_U_STAT_CACHE` hit. The payload is `<mode> <size> <uid> <ino>`, in `_u_stat`'s own order, with
+# the mode ALREADY reduced to its last four octal digits by the prefetch — which is exactly what
+# `_u_stat`'s bash arm computes and exactly what the zsh arm's `%04o` of `mode & 4095` produces
+# (measured: `40755` -> both give `0755`; `104600` -> both give `4600`). A hit therefore answers
+# IDENTICALLY in both shells, which is why the lookup sits inside both arms rather than in front of
+# them, and why the reduction is done once at prefetch rather than once per lookup.
+_u_stat_cache_get() {
+    [ -n "${_U_STAT_CACHE:-}" ] || return 1
+    _u_pf_sep
+    _u_sg_h="$_u_pf_nl$_u_pf_rs$1$_u_pf_nl"
+    # A MISS IS "THE PREFIX STRIP CHANGED NOTHING", not a separate `case` search: `${v#*h}` returns
+    # `v` unchanged exactly when `h` does not occur, and a hit always removes at least the header, so
+    # the equality test is exact and the ~1 KB cache is scanned once instead of twice.
+    _u_sg_v="${_U_STAT_CACHE#*"$_u_sg_h"}"
+    [ "$_u_sg_v" = "$_U_STAT_CACHE" ] && return 1
+    _u_sg_v="${_u_sg_v%%"$_u_pf_nl"*}"
+    _U_MODE="${_u_sg_v%% *}"; _u_sg_v="${_u_sg_v#* }"
+    _U_SIZE="${_u_sg_v%% *}"; _u_sg_v="${_u_sg_v#* }"
+    _U_UID="${_u_sg_v%% *}"; _U_INO="${_u_sg_v##* }"
+    return 0
+}
+
 # ── P-2 — mode, size AND owning uid, in ONE lstat call per component ──────────────────────────────
 # -> _U_MODE (four octal digits, TWELVE bits), _U_SIZE, _U_UID. Non-zero if the path does not exist.
 #
@@ -21,6 +119,12 @@
 # without -L fails outright. `/usr/bin/stat` is lstat by default; `zstat` follows by default.
 _u_stat() {
     if [ -n "${ZSH_VERSION:-}" ]; then
+        # PF-1 — the prefetched record first, and the SAME record in both arms. The lookup is written
+        # once per arm rather than once in front of them so that the two arms stay textually
+        # symmetric: an arm that could reach the fork without consulting the cache, or consult a
+        # cache the other arm does not, is exactly the FAM-5 class of divergence no single-arm test
+        # can see. On a miss the arm below runs unchanged.
+        _u_stat_cache_get "$1" && return 0
         zmodload zsh/stat 2>/dev/null
         # `zstat -H _u_h` populates the associative array `_u_h`; shellcheck models bash and cannot
         # see that assignment, so SC2154 here is a false positive about a zsh builtin.
@@ -29,6 +133,7 @@ _u_stat() {
         printf -v _U_MODE "%04o" $(( ${_u_h[mode]} & 4095 ))
         _U_SIZE=${_u_h[size]}; _U_UID=${_u_h[uid]}; _U_INO=${_u_h[inode]}
     else
+        _u_stat_cache_get "$1" && return 0                  # PF-1, the same lookup as the zsh arm
         # Darwin: `%p` is the full mode; the twelve bits are its LAST FOUR octal digits. `%i` is the
         # inode — ENT-2b binds the OPENED object to it (measured: /dev/fd/N reports the open object's
         # inode, size and uid, but its mode as the open flags and its device as fdesc's).
@@ -111,6 +216,14 @@ _u_identity_uuid_probe() {
 _u_probes_reset() {
     unset _U_PRINCIPAL _U_PRINCIPAL_UUID _U_PRINCIPAL_PROBED _U_PLATFORM _U_PLATFORM_PROBED _U_PLATFORM_RC
     unset _U_EUID _U_EUID_PROBED
+    # PF-1's two prefetch caches, for EXACTLY the reason above and no other: `_U_STAT_CACHE` and
+    # `_U_ACL_CACHE` are ordinary variables in a sourced library, so a caller can arrive holding a
+    # record that says a component is 0700 and euid-owned, or an ACL answer with no foreign ACE in
+    # it. Cleared here, a caller's record is discarded before any accessor can consult it; rebuilt
+    # from empty by `_u_chain_prefetch`, it can only ever describe the chain being walked now. This
+    # is the principal/platform/euid rule applied to the two caches that answer FOR a component
+    # rather than about the process.
+    unset _U_STAT_CACHE _U_ACL_CACHE
 }
 
 _u_principal() {
@@ -262,13 +375,155 @@ _u_acl_check_ace() {
 # `/bin/ls -lde` cannot emit a duplicate verb, an empty rights field, a non-decimal index or a second
 # stat line, so without it those rows could be unit-tested as strings but never produce a
 # store-level outcome through the production resolver.
+#
+# PF-1 — the prefetched answer is consulted HERE, inside the seam, and never in `_u_acl_ok`. That
+# placement is the whole safety argument: a fixture presents its answer by REDEFINING this function,
+# which removes the lookup along with the fork, so a fixture's answer is still the only answer the
+# predicate can see. A lookup in `_u_acl_ok` would have served a cached `/bin/ls` answer PAST a
+# fixture and silently disarmed every enumerator-output obligation.
+_u_acl_cache_get() {
+    [ -n "${_U_ACL_CACHE:-}" ] || return 1
+    _u_pf_sep
+    _u_ag_h="$_u_pf_nl$_u_pf_rs$1$_u_pf_nl"
+    _u_ag_out="${_U_ACL_CACHE#*"$_u_ag_h"}"             # everything after this component's header
+    [ "$_u_ag_out" = "$_U_ACL_CACHE" ] && return 1      # unchanged == the header is not there
+    case "$_u_ag_out" in *"$_u_pf_rs"*) _u_ag_out="${_u_ag_out%%"$_u_pf_rs"*}" ;; esac   # to the next
+    printf '%s' "$_u_ag_out"
+    return 0
+}
+
 _u_acl_enumerate() {
+    _u_acl_cache_get "$1" && return 0
     /bin/ls -lde -- "$1" 2>/dev/null
 }
 
 _u_acl_ok() {
     _u_acl_out="$(_u_acl_enumerate "$1")" || return 1   # a failed enumerator REFUSES
     printf '%s\n' "$_u_acl_out" | _u_acl_answer_ok
+}
+
+# ── PF-1 — ONE lstat and ONE enumeration for the whole chain ──────────────────────────────────────
+# $1 = the chain the walk is about to make. Fills `_U_STAT_CACHE` and `_U_ACL_CACHE`, or leaves either
+# EMPTY — which is not a failure and is never reported as one, because an empty cache is a total miss
+# and a total miss is the shipped per-component behaviour. This function returns 0 always: it decides
+# nothing, and a prefetch that decided anything would be a second predicate, which AUTH-1 forbids.
+#
+# ACL-6 still holds: `stat` and `ls` create no file and no byte anywhere.
+_u_chain_prefetch() {
+    _U_STAT_CACHE=""; _U_ACL_CACHE=""          # ONE chain at a time; never accumulated across walks
+    _u_pf_sep
+    _u_cp_path="$1"
+
+    # (1) THE COMPONENT LIST, derived by the SAME loop the walk below uses — the `//` collapse, the
+    # `${acc:-/}` root and the trailing-slash handling are copied clause for clause, because a list
+    # that differed from the walk's would prefetch one path and answer for another. The positional
+    # parameters carry it: they are the one list structure bash 3.2 and zsh index identically, and
+    # `set --` here rebinds only THIS function's own arguments.
+    set --
+    _u_cp_acc=""; _u_cp_rest="$_u_cp_path"
+    while :; do
+        case "$_u_cp_rest" in //*) _u_cp_rest="/${_u_cp_rest#//}"; continue ;; esac
+        _u_cp_c="${_u_cp_acc:-/}"
+        # UNFRAMEABLE COMPONENTS ABANDON THE WHOLE BATCH, both halves of it. A newline in a component
+        # would split one `stat` record or one `ls` block into two and let a record answer for a path
+        # that is not its own; `\001` would collide with the ACL cache's header framing. Neither is
+        # worth a special case: the walk then runs exactly as it ran before this change.
+        case "$_u_cp_c" in
+            *"$_u_pf_nl"*|*"$_u_pf_rs"*) return 0 ;;
+        esac
+        set -- "$@" "$_u_cp_c"
+        [ -n "$_u_cp_rest" ] || break
+        _u_cp_rest="${_u_cp_rest#/}"
+        [ -n "$_u_cp_rest" ] || break
+        _u_cp_seg="${_u_cp_rest%%/*}"; _u_cp_acc="$_u_cp_acc/$_u_cp_seg"
+        case "$_u_cp_rest" in *"/"*) _u_cp_rest="/${_u_cp_rest#*/}" ;; *) _u_cp_rest="" ;; esac
+    done
+    [ "$#" -gt 0 ] || return 0
+
+    # (2) ONE lstat over every component. `/usr/bin/stat` is lstat by default, which is the property
+    # `_u_stat`'s own bash arm depends on, and the same absolute path is used for the same reason.
+    # A PARTIAL answer is KEPT: `stat` exits non-zero when an operand is missing but still prints a
+    # correct line for every operand that is not, and a record is only ever found by its own path, so
+    # a component absent from the output simply misses and is fetched per-path exactly as before.
+    # THE NAME IS THE REMAINDER, NOT A FIELD: `%N` is placed last precisely because a path may
+    # contain spaces and the four fields before it may not, so the line is split on the first four
+    # spaces and everything after them is the path, verbatim as the operand was given.
+    _u_cp_st="$(/usr/bin/stat -f '%p %z %u %i %N' -- "$@" 2>/dev/null)" || :
+    _u_cp_out=""
+    _u_cp_rest="$_u_cp_st"
+    while [ -n "$_u_cp_rest" ]; do
+        case "$_u_cp_rest" in
+            *"$_u_pf_nl"*) _u_cp_line="${_u_cp_rest%%"$_u_pf_nl"*}"; _u_cp_rest="${_u_cp_rest#*"$_u_pf_nl"}" ;;
+            *)             _u_cp_line="$_u_cp_rest"; _u_cp_rest="" ;;
+        esac
+        _u_cp_f="$_u_cp_line"; _u_cp_bad=0
+        _u_cp_m="${_u_cp_f%% *}"; case "$_u_cp_f" in *" "*) _u_cp_f="${_u_cp_f#* }" ;; *) _u_cp_bad=1 ;; esac
+        _u_cp_z="${_u_cp_f%% *}"; case "$_u_cp_f" in *" "*) _u_cp_f="${_u_cp_f#* }" ;; *) _u_cp_bad=1 ;; esac
+        _u_cp_u="${_u_cp_f%% *}"; case "$_u_cp_f" in *" "*) _u_cp_f="${_u_cp_f#* }" ;; *) _u_cp_bad=1 ;; esac
+        _u_cp_i="${_u_cp_f%% *}"; case "$_u_cp_f" in *" "*) _u_cp_f="${_u_cp_f#* }" ;; *) _u_cp_bad=1 ;; esac
+        [ "$_u_cp_bad" = 0 ] || continue                # a line with fewer than five fields is dropped
+        [ -n "$_u_cp_f" ] || continue
+        # The TWELVE bits, as `_u_stat`'s bash arm takes them: the last four octal digits of `%p`.
+        # `#?` removes one CHARACTER in both shells, where `${v: -4}` is the bash arm's spelling and
+        # this record is served to both.
+        while [ "${#_u_cp_m}" -gt 4 ]; do _u_cp_m="${_u_cp_m#?}"; done
+        _u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$_u_cp_f$_u_pf_nl$_u_cp_m $_u_cp_z $_u_cp_u $_u_cp_i$_u_pf_nl"
+    done
+    _U_STAT_CACHE="$_u_cp_out"
+
+    # (3) ONE enumeration over every component, mapped back to the components by the path each block
+    # names. UNLIKE the stat batch this is ALL-OR-NOTHING: a non-zero exit, a block whose path
+    # matches no component (a symbolic link renders as `<path> -> <target>` and matches none), a
+    # component claimed twice, or any component with no block at all discards the WHOLE cache and
+    # every component is enumerated singly, exactly as before. Correctness first, speed second.
+    #
+    # A BATCHED BLOCK IS NOT BYTE-IDENTICAL to a single-operand one — `ls` sizes its columns to the
+    # widest operand, so the link-count field is padded differently — and that is immaterial, which
+    # was MEASURED rather than assumed: over five ACL shapes (no ACL, a read-only foreign ACE, a
+    # mutating foreign ACE, an own-user ACE, thirteen stacked ACEs) in both shells, the cached block
+    # and the freshly forked one differ only in runs of spaces and `_u_acl_answer_ok` returns the
+    # SAME status for both, rc=2 included. Nothing downstream reads a column: `_u_acl_answer_ok`
+    # recognises the first line by the mode field at its start and every later line by its leading
+    # space, and `_u_ace` splits fields on runs of spaces.
+    _u_cp_ls="$(/bin/ls -lde -d -- "$@" 2>/dev/null)" || _u_cp_ls=""
+    [ -n "$_u_cp_ls" ] || return 0
+    _u_cp_out=""; _u_cp_claim=""; _u_cp_have=0; _u_cp_cur=""; _u_cp_ok=1
+    _u_cp_rest="$_u_cp_ls"
+    while [ -n "$_u_cp_rest" ]; do
+        case "$_u_cp_rest" in
+            *"$_u_pf_nl"*) _u_cp_line="${_u_cp_rest%%"$_u_pf_nl"*}"; _u_cp_rest="${_u_cp_rest#*"$_u_pf_nl"}" ;;
+            *)             _u_cp_line="$_u_cp_rest"; _u_cp_rest="" ;;
+        esac
+        case "$_u_cp_line" in
+            ' '*|'')                                    # an ACE line, or a blank: same block
+                [ -n "$_u_cp_cur" ] || { _u_cp_ok=0; break; }
+                _u_cp_out="$_u_cp_out$_u_cp_line$_u_pf_nl" ;;
+            *)                                          # a stat line: a new block, and whose?
+                # The component the line NAMES. `ls` sorts its operands, so position proves nothing;
+                # the LAST match wins because the component list is in walk order and a chain's
+                # components strictly increase in length, so "last" is "longest". Even a mismatch
+                # that survived the claim test below could not change a verdict: `_u_acl_ok` is a
+                # predicate on the ANSWER alone and the walk accepts iff EVERY component's answer
+                # passes, so permuting answers among one chain's components preserves that
+                # conjunction exactly. The claim test is kept anyway — a mis-assignment is a fact
+                # about the batch, and a batch that cannot be trusted is not used.
+                _u_cp_cur=""
+                for _u_cp_k in "$@"; do
+                    case "$_u_cp_line" in *" $_u_cp_k") _u_cp_cur="$_u_cp_k" ;; esac
+                done
+                [ -n "$_u_cp_cur" ] || { _u_cp_ok=0; break; }
+                case "$_u_cp_claim" in
+                    *"$_u_pf_rs$_u_cp_cur$_u_pf_rs"*) _u_cp_ok=0; break ;;
+                esac
+                _u_cp_claim="$_u_cp_claim$_u_pf_rs$_u_cp_cur$_u_pf_rs"
+                _u_cp_have=$(( _u_cp_have + 1 ))
+                _u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$_u_cp_cur$_u_pf_nl$_u_cp_line$_u_pf_nl" ;;
+        esac
+    done
+    if [ "$_u_cp_ok" = 1 ] && [ "$_u_cp_have" = "$#" ]; then
+        _U_ACL_CACHE="$_u_cp_out"
+    fi
+    return 0
 }
 
 # ── PCH-1 + ANCHOR-1 — one walk, both chains ──────────────────────────────────────────────────────
@@ -294,6 +549,12 @@ _unleashed_auth_chain() {
     # `_u_principal` decides for itself whether it is cached (on ITS OWN flag); a presence test on
     # the variable here would re-open the pre-set-value bypass that codex found (PR #67, #5).
     _u_principal || return 1
+    # PF-1 — one lstat and one enumeration for the whole chain, taken before the walk reads its first
+    # component. It sits BELOW the platform gate, not above it, because both batch programs are the
+    # DARWIN arm's: on a platform this build refuses there is nothing to prefetch and this line has
+    # forked nothing. It cannot refuse and cannot accept; the walk below is unchanged and still asks
+    # the same two accessors about every component in the same order.
+    _u_chain_prefetch "$1"
 
     _u_ac_in_prefix=1                  # ANCHOR-1: we begin inside the SYSTEM PREFIX run
     _u_ac_acc=""; _u_ac_rest="$1"
