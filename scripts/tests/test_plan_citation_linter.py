@@ -124,3 +124,51 @@ class OneNegationExemptsOneReference(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+def _load_linter():
+    """The validator is a script, not a module — load it by path so the predicate can be exercised
+    directly. Everything else in this file drives it as a subprocess; these four cells are about one
+    regex's SCOPE, which a subprocess cannot show."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "unleashed_plan_citations", os.path.join(REPO, "scripts", "validate-plan-citations.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class PreNegationSeesOnlyWhatItsSliceContains(unittest.TestCase):
+    """codex, PR #67 pass 18 — `_PRE_NEGATION` was written as `no §`, but `_sentence_around` ends the
+    pre-slice AT the citation, so the slice never contains the `§`: the one form that alternative
+    existed for (`cites no §9.9z of …`) could not match it, the reference was treated as live, and the
+    CI plan gate failed on a valid document. Reproduced at the function level before the fix —
+    pre=`'The design cites no '`, post=`' of the journal plan …'`, neither matching.
+
+    The four cells below are the whole predicate: the two that MUST exempt, and the two that must NOT,
+    because a negation matcher that exempts too much silently stops checking live citations. The
+    anchoring to the slice's end is what the fourth cell holds — an unrelated `no` earlier in the
+    sentence must not exempt the citation that follows it.
+    """
+
+    def _exempt(self, sentence):
+        start = sentence.index("\u00a79.9z")
+        end = start + len("\u00a79.9z")
+        lint = _load_linter()
+        post, pre = lint._sentence_around(sentence, start, end, [])
+        return bool(lint._PRE_NEGATION.search(pre) or lint._POST_NEGATION.search(post))
+
+    def test_a_citation_negated_only_by_a_preceding_no_is_exempt(self):
+        self.assertTrue(self._exempt("The design cites no \u00a79.9z of the journal plan as authority."),
+                        "the form the `no \u00a7` alternative was written for is still not exempt")
+
+    def test_there_is_no_remains_exempt(self):
+        self.assertTrue(self._exempt("There is no \u00a79.9z in that document."))
+
+    def test_a_live_citation_is_still_checked(self):
+        self.assertFalse(self._exempt("See \u00a79.9z for the encoder rule."),
+                         "a live citation was exempted — the linter would stop checking it")
+
+    def test_an_unrelated_no_earlier_in_the_sentence_does_not_exempt(self):
+        self.assertFalse(self._exempt("There are no fewer than three reasons; \u00a79.9z governs."),
+                         "an unrelated `no` exempted a live citation — the matcher is not anchored")
+

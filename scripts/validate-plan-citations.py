@@ -190,7 +190,13 @@ def _sentence_around(flat, start, end, other_spans=()):
 
 
 _POST_NEGATION = re.compile(r"does not exist|does NOT exist|lives only on|unmerged|zero hits|not exist in this tree|prospective")
-_PRE_NEGATION = re.compile(r"no §|there is\s+no|there was\s+no")
+# The pre-slice ENDS AT THE CITATION, so it never contains the `§` itself: written as `no §`, that
+# alternative could not match the one form it existed for — `cites no §9.9z of …` was rejected as a
+# real reference and the CI plan gate failed on a valid document (codex, PR #67 pass 18 —
+# reproduced at the function level: pre='…cites no ', post=' of the journal plan …', neither
+# matching). The negation word is what the slice can see, so that is what is matched, anchored to
+# the slice's end so an unrelated "no" earlier in the sentence does not exempt a live citation.
+_PRE_NEGATION = re.compile(r"(?:\bno|there is\s+no|there was\s+no)\s*$|there is\s+no|there was\s+no")
 
 
 def check_external(text, repo, problems, flat):
