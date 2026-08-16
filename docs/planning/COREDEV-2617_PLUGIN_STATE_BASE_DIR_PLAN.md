@@ -677,8 +677,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2426`) and its matrix change (`:2432-2436`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2459-2466`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2497`) and its matrix change (`:2503-2507`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2530-2537`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -969,7 +969,7 @@ material.
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2811`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2882`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1289,7 +1289,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2525`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2596`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1322,7 +1322,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2811`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2882`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1343,7 +1343,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2426`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2497`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1576,6 +1576,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 175 | **discard an inherited stamp with a bare `unset -f`** | zsh under `set -e` (and `setopt err_return`), with `_UNLEASHED_BASE_INSTANCE=1` carried in the environment and the marker function absent: the specification's `|| :` lets every copy source to completion and resolve; under the mutation `unset -f` returns 1 for the undefined function and the sourcing shell dies with nothing established. bash is unaffected (its `unset -f` returns 0) and must be shown so. *(PR #67, codex sweep after pass 14 — reproduced.)* |
 | 176 | **test the readonly attribute against the WHOLE `declare -p` line** | `_UNLEASHED_BASE_INSTANCE='r _UNLEASHED_BASE_INSTANCE='` in the environment of a child that sources a resolver copy with a genuine `CLAUDE_PLUGIN_DATA`: the specification strips everything from the first ` _UNLEASHED_BASE_INSTANCE` and reads only the flag letters, finds no `r`, discards the inherited value and re-resolves; under the mutation the attacker-supplied VALUE furnishes both the `r` and the name, the line matches and the inherited resolution is trusted. The control — a genuine in-process stamp honoured across three copies in one shell, `-r` present in both shells — must hold in both builds. *(PR #67, codex sweep after pass 14 — reproduced.)* |
 | 177 | **take the effective uid from `${EUID:-$(/usr/bin/id -u)}`** | bash 3.2 with `EUID=4242` in the environment (measured: bash IMPORTS it, zsh does not), a healthy euid-owned store and a publish: the specification probes `/usr/bin/id -u` through its own seam and publishes and reads normally; under the mutation every ownership clause compares against 4242 — the entry is `stale`, the publish `failed`, nothing is read or written. A failing seam must still refuse (fail-closed) in both builds. *(PR #67, codex sweep after pass 14 — reproduced.)* |
+| 178 | **treat an equal inode as proof that the entry pathname is still a bare file** | a `DEBUG`-trap fixture renames the validated entry aside and puts a symlink to it at `base.<key>` between ENT-1 and the open, on a healthy store: the specification re-tests the pathname after the read, refuses the link and reports `stale` with nothing resolved; under the mutation the descriptor's inode still matches, every other clause passes and the read is ACCEPTED (`ok=1`, `source=pointer`) while the store entry is a symlink ENT-1 forbids. A fresh untouched store resolves in both builds. *(PR #67, codex pass 15 — reproduced.)* |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1670,7 +1671,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2811` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2882` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1692,6 +1693,74 @@ assertion would contradict them — the draft's N6 clause did exactly that.
 > platform-independent gloss that disagrees with ACL-3 on Linux; the bridge reports `none` on the
 > RESOLVED path only, since arm equivalence requires identical states in every read cell; and the
 > `SessionStart` notice keys on the enum, never on a hook's own `_UNLEASHED_BASE_OK`.
+
+## 4.2a-T — Threat model (normative as to SCOPE)
+
+This section states what the plugin-state store defends, what it does not, and the rule by which a reported finding is triaged. It is normative **as to scope only**. It is not normative as to behaviour: §4.2a-S governs every rule about what the code does, and where this section and §4.2a-S appear to conflict, §4.2a-S governs and this section is explanatory.
+
+**TM-0 — What this section may not be used for.** This section may never be cited to excuse a defect an ordinary environment produces. TM-4 states that exclusion in terms, and it is stated first because the hazard of writing a threat model at round 124 is precisely that it becomes a reason to stop reading honest-run reports. The evidence for the hazard is on this ticket: 124 adversarial gate rounds did not find that the store is dead on the author's own machine, that a hook costs a full second, or that `set -f` empties the store scan. Every one of those was found by RUNNING the code. A scope statement narrows what counts as an attack; it does not narrow what counts as broken.
+
+### TM-1 — What the store defends
+
+The store defends exactly three things. Each is defended because a defence there is real and bounded, and each is pinned by a mutant row.
+
+**(a) Accidental inheritance.** A resolution belonging to some other process must never be adopted by this one. A stale `_UNLEASHED_BASE_*` set inherited across a fork, an `exec` that preserves `$$`, a wrapper that re-sources the family with a different value, or a second in-process load must all cause re-resolution rather than reuse. This is a correctness property before it is a security property — the honest agent-fence sequence (source `paths.sh`, then `agent-env-bridge.sh` with a different base) produced the wrong capture and roster state with no attacker present at all *(T49)* — and it is why the instance stamp, the pid check and the marker function exist. The stamp is checked by reading the shell's OWN declared flags and never the attacker-supplied value beside them; matching the whole `declare -p` line let a crafted value furnish both the `r` and the name *(PR #67 sweep pass 14, reproduced)*.
+
+**(b) A different uid on the store path.** The kernel enforces the uid boundary, so every clause that tests it buys something an adversary cannot argue away. AUTH-1's chain walk, ANCHOR-1's ownership rule, ST-3's exact 0700, ENT-1's exact 0600 and the ACL clauses ACL-1..ACL-5 exist for this and only this. The ACL clauses in particular are not decoration: on Darwin a `chmod +a` grant on a root-owned 0755 ancestor gives another uid write access while every mode bit still reads correct, so mode bits alone are not a uid boundary on this platform. **This is the one category where a new finding is worth the most, and no finding on this ticket has ever landed in it.**
+
+**(c) Fail-closed on a strange environment — visibly.** Where the store, an entry, an ancestor or a target is in any state these rules do not describe, the resolution is refused, nothing is written, nothing is repaired and nothing is deleted. Refusal is the correct direction and is not negotiable. **But fail-closed is only correct when the failure is VISIBLE, and a silent refusal is a defect of the same weight as a wrong resolution.** SS-1 is the mechanism: its six-value partition carries `conflict`, `stale` and `failed` to the user on every SessionStart source. Two open defects break exactly this clause — an inherited `noglob` makes a healthy store read as empty and takes RD-8 rule 4, whose `none` SS-1 is specified to stay silent on; and a store bricked by a dangling entry has no recovery a user can act on. Both fail closed, and both fail closed INVISIBLY, which this clause forbids.
+
+### TM-2 — What the store does not defend
+
+**The store does not defend against a process running as the same uid that can execute code inside the hook's own shell, and it does not defend against a same-uid process that can write files as the user.** This is a scope statement, not an aspiration deferred to a later round: it is unwinnable by construction, and the proof is `BASH_ENV`.
+
+`BASH_ENV` names a file that bash sources at the start of every non-interactive shell, **before the first line of any script or library runs** — `ZDOTDIR` gives zsh the same. A parent that can set it has arbitrary code execution in our shell before `paths.sh` is read, and can therefore satisfy any in-process guard we could write, including a genuine `declare -r` stamp with no pid prediction *(G2/G4, reproduced; both closed as residuals rather than fixed, correctly)*. No guard placed in a file that is sourced can precede code that runs before sourcing begins.
+
+The same premise makes the defence pointless as well as impossible. A process at this uid can already:
+
+- write `${HOME}/.claude/unleashed-mail/bases/` directly — the store is 0700 and owned by this uid, which is the property that makes it trustworthy against *other* uids and worthless against *this* one;
+- edit the plugin's own files in place, since the plugin is installed under the user's home;
+- simply perform whatever action the hook would have performed.
+
+An adversary who must be granted that premise gains nothing from defeating a resolver guard that they could not do more directly and more quietly. So findings of that shape are **recorded as residuals and closed**, not fixed. They are recorded rather than dismissed: §28 lists them one line each so they are stated rather than rediscovered, and a residual list is the deliverable this category produces.
+
+**Two consequences follow, and both are normative.** First, an in-process guard against a same-uid parent may not be added on the grounds that it "raises the bar", because it does not — it raises the reviewer's confidence without raising the attacker's cost, and this campaign has now spent four separate rounds re-fixing one such guard as each round's carrier was replaced by the next *(T08 → T13; T43 → T48 → T59; G1/G3/G6 are three statements of one live instance)*. Second, a guard that already exists for reason TM-1(a) is kept and maintained for THAT reason; it is not re-justified as a defence under TM-2 and its bypasses are not tracked as vulnerabilities.
+
+### TM-3 — Two things TM-2 does not say
+
+TM-2 does not say the same-uid boundary is unimportant; it says it is unenforceable **from inside a shell we did not start**. Enforcement that happens outside that shell is in scope and is not covered by this section — the 0700 store mode, the euid ownership clause and the chain walk are all still required, because they are what makes TM-1(b) true.
+
+TM-2 also does not extend to the CONSEQUENCE of a same-uid mechanism when that consequence is reachable without one. A finding whose premise is same-uid but whose failure mode also occurs in an ordinary environment is C1, and TM-4 governs it. This is not a theoretical carve-out: a `PATH` without `/usr/bin` broke the library loader on its own, with no imported functions and no hostile parent *(F15)*; a stale instance stamp arriving through an ordinary allexport wrapper killed the sourcing of all five copies under zsh `set -e` *(F10)*; an inherited `_UNLEASHED_STATE_LOADED` produced a `command not found` and four unset protocol variables *(T28)*. Each was filed with an adversarial framing and each decides as C1.
+
+### TM-4 — An honest-run defect is never in scope of TM-2
+
+**A defect that an ordinary, non-adversarial environment produces is in scope, is a release blocker if it refuses a healthy store or silently writes nothing, and may not be closed by citing TM-2 — whatever framing the reporter chose.** "Ordinary" means ordinary for this plugin's deployment, not "default": each of the following is ordinary, and each has produced a shipped C1 on this ticket.
+
+| Ordinary condition | What it produced |
+|---|---|
+| A UTF-8 locale and a non-ASCII path | the publisher's own fresh entry failed its own entry check; every reader `stale` *(T04)* |
+| An exported `EUID` under bash 3.2 | a healthy store read `stale` in bash and resolved in zsh *(F14)* |
+| A `PATH` without `/usr/bin` | the loader could not find libraries sitting beside it; healthy store → D′ sentinel *(F15)* |
+| `set -euf` / `setopt noglob` in a caller | the store scan glob stays literal; healthy store reads as empty; SS-1 silent *(F17/G8, OPEN)* |
+| `set -e` in a sourcing script | `readonly` re-assignment and a bare status capture each exited the sourcing shell *(T60, T30)* |
+| Two hooks publishing the same base | 27 of 64 concurrent publishers reported `stale`; user-facing failure diagnostic *(OPEN)* |
+| An absent `HOME` under zsh | zsh substitutes the passwd `HOME`; PUB-9 E1 unreachable; a store written under a home the environment never named *(OPEN)* |
+| A case-insensitive volume, a `..` or `//` segment | two entries for one directory; permanent `conflict` *(ENC-4 declares two carriers; OPEN for the rest)* |
+| A removed or relocated plugin-data directory | a permanent tombstone; every reader `stale`; **the author's own store is in this state — measured `OK=0 SRC=unresolved PTR=stale` against three entries, two naming deleted directories** *(OPEN)* |
+| A healthy machine and a healthy store | **999 ms and ~149 process spawns per hook**, on every Write/Edit/MultiEdit and every Bash tool call; 6.1 ms with the publish skipped, 2.5 ms for bare `bash -c :`; +77 ms per component of the base path *(OPEN)* |
+
+The last row is not one of the five symptoms C1 enumerates. It is C1 anyway: ordinary environment, no attacker, user-visible harm on every interaction, and no other category fits. **Where a finding is C1 under TM-4 and C3 under TM-2, it is C1**, and the finding records which honest environment triggers it.
+
+### TM-5 — The triage rule
+
+Every reported finding is triaged by four questions asked in this order, first match wins. The answer is recorded in the finding, and a finding whose first question is unanswered is not finished.
+
+1. **Does an ordinary, non-adversarial environment produce it?** → **C1. In scope. TM-2 may not be cited against it.** The finding must name the environment and the observable outcome — not the code path — and the environment must be one a user could plausibly be in. A C1 that refuses a healthy store, resolves wrongly, aborts a hook, or silently writes nothing is a release blocker.
+2. **Can a process at a DIFFERENT uid influence what we resolve, read or write?** → **C2. In scope, highest priority.** The kernel enforces this boundary, so a defence here is real and bounded. Nothing on this ticket has ever been C2; a genuine one would be the most valuable finding this campaign has produced.
+3. **Does it require a process at the SAME uid that controls the hook's environment, or that can write files as the user?** → **C3. Out of scope per TM-2.** Recorded in §28 as a residual and closed. It is re-opened only by satisfying question 1 as well, per TM-3. **Naming a new carrier for an already-recorded premise is not a new finding** — an exported function, a `PATH` executable, a crafted `declare -p` value and an imported `BASH_SOURCE` are four carriers of one premise, and the premise is what was recorded.
+4. **Does it concern the campaign's own evidence** — `tree-fingerprint.sh`, the `isolated-*` review wrappers, `validate-plan-citations.py`, the kimi effort assertion? → **C4. Out of scope for this ticket**, tracked on its own ticket. **A C4 never gates the store's release.** It has produced roughly a third of this campaign's findings and every fix to it creates new reviewable surface, which is the definition of an unbounded loop attached to the wrong deliverable.
+
+**One further rule, applying to all four.** A finding that reproduces but demonstrates no capability change over what its own premise already grants is not a defect: it is a residual, and it is written into §28 rather than fixed. `BASH_ENV` is the worked example — the mechanism reproduces exactly as reported, and a parent holding it already has everything the mechanism would obtain.
 
 ## 4.2a-S — THE NORMATIVE SPECIFICATION (authoritative)
 
@@ -1756,6 +1825,8 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 **ENT-1 — Entry file clauses.** The entry file `<store>/base.<key>` must be a regular file, must NOT be a symbolic link, must be owned by the effective uid, and must be mode exactly `0600`. A `base.*` path that is a symbolic link — dangling or not — is a FAILING entry, never a vanished-entry skip. A `base.*` path that exists and is not a regular file (directory, FIFO, socket, device) is a failing entry.
 
 **ENT-2 — Exactly one line, exactly its bytes, read from the object that was validated.** The entry authenticates only if ALL of these hold: **(1) the read RETURNS 0 and the content ends in exactly one newline** — a non-zero return means EOF with no delimiter, i.e. no trailing newline; **(2) its size in bytes equals the length of the line read plus one** (the single trailing newline); and **(3) — in zsh only — the line contains no NUL.** They are total over every malformed shape only TOGETHER, and each covers a case the others miss: (1) catches a TERMINAL NUL and an empty file in BOTH shells, (2) catches a mid-line or leading NUL in BASH (which truncates at the NUL, so the file is longer than the line), and (3) catches the same in ZSH (which keeps the NUL, so the byte count matches). **(2b) THE READ IS BOUND TO THE OBJECT ENT-1 VALIDATED.** ENT-1 stat'ed the PATHNAME; a plain `read < "$p"` then opened the pathname a SECOND time, and same-uid interference substituting the entry between the two — a FIFO, whose read-open BLOCKS every hook at source time; a large regular file the pre-read size bound never saw — was read in place of what was checked. So the entry is opened ONCE, and THE OPENED OBJECT IS BOUND TO THE OBJECT ENT-1 VALIDATED: its inode (P-2 now returns `_U_INO`) must equal the inode ENT-1 stat'ed — which binds every clause ENT-1 validated on the pathname, MODE INCLUDED, to the descriptor without a second copy of any of them (a second mode check on the descriptor masked ENT-1's own mutants, rows 8 and 114); type, size and owner are re-read on the descriptor as well, and the read is bounded to `len(key)+1`, the largest size a valid entry can have (ENT-3). A same-uid replacement of any kind — a `0644` copy with valid content included — is a different inode and is refused (PR #67, codex pass 11 — reproduced, both shells; row 168). The two arms differ only in what the shell can do, and the difference is stated: **zsh** opens with `sysopen -o nonblock` (never blocks on a FIFO), validates with `zstat -f` (INODE equal to ENT-1's, then TYPE, UID and SIZE of the OPEN object — the mode is bound through the inode, not re-checked: a second copy on the descriptor masked ENT-1's clause from its own mutants, rows 8 and 114) and reads once with `sysread -s len(key)+1`, taking the content up to the FIRST newline as the line exactly as `IFS= read -r` does, so clause (2) alone refuses a second line (row 4); **bash 3.2** has no non-blocking open, so a FIFO substituted in that window still blocks it — P-5's stated residual, mirrored here rather than claimed closed — and validates the open object through `/dev/fd/N`, which on Darwin (measured) reports its INODE, TYPE, SIZE and UID but its MODE as the open flags and its DEVICE as fdesc's, so the binding is by inode and mode stays validated on the pathname; its read is `read -r -n len(key)+1 -u N`, which stops at the newline or the bound. The descriptor is allocated, not fixed: zsh's `sysopen` needs an explicit number, taken from a free `{fd}` allocation and closed after; bash's `9<` on a group is saved and restored by the shell. Measured, both shells: a valid entry resolves with no stderr; a large regular file, a symlink, a vanished entry — and in zsh a FIFO — substituted between ENT-1's stat and the open are all refused as failing entries with the one sanitised diagnostic, never a path-bearing shell message (the group's `2>/dev/null` sits OUTSIDE the redirection that can fail). Mutant row 160. *(PR #67, codex pass 7. Round 104, codex: this rule declared the two-clause design complete and total while the round-102 correction added the third clause in a NOTE below — fix-the-rule-not-the-note, in the round that fixed a fail-open. Measured: `/private/tmp<NUL>` with no newline gives bash `rc=1`, `size=13`, `${#line}+1=13`, so clauses (2) and (3) alone PASS it and a correctly named entry targeting the real `/private/tmp` authenticates.)*
+
+**ENT-2c — After the read, the PATHNAME must still be the bare file ENT-1 validated.** ENT-2b binds the descriptor to the inode ENT-1 checked, which proves the bytes came from that object — it does NOT prove that `base.<key>` still denotes it, or that it is still not a symlink. Measured (bash `DEBUG`-trap fixture): a same-uid process renames the validated entry aside and drops a symlink to it at the entry name between ENT-1 and the open; the descriptor carries exactly `_U_INO`, so type, owner, size and content all pass and the read was ACCEPTED while the surviving store entry is a link ENT-1 requires to fail — and every later consumer that opens that name leaves the store. So after the read, and in BOTH arms, the pathname is re-tested: `-L` refuses, and a fresh stat must still report the inode ENT-1 validated. The re-test SAVES AND RESTORES the four `_u_stat` outputs, because ENT-2's clause (2) compares `_U_SIZE` — in the zsh arm the size of the AUTHENTICATED DESCRIPTOR — and a clobbering helper would silently substitute the pathname's current size for it. *(PR #67, codex pass 15 — reproduced; row 178.)*
 
 *Why it is written this way, all measured in bash 3.2.57 and zsh 5.9:*
 * **The shells diverge on NUL.** Reading `/tmp\0junk\n`, bash yields `/tmp` (length 4) and zsh yields `/tmp\0junk` (length 9). Bash would otherwise authenticate a NUL-injected entry as the perfectly valid absolute path `/tmp`.

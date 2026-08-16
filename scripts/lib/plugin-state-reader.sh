@@ -98,6 +98,7 @@ _unleashed_auth_entry() {
         # clause (2) below, and only clause (2), refuses a second line (row 4's mutant must be able
         # to fail here as it does in bash); (1) is that a newline exists at all.
         case "$_ae_raw" in *$'\n'*) _ae_line="${_ae_raw%%$'\n'*}" ;; *) return 1 ;; esac    # (1)
+        _u_entry_path_still_bare "$_ae_p" || return 1
     else
         _ae_ok=0
         # `2>/dev/null` on the OUTER group: a refused open reports on the shell's stderr BEFORE the
@@ -109,6 +110,7 @@ _unleashed_auth_entry() {
               && [ "$_U_SIZE" -le "$_ae_bound" ] \
               && IFS= read -r -n "$_ae_bound" -u 9 _ae_line && _ae_ok=1; } 9<"$_ae_p"; } 2>/dev/null
         [ "$_ae_ok" = 1 ] || return 1                                                      # (1)
+        _u_entry_path_still_bare "$_ae_p" || return 1
     fi
     # (2) is a BYTE comparison, and `${#var}` counts CHARACTERS under a UTF-8 locale — so a base
     # such as `/café` reads as 14 characters against a 15-byte line, the equality fails, and every
@@ -199,6 +201,27 @@ _unleashed_store_ok() {
     _unleashed_auth_chain "$_so_s" || return 1       # `/` down to and including bases/
     return 0
 }
+
+# AN EQUAL INODE IS NOT A BARE PATHNAME. ENT-2b binds the descriptor to the inode ENT-1 validated, which
+# proves the bytes read came from that object — it does NOT prove `base.<key>` is still the non-symlink
+# regular file ENT-1 requires. Measured (DEBUG-trap fixture, PR #67 pass 15, codex): a same-uid process
+# renames the validated entry aside and drops a symlink to it at the entry name between ENT-1 and the
+# open; the descriptor still has exactly that inode, so type, owner, size and content all pass and the
+# read was ACCEPTED while the surviving store entry is a link ENT-1 forbids — and every later consumer
+# opening that name leaves the store. So the pathname is re-tested after the read: a link, or a name
+# that no longer denotes the validated inode, fails the read (rule ENT-2c).
+# It SAVES AND RESTORES the four `_u_stat` outputs: clause (2) below compares `_U_SIZE` — in the zsh arm
+# the size of the AUTHENTICATED DESCRIPTOR — against the line it read, and a helper that re-stats the
+# pathname would silently substitute the pathname's current size for it, weakening the very clause it
+# runs beside. (Caught while writing this one, not by a reviewer.)
+_u_entry_path_still_bare() {
+    [ -L "$1" ] && return 1
+    _ue_m="${_U_MODE:-}"; _ue_s="${_U_SIZE:-}"; _ue_u="${_U_UID:-}"; _ue_i="${_U_INO:-}"
+    if _u_stat "$1" && [ "$_U_INO" = "$_ae_ino" ]; then _ue_rc=0; else _ue_rc=1; fi
+    _U_MODE="$_ue_m"; _U_SIZE="$_ue_s"; _U_UID="$_ue_u"; _U_INO="$_ue_i"
+    return "$_ue_rc"
+}
+
 
 # ── RD-8: "does not exist AT ALL" ────────────────────────────────────────────────────────────────
 # True iff the store is genuinely absent: walking its path from `/` down, every prefix that exists is a

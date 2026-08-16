@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 125 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 126 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,21 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Fifteenth review pass (codex) — six findings, each reproduced.** Config-referenced paths are read
+  the way Git reads them: `core.hooksPath` with `--path`, so the supported `~/hooks` form is no longer
+  fingerprinted as a nonexistent `<root>/~/hooks` while Git executes `$HOME/hooks/pre-commit`. The
+  files config POINTS AT are recorded, not just the text naming them — `core.excludesFile`,
+  `core.attributesFile`, and every `file:` origin reported by `--show-origin`, which also covers
+  `include.path` / `includeIf` and the global and system config and closes the "a file outside the
+  repository is not covered" residual. The tracked half records STAGED OBJECT IDS (`ls-files --stage`):
+  `update-index --cacheinfo` swapped the staged blob while `status` printed the same `MM` and the
+  fingerprint did not move. `tree_fingerprint_report` runs its probes through the safe git wrapper, so
+  a planted `core.fsmonitor` is not executed by the report that runs after a mutation is detected. The
+  reader re-tests the entry PATHNAME after the read (ENT-2c): an equal inode proved the bytes, not that
+  `base.<key>` is still the bare file ENT-1 validated — a rename-aside plus a symlink at the entry name
+  was accepted (row 178). And the kimi harness now labels its effort token `(self-reported)` with the
+  digest of the bytes it read: that log lives inside the reviewed process's own writable session tree,
+  so it attests to an honest run's tier and to nothing about an adversarial one.
 - **Pre-push sweep of the fourteenth pass — eight more findings, each reproduced, five of them in the
   state libraries.** The library directory every resolver copy sources from is derived without any
   external command (`dirname` is PATH-resolved, and dropping `/usr/bin` from PATH made the four

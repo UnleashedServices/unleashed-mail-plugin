@@ -22,6 +22,11 @@ PR #67 pass 14: the library directory not derived through PATH, sourcing survivi
 arrives through the environment, the readonly-attribute test reading the FLAG LETTERS only, and the effective
 uid PROBED rather than read from `$EUID` — which bash 3.2, the `/bin/bash` a macOS hook runs, imports from
 the environment). That sweep also re-pinned rows 7, 23, 24 and 166, whose anchors quote text it rewrote.
+Row 178 (PR #67, codex pass 15) closes the last of ENT-2b's residuals: an equal INODE is not a bare
+PATHNAME, so the entry name is re-tested after the read (ENT-2c). It also RESHAPED rows 160 and 168 —
+160's slice now runs through the re-test that closes the bash arm, and 168 removes EVERY binding to
+`_ae_ino` (the re-test refused 168's copy on its own the moment it landed, which is how the third clause
+was found).
 """
 
 import os
@@ -4536,7 +4541,7 @@ SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156-177 (156-173, then the pass-14 codex sweep's 174, 175, 176, 177)."""
+    """Mutant-table rows 156-178 (156-173, the pass-14 codex sweep's 174-177, then pass 15's 178)."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -4875,15 +4880,20 @@ class RowsPass7(unittest.TestCase):
         # The slice starts after `_ae_bound=` (the trap's key, kept in both builds) and so takes the
         # `_ae_ino=` capture (PR #67 pass 11) along with the two arms: the mutant reads through a
         # second open and validates NOTHING on a descriptor, so it has no inode to bind to either.
+        # It runs THROUGH the `_u_entry_path_still_bare` call that closes the bash arm (PR #67 pass 15,
+        # row 178): that call belongs to the read, and a mutant that read through a second open and
+        # then re-tested the pathname would be a build nobody proposed.
         old = self._slice(READER,
                           '    _ae_bound=$(( ${#_ae_name} + 1 ))\n',
                           '        [ "$_ae_ok" = 1 ] || return 1                                                      # (1)\n'
+                          '        _u_entry_path_still_bare "$_ae_p" || return 1\n'
                           '    fi\n',
                           after_head=True)
         self.assertTrue(old.startswith('    _ae_ino="$_U_INO"'), old[:80])
         self.assertIn('    if [ -n "${ZSH_VERSION:-}" ]; then\n        zmodload zsh/system', old)
         self.assertIn("sysopen", old)
         self.assertIn('9<"$_ae_p"', old)
+        self.assertEqual(2, old.count("_u_entry_path_still_bare"), "both arms' pathname re-tests must be in the slice")
         self.assertNotIn("_ae_bytes", old, "the slice ran past the arms into clause (2)")
         mutant = with_mutation(old, '    { IFS= read -r _ae_line < "$_ae_p"; } 2>/dev/null || return 1\n',
                                path=READER)
@@ -5453,8 +5463,16 @@ class RowsPass7(unittest.TestCase):
 
     # ── row 168 ───────────────────────────────────────────────────────────────────────────────
 
+    #: The pathname re-test's own inode clause (PR #67 pass 15, row 178), and the shape without it.
+    #: Row 168's mutation removes EVERY binding to `_ae_ino`, so "the opened entry must be the inode
+    #: ENT-1 validated" is tested against a build that binds to it nowhere — otherwise the re-test
+    #: refuses row 168's copy on its own and the row would stop discriminating (it did: the row failed
+    #: the moment the re-test landed, which is how the third clause was found).
+    ROW_168_PATH_INODE = '    if _u_stat "$1" && [ "$_U_INO" = "$_ae_ino" ]; then _ue_rc=0; else _ue_rc=1; fi\n'
+    ROW_168_PATH_INODE_GONE = '    if _u_stat "$1"; then _ue_rc=0; else _ue_rc=1; fi\n'
+
     def test_row_168_the_opened_entry_must_be_the_inode_ent_1_validated(self):
-        """Row 168: a DEBUG trap (`set -T` in bash) replaces the entry with a 0644 COPY of itself — same bytes, same size, same owner, a different inode — the instant ENT-1 has validated it and before ENT-2b opens it: the specification refuses (`stale`, one sanitised diagnostic) because the opened inode is not the validated one; under the mutation (the inode clause removed from BOTH arms) type, uid and size all still match on the descriptor, the copy authenticates and the store RESOLVES to a world-readable entry (`1 pointer none`). Row 160's large-file substitution stays refused under this mutant in both builds — its size differs. Both shells."""
+        """Row 168: a DEBUG trap (`set -T` in bash) replaces the entry with a 0644 COPY of itself — same bytes, same size, same owner, a different inode — the instant ENT-1 has validated it and before ENT-2b opens it: the specification refuses (`stale`, one sanitised diagnostic) because the opened inode is not the validated one; under the mutation (EVERY binding to `_ae_ino` removed — both descriptor arms and the pathname re-test ENT-2c added in PR #67 pass 15) type, uid and size all still match on the descriptor, the copy authenticates and the store RESOLVES to a world-readable entry (`1 pointer none`). Row 160's large-file substitution stays refused under this mutant in both builds — its size differs. Both shells."""
         # THE INTERLEAVING IS DETERMINISTIC (row 160's shape): keyed on `_ae_bound` being set — the
         # line before `_ae_ino=` — and a once-flag, the trap fires before `_ae_ino="$_U_INO"` runs;
         # `_U_INO` is ENT-1's pathname stat, untouched by the cp/chmod/mv, so `_ae_ino` is the
@@ -5463,14 +5481,15 @@ class RowsPass7(unittest.TestCase):
         # substitution happened); mutant `1 pointer none <target>`, empty stderr.
         m1 = with_mutation('            && [ "${_u_h[inode]}" = "$_ae_ino" ] \\\n', '', path=READER)
         m2 = with_mutation('              && [ "$_U_INO" = "$_ae_ino" ] \\\n', '', path=m1)
-        with open(m2, encoding="utf-8") as fh:
-            self.assertNotIn('"$_ae_ino"', fh.read(), "an inode clause survived the double mutation")
+        m3 = with_mutation(self.ROW_168_PATH_INODE, self.ROW_168_PATH_INODE_GONE, path=m2)
+        with open(m3, encoding="utf-8") as fh:
+            self.assertNotIn('"$_ae_ino"', fh.read(), "an inode clause survived the triple mutation")
         copy = ('/bin/cp "$_ae_p" "$_ae_p.n"; /bin/chmod 644 "$_ae_p.n"; /bin/mv -f "$_ae_p.n" "$_ae_p"')
         big = os.path.join(self.home, "big")
         try:
             for shell in SHELLS:
                 for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
-                                        ((AUTH, STORE, m2, PUB), True)):
+                                        ((AUTH, STORE, m3, PUB), True)):
                     self._wipe()
                     body = (self._mkstore() + self._entry()
                             + '[ -n "${BASH_VERSION:-}" ] && set -T\n'
@@ -5515,12 +5534,13 @@ class RowsPass7(unittest.TestCase):
                         + 'trap - DEBUG\n'
                         + 'printf "%s %s %s|%s|%s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_POINTER_STATE" '
                           '"$_UNLEASHED_BASE_RESOLVED" "${#_ae_line}" "${_t168_done:-0}"')
-                rc, out, err = self._run_with_timeout(shell, body, (AUTH, STORE, m2, PUB))
+                rc, out, err = self._run_with_timeout(shell, body, (AUTH, STORE, m3, PUB))
                 self.assertEqual(f"0 stale {SENTINEL}|0|1", out,
                                  f"{shell} mutant, row 160's large file: not refused on size alone: {out!r} {err!r}")
         finally:
             os.unlink(m1)
             os.unlink(m2)
+            os.unlink(m3)
 
     # ── row 169 ───────────────────────────────────────────────────────────────────────────────
 
@@ -6240,6 +6260,179 @@ class RowsPass7(unittest.TestCase):
                                  f"state the entry point does not reset: {out!r} {err!r}")
         finally:
             os.unlink(mutant)
+
+    # ── row 178 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The two call sites of the pathname re-test (ENT-2c). The shipped line is IDENTICAL in both
+    #: arms, so each anchor carries the line that follows it — `else` for the zsh arm, `fi` for bash.
+    ROW_178_ZSH_CALL = '        _u_entry_path_still_bare "$_ae_p" || return 1\n    else\n'
+    ROW_178_ZSH_GONE = '    else\n'
+    ROW_178_BASH_CALL = '        _u_entry_path_still_bare "$_ae_p" || return 1\n    fi\n'
+    ROW_178_BASH_GONE = '    fi\n'
+    #: The helper's save/restore of `_u_stat`'s four outputs. Cell (iii) drops it, so the helper's own
+    #: re-stat CLOBBERS `_U_SIZE` — which clause (2), immediately below the call, compares against the
+    #: line that was read (in the zsh arm `_U_SIZE` is the AUTHENTICATED DESCRIPTOR's size).
+    ROW_178_SAVE = ('    _ue_m="${_U_MODE:-}"; _ue_s="${_U_SIZE:-}"; _ue_u="${_U_UID:-}"; _ue_i="${_U_INO:-}"\n'
+                    '    if _u_stat "$1" && [ "$_U_INO" = "$_ae_ino" ]; then _ue_rc=0; else _ue_rc=1; fi\n'
+                    '    _U_MODE="$_ue_m"; _U_SIZE="$_ue_s"; _U_UID="$_ue_u"; _U_INO="$_ue_i"\n')
+    ROW_178_SAVE_GONE = '    if _u_stat "$1" && [ "$_U_INO" = "$_ae_ino" ]; then _ue_rc=0; else _ue_rc=1; fi\n'
+
+    #: `mv` the validated entry aside and drop a SYMLINK to it at the entry name. The descriptor the
+    #: read is bound to still has exactly `_ae_ino` — the bytes DID come from the validated object —
+    #: while the name ENT-1 validated is now a link ENT-1 forbids.
+    ROW_178_SWAP = '/bin/mv -f "$_ae_p" "$_ae_p.moved"; /bin/ln -s "$_ae_p.moved" "$_ae_p"'
+    #: Cell (i)'s window: after ENT-1 (`_ae_bound` is set on the line before `_ae_ino=`) and before the
+    #: open, while the entry is still the non-symlink regular file ENT-1 validated.
+    ROW_178_BEFORE_OPEN = '[ -n "${_ae_bound:-}" ] && [ -f "${_ae_p:-}" ] && [ ! -L "$_ae_p" ]'
+    #: Cell (iii)'s window: after the READ (`_ae_ok` is set by it) and before the re-test.
+    ROW_178_AFTER_READ = '[ "${_ae_ok:-0}" = 1 ]'
+
+    def _row_178_trap(self, when, action):
+        """A once-firing DEBUG trap (rows 160/168's mechanism), keyed on `when` and a done-flag."""
+        return ('[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                "trap 'if " + when + ' && [ -z "${_t178_done:-}" ]; then _t178_done=1; '
+                + action + "; fi' DEBUG\n")
+
+    #: The store tuple plus whether the trap fired.
+    ROW_178_OUT = ('trap - DEBUG\n'
+                   'printf "%s %s %s %s|%s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" '
+                   '"$_UNLEASHED_POINTER_STATE" "$_UNLEASHED_BASE_RESOLVED" "${_t178_done:-0}"')
+
+    def _row_178_shape(self):
+        """(the symlinked names, the other names) of the store as the round left it."""
+        if not os.path.isdir(self.store):
+            return [], []
+        names = sorted(os.listdir(self.store))
+        return ([n for n in names if os.path.islink(os.path.join(self.store, n))],
+                [n for n in names if not os.path.islink(os.path.join(self.store, n))])
+
+    def test_row_178_an_equal_inode_is_not_a_bare_pathname(self):
+        """Row 178 (codex, PR #67 pass 15 — reproduced): between ENT-1 and the open, a same-uid process renames the validated entry aside and drops a SYMLINK to it at the entry name. ENT-2b binds the descriptor to `_ae_ino` and the link resolves to exactly that inode, so type, owner, size and content ALL pass on the descriptor — (i) the specification refuses anyway (`0 unresolved stale <sentinel>`, one sanitised diagnostic) because the pathname is re-tested after the read (ENT-2c: a link, or a name that no longer denotes the validated inode, fails the read), while an untouched FRESH store still resolves `1 pointer none`; (ii) under the mutation (both `_u_entry_path_still_bare` calls removed) the swap is ACCEPTED — `1 pointer none` — although the surviving store entry is a symlink ENT-1 forbids and every later consumer that opens that name leaves the store; (iii) under a mutation of the HELPER that drops the save/restore of `_u_stat`'s four outputs, its own re-stat clobbers `_U_SIZE`, and clause (2) then compares the line against the PATHNAME's current size: a two-line entry truncated to its first line after the read AUTHENTICATES (`1 pointer none`) where the specification refuses it — the helper would weaken the clause it runs beside. That clobbering mutant STILL refuses cell (i)'s swap, so (iii) is isolated to the save/restore. Both shells; every cell gets a FRESH store."""
+        # THE INTERLEAVING IS DETERMINISTIC (rows 160/168's shape). Cell (i)'s trap is keyed on
+        # `_ae_bound` being set — the line before `_ae_ino=` — plus the entry still being the
+        # non-symlink regular file ENT-1 validated, so it fires exactly once, after ENT-1 and before
+        # the open. `_unleashed_scan_store` expanded its glob before the body ran, so the `.moved`
+        # file the swap leaves behind is NOT a second candidate in this scan.
+        # Cell (iii)'s trap is keyed on `_ae_ok`, which the read itself sets, so it fires between the
+        # read and the re-test; it truncates THROUGH the same name (`>` keeps the inode), so the
+        # re-test's own inode clause still passes and only the size substitution can decide.
+        # Measured, both shells: (i) spec `0 unresolved stale <sentinel>|1` with the store left holding
+        # one symlink and one `.moved` regular file, fresh store `1 pointer none <target>|0`;
+        # (ii) mutant `1 pointer none <target>|1`, empty stderr; (iii) spec `0 unresolved stale|1`,
+        # clobbering mutant `1 pointer none <target>|1`, and that mutant still refuses (i).
+        # THE SHIPPED SHAPE FIRST, so a reader that no longer carries ENT-2c fails HERE — on the rule —
+        # rather than inside `with_mutation` on an anchor that no longer matches (the failure mode this
+        # suite has hit before: a control built from a pattern that does not match cannot fail).
+        with open(READER, encoding="utf-8") as fh:
+            shipped = fh.read()
+        self.assertEqual(2, shipped.count('_u_entry_path_still_bare "$_ae_p" || return 1'),
+                         "the shipped reader does not re-test the entry pathname in BOTH arms (ENT-2c)")
+        self.assertIn(self.ROW_178_SAVE, shipped,
+                      "the re-test no longer saves and restores `_u_stat`'s four outputs")
+        m_zsh = with_mutation(self.ROW_178_ZSH_CALL, self.ROW_178_ZSH_GONE, path=READER)
+        m_nocall = with_mutation(self.ROW_178_BASH_CALL, self.ROW_178_BASH_GONE, path=m_zsh)
+        m_clobber = with_mutation(self.ROW_178_SAVE, self.ROW_178_SAVE_GONE, path=READER)
+        with open(m_nocall, encoding="utf-8") as fh:
+            self.assertNotIn('_u_entry_path_still_bare "$_ae_p"', fh.read(),
+                             "a pathname re-test survived the double mutation")
+        with open(m_clobber, encoding="utf-8") as fh:
+            clob = fh.read()
+        self.assertEqual(2, clob.count('_u_entry_path_still_bare "$_ae_p"'),
+                         "cell (iii) removed the calls as well — it is not a mutation of the HELPER")
+        self.assertNotIn('_ue_m="${_U_MODE:-}"', clob, "the save/restore survived cell (iii)'s mutation")
+        # Cell (iii)'s entry holds TWO lines, which clause (2) exists to refuse; the truncation source
+        # holds only the first, and `>` truncates through the name so the inode never moves.
+        short = os.path.join(self.home, "short")
+        with open(short, "w", encoding="utf-8") as fh:
+            fh.write(self.target + "\n")
+        trunc = os.path.join(self.home, "trunc.sh")
+        with open(trunc, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\ncat "$1" > "$2"\n')
+        os.chmod(trunc, 0o755)
+        two_line = (f'_unleashed_key "{self.target}"\n'
+                    f'printf "%s\\n%s\\n" "{self.target}" "x" > "{self.store}/base.$_UNLEASHED_KEY"\n'
+                    f'/bin/chmod 600 "{self.store}/base.$_UNLEASHED_KEY"\n')
+        swap_body = (self._mkstore() + self._entry()
+                     + self._row_178_trap(self.ROW_178_BEFORE_OPEN, self.ROW_178_SWAP)
+                     + f'_unleashed_read_store "{self.store}"\n' + self.ROW_178_OUT)
+        stale = f"0 unresolved stale {SENTINEL}"
+        resolved = f"1 pointer none {self.target}"
+        try:
+            for shell in SHELLS:
+                # ── (i) the swap is refused, and (ii) the call-less mutant accepts it ─────────────
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, m_nocall, PUB), True)):
+                    self._wipe()
+                    rc, out, err = self._run_with_timeout(shell, swap_body, srcs)
+                    tag = f"{shell} swap {'mutant' if is_mutant else 'shipped'}"
+                    self.assertNotEqual("TIMEOUT", rc, f"{tag}: the resolver hung")
+                    links, others = self._row_178_shape()
+                    # THE FIXTURE IS THE FINDING, asserted on BOTH builds: the entry name is a symlink
+                    # afterwards, and the object it names survived beside it.
+                    self.assertEqual(1, len(links), f"{tag}: the swap left no symlink: {links} {others}")
+                    self.assertTrue(any(n.endswith(".moved") for n in others),
+                                    f"{tag}: the renamed original is gone: {others}")
+                    if not is_mutant:
+                        self.assertEqual(f"{stale}|1", out,
+                                         f"{tag}: an entry whose NAME became a symlink to the validated "
+                                         f"inode was accepted, or the trap did not fire: {out!r} {err!r}")
+                        diags = self._diags(err)
+                        self.assertEqual(1, len(diags), f"{tag}: not one diagnostic: {err!r}")
+                        self.assertEqual(1, len(err.splitlines()), f"{tag}: {err!r}")
+                        self.assertNotIn(self.store, err, f"{tag}: the store path reached stderr")
+                        self.assertNotIn(self.target, err, f"{tag}: the target path reached stderr")
+                    else:
+                        self.assertEqual(f"{resolved}|1", out,
+                                         f"{tag}: the CONTROL did not fail — without the pathname re-test "
+                                         f"the symlinked entry did not authenticate: {out!r} {err!r}")
+                        self.assertEqual("", err, f"{tag}: {err!r}")
+                # THE HONEST CONTROL, on a store nothing has interfered with — a re-test that refused
+                # those would void every ordinary resolution. (The first draft of this control read a
+                # store the swap had already symlinked, and would have passed for the wrong reason.)
+                self._wipe()
+                rc, out, err = self._run_with_timeout(
+                    shell, self._mkstore() + self._entry()
+                    + f'_unleashed_read_store "{self.store}"\n' + self.ROW_178_OUT,
+                    (AUTH, STORE, READER, PUB))
+                self.assertEqual(f"{resolved}|0", out,
+                                 f"{shell}: a FRESH untouched store no longer resolves — the pathname "
+                                 f"re-test refuses honest entries: {out!r} {err!r}")
+                self.assertEqual([], self._diags(err), f"{shell}: {err!r}")
+                links, others = self._row_178_shape()
+                self.assertEqual(([], 1), (links, len(others)),
+                                 f"{shell}: the honest round did not leave one plain entry: {links} {others}")
+                # ── (iii) the helper must not clobber `_u_stat`'s outputs ─────────────────────────
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, m_clobber, PUB), True)):
+                    self._wipe()
+                    body = (self._mkstore() + two_line
+                            + self._row_178_trap(self.ROW_178_AFTER_READ,
+                                                 f'"{trunc}" "{short}" "$_ae_p"')
+                            + f'_unleashed_read_store "{self.store}"\n' + self.ROW_178_OUT)
+                    rc, out, err = self._run_with_timeout(shell, body, srcs)
+                    tag = f"{shell} clobber {'mutant' if is_mutant else 'shipped'}"
+                    self.assertNotEqual("TIMEOUT", rc, f"{tag}: the resolver hung")
+                    if not is_mutant:
+                        self.assertEqual(f"{stale}|1", out,
+                                         f"{tag}: a TWO-LINE entry authenticated, or the truncation did "
+                                         f"not happen: {out!r} {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag}: not one diagnostic: {err!r}")
+                    else:
+                        self.assertEqual(f"{resolved}|1", out,
+                                         f"{tag}: the CONTROL did not fail — a helper that re-stats the "
+                                         f"pathname without restoring `_U_SIZE` did not substitute the "
+                                         f"truncated size into clause (2): {out!r} {err!r}")
+                        self.assertEqual("", err, f"{tag}: {err!r}")
+                # …AND CELL (iii) IS ISOLATED: the clobbering mutant still refuses cell (i)'s swap, so
+                # it is the save/restore that (iii) measures and not a re-test that stopped running.
+                self._wipe()
+                rc, out, err = self._run_with_timeout(shell, swap_body, (AUTH, STORE, m_clobber, PUB))
+                self.assertEqual(f"{stale}|1", out,
+                                 f"{shell}: the clobbering mutant also stopped refusing the swap — cell "
+                                 f"(iii) is not isolated to the save/restore: {out!r} {err!r}")
+        finally:
+            for m in (m_zsh, m_nocall, m_clobber):
+                os.unlink(m)
 
 
 if __name__ == "__main__":

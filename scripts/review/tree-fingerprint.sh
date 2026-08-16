@@ -67,7 +67,8 @@ tree_fingerprint() {
     printf '\036\n'
     # THE EXCLUSION METADATA A REVIEWER COULD USE TO HIDE AN UNTRACKED FILE FROM `status`: the repo's
     # own `.git/info/exclude` and `.git/config` (`core.excludesFile`) — tracked `.gitignore` files are
-    # already covered above. RESIDUAL, stated: a global excludes file outside the repository is not.
+    # already covered above, and the configured `core.excludesFile` and every file that contributes config
+    # — including the global and system ones — are recorded by `_u_git_metadata_fingerprint` below.
     _u_git_metadata_fingerprint "$1" || return 1
     printf '\036\n'
     _u_acl_fingerprint "$1" || return 1
@@ -106,11 +107,22 @@ root = sys.argv[1]
 # INDEX, so a path staged for deletion (`git rm --cached`) and ignored was omitted while status stayed
 # `D  path` before and after a reviewer rewrote its working-tree file (codex, PR #67 pass 11 —
 # reproduced). HEAD's tree cannot be edited without moving HEAD, which the first line records.
-r = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", root, "ls-files", "-z"], capture_output=True)
+GIT = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", root]
+r = subprocess.run(GIT + ["ls-files", "-z"], capture_output=True)
 if r.returncode != 0:
     sys.exit(1)
 names = set(x for x in r.stdout.split(b"\0") if x)
-r2 = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
+# THE STAGED OBJECT IDS, not merely index MEMBERSHIP. `ls-files` names the paths; it does not say what
+# bytes are staged for them. In a checkout that starts `MM f`, a reviewer can swap the staged blob with
+# `git update-index --cacheinfo` and leave the working tree alone: status prints the same two letters,
+# every leaf digest above is unchanged, and the fingerprint was byte-identical while `git show :f`
+# returned different bytes — silently corrupting what the maintainer commits next (codex, PR #67 pass 15
+# — reproduced). `--stage` prints `<mode> <oid> <stage>\t<path>`, which is exactly that missing half.
+rs = subprocess.run(GIT + ["ls-files", "--stage", "-z"], capture_output=True)
+if rs.returncode != 0:
+    sys.exit(1)
+staged = sorted(os.fsdecode(x) for x in rs.stdout.split(b"\0") if x)
+r2 = subprocess.run(GIT + ["ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
 if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure
     names.update(x for x in r2.stdout.split(b"\0") if x)
 # THE ANCESTOR DIRECTORIES OF EVERY TRACKED PATH, BY LSTAT — mode and type. `git status` says nothing
@@ -133,7 +145,7 @@ for raw in names:
     p = os.path.dirname(os.fsdecode(raw))
     while p:
         dirs.add(p); p = os.path.dirname(p)
-out = []
+out = ["INDEX %s" % s for s in staged]
 for rel in sorted(dirs):
     full = os.path.join(root, rel)
     try:
@@ -259,7 +271,7 @@ _u_git() {
 # moves no other record), and every entry of the hooks directories that will actually run — a
 # `pre-commit` planted there needs no config change and fires on the maintainer's next commit.
 # RESIDUAL, stated: `packed-refs` and `logs/` are NOT recorded (an auto-gc repack would void an honest
-# round), and neither is a global `~/.gitconfig` outside the repository.
+# round). The global and system config files ARE recorded, via `--show-origin`.
 _u_git_metadata_fingerprint() {
     _ugm_root="$1"
     _ugm_git="$(_u_git -C "$_ugm_root" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
@@ -270,15 +282,54 @@ _u_git_metadata_fingerprint() {
         case "$_ugm_common" in ''|/*) : ;; *) _ugm_common="$_ugm_root/$_ugm_common" ;; esac
     fi
     [ -n "$_ugm_common" ] || _ugm_common="$_ugm_git"
-    _ugm_hooks="$(_u_git -C "$_ugm_root" config --get core.hooksPath 2>/dev/null)" || _ugm_hooks=""
+    # EVERY CONFIG-REFERENCED PATH IS READ WITH `--path`, which is how GIT reads it. A plain `--get`
+    # returns the unexpanded text, so the supported tilde form `~/hooks` was fingerprinted as
+    # `<root>/~/hooks` — a directory that does not exist — while git executed `$HOME/hooks/pre-commit`:
+    # editing that hook left both fingerprints identical (codex, PR #67 pass 15 — reproduced). A
+    # relative value stays relative to the working tree, which is what git does with it.
+    _ugm_hooks="$(_u_git -C "$_ugm_root" config --path --get core.hooksPath 2>/dev/null)" || _ugm_hooks=""
     case "$_ugm_hooks" in ''|/*) : ;; *) _ugm_hooks="$_ugm_root/$_ugm_hooks" ;; esac
+    # THE FILES CONFIG POINTS AT, not just the config text that names them. `core.excludesFile` hides an
+    # untracked file from `status`, so a reviewer who adds one line to an external excludes file and
+    # creates the matching file leaves status empty and the tracked-content half untouched; recording
+    # the config text alone did not see the exclusion change (codex, PR #67 pass 15 — reproduced on a
+    # filesystem where a directory's link count does not track its entries; on APFS the root record
+    # happened to move, which is an accident of the filesystem, not a protection).
+    _ugm_excl="$(_u_git -C "$_ugm_root" config --path --get core.excludesFile 2>/dev/null)" || _ugm_excl=""
+    case "$_ugm_excl" in ''|/*) : ;; *) _ugm_excl="$_ugm_root/$_ugm_excl" ;; esac
+    _ugm_attr="$(_u_git -C "$_ugm_root" config --path --get core.attributesFile 2>/dev/null)" || _ugm_attr=""
+    case "$_ugm_attr" in ''|/*) : ;; *) _ugm_attr="$_ugm_root/$_ugm_attr" ;; esac
     set -- "$_ugm_root/.git" "$_ugm_git" "$_ugm_common" \
            "$_ugm_common/config" "$_ugm_git/config.worktree" \
            "$_ugm_common/info/exclude" "$_ugm_common/info/attributes" \
            "$_ugm_common/objects/info/alternates" "$_ugm_git/HEAD" \
            --dir "$_ugm_common/hooks"
-    if [ -n "$_ugm_hooks" ]; then
-        set -- "$@" --dir "$_ugm_hooks"
+    [ -n "$_ugm_hooks" ] && set -- "$@" --dir "$_ugm_hooks"
+    [ -n "$_ugm_excl" ] && set -- "$@" "$_ugm_excl"
+    [ -n "$_ugm_attr" ] && set -- "$@" "$_ugm_attr"
+    # ...AND EVERY FILE THAT CONTRIBUTES CONFIG AT ALL. `include.path` / `includeIf` pull settings from
+    # another file — measured: an included file setting `core.hooksPath` wins, and the repository's own
+    # `config` shows only the `include.path` line — and the global and system files are equally able to
+    # set `core.hooksPath` for this checkout. `--show-origin` names them all, which closes the
+    # "a file outside the repository is not covered" residual this function used to carry.
+    _ugm_origins="$(_u_git -C "$_ugm_root" config --list --show-origin --name-only -z 2>/dev/null | tr '\0' '\n' | sed -n 's/^file://p' | LC_ALL=C sort -u)" || _ugm_origins=""
+    # `--show-origin` PRINTS THE REPOSITORY'S OWN FILES RELATIVE. Measured in a plain checkout: the
+    # repo config comes back as `.git/config`, and a relatively-included file as `.git/../inc.cfg`.
+    # Fed verbatim, those resolve against the RECORDER's cwd, so this block recorded `.git/config
+    # ABSENT` — the one file it exists to cover — and a relative `include.path` was not covered at all
+    # (found by the test author while pinning this block, not by a reviewer). Relative origins are
+    # therefore resolved against the checkout root, which is what git resolved them against.
+    # RESIDUAL, stated: the global (`~/.gitconfig`) and system config files ARE hashed, because a
+    # reviewer runs at the same uid and `core.hooksPath` set there governs this checkout — the cost is
+    # that an unrelated edit to them mid-round voids the round, and an unreadable one fails it closed.
+    if [ -n "$_ugm_origins" ]; then
+        while IFS= read -r _ugm_o; do
+            [ -n "$_ugm_o" ] || continue
+            case "$_ugm_o" in /*) : ;; *) _ugm_o="$_ugm_root/$_ugm_o" ;; esac
+            set -- "$@" "$_ugm_o"
+        done <<ORIGINS
+$_ugm_origins
+ORIGINS
     fi
     _u_hash_if_present "$@" || return 1
 }
@@ -404,7 +455,7 @@ PY
 # Print the human-readable summary of what changed between two fingerprints, to stderr.
 # $1 = checkout root, $2 = the status portion captured before the run.
 tree_fingerprint_report() {
-    _tf_after_status="$(git -C "$1" status --porcelain 2>/dev/null)"
+    _tf_after_status="$(_u_git -C "$1" status --porcelain 2>/dev/null)"
     # Only what CHANGED at the STATUS level, for a readable summary — printing the whole status (or the
     # whole diff) buries the one new line. A content-only edit to an already-dirty file shows no new
     # status line, so say so rather than printing nothing.
@@ -415,9 +466,9 @@ tree_fingerprint_report() {
         # No new status line: either the CONTENT of an already-modified file changed, or — the case a
         # clean commit mid-round produces — HEAD itself moved. Say which, from the fingerprint's own
         # first line ($3 = the HEAD recorded before the run, when the caller has it).
-        if [ -n "${3:-}" ] && [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
+        if [ -n "${3:-}" ] && [ "$(_u_git -C "$1" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
             printf '(no new status line — HEAD moved from %s to %s: a commit was made during the review)\n' \
-                "$3" "$(git -C "$1" rev-parse HEAD 2>/dev/null)" >&2
+                "$3" "$(_u_git -C "$1" rev-parse HEAD 2>/dev/null)" >&2
         else
             printf '(no new status line — the CONTENT of an already-modified tracked file changed)\n' >&2
         fi

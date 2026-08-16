@@ -19,7 +19,9 @@
 # places (a per-model `default_effort` and a global `[thinking] effort`), so a hand-edit to one is
 # invisible. The tier a run really used is recorded in that session's wire log as `thinkingEffort`.
 # A review whose tier cannot be asserted is not evidence about that tier, so this exits 4 rather than
-# reporting a number it never verified.
+# reporting a number it never verified. SCOPE, stated once here and again at the assertion: that log
+# sits inside the reviewed process's own writable session tree, so the tier is SELF-REPORTED — it
+# defends against a run that quietly used the default tier, not against a reviewer that lies about it.
 #
 # THE FAILURE MODES THIS ENCODES, EACH MEASURED ON THIS TICKET
 #   * A round is VOID if the worktree changes during the review. Kimi's round-37 run tripped this
@@ -245,8 +247,20 @@ EFFORTS=""
 [ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
     | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"
 
-printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s\n' \
-    "$STATUS" "$(wc -c < "$OUT" | tr -d ' ')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" "${EFFORTS:-UNKNOWN}"
+# WHAT THIS LINE IS EVIDENCE OF, EXACTLY. The wire log lives inside the session tree of the process it
+# describes, and that process is shell-capable with this same `$HOME` and uid — it can rewrite the file
+# to say `max` before this grep reads it (codex, PR #67 pass 15). No file under a HOME the reviewed
+# process can write authenticates anything against that process, and neither does its own stdout; a
+# channel it "cannot modify" does not exist at the same uid on the same machine. So the token is
+# labelled for what it is — SELF-REPORTED — and the digest of the bytes this run actually read is
+# printed beside it, so a later dispute has something fixed to point at. The assertion below still
+# earns its keep against the failure it was written for (a run that silently used the default tier),
+# and claims nothing about an adversarial one.
+WIRE_SHA=""
+[ -n "$WIRE" ] && WIRE_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WIRE" 2>/dev/null)"
+
+printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s(self-reported) WIRE=%s\n' \
+    "$STATUS" "$(wc -c < "$OUT" | tr -d ' ')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" "${EFFORTS:-UNKNOWN}" "${WIRE_SHA:0:12}"
 
 if [ "$EFFORTS" != "max," ]; then
     echo "EFFORT NOT ASSERTED AS max (saw: ${EFFORTS:-none}) — this run is not evidence about max" >&2

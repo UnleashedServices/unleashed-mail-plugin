@@ -95,6 +95,8 @@ case "${{KIMI_STUB_MODE:-clean}}" in
   # The session-binding modes write under $HOME — the harness's HOME, re-pointed at the scratch by the test.
   new-max)       mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  new-high)      mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   quote-old)     printf 'As in {OLD_SESSION} earlier\\n' ;;      # creates NOTHING; quotes a pre-existing session
   two-new)       for s in {NEW_SESSION} {NEW_SESSION_2}; do
                    mkdir -p "$HOME/.kimi-code/sessions/wd_new/$s/agents/main"
@@ -187,7 +189,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         p, out = self._run("clean")
         self.assertTrue(self._stub_ran(), "the stub ran but left no marker — the refusal tests could not tell")
         self.assertEqual(4, p.returncode, f"clean: rc {p.returncode}\n{p.stdout}{p.stderr}")
-        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN$")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN\(self-reported\) WIRE=$")
         self.assertIn("EFFORT NOT ASSERTED", p.stderr)
         with open(out, encoding="utf-8") as fh:
             transcript = fh.read()
@@ -592,7 +594,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.home, ".kimi-code")), "no session before the run")
         p, _ = self._run("new-max")
         self.assertEqual(0, p.returncode, f"new-max: rc {p.returncode}\n{p.stdout}{p.stderr}")
-        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=max,$")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
         self.assertNotIn("EFFORT NOT ASSERTED", p.stderr)
         self.assertTrue(os.path.isfile(self._wire("wd_new", NEW_SESSION)), "the stub's session did not land under the scratch HOME")
 
@@ -612,7 +614,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         The pre-existing session's `max` log is NOT consulted: EFFORT=UNKNOWN and exit 4."""
         p = self._quote_old(HARNESS)
         self.assertEqual(4, p.returncode, f"quote-old: rc {p.returncode}\n{p.stdout}{p.stderr}")
-        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN$")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN\(self-reported\) WIRE=$")
         self.assertIn("EFFORT NOT ASSERTED", p.stderr)
 
     # The set-difference selection, as shipped — replaced by the control with the PREVIOUS selection: the
@@ -666,17 +668,75 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertEqual(0, p.returncode,
                          f"the CONTROL did not certify the quoted session — the fixture is not the finding: "
                          f"rc {p.returncode}\n{p.stdout}{p.stderr}")
-        self.assertRegex(p.stdout, r" EFFORT=max,$")
+        self.assertRegex(p.stdout, r" EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
 
     def test_two_new_sessions_are_not_evidence(self):
         """Two sessions created during the run (a concurrent run's shape), both `max`: no single session is
         this run's, so EFFORT=UNKNOWN and exit 4 — never `max` on the strength of either."""
         p, _ = self._run("two-new")
         self.assertEqual(4, p.returncode, f"two-new: rc {p.returncode}\n{p.stdout}{p.stderr}")
-        self.assertRegex(p.stdout, r" EFFORT=UNKNOWN$")
+        self.assertRegex(p.stdout, r" EFFORT=UNKNOWN\(self-reported\) WIRE=$")
         self.assertIn("EFFORT NOT ASSERTED", p.stderr)
         for s in (NEW_SESSION, NEW_SESSION_2):
             self.assertTrue(os.path.isfile(self._wire("wd_new", s)), f"the stub did not create {s}")
+
+    # ── what the effort token is EVIDENCE OF, said on the line itself ─────────────────────────────
+
+    #: The summary line as shipped, and the bare `EFFORT=%s` the control restores. The digest line is
+    #: part of the pin: a control that kept it while dropping the label would still print the digest.
+    SUMMARY = ('WIRE_SHA=""\n'
+               '[ -n "$WIRE" ] && WIRE_SHA="$(python3 -c \'import hashlib,sys; '
+               'print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())\' "$WIRE" 2>/dev/null)"\n'
+               '\n'
+               "printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s(self-reported) WIRE=%s\\n' \\\n"
+               '    "$STATUS" "$(wc -c < "$OUT" | tr -d \' \')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" '
+               '"${EFFORTS:-UNKNOWN}" "${WIRE_SHA:0:12}"\n')
+    SUMMARY_OLD = ("printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s\\n' \\\n"
+                   '    "$STATUS" "$(wc -c < "$OUT" | tr -d \' \')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" '
+                   '"${EFFORTS:-UNKNOWN}"\n')
+
+    def test_the_effort_token_is_labelled_self_reported_and_digests_the_wire_log_it_read(self):
+        """codex, PR #67 pass 15 — the wire log lives INSIDE the session tree of the process it describes,
+        under the same `$HOME` and the same uid, and that process has a shell: it can rewrite the file to
+        say `max` before this grep reads it, and no file under a HOME it can write authenticates anything
+        against it. There is no channel at the same uid that would. So the token says what it is —
+        `EFFORT=<v>(self-reported)` — and the digest of the bytes THIS run actually read is printed
+        beside it, so a later dispute has something fixed to point at. The exit-4 assertion is unchanged
+        and still earns its keep against the failure it was written for: a run whose wire log says `high`
+        is refused as evidence about `max`. Mutant: the bare `EFFORT=%s` restored — the line carries
+        neither the label nor the digest, and reads as an assertion about the run."""
+        wire = self._wire("wd_new", NEW_SESSION)
+        p, _ = self._run("new-high", out=os.path.join(self.scratch, "out-high-shipped.txt"))
+        self.assertEqual(4, p.returncode, f"new-high: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("EFFORT NOT ASSERTED AS max (saw: high,)", p.stderr,
+                      f"a `high` wire log was accepted as evidence about max: {p.stderr!r}")
+        self.assertTrue(os.path.isfile(wire),
+                        "the stub's `high` session did not land under the scratch HOME — there is no "
+                        "wire log for the digest to be OF")
+        with open(wire, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+        self.assertRegex(p.stdout,
+                         r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} "
+                         r"EFFORT=high,\(self-reported\) WIRE=" + digest + "$")
+        # The control: the bare token — no label, no digest (which is what the line said before).
+        control = self._laid_out_harness(self._summary_control_text())
+        shutil.rmtree(os.path.join(self.home, ".kimi-code"))     # so the control's run creates it afresh
+        p2, _ = self._run("new-high", out=os.path.join(self.scratch, "out-high-control.txt"),
+                          harness=control)
+        self.assertEqual(4, p2.returncode,
+                         f"the CONTROL did not reach the summary — the fixture is not the finding: "
+                         f"rc {p2.returncode}\n{p2.stdout}{p2.stderr}")
+        self.assertRegex(p2.stdout, r" EFFORT=high,$")
+        self.assertNotIn("self-reported", p2.stdout,
+                         "the CONTROL still labelled the token — it is not the pre-fix line")
+        self.assertNotIn("WIRE=", p2.stdout, "the CONTROL still printed a digest")
+
+    def _summary_control_text(self):
+        """The harness text with the shipped summary block replaced by the bare `EFFORT=%s` line."""
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.SUMMARY), "the summary block is not unique — re-derive the pin")
+        return text.replace(self.SUMMARY, self.SUMMARY_OLD, 1)
 
 
 if __name__ == "__main__":

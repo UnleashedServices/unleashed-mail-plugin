@@ -52,6 +52,21 @@ Controls: the two literal `$1/.git/…` calls restored, the `--dir <common>/hook
 `$_ugm_git/HEAD` argument dropped, and the ACL enumeration reduced to its marker — each RUN and compared
 EQUAL. And STABILITY, which guards against a false void: two takes of an untouched linked worktree are
 byte-identical.
+
+THE STAGED BYTES, THE PATHS CONFIG POINTS AT, AND THE REPORT'S OWN GIT (codex, PR #67 pass 15 — four
+more findings, all reproduced). `ls-files -z` records index MEMBERSHIP only, so a staged blob swapped
+with `update-index --cacheinfo` left `status` reading the same `MM f.txt` and the fingerprint
+byte-identical while `rev-parse :f.txt` moved — `ls-files --stage -z` is emitted as `INDEX` records now.
+`git config --get` returns the UNEXPANDED text, so `core.hooksPath = ~/hooks` was fingerprinted as
+`<root>/~/hooks` while git ran `$HOME/hooks/pre-commit`; every config-referenced path is read with
+`--path`. `core.excludesFile` and `core.attributesFile`, and every `file:` origin `git config --list
+--show-origin` names (which is how an `include.path`/`includeIf` file, and the global and system config,
+get covered), are hashed — recording the config TEXT that named them did not record them. And
+`tree_fingerprint_report`, which both isolation harnesses call the moment a mutation is detected, ran a
+plain `git status`: a reviewer-planted `core.fsmonitor` executable would have been RUN by it, as us,
+inside the tree being measured. Controls: the staged records dropped from the seed, `--path` dropped,
+the excludes read dropped, the origins block dropped — each RUN and compared EQUAL; and for the report,
+the plain `git status` restored, which EXECUTES the planted hook (the witness file appears).
 """
 
 from __future__ import annotations
@@ -143,13 +158,17 @@ class DisposableFingerprintIsInjective(unittest.TestCase):
         self.assertNotEqual(b2, a2)
 
 
-def tree_fingerprint(helper, root, ceiling):
+def tree_fingerprint(helper, root, ceiling, extra_env=None):
     """`tree_fingerprint <root>` through `helper`, as the harnesses call it. Returns (rc, stdout, stderr).
 
     GIT_CEILING_DIRECTORIES stops repository discovery at the scratch directory: with the fixture's own
     `.git` deleted, git would otherwise walk UP and answer for whatever repository encloses ~/.claude
-    (a dotfiles checkout of $HOME is common), and a probe that succeeded THERE would read as clean."""
-    env = dict(os.environ, GIT_CEILING_DIRECTORIES=ceiling)
+    (a dotfiles checkout of $HOME is common), and a probe that succeeded THERE would read as clean.
+
+    `extra_env` re-points HOME for the tilde-expansion case (PR #67 pass 15): `core.hooksPath = ~/hooks`
+    is a form git supports, and the probe must resolve it the way git does — which means the fixture's
+    HOME, never the developer's."""
+    env = dict(os.environ, GIT_CEILING_DIRECTORIES=ceiling, **(extra_env or {}))
     p = subprocess.run(["bash", "-c", '. "$1"; tree_fingerprint "$2"', "_", helper, root],
                        capture_output=True, text=True, check=False, env=env)
     return p.returncode, p.stdout, p.stderr
@@ -289,12 +308,12 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         return before, after
 
     # The HEAD-tree half of the tracked-path union — the `ls-tree` call and the lines that fold it in.
-    # (Both git calls carry `--no-optional-locks -c core.fsmonitor=false` since PR #67 pass 14: a probe
-    # must never write the live index, and a reviewer-planted fsmonitor hook must not be EXECUTED by
-    # our own AFTER take. The pin quotes the call as it is shipped.)
-    LS_TREE_UNION = ('r2 = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", '
-                     '"-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], '
-                     'capture_output=True)\n'
+    # (Every git call in the probe is built from the shared `GIT` prefix, which carries
+    # `--no-optional-locks -c core.fsmonitor=false` since PR #67 pass 14: a probe must never write the
+    # live index, and a reviewer-planted fsmonitor hook must not be EXECUTED by our own AFTER take.
+    # `FsmonitorIsNeverExecutedByTheProbeOrTheReport` asserts that prefix behaviourally; the pin here
+    # quotes the call as it is shipped, so a rewrite that dropped the prefix would strand this anchor.)
+    LS_TREE_UNION = ('r2 = subprocess.run(GIT + ["ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)\n'
                      'if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure\n'
                      '    names.update(x for x in r2.stdout.split(b"\\0") if x)\n')
 
@@ -337,11 +356,76 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
                          "to something other than the HEAD-tree half, so this test does not prove that half")
         self.assertNotIn(' "f.txt"\n', b2, b2)
 
+    # ── the STAGED BYTES, not merely index membership (codex, PR #67 pass 15) ─────────────────────
+
+    def _staged_blob_swap(self, helper):
+        """`f.txt` committed, staged with one content and edited again in the working tree, so the checkout
+        starts `MM f.txt`; B; `git update-index --cacheinfo` swaps the STAGED blob for other bytes; A.
+        Returns (B, A, the staged oid before, the staged oid after). The premise is asserted on both
+        sides: `git status --porcelain` is EXACTLY `MM f.txt` before and after, and `git rev-parse :f.txt`
+        moved — the working tree, HEAD and the set of listed paths are all untouched."""
+        self._fresh_repo()
+        path = os.path.join(self.repo, "f.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("staged\n")
+        self._git("add", "f.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("worktree\n")
+        other = subprocess.run(["git", "-C", self.repo, "hash-object", "-w", "--stdin"],
+                               input="planted\n", capture_output=True, text=True, check=True).stdout.strip()
+        oid = lambda: subprocess.run(["git", "-C", self.repo, "rev-parse", ":f.txt"],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+        status = lambda: subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                                        capture_output=True, text=True, check=True).stdout
+        before_oid = oid()
+        self.assertNotEqual(before_oid, other, "the planted blob already IS the staged one")
+        self.assertEqual("MM f.txt\n", status(), f"the fixture must start `MM f.txt`: {status()!r}")
+        before = self._fp(helper)
+        self._git("update-index", "--cacheinfo", f"100644,{other},f.txt")
+        self.assertEqual(other, oid(), "the cacheinfo swap did not move the staged object id")
+        self.assertEqual("MM f.txt\n", status(),
+                         f"status moved — the fixture is not the finding: {status()!r}")
+        with open(path, encoding="utf-8") as fh:
+            self.assertEqual("worktree\n", fh.read(), "the swap touched the working tree — not the finding")
+        after = self._fp(helper)
+        return before, after, before_oid, other
+
+    def test_the_staged_object_ids_are_recorded_not_only_index_membership(self):
+        """codex, PR #67 pass 15 — `ls-files -z` records index MEMBERSHIP only. In a checkout that starts
+        `MM f.txt` a reviewer can swap what is STAGED with `git update-index --cacheinfo` and leave the
+        working tree alone: `git status --porcelain` prints the same two letters, every leaf digest is
+        unchanged, and the fingerprint was BYTE-IDENTICAL while `git rev-parse :f.txt` returned different
+        bytes — so the maintainer's next `git commit` writes a blob nobody reviewed. `ls-files --stage -z`
+        is emitted as `INDEX <mode> <oid> <stage>\\t<path>` records at the head of the tracked block.
+        Mutant: the staged records dropped from the seed (`out = []`) — the two takes compare EQUAL."""
+        before, after, before_oid, other = self._staged_blob_swap(HELPER)
+        self.assertNotEqual(before, after,
+                            "the `update-index --cacheinfo` swap of the staged blob left the LIVE "
+                            "fingerprint byte-identical — only index MEMBERSHIP was recorded")
+        self.assertIn(f"\nINDEX 100644 {before_oid} 0\tf.txt\n", before,
+                      f"no `INDEX <mode> <oid> <stage>\\t<path>` record before: {before!r}")
+        self.assertIn(f"\nINDEX 100644 {other} 0\tf.txt\n", after,
+                      f"the swapped object id is not recorded after: {after!r}")
+        # ONLY the staged half moved: substituting the one oid in B reproduces A exactly.
+        self.assertEqual(before.replace(before_oid, other), after,
+                         "something other than the INDEX record differs — the fixture is not the finding")
+        # The control: the seed without the staged records — the swap is invisible (measured).
+        mutant = self._mutant(self.STAGED_SEED, "out = []\n", "tree-fingerprint-no-staged-oids.sh")
+        b2, a2, _, _ = self._staged_blob_swap(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no staged object ids) told the trees apart — the swap is visible to "
+                         "something other than the INDEX records, so this test does not prove them")
+        self.assertNotIn("\nINDEX ", b2, b2)
+
     # The directory block of the tracked-content probe — from the ancestor set through the `D` record;
-    # the leaf loop that follows it (and the `out = []` it shares) stays in the control.
+    # the leaf loop that follows it (and the record-list seed it shares) stays in the control.
     # (`ident(st)` is defined ABOVE the block and stays in the control — the leaf loop uses it too.)
     DIR_BLOCK_HEAD = 'dirs = set(["."])\n'
     DIR_BLOCK_TAIL = '        out.append("D %s %s %s" % (mode, ident(st), json.dumps(rel)))\n'
+    #: The record list's SEED — the staged `INDEX` records (PR #67 pass 15) the directory block is
+    #: appended to. The directory-block control re-adds it verbatim, so the control differs from the
+    #: shipped build in the directory block ALONE and not also in the staged-object-id half.
+    STAGED_SEED = 'out = ["INDEX %s" % s for s in staged]\n'
 
     def _dir_block(self):
         """The CURRENT text of the directory block, sliced between two unique anchors of the shipped helper."""
@@ -353,7 +437,8 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         end = text.index(self.DIR_BLOCK_TAIL, start) + len(self.DIR_BLOCK_TAIL)
         block = text[start:end]
         self.assertEqual(1, text.count(block), "the sliced directory block is not unique")
-        self.assertIn("out = []\n", block, "the block should carry the shared `out = []` — the control re-adds it")
+        self.assertIn(self.STAGED_SEED, block,
+                      "the block should carry the shared record-list seed — the control re-adds it")
         self.assertIn('out.append("MISSING-DIR %s"', block)
         self.assertIn('out.append("DL %s %s %s -> %s"', block)
         # The leaf loop is OUTSIDE the slice, so the control still hashes every tracked file.
@@ -391,7 +476,7 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         self.assertLess(re.search(rf'D 0777 {IDENT} "scripts"', after).start(), after.index(' "scripts/f.sh"\n'), after)
         self.assertIn(' "scripts/f.sh"\n', before, before)                 # the leaf is still hashed
         # The control: the directory block removed, the leaf loop kept — compares EQUAL (measured).
-        mutant = self._mutant(self._dir_block(), "out = []\n", "tree-fingerprint-no-dir-block.sh")
+        mutant = self._mutant(self._dir_block(), self.STAGED_SEED, "tree-fingerprint-no-dir-block.sh")
         b2, a2, _ = self._directory_mode_change(mutant)
         self.assertEqual(b2, a2,
                          "the CONTROL (leaves only) told the trees apart — the chmod is visible to something "
@@ -661,10 +746,22 @@ class GitMetadataAndAclsAreFingerprinted(unittest.TestCase):
     def _assert_clean(self, why):
         self.assertEqual("", self._status(), f"{why}: {self._status()!r}")
 
-    def _fp(self, helper):
-        rc, out, err = tree_fingerprint(helper, self.wt, self.scratch)
+    def _fp(self, helper, env=None):
+        rc, out, err = tree_fingerprint(helper, self.wt, self.scratch, extra_env=env)
         self.assertEqual(0, rc, f"tree_fingerprint failed on the linked worktree: {err!r}")
         return out
+
+    def _ext(self, name):
+        """A directory beside the worktree but OUTSIDE it — where the config-referenced files live."""
+        path = os.path.join(self.scratch, name)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _config(self, *args, env=None):
+        """`git -C <worktree> config <args>`, returning the trimmed stdout (empty when unset)."""
+        p = subprocess.run(["git", "-C", self.wt, "config", *args], capture_output=True, text=True,
+                           check=False, env=dict(os.environ, **(env or {})))
+        return p.stdout.strip()
 
     def _mutant(self, old, new, name):
         """A copy of the shipped helper with ONE anchor replaced; the anchor must be unique."""
@@ -790,6 +887,207 @@ class GitMetadataAndAclsAreFingerprinted(unittest.TestCase):
                          "something other than that record, so this test does not prove it")
         self.assertNotIn(f"\n{head_file} ", b2, b2)
 
+    # ── the paths CONFIG POINTS AT, read the way GIT reads them (codex, PR #67 pass 15) ───────────
+
+    #: `core.hooksPath` read with git's own path semantics; the control drops `--path`, which is the
+    #: shape that fingerprinted the supported tilde form as the literal `<root>/~/hooks`.
+    HOOKS_PATH_READ = 'config --path --get core.hooksPath'
+    HOOKS_PATH_OLD = 'config --get core.hooksPath'
+
+    def _home(self):
+        """A HOME for the fixture — inside the scratch, outside the worktree. `~` must never expand to
+        the developer's own home in a test that then edits `~/hooks/pre-commit`."""
+        return self._ext("home")
+
+    def _tilde_hooks_edit(self, helper):
+        """`core.hooksPath = ~/hooks` (the literal tilde, as git stores it) with `~/hooks/pre-commit`
+        already present; B; the hook's CONTENT is rewritten in place — nothing created anywhere; A.
+        Returns (B, A, the hook path). The premises are asserted: `--get` returns the raw tilde,
+        `--path --get` returns the expanded path, and `git status` is blind throughout."""
+        home = self._home()
+        hooks = os.path.join(home, "hooks")
+        os.makedirs(hooks, exist_ok=True)
+        hook = os.path.join(hooks, "pre-commit")
+        with open(hook, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(hook, 0o755)
+        self._git("config", "core.hooksPath", "~/hooks", repo=self.wt)
+        self.assertEqual("~/hooks", self._config("--get", "core.hooksPath"),
+                         "git did not store the tilde form verbatim — the fixture is not the finding")
+        self.assertEqual(hooks, self._config("--path", "--get", "core.hooksPath", env={"HOME": home}),
+                         "git does not expand `~` for this key — the fixture is not the finding")
+        self._assert_clean("the tilde-hooks round must start clean")
+        before = self._fp(helper, env={"HOME": home})
+        with open(hook, "w", encoding="utf-8") as fh:                     # in place: same inode, new bytes
+            fh.write("#!/bin/sh\nexfiltrate\n")
+        self._assert_clean("the hook edit is visible to `status` — the fixture is not the finding")
+        after = self._fp(helper, env={"HOME": home})
+        return before, after, hook
+
+    def test_core_hookspath_in_its_tilde_form_is_resolved_the_way_git_resolves_it(self):
+        """codex, PR #67 pass 15 — `git config --get` returns the UNEXPANDED text, so the supported
+        `core.hooksPath = ~/hooks` was fingerprinted as `<root>/~/hooks`, a directory that does not
+        exist, while git executed `$HOME/hooks/pre-commit`: editing that hook left the two takes
+        byte-identical. The value is read with `--path`, which is how git itself reads it (a relative
+        value is still resolved against the checkout root). Mutant: `--path` dropped — the two takes
+        compare EQUAL, and the recorded directory is the literal `<worktree>/~/hooks` ABSENT."""
+        before, after, hook = self._tilde_hooks_edit(HELPER)
+        self.assertNotEqual(before, after,
+                            "an edit to the hook `core.hooksPath = ~/hooks` actually names left the LIVE "
+                            "fingerprint byte-identical — the tilde was never expanded")
+        self.assertRegex(before, rf'\n{re.escape(hook)} F 0755 {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        self.assertRegex(after, rf'\n{re.escape(hook)} F 0755 {IDENT} \d+ [0-9a-f]{{64}}\n', after)
+        digest = lambda t: re.search(rf'\n{re.escape(hook)} F 0755 {IDENT} \d+ ([0-9a-f]{{64}})\n', t).group(1)
+        self.assertNotEqual(digest(before), digest(after), "the hook's digest did not move")
+        # The control: without `--path` the recorded path is the literal tilde under the checkout root,
+        # which does not exist — both takes record it ABSENT and compare EQUAL (measured).
+        mutant = self._mutant(self.HOOKS_PATH_READ, self.HOOKS_PATH_OLD,
+                              "tree-fingerprint-hookspath-unexpanded.sh")
+        b2, a2, _ = self._tilde_hooks_edit(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no `--path`) told the trees apart — the hook edit is visible to "
+                         "something other than the expanded hooks path, so this test does not prove it")
+        self.assertIn(f"\n{os.path.join(self.wt, '~', 'hooks')} ABSENT\n", b2,
+                      f"the CONTROL did not record the unexpanded `<root>/~/hooks`: {b2!r}")
+        self.assertNotIn(f"\n{hook} ", b2, b2)
+
+    #: `core.excludesFile` read as a path and hashed; the control drops the argument entirely, which is
+    #: the shape that recorded the config TEXT naming the file but never the file.
+    EXCLUDES_READ = ('    _ugm_excl="$(_u_git -C "$_ugm_root" config --path --get core.excludesFile '
+                     '2>/dev/null)" || _ugm_excl=""\n')
+    EXCLUDES_GONE = '    _ugm_excl=""\n'
+
+    def _external_excludes_edit(self, helper):
+        """An EXTERNAL `core.excludesFile` that hides an untracked file from `status`; the hidden file is
+        created BEFORE the round, so the window contains ONLY a content change to the excludes file; B;
+        one rule appended to it; A. Returns (B, A, the excludes path). The premises are asserted: the
+        file IS hidden, and it is that external file doing the hiding.
+
+        (Nothing is CREATED between the takes on purpose: on APFS a directory's `st_nlink` tracks its
+        entry count, so a new file moves the enclosing directory's own record and the round would pass
+        for a reason that has nothing to do with the excludes file.)"""
+        excl = os.path.join(self._ext("ext-excludes"), "excludes")
+        with open(excl, "w", encoding="utf-8") as fh:
+            fh.write("hidden.txt\n")
+        self._git("config", "core.excludesFile", excl, repo=self.wt)
+        hidden = os.path.join(self.wt, "hidden.txt")
+        if not os.path.exists(hidden):
+            with open(hidden, "w", encoding="utf-8") as fh:
+                fh.write("planted\n")
+        self.assertEqual("", self._status(),
+                         "the external excludes file does not hide the untracked file — not the finding")
+        bare = subprocess.run(["git", "-C", self.wt, "-c", "core.excludesFile=/dev/null",
+                               "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertEqual("?? hidden.txt\n", bare.stdout,
+                         f"without that excludes file the path is NOT untracked-visible — the fixture "
+                         f"does not show the file doing the hiding: {bare.stdout!r}")
+        before = self._fp(helper)
+        with open(excl, "a", encoding="utf-8") as fh:                     # one more rule; nothing created
+            fh.write("second-rule\n")
+        self._assert_clean("the excludes edit is visible to `status` — the fixture is not the finding")
+        after = self._fp(helper)
+        return before, after, excl
+
+    def test_the_external_excludes_file_is_hashed_not_only_the_config_that_names_it(self):
+        """codex, PR #67 pass 15 — `core.excludesFile` hides an untracked file from `status`, so a reviewer
+        who adds a rule to an external excludes file changes what the whole status half can see while the
+        repository's own config text stands still: recording the config that NAMES the file did not
+        record the file. Mutant: the `--path --get core.excludesFile` read dropped — the two takes
+        compare EQUAL."""
+        before, after, excl = self._external_excludes_edit(HELPER)
+        self.assertNotEqual(before, after,
+                            "a rule appended to the external `core.excludesFile` left the LIVE fingerprint "
+                            "byte-identical — only the config text that names it was recorded")
+        self.assertRegex(before, rf'\n{re.escape(excl)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        # The control: the excludes read dropped — the file is not recorded at all and the takes are EQUAL.
+        mutant = self._mutant(self.EXCLUDES_READ, self.EXCLUDES_GONE, "tree-fingerprint-no-excludes.sh")
+        b2, a2, _ = self._external_excludes_edit(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no excludes-file record) told the trees apart — the appended rule is "
+                         "visible to something other than that record, so this test does not prove it")
+        self.assertNotIn(f"\n{excl} ", b2, b2)
+
+    def _origins_block(self):
+        """The CURRENT text of the `--show-origin` block, sliced between two unique anchors."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        head = '    _ugm_origins="$(_u_git -C "$_ugm_root" config --list --show-origin'
+        self.assertEqual(1, text.count(head), "the origins block's head is not unique")
+        start = text.index(head)
+        end = text.index("\n    fi\n", start) + len("\n    fi\n")
+        block = text[start:end]
+        self.assertEqual(1, text.count(block), "the sliced origins block is not unique")
+        self.assertIn("sed -n 's/^file://p'", block)
+        # The block feeds the origins through a `while read` so a RELATIVE origin can be resolved
+        # against the checkout root: `--show-origin` prints the repository's own files relative
+        # (`.git/config`, and `.git/../inc.cfg` for a relative include), and fed verbatim they
+        # resolved against the recorder's cwd and recorded `.git/config ABSENT`.
+        self.assertIn('while IFS= read -r _ugm_o', block)
+        self.assertIn('case "$_ugm_o" in /*) : ;; *) _ugm_o="$_ugm_root/$_ugm_o" ;; esac', block)
+        self.assertIn('set -- "$@" "$_ugm_o"', block)
+        return block
+
+    def _included_config_edit(self, helper):
+        """An EXTERNAL config pulled in by `include.path`, which sets `core.hooksPath` for this checkout;
+        B; that file's CONTENT changes (a `user.email` line — `core.hooksPath` is left byte-identical, so
+        no other record can move); A. Returns (B, A, the included path). The premises are asserted: the
+        included file is what supplies `core.hooksPath`, the repository's own config never names it, and
+        the value does not move across the window."""
+        inc = os.path.join(self._ext("ext-include"), "included.cfg")
+        inc_hooks = self._ext("ext-include-hooks")
+        with open(os.path.join(inc_hooks, "pre-commit"), "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+
+        def write_inc(email):
+            with open(inc, "w", encoding="utf-8") as fh:
+                fh.write(f"[core]\n\thooksPath = {inc_hooks}\n[user]\n\temail = {email}\n")
+
+        write_inc("a@a")
+        self._git("config", "include.path", inc, repo=self.wt)
+        self.assertEqual(inc_hooks, self._config("--get", "core.hooksPath"),
+                         "the included file does not supply `core.hooksPath` — the fixture is not the finding")
+        with open(os.path.join(self.common, "config"), encoding="utf-8") as fh:
+            self.assertNotIn("hooksPath", fh.read(),
+                             "the repository's own config names the hooks path — the fixture does not show "
+                             "the INCLUDED file governing the checkout")
+        self._assert_clean("the include round must start clean")
+        before = self._fp(helper)
+        write_inc("b@b")                                  # content moves; `core.hooksPath` does not
+        self.assertEqual(inc_hooks, self._config("--get", "core.hooksPath"),
+                         "the rewrite moved `core.hooksPath` — another record could account for the change")
+        self._assert_clean("the include edit is visible to `status` — the fixture is not the finding")
+        after = self._fp(helper)
+        return before, after, inc
+
+    def test_every_file_that_contributes_config_is_hashed_including_an_included_one(self):
+        """codex, PR #67 pass 15 — `include.path` / `includeIf` pull settings from a file the repository's
+        own `config` only NAMES, and the global and system files can set `core.hooksPath` for this
+        checkout too; none of them was recorded. `git config --list --show-origin --name-only` names
+        every file that contributed, and each is hashed. Mutant: the origins block dropped — the two
+        takes compare EQUAL.
+
+        RESIDUAL, MEASURED (not closed by the shipped block, reported rather than asserted here):
+        `--show-origin` renders the repository's own config as the RELATIVE `.git/config`, and a
+        RELATIVELY-included file as `.git/../<name>`; those strings are passed to the recorder verbatim
+        and resolve against the RECORDER's cwd, so they read `ABSENT` (or, worse, name another
+        repository's file) whenever the caller's cwd is not the checkout root. An ABSOLUTE include —
+        the case this fixture drives — is recorded correctly."""
+        before, after, inc = self._included_config_edit(HELPER)
+        self.assertNotEqual(before, after,
+                            "an edit to the config file `include.path` pulls in left the LIVE fingerprint "
+                            "byte-identical — only the file that NAMES it was recorded")
+        self.assertRegex(before, rf'\n{re.escape(inc)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        digest = lambda t: re.search(rf'\n{re.escape(inc)} F \d{{4}} {IDENT} \d+ ([0-9a-f]{{64}})\n', t).group(1)
+        self.assertNotEqual(digest(before), digest(after), "the included file's digest did not move")
+        # The control: the origins block dropped — the included file is not recorded and the takes are EQUAL.
+        mutant = self._mutant(self._origins_block(), '    _ugm_origins=""\n',
+                              "tree-fingerprint-no-config-origins.sh")
+        b2, a2, _ = self._included_config_edit(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no config origins) told the trees apart — the included file's edit is "
+                         "visible to something other than the origins block, so this test does not prove it")
+        self.assertNotIn(f"\n{inc} ", b2, b2)
+
     # ── the ACLs macOS keeps outside st_mode ──────────────────────────────────────────────────────
 
     #: The enumeration `_u_acl_fingerprint` performs; the control keeps only its `ACL-PROBE done` marker,
@@ -863,6 +1161,138 @@ class GitMetadataAndAclsAreFingerprinted(unittest.TestCase):
             self.assertRegex(first, rf'\n{re.escape(hooks)}/\S+ F ', first)
         self.assertIn("\nACL-PROBE %s\n" % ("done" if DARWIN else "unsupported"), first, first)
         self.assertRegex(first, rf'\nF \d{{4}} \d+ [0-9a-f]{{64}} {IDENT} "f\.txt"\n', first)
+
+
+class FsmonitorIsNeverExecutedByTheProbeOrTheReport(unittest.TestCase):
+    """`core.fsmonitor` names an EXECUTABLE that git runs on index refresh, so it is a way for a
+    reviewer who can write the live checkout's config to have OUR OWN post-run probe run THEIR code,
+    as us, in the tree we are measuring. `tree_fingerprint` has gone through `_u_git`
+    (`--no-optional-locks -c core.fsmonitor=false`) since PR #67 pass 14 — but
+    `tree_fingerprint_report`, which BOTH isolation harnesses call the moment a mutation is detected,
+    still ran a plain `git status` / `git rev-parse` (codex, PR #67 pass 15 — reproduced). All three
+    call sites use `_u_git` now.
+
+    Measured on git 2.54.0 (Apple Git-157): a plain `git status --porcelain` EXECUTES the hook (the
+    witness file appears); `git status` under `-c core.fsmonitor=false` does not; and `git rev-parse
+    HEAD` does not execute it either way — so the two `rev-parse` call sites cannot be shown
+    behaviourally and are covered by the text assertion below, which is stated as being that."""
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="tree-fp-fsm.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.repo = os.path.join(self.scratch, "repo")
+        subprocess.run(["git", "init", "-q", self.repo], check=True, capture_output=True)
+        self._git("config", "user.email", "fixture@test")
+        self._git("config", "user.name", "fixture")
+        with open(os.path.join(self.repo, "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write("one\n")
+        self._git("add", "-A")
+        self._git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+        # THE PLANTED HOOK AND ITS WITNESS LIVE OUTSIDE THE CHECKOUT, so neither is a tracked or
+        # untracked path the fingerprint would notice — the only thing the witness records is that
+        # the hook RAN.
+        self.witness = os.path.join(self.scratch, "witness")
+        self.hook = os.path.join(self.scratch, "fsmonitor-hook.sh")
+        with open(self.hook, "w", encoding="utf-8") as fh:
+            fh.write(f'#!/bin/sh\nprintf "FIRED %s\\n" "$*" >> {self.witness}\nexit 1\n')
+        os.chmod(self.hook, 0o755)
+        self._git("config", "core.fsmonitor", self.hook)
+
+    def _git(self, *args):
+        subprocess.run(["git", "-C", self.repo, *args], check=True, capture_output=True)
+
+    def _fired(self):
+        return os.path.exists(self.witness)
+
+    def _clear(self):
+        if os.path.exists(self.witness):
+            os.unlink(self.witness)
+
+    def _run(self, helper, script):
+        env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.scratch)
+        return subprocess.run(["bash", "-c", script, "_", helper, self.repo],
+                              capture_output=True, text=True, check=False, env=env)
+
+    #: The report's status probe as shipped, and the plain `git` the control restores.
+    REPORT_STATUS = '    _tf_after_status="$(_u_git -C "$1" status --porcelain 2>/dev/null)"\n'
+    REPORT_STATUS_OLD = '    _tf_after_status="$(git -C "$1" status --porcelain 2>/dev/null)"\n'
+    #: `tree_fingerprint <root> >/dev/null; tree_fingerprint_report <root> "" <a sha that is not HEAD>` —
+    #: the empty before-status forces the report down its `rev-parse` branch as well.
+    PROBE = '. "$1"; tree_fingerprint "$2" >/dev/null'
+    REPORT = PROBE + '; tree_fingerprint_report "$2" "" 0000000000000000000000000000000000000000'
+
+    def test_a_planted_fsmonitor_hook_is_not_executed_by_the_probe_or_by_the_report(self):
+        """codex, PR #67 pass 15 — the report ran plain `git`, so a reviewer-planted `core.fsmonitor`
+        executable was RUN by the very code path that reports the mutation it planted. Mutant: the
+        report's `_u_git` status restored to a plain `git` — the hook FIRES."""
+        # The premise, measured rather than assumed: an ordinary `git status` DOES execute the hook.
+        subprocess.run(["git", "-C", self.repo, "status", "--porcelain"], check=True, capture_output=True)
+        self.assertTrue(self._fired(),
+                        "a plain `git status` did not execute the planted fsmonitor hook — this git does "
+                        "not run it, so the fixture cannot show anything")
+        self._clear()
+        # The shipped build: neither the probe nor the report executes it.
+        p = self._run(HELPER, self.PROBE)
+        self.assertEqual(0, p.returncode, f"tree_fingerprint failed: {p.stderr!r}")
+        self.assertFalse(self._fired(), "`tree_fingerprint` executed the planted fsmonitor hook")
+        p = self._run(HELPER, self.REPORT)
+        self.assertEqual(0, p.returncode, f"the report failed: {p.stderr!r}")
+        self.assertIn("no new status line", p.stderr, f"the report did not run its branch: {p.stderr!r}")
+        self.assertFalse(self._fired(),
+                         "`tree_fingerprint_report` EXECUTED the reviewer-planted fsmonitor hook — the "
+                         "report runs after a mutation is detected, as us, inside the measured tree")
+        # The control: the report's plain `git status` restored — the hook fires (measured).
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.REPORT_STATUS), "the report's status probe is not unique")
+        mutant = os.path.join(self.scratch, "tree-fingerprint-plain-git-report.sh")
+        with open(mutant, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(self.REPORT_STATUS, self.REPORT_STATUS_OLD, 1))
+        self._clear()
+        p = self._run(mutant, self.PROBE)                 # the PROBE half of the control is still clean …
+        self.assertEqual(0, p.returncode, f"the control's probe failed: {p.stderr!r}")
+        self.assertFalse(self._fired(),
+                         "the CONTROL fired on `tree_fingerprint` alone — the mutation is not what runs "
+                         "the hook, so this test does not prove the report's own call")
+        p = self._run(mutant, self.REPORT)                # … and only the REPORT executes the hook
+        self.assertEqual(0, p.returncode, f"the control's report failed: {p.stderr!r}")
+        self.assertTrue(self._fired(),
+                        "the CONTROL (plain `git status` in the report) did NOT execute the hook — the "
+                        "fixture is not the finding")
+        with open(self.witness, encoding="utf-8") as fh:
+            self.assertIn("FIRED", fh.read())
+
+    def test_every_git_invocation_in_the_report_goes_through_the_safe_wrapper(self):
+        """The two `rev-parse HEAD` call sites cannot be shown behaviourally — measured: `git rev-parse
+        HEAD` does not execute an fsmonitor hook with or without `core.fsmonitor=false` — so they are
+        asserted at the TEXT level, which is stated here rather than dressed up as a behavioural proof.
+        Every `git` token in `tree_fingerprint_report`'s body is `_u_git`."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        head = "tree_fingerprint_report() {\n"
+        self.assertEqual(1, text.count(head), "the report's definition is not unique")
+        start = text.index(head)
+        end = text.index("\n}\n", start)
+        body = text[start + len(head):end]
+        self.assertIn("rev-parse HEAD", body, "the report no longer probes HEAD — re-derive this pin")
+        # WHOLE-LINE COMMENTS ARE SKIPPED and nothing else is: a line that is entirely a comment cannot
+        # invoke anything, while an inline comment sits on a line that can, so those stay scanned.
+        bare = [ln for ln in body.splitlines()
+                if not ln.lstrip().startswith("#")
+                and re.search(r'(?<![\w-])git\b', ln) and not re.search(r'(?<![\w-])_u_git\b', ln)]
+        self.assertEqual([], bare,
+                         f"a plain `git` invocation survives in `tree_fingerprint_report` — a "
+                         f"reviewer-planted `core.fsmonitor` would be executed by it: {bare}")
+        self.assertEqual(3, len(re.findall(r'(?<![\w-])_u_git\b', body)),
+                         f"the report's three git call sites are not all `_u_git`: {body!r}")
+        # …and the premise for the pair above: `rev-parse` really is the call that cannot be shown.
+        subprocess.run(["git", "-C", self.repo, "rev-parse", "HEAD"], check=True, capture_output=True)
+        self.assertFalse(self._fired(),
+                         "a plain `git rev-parse HEAD` DOES execute the fsmonitor hook on this git — the "
+                         "rev-parse call sites can be asserted behaviourally, and this text-level "
+                         "assertion is weaker than what is available")
 
 
 if __name__ == "__main__":
