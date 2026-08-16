@@ -171,4 +171,3 @@ class PreNegationSeesOnlyWhatItsSliceContains(unittest.TestCase):
     def test_an_unrelated_no_earlier_in_the_sentence_does_not_exempt(self):
         self.assertFalse(self._exempt("There are no fewer than three reasons; \u00a79.9z governs."),
                          "an unrelated `no` exempted a live citation — the matcher is not anchored")
-
