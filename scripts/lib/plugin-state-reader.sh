@@ -30,7 +30,7 @@ _unleashed_auth_entry() {
     [ -f "$_ae_p" ] || return 1                      # regular file only — directory, FIFO, socket out
     _u_stat "$_ae_p" || return 1
     [ "$_U_MODE" = 0600 ] || return 1                # TWELVE bits: `chmod 4600` must not pass as 0600
-    [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1
+    { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1
 
     # ENT-2 — exactly one line, and exactly its bytes. All THREE clauses are required and each covers
     # a case the others miss: (1) `rc=0` catches a TERMINAL NUL and an empty file in BOTH shells,
@@ -83,10 +83,10 @@ _unleashed_auth_entry() {
         # copy of any of them (a second mode check here masked ENT-1's own mutants, rows 8/114); a
         # same-uid replacement of any kind, mode or content, is a different inode and is refused
         # (codex, PR #67 pass 11).
-        if zstat -f "$_ae_fd" -H _u_h 2>/dev/null \
+        if _u_euid && zstat -f "$_ae_fd" -H _u_h 2>/dev/null \
             && [ "${_u_h[inode]}" = "$_ae_ino" ] \
             && [ "$(( ${_u_h[mode]} & 8#170000 ))" = "$(( 8#100000 ))" ] \
-            && [ "${_u_h[uid]}" = "${EUID:-$(/usr/bin/id -u)}" ] \
+            && [ "${_u_h[uid]}" = "$_U_EUID" ] \
             && [ "${_u_h[size]}" -le "$_ae_bound" ]; then
             _U_SIZE=${_u_h[size]}
             # One bounded read; sysread returns 5 on an empty object.
@@ -103,9 +103,9 @@ _unleashed_auth_entry() {
         # `2>/dev/null` on the OUTER group: a refused open reports on the shell's stderr BEFORE the
         # inner group's own redirections apply, and that message names the path — a lossless encoding
         # of the target (measured, both shells).
-        { { [ -f /dev/fd/9 ] && _u_stat /dev/fd/9 \
+        { { _u_euid && [ -f /dev/fd/9 ] && _u_stat /dev/fd/9 \
               && [ "$_U_INO" = "$_ae_ino" ] \
-              && [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] \
+              && [ "$_U_UID" = "$_U_EUID" ] \
               && [ "$_U_SIZE" -le "$_ae_bound" ] \
               && IFS= read -r -n "$_ae_bound" -u 9 _ae_line && _ae_ok=1; } 9<"$_ae_p"; } 2>/dev/null
         [ "$_ae_ok" = 1 ] || return 1                                                      # (1)
@@ -195,7 +195,7 @@ _unleashed_store_ok() {
     [ -d "$_so_s" ] || return 1
     _u_stat "$_so_s" || return 1
     [ "$_U_MODE" = 0700 ] || return 1                # EXACTLY 0700, twelve bits
-    [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1
+    { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1
     _unleashed_auth_chain "$_so_s" || return 1       # `/` down to and including bases/
     return 0
 }

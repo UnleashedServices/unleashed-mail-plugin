@@ -25,6 +25,22 @@ inside the live tree and `<scratch>/other/link/deep/kimi.txt` (the link into `<c
 computed without creating anything; the control — the `mkdir -p` restored ahead of the resolution — is RUN
 on the same operands and does create them.
 
+AND THE RECONSTRUCTED PATH IS NORMALISED (codex, PR #67 pass 14): the re-appended missing tail was kept
+VERBATIM, so `<scratch>/missing/../repo/README.md` (with `<scratch>/repo` the live checkout and `missing`
+absent) passed the repository-prefix refusal, `mkdir -p` created `missing`, and the transcript was written
+INTO the live checkout — over a TRACKED file — before the post-run fingerprint voided the round. It is refused
+now, before the reviewer, creating nothing; the control (the `normpath` line deleted) is RUN and does all of it.
+
+AND SO IS A LEADING `//`, AND THE PHYSICAL PREFIX IS TESTED ON ITS OWN (codex sweep, PR #67 pass 14, two
+more findings). `os.path.normpath` PRESERVES exactly two leading slashes, so an operand whose nearest
+EXISTING ancestor is `/` reconstructed as `//tmp/x` / `//<repo>/tracked` — matching neither prefix refusal
+while the kernel resolves both to exactly those places; the line collapses `^//+` now, and the control
+(the `re.sub` removed, the `normpath` kept) is RUN and overwrites the tracked README.md. And the `|| exit 1`
+after the reconstruction was INERT — an assignment takes the status of its LAST command substitution,
+`basename` — so a `cd -P` that could not enter its target was ignored and the operand was silently
+RE-ROOTED at `/`; the prefix is captured and tested on its own, and the control (the single-assignment
+form restored) is RUN on an unenterable 0000 parent and writes the transcript where the operand never named.
+
 THE EFFORT EVIDENCE IS BOUND TO THE ONE SESSION THE RUN CREATED (codex, PR #67 pass 11): the set
 difference of `$HOME/.kimi-code/sessions/*/session_*` before and after the run — never a session id read
 out of the transcript, which is reviewer-controlled text. Exactly one new session with a `max` wire log
@@ -377,6 +393,196 @@ class KimiHarnessMutationGates(unittest.TestCase):
         control = self._mkdir_first_control()
         self.assertTrue(self._refused_creates(out, probe, harness=control),
                         "the CONTROL (parent created first) did not create `.git/deep` — the fixture is not the finding")
+
+    # ── the reconstructed physical path is NORMALISED before the refusals (codex, PR #67 pass 14) ──
+
+    # The normalisation line, as shipped; the control DELETES it (the pre-fix resolution kept the missing
+    # tail verbatim, `..` segments included). The line also collapses a leading `//` — `os.path.normpath`
+    # PRESERVES exactly two leading slashes, and that half has its own control below, which removes the
+    # `re.sub` and keeps the `normpath`.
+    NORMPATH_LINE = ('''OUT="$(python3 -c 'import os, re, sys; '''
+                     '''print(re.sub(r"^//+", "/", os.path.normpath(sys.argv[1])))' "$OUT")" || exit 1\n''')
+
+    def _no_normpath_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.NORMPATH_LINE), "the normalisation line is not unique — the control is not the control")
+        # The shipped order: the reconstruction, THEN the normalisation, THEN the repository-prefix refusal.
+        self.assertLess(text.index(self.RESOLUTION_HEAD), text.index(self.NORMPATH_LINE))
+        self.assertLess(text.index(self.NORMPATH_LINE), text.index('    "$REPO_P"/*)\n'))
+        return self._laid_out_harness(text.replace(self.NORMPATH_LINE, "", 1))
+
+    def test_a_transcript_operand_traversing_through_a_missing_directory_into_the_live_checkout_is_refused(self):
+        """codex, PR #67 pass 14 — `<scratch>/missing/../repo/README.md`, where `<scratch>/repo` IS the live
+        checkout and `<scratch>/missing` does not exist: the nearest-existing-ancestor reconstruction stopped
+        at `<scratch>` and re-appended `missing/../repo/README.md` VERBATIM, so the result did not match
+        `"$REPO_P"/*`, `mkdir -p` then created `missing`, and the kernel resolved the write INTO the live
+        checkout — a TRACKED file was overwritten by the transcript before the post-run fingerprint voided the
+        round. The reconstructed path is now `os.path.normpath`-ed: refused as inside the live checkout, before
+        the reviewer, with `missing` never created and README.md untouched. Mutant: the normalisation line
+        deleted — the operand is ACCEPTED, `<scratch>/missing` is created, the reviewer runs, README.md is
+        overwritten with the transcript, and only then is the round VOIDed (rc 3) — measured."""
+        readme = os.path.join(self.clone, "README.md")
+        with open(readme, "rb") as fh:
+            original = fh.read()
+        self.assertTrue(original, "the fixture's README.md is empty")
+        missing = os.path.join(self.scratch, "missing")
+        out = os.path.join(missing, "..", "repo", "README.md")
+        # The premise: lexically it does not start with the clone; physically (once `missing` existed) it
+        # would be the tracked file itself; and `missing` does not exist yet.
+        self.assertFalse(out.startswith(self.clone + os.sep), out)
+        self.assertEqual(os.path.realpath(readme), os.path.realpath(out))
+        self.assertFalse(os.path.lexists(missing), "the fixture pre-creates `missing`")
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        self.assertFalse(os.path.lexists(missing), "the refusal created the missing traversal component")
+        with open(readme, "rb") as fh:
+            self.assertEqual(original, fh.read(), "the refused run overwrote the tracked file")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"the refused run dirtied the live checkout: {st.stdout!r}")
+        # The control: the normalisation removed. The SAME operand is accepted — `missing` is created, the
+        # reviewer runs, the transcript lands ON README.md, and the round is voided only afterwards.
+        control = self._no_normpath_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(3, p.returncode,
+                         f"the CONTROL did not accept the operand and void the round after the fact — the fixture "
+                         f"is not the finding: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("real worktree was mutated", p.stderr, p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        self.assertTrue(os.path.isdir(missing), "the CONTROL did not create `missing` — the fixture is not the finding")
+        with open(readme, "rb") as fh:
+            overwritten = fh.read()
+        self.assertNotEqual(original, overwritten, "the CONTROL did not overwrite README.md — the fixture is not the finding")
+        self.assertIn(SESSION.encode(), overwritten, "README.md was not overwritten WITH the transcript")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertIn(" M README.md", st.stdout, f"the CONTROL's overwrite is not a live tracked change: {st.stdout!r}")
+
+    # ── a leading `//` survives normalisation, and the physical prefix is TESTED (pass 14 sweep) ──
+
+    #: The normalisation line WITHOUT its `//` collapse — the shape that shipped between the pass-14
+    #: `normpath` fix and this sweep. `os.path.normpath` PRESERVES exactly two leading slashes (POSIX
+    #: leaves that spelling implementation-defined), so when the nearest EXISTING ancestor is `/` the
+    #: reconstruction produced `//tmp/x` / `//<repo>/tracked` and neither prefix refusal matched.
+    NORMPATH_NO_COLLAPSE = ('''OUT="$(python3 -c 'import os, sys; '''
+                            '''print(os.path.normpath(sys.argv[1]))' "$OUT")" || exit 1\n''')
+
+    def _no_collapse_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.NORMPATH_LINE),
+                         "the normalisation line is not unique — the control is not the control")
+        self.assertIn('re.sub(r"^//+", "/"', self.NORMPATH_LINE)
+        return self._laid_out_harness(text.replace(self.NORMPATH_LINE, self.NORMPATH_NO_COLLAPSE, 1))
+
+    def test_an_operand_whose_nearest_existing_ancestor_is_the_root_collapses_its_leading_slashes(self):
+        """codex sweep, PR #67 pass 14, finding K1 — when the operand's nearest EXISTING ancestor is `/`,
+        the reconstruction is `pwd -P` (`/`) + `/` + the missing tail, i.e. `//missing/../tmp/x`, and
+        `os.path.normpath` PRESERVES the two leading slashes: the result matched neither the `/tmp/*` nor
+        the `"$REPO_P"/*` refusal while the kernel resolves both to exactly those places. Both spellings
+        are refused now, before the reviewer, creating nothing. Mutant: the `re.sub(r"^//+", "/", …)`
+        removed and `os.path.normpath` kept — the repository operand is ACCEPTED, the reviewer runs, the
+        transcript lands ON the tracked README.md and the round is voided only afterwards (measured).
+
+        The `/tmp` spelling is asserted on the SHIPPED side only: completing its control would write the
+        transcript into the real /tmp, which is the one place this repository forbids. It is the same
+        line, the same `case "$OUT" in <prefix>/*)`, and the repository spelling — the damaging half,
+        since it overwrites a TRACKED file — carries the control."""
+        # The premise the whole finding rests on, pinned here rather than assumed: normpath keeps `//`.
+        self.assertTrue(os.path.normpath("//missing14/../tmp/k.txt").startswith("//"),
+                        "this python's normpath collapses `//` — the fixture is not the finding")
+        # …and the operand's FIRST component must be absent, or the walk stops below `/`, the prefix is
+        # never `/`, and no `//` is ever produced — the fixture would pass for the wrong reason.
+        missing = f"/missing-{os.path.basename(self.scratch)}"
+        self.assertFalse(os.path.lexists(missing), f"the fixture's missing component exists: {missing}")
+        # (a) the /tmp spelling — refused, and nothing appears under either physical spelling of /tmp.
+        leaf = f"kimi-k1-{os.path.basename(self.scratch)}.txt"
+        self._assert_tmp_refused(os.path.join(missing, "..", "tmp", leaf), leaf)
+        self.assertFalse(os.path.lexists(missing), f"the refused run created `{missing}`")
+        # (b) the live-checkout spelling — refused, README.md untouched, the component never created.
+        readme = os.path.join(self.clone, "README.md")
+        with open(readme, "rb") as fh:
+            original = fh.read()
+        self.assertTrue(original, "the fixture's README.md is empty")
+        out = os.path.join(missing, "..", os.path.realpath(self.clone).lstrip("/"), "README.md")
+        self.assertFalse(out.startswith(self.clone + os.sep), out)          # lexically outside …
+        self.assertEqual(os.path.realpath(readme), os.path.realpath(out))    # … physically the tracked file
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        self.assertFalse(os.path.lexists(missing), f"the refused run created `{missing}`")
+        with open(readme, "rb") as fh:
+            self.assertEqual(original, fh.read(), "the refused run overwrote the tracked file")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"the refused run dirtied the live checkout: {st.stdout!r}")
+        # The control: the `//` collapse removed. The SAME operand is accepted, the reviewer runs, and
+        # the transcript is written over README.md — the round is voided only after the damage.
+        control = self._no_collapse_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(3, p.returncode,
+                         f"the CONTROL did not accept the `//`-prefixed operand and void the round after "
+                         f"the fact — the fixture is not the finding: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("real worktree was mutated", p.stderr, p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        with open(readme, "rb") as fh:
+            overwritten = fh.read()
+        self.assertNotEqual(original, overwritten, "the CONTROL did not overwrite README.md")
+        self.assertIn(SESSION.encode(), overwritten, "README.md was not overwritten WITH the transcript")
+
+    # The physical prefix, captured and tested on ITS OWN; the control restores the single assignment
+    # whose trailing `|| exit 1` was INERT — for an assignment the status is that of the LAST command
+    # substitution, which is `basename`.
+    OUT_BASE_TESTED = (
+        '''_out_base="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)" || _out_base=""\n'''
+        '''[ -n "$_out_base" ] || { echo "cannot enter the transcript's physical parent: $_out_dir" >&2; exit 1; }\n'''
+        '''OUT="$_out_base/${_out_missing}$(basename -- "$OUT")"\n''')
+    OUT_BASE_OLD = ('''OUT="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)'''
+                    '''/${_out_missing}$(basename -- "$OUT")" || exit 1\n''')
+
+    def _inert_status_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.OUT_BASE_TESTED),
+                         "the physical-prefix block is not unique — the control is not the control")
+        return self._laid_out_harness(text.replace(self.OUT_BASE_TESTED, self.OUT_BASE_OLD, 1))
+
+    @unittest.skipIf(os.geteuid() == 0, "root enters a 0000 directory, so the fixture is not the finding")
+    def test_a_transcript_parent_that_cannot_be_entered_is_refused_not_re_rooted(self):
+        """codex sweep, PR #67 pass 14, finding K2 — the `|| exit 1` after the physical-prefix
+        reconstruction was INERT: an assignment takes the status of its LAST command substitution, which
+        was `basename`, so a `cd -P` that could not enter its target was ignored, the empty prefix
+        silently RE-ROOTED the operand at `/`, and the reviewer was launched on a path the operand never
+        named. The prefix is captured and tested on its own now. Mutant: the single-assignment form with
+        the trailing `|| exit 1` restored — the operand is accepted, the reviewer runs, and the transcript
+        is written to `/` + the missing tail (measured).
+
+        The fixture is an operand whose nearest EXISTING ancestor is a directory this process cannot
+        `cd` into (mode 0000), and whose missing tail is the scratch directory's own path minus its
+        leading `/` — so the re-rooted spelling is a REAL, writable place the operand never named."""
+        nocd = os.path.join(self.scratch, "nocd")
+        os.mkdir(nocd)
+        os.chmod(nocd, 0o000)
+        self.addCleanup(os.chmod, nocd, 0o700)               # LIFO: before the scratch is removed
+        rerooted = os.path.join(os.path.realpath(self.scratch), "k2", "kimi.txt")
+        out = os.path.join(nocd, os.path.relpath(rerooted, "/"))
+        self.assertTrue(os.path.isdir(nocd), "the fixture's unenterable parent must still stat as a directory")
+        self.assertFalse(os.path.lexists(os.path.dirname(rerooted)), "the fixture pre-creates the re-rooted parent")
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "cannot enter the transcript's physical parent")
+        self.assertFalse(os.path.lexists(os.path.dirname(rerooted)),
+                         "the refused run created the RE-ROOTED parent — the operand was resolved at `/`")
+        # The control: the inert `|| exit 1` restored. The same operand is ACCEPTED, the reviewer runs,
+        # and the transcript lands at `/` + the missing tail — a place the operand never named.
+        control = self._inert_status_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(4, p.returncode,
+                         f"the CONTROL did not accept the operand — the fixture is not the finding: "
+                         f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("TREE=clean", p.stdout, p.stdout + p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        self.assertTrue(os.path.isfile(rerooted),
+                        f"the CONTROL did not write the transcript at the re-rooted path {rerooted}")
+        with open(rerooted, encoding="utf-8") as fh:
+            self.assertIn(SESSION, fh.read(), "the re-rooted file is not this run's transcript")
 
     # ── the effort assertion is bound to the ONE session this run created ─────────────────────
 

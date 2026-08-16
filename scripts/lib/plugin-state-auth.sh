@@ -67,6 +67,25 @@ _u_platform() {
 _u_identity_probe() {
     /usr/bin/id -un 2>/dev/null
 }
+# THE EFFECTIVE UID, and never `$EUID`. bash 3.2 — the `/bin/bash` a macOS hook runs — IMPORTS EUID
+# from the environment as an ordinary exported variable (measured: `env EUID=4242 bash -c 'echo $EUID'`
+# prints 4242; zsh sets its own and is unaffected), so `${EUID:-$(/usr/bin/id -u)}` let the parent
+# decide the answer to every ownership test: a healthy store read `stale` and a publish `failed`
+# (codex sweep, PR #67 pass 14 — reproduced). The fix is not to consult that variable at all. Same
+# IDENTITY-PROBE SEAM rule as `_u_identity_probe`: absolute path, so no PATH manipulation can make it
+# fail, and a fixture presenting a failed probe must redefine this accessor.
+_u_euid_probe() {
+    /usr/bin/id -u 2>/dev/null
+}
+_u_euid() {
+    # Cached only within ONE resolution, exactly like `_u_principal`: `_u_probes_reset` clears the flag
+    # at the entry points, so honouring it here can never honour a caller's.
+    [ "${_U_EUID_PROBED:-}" = 1 ] && return 0
+    _U_EUID="$(_u_euid_probe)" || { unset _U_EUID; return 1; }
+    case "$_U_EUID" in ''|*[!0-9]*) unset _U_EUID; return 1 ;; esac
+    _U_EUID_PROBED=1
+    return 0
+}
 # THE EFFECTIVE USER'S UUID, the second half of P-3a. `/bin/ls -lde` renders an ACE's principal as
 # `user:<name>` when the system can resolve the identity and as a BARE UUID when it cannot — and on
 # some hosts (a mobile or directory account) the EFFECTIVE USER'S OWN ACE renders as the UUID. A parser
@@ -91,6 +110,7 @@ _u_identity_uuid_probe() {
 # be consulted; a caller-set value is overwritten by the probe.
 _u_probes_reset() {
     unset _U_PRINCIPAL _U_PRINCIPAL_UUID _U_PRINCIPAL_PROBED _U_PLATFORM _U_PLATFORM_PROBED _U_PLATFORM_RC
+    unset _U_EUID _U_EUID_PROBED
 }
 
 _u_principal() {
@@ -293,7 +313,7 @@ _unleashed_auth_chain() {
             :
         else
             _u_ac_in_prefix=0
-            [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1
+            { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1
         fi
         _u_acl_ok "$_u_ac_c" || return 1
 

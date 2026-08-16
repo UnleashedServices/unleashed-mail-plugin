@@ -593,7 +593,7 @@ printf 'VERDICT: APPROVE\\n'
                         ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy2(REPO / "scripts" / "pty-capture.py", mutant_root / "scripts" / "pty-capture.py")
         fingerprint = mutant_root / "scripts" / "review" / "tree-fingerprint.sh"
-        head_probe = '    git -C "$1" rev-parse HEAD 2>/dev/null || return 1\n'
+        head_probe = '    _u_git -C "$1" rev-parse HEAD 2>/dev/null || return 1\n'   # `_u_git`: PR #67 pass 14
         text = fingerprint.read_text(encoding="utf-8")
         self.assertEqual(1, text.count(head_probe), "the HEAD probe is not where the control expects it")
         fingerprint.write_text(text.replace(head_probe, "", 1), encoding="utf-8")

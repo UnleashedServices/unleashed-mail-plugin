@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 119 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 125 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,39 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Pre-push sweep of the fourteenth pass — eight more findings, each reproduced, five of them in the
+  state libraries.** The library directory every resolver copy sources from is derived without any
+  external command (`dirname` is PATH-resolved, and dropping `/usr/bin` from PATH made the four
+  libraries "unreadable" beside the file, so the presence fallback trusted an imported reader — row
+  174). Discarding an inherited instance stamp is errexit-safe: zsh's `unset -f` returns 1 for an
+  undefined function and killed the sourcing of every copy under `set -e` (row 175). The readonly-
+  attribute test reads the flag letters only — the attacker-supplied VALUE could furnish both the `r`
+  and the variable name and pass as readonly (row 176). `$EUID` is never consulted: bash 3.2 imports
+  it from the environment, so `EUID=4242` turned a healthy store `stale` and a publish `failed`; the
+  effective uid is now a seam-probed, per-resolution value (row 177). In the review harness: the
+  transcript operand's reconstructed path collapses a leading `//` (POSIX keeps it, so `//tmp/x` and
+  `//<repo>/tracked` passed both refusals and a tracked file was overwritten) and its physical prefix
+  is now tested on its own (the old `|| exit 1` sat on an assignment whose last substitution was
+  `basename`, and was inert). The live-tree fingerprint resolves the real git directories instead of
+  assuming `$root/.git` is one — in a linked worktree, which is where this campaign's own reviews run,
+  `.git` is a FILE and `config`/`info/exclude` were recorded ABSENT, so `core.hooksPath` tampering
+  passed every gate — and it now records `HEAD`, `config.worktree`, `info/attributes`,
+  `objects/info/alternates`, every entry of the hooks directories, and macOS ACLs (`chmod +a` left
+  every record byte-identical). Probes run with `--no-optional-locks -c core.fsmonitor=false` so the
+  gate never writes the live index or executes a planted fsmonitor hook.
+- **Fourteenth review pass (codex) — six findings, each reproduced.** The state-machinery loader
+  re-sources its four libraries whenever they are readable beside it instead of trusting a present
+  namespace: bash `set -a` exports functions, so a parent's tampered `_unleashed_read_store` beside
+  genuine names was trusted and resolved `/attacker` (row 172; all five resolver copies). The instance
+  stamp is set once, only when absent, and globally — bash treats a repeated `readonly X=1` under
+  `set -e` as fatal even behind `|| :`, so the bridge's legitimate re-resolution exited the sourcing
+  shell; and zsh's `readonly` inside a function was function-local, so the zsh arm never held the
+  attribute (row 173). The live fingerprint records the checkout root's own lstat (`chmod 777
+  <checkout>` was invisible), every record's identity (`dev:inode:nlink` — a hard-link swap with
+  identical bytes was invisible), and `.git/config` / `.git/info/exclude` by lstat before content (a
+  symlink to an identical external copy hashed the same). The kimi harness normalises the reconstructed
+  transcript path lexically before the refusals (`/x/missing/../repo/tracked` passed the prefix check
+  and overwrote a tracked file before the void).
 - **Thirteenth review pass (codex) — four findings, each reproduced.** Store creation (E4 step ii)
   authenticates a component that is present but was absent at step (i) before creating anything
   beneath it — a symlink planted in between had the next `mkdir` create a directory outside the store

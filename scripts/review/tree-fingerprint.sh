@@ -51,8 +51,8 @@ tree_fingerprint() {
     # of a repository that had changed under it, contrary to the "an author commit voids the round"
     # rule the harnesses print. The resolved commit is part of the checkout's identity (codex, PR #67
     # pass 8 — reproduced).
-    git -C "$1" rev-parse HEAD 2>/dev/null || return 1
-    git -C "$1" status --porcelain 2>/dev/null || return 1
+    _u_git -C "$1" rev-parse HEAD 2>/dev/null || return 1
+    _u_git -C "$1" status --porcelain 2>/dev/null || return 1
     printf '\036\n'   # a record separator so the halves cannot alias across the boundary
     # THE CONTENT OF EVERY TRACKED FILE, HASHED — NOT `git diff HEAD`. Both `status` and `diff` consult
     # the live INDEX, and a reviewer that can address the live checkout can switch that index off for a
@@ -68,8 +68,9 @@ tree_fingerprint() {
     # THE EXCLUSION METADATA A REVIEWER COULD USE TO HIDE AN UNTRACKED FILE FROM `status`: the repo's
     # own `.git/info/exclude` and `.git/config` (`core.excludesFile`) — tracked `.gitignore` files are
     # already covered above. RESIDUAL, stated: a global excludes file outside the repository is not.
-    _u_hash_if_present "$1/.git/info/exclude" || return 1
-    _u_hash_if_present "$1/.git/config" || return 1
+    _u_git_metadata_fingerprint "$1" || return 1
+    printf '\036\n'
+    _u_acl_fingerprint "$1" || return 1
     # THE ONE GITIGNORED PATH THAT IS GATE-BEARING. `docs/planning/.verdicts/` holds the Combined-verdict
     # artefact the plan gate READS, and it is ignored at the repo root — so a reviewer with a shell that
     # wrote a forged approval there was invisible to both halves above (adversarial verification, PR #67
@@ -105,18 +106,29 @@ root = sys.argv[1]
 # INDEX, so a path staged for deletion (`git rm --cached`) and ignored was omitted while status stayed
 # `D  path` before and after a reviewer rewrote its working-tree file (codex, PR #67 pass 11 —
 # reproduced). HEAD's tree cannot be edited without moving HEAD, which the first line records.
-r = subprocess.run(["git", "-C", root, "ls-files", "-z"], capture_output=True)
+r = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", root, "ls-files", "-z"], capture_output=True)
 if r.returncode != 0:
     sys.exit(1)
 names = set(x for x in r.stdout.split(b"\0") if x)
-r2 = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
+r2 = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], capture_output=True)
 if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure
     names.update(x for x in r2.stdout.split(b"\0") if x)
 # THE ANCESTOR DIRECTORIES OF EVERY TRACKED PATH, BY LSTAT — mode and type. `git status` says nothing
 # about a directory's own metadata, and hashing only the leaves left `chmod 777 scripts` invisible: the
 # round certified a live tree whose formerly protected directory was now world-writable (codex, PR #67
 # pass 13 — reproduced). Directories are recorded once each, before the leaves.
-dirs = set()
+# THE CHECKOUT ROOT ITSELF IS ONE OF THEM: the walk above stopped where `dirname` became empty, so
+# the root was never recorded and `chmod 777 <checkout>` passed every gate (codex, PR #67 pass 14 —
+# reproduced). It is recorded as ".".
+# EVERY RECORD CARRIES THE OBJECT'S IDENTITY — device, inode, link count. Mode+size+content let a
+# tracked file be replaced by a HARD LINK to an external file with identical bytes: status stayed
+# clean and the record was unchanged, while a later write through either name silently changed the
+# other (codex, PR #67 pass 14 — reproduced). Identity is stable across a clean round — nothing the
+# harness does re-creates a tracked object — and it is not content, so it changes exactly when the
+# object was swapped.
+def ident(st):
+    return "%d:%d:%d" % (st.st_dev, st.st_ino, st.st_nlink)
+dirs = set(["."])
 for raw in names:
     p = os.path.dirname(os.fsdecode(raw))
     while p:
@@ -130,9 +142,9 @@ for rel in sorted(dirs):
         out.append("MISSING-DIR %s" % json.dumps(rel)); continue
     mode = "%04o" % stat.S_IMODE(st.st_mode)
     if stat.S_ISLNK(st.st_mode):
-        out.append("DL %s %s -> %s" % (mode, json.dumps(rel), json.dumps(os.readlink(full))))
+        out.append("DL %s %s %s -> %s" % (mode, ident(st), json.dumps(rel), json.dumps(os.readlink(full))))
     else:
-        out.append("D %s %s" % (mode, json.dumps(rel)))
+        out.append("D %s %s %s" % (mode, ident(st), json.dumps(rel)))
 for raw in sorted(names):
     rel = os.fsdecode(raw)
     full = os.path.join(root, rel)
@@ -142,27 +154,153 @@ for raw in sorted(names):
         out.append("MISSING %s" % json.dumps(rel)); continue
     mode = "%04o" % stat.S_IMODE(st.st_mode)
     if stat.S_ISLNK(st.st_mode):
-        out.append("L %s %s -> %s" % (mode, json.dumps(rel), json.dumps(os.readlink(full))))
+        out.append("L %s %s %s -> %s" % (mode, ident(st), json.dumps(rel), json.dumps(os.readlink(full))))
     elif stat.S_ISREG(st.st_mode):
         h = hashlib.sha256()
         with open(full, "rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 16), b""):
                 h.update(chunk)
-        out.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), json.dumps(rel)))
+        out.append("F %s %d %s %s %s" % (mode, st.st_size, h.hexdigest(), ident(st), json.dumps(rel)))
     else:
-        out.append("O %s %s" % (mode, json.dumps(rel)))
+        out.append("O %s %s %s" % (mode, ident(st), json.dumps(rel)))
 sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 PY
 }
 
-# `<label> sha256` for a file that exists, `<label> ABSENT` otherwise; a present-but-unreadable file fails.
+# `<label> <record>` for a path that exists, `<label> ABSENT` otherwise; a present-but-unreadable file fails.
+# THE RECORD IS TAKEN BY LSTAT — type, mode, identity, and a link's target — before any content is hashed:
+# hashing through the name followed a symlink, so `.git/config` replaced by a symlink to an external copy
+# with identical bytes produced the same digest, and Git then read its settings (`core.hooksPath` among
+# them) from outside the checkout (codex, PR #67 pass 14 — reproduced). A regular file records its
+# content digest; a link records its target and the digest of what the target resolves to, so a link
+# whose external target is later edited is caught as well.
+# ONE RECORD PER PATH, in ONE python invocation: `<path> <record>` for a path that exists, `<path>
+# ABSENT` otherwise, and a present-but-unreadable regular file FAILS (a void round, never a clean tree).
+# `--dir <path>` additionally records every entry of that directory (sorted, not descended) — the shape
+# the hooks directories need. THE RECORD IS TAKEN BY LSTAT before any content is hashed: hashing through
+# the name followed a symlink, so `.git/config` replaced by a symlink to an external byte-identical copy
+# produced the same digest while Git read `core.hooksPath` and friends from outside the checkout (codex,
+# PR #67 pass 14 — reproduced). A link records its target AND the digest of what the target resolves to,
+# so an edit to the external target is caught as well.
 _u_hash_if_present() {
-    if [ -e "$1" ] || [ -L "$1" ]; then
-        printf '%s ' "$1"
-        python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null || return 1
-    else
-        printf '%s ABSENT\n' "$1"
+    python3 - "$@" <<'PY'
+import hashlib, json, os, stat, sys
+def digest(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+def rec(p):
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return "ABSENT"
+    mode = "%04o" % stat.S_IMODE(st.st_mode)
+    ident = "%d:%d:%d" % (st.st_dev, st.st_ino, st.st_nlink)
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            d = digest(p)
+        except OSError:
+            d = "UNREADABLE-TARGET"
+        return "L %s %s -> %s %s" % (mode, ident, json.dumps(os.readlink(p)), d)
+    if stat.S_ISREG(st.st_mode):
+        try:
+            return "F %s %s %d %s" % (mode, ident, st.st_size, digest(p))
+        except OSError:
+            return None                      # present but unreadable -> fail closed
+    return "O %s %s" % (mode, ident)
+args = sys.argv[1:]
+targets, i, seen = [], 0, set()
+while i < len(args):
+    if args[i] == "--dir":
+        targets.append((args[i + 1], True)); i += 2
+    else:
+        targets.append((args[i], False)); i += 1
+out = []
+for p, expand in targets:
+    key = (os.path.realpath(p), expand)
+    if key in seen:                          # a configured hooksPath that IS the default one
+        continue
+    seen.add(key)
+    r = rec(p)
+    if r is None:
+        sys.exit(1)
+    out.append("%s %s" % (p, r))
+    if not expand:
+        continue
+    try:
+        names = sorted(os.listdir(p))
+    except OSError:
+        continue                             # absent or unreadable: the record above already says so
+    for n in names:
+        r = rec(os.path.join(p, n))
+        if r is None:
+            sys.exit(1)
+        out.append("%s %s" % (os.path.join(p, n), r))
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+PY
+}
+
+# EVERY GIT PROBE OF THE LIVE CHECKOUT GOES THROUGH THIS. `--no-optional-locks` so a probe never writes
+# the live index, and `core.fsmonitor=false` so a reviewer-planted fsmonitor hook is not EXECUTED by our
+# own AFTER take — it would run as us, inside the tree being measured (codex sweep, PR #67 pass 14).
+_u_git() {
+    git --no-optional-locks -c core.fsmonitor=false "$@"
+}
+
+# THE GIT METADATA THAT GOVERNS THIS CHECKOUT, resolved THROUGH GIT rather than by assuming `$1/.git` is
+# a directory. In a LINKED WORKTREE — which is where this campaign's own reviews run — `.git` is a FILE
+# and the real directories are elsewhere, so the two literal paths this used to hash were recorded
+# ABSENT and the protection was inert exactly where it was needed: `git -C <live> config core.hooksPath`
+# passed every gate (codex sweep, PR #67 pass 14 — reproduced). Recorded: the `.git` entry itself, the
+# per-worktree gitdir and the common dir, `config` (+ `config.worktree`), `info/exclude`,
+# `info/attributes`, `objects/info/alternates`, `HEAD` (a retarget to another branch at the same sha
+# moves no other record), and every entry of the hooks directories that will actually run — a
+# `pre-commit` planted there needs no config change and fires on the maintainer's next commit.
+# RESIDUAL, stated: `packed-refs` and `logs/` are NOT recorded (an auto-gc repack would void an honest
+# round), and neither is a global `~/.gitconfig` outside the repository.
+_u_git_metadata_fingerprint() {
+    _ugm_root="$1"
+    _ugm_git="$(_u_git -C "$_ugm_root" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    [ -n "$_ugm_git" ] || return 1
+    _ugm_common="$(_u_git -C "$_ugm_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || _ugm_common=""
+    if [ -z "$_ugm_common" ]; then           # git < 2.31 has no --path-format
+        _ugm_common="$(_u_git -C "$_ugm_root" rev-parse --git-common-dir 2>/dev/null)" || _ugm_common=""
+        case "$_ugm_common" in ''|/*) : ;; *) _ugm_common="$_ugm_root/$_ugm_common" ;; esac
     fi
+    [ -n "$_ugm_common" ] || _ugm_common="$_ugm_git"
+    _ugm_hooks="$(_u_git -C "$_ugm_root" config --get core.hooksPath 2>/dev/null)" || _ugm_hooks=""
+    case "$_ugm_hooks" in ''|/*) : ;; *) _ugm_hooks="$_ugm_root/$_ugm_hooks" ;; esac
+    set -- "$_ugm_root/.git" "$_ugm_git" "$_ugm_common" \
+           "$_ugm_common/config" "$_ugm_git/config.worktree" \
+           "$_ugm_common/info/exclude" "$_ugm_common/info/attributes" \
+           "$_ugm_common/objects/info/alternates" "$_ugm_git/HEAD" \
+           --dir "$_ugm_common/hooks"
+    if [ -n "$_ugm_hooks" ]; then
+        set -- "$@" --dir "$_ugm_hooks"
+    fi
+    _u_hash_if_present "$@" || return 1
+}
+
+# THE ACLs. macOS keeps them OUTSIDE st_mode, so `chmod +a 'everyone allow write,delete,add_file'` on a
+# tracked file, a tracked directory or the checkout root left every record above byte-identical (codex
+# sweep, PR #67 pass 14 — reproduced), re-opening for ACEs the write-access class pass 13 closed for
+# mode bits. `find -acl` names exactly the paths that carry one — normally NONE, so this is one exec —
+# and `ls -lde` renders each ACE. Where the probe does not exist (Linux CI) the line says so rather than
+# claiming a clean answer.
+_u_acl_fingerprint() {
+    if [ ! -x /usr/bin/find ] || [ "$(/usr/bin/uname -s 2>/dev/null)" != Darwin ]; then
+        printf 'ACL-PROBE unsupported\n'
+        return 0
+    fi
+    # `|| :` — the callers run under `set -o pipefail` and `find` exits non-zero on any unreadable
+    # directory it walked past; a probe that voids an honest round is a probe that gets switched off.
+    { /usr/bin/find "$1" -acl -print 2>/dev/null || :; } | LC_ALL=C sort | while IFS= read -r _uacl_p; do
+        printf 'ACL %s\n' "$_uacl_p"
+        /bin/ls -lde -- "$_uacl_p" 2>/dev/null | sed -n 's/^[[:space:]]*\([0-9][0-9]*: .*\)$/ACE \1/p'
+    done
+    printf 'ACL-PROBE done\n'
 }
 
 # The lstat record of ONE path (not descended): type, mode, and a link's target, JSON-encoded.

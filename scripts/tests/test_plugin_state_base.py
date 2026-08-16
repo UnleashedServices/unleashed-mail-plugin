@@ -236,7 +236,9 @@ class N6BridgeReResolves(unittest.TestCase):
     """
 
     #: The reset the bridge performs right after exporting the value — the control deletes exactly this.
-    RESET_LINE = "unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=\n"
+    #: (`|| :` since PR #67 pass 14: zsh's `unset -f` returns 1 for a function that is not defined, and
+    #: under `set -e` that killed the sourcing — row 175. The line the control deletes is the same one.)
+    RESET_LINE = "unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=\n"
 
     def setUp(self):
         base = os.path.expanduser("~/.claude")

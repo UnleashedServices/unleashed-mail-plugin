@@ -14,7 +14,14 @@ rows 163-164 (PR #67, codex pass 8), row 165 (PR #67, codex pass 9), rows 166-16
 pass 11), row 169 (external audit of PR #67, finding 1) and row 170 (PR #67, codex pass 12 — which also
 RESHAPED rows 158 and 167: paths.sh's definition block is now unconditional, so those mutations ADD a
 guard where the specification has none) and row 171 (PR #67, codex pass 13 — a component that APPEARED
-between E4's steps (i) and (ii)) joined that class.
+between E4's steps (i) and (ii)) joined that class, as did rows 172-173 (PR #67, codex pass 14 — the
+machinery RE-SOURCED rather than trusted because it is present, and the instance stamp set once, errexit-safe
+and global under zsh; that pass also RESHAPED rows 92, 157 and 159, whose fixtures had relied on the resolver
+KEEPING a seam or a mutant machinery file sourced ahead of it), and finally rows 174-177 (the codex sweep of
+PR #67 pass 14: the library directory not derived through PATH, sourcing surviving `set -e` when the stamp
+arrives through the environment, the readonly-attribute test reading the FLAG LETTERS only, and the effective
+uid PROBED rather than read from `$EUID` — which bash 3.2, the `/bin/bash` a macOS hook runs, imports from
+the environment). That sweep also re-pinned rows 7, 23, 24 and 166, whose anchors quote text it rewrote.
 """
 
 import os
@@ -149,9 +156,12 @@ class RowsChunk1(unittest.TestCase):
 
     def test_row_007_pointer_owner_check_is_load_bearing(self):
         """An entry owned by another uid ⇒ stale + one diagnostic, and a conforming sibling does not win."""
+        # (The owner clause reads the euid through `_u_euid` since PR #67 pass 14 — bash 3.2 IMPORTS
+        # `$EUID` from the environment, so `${EUID:-…}` let the parent decide it, row 177. The MUTATION
+        # is unchanged: the entry's owner check is dropped.)
         mutant = with_mutation(
             '    [ "$_U_MODE" = 0600 ] || return 1                # TWELVE bits: `chmod 4600` must not pass as 0600\n'
-            '    [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1\n',
+            '    { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1\n',
             '    [ "$_U_MODE" = 0600 ] || return 1                # TWELVE bits: `chmod 4600` must not pass as 0600\n',
             path=READER)
         try:
@@ -174,8 +184,9 @@ class RowsChunk1(unittest.TestCase):
 
     def test_row_023_target_owner_check_is_load_bearing(self):
         """A target owned by another uid ⇒ stale + one diagnostic, and a conforming sibling does not win."""
+        # (Same rule, re-pinned on the `_u_euid` spelling PR #67 pass 14 introduced — row 177.)
         mutant = with_mutation(
-            '            [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1\n',
+            '            { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1\n',
             '            :\n', path=AUTH)
         try:
             t1 = os.path.join(self.home, "foreign_t")
@@ -911,8 +922,9 @@ class RowsChunk2(unittest.TestCase):
         st = os.stat(anc)
         if st.st_uid in (0, os.geteuid()) or (st.st_mode & 0o022) or (os.stat(tgt).st_mode & 0o022):
             self.skipTest("fixture ancestor is not another-uid with clean modes")
+        # (Same rule, re-pinned on the `_u_euid` spelling PR #67 pass 14 introduced — row 177.)
         mutant = with_mutation(
-            '            [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1',
+            '            { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1',
             '            :', path=AUTH)
         try:
             alone = self.ENTRY.format(t=tgt, s=self.store)
@@ -2807,18 +2819,29 @@ class RowsChunk4(unittest.TestCase):
             path=PATHS_C4)
         cnt = os.path.join(self.home, "cnt")
         derived = 2 * self._comps(self.store) + self._comps(self.target)
-        # THE MUTANT LIVES IN A SHADOW LIB, with the family files beside it: since PR #67 pass 12 every
+        # BOTH BUILDS LIVE IN A SHADOW LIB, with the family files beside them: since PR #67 pass 12 every
         # family file sources paths.sh UNCONDITIONALLY from its own directory, so a mutant paths.sh
         # sourced first and then the REAL marker.sh would have the real paths.sh redefine the guard and
-        # the control could not fail (measured: 22 for both builds). Each build sources its own set.
-        shadow = os.path.join(self.home, "shadow"); shadow_lib = os.path.join(shadow, "scripts", "lib")
-        shutil.copytree(os.path.dirname(PATHS_C4), shadow_lib)
-        shutil.copyfile(mutant, os.path.join(shadow_lib, "paths.sh"))
+        # the control could not fail (measured: 22 for both builds). And since PR #67 pass 14 the resolver
+        # RE-SOURCES the four machinery files beside it whenever they are readable, so a counting seam
+        # defined in the fixture BEFORE `. paths.sh` is replaced by the real enumerator before the first
+        # walk (measured: 0 for the shipped build). The seam is therefore APPENDED to each shadow's own
+        # `plugin-state-auth.sh` — a later definition in the same file wins, so every re-source
+        # re-installs it — and each build sources its own set.
+        seam = '\n_u_acl_enumerate() { printf x >> "' + cnt + '"; /bin/ls -lde -- "$1" 2>/dev/null; }\n'
+        shadows = {}
+        for build in ("spec", "mut"):
+            root = os.path.join(self.home, f"shadow-{build}"); lib = os.path.join(root, "scripts", "lib")
+            shutil.copytree(os.path.dirname(PATHS_C4), lib)
+            with open(os.path.join(lib, "plugin-state-auth.sh"), "a", encoding="utf-8") as fh:
+                fh.write(seam)
+            if build == "mut":
+                shutil.copyfile(mutant, os.path.join(lib, "paths.sh"))
+            shadows[build] = (root, lib)
         try:
             for shell in SHELLS:
                 for is_mutant in (False, True):
-                    lib = shadow_lib if is_mutant else os.path.dirname(PATHS_C4)
-                    root = shadow if is_mutant else ROOT2
+                    root, lib = shadows["mut" if is_mutant else "spec"]
                     self._wipe()
                     body = (self._mkstore() + self._entry()
                             + f'export HOME="{self.home}"\n'
@@ -2826,7 +2849,6 @@ class RowsChunk4(unittest.TestCase):
                             'unset _UNLEASHED_POINTER_STATE _UNLEASHED_BASE_DIAGNOSED _UNLEASHED_PATHS_SH_LOADED\n'
                             '_UNLEASHED_STATE_LOADED=1; _UNLEASHED_STATE_RC=0\n'
                             f': > "{cnt}"\n'
-                            '_u_acl_enumerate() { printf x >> "' + cnt + '"; /bin/ls -lde -- "$1" 2>/dev/null; }\n'
                             f'. "{lib}/paths.sh"\n'
                             f'. "{lib}/marker.sh"\n'
                             f'. "{lib}/context.sh"\n'
@@ -4514,7 +4536,7 @@ SESSIONSTART_P7 = os.path.join(os.path.dirname(LIBDIR), "sessionstart-restore.sh
 
 @unittest.skipUnless(DARWIN, "every row here drives the Darwin store/ACL arm, /dev/fd or zsh 5.9 semantics")
 class RowsPass7(unittest.TestCase):
-    """Mutant-table rows 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171."""
+    """Mutant-table rows 156-177 (156-173, then the pass-14 codex sweep's 174, 175, 176, 177)."""
 
     #: The store-level outcome, N6-6's tuple.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -4693,13 +4715,15 @@ class RowsPass7(unittest.TestCase):
     # ── row 157 ───────────────────────────────────────────────────────────────────────────────
 
     def test_row_157_machinery_loaded_means_the_functions_exist_not_a_flag(self):
-        """Row 157: `_UNLEASHED_STATE_LOADED=1 _UNLEASHED_STATE_RC=0` inherited by a child that sources paths.sh with the variable unset — the specification loads the four libraries (keyed on `command -v` of their entry functions) and resolves (OK=0, the sentinel, one diagnostic, nothing `command not found`); the flag-keyed mutant reports the machinery present, the reader branch calls an undefined `_unleashed_read_store` — `command not found` on stderr, every protocol variable UNSET, and a `set -u` consumer aborts before its next statement. Both shells."""
+        """Row 157: `_UNLEASHED_STATE_LOADED=1 _UNLEASHED_STATE_RC=0` inherited by a child that sources paths.sh with the variable unset — the specification loads the four libraries (RE-SOURCED from the files beside the resolver whenever they are readable, and keyed on `command -v` of their entry functions only where they are not — pass 14) and resolves (OK=0, the sentinel, one diagnostic, nothing `command not found`); the flag-keyed mutant reports the machinery present, the reader branch calls an undefined `_unleashed_read_store` — `command not found` on stderr, every protocol variable UNSET, and a `set -u` consumer aborts before its next statement. Both shells."""
+        # THE MUTATION is the flag short-circuit restored at the TOP of the loader — before the readable
+        # files are sourced — which is where the pass-7 defect lived. (Until pass 14 it replaced the
+        # `command -v` presence check; that check now runs only when the files are unreadable, so a flag
+        # planted there is unreachable in this fixture and the control could not fail — measured.)
         mutant = with_mutation(
-            '        if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \\\n'
-            '            && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then\n'
-            '            return 0\n'
-            '        fi\n',
-            '        [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"\n',
+            '        _usm_d="$_UNLEASHED_LIB_DIR"; _usm_readable=1\n',
+            '        [ -n "${_UNLEASHED_STATE_LOADED:-}" ] && return "${_UNLEASHED_STATE_RC:-0}"\n'
+            '        _usm_d="$_UNLEASHED_LIB_DIR"; _usm_readable=1\n',
             path=PATHS_C4)
         env = {"HOME": self.home, "_UNLEASHED_STATE_LOADED": "1", "_UNLEASHED_STATE_RC": "0"}
         try:
@@ -4790,15 +4814,23 @@ class RowsPass7(unittest.TestCase):
             '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value" && _pb_wrc=0 || _pb_wrc=$?\n',
             '            _unleashed_write_transient "$_UNLEASHED_TRANSIENT" "$_pb_value"; _pb_wrc=$?\n',
             path=PUB)
+        # THE PUBLISHER UNDER TEST IS THE ONE THE RESOLVER LOADS: since PR #67 pass 14 paths.sh re-sources
+        # the four machinery files beside it whenever they are readable, so a mutant publisher sourced
+        # into the fixture BEFORE `. paths.sh` was replaced by the shipped one and the control could not
+        # fail (measured). Each build is a shadow root — the machinery, with its own publisher, beside
+        # paths.sh — and the fixture sources paths.sh alone.
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        spec_root = self._shadow("spec159", dict(machinery, **{"paths.sh": PATHS_C4}))
+        mut_root = self._shadow("mut159", dict(machinery, **{"plugin-state-publisher.sh": mutant, "paths.sh": PATHS_C4}))
         try:
             for shell in SHELLS:
-                for pub, is_mutant in ((PUB, False), (mutant, True)):
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
                     self._wipe()
                     body = ('set -eu\n'
                             f'export HOME="{self.home}"\n'
                             f'export CLAUDE_PLUGIN_DATA="{self.target}"\n'
                             'trap "" XFSZ\nulimit -f 0\n'
-                            + "".join(f'. "{s}"\n' for s in (AUTH, STORE, READER, pub, PATHS_C4))
+                            f'. "{os.path.join(root, "scripts", "lib", "paths.sh")}"\n'
                             + 'printf "STATE=%s OK=%s SRC=%s" "$_UNLEASHED_POINTER_STATE" '
                               '"$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE"\n'
                               'printf " END"')
@@ -5327,7 +5359,9 @@ class RowsPass7(unittest.TestCase):
         machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
         for fam, prim in self.ROW_166:
             src = os.path.join(LIBDIR, fam)
-            block = self._slice(src, head, '    esac\nfi\n')
+            # (The block gained a `_ubi_decl` capture and its cleanup in PR #67 pass 14 — row 176 —
+            # so the tail anchor is the cleanup line before the `fi`, not the `esac` itself.)
+            block = self._slice(src, head, '    unset _ubi_decl 2>/dev/null || :\nfi\n')
             self.assertIn("declare -p _UNLEASHED_BASE_INSTANCE", block, block)
             self.assertIn("unset -f _unleashed_resolved_in_process", block, block)
             mutant = with_mutation(block, "", path=src)
@@ -5707,6 +5741,505 @@ class RowsPass7(unittest.TestCase):
             os.unlink(mutant)
             if os.path.islink(top):
                 os.unlink(top)
+
+    # ── row 172 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The attacker: `_unleashed_read_store` REDEFINED in the parent while `set -a` is still on, so bash
+    #: exports it beside the four genuine machinery names the earlier source already exported. It answers
+    #: `/attacker` — the value the child must never adopt.
+    ROW_172_ATTACKER = ('_unleashed_read_store() { _UNLEASHED_BASE_RESOLVED=/attacker; _UNLEASHED_BASE_OK=1; '
+                        '_UNLEASHED_BASE_SOURCE=pointer; _UNLEASHED_POINTER_STATE=none; }')
+    #: The old presence-first early return, restored in front of the readable-source block of each loader.
+    ROW_172_GUARD = ('if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \\\n'
+                     '{ind}    && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then\n'
+                     '{ind}    return 0\n'
+                     '{ind}fi\n')
+
+    def _row_172_mutant(self, fam):
+        """A copy of family file `fam` whose loader trusts PRESENT functions before re-sourcing the files:
+        the old `if command -v … ; then return 0; fi` inserted immediately before the loader's
+        `if [ "$_…_readable" = 1 ]; then` line — the shape every loader had until pass 14."""
+        var = "_usm_readable" if fam == "paths.sh" else ("_ueb_readable" if fam == "agent-env-bridge.sh" else "_upb_readable")
+        ind = "        " if fam == "paths.sh" else "    "
+        anchor = f'{ind}if [ "${var}" = 1 ]; then\n'
+        return with_mutation(anchor, ind + self.ROW_172_GUARD.format(ind=ind) + anchor, path=os.path.join(LIBDIR, fam))
+
+    def test_row_172_the_machinery_is_re_sourced_not_trusted_because_it_is_present(self):
+        """Row 172 (codex, PR #67 pass 14, finding — the loader kept an IMPORTED `_unleashed_read_store`): a bash parent under `set -a` sources a resolver copy (no `CLAUDE_PLUGIN_DATA`, no store — the machinery loads and every function is exported), then REDEFINES `_unleashed_read_store` to answer `/attacker` and `exec`s a child that sources the same copy: the specification RE-SOURCES the four machinery files beside the resolver whenever they are readable — the child prints the sentinel with `OK=0` (or, with a real base published, that base — never `/attacker`); under the mutation (the old presence-first `command -v … && return 0` restored ahead of the re-source) the child trusts the import and prints `/attacker` with `OK=1`. All five resolver copies, each where it is the resolver in force; the marker.sh-beside-paths.sh cell as the reproduction ran it; bash only (zsh's `set -a` exports no functions, so its child never holds the import — measured: the sentinel in both builds)."""
+        # THE MUTANT MUST SIT BESIDE READABLE MACHINERY: the specification falls back to present functions
+        # only when the files are NOT readable, so a mutant left in a bare temp dir would take that branch
+        # in both builds and could not fail — which is exactly why the shadow-lib pattern (row 156's) is
+        # required. paths.sh is exercised in a shadow with the machinery; the four family files in a
+        # shadow WITHOUT paths.sh, so their own loader runs (row 156's shape); and marker.sh BESIDE the
+        # (spec/mutant) paths.sh, which is the reproduction as it was run. Measured, bash, all cells:
+        # spec `ok=1|<sentinel>` (`unleashed_base_ok` false → prints 1); mutant `ok=0|/attacker`.
+        # The store cell: the parent PUBLISHES `<b>` (variable set, E4 creates the store), the attacker is
+        # planted, the variable is unset, and the child reads the STORE — spec `<b>` (source `pointer`),
+        # mutant `/attacker`. `_UNLEASHED_PUBLISH_OK=0` everywhere else, so no other cell writes a store.
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        marker = os.path.join(LIBDIR, "marker.sh")
+        b = os.path.join(self.home, "base-b")
+        os.makedirs(b)
+        os.chmod(b, 0o700)
+        probe = 'unleashed_base_ok; printf "ok=%s|%s" "$?" "$_UNLEASHED_BASE_RESOLVED"'
+        for fam in FAMILY_P7:
+            mutant = self._row_172_mutant(fam)
+            try:
+                if fam == "paths.sh":
+                    files = dict(machinery, **{"marker.sh": marker})
+                else:
+                    files = dict(machinery)                          # WITHOUT paths.sh: the copy's own loader runs
+                spec_root = self._shadow(f"spec172-{fam}", dict(files, **{fam: os.path.join(LIBDIR, fam)}))
+                mut_root = self._shadow(f"mut172-{fam}", dict(files, **{fam: mutant}))
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    f = os.path.join(root, "scripts", "lib", fam)
+                    src = f'. "{f}" "" "{root}"' if fam == "agent-env-bridge.sh" else f'. "{f}"'
+                    cells = {"self": src}
+                    if fam == "paths.sh":
+                        cells["marker.sh beside paths.sh"] = f'. "{os.path.join(root, "scripts", "lib", "marker.sh")}"'
+                    for cell, child_src in cells.items():
+                        self._wipe()
+                        body = (f'set -a; export HOME="{self.home}" _UNLEASHED_PUBLISH_OK=0; unset CLAUDE_PLUGIN_DATA; '
+                                f'{src}; {self.ROW_172_ATTACKER}; set +a; '
+                                f"exec /bin/bash -c '{child_src}; {probe}'")
+                        rc, out, err = self._row_166_cell("/bin/bash", body)
+                        tag = f"{fam} {'mutant' if is_mutant else 'shipped'} [{cell}]"
+                        self.assertEqual(0, rc, f"{tag}: rc {rc}: {err!r}")
+                        self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                        self.assertFalse(os.path.exists(self.store), f"{tag}: E0 wrote a store")
+                        if not is_mutant:
+                            self.assertEqual(f"ok=1|{SENTINEL}", out,
+                                             f"{tag}: the child adopted an IMPORTED reader's answer — the "
+                                             f"present machinery was trusted instead of re-sourced: {out!r} {err!r}")
+                        else:
+                            self.assertEqual("ok=0|/attacker", out,
+                                             f"{tag}: the CONTROL did not fail — under the restored presence-first "
+                                             f"guard the child still re-sourced the machinery: {out!r} {err!r}")
+                    # The store cell — paths.sh only: a REAL base published by the parent must come back from
+                    # the store in the child, never the import's answer.
+                    if fam == "paths.sh":
+                        self._wipe()
+                        body = (f'set -a; export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{b}"; '
+                                f'{src}; printf "%s|" "$_UNLEASHED_POINTER_STATE"; {self.ROW_172_ATTACKER}; '
+                                f'unset CLAUDE_PLUGIN_DATA; set +a; '
+                                f"exec /bin/bash -c '{src}; {probe}; printf \"|%s\" \"$_UNLEASHED_BASE_SOURCE\"'")
+                        rc, out, err = self._row_166_cell("/bin/bash", body)
+                        tag = f"{fam} {'mutant' if is_mutant else 'shipped'} [store]"
+                        self.assertEqual(0, rc, f"{tag}: rc {rc}: {err!r}")
+                        self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                        self.assertTrue(out.startswith("created|"),
+                                        f"{tag}: the parent did not publish `<b>` — the fixture is not the finding: {out!r} {err!r}")
+                        if not is_mutant:
+                            self.assertEqual(f"created|ok=0|{b}|pointer", out,
+                                             f"{tag}: the child did not read the published base back from the store: {out!r} {err!r}")
+                        else:
+                            self.assertEqual("created|ok=0|/attacker|pointer", out,
+                                             f"{tag}: the CONTROL did not fail — the child did not adopt the import: {out!r} {err!r}")
+            finally:
+                os.unlink(mutant)
+        # zsh does not export functions under `set -a`: the import never reaches the child, and BOTH builds
+        # print the sentinel — asserted, so the bash-only claim above is measured rather than assumed.
+        mutant = self._row_172_mutant("paths.sh")
+        try:
+            spec_root = self._shadow("spec172-zsh", dict(machinery, **{"paths.sh": PATHS_C4}))
+            mut_root = self._shadow("mut172-zsh", dict(machinery, **{"paths.sh": mutant}))
+            for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                f = os.path.join(root, "scripts", "lib", "paths.sh")
+                self._wipe()
+                body = (f'set -a; export HOME="{self.home}" _UNLEASHED_PUBLISH_OK=0; unset CLAUDE_PLUGIN_DATA; '
+                        f'. "{f}"; {self.ROW_172_ATTACKER}; set +a; '
+                        f"exec /bin/zsh -c '. \"{f}\"; {probe}'")
+                rc, out, err = self._row_166_cell("/bin/zsh", body)
+                self.assertEqual((0, f"ok=1|{SENTINEL}"), (rc, out),
+                                 f"zsh {'mutant' if is_mutant else 'shipped'}: the zsh child held the import — "
+                                 f"the bash-only claim is wrong: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 173 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The instance stamp as shipped (pass 14) — set once, only when absent, global under zsh — in the
+    #: two files the row's mutant reverts; `{ind}` is the file's indentation. The old stamp was one line.
+    ROW_173_STAMP = ('{ind}if [ -z "${{_UNLEASHED_BASE_INSTANCE+set}}" ]; then\n'
+                     '{ind}    if [ -n "${{ZSH_VERSION:-}}" ]; then typeset -g -r _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; '
+                     'else readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; fi\n'
+                     '{ind}fi\n')
+    ROW_173_OLD = '{ind}readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null\n'
+
+    def _row_173_mutant(self, fam):
+        ind = "        " if fam == "paths.sh" else "    "
+        return with_mutation(self.ROW_173_STAMP.format(ind=ind), self.ROW_173_OLD.format(ind=ind),
+                             path=os.path.join(LIBDIR, fam))
+
+    def test_row_173_the_instance_stamp_is_set_once_errexit_safe_and_global_under_zsh(self):
+        """Row 173 (codex, PR #67 pass 14, finding — the readonly stamp re-applied under `set -e`, and function-local under zsh): (i) `set -e; . paths.sh` (base A) then `. agent-env-bridge.sh <B> <root>` — the bridge re-resolves an already-stamped instance — the specification's sourcing shell SURVIVES and holds `<B>` in both shells; under the mutation (the stamp restored to the bare `readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null` in paths.sh and the bridge) bash treats the second `readonly` as a FATAL assignment error and the shell EXITS non-zero, while zsh survives — because there (ii) the resolver's stamp was FUNCTION-LOCAL: after `. paths.sh` alone, `typeset -p _UNLEASHED_BASE_INSTANCE` shows the global `-r` attribute in the specification and `no such variable` under the mutant; (iv) the bridge sourced alone TWICE with differing values (its stamp is at file top level, so it was global in zsh already) EXITS the errexit shell under the mutant in BOTH shells and survives in the specification. (iii) The instance check the stamp serves still holds in both builds: a `set -a` wrapper's exec'd bash child sees `declare -x` (value inherited without the attribute) and, after `. paths.sh`, `declare -r`."""
+        # Measured: (i) bash spec rc 0 `SURVIVED <b>`, mutant rc 1 with EMPTY output; zsh rc 0 `SURVIVED <b>`
+        # in both builds. (ii) zsh spec `typeset -r _UNLEASHED_BASE_INSTANCE=1`, mutant `no such variable`
+        # (rc 1); bash `declare -r …` in both. (iii) `declare -x` then `declare -r` in both builds. (iv) spec
+        # rc 0 `SURVIVED <b>` in both shells; mutant rc 1, empty, in both. Both mutant files sit in ONE
+        # shadow lib beside the shipped machinery and family (row 92's shape), and every cell runs with a
+        # protocol-clean environment (`_row_166_cell`) so nothing inherited stands in for the stamp.
+        a = os.path.join(self.home, "base-a"); b = os.path.join(self.home, "base-b")
+        os.makedirs(a); os.makedirs(b)
+        m_paths = self._row_173_mutant("paths.sh")
+        m_bridge = self._row_173_mutant("agent-env-bridge.sh")
+        try:
+            everything = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7 + FAMILY_P7}
+            spec_root = self._shadow("spec173", everything)
+            mut_root = self._shadow("mut173", dict(everything, **{"paths.sh": m_paths, "agent-env-bridge.sh": m_bridge}))
+            # The bridge ALONE (paths.sh absent) — the fifth resolver copy in force, its own top-level stamp.
+            spec_alone = self._shadow("spec173-alone", dict(everything, **{"agent-env-bridge.sh": os.path.join(LIBDIR, "agent-env-bridge.sh")}))
+            mut_alone = self._shadow("mut173-alone", dict(everything, **{"agent-env-bridge.sh": m_bridge}))
+            for r in (spec_alone, mut_alone):
+                os.unlink(os.path.join(r, "scripts", "lib", "paths.sh"))
+            env = f'export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{a}" _UNLEASHED_PUBLISH_OK=0'
+            for root, alone, is_mutant in ((spec_root, spec_alone, False), (mut_root, mut_alone, True)):
+                paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                bridge = os.path.join(root, "scripts", "lib", "agent-env-bridge.sh")
+                bridge_alone = os.path.join(alone, "scripts", "lib", "agent-env-bridge.sh")
+                tag0 = "mutant" if is_mutant else "shipped"
+                for shell in SHELLS:
+                    bash = shell.endswith("bash")
+                    # (i) errexit sourcer: paths.sh (A) then the bridge (B) — a re-resolution of a stamped instance.
+                    self._wipe()
+                    rc, out, err = self._row_166_cell(shell, f'set -e; {env}; . "{paths}"; . "{bridge}" "{b}" "{root}"; '
+                                                             f'printf "SURVIVED %s" "$_UNLEASHED_BASE_RESOLVED"')
+                    tag = f"{tag0} {shell} (i)"
+                    if not is_mutant or not bash:
+                        self.assertEqual((0, f"SURVIVED {b}"), (rc, out),
+                                         f"{tag}: the errexit sourcing shell did not survive the bridge's "
+                                         f"re-resolution, or did not hold <b>: {rc} {out!r} {err!r}")
+                    else:
+                        self.assertNotEqual(0, rc, f"{tag}: the CONTROL did not fail — bash survived a second "
+                                                   f"bare `readonly` under set -e: {out!r} {err!r}")
+                        self.assertEqual("", out, f"{tag}: the shell reached its next statement: {out!r}")
+                    # (iv) the bridge alone, twice, with differing values — its own top-level stamp re-applied.
+                    self._wipe()
+                    rc, out, err = self._row_166_cell(shell, f'set -e; export HOME="{self.home}"; . "{bridge_alone}" "{a}" "{alone}"; '
+                                                             f'. "{bridge_alone}" "{b}" "{alone}"; printf "SURVIVED %s" "$_UNLEASHED_BASE_RESOLVED"')
+                    tag = f"{tag0} {shell} (iv)"
+                    if not is_mutant:
+                        self.assertEqual((0, f"SURVIVED {b}"), (rc, out), f"{tag}: {rc} {out!r} {err!r}")
+                    else:
+                        self.assertNotEqual(0, rc, f"{tag}: the CONTROL did not fail — the bridge's second bare "
+                                                   f"`readonly` did not exit the errexit shell: {out!r} {err!r}")
+                        self.assertEqual("", out, f"{tag}: the shell reached its next statement: {out!r}")
+                    # (ii) after paths.sh alone, the stamp is a GLOBAL readonly (zsh: `typeset -p` shows -r).
+                    self._wipe()
+                    show = "declare -p" if bash else "typeset -p"
+                    rc, out, err = self._row_166_cell(shell, f'{env}; . "{paths}"; {show} _UNLEASHED_BASE_INSTANCE')
+                    tag = f"{tag0} {shell} (ii)"
+                    if bash or not is_mutant:
+                        self.assertEqual(0, rc, f"{tag}: {out!r} {err!r}")
+                        self.assertRegex(out, r"^(declare|typeset) -[a-z]*r[a-z]* _UNLEASHED_BASE_INSTANCE=",
+                                         f"{tag}: the stamp is not a global readonly after sourcing: {out!r}")
+                    else:
+                        self.assertNotEqual(0, rc, f"{tag}: the CONTROL did not fail — zsh holds a global "
+                                                   f"stamp under the function-local `readonly`: {out!r}")
+                        self.assertIn("no such variable", err, f"{tag}: {err!r}")
+                # (iii) bash: the readonly attribute does not cross exec — the child sees `-x`, then `-r` after sourcing.
+                self._wipe()
+                rc, out, err = self._row_166_cell("/bin/bash", f'set -a; {env}; . "{paths}"; set +a; '
+                                                               f"exec /bin/bash -c 'declare -p _UNLEASHED_BASE_INSTANCE; "
+                                                               f'. "{paths}"; declare -p _UNLEASHED_BASE_INSTANCE\'')
+                tag = f"{tag0} bash (iii)"
+                self.assertEqual(0, rc, f"{tag}: {out!r} {err!r}")
+                lines = out.splitlines()
+                self.assertEqual(2, len(lines), f"{tag}: {out!r}")
+                self.assertRegex(lines[0], r'^declare -x _UNLEASHED_BASE_INSTANCE="1"$',
+                                 f"{tag}: the exec'd child inherited the ATTRIBUTE, or not the value: {lines[0]!r}")
+                self.assertRegex(lines[1], r'^declare -r _UNLEASHED_BASE_INSTANCE="1"$',
+                                 f"{tag}: sourcing in the child did not stamp its own instance: {lines[1]!r}")
+        finally:
+            os.unlink(m_paths); os.unlink(m_bridge)
+
+    # ── row 174 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The library directory each resolver copy derives, and the indentation of the block that derives
+    #: it. agent-env-bridge.sh is NOT here: it takes the plugin root as a positional argument and
+    #: derives no directory of its own.
+    ROW_174_FILES = (("paths.sh", "_UNLEASHED_LIB_DIR", "    "),
+                     ("marker.sh", "_upb_d", ""),
+                     ("log.sh", "_upb_d", ""),
+                     ("context.sh", "_UNLEASHED_CONTEXT_LIB_DIR", ""))
+    #: The PATH-resolved one-liner every copy carried until pass 14 — `dirname` is an EXTERNAL command.
+    ROW_174_OLD = '{ind}{v}="$(cd "$(dirname "${{BASH_SOURCE[0]:-$0}}")" 2>/dev/null && pwd)" || {v}="."\n'
+    #: The parent supplies a tampered machinery namespace under `set -a` AND the PATH it is found on.
+    ROW_174_ATTACKER = ('_unleashed_key() { :; }; _unleashed_auth_chain() { :; }; _unleashed_publish() { :; }; '
+                        '_unleashed_read_store() { _UNLEASHED_BASE_RESOLVED=/attacker; _UNLEASHED_BASE_OK=1; '
+                        '_UNLEASHED_BASE_SOURCE=pointer; _UNLEASHED_POINTER_STATE=none; }')
+
+    def _row_174_mutant(self, fam, var, ind):
+        """A copy of `fam` whose lib-directory derivation is the PATH-resolved `dirname` one-liner."""
+        src = os.path.join(LIBDIR, fam)
+        old = self._slice(src, f'{ind}{var}="${{BASH_SOURCE[0]:-$0}}"\n',
+                          f'{ind}[ -n "${var}" ] || {var}="."\n')
+        self.assertIn("cd -P", old, old)                 # the shipped derivation is a BUILTIN cd …
+        self.assertNotIn("dirname", old, old)            # … and consults no external command at all
+        return with_mutation(old, self.ROW_174_OLD.format(ind=ind, v=var), path=src)
+
+    def test_row_174_the_library_directory_is_not_derived_through_path(self):
+        """Row 174 (codex sweep, PR #67 pass 14, finding — the lib directory came from `dirname`, and PATH decides where `dirname` is): a bash parent under `set -a` exports a tampered `_unleashed_read_store` answering `/attacker`, drops `/usr/bin` from PATH and `exec`s a child that sources a resolver copy sitting BESIDE the four machinery files: the specification derives the directory by parameter expansion and builtin `cd -P`/`pwd -P`, finds the machinery beside itself, RE-SOURCES it, and answers the sentinel (`ok=1`); under the mutation (the `dirname` one-liner restored) `dirname` is not found, the directory falls back to the caller's CWD, the four libraries "are not readable" although they sit right beside the file, the loader's presence fallback trusts the import, and the child answers `/attacker` (`ok=0`) with `dirname: command not found` on stderr. All four deriving copies. And the honest control, BOTH shells: with a normal PATH and no shadow, a genuine `CLAUDE_PLUGIN_DATA` still resolves through every copy."""
+        # Measured, all four files: shipped `ok=1|<sentinel>` with ONE diagnostic and no `command not
+        # found`; mutant `ok=0|/attacker`, no diagnostic, `dirname: command not found` on stderr. The CWD
+        # is a scratch directory holding no libraries — that is what the mutant's fallback resolves to,
+        # and it is set explicitly rather than inherited from the test runner. `_UNLEASHED_PUBLISH_OK=0`
+        # (E0) and no store, so no cell writes one.
+        cwd = os.path.join(self.home, "cwd174")
+        os.makedirs(cwd)
+        probe = 'unleashed_base_ok; printf "ok=%s|%s" "$?" "$_UNLEASHED_BASE_RESOLVED"'
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        for fam, var, ind in self.ROW_174_FILES:
+            mutant = self._row_174_mutant(fam, var, ind)
+            try:
+                # The shadow holds the four machinery files and NOTHING else besides the copy under test,
+                # so each copy's own derivation and loader are the ones in force (row 156's shape): with
+                # paths.sh beside a family file, paths.sh would resolve first and the family copy's
+                # derivation would be unreachable — a mutant there could not fail.
+                spec_root = self._shadow(f"spec174-{fam}", dict(machinery, **{fam: os.path.join(LIBDIR, fam)}))
+                mut_root = self._shadow(f"mut174-{fam}", dict(machinery, **{fam: mutant}))
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    f = os.path.join(root, "scripts", "lib", fam)
+                    self._wipe()
+                    body = (f'cd "{cwd}" || exit 9; set -a; export HOME="{self.home}" _UNLEASHED_PUBLISH_OK=0; '
+                            f'unset CLAUDE_PLUGIN_DATA; {self.ROW_174_ATTACKER}; set +a; '
+                            f"PATH=/bin exec /bin/bash -c '. \"{f}\"; {probe}'")
+                    rc, out, err = self._row_166_cell("/bin/bash", body)
+                    tag = f"{fam} {'mutant' if is_mutant else 'shipped'}"
+                    self.assertEqual(0, rc, f"{tag}: rc {rc}: {out!r} {err!r}")
+                    self.assertFalse(os.path.exists(self.store), f"{tag}: E0 wrote a store")
+                    if not is_mutant:
+                        self.assertEqual(f"ok=1|{SENTINEL}", out,
+                                         f"{tag}: the child adopted the IMPORTED reader's answer — the "
+                                         f"libraries beside it were not found: {out!r} {err!r}")
+                        self.assertNotIn("command not found", err, f"{tag}: {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                    else:
+                        self.assertEqual("ok=0|/attacker", out,
+                                         f"{tag}: the CONTROL did not fail — with `/usr/bin` off PATH the "
+                                         f"`dirname` derivation still found the libraries: {out!r} {err!r}")
+                        self.assertIn("dirname", err,
+                                      f"{tag}: `dirname` was found after all — the fixture is not the "
+                                      f"finding: {err!r}")
+                        self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+            finally:
+                os.unlink(mutant)
+        # THE HONEST CONTROL, both shells: nothing above is bought at the price of the normal case — the
+        # shipped derivation still finds the libraries beside every copy, from a foreign CWD, and a
+        # genuine `CLAUDE_PLUGIN_DATA` resolves through all four.
+        b = os.path.join(self.home, "base-174")
+        os.makedirs(b)
+        os.chmod(b, 0o700)
+        for fam, _, _ in self.ROW_174_FILES:
+            for shell in SHELLS:
+                self._wipe()
+                rc, out, err = self._row_166_cell(
+                    shell, f'cd "{cwd}" || exit 9; export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{b}" '
+                           f'_UNLEASHED_PUBLISH_OK=0; . "{os.path.join(LIBDIR, fam)}"; {probe}')
+                self.assertEqual((0, f"ok=0|{b}"), (rc, out),
+                                 f"{fam} {shell}: the shipped derivation did not resolve a genuine base "
+                                 f"from a foreign cwd: {rc} {out!r} {err!r}")
+
+    # ── row 175 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The discard branch of the instance check, `|| :` on BOTH unsets (pass 14); the mutant drops them.
+    #: zsh's `unset -f` returns 1 for a function that is not defined — and in a shell that has just
+    #: inherited the stamp through the environment, that function is exactly what is NOT defined.
+    ROW_175_LINE = ('        *)  unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=; '
+                    'unset _UNLEASHED_BASE_INSTANCE 2>/dev/null || : ;;\n')
+    ROW_175_OLD = ('        *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; '
+                   'unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;\n')
+
+    def test_row_175_sourcing_survives_errexit_when_the_stamp_arrives_through_the_environment(self):
+        """Row 175 (codex sweep, PR #67 pass 14, finding — `unset -f` on an undefined function returns 1 in zsh): a shell with `set -e` and `_UNLEASHED_BASE_INSTANCE=1` in its ENVIRONMENT (a value without the attribute — the inherited shape the check exists to discard) sources each of the five resolver copies: the specification's shell SURVIVES and holds the genuine base in both shells; under the mutation (the `|| :` dropped from both unsets in the discard branch) the ZSH shell dies at the `unset -f` — rc non-zero, nothing sourced, no base — while bash is unaffected (its `unset -f` returns 0), which is asserted rather than claimed. Under `setopt err_return` the zsh mutant returns out of the sourced file instead of exiting: the shell survives with the base UNSET, which is the same defect in its second spelling."""
+        # Measured, all five copies: (i) `set -e` — spec rc 0 `SURVIVED <b>` in both shells; mutant zsh
+        # rc 1 with EMPTY output, bash rc 0 `SURVIVED <b>` (no discrimination, asserted). (ii) zsh
+        # `setopt err_return` — spec `SURVIVED <b>`; mutant rc 0 but `SURVIVED ` with an empty base.
+        b = os.path.join(self.home, "base-175")
+        os.makedirs(b)
+        os.chmod(b, 0o700)
+        everything = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7 + FAMILY_P7}
+        spec_root = self._shadow("spec175", everything)
+        show = 'printf "SURVIVED %s" "$_UNLEASHED_BASE_RESOLVED"'
+        for fam in FAMILY_P7:
+            mutant = with_mutation(self.ROW_175_LINE, self.ROW_175_OLD, path=os.path.join(LIBDIR, fam))
+            try:
+                mut_root = self._shadow(f"mut175-{fam}", dict(everything, **{fam: mutant}))
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    f = os.path.join(root, "scripts", "lib", fam)
+                    src = (f'. "{f}" "{b}" "{root}"' if fam == "agent-env-bridge.sh" else f'. "{f}"')
+                    env = (f'export HOME="{self.home}" _UNLEASHED_PUBLISH_OK=0 _UNLEASHED_BASE_INSTANCE=1; '
+                           + ('unset CLAUDE_PLUGIN_DATA; ' if fam == "agent-env-bridge.sh"
+                              else f'export CLAUDE_PLUGIN_DATA="{b}"; '))
+                    for shell in SHELLS:
+                        bash = shell.endswith("bash")
+                        self._wipe()
+                        rc, out, err = self._row_166_cell(shell, f'set -e; {env}{src}; {show}')
+                        tag = f"{fam} {shell} {'mutant' if is_mutant else 'shipped'} (set -e)"
+                        if not is_mutant or bash:
+                            self.assertEqual((0, f"SURVIVED {b}"), (rc, out),
+                                             f"{tag}: the errexit sourcing shell did not survive an "
+                                             f"inherited stamp, or did not resolve: {rc} {out!r} {err!r}")
+                        else:
+                            self.assertNotEqual(0, rc, f"{tag}: the CONTROL did not fail — zsh survived "
+                                                       f"`unset -f` on an undefined function: {out!r} {err!r}")
+                            self.assertEqual("", out, f"{tag}: the shell reached its next statement: {out!r}")
+                    # (ii) zsh `setopt err_return`: the mutant RETURNS out of the sourced file — the shell
+                    # lives, the base does not.
+                    self._wipe()
+                    rc, out, err = self._row_166_cell("/bin/zsh", f'setopt err_return; {env}{src}; {show}')
+                    tag = f"{fam} zsh {'mutant' if is_mutant else 'shipped'} (err_return)"
+                    if not is_mutant:
+                        self.assertEqual((0, f"SURVIVED {b}"), (rc, out), f"{tag}: {rc} {out!r} {err!r}")
+                    else:
+                        self.assertEqual("SURVIVED ", out,
+                                         f"{tag}: the CONTROL did not fail — the sourcing completed and "
+                                         f"the base was resolved anyway: {rc} {out!r} {err!r}")
+            finally:
+                os.unlink(mutant)
+
+    # ── row 176 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The readonly-attribute test as shipped — the FLAG LETTERS only, everything from the first
+    #: ` _UNLEASHED_BASE_INSTANCE` dropped before the match; the mutant restores the whole-line patterns.
+    ROW_176_SHIPPED = ('    _ubi_decl="$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )"\n'
+                       '    case "${_ubi_decl%% _UNLEASHED_BASE_INSTANCE*}" in\n'
+                       '        "declare -"*r*|"typeset -"*r*|"export -"*r*|readonly) : ;;\n')
+    ROW_176_OLD = ('    case "$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )" in\n'
+                   '        "declare -"*r*" _UNLEASHED_BASE_INSTANCE="*|"typeset -"*r*" _UNLEASHED_BASE_INSTANCE="*|"export -"*r*" _UNLEASHED_BASE_INSTANCE="*|"readonly "*) : ;;\n')
+    #: The crafted VALUE that supplies both the `r` and the name to a whole-line match, beside a complete
+    #: inherited resolution: `exec` preserves `$$`, and bash `set -a` carries the marker function across.
+    ROW_176_CRAFTED = "r _UNLEASHED_BASE_INSTANCE="
+
+    def test_row_176_the_readonly_attribute_test_reads_the_flag_letters_only(self):
+        """Row 176 (codex sweep, PR #67 pass 14, finding — the attribute test globbed the whole `declare -p` line, and the VALUE is attacker-supplied): a bash parent under `set -a` publishes a complete inherited resolution — `_UNLEASHED_BASE_RESOLVED=/attacker`, `_UNLEASHED_BASE_PID=$$`, the marker function — and sets `_UNLEASHED_BASE_INSTANCE='r _UNLEASHED_BASE_INSTANCE='`, then `exec`s a child that sources a resolver copy: the specification strips everything from the first ` _UNLEASHED_BASE_INSTANCE` before matching, sees `declare -x`, DISCARDS the inherited resolution and re-resolves from the environment (`<b>`); under the mutation (the whole-line patterns restored) the crafted value supplies the `r` and the name, the attribute-less inherited value passes as READONLY, the pid + marker guard is satisfied across `exec`, and the child keeps `/attacker`. All four exec'd resolver copies; bash only, and the zsh half is asserted non-discriminating (its `set -a` exports no functions). The honest control: a GENUINE in-process stamp is still honoured — paths.sh, then marker.sh, then log.sh in one shell with `CLAUDE_PLUGIN_DATA` changed in between resolves ONCE, and the stamp carries the `-r` attribute, in both shells and both builds."""
+        # Measured, all four files: bash spec `<b>`, mutant `/attacker`; zsh `<b>` in both builds.
+        # The honest control: `<a>|declare -r` (bash) / `<a>|typeset -r` (zsh) in both builds — the base
+        # did NOT follow `CLAUDE_PLUGIN_DATA` to `<b>`, which is what "resolved once" means here.
+        a = os.path.join(self.home, "base-176a")
+        b = os.path.join(self.home, "base-176b")
+        os.makedirs(a); os.makedirs(b)
+        os.chmod(a, 0o700); os.chmod(b, 0o700)
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        for fam, prim in self.ROW_166:
+            mutant = with_mutation(self.ROW_176_SHIPPED, self.ROW_176_OLD, path=os.path.join(LIBDIR, fam))
+            try:
+                spec_root = self._shadow(f"spec176-{fam}", dict(machinery, **{fam: os.path.join(LIBDIR, fam)}))
+                mut_root = self._shadow(f"mut176-{fam}", dict(machinery, **{fam: mutant}))
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    f = os.path.join(root, "scripts", "lib", fam)
+                    for shell in SHELLS:
+                        self._wipe()
+                        body = (f'set -a; export HOME="{self.home}" _UNLEASHED_PUBLISH_OK=0 '
+                                f'CLAUDE_PLUGIN_DATA="{b}"; _unleashed_resolved_in_process() {{ :; }}; '
+                                f'export _UNLEASHED_BASE_RESOLVED=/attacker _UNLEASHED_BASE_OK=1 '
+                                f'_UNLEASHED_BASE_SOURCE=host-env _UNLEASHED_POINTER_STATE=none '
+                                f'_UNLEASHED_BASE_PID=$$ '
+                                f'_UNLEASHED_BASE_INSTANCE="{self.ROW_176_CRAFTED}"; set +a; '
+                                f"exec {shell} -c '. \"{f}\"; printf %s \"$({prim})\"'")
+                        rc, out, err = self._row_166_cell(shell, body)
+                        tag = f"{fam} {shell} {'mutant' if is_mutant else 'shipped'}"
+                        self.assertEqual(0, rc, f"{tag}: rc {rc}: {out!r} {err!r}")
+                        self.assertFalse(os.path.exists(self.store), f"{tag}: E0 wrote a store")
+                        if not is_mutant or shell.endswith("zsh"):
+                            self.assertEqual(b, out,
+                                             f"{tag}: the crafted VALUE passed the attribute test and the "
+                                             f"inherited resolution was kept: {out!r} {err!r}")
+                        else:
+                            self.assertEqual("/attacker", out,
+                                             f"{tag}: the CONTROL did not fail — under the whole-line "
+                                             f"patterns the crafted value did not pass as readonly: "
+                                             f"{out!r} {err!r}")
+                # THE HONEST CONTROL — a genuine in-process stamp is still honoured. Runs against BOTH
+                # builds and does not discriminate (a real `declare -r` matches either pattern); its job
+                # is to prove the fix did not turn every legitimate second sourcing into a re-resolution.
+                for root, is_mutant in ((spec_root, False), (mut_root, True)):
+                    if fam != "paths.sh":
+                        continue                     # the three-file chain is paths.sh -> marker.sh -> log.sh
+                    paths = os.path.join(root, "scripts", "lib", "paths.sh")
+                    for shell in SHELLS:
+                        self._wipe()
+                        show = "declare -p" if shell.endswith("bash") else "typeset -p"
+                        rc, out, err = self._row_166_cell(
+                            shell, f'export HOME="{self.home}" CLAUDE_PLUGIN_DATA="{a}" _UNLEASHED_PUBLISH_OK=0; '
+                                   f'. "{paths}"; export CLAUDE_PLUGIN_DATA="{b}"; '
+                                   f'. "{os.path.join(LIBDIR, "marker.sh")}"; . "{os.path.join(LIBDIR, "log.sh")}"; '
+                                   f'printf "%s|" "$_UNLEASHED_BASE_RESOLVED"; {show} _UNLEASHED_BASE_INSTANCE')
+                        tag = f"honest {shell} {'mutant' if is_mutant else 'shipped'}"
+                        self.assertEqual(0, rc, f"{tag}: rc {rc}: {out!r} {err!r}")
+                        self.assertTrue(out.startswith(f"{a}|"),
+                                        f"{tag}: the genuine in-process stamp was discarded and the base "
+                                        f"re-resolved to the NEW environment value: {out!r} {err!r}")
+                        self.assertRegex(out.split("|", 1)[1],
+                                         r"^(declare|typeset) -[a-z]*r[a-z]* _UNLEASHED_BASE_INSTANCE=",
+                                         f"{tag}: the stamp does not carry the readonly attribute: {out!r}")
+            finally:
+                os.unlink(mutant)
+
+    # ── row 177 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The ownership test as shipped — the euid through the `_u_euid` accessor and its probe seam; the
+    #: mutant restores `$EUID`, which bash 3.2 IMPORTS from the environment as an ordinary variable.
+    ROW_177_SHIPPED = '            { _u_euid && [ "$_U_UID" = "$_U_EUID" ]; } || return 1\n'
+    ROW_177_OLD = '            [ "$_U_UID" = "${EUID:-$(/usr/bin/id -u)}" ] || return 1\n'
+
+    def test_row_177_the_effective_uid_is_probed_never_read_from_euid(self):
+        """Row 177 (codex sweep, PR #67 pass 14, finding — bash 3.2, the `/bin/bash` a macOS hook runs, imports `$EUID` from the environment): with `env EUID=4242` a full publish + read cycle still resolves and publishes under the specification, which probes `/usr/bin/id -u` through `_u_euid_probe`; under the mutation (`${EUID:-$(/usr/bin/id -u)}` restored at the chain's ownership test) the bash cycle fails closed on a PERFECTLY HEALTHY store — publish `failed`, nothing read — because the parent decided the answer to every ownership test. zsh sets its own `EUID` and is unaffected, which is asserted rather than claimed. Three further cells on the SHIPPED build: without `EUID` the two builds are identical (the mutation is inert until the environment is tampered with); a fixture that makes `_u_euid_probe` FAIL refuses the chain (fail-closed, both shells); and a caller-preset `_U_EUID`/`_U_EUID_PROBED` is NOT honoured — `_u_probes_reset` clears the flag at the entry points, so the cache cannot be seeded from outside."""
+        # Measured: `EUID=4242` bash — spec `pub=created|1 pointer none`, no diagnostic; mutant
+        # `pub=failed|0 unresolved none`, two diagnostics. `EUID=4242` zsh — `pub=created|1 pointer none`
+        # in BOTH builds (no discrimination). No `EUID` — `pub=created|1 pointer none` in both builds,
+        # both shells. Probe seam failing — `pub=failed`, both shells. Caller-preset cache — `pub=created`.
+        self.assertEqual("4242", subprocess.run(["env", "EUID=4242", "/bin/bash", "-c", "echo $EUID"],
+                                                capture_output=True, text=True).stdout.strip(),
+                         "this bash does not import EUID from the environment — the fixture is not the finding")
+        mutant = with_mutation(self.ROW_177_SHIPPED, self.ROW_177_OLD, path=AUTH)
+        cycle = (f'_unleashed_publish "{self.store}" "{self.target}"\n'
+                 'printf "pub=%s|" "$_UNLEASHED_POINTER_STATE"\n'
+                 'unset _UNLEASHED_BASE_OK _UNLEASHED_BASE_SOURCE _UNLEASHED_POINTER_STATE '
+                 '_UNLEASHED_BASE_DIAGNOSED _U_PRINCIPAL\n'
+                 f'_unleashed_read_store "{self.store}"\n' + self.OUTP)
+        try:
+            for shell in SHELLS:
+                bash = shell.endswith("bash")
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((mutant, STORE, READER, PUB), True)):
+                    for tampered in (True, False):
+                        self._wipe()
+                        env = {"HOME": self.home}
+                        if tampered:
+                            env["EUID"] = "4242"
+                        rc, out, err = run_shell(shell, cycle, sources=srcs, env=env)
+                        tag = (f"{shell} {'mutant' if is_mutant else 'shipped'} "
+                               f"{'EUID=4242' if tampered else 'no EUID'}")
+                        if is_mutant and tampered and bash:
+                            self.assertEqual("pub=failed|0 unresolved none", out,
+                                             f"{tag}: the CONTROL did not fail — `$EUID` from the "
+                                             f"environment did not decide the ownership test: {out!r} {err!r}")
+                            self.assertEqual(2, len(self._diags(err)),
+                                             f"{tag}: not one diagnostic per refusing entry point: {err!r}")
+                        else:
+                            self.assertEqual("pub=created|1 pointer none", out,
+                                             f"{tag}: a healthy store did not publish and read back: "
+                                             f"{out!r} {err!r}")
+                            self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+                # THE SEAM IS HONOURED, FAIL-CLOSED: a fixture whose `_u_euid_probe` fails must refuse the
+                # chain, not fall back to anything. Shipped build only — the mutant has no such seam.
+                self._wipe()
+                rc, out, err = run_shell(shell, '_u_euid_probe() { return 1; }\n' + cycle,
+                                         sources=(AUTH, STORE, READER, PUB), env={"HOME": self.home})
+                self.assertTrue(out.startswith("pub=failed|"),
+                                f"{shell}: a failed euid probe did not refuse the chain — the seam is not "
+                                f"honoured, or something else answered the ownership test: {out!r} {err!r}")
+                # …AND THE CACHE CANNOT BE SEEDED FROM OUTSIDE: `_u_probes_reset` clears the flag at the
+                # entry points, so a caller-set `_U_EUID` never stands in for the probe.
+                self._wipe()
+                rc, out, err = run_shell(shell, '_U_EUID=4242; _U_EUID_PROBED=1\n' + cycle,
+                                         sources=(AUTH, STORE, READER, PUB), env={"HOME": self.home})
+                self.assertEqual("pub=created|1 pointer none", out,
+                                 f"{shell}: a caller-preset `_U_EUID` was honoured — the cache is keyed on "
+                                 f"state the entry point does not reset: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
 
 
 if __name__ == "__main__":

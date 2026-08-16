@@ -41,7 +41,7 @@ export CLAUDE_PLUGIN_DATA="${1-}"          # empty is PRESERVED, not unset — s
 # function and pid are cleared (the readonly instance stamp is this instance's and stays), and paths.sh's
 # eager resolve below runs again from the value just exported.
 if command -v _unleashed_resolved_in_process >/dev/null 2>&1 && [ "${_UNLEASHED_BASE_ENV-}" != "${CLAUDE_PLUGIN_DATA:-}" ]; then
-    unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=
+    unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=
 fi
 
 # Prefer the shared resolver so the bridge and the libs run one code path. GUARDED: paths.sh is an
@@ -57,10 +57,23 @@ fi
 # a value present WITHOUT the attribute is inherited, and the inherited resolution is discarded here.
 # One `declare -p` capture per SOURCING — the per-call guard below stays fork-free.
 if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
-    case "$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )" in
-        "declare -"*r*" _UNLEASHED_BASE_INSTANCE="*|"typeset -"*r*" _UNLEASHED_BASE_INSTANCE="*|"export -"*r*" _UNLEASHED_BASE_INSTANCE="*|"readonly "*) : ;;
-        *)  unset -f _unleashed_resolved_in_process 2>/dev/null; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null ;;
+    # THE FLAG LETTERS ONLY, never the whole line. `declare -p` prints `declare -<flags> NAME="<value>"`
+    # and the VALUE is attacker-supplied: matched against the whole line, `"declare -"*r*" NAME="*` let a
+    # value of `r _UNLEASHED_BASE_INSTANCE=` provide both the `r` and the name, so an inherited
+    # `declare -x` passed as READONLY and the inherited resolution was trusted (codex sweep, PR #67
+    # pass 14 — reproduced). Everything from the first ` _UNLEASHED_BASE_INSTANCE` on is dropped BEFORE
+    # the test, so only the shell's own flags are read; absent output leaves the empty string, which
+    # matches nothing and discards — the fail-safe direction. Measured shapes: bash `declare -r`,
+    # `declare -rx`, inherited `declare -x`; zsh `typeset -r`, `export -r`, inherited `export`.
+    _ubi_decl="$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )"
+    case "${_ubi_decl%% _UNLEASHED_BASE_INSTANCE*}" in
+        "declare -"*r*|"typeset -"*r*|"export -"*r*|readonly) : ;;
+        # `|| :` on BOTH: zsh's `unset -f` returns 1 for a function that is not defined, and under
+        # `set -e` / `setopt err_return` that killed the sourcing of every copy the moment the stamp
+        # arrived through the environment (codex sweep, PR #67 pass 14 — reproduced, zsh only).
+        *)  unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null || : ;;
     esac
+    unset _ubi_decl 2>/dev/null || :
 fi
 # paths.sh is sourced UNCONDITIONALLY when readable — a present API can be an inherited one under bash
 # `set -a` (codex, PR #67 pass 12); sourcing it again is idempotent.
@@ -84,18 +97,28 @@ _ueb_state_load() {
     # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
     # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
     # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    # AND "THE FUNCTIONS EXIST" IS NOT "THE FUNCTIONS ARE OURS": bash `set -a` exports functions, so
+    # keyed on presence this skipped the libraries and trusted an imported `_unleashed_read_store`
+    # (codex, PR #67 pass 14 — reproduced). Re-source from the plugin root whenever the files are
+    # readable; the functions already present are used only where they are not.
+    # $1 here is the PLUGIN ROOT the caller passes — the function's own parameter, not the
+    # file's; the file-level $2 is forwarded at the call site below.
+    _ueb_readable=1
+    for _ueb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+        [ -r "${1-}/scripts/lib/$_ueb_f.sh" ] || { _ueb_readable=0; break; }
+    done
+    if [ "$_ueb_readable" = 1 ]; then
+        for _ueb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+            # shellcheck source=/dev/null
+            . "${1-}/scripts/lib/$_ueb_f.sh"
+        done
+        return 0
+    fi
     if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
         && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
         return 0
     fi
-    # $1 here is the PLUGIN ROOT the caller passes — the function's own parameter, not the
-    # file's; the file-level $2 is forwarded at the call site below.
-    for _ueb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
-        [ -r "${1-}/scripts/lib/$_ueb_f.sh" ] || return 1
-        # shellcheck source=/dev/null
-        . "${1-}/scripts/lib/$_ueb_f.sh"
-    done
-    return 0
+    return 1
 }
 if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in_process >/dev/null 2>&1; then   # pid + marker function
     _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
@@ -124,7 +147,16 @@ if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in
     _UNLEASHED_BASE_PID=$$
     _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"           # the environment this resolution was made under
     _unleashed_resolved_in_process() { :; }
-    readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null       # the attribute no environment can carry across exec
+    # THE STAMP — the attribute NO environment carries (see top). Set ONCE, only when absent, and errexit-
+    # safe: the bridge re-resolves an already-stamped instance, and bash treats `readonly X=1` on a readonly
+    # X as a FATAL assignment error under `set -e`, even behind `|| :` — the sourcing shell exited (codex,
+    # PR #67 pass 14 — reproduced). "Absent" is the right test because the sourcing-time check above already
+    # discarded any inherited value, so a present value here is this instance's own. Under zsh the stamp is
+    # declared GLOBAL: a bare `readonly` inside a function is function-local there, so the resolver's stamp
+    # vanished at return and the zsh arm never held the attribute (measured, same pass).
+    if [ -z "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then typeset -g -r _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; else readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; fi
+    fi
 fi
 
 # The sanctioned state test, for consumers that source only this bridge.

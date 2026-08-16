@@ -88,7 +88,28 @@ while [ ! -d "$_out_dir" ]; do
     [ "$_out_parent" != "$_out_dir" ] || { echo "cannot resolve the transcript's parent: $OUT" >&2; exit 1; }
     _out_dir="$_out_parent"
 done
-OUT="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)/${_out_missing}$(basename -- "$OUT")" || exit 1
+# The `|| exit 1` used to sit on THIS assignment and was inert: for an assignment the status is that of
+# the LAST command substitution, which was `basename` — it succeeds even when the `cd -P` before it
+# failed, so an unenterable parent silently re-rooted OUT at `/` and the reviewer was launched anyway
+# (codex sweep, PR #67 pass 14 — reproduced). The physical prefix is captured and tested on its own.
+_out_base="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)" || _out_base=""
+[ -n "$_out_base" ] || { echo "cannot enter the transcript's physical parent: $_out_dir" >&2; exit 1; }
+OUT="$_out_base/${_out_missing}$(basename -- "$OUT")"
+# ...AND THE RESULT IS NORMALISED LEXICALLY. The re-appended missing tail was kept verbatim, so
+# `/x/missing/../repo/f` stopped at `/x`, retained `missing/..`, passed the repository-prefix check
+# below — and `mkdir -p` then created `missing` and resolved the write INTO the live checkout: a tracked
+# file was overwritten before the post-run fingerprint reported it (codex, PR #67 pass 14 — reproduced).
+# No component of the missing tail exists, so collapsing `.` and `..` lexically is exactly what the
+# kernel does after the mkdir, and the existing prefix is already physical.
+# NORMALISED, AND A LEADING `//` COLLAPSED. POSIX leaves a path beginning with exactly two slashes
+# implementation-defined and `os.path.normpath` PRESERVES it, so when the nearest existing ancestor was
+# `/` the reconstruction produced `//tmp/x` or `//<repo>/tracked` — neither of which matches the `/tmp/*`
+# or `"$REPO_P"/*` refusals below, while the kernel resolves them to exactly those places (codex sweep,
+# PR #67 pass 14 — reproduced: a tracked file was overwritten). Both refusals are applied to this value.
+OUT="$(python3 -c 'import os, re, sys; print(re.sub(r"^//+", "/", os.path.normpath(sys.argv[1])))' "$OUT")" || exit 1
+# The reconstruction is only meaningful if it produced an absolute path; anything else means a step
+# above failed and the refusals below would be testing a relative string.
+case "$OUT" in /*) : ;; *) echo "cannot resolve the transcript's physical path: $OUT" >&2; exit 1 ;; esac
 # OUT is made ABSOLUTE here, before any `cd`: the capture below runs inside the disposable
 # checkout, so a relative path such as `.verdicts/kimi.txt` would land the transcript under the
 # temporary worktree — where the later grep/wc could not find it, the run would end EFFORT=UNKNOWN

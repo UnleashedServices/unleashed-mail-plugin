@@ -28,12 +28,37 @@ The ANCESTOR DIRECTORIES of every tracked path are recorded by lstat — type an
 (codex, PR #67 pass 13 — reproduced): `git status` says nothing about a directory's own metadata, so a
 probe that hashed only the leaves certified a live tree whose `scripts/` had been `chmod 777`ed. The
 control — the directory block removed, the leaf loop kept — must NOT move.
+
+THE CHECKOUT ROOT IS ONE OF THOSE DIRECTORIES, EVERY RECORD CARRIES THE OBJECT'S IDENTITY, AND THE
+EXCLUSION-METADATA FILES ARE RECORDED BY LSTAT (codex, PR #67 pass 14 — reproduced, three findings): the
+ancestor walk stopped where `dirname` became empty, so `chmod 777 <checkout>` passed; mode+size+content
+let a tracked file be swapped for a HARD LINK to an external byte-identical file (status clean, record
+unchanged); and `.git/config` hashed THROUGH the name, so a symlink to an external byte-identical copy
+digested identically while Git read its settings from outside the checkout. Records now carry
+`dev:ino:nlink` (`D <mode> <ident> "rel"`, `F <mode> <size> <sha> <ident> "rel"`, …), the root is
+recorded as `"."`, and `_u_hash_if_present` records type, mode, identity and (for a link) the target.
+Each has a control — `dirs = set()`, the F record without `ident(st)`, the sha-only hasher — RUN and
+compared EQUAL; and identity is stable across a clean round: two takes of an untouched tree are equal.
+
+THE GIT METADATA IS RESOLVED THROUGH GIT, AND THE ACLs ARE RECORDED (codex sweep, PR #67 pass 14 — five
+more findings, all reproduced, all in `GitMetadataAndAclsAreFingerprinted`). In a LINKED WORKTREE — which
+is where this campaign's own reviews run — `.git` is a FILE and the real directories are elsewhere, so
+`_u_hash_if_present "$1/.git/config"` recorded ABSENT and the whole metadata protection was inert:
+`git -C <live> config core.hooksPath /tmp/evil` passed every gate. `_u_git_metadata_fingerprint` now
+resolves `--absolute-git-dir` and `--git-common-dir` and records the `.git` entry, both directories,
+`config`(+`.worktree`), `info/exclude`, `info/attributes`, `objects/info/alternates`, `HEAD` and every
+entry of the hooks directories; `_u_acl_fingerprint` records the ACEs macOS keeps outside `st_mode`.
+Controls: the two literal `$1/.git/…` calls restored, the `--dir <common>/hooks` argument dropped, the
+`$_ugm_git/HEAD` argument dropped, and the ACL enumeration reduced to its marker — each RUN and compared
+EQUAL. And STABILITY, which guards against a false void: two takes of an untouched linked worktree are
+byte-identical.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +66,10 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HELPER = os.path.join(REPO, "scripts", "review", "tree-fingerprint.sh")
+#: The identity field every tracked-content record carries (PR #67 pass 14): `st_dev:st_ino:st_nlink`.
+IDENT = r"\d+:\d+:\d+"
+#: `chmod +a` / `ls -lde` are macOS spellings; CI is Linux, where `_u_acl_fingerprint` says so and stops.
+DARWIN = os.uname().sysname == "Darwin"
 
 
 def fingerprint(helper, root):
@@ -260,7 +289,11 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         return before, after
 
     # The HEAD-tree half of the tracked-path union — the `ls-tree` call and the lines that fold it in.
-    LS_TREE_UNION = ('r2 = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], '
+    # (Both git calls carry `--no-optional-locks -c core.fsmonitor=false` since PR #67 pass 14: a probe
+    # must never write the live index, and a reviewer-planted fsmonitor hook must not be EXECUTED by
+    # our own AFTER take. The pin quotes the call as it is shipped.)
+    LS_TREE_UNION = ('r2 = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", '
+                     '"-C", root, "ls-tree", "-r", "-z", "--name-only", "HEAD"], '
                      'capture_output=True)\n'
                      'if r2.returncode == 0:                      # an unborn HEAD has no tree; that is not a failure\n'
                      '    names.update(x for x in r2.stdout.split(b"\\0") if x)\n')
@@ -306,8 +339,9 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
 
     # The directory block of the tracked-content probe — from the ancestor set through the `D` record;
     # the leaf loop that follows it (and the `out = []` it shares) stays in the control.
-    DIR_BLOCK_HEAD = "dirs = set()\n"
-    DIR_BLOCK_TAIL = '        out.append("D %s %s" % (mode, json.dumps(rel)))\n'
+    # (`ident(st)` is defined ABOVE the block and stays in the control — the leaf loop uses it too.)
+    DIR_BLOCK_HEAD = 'dirs = set(["."])\n'
+    DIR_BLOCK_TAIL = '        out.append("D %s %s %s" % (mode, ident(st), json.dumps(rel)))\n'
 
     def _dir_block(self):
         """The CURRENT text of the directory block, sliced between two unique anchors of the shipped helper."""
@@ -321,7 +355,7 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         self.assertEqual(1, text.count(block), "the sliced directory block is not unique")
         self.assertIn("out = []\n", block, "the block should carry the shared `out = []` — the control re-adds it")
         self.assertIn('out.append("MISSING-DIR %s"', block)
-        self.assertIn('out.append("DL %s %s -> %s"', block)
+        self.assertIn('out.append("DL %s %s %s -> %s"', block)
         # The leaf loop is OUTSIDE the slice, so the control still hashes every tracked file.
         self.assertIn("for raw in sorted(names):\n", text[end:], "the leaf loop must follow the block")
         return block
@@ -347,12 +381,14 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         before, after, pre = self._directory_mode_change(HELPER)
         self.assertNotEqual(before, after,
                             "`chmod 777 scripts` left the LIVE fingerprint byte-identical — only the leaves were hashed")
-        self.assertIn(f'\nD {pre} "scripts"\n', before,
-                      f"no `D {pre} \"scripts\"` record (the directory's actual pre-chmod mode) before: {before!r}")
-        self.assertIn('\nD 0777 "scripts"\n', after, f"no `D 0777 \"scripts\"` record after: {after!r}")
-        self.assertNotIn('\nD 0777 "scripts"\n', before)
+        # The record shape (PR #67 pass 14): `D <mode> <dev:ino:nlink> "rel"` — an identity field between
+        # the mode and the name, so the pins are regexes over the WHOLE line.
+        self.assertRegex(before, rf'\nD {pre} {IDENT} "scripts"\n',
+                         f"no `D {pre} <ident> \"scripts\"` record (the directory's actual pre-chmod mode) before: {before!r}")
+        self.assertRegex(after, rf'\nD 0777 {IDENT} "scripts"\n', f"no `D 0777 <ident> \"scripts\"` record after: {after!r}")
+        self.assertNotRegex(before, rf'\nD 0777 {IDENT} "scripts"\n')
         # The directory record precedes the leaves it encloses.
-        self.assertLess(after.index('D 0777 "scripts"'), after.index(' "scripts/f.sh"\n'), after)
+        self.assertLess(re.search(rf'D 0777 {IDENT} "scripts"', after).start(), after.index(' "scripts/f.sh"\n'), after)
         self.assertIn(' "scripts/f.sh"\n', before, before)                 # the leaf is still hashed
         # The control: the directory block removed, the leaf loop kept — compares EQUAL (measured).
         mutant = self._mutant(self._dir_block(), "out = []\n", "tree-fingerprint-no-dir-block.sh")
@@ -376,6 +412,457 @@ class LiveFingerprintDoesNotTrustTheIndex(unittest.TestCase):
         self.assertEqual(b2, a2,
                          "the CONTROL (no root lstat) told the trees apart — the swap is visible to something "
                          "other than the root record, so this test does not prove that record")
+
+    # ── the checkout root, object identity, and the exclusion files by lstat (codex, PR #67 pass 14) ──
+
+    def _root_mode_change(self, helper):
+        """`scripts/f.sh` committed; B; `chmod 777 <checkout root>`; A. Returns (B, A, pre-chmod mode).
+        The premise is asserted: `status` is blind to the root's mode after the change."""
+        self._fresh_repo({"scripts/f.sh": "#!/bin/sh\n"})
+        pre = "%04o" % (os.lstat(self.repo).st_mode & 0o7777)
+        self.assertNotEqual("0777", pre, "the fixture's root already carries the mode the change applies")
+        before = self._fp(helper)
+        os.chmod(self.repo, 0o777)
+        self.assertEqual("0777", "%04o" % (os.lstat(self.repo).st_mode & 0o7777))
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"status sees the root chmod — the fixture is not the finding: {st.stdout!r}")
+        after = self._fp(helper)
+        return before, after, pre
+
+    def test_the_checkout_roots_mode_change_moves_the_fingerprint(self):
+        """codex, PR #67 pass 14, finding 1 — the ancestor walk stopped where `dirname` became empty, so the
+        checkout ROOT was never recorded and `chmod 777 <checkout>` passed every gate. The root is recorded
+        as `D <mode> <ident> "."`, before every other directory. Mutant: `dirs = set(["."])` → `dirs = set()`
+        (the root dropped from the ancestor set) — the two takes compare EQUAL (measured)."""
+        before, after, pre = self._root_mode_change(HELPER)
+        self.assertNotEqual(before, after,
+                            "`chmod 777 <checkout>` left the LIVE fingerprint byte-identical — the root was not recorded")
+        self.assertRegex(before, rf'\nD {pre} {IDENT} "\."\n', f"no `D {pre} <ident> \".\"` record before: {before!r}")
+        self.assertRegex(after, rf'\nD 0777 {IDENT} "\."\n', f"no `D 0777 <ident> \".\"` record after: {after!r}")
+        self.assertNotRegex(before, rf'\nD 0777 {IDENT} "\."\n')
+        # The root record precedes every other directory and every leaf.
+        self.assertLess(re.search(rf'\nD {pre} {IDENT} "\."\n', before).start(),
+                        re.search(rf'\nD \d{{4}} {IDENT} "scripts"\n', before).start(), before)
+        # The control: the root dropped from the ancestor set — `scripts` is still recorded, the root is
+        # not, and the takes compare EQUAL (measured).
+        mutant = self._mutant('dirs = set(["."])\n', "dirs = set()\n", "tree-fingerprint-no-root-dir.sh")
+        b2, a2, _ = self._root_mode_change(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (root not in the ancestor set) told the trees apart — the chmod is visible "
+                         "to something other than the root's own record, so this test does not prove that record")
+        self.assertNotRegex(b2, rf'\nD \d{{4}} {IDENT} "\."\n', b2)          # no root record …
+        self.assertRegex(b2, rf'\nD \d{{4}} {IDENT} "scripts"\n', b2)         # … but the other directories survived
+
+    # The F record WITH the identity field (shipped) and the pre-fix record without it (the control).
+    F_RECORD_IDENT = '        out.append("F %s %d %s %s %s" % (mode, st.st_size, h.hexdigest(), ident(st), json.dumps(rel)))\n'
+    F_RECORD_OLD = '        out.append("F %s %d %s %s" % (mode, st.st_size, h.hexdigest(), json.dumps(rel)))\n'
+
+    def _external_sibling(self):
+        """A scratch directory BESIDE this test's own, under ~/.claude — the same filesystem as the fixture
+        repository, which a hard link requires (a link across filesystems is EXDEV, not the finding)."""
+        base = os.path.expanduser("~/.claude")
+        ext = tempfile.mkdtemp(prefix="tree-fp-ext.", dir=base)
+        self.addCleanup(shutil.rmtree, ext, ignore_errors=True)
+        return ext
+
+    def _hard_link_swap(self, helper):
+        """`f.txt` committed; an EXTERNAL `f.txt` with identical bytes and mode in a sibling scratch; B;
+        replace the tracked file by a hard link to the external one; A. Returns (B, A). The premise is
+        asserted: same device, `status` blind to the swap, and the link count went to 2."""
+        self._fresh_repo()
+        tracked = os.path.join(self.repo, "f.txt")
+        external = os.path.join(self._external_sibling(), "f.txt")
+        with open(tracked, "rb") as fh:
+            payload = fh.read()
+        with open(external, "wb") as fh:
+            fh.write(payload)
+        os.chmod(external, os.lstat(tracked).st_mode & 0o7777)
+        self.assertEqual(os.lstat(tracked).st_dev, os.lstat(external).st_dev,
+                         "the external copy is on another filesystem — a hard link cannot be made (fixture, not the finding)")
+        before = self._fp(helper)
+        os.unlink(tracked)
+        os.link(external, tracked)
+        self.assertEqual(2, os.lstat(tracked).st_nlink, "the swap did not produce a hard link")
+        self.assertEqual(os.lstat(external).st_ino, os.lstat(tracked).st_ino)
+        with open(tracked, "rb") as fh:
+            self.assertEqual(payload, fh.read(), "the swap changed the bytes — the fixture is not the finding")
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"status sees the hard-link swap — the fixture is not the finding: {st.stdout!r}")
+        after = self._fp(helper)
+        return before, after
+
+    def test_a_tracked_file_replaced_by_a_hard_link_to_an_identical_external_file_moves_the_fingerprint(self):
+        """codex, PR #67 pass 14, finding 2 — mode+size+content let a tracked file be REPLACED by a hard link
+        to an external file with identical bytes and mode: status stayed clean and the record was unchanged,
+        while a later write through either name silently changed the other. Every record now carries
+        `dev:ino:nlink`. Mutant: the F record without `ident(st)` (the pre-fix shape) — the two takes compare
+        EQUAL (measured)."""
+        before, after = self._hard_link_swap(HELPER)
+        self.assertNotEqual(before, after,
+                            "the hard-link swap of a tracked file left the LIVE fingerprint byte-identical — "
+                            "the record carried no object identity")
+        self.assertRegex(before, r'\nF 0644 \d+ [0-9a-f]{64} \d+:\d+:1 "f\.txt"\n', before)
+        self.assertRegex(after, r'\nF 0644 \d+ [0-9a-f]{64} \d+:\d+:2 "f\.txt"\n',
+                         f"no F record with link count 2 after the swap: {after!r}")
+        # Same mode, size and digest in both takes — ONLY the identity moved.
+        rec = lambda text: re.search(r'\n(F 0644 \d+ [0-9a-f]{64}) \d+:\d+:\d+ "f\.txt"\n', text).group(1)
+        self.assertEqual(rec(before), rec(after), "mode/size/digest changed — the fixture is not the finding")
+        # The control: the pre-fix F record — no identity — compares EQUAL (measured).
+        mutant = self._mutant(self.F_RECORD_IDENT, self.F_RECORD_OLD, "tree-fingerprint-no-ident.sh")
+        b2, a2 = self._hard_link_swap(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (F record without identity) told the trees apart — the swap is visible to "
+                         "something other than the identity field, so this test does not prove that field")
+        self.assertRegex(b2, r'\nF 0644 \d+ [0-9a-f]{64} "f\.txt"\n', b2)     # the old four-field shape
+
+    # `_u_hash_if_present`'s per-path record — `rec()`, from its `def` line through the `O` record it
+    # ends with. The control replaces the whole lstat dispatch with a sha256 taken THROUGH the name,
+    # which is what the helper did before pass 14: `open()` follows a symlink, so the link and its
+    # target digested identically. `ABSENT` is kept for a path that does not exist, so the control
+    # differs from the shipped build in exactly one respect — it never lstats.
+    REC_HEAD = 'def rec(p):\n'
+    REC_TAIL = '    return "O %s %s" % (mode, ident)\n'
+    REC_OLD = ('def rec(p):\n'
+               '    try:\n'
+               '        return hashlib.sha256(open(p, "rb").read()).hexdigest()\n'
+               '    except OSError:\n'
+               '        return "ABSENT"\n')
+
+    def _rec_block(self):
+        """The CURRENT text of `_u_hash_if_present`'s `rec()`, sliced between two unique anchors."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.REC_HEAD), "the lstat record's head is not unique")
+        start = text.index(self.REC_HEAD)
+        self.assertIn(self.REC_TAIL, text[start:], "the lstat record's tail is not after its head")
+        end = text.index(self.REC_TAIL, start) + len(self.REC_TAIL)
+        block = text[start:end]
+        self.assertEqual(1, text.count(block), "the sliced record block is not unique")
+        self.assertIn("os.lstat(p)", block)
+        self.assertIn("UNREADABLE-TARGET", block)
+        return block
+
+    def _config_symlink_swap(self, helper):
+        """`.git/config` copied byte-for-byte to an EXTERNAL sibling scratch; B; replace `.git/config` by a
+        symlink to that copy; A. Returns (B, A). The premise is asserted: git still reads its config
+        through the link and `status` is clean and blind to the swap."""
+        self._fresh_repo()
+        cfg = os.path.join(self.repo, ".git", "config")
+        external = os.path.join(self._external_sibling(), "config")
+        shutil.copy2(cfg, external)
+        with open(cfg, "rb") as a, open(external, "rb") as b:
+            self.assertEqual(a.read(), b.read())
+        before = self._fp(helper)
+        os.unlink(cfg)
+        os.symlink(external, cfg)
+        self.assertTrue(os.path.islink(cfg) and os.path.isfile(cfg))
+        st = subprocess.run(["git", "-C", self.repo, "status", "--porcelain"],
+                            capture_output=True, text=True, check=False)
+        self.assertEqual((0, ""), (st.returncode, st.stdout),
+                         f"git does not read its config through the link, or status sees the swap — "
+                         f"the fixture is not the finding: {st.returncode} {st.stdout!r} {st.stderr!r}")
+        after = self._fp(helper)
+        return before, after
+
+    def test_git_config_replaced_by_a_symlink_to_an_identical_copy_moves_the_fingerprint(self):
+        """codex, PR #67 pass 14, finding 3 — `_u_hash_if_present` hashed `.git/config` THROUGH the name, so a
+        symlink to an external byte-identical copy digested identically while Git read its settings
+        (`core.hooksPath` among them) from outside the checkout. The record is now taken by lstat — type,
+        mode, identity, and a link's target. Mutant: `rec()`'s lstat dispatch replaced by the previous
+        sha256-through-the-name — the two takes compare EQUAL (measured)."""
+        before, after = self._config_symlink_swap(HELPER)
+        self.assertNotEqual(before, after,
+                            "`.git/config` swapped for a symlink to an identical copy left the LIVE fingerprint "
+                            "byte-identical — the file was hashed through its name")
+        cfg = os.path.join(self.repo, ".git", "config")
+        self.assertRegex(before, rf'\n{re.escape(cfg)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        self.assertRegex(after, rf'\n{re.escape(cfg)} L \d{{4}} {IDENT} -> "[^"\n]+" [0-9a-f]{{64}}\n',
+                         f"no `L … -> <target> <digest>` record for the linked config after: {after!r}")
+        # The digest of what the link resolves to is the SAME bytes — only the type/identity/target moved.
+        digest = lambda text: re.search(rf'\n{re.escape(cfg)} \S.* ([0-9a-f]{{64}})\n', text).group(1)
+        self.assertEqual(digest(before), digest(after), "the bytes differ — the fixture is not the finding")
+        # The control: the sha-only record (a digest through the name) compares EQUAL (measured).
+        mutant = self._mutant(self._rec_block(), self.REC_OLD, "tree-fingerprint-sha-only-hasher.sh")
+        b2, a2 = self._config_symlink_swap(mutant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (sha256 through the name) told the trees apart — the swap is visible to "
+                         "something other than the lstat record, so this test does not prove that record")
+        self.assertRegex(b2, rf'\n{re.escape(cfg)} [0-9a-f]{{64}}\n', b2)      # the old `<path> <sha>` shape
+
+    def test_two_takes_of_an_untouched_tree_are_equal(self):
+        """Identity is stable across a clean round: nothing the harness does re-creates a tracked object, so
+        two takes of an untouched tree — files, directories, the root and `.git/config` all carrying
+        `dev:ino:nlink` — are byte-identical. (The identity fields must not turn every honest round void.)"""
+        self._fresh_repo({"scripts/f.sh": "#!/bin/sh\n", ".gitignore": "elsewhere/\n"})
+        first = self._fp(HELPER)
+        second = self._fp(HELPER)
+        self.assertEqual(first, second, "two takes of an untouched tree differ — the fingerprint is not stable")
+        self.assertRegex(first, rf'\nD \d{{4}} {IDENT} "\."\n', first)
+        self.assertRegex(first, rf'\nF \d{{4}} \d+ [0-9a-f]{{64}} {IDENT} "f\.txt"\n', first)
+        cfg = os.path.join(self.repo, ".git", "config")
+        self.assertRegex(first, rf'\n{re.escape(cfg)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', first)
+
+
+class GitMetadataAndAclsAreFingerprinted(unittest.TestCase):
+    """The fixture is a LINKED WORKTREE — `git init main`, one commit, `git worktree add wt` — and every
+    scenario fingerprints THE WORKTREE, which is how this campaign's own reviews actually run.
+
+    codex sweep, PR #67 pass 14, five findings; each has a control that is RUN and compared EQUAL:
+      * in a linked worktree `.git` is a FILE and the real directories are elsewhere, so the two literal
+        `_u_hash_if_present "$1/.git/…"` calls recorded ABSENT and the metadata protection was entirely
+        inert — `git -C <live> config core.hooksPath <evil>` passed every gate;
+      * a `pre-commit` planted in the COMMON hooks directory needs no config change and fires on the
+        maintainer's next commit;
+      * `HEAD` retargeted to another branch at the SAME sha moves no other record;
+      * macOS keeps ACLs outside `st_mode`, so `chmod +a` on a tracked file, a tracked directory or the
+        checkout root left every record byte-identical (Darwin only — `find -acl`/`ls -lde`/`chmod +a`);
+      * and the new records must be STABLE, or they void every honest round instead of the tampered ones.
+    """
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="tree-fp-wt.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.main = os.path.join(self.scratch, "main")
+        self.wt = os.path.join(self.scratch, "wt")
+        subprocess.run(["git", "init", "-q", self.main], check=True, capture_output=True)
+        self._git("config", "user.email", "fixture@test")
+        self._git("config", "user.name", "fixture")
+        os.makedirs(os.path.join(self.main, "scripts"))
+        for rel, text in (("f.txt", "one\n"), ("scripts/f.sh", "#!/bin/sh\n")):
+            with open(os.path.join(self.main, rel), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        self._git("add", "-A")
+        self._git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+        self._git("branch", "other")                         # a second branch for the HEAD retarget
+        self._git("worktree", "add", "--quiet", "-b", "feat", self.wt)
+        # THE FIXTURE IS THE FINDING: `.git` in the worktree is a FILE, not a directory.
+        self.assertTrue(os.path.isfile(os.path.join(self.wt, ".git")),
+                        "the fixture's `.git` is not a regular file — this is not a linked worktree")
+        self.common = os.path.join(self.main, ".git")        # the common dir, where config and hooks live
+        self.gitdir = os.path.join(self.common, "worktrees", "wt")   # this worktree's own gitdir
+        self.assertTrue(os.path.isdir(self.gitdir), self.gitdir)
+        self._assert_clean("the worktree fixture must start clean")
+
+    def _git(self, *args, repo=None):
+        subprocess.run(["git", "-C", repo or self.main, *args], check=True, capture_output=True)
+
+    def _status(self):
+        return subprocess.run(["git", "-C", self.wt, "status", "--porcelain"],
+                              capture_output=True, text=True, check=True).stdout
+
+    def _head(self):
+        return subprocess.run(["git", "-C", self.wt, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def _assert_clean(self, why):
+        self.assertEqual("", self._status(), f"{why}: {self._status()!r}")
+
+    def _fp(self, helper):
+        rc, out, err = tree_fingerprint(helper, self.wt, self.scratch)
+        self.assertEqual(0, rc, f"tree_fingerprint failed on the linked worktree: {err!r}")
+        return out
+
+    def _mutant(self, old, new, name):
+        """A copy of the shipped helper with ONE anchor replaced; the anchor must be unique."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(old), "mutation anchor is not unique — the control is not the control")
+        path = os.path.join(self.scratch, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(old, new, 1))
+        return path
+
+    def _round(self, helper, mutate):
+        """B on the untouched worktree, `mutate()`, A. Returns (B, A). The premise is asserted on both
+        sides: `git status` stays clean, so nothing here is visible to the index-based views."""
+        self._assert_clean("the round must start clean")
+        before = self._fp(helper)
+        mutate()
+        self._assert_clean("the mutation is visible to `status` — the fixture is not the finding")
+        return before, self._fp(helper)
+
+    # ── the metadata is resolved THROUGH GIT, not by assuming `$1/.git` is a directory ────────────
+
+    #: The shipped probe; the control puts the two literal `$1/.git/…` paths back — the shape that was
+    #: recorded ABSENT in a linked worktree, which is where the campaign's reviews run.
+    METADATA_CALL = '    _u_git_metadata_fingerprint "$1" || return 1\n'
+    METADATA_OLD = ('    _u_hash_if_present "$1/.git/info/exclude" || return 1\n'
+                    '    _u_hash_if_present "$1/.git/config" || return 1\n')
+
+    def test_core_hookspath_set_in_a_linked_worktree_moves_the_fingerprint(self):
+        """codex sweep, PR #67 pass 14, finding T1 — in a linked worktree `.git` is a FILE, so
+        `_u_hash_if_present "$1/.git/config"` recorded ABSENT and `git -C <live> config core.hooksPath
+        <evil>` passed every gate. Mutant: the two literal `$1/.git/…` calls restored in place of
+        `_u_git_metadata_fingerprint` — the two takes compare EQUAL (measured)."""
+        evil = os.path.join(self.scratch, "evil-hooks")      # never created: only lstat-ed
+        mutate = lambda: self._git("config", "core.hooksPath", evil, repo=self.wt)
+        before, after = self._round(HELPER, mutate)
+        self.assertNotEqual(before, after,
+                            "`git config core.hooksPath` in a linked worktree left the LIVE fingerprint "
+                            "byte-identical — the metadata was looked for at `<worktree>/.git/config`")
+        # The `.git` entry is recorded as the FILE it is, and the config that governs the worktree is the
+        # COMMON one — the proof that the resolution went through git rather than through `$1/.git/`.
+        dot_git = os.path.join(self.wt, ".git")
+        self.assertRegex(before, rf'\n{re.escape(dot_git)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        cfg = os.path.join(self.common, "config")
+        self.assertRegex(before, rf'\n{re.escape(cfg)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        self.assertIn(f"\n{evil} ABSENT\n", after,
+                      f"the configured hooks directory is not recorded after the change: {after!r}")
+        self.assertNotIn(f"\n{evil} ABSENT\n", before)
+        # The control: the pre-fix literal paths — ABSENT in a linked worktree — compare EQUAL (measured).
+        mutant = self._mutant(self.METADATA_CALL, self.METADATA_OLD, "tree-fingerprint-literal-gitdir.sh")
+        self._git("config", "--unset", "core.hooksPath", repo=self.wt)
+        b2, a2 = self._round(mutant, mutate)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (the literal `$1/.git/…` paths) told the trees apart — the hooksPath "
+                         "write is visible to something other than the git-resolved metadata, so this test "
+                         "does not prove that resolution")
+        # …and the inertness itself, asserted rather than inferred: BOTH literal paths read ABSENT.
+        for leaf in ("info/exclude", "config"):
+            self.assertIn(f"\n{os.path.join(self.wt, '.git', leaf)} ABSENT\n", b2,
+                          f"the CONTROL did not record `<worktree>/.git/{leaf}` as ABSENT: {b2!r}")
+
+    # ── the hooks that will actually run, and the branch HEAD points at ───────────────────────────
+
+    #: The `--dir <common>/hooks` argument (T2) and the per-worktree `HEAD` argument (T3). The first
+    #: anchor contains the second, so both are unique; each control drops exactly one argument.
+    HOOKS_DIR_ARG = ('           "$_ugm_common/objects/info/alternates" "$_ugm_git/HEAD" \\\n'
+                     '           --dir "$_ugm_common/hooks"\n')
+    HOOKS_DIR_GONE = '           "$_ugm_common/objects/info/alternates" "$_ugm_git/HEAD"\n'
+    HEAD_ARG = '           "$_ugm_common/objects/info/alternates" "$_ugm_git/HEAD" \\\n'
+    HEAD_GONE = '           "$_ugm_common/objects/info/alternates" \\\n'
+
+    def test_a_pre_commit_hook_planted_in_the_common_dir_moves_the_fingerprint(self):
+        """codex sweep, PR #67 pass 14, finding T2 — a `pre-commit` planted in the COMMON hooks directory
+        needs no config change at all and fires on the maintainer's next commit, so the hooks directories
+        are recorded entry by entry. Mutant: the `--dir "$_ugm_common/hooks"` argument dropped — the two
+        takes compare EQUAL (measured)."""
+        hook = os.path.join(self.common, "hooks", "pre-commit")
+        os.makedirs(os.path.dirname(hook), exist_ok=True)    # an empty init template ships no hooks dir
+
+        def plant():
+            with open(hook, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\nexfiltrate\n")
+            os.chmod(hook, 0o755)
+
+        before, after = self._round(HELPER, plant)
+        self.assertNotEqual(before, after,
+                            "a `pre-commit` planted in the common hooks directory left the LIVE fingerprint "
+                            "byte-identical — the hooks directory was not recorded")
+        self.assertRegex(after, rf'\n{re.escape(hook)} F 0755 {IDENT} \d+ [0-9a-f]{{64}}\n', after)
+        self.assertNotIn(f"\n{hook} ", before)
+        # The control: without the hooks directory the planted hook is invisible (measured).
+        mutant = self._mutant(self.HOOKS_DIR_ARG, self.HOOKS_DIR_GONE, "tree-fingerprint-no-hooks-dir.sh")
+        os.unlink(hook)
+        b2, a2 = self._round(mutant, plant)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no hooks directory) told the trees apart — the planted hook is "
+                         "visible to something other than the `--dir` expansion, so this test does not "
+                         "prove that expansion")
+        self.assertNotIn(f"\n{hook} ", a2, a2)
+
+    def test_a_head_retarget_at_the_same_sha_moves_the_fingerprint(self):
+        """codex sweep, PR #67 pass 14, finding T3 — `git symbolic-ref HEAD refs/heads/other` leaves the
+        resolved commit and every other record untouched, so the worktree's own `HEAD` file is recorded.
+        Mutant: the `"$_ugm_git/HEAD"` argument dropped — the two takes compare EQUAL (measured)."""
+        head_file = os.path.join(self.gitdir, "HEAD")
+        sha = self._head()
+        retarget = lambda: self._git("symbolic-ref", "HEAD", "refs/heads/other", repo=self.wt)
+        before, after = self._round(HELPER, retarget)
+        # The premise: the resolved commit did NOT move, so the first line of the record is unchanged.
+        self.assertEqual(sha, self._head(), "the retarget moved HEAD's commit — the fixture is not the finding")
+        self.assertEqual(before.splitlines()[0], after.splitlines()[0],
+                         "the `rev-parse HEAD` line moved — the fixture is not the finding")
+        self.assertNotEqual(before, after,
+                            "`symbolic-ref HEAD refs/heads/other` left the LIVE fingerprint byte-identical "
+                            "— the worktree's own HEAD was not recorded")
+        self.assertRegex(before, rf'\n{re.escape(head_file)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', before)
+        # The control: without the HEAD argument the retarget is invisible (measured).
+        mutant = self._mutant(self.HEAD_ARG, self.HEAD_GONE, "tree-fingerprint-no-head.sh")
+        self._git("symbolic-ref", "HEAD", "refs/heads/feat", repo=self.wt)
+        b2, a2 = self._round(mutant, retarget)
+        self.assertEqual(b2, a2,
+                         "the CONTROL (no HEAD record) told the trees apart — the retarget is visible to "
+                         "something other than that record, so this test does not prove it")
+        self.assertNotIn(f"\n{head_file} ", b2, b2)
+
+    # ── the ACLs macOS keeps outside st_mode ──────────────────────────────────────────────────────
+
+    #: The enumeration `_u_acl_fingerprint` performs; the control keeps only its `ACL-PROBE done` marker,
+    #: so the probe still RUNS and still prints a line — it just never names an ACE (the pre-fix state,
+    #: where mode bits were the whole of the write-access answer).
+    ACL_ENUM = ('    { /usr/bin/find "$1" -acl -print 2>/dev/null || :; } | LC_ALL=C sort | while IFS= read -r _uacl_p; do\n'
+                "        printf 'ACL %s\\n' \"$_uacl_p\"\n"
+                "        /bin/ls -lde -- \"$_uacl_p\" 2>/dev/null | sed -n 's/^[[:space:]]*\\([0-9][0-9]*: .*\\)$/ACE \\1/p'\n"
+                '    done\n')
+
+    def _acl_case(self, helper, target):
+        add = lambda: subprocess.run(["chmod", "+a", "everyone allow write,delete", target],
+                                     check=True, capture_output=True)
+        try:
+            return self._round(helper, add)
+        finally:
+            subprocess.run(["chmod", "-N", target], check=False, capture_output=True)
+
+    @unittest.skipUnless(DARWIN, "`chmod +a`, `ls -lde` and `find -acl` are macOS spellings")
+    def test_an_acl_on_a_tracked_path_the_root_or_a_directory_moves_the_fingerprint(self):
+        """codex sweep, PR #67 pass 14, finding T4 — macOS keeps ACLs OUTSIDE `st_mode`, so `chmod +a
+        'everyone allow write,delete'` on a tracked file, on a tracked DIRECTORY, or on the checkout ROOT
+        left every record byte-identical, re-opening for ACEs the write-access class pass 13 closed for
+        mode bits. Mutant: `_u_acl_fingerprint` reduced to its `ACL-PROBE done` marker — all three cases
+        compare EQUAL (measured)."""
+        targets = {"tracked file": os.path.join(self.wt, "f.txt"),
+                   "tracked directory": os.path.join(self.wt, "scripts"),
+                   "checkout root": self.wt}
+        for what, target in targets.items():
+            before, after = self._acl_case(HELPER, target)
+            self.assertNotEqual(before, after,
+                                f"`chmod +a` on the {what} left the LIVE fingerprint byte-identical — "
+                                f"the ACL is outside st_mode and nothing recorded it")
+            self.assertIn(f"\nACL {target}\n", after, f"{what}: no `ACL {target}` line after: {after!r}")
+            self.assertNotIn(f"\nACL {target}\n", before, f"{what}: {before!r}")
+            self.assertRegex(after, r"\nACE\s+0: .*everyone", f"{what}: the ACE itself is not rendered: {after!r}")
+            self.assertIn("\nACL-PROBE done\n", before, before)
+            # The control: the enumeration removed, the marker kept — EQUAL (measured). Built HERE, after
+            # the discriminating assertion, so a HELPER that already carries the defect fails on the
+            # comparison above rather than on the anchor that no longer matches.
+            mutant = self._mutant(self.ACL_ENUM, "    :\n", "tree-fingerprint-no-acl.sh")
+            b2, a2 = self._acl_case(mutant, target)
+            self.assertEqual(b2, a2,
+                             f"the CONTROL (no ACL enumeration) told the trees apart on the {what} — the "
+                             f"ACE is visible to something other than the ACL probe, so this test does not "
+                             f"prove that probe")
+            self.assertNotIn("\nACL ", b2, b2)
+            self.assertIn("\nACL-PROBE done\n", b2, b2)      # the probe still ran, and still said so
+
+    # ── stability: the new records must not void an honest round ─────────────────────────────────
+
+    def test_two_takes_of_an_untouched_linked_worktree_are_equal(self):
+        """codex sweep, PR #67 pass 14, finding T5 — a fingerprint that moves on its own turns every honest
+        round VOID, which is how a probe gets switched off. Two consecutive takes of an untouched LINKED
+        worktree are byte-identical, and the take is not vacuous: it carries the worktree's `.git` file, the
+        common dir's `config`, the per-worktree `HEAD`, the hooks directory and the ACL probe's own marker.
+        (No mutant: this asserts the ABSENCE of movement, so the discriminating build is the shipped one —
+        any record that were unstable would fail it. Its positive controls are T1-T4, which prove the same
+        records DO move when the corresponding metadata changes.)"""
+        first = self._fp(HELPER)
+        second = self._fp(HELPER)
+        self.assertEqual(first, second,
+                         "two takes of an untouched linked worktree differ — the metadata/ACL records are "
+                         "not stable, and every honest round is now void")
+        self.assertRegex(first, rf'\n{re.escape(os.path.join(self.wt, ".git"))} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', first)
+        self.assertRegex(first, rf'\n{re.escape(os.path.join(self.common, "config"))} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', first)
+        self.assertRegex(first, rf'\n{re.escape(os.path.join(self.gitdir, "HEAD"))} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n', first)
+        hooks = os.path.join(self.common, "hooks")
+        self.assertRegex(first, rf'\n{re.escape(hooks)} O \d{{4}} {IDENT}\n', first)
+        if os.listdir(hooks):                                # an empty init template ships no samples
+            self.assertRegex(first, rf'\n{re.escape(hooks)}/\S+ F ', first)
+        self.assertIn("\nACL-PROBE %s\n" % ("done" if DARWIN else "unsupported"), first, first)
+        self.assertRegex(first, rf'\nF \d{{4}} \d+ [0-9a-f]{{64}} {IDENT} "f\.txt"\n', first)
 
 
 if __name__ == "__main__":
