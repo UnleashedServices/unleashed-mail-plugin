@@ -26,7 +26,12 @@ Row 178 (PR #67, codex pass 15) closes the last of ENT-2b's residuals: an equal 
 PATHNAME, so the entry name is re-tested after the read (ENT-2c). It also RESHAPED rows 160 and 168 —
 160's slice now runs through the re-test that closes the bash arm, and 168 removes EVERY binding to
 `_ae_ino` (the re-test refused 168's copy on its own the moment it landed, which is how the third clause
-was found).
+was found). Rows 179-183 (PR #67, codex pass 17) are `RowsPass17` at the end of the file, and they are
+all ORDINARY-ENVIRONMENT rows — a caller with globbing off, a plugin-data directory that does not exist
+yet, a `.` or `..` in the value, two hooks publishing at once, and a harness that clears HOME. Row 183
+is the one row here whose fix is a STATED FACT rather than a behaviour: no post-startup test separates
+zsh's passwd-filled `HOME` from a caller who set it, so that row pins the statement and mutates the
+opt-out that is the actual protection.
 """
 
 import os
@@ -288,7 +293,11 @@ class RowsChunk1(unittest.TestCase):
         # copies (mutant arm: the reader with `setopt local_options no_nomatch` dropped). Measured:
         # a zsh glob failure aborts execution up to the source boundary, so the family file's later
         # protocol assignments never run — the discriminator is the UNSET tuple, bash unaffected.
-        mutant = with_mutation('        setopt local_options no_nomatch\n', '        :\n',
+        # RE-PINNED (PR #67 pass 17, row 179): the scan's `setopt` line now also carries `glob`, and
+        # the mutation drops `no_nomatch` ALONE rather than the whole line — dropping the line would
+        # take the glob-forcing with it and this row would then be discriminating on row 179's rule
+        # as well as its own.
+        mutant = with_mutation('setopt local_options no_nomatch glob', 'setopt local_options glob',
                                path=READER)
         lib = os.path.dirname(READER)
         try:
@@ -504,9 +513,12 @@ class RowsChunk1(unittest.TestCase):
 
     def test_row_088_vanished_own_entry_fails_on_the_no_write_path_too(self):
         """PUB-9 P1 fires whether or not this process wrote: a no-write `current` publish reports `failed`."""
+        # RE-PINNED (PR #67 pass 17, row 182): the post-scan's own-entry check is now captured in
+        # `_pb_own` ahead of E7b's single rescan, so the P1 branch tests that variable. The MUTATION
+        # is unchanged in meaning — P1 fires only when this process wrote.
         mutant = with_mutation(
-            '    if ! _unleashed_auth_entry "$_pb_entry"; then\n',
-            '    if [ "$_pb_wrote" = 1 ] && ! _unleashed_auth_entry "$_pb_entry"; then\n',
+            '    if [ "$_pb_own" = 0 ]; then\n',
+            '    if [ "$_pb_wrote" = 1 ] && [ "$_pb_own" = 0 ]; then\n',
             path=PUB)
         try:
             for shell in SHELLS:
@@ -521,14 +533,16 @@ class RowsChunk1(unittest.TestCase):
 
     def test_row_095_post_scan_exits_are_ordered_p1_before_p2(self):
         """Own-entry-missing PLUS another malformed entry reports `failed` (P1), never `stale` (P2)."""
+        # RE-PINNED (PR #67 pass 17, row 182): the own-entry verdict is `_pb_own` now, decided before
+        # E7b's rescan. The mutation still SWAPS P1 and P2, which is this row's whole content.
         mutant = with_mutation(
-            '    if ! _unleashed_auth_entry "$_pb_entry"; then\n'
+            '    if [ "$_pb_own" = 0 ]; then\n'
             '        _unleashed_pub_failed "this process\'s own plugin-state entry is missing or unusable"   # P1\n'
             '    elif [ "$_UNLEASHED_FAILED" -gt 0 ]; then\n'
             '        _unleashed_pub_state stale                                                             # P2\n',
             '    if [ "$_UNLEASHED_FAILED" -gt 0 ]; then\n'
             '        _unleashed_pub_state stale                                                             # P2\n'
-            '    elif ! _unleashed_auth_entry "$_pb_entry"; then\n'
+            '    elif [ "$_pb_own" = 0 ]; then\n'
             '        _unleashed_pub_failed "this process\'s own plugin-state entry is missing or unusable"   # P1\n',
             path=PUB)
         sibling = (f'printf "%s\\n" garbage > "{self.store}/base.bad"; '
@@ -1011,9 +1025,16 @@ class RowsChunk2(unittest.TestCase):
             '    if _unleashed_auth_entry "$_pb_entry"; then\n        _pb_wrote=0\n',
             '    _unleashed_scan_store "$_pb_store"\n'
             '    if _unleashed_auth_entry "$_pb_entry"; then\n        _pb_wrote=0\n', path=PUB)
+        # RE-PINNED (PR #67 pass 17, row 182): the post-scan is now `scan; capture; maybe rescan`, so
+        # m2 removes the FIRST (post-)scan only — which is the whole of this row's mutation, "scan
+        # before publishing and not after". E7b's rescan is unreachable in this fixture (the racer's
+        # own entry authenticates and nothing failed), so removing it as well would change nothing.
         m2 = with_mutation(
-            '    _unleashed_scan_store "$_pb_store"\n    if ! _unleashed_auth_entry "$_pb_entry"; then\n',
-            '    if ! _unleashed_auth_entry "$_pb_entry"; then\n', path=m1)
+            '    _unleashed_scan_store "$_pb_store"\n'
+            '    _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1\n'
+            '    if [ "$_pb_own" = 0 ] || [ "$_UNLEASHED_FAILED" -gt 0 ]; then\n',
+            '    _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1\n'
+            '    if [ "$_pb_own" = 0 ] || [ "$_UNLEASHED_FAILED" -gt 0 ]; then\n', path=m1)
         try:
             base_b = os.path.join(self.home, "baseB")
             os.makedirs(base_b)
@@ -1127,11 +1148,17 @@ class RowsChunk2(unittest.TestCase):
         # The guard exists FOR bash: `setopt` is a zsh builtin, so the unguarded mutant makes the
         # bash arm die at scan time under errexit. The zsh arms are identical by design — the
         # discriminating cell is bash, where the shipped build completes and the mutant aborts.
+        # RE-PINNED (PR #67 pass 17, row 179): the guarded block now carries the glob-forcing and a
+        # bash `else` arm, so the anchor is SLICED from the current file — `if` line through its `fi`
+        # — rather than quoted, and the mutation replaces the whole block with the unguarded `setopt`
+        # the row is about. `_ss_noglob=0` is kept so the restore line below it stays well-defined.
+        with open(READER, encoding="utf-8") as fh:
+            _r74 = fh.read()
+        _r74_i = _r74.index('    if [ -n "${ZSH_VERSION:-}" ]; then\n        setopt local_options')
+        _r74_j = _r74.index('\n    fi\n', _r74_i) + len('\n    fi\n')
         mutant = with_mutation(
-            '    if [ -n "${ZSH_VERSION:-}" ]; then\n'
-            '        setopt local_options no_nomatch\n'
-            '    fi\n',
-            '    setopt local_options no_nomatch\n', path=READER)
+            _r74[_r74_i:_r74_j],
+            '    setopt local_options no_nomatch glob\n    _ss_noglob=0\n', path=READER)
         try:
             body = ('set -euo pipefail\n' + self.MAKE.format(s=self.store)
                     + self.TUPLE.format(s=self.store))
@@ -6463,6 +6490,823 @@ class RowsPass7(unittest.TestCase):
         finally:
             for m in (m_zsh, m_nocall, m_clobber):
                 os.unlink(m)
+
+
+# ==================================================================================================
+# Chunk 8 — PR #67 pass 17
+# ==================================================================================================
+# Rows 179-183. Every row here is TM-4 C1 material: an ordinary environment, no adversary, and a
+# user-visible outcome — a healthy store that reads as empty, a first session that never seeds the
+# store, one directory that publishes three entries, two ordinary hooks that report a repair state at
+# each other, and a harness whose HOME sandbox is a sandbox in bash only. Each defect was REPRODUCED
+# before its fix, and each mutation below restores the pre-fix code exactly.
+
+import pwd
+import time
+
+
+@unittest.skipUnless(DARWIN, "the Darwin chain/ACL arm and the Darwin store; on Linux every publish cell is `failed` by design")
+class RowsPass17(unittest.TestCase):
+    """Mutant-table rows 179-183 (PR #67, codex pass 17)."""
+
+    #: N6-6's store-level tuple, and the publisher's one-word state.
+    OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
+    PSTATE = 'printf "%s" "$_UNLEASHED_POINTER_STATE"'
+
+    def setUp(self):
+        # A scratch HOME under ~/.claude (§7 step 3f(i)) so every chain authenticates and no cell
+        # reads or writes the developer's real store.
+        self.home = scratch_home("rp17.2617.")
+        self.store = os.path.join(self.home, ".claude", "unleashed-mail", "bases")
+        self.target = os.path.join(self.home, "target")
+        os.makedirs(self.target)
+        os.chmod(self.target, 0o700)
+
+    def tearDown(self):
+        # Row 181 leaves a 0600 directory and row 180 a 0777 one; restore both before the rmtree, or
+        # the fixture leaks into $HOME exactly as the ACL fixtures once did.
+        os.chmod(self.home, 0o700)
+        for dirpath, dirnames, _ in os.walk(self.home):
+            for d in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, d), 0o700)
+                except OSError:
+                    pass
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    # ── shared scaffolding ────────────────────────────────────────────────────────────────────
+
+    def _wipe(self):
+        shutil.rmtree(os.path.join(self.home, ".claude"), ignore_errors=True)
+
+    def _mkstore(self):
+        return (f'_unleashed_name_max "{self.store}" >/dev/null || exit 9\n'
+                f'_unleashed_create_store "{self.store}" || exit 9\n')
+
+    def _entry(self, t=None, mode="600"):
+        t = t or self.target
+        return (f'_unleashed_key "{t}"\n'
+                f'printf "%s\\n" "{t}" > "{self.store}/base.$_UNLEASHED_KEY"\n'
+                f'/bin/chmod {mode} "{self.store}/base.$_UNLEASHED_KEY"\n')
+
+    def _names(self):
+        """The durable entries in the store, sorted — never the transients."""
+        if not os.path.isdir(self.store):
+            return []
+        return sorted(f for f in os.listdir(self.store) if f.startswith("base."))
+
+    @staticmethod
+    def _diags(err):
+        return [l for l in err.splitlines() if l.startswith("unleashed-mail:")]
+
+    def _shadow(self, name, files):
+        """A plugin root holding ONLY `files` under scripts/lib — {basename: source path}.
+
+        Row 156's shape, and row 183 needs it: a mutated `paths.sh` alone in the directory
+        `with_mutation` returns finds none of the machinery beside it, degrades to the D′ envelope for
+        the wrong reason and publishes nothing in EITHER build — a control that cannot fail.
+        """
+        root = os.path.join(self.home, name, "scripts", "lib")
+        os.makedirs(root)
+        for base, src in files.items():
+            shutil.copy(src, os.path.join(root, base))
+        return root
+
+    @staticmethod
+    def _slice(path, head, tail):
+        """The CURRENT text of `path` from the unique `head` through the first `tail` after it."""
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text.count(head) == 1, f"head anchor not unique in {path}: {head!r}"
+        start = text.index(head)
+        assert tail in text[start:], f"tail anchor not found after the head in {path}: {tail!r}"
+        end = text.index(tail, start) + len(tail)
+        old = text[start:end]
+        assert text.count(old) == 1, f"sliced block not unique in {path}"
+        return old
+
+    # ── row 179 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The scan's glob-forcing block — sliced from the head of its paragraph through the `for` line —
+    #: and the pre-fix shape: a zsh arm that sets `no_nomatch` ALONE (which does not turn globbing back
+    #: on) and no bash arm at all.
+    ROW_179_HEAD = "    # GLOBBING IS FORCED ON FOR THIS SCAN"
+    ROW_179_TAIL = '    fi\n    for _ss_f in "$_ss_store"/base.*; do\n'
+    ROW_179_OLD = ('    if [ -n "${ZSH_VERSION:-}" ]; then\n'
+                   '        setopt local_options no_nomatch\n'
+                   '    fi\n'
+                   '    for _ss_f in "$_ss_store"/base.*; do\n')
+    #: …and the restore of the caller's own flag, which the mutation drops with it.
+    ROW_179_RESTORE = ("    [ \"${_ss_noglob:-0}\" = 1 ] && set -f          "
+                       "# restore the caller's `noglob`; zsh did it at return\n")
+    #: Globbing OFF, spelled as each shell spells it. zsh's own name for the option is `noglob`;
+    #: `no_noglob` is NOT an option name there (measured: `setopt: no such option: no_noglob`), which
+    #: is why the first attempt at this fix moved the bash arm only.
+    NOGLOB = {"/bin/bash": "set -f\n", "/bin/zsh": "setopt noglob\n"}
+    #: The FUNCTIONAL probe for "globbing is still off". NOT `$-`: zsh reports `noglob` as `F` and not
+    #: `f`, so a flag-letter test reads as restored under zsh when nothing was restored at all.
+    GLOB_PROBE = 'printf "%s|" /etc/ho*\n'
+
+    def _row_179_mutant(self):
+        block = self._slice(READER, self.ROW_179_HEAD, self.ROW_179_TAIL)
+        first = with_mutation(block, self.ROW_179_OLD, path=READER)
+        try:
+            return with_mutation(self.ROW_179_RESTORE, "", path=first)
+        finally:
+            os.unlink(first)
+
+    def test_row_179_the_store_scan_forces_globbing_on_and_restores_the_callers_setting(self):
+        """Row 179 (codex, PR #67 pass 17 — reproduced): a caller with globbing DISABLED — `set -f`, zsh `setopt noglob`, the defensive `set -euf` idiom in a wrapper, or an inherited `SHELLOPTS=noglob` — reads a store holding one valid entry: the specification forces globbing on for the scan and resolves (`1 pointer none`, no diagnostic) in both shells; under the mutation (the forcing removed, the zsh arm back to `no_nomatch` alone and the bash flag save/restore gone) the pattern `<store>/base.*` reaches the loop LITERAL, fails rule 0 as "vanished", and a HEALTHY store reports `0 unresolved none` with the "no plugin-state entry is present" notice — the wrong answer, and one SS-1 is specified to stay silent on. Both shells; the bash arm again with `SHELLOPTS=noglob` carried in from the environment. Three cells hold in BOTH builds, so nothing here is bought with a regression: the caller's `noglob` is still in force after the read (`/etc/ho*` stays literal — asserted FUNCTIONALLY, because zsh reports the option as `F` and a `$-` test reads as restored when nothing was), an EMPTY store still reports `none`, and a caller who left globbing ON keeps it on and still resolves."""
+        # Measured, both shells: (i) shipped `1 pointer none` with ZERO diagnostics, mutant
+        # `0 unresolved none` with ONE ("no plugin-state entry is present"). (iv) bash + SHELLOPTS:
+        # `1 pointer none` / `0 unresolved none`. (ii) `/etc/ho*|` in both builds under noglob and
+        # `/etc/hosts|/etc/hosts.equiv|` with globbing on. (iii) empty store `0 unresolved none`, one
+        # diagnostic, in both builds. A PUBLISH under `noglob` is NOT a cell: its own-entry check runs
+        # on the composed pathname and not through the glob, so both builds report `created` (measured)
+        # — a cell that cannot fail, recorded here rather than written.
+        # THE SHIPPED SHAPE FIRST (row 178's convention), so a reader that no longer forces the glob
+        # fails HERE — on the rule — and not inside `with_mutation` on an anchor that stopped matching.
+        with open(READER, encoding="utf-8") as fh:
+            shipped = fh.read()
+        self.assertIn("setopt local_options no_nomatch glob", shipped,
+                      "the shipped scan does not force globbing ON in the zsh arm (RD-9)")
+        self.assertIn("case $- in *f*) _ss_noglob=1; set +f ;;", shipped,
+                      "the shipped scan does not save and clear the caller's `-f` in the bash arm (RD-9)")
+        self.assertIn(self.ROW_179_RESTORE, shipped,
+                      "the shipped scan does not restore the caller's `noglob` (RD-9)")
+        mutant = self._row_179_mutant()
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, mutant, PUB), True)):
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    # (i) a HEALTHY store read by a caller who has globbing off.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self._entry() + self.NOGLOB[shell]
+                                             + f'_unleashed_read_store "{self.store}"\n' + self.OUTP,
+                                             sources=srcs)
+                    if not is_mutant:
+                        self.assertEqual("1 pointer none", out,
+                                         f"{tag}: a healthy store did not resolve under noglob: {out!r} {err!r}")
+                        self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+                    else:
+                        self.assertEqual("0 unresolved none", out,
+                                         f"{tag}: the CONTROL did not fail — the literal pattern still "
+                                         f"reached the loop and the store still read as empty: {out!r} {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                        self.assertIn("no plugin-state entry is present", err,
+                                      f"{tag}: the healthy store was not reported as empty: {err!r}")
+                    # (ii) the caller's globbing is STILL OFF afterwards — in both builds.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self._entry() + self.NOGLOB[shell]
+                                             + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.GLOB_PROBE + self.OUTP, sources=srcs)
+                    self.assertTrue(out.startswith("/etc/ho*|"),
+                                    f"{tag}: the scan left the caller's globbing ON: {out!r}")
+                    # …and the probe can fail: with globbing left ON the same pattern expands.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self._entry()
+                                             + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.GLOB_PROBE + self.OUTP, sources=srcs)
+                    self.assertFalse(out.startswith("/etc/ho*|"),
+                                     f"{tag}: the glob probe does not discriminate — it stayed literal "
+                                     f"with globbing ON: {out!r}")
+                    self.assertTrue(out.startswith("/etc/ho"), f"{tag}: {out!r}")
+                    # (v) the honest control: with globbing ON the store resolves in both builds.
+                    self.assertTrue(out.endswith("1 pointer none"),
+                                    f"{tag}: a healthy store did not resolve with globbing on: {out!r} {err!r}")
+                    # (iii) an EMPTY store still reports `none` under noglob, in both builds — the
+                    # forced glob must not turn the unmatched pattern into a phantom entry.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self.NOGLOB[shell]
+                                             + f'_unleashed_read_store "{self.store}"\n' + self.OUTP,
+                                             sources=srcs)
+                    self.assertEqual("0 unresolved none", out, f"{tag}: empty store: {out!r} {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: empty store: {err!r}")
+                # (iv) bash imports SHELLOPTS at startup, so a wrapper that exported it disables
+                # globbing before the first sourced line runs. zsh has no such import.
+                if shell == "/bin/bash":
+                    for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                            ((AUTH, STORE, mutant, PUB), True)):
+                        self._wipe()
+                        rc, out, err = run_shell(shell, self._mkstore() + self._entry()
+                                                 + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                                 + self.OUTP, sources=srcs, env={"SHELLOPTS": "noglob"})
+                        want = "0 unresolved none" if is_mutant else "1 pointer none"
+                        note = ("the CONTROL did not fail — an inherited SHELLOPTS=noglob no longer "
+                                "empties the scan") if is_mutant else "an inherited SHELLOPTS=noglob emptied the scan"
+                        self.assertEqual(want, out, f"{shell} SHELLOPTS {'mutant' if is_mutant else 'shipped'}: "
+                                                    f"{note}: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 180 ───────────────────────────────────────────────────────────────────────────────
+
+    #: E2a's creation block — the `[ ! -e ] && [ ! -L ]` head through its own `fi`. RE-PINNED (pass 17
+    #: follow-up): the block now authenticates the PARENT before it creates anything and creates under
+    #: `umask 077`, so it is SLICED from the current file rather than quoted — a comment rewrite inside
+    #: it must not strand this row on a pattern that no longer matches.
+    ROW_180_HEAD = '    if [ ! -e "$_pb_value" ] && [ ! -L "$_pb_value" ]; then\n'
+    ROW_180_TAIL = '\n    fi\n'
+    #: The two halves the follow-up added, each mutable on its own so each is measured on its own.
+    ROW_180_UMASK = '        ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :\n'
+    ROW_180_UMASK_GONE = '        /bin/mkdir -p -- "$_pb_value" >/dev/null 2>&1 || :\n'
+    ROW_180_PARENT = ('        _pb_parent="${_pb_value%/*}"; [ -n "$_pb_parent" ] || _pb_parent=/\n'
+                      '        if ! _unleashed_auth_chain "$_pb_parent"; then\n'
+                      '            _unleashed_pub_failed "the plugin-data base does not exist and its parent'
+                      ' does not authenticate"; return 0\n'
+                      '        fi\n')
+
+    def _row_180_block(self):
+        with open(PUB, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text.count(self.ROW_180_HEAD) == 1, "E2a's creation guard is not unique"
+        i = text.index(self.ROW_180_HEAD)
+        return text[i:text.index(self.ROW_180_TAIL, i) + len(self.ROW_180_TAIL)]
+
+    def test_row_180_a_plugin_data_base_that_does_not_exist_yet_is_created_not_refused(self):
+        """Row 180 (codex, PR #67 pass 17 — reproduced; re-pinned after the follow-up that closed this row's own two findings): `CLAUDE_PLUGIN_DATA` names a directory nothing has written to yet — the ordinary state of a FIRST SESSION, since this library's own writers create it lazily with `mkdir -p` moments later: the specification authenticates the PARENT, creates the directory at 0700 and publishes (`created`, stderr SILENT), a second process reports `current`, and a reader with no variable resolves it (`1 pointer <base>`); under the mutation (E2a's whole creation block removed) EVERY run reports `failed` with a publication-failure line on stderr, the store is never seeded, and the reader answers `0 unresolved none`. TWO FURTHER MUTANTS, one per half of the follow-up, because the first version of this fix shipped both defects and this row is what found them: (a) with the `umask 077` subshell dropped, a fresh install under `umask 002` creates the base 0775, its OWN chain then refuses it, and the publish reports `failed` on that hook and every later one — the specification creates 0700 and publishes under either umask; (b) with the `mkdir` moved back above the parent authentication, an other-writable parent gets the directory CREATED and only then refused — a write outside the store performed by the refusal path, which PUB-9 E4 step (i) forbids on the store chain — where the specification refuses with nothing on disk. Both shells throughout. Four refusal controls hold on the shipped build: a FILE at the base, a SYMLINK to a directory, a DANGLING symlink (whose target is NOT created) and an other-writable parent each report `failed` with one diagnostic and leave no store. The `-L` half of the creation guard is stated rather than claimed: `/bin/mkdir -p` on a dangling symlink creates nothing in either build (measured), so that half does not discriminate at the outcome level and no cell here pretends it does."""
+        # Measured, both shells. SHIPPED: fresh `created` at 0700, silent, then `current`, reader
+        # `1 pointer <b>`; `umask 002` `created` at 0700; 0777 parent `failed`, nothing created, no
+        # store, "…does not exist and its parent does not authenticate".
+        # m_none  : `failed` + 1 diagnostic on both runs, `0 unresolved none`, nothing created.
+        # m_umask : fresh `created` at 0755; `umask 002` `failed` at 0775 — the base is left behind
+        #           group-writable, so every later hook fails on it too.
+        # m_order : 0777 parent `failed` WITH the directory created (the state is the same; the
+        #           FILESYSTEM is the discriminator, as in row 1's mtime cell).
+        block = self._row_180_block()
+        self.assertIn("_unleashed_auth_chain \"$_pb_parent\"", block,
+                      "E2a no longer authenticates the parent before creating the base (PUB-9 E2a)")
+        self.assertIn(self.ROW_180_UMASK, block,
+                      "E2a no longer creates the base under `umask 077` (PUB-9 E2a)")
+        mutant = with_mutation(block, "", path=PUB)
+        m_umask = with_mutation(self.ROW_180_UMASK, self.ROW_180_UMASK_GONE, path=PUB)
+        m_order = with_mutation(self.ROW_180_PARENT + self.ROW_180_UMASK,
+                                self.ROW_180_UMASK + self.ROW_180_PARENT, path=PUB)
+        try:
+            self._row_180_halves(m_umask, m_order)
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    self._wipe()
+                    base = os.path.join(self.home, f"first-session-{os.path.basename(shell)}")
+                    shutil.rmtree(base, ignore_errors=True)
+                    rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{base}"\n' + self.PSTATE,
+                                             sources=srcs)
+                    rc2, out2, err2 = run_shell(shell, f'_unleashed_publish "{self.store}" "{base}"\n' + self.PSTATE,
+                                                sources=srcs)
+                    rc3, out3, err3 = run_shell(shell, f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                                + self.OUTP + ' ; printf " %s" "$_UNLEASHED_BASE_RESOLVED"',
+                                                sources=srcs)
+                    if not is_mutant:
+                        self.assertEqual("created", out, f"{tag}: a base that does not exist yet did not "
+                                                         f"publish: {out!r} {err!r}")
+                        self.assertEqual("", err, f"{tag}: the first session's stderr was not silent: {err!r}")
+                        self.assertTrue(os.path.isdir(base) and not os.path.islink(base),
+                                        f"{tag}: the base was not created")
+                        self.assertEqual(0o700, statmod.S_IMODE(os.stat(base).st_mode),
+                                         f"{tag}: the created base is not 0700 — E2a's `umask 077` "
+                                         f"subshell is what makes this independent of the caller's umask")
+                        self.assertEqual("current", out2, f"{tag}: the second run rewrote or refused: {out2!r}")
+                        self.assertEqual(f"1 pointer none {base}", out3, f"{tag}: {out3!r} {err3!r}")
+                    else:
+                        self.assertEqual("failed", out, f"{tag}: the CONTROL did not fail — a base that does "
+                                                        f"not exist yet still published: {out!r} {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                        self.assertFalse(os.path.exists(base), f"{tag}: the mutant created the base after all")
+                        self.assertEqual("failed", out2, f"{tag}: {out2!r}")
+                        self.assertEqual(f"0 unresolved none {SENTINEL}", out3,
+                                         f"{tag}: the store was seeded anyway: {out3!r} {err3!r}")
+                # ── the refusal controls, on the SHIPPED build ────────────────────────────────
+                afile = os.path.join(self.home, "a-file")
+                with open(afile, "w", encoding="utf-8") as fh:
+                    fh.write("x\n")
+                realdir = os.path.join(self.home, "a-real-dir")
+                os.makedirs(realdir, exist_ok=True)
+                os.chmod(realdir, 0o700)
+                link = os.path.join(self.home, "a-link")
+                victim = os.path.join(self.home, "victim-that-must-not-be-created")
+                wwpar = os.path.join(self.home, "other-writable-parent")
+                shutil.rmtree(wwpar, ignore_errors=True)
+                os.makedirs(wwpar)
+                os.chmod(wwpar, 0o777)
+                for label, setup, value in (
+                        ("a FILE at the base", lambda: None, afile),
+                        ("a SYMLINK at the base", lambda: os.symlink(realdir, link), link),
+                        ("a DANGLING symlink at the base", lambda: os.symlink(victim, link), link),
+                        ("an other-writable parent", lambda: None, os.path.join(wwpar, "b"))):
+                    self._wipe()
+                    if os.path.islink(link):
+                        os.unlink(link)
+                    setup()
+                    rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{value}"\n' + self.PSTATE)
+                    tag = f"{shell} control [{label}]"
+                    self.assertEqual("failed", out, f"{tag}: an unusable base was published: {out!r} {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                    self.assertFalse(os.path.exists(self.store), f"{tag}: a refused publish created the store")
+                    self.assertFalse(os.path.exists(victim),
+                                     f"{tag}: `mkdir -p` followed a dangling symlink and created its target")
+                    self.assertTrue(os.path.isfile(afile), f"{tag}: the file at the base was replaced")
+                if os.path.islink(link):
+                    os.unlink(link)
+                os.chmod(wwpar, 0o700)
+        finally:
+            for m in (mutant, m_umask, m_order):
+                os.unlink(m)
+
+    def _row_180_halves(self, m_umask, m_order):
+        """The two cells for the halves the follow-up added — the umask, and the ordering.
+
+        Kept beside the row rather than folded into its loop because each has its OWN mutant and its
+        own discriminator: the umask cell discriminates on the base's MODE and then on the state it
+        causes, the ordering cell on whether a directory exists after a refusal (the state is `failed`
+        in both builds — a cell that compared only the state would prove nothing here).
+        """
+        for shell in SHELLS:
+            # (a) THE UMASK. A fresh install under `umask 002`: 0700 and `created` under the
+            # specification; 0775 and `failed` under the mutant, because the base's own chain walk
+            # refuses a group-writable directory — and the directory is LEFT behind, so every later
+            # hook fails on it too.
+            for label, srcs, want, want_mode in (("shipped", (AUTH, STORE, READER, PUB), "created", 0o700),
+                                                 ("mutant", (AUTH, STORE, READER, m_umask), "failed", 0o775)):
+                self._wipe()
+                b = os.path.join(self.home, f"umask002-{label}-{os.path.basename(shell)}")
+                shutil.rmtree(b, ignore_errors=True)
+                rc, out, err = run_shell(shell, "umask 002\n"
+                                         + f'_unleashed_publish "{self.store}" "{b}"\n' + self.PSTATE,
+                                         sources=srcs)
+                tag = f"{shell} umask002 {label}"
+                self.assertTrue(os.path.isdir(b), f"{tag}: nothing was created")
+                self.assertEqual(want_mode, statmod.S_IMODE(os.stat(b).st_mode),
+                                 f"{tag}: base mode {oct(statmod.S_IMODE(os.stat(b).st_mode))}")
+                if label == "shipped":
+                    self.assertEqual("created", out, f"{tag}: {out!r} {err!r}")
+                    self.assertEqual("", err, f"{tag}: {err!r}")
+                else:
+                    self.assertEqual("failed", out,
+                                     f"{tag}: the CONTROL did not fail — a base created with the "
+                                     f"ambient umask still authenticated: {out!r} {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+            # (b) THE ORDERING. An other-writable parent: both builds report `failed`, and the
+            # discriminator is the FILESYSTEM — the specification creates nothing, the mutant
+            # (mkdir moved above the parent authentication) leaves a directory it then refuses.
+            for label, srcs, want_created in (("shipped", (AUTH, STORE, READER, PUB), False),
+                                              ("mutant", (AUTH, STORE, READER, m_order), True)):
+                self._wipe()
+                par = os.path.join(self.home, f"wwpar-{label}-{os.path.basename(shell)}")
+                shutil.rmtree(par, ignore_errors=True)
+                os.makedirs(par)
+                os.chmod(par, 0o777)
+                child = os.path.join(par, "b")
+                try:
+                    rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{child}"\n'
+                                             + self.PSTATE, sources=srcs)
+                    tag = f"{shell} 0777-parent {label}"
+                    self.assertEqual("failed", out, f"{tag}: an unauthenticated parent published: {out!r} {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                    self.assertFalse(os.path.exists(self.store), f"{tag}: the refusal created a store")
+                    if want_created:
+                        self.assertTrue(os.path.isdir(child),
+                                        f"{tag}: the CONTROL did not fail — `mkdir` above the parent "
+                                        f"authentication left nothing on disk: {err!r}")
+                    else:
+                        self.assertFalse(os.path.exists(child),
+                                         f"{tag}: the refusal path created a directory under an "
+                                         f"other-writable parent: {err!r}")
+                finally:
+                    os.chmod(par, 0o700)
+
+    # ── row 181 ───────────────────────────────────────────────────────────────────────────────
+
+    #: E2b's normalisation, sliced from the first line of the fold through the assignment that installs
+    #: its result. The pre-fix shape is its ABSENCE: the caller's spelling reaches the encoder.
+    #: RE-PINNED (pass 17 follow-up): the fold is LEXICAL now — a `while` over `/`-separated segments —
+    #: because this row's own cross-shell finding killed the `cd -P`/`pwd -P` version.
+    ROW_181_HEAD = '    _pb_norm=""; _pb_rest="${_pb_value#/}"\n'
+    # The tail moved when the fold gained its same-inode check: the block now ends at the assignment
+    # BACK to `_pb_value`, so slicing it out still removes the whole fold — the loop, the folded-path
+    # `-d` test and the inode verification — and leaves the caller's raw spelling as the key, which is
+    # exactly the pre-fix behaviour this row discriminates against. Measured after re-pinning.
+    ROW_181_TAIL = '    _pb_value="$_pb_folded"\n'
+
+    def test_row_181_one_directory_publishes_one_entry_whatever_the_caller_spelled(self):
+        """Row 181 (codex, PR #67 pass 17 — reproduced; re-pinned after the follow-up this row's own finding forced): four spellings of ONE directory — `<d>/sub`, `<d>/./sub`, `<d>/x/../sub`, `<d>//sub` — published by four fresh processes into one store: the specification folds the value LEXICALLY before deriving the key — a `while` over `/`-separated segments that drops `''` and `.` and pops on `..`, no fork and no `cd` — so the store holds ONE entry, the runs report `created` then `current` three times, and a reader answers `1 pointer <d>/sub`, IDENTICALLY IN BOTH SHELLS; under the mutation (the fold removed) the key is an injective encoding of the SPELLING, so the store holds FOUR entries, three runs report `conflict`, and every later reader is permanently `0 unresolved conflict` — a state only a manual delete clears. THE FIRST VERSION OF THIS FIX USED `cd -P`/`pwd -P`, and this row measured what that cost: bash returns the spelling it was asked for and zsh returns the ON-DISK case, so one mis-cased `CLAUDE_PLUGIN_DATA` published by a bash hook and a zsh shell left TWO entries and a permanent conflict that did not exist before the fix. That cell is kept as a REGRESSION GUARD and now asserts ONE entry. ENC-4's case-folding cost stands and is asserted as accepted behaviour in BOTH shells: `SUB` beside `sub` still publishes a second entry and still conflicts. One control on the residual the fold declares: a value whose PARENT is a symlink is refused by the chain walk (`failed`) in both builds, so not resolving symlinks cannot publish a base the chain would reject."""
+        # Measured, both shells: shipped 1 entry, `created current current current`, read
+        # `1 pointer none <d>/sub`; mutant 4 entries, `created conflict conflict conflict`, read
+        # `0 unresolved conflict`. Case: `created conflict`, 2 entries, in BOTH shells. Cross-shell
+        # mis-cased: `created current`, ONE entry (two under the `cd -P` version). Symlinked parent:
+        # `failed`, "chain does not authenticate", in both builds.
+        # THE 0600-DIRECTORY CELL IS REMOVED, and this is why rather than a silent deletion: the
+        # `cd -P` version refused an unenterable base because it could not enter it, and a LEXICAL
+        # fold never enters anything — measured, both builds now report `created` for a 0600 base, so
+        # the cell no longer discriminates and would be a check that cannot fail. (The refusal it
+        # asserted, "cannot be resolved to a physical path", no longer exists in the publisher.)
+        d = os.path.join(self.home, "d")
+        sub = os.path.join(d, "sub")
+        os.makedirs(sub)
+        os.makedirs(os.path.join(d, "x"))
+        for p in (d, sub, os.path.join(d, "x")):
+            os.chmod(p, 0o700)
+        spellings = (sub, f"{d}/./sub", f"{d}/x/../sub", f"{d}//sub")
+        with open(PUB, encoding="utf-8") as fh:
+            pub = fh.read()
+        self.assertIn(self.ROW_181_HEAD, pub,
+                      "the shipped publisher no longer folds the base value before deriving its key "
+                      "(PUB-9 E2b)")
+        self.assertIn("'..')   _pb_norm=\"${_pb_norm%/*}\" ;;", pub,
+                      "E2b's fold no longer pops on `..`")
+        # …and it is LEXICAL: no `cd`, no `pwd`, no fork on this path. Pinned as an absence because the
+        # `cd -P` version was correct in bash and wrong in zsh, and nothing but a shell-by-shell run
+        # would have shown that — the absence is the fix.
+        self.assertNotIn("_pb_phys", pub,
+                         "E2b resolves the base through `cd -P`/`pwd -P` again — that version returns "
+                         "the caller's spelling in bash and the ON-DISK case in zsh, so one value "
+                         "published by the two shells leaves two entries and a permanent conflict")
+        block = self._slice(PUB, self.ROW_181_HEAD, self.ROW_181_TAIL)
+        mutant = with_mutation(block, "", path=PUB)
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    self._wipe()
+                    states = []
+                    for v in spellings:
+                        rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{v}" 2>/dev/null\n'
+                                                 + self.PSTATE, sources=srcs)
+                        states.append(out)
+                    rc, out, err = run_shell(shell, f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.OUTP + ' ; printf " %s" "$_UNLEASHED_BASE_RESOLVED"',
+                                             sources=srcs)
+                    if not is_mutant:
+                        self.assertEqual(["created", "current", "current", "current"], states,
+                                         f"{tag}: four spellings of one directory did not settle: {states}")
+                        self.assertEqual(1, len(self._names()),
+                                         f"{tag}: one directory left {self._names()}")
+                        self.assertEqual(f"1 pointer none {sub}", out, f"{tag}: {out!r} {err!r}")
+                    else:
+                        self.assertEqual(["created", "conflict", "conflict", "conflict"], states,
+                                         f"{tag}: the CONTROL did not fail — the spellings did not each "
+                                         f"publish their own entry: {states}")
+                        self.assertEqual(4, len(self._names()), f"{tag}: {self._names()}")
+                        self.assertEqual(f"0 unresolved conflict {SENTINEL}", out, f"{tag}: {out!r} {err!r}")
+                    # THE RESIDUAL THE FOLD DECLARES, asserted in both builds: it does not resolve
+                    # symlinks, and it does not have to — a value whose PARENT is a symlink is refused
+                    # by the chain walk (PCH-1 admits no symlinked component), so the fold cannot
+                    # publish a base the chain would reject.
+                    self._wipe()
+                    lnk = os.path.join(self.home, "lnk-parent")
+                    if not os.path.islink(lnk):
+                        os.symlink(d, lnk)
+                    rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{lnk}/sub"\n'
+                                             + self.PSTATE, sources=srcs)
+                    self.assertEqual("failed", out,
+                                     f"{tag}: a base reached through a symlinked parent published: "
+                                     f"{out!r} {err!r}")
+                    self.assertIn("chain does not authenticate", err, f"{tag}: {err!r}")
+                    self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+            # ── ENC-4's ACCEPTED residual, measured on the SHIPPED build ──────────────────────
+            # The volume decides what these cells MEAN, so it is probed and both kinds are asserted
+            # rather than one being skipped: a skip here would report the whole row as skipped on a
+            # case-sensitive volume and hide the discriminating cells above that had already passed.
+            upper = os.path.join(d, "SUB")
+            case_insensitive = os.path.exists(upper)
+            if case_insensitive:
+                # `SUB` and `sub` are ONE directory, and the fold does not touch case, so the
+                # mis-cased value publishes a SECOND entry and conflicts — the cost ENC-4 declares —
+                # IN BOTH SHELLS. (Under the `cd -P` version zsh reported `current` with one entry
+                # here, which is what made that version shell-dependent.)
+                per_shell = (("/bin/bash", ["created", "conflict"], 2),
+                             ("/bin/zsh", ["created", "conflict"], 2))
+                cross, cross_n = ["created", "current"], 1
+                why = "the case-folding cost ENC-4 declares has changed, or it now differs by shell"
+            else:
+                # A case-SENSITIVE volume: `SUB` does not exist, so it is a different directory and
+                # two entries are the CORRECT answer in both shells — and the two shells agree.
+                os.makedirs(upper)
+                os.chmod(upper, 0o700)
+                per_shell = (("/bin/bash", ["created", "conflict"], 2),
+                             ("/bin/zsh", ["created", "conflict"], 2))
+                cross, cross_n = ["created", "current"], 1
+                why = "on a case-sensitive volume two directories must produce two entries"
+            for shell, want_states, want_entries in per_shell:
+                self._wipe()
+                states = [run_shell(shell, f'_unleashed_publish "{self.store}" "{v}" 2>/dev/null\n' + self.PSTATE)[1]
+                          for v in (sub, upper)]
+                self.assertEqual(want_states, states, f"{shell}: {why}: {states}")
+                self.assertEqual(want_entries, len(self._names()), f"{shell}: {self._names()}")
+            # THE REGRESSION GUARD, which is why this cell exists at all: ONE mis-cased value
+            # published by BOTH shells must leave ONE entry. Under the `cd -P` version it left two —
+            # bash published `<d>/SUB` and zsh published `<d>/sub` — a permanent conflict the fix
+            # introduced and this cell measured. A lexical fold cannot reintroduce it: it never asks
+            # the filesystem what the path is called.
+            self._wipe()
+            states = [run_shell(shell, f'_unleashed_publish "{self.store}" "{upper}" 2>/dev/null\n' + self.PSTATE)[1]
+                      for shell in SHELLS]
+            self.assertEqual(cross, states,
+                             f"the two shells disagreed on ONE value: {states} (case-insensitive "
+                             f"volume: {case_insensitive})")
+            self.assertEqual(cross_n, len(self._names()),
+                             f"one value published by two shells left {self._names()}")
+            # The control that makes that cell a finding and not a fixture artefact: with the value
+            # spelled as it is on disk, the two shells publish ONE entry.
+            self._wipe()
+            states = [run_shell(shell, f'_unleashed_publish "{self.store}" "{sub}" 2>/dev/null\n' + self.PSTATE)[1]
+                      for shell in SHELLS]
+            self.assertEqual(["created", "current"], states, f"{states}")
+            self.assertEqual(1, len(self._names()), f"{self._names()}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 182 ───────────────────────────────────────────────────────────────────────────────
+
+    #: E7b's post-scan, and the pre-fix shape: one scan, one authentication, and the repair state
+    #: reported from it.
+    ROW_182_SHIPPED = ('    _unleashed_scan_store "$_pb_store"\n'
+                       '    _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1\n'
+                       '    if [ "$_pb_own" = 0 ] || [ "$_UNLEASHED_FAILED" -gt 0 ]; then\n'
+                       '        _unleashed_scan_store "$_pb_store"\n'
+                       '        _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1\n'
+                       '    fi\n'
+                       '    if [ "$_pb_own" = 0 ]; then\n')
+    ROW_182_OLD = ('    _unleashed_scan_store "$_pb_store"\n'
+                   '    if ! _unleashed_auth_entry "$_pb_entry"; then\n')
+
+    #: Counting delegates for the two functions the post-scan calls, built by COPYING the shipped
+    #: definitions (never paraphrasing them) exactly as row 7's stat wrapper does. `_ae_bound` is
+    #: cleared at entry so the trap below can key on the window between ENT-1's stat and the open —
+    #: the variable survives the previous call otherwise, and the trap then fires before the stat,
+    #: where a substituted entry is simply the entry that gets validated (measured: the swap landed
+    #: and BOTH builds still reported `created`).
+    ROW_182_COUNT = (
+        'if [ -n "${ZSH_VERSION:-}" ]; then functions -c _unleashed_auth_entry _uae_real; '
+        'functions -c _unleashed_scan_store _uss_real; else '
+        'eval "$(declare -f _unleashed_auth_entry | /usr/bin/sed \'1s/_unleashed_auth_entry/_uae_real/\')"; '
+        'eval "$(declare -f _unleashed_scan_store | /usr/bin/sed \'1s/_unleashed_scan_store/_uss_real/\')"; fi\n'
+        '_uae_n=0; _uss_n=0\n'
+        '_unleashed_auth_entry() { unset _ae_bound; _uae_n=$(( _uae_n + 1 )); _uae_real "$@"; }\n'
+        '_unleashed_scan_store() { _uss_n=$(( _uss_n + 1 )); _uss_real "$@"; }\n')
+    #: What a CONCURRENT publisher of the same base does: replace the entry with an identical-content
+    #: copy at a NEW inode. `cp -p` then `mv -f`, so the surviving entry is valid in every clause and
+    #: only ENT-2b's inode binding rejects the object this process opened.
+    ROW_182_SWAP = '/bin/cp -p "$_ae_p" "$_ae_p.swap" && /bin/mv -f "$_ae_p.swap" "$_ae_p"'
+    #: The state, whether the trap fired, and how many times the store was scanned.
+    ROW_182_OUT = ('trap - DEBUG\n'
+                   'printf "%s|%s|%s" "$_UNLEASHED_POINTER_STATE" "${_tdone:-0}" "${_uss_n:-0}"')
+
+    def _row_182_trap(self, nth):
+        """Swap the entry inside the `nth` call to `_unleashed_auth_entry`, between ENT-1 and the open."""
+        return ('[ -n "${BASH_VERSION:-}" ] && set -T\n'
+                'trap \'if [ "${_uae_n:-0}" = ' + str(nth) + ' ] && [ -n "${_ae_bound:-}" ] '
+                '&& [ -f "${_ae_p:-}" ] && [ ! -L "$_ae_p" ] && [ -z "${_tdone:-}" ]; then _tdone=1; '
+                + self.ROW_182_SWAP + "; fi' DEBUG\n")
+
+    def _row_182_concurrent(self, shell, srcs, trials, n):
+        """`trials` rounds of `n` simultaneous publishers of ONE base into a FRESH store.
+
+        Returns (repair-state count, the states). A repair state is `stale`, `failed` or `conflict`:
+        every one of these processes publishes the SAME value, so `created`/`current` are the only
+        correct answers and anything else is the race being reported to the user.
+
+        THE START BARRIER IS LOAD-BEARING for the mutant arm, not decoration: spawned and left to
+        start when they may, the sixty-four publishers overlap only partly and the pre-fix rate fell
+        to 5 of 64 on one run (measured) — a population cell whose control can quietly stop failing.
+        Each process spins on a gate file, so all `n` reach the publish within microseconds of each
+        other; with it the pre-fix rate is 11-38 of 64 and the fixed one 0-2.
+        """
+        gate = os.path.join(self.home, "row182.gate")
+        src = "".join(f'. "{s}"\n' for s in srcs)
+        body = (src + f'while [ ! -e "{gate}" ]; do :; done\n'
+                + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n' + self.PSTATE)
+        repair, states = 0, []
+        for _ in range(trials):
+            self._wipe()
+            if os.path.exists(gate):
+                os.unlink(gate)
+            procs = [subprocess.Popen([shell, "-c", body], stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True) for _ in range(n)]
+            time.sleep(0.25)                      # every process is spinning on the gate by now
+            open(gate, "w").close()
+            out = [p.communicate(timeout=60)[0] for p in procs]
+            states.extend(out)
+            repair += sum(1 for s in out if s in ("stale", "failed", "conflict"))
+        return repair, states
+
+    def test_row_182_one_rescan_before_a_repair_state_is_reported(self):
+        """Row 182 (codex, PR #67 pass 17 — reproduced): two ORDINARY hooks publishing the SAME base into a fresh store race each other — the second `mv` replaces the entry between the post-scan's stat and its open, ENT-2b's inode binding correctly rejects the object that was opened, and the publisher reported a repair state although the surviving entry is valid and both processes agree on its content. A `DEBUG` trap makes the interleaving deterministic by performing exactly that replacement (an identical-content copy at a new inode) inside one authentication: (i) swapped during the post-SCAN, the specification rescans and reports `created` while the mutation (the rescan removed) reports `stale`; (ii) swapped during the OWN-ENTRY check, the specification reports `created` and the mutation `failed`. EXACTLY ONE retry, counted through a delegating wrapper: one scan on a healthy publish in both builds, two on the repair path, never three. Two controls hold in both builds, so the retry converts the transient case only: a genuinely corrupt sibling entry still reports `stale` (and the specification still scans exactly twice), and two publishers of DIFFERENT bases still report `conflict`. Both shells. And the population measurement, 8 trials of 8 concurrent publishers per shell released together off a start barrier: the mutation reports 11-38 repair states of 64 and the specification 0-3 — the fix is a large reduction and NOT an elimination, so this cell asserts a BOUND (<= 6 of 64), which is what E7b's own comment now states after this row measured it."""
+        # Measured, both shells: (i) shipped `created|1|2`, mutant `stale|1|1`; (ii) shipped
+        # `created|1|2`, mutant `failed|1|1`; healthy `created|0|1` in both; corrupt sibling
+        # `stale|0|2` shipped and `stale|0|1` mutant; two bases `conflict|0|1` in both.
+        # Concurrency, 8x8 per arm, in two regimes. WITHOUT a start barrier (processes spawned and
+        # left to start when they may): shipped bash 0,0,0,2 and zsh 1,1,2,3 across four runs; mutant
+        # bash 5,21,23,27 and zsh 19,24,29 — the 5 is why the barrier exists, a control that quietly
+        # stopped failing. WITH the barrier every process spins until one gate file appears: mutant
+        # bash 12,17,23,25 and zsh 25,31,34,35,38; shipped 0-2. The shipped arm is BOUNDED, not zero:
+        # a publisher that loses the race a SECOND time inside the rescan still reports the repair
+        # state, which is what "exactly one retry, never a loop" costs and what this cell records.
+        other = os.path.join(self.home, "other-base")
+        os.makedirs(other)
+        os.chmod(other, 0o700)
+        with open(PUB, encoding="utf-8") as fh:
+            pub = fh.read()
+        self.assertIn(self.ROW_182_SHIPPED, pub,
+                      "the shipped publisher no longer rescans once before reporting a repair state "
+                      "(PUB-9 E7b)")
+        # Counted on the CALL, not on an indented spelling of it: `'    x'` is a substring of
+        # `'        x'`, so summing two indentation-prefixed counts double-counts the deeper one.
+        self.assertEqual(2, pub.count('_unleashed_scan_store "$_pb_store"'),
+                         "the publisher does not scan the store exactly TWICE — E7b is one retry, "
+                         "never a loop")
+        mutant = with_mutation(self.ROW_182_SHIPPED, self.ROW_182_OLD, path=PUB)
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    # (i) and (ii) — the deterministic interleavings. Call 1 is PUB-7's write-or-skip
+                    # check (the entry does not exist yet, so it returns before the window opens),
+                    # call 2 is the post-scan's, call 3 the own-entry check.
+                    for nth, cell, mutant_state in ((2, "scan-phase swap", "stale"),
+                                                    (3, "own-entry swap", "failed")):
+                        self._wipe()
+                        body = (self.ROW_182_COUNT + self._row_182_trap(nth)
+                                + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                                + self.ROW_182_OUT)
+                        rc, out, err = self._run_182(shell, body, srcs)
+                        self.assertNotEqual("TIMEOUT", rc, f"{tag} [{cell}]: the publisher hung")
+                        self.assertTrue(out.split("|")[1] == "1",
+                                        f"{tag} [{cell}]: the trap did not fire — the fixture is not the "
+                                        f"finding: {out!r} {err!r}")
+                        if not is_mutant:
+                            self.assertEqual("created|1|2", out,
+                                             f"{tag} [{cell}]: a valid surviving entry was reported as a "
+                                             f"repair state, or the store was scanned other than twice: "
+                                             f"{out!r} {err!r}")
+                        else:
+                            self.assertEqual(f"{mutant_state}|1|1", out,
+                                             f"{tag} [{cell}]: the CONTROL did not fail — without the "
+                                             f"rescan the transient replacement was not reported as a "
+                                             f"repair state: {out!r} {err!r}")
+                    # A healthy publish scans ONCE in both builds: the retry is on the repair path only.
+                    self._wipe()
+                    rc, out, err = self._run_182(shell, self.ROW_182_COUNT
+                                                 + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                                                 + self.ROW_182_OUT, srcs)
+                    self.assertEqual("created|0|1", out, f"{tag}: a healthy publish: {out!r} {err!r}")
+                    # CONTROL: a genuinely corrupt sibling entry still reports `stale` — the retry
+                    # converts a transient replacement, never an entry that cannot authenticate.
+                    self._wipe()
+                    body = (self.ROW_182_COUNT
+                            + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                            + self._entry(t=other, mode="644")
+                            + '_uae_n=0; _uss_n=0\n'
+                            + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                            + self.ROW_182_OUT)
+                    rc, out, err = self._run_182(shell, body, srcs)
+                    want = "stale|0|2" if not is_mutant else "stale|0|1"
+                    self.assertEqual(want, out,
+                                     f"{tag}: a corrupt sibling must still report `stale`, and the "
+                                     f"specification must scan exactly twice doing it: {out!r} {err!r}")
+                    # CONTROL: two publishers of DIFFERENT bases still report `conflict`, with no retry.
+                    self._wipe()
+                    body = (self.ROW_182_COUNT
+                            + f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                            + '_uae_n=0; _uss_n=0\n'
+                            + f'_unleashed_publish "{self.store}" "{other}" 2>/dev/null\n'
+                            + self.ROW_182_OUT)
+                    rc, out, err = self._run_182(shell, body, srcs)
+                    self.assertEqual("conflict|0|1", out,
+                                     f"{tag}: two bases must still conflict, without a rescan: {out!r} {err!r}")
+                # ── the population measurement: 8 trials of 8 concurrent publishers ───────────
+                ship, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, PUB), 8, 8)
+                mut, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, mutant), 8, 8)
+                self.assertGreaterEqual(mut, 5,
+                                        f"{shell}: the CONTROL did not fail — 64 concurrent publishers of "
+                                        f"one base produced only {mut} repair states WITHOUT the rescan; "
+                                        f"the race did not occur and this cell measured nothing (the "
+                                        f"deterministic cells above are what proves discrimination)")
+                self.assertLessEqual(ship, 6,
+                                     f"{shell}: {ship} of 64 concurrent publishers reported a repair state "
+                                     f"WITH the rescan (measured range 0-3); the retry is not converting "
+                                     f"the transient case")
+                self.assertLess(ship, mut, f"{shell}: shipped {ship}, mutant {mut}")
+        finally:
+            os.unlink(mutant)
+
+    @staticmethod
+    def _run_182(shell, body, srcs, timeout=60):
+        src = "".join(f'. "{s}"\n' for s in srcs) + body
+        try:
+            p = subprocess.run([shell, "-c", src], capture_output=True, text=True, timeout=timeout)
+            return p.returncode, p.stdout, p.stderr
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT", "", ""
+
+    # ── row 183 ───────────────────────────────────────────────────────────────────────────────
+
+    #: E0, the publication opt-out — the ONLY protection that holds in both shells — and the mutation
+    #: that removes it. There is no mutation of E1's HOME predicate that discriminates under zsh:
+    #: that is the point of the row.
+    ROW_183_E0 = '            if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then\n'
+    ROW_183_E0_GONE = '            if false; then\n'
+
+    def test_row_183_the_publication_opt_out_is_the_protection_e1_cannot_be_under_zsh(self):
+        """Row 183 (codex, PR #67 pass 17 — reproduced): zsh initialises `HOME` from the PASSWD DATABASE before any sourced line runs — `env -i /bin/zsh` reports `HOME=/Users/<u>` where `env -i /bin/bash` reports it unset (measured, and asserted here against the passwd entry) — so PUB-9 E1's "HOME is empty or not absolute" refusal is UNREACHABLE for an ABSENT `HOME` under zsh, and a harness that clears `HOME` to prevent persistent writes is protected in bash and not in zsh. That divergence is a STATED FACT of the arm, not a bug with a fix: no post-startup test can distinguish "zsh filled it in" from "the caller set HOME to the passwd value", and this row asserts it rather than mutating it — under `env -i`, with publication disabled so nothing is written, `_unleashed_home_ok` REFUSES in bash and ACCEPTS in zsh. E1 is still reachable in BOTH shells for a `HOME` that is set and EMPTY (`failed`, one diagnostic), which is asserted so the divergence is bounded to the absent case. THE PROTECTION IS THE EXPLICIT OPT-OUT, and that is what carries the mutant: with `_UNLEASHED_PUBLISH_OK=0` the specification publishes nothing and creates no store under a scratch `HOME` in both shells (`none`), while the mutation (E0 removed) publishes and leaves a store holding one entry. The honest control: without the opt-out both builds publish `created`, so the cell measures the opt-out and not a resolver that stopped working."""
+        # Measured, both shells: (i) `env -i bash` HOME UNSET, `env -i zsh` HOME=<passwd>; an in-shell
+        # `unset HOME` leaves it UNSET in BOTH, so the initialisation is a startup property.
+        # (ii) `env -i` + E0: bash HOME_REFUSED, zsh HOME_OK, `none`, nothing written.
+        # (iii) HOME='' : `failed` + one diagnostic in both shells. (iv) opt-out: shipped
+        # `none` with no store; mutant `created` with one entry. (v) no opt-out: `created` in both.
+        # The real store is asserted absent after the `env -i` cells: those run with the passwd HOME
+        # in force under zsh, and only E0 keeps them from writing there.
+        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".claude", "unleashed-mail")
+        real_before = os.path.exists(real)
+        base = os.path.join(self.home, "base-183")
+        os.makedirs(base)
+        os.chmod(base, 0o700)
+        machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+        # THE FIX HERE IS A STATED FACT, so the stating is what this row pins first: E1's precondition
+        # must SAY it cannot detect an absent HOME under zsh and must name the opt-out that can. A
+        # predicate that silently implies otherwise is the defect, and it has no behavioural mutant.
+        with open(PATHS_C4, encoding="utf-8") as fh:
+            paths = fh.read()
+        self.assertIn("IT CANNOT DETECT AN ABSENT `HOME` UNDER ZSH", paths,
+                      "PUB-9 E1's precondition no longer states the zsh divergence it cannot detect")
+        self.assertIn("_UNLEASHED_PUBLISH_OK=0", paths,
+                      "E1's precondition no longer names the opt-out that IS the protection")
+        mutant = with_mutation(self.ROW_183_E0, self.ROW_183_E0_GONE, path=PATHS_C4)
+        try:
+            spec_root = self._shadow("spec183", dict(machinery, **{"paths.sh": PATHS_C4}))
+            mut_root = self._shadow("mut183", dict(machinery, **{"paths.sh": mutant}))
+            # (i) the shells' own HOME initialisation, at startup and after an explicit unset.
+            for shell, want in (("/bin/bash", "UNSET"), ("/bin/zsh", pwd.getpwuid(os.getuid()).pw_dir)):
+                p = subprocess.run([shell, "-c", 'printf "%s" "${HOME-UNSET}"'],
+                                   capture_output=True, text=True, env={})
+                self.assertEqual(want, p.stdout,
+                                 f"{shell}: `env -i` HOME is {p.stdout!r}, not {want!r} — the arm "
+                                 f"divergence this row states does not hold on this machine")
+                p = subprocess.run([shell, "-c", 'unset HOME 2>/dev/null; printf "%s" "${HOME-UNSET}"'],
+                                   capture_output=True, text=True)
+                self.assertEqual("UNSET", p.stdout,
+                                 f"{shell}: an in-shell `unset HOME` was refilled — the divergence is "
+                                 f"not confined to startup: {p.stdout!r}")
+            # (ii) the predicate's verdict under `env -i`, with E0 in force so nothing is written.
+            for shell, want in (("/bin/bash", "HOME_REFUSED"), ("/bin/zsh", "HOME_OK")):
+                p = subprocess.run(
+                    [shell, "-c", f'. "{spec_root}/paths.sh"; _unleashed_home_ok && printf HOME_OK || printf HOME_REFUSED; '
+                                  'printf "|%s" "$_UNLEASHED_POINTER_STATE"'],
+                    capture_output=True, text=True,
+                    env={"_UNLEASHED_PUBLISH_OK": "0", "CLAUDE_PLUGIN_DATA": base})
+                self.assertEqual(f"{want}|none", p.stdout,
+                                 f"{shell}: E1's precondition under `env -i`: {p.stdout!r} {p.stderr!r}")
+            self.assertEqual(real_before, os.path.exists(real),
+                             "an `env -i` cell wrote to the REAL store — the opt-out did not hold")
+            # (iii) E1 is still reachable in both shells for a HOME that is set and EMPTY.
+            for shell in SHELLS:
+                p = subprocess.run([shell, "-c", f'. "{spec_root}/paths.sh"; ' + self.PSTATE],
+                                   capture_output=True, text=True,
+                                   env={"HOME": "", "CLAUDE_PLUGIN_DATA": base, "PATH": "/usr/bin:/bin"})
+                self.assertEqual("failed", p.stdout, f"{shell}: an empty HOME did not take E1: {p.stdout!r}")
+                self.assertEqual(1, len(self._diags(p.stderr)), f"{shell}: {p.stderr!r}")
+            # (iv) THE OPT-OUT — and (v) the honest control beside it.
+            for label, root in (("shipped", spec_root), ("mutant", mut_root)):
+                for shell in SHELLS:
+                    for optout in (True, False):
+                        h = os.path.join(self.home, f"h183-{label}-{os.path.basename(shell)}-{int(optout)}")
+                        shutil.rmtree(h, ignore_errors=True)
+                        os.makedirs(h)
+                        os.chmod(h, 0o700)
+                        env = {"HOME": h, "CLAUDE_PLUGIN_DATA": base, "PATH": "/usr/bin:/bin"}
+                        if optout:
+                            env["_UNLEASHED_PUBLISH_OK"] = "0"
+                        p = subprocess.run([shell, "-c", f'. "{root}/paths.sh"; ' + self.PSTATE],
+                                           capture_output=True, text=True, env=env)
+                        st = os.path.join(h, ".claude", "unleashed-mail", "bases")
+                        names = sorted(f for f in os.listdir(st)) if os.path.isdir(st) else []
+                        tag = f"{shell} {label} {'opt-out' if optout else 'no opt-out'}"
+                        if not optout:
+                            self.assertEqual("created", p.stdout,
+                                             f"{tag}: the resolver did not publish at all — the opt-out "
+                                             f"cells above would measure nothing: {p.stdout!r} {p.stderr!r}")
+                            self.assertEqual(1, len(names), f"{tag}: {names}")
+                        elif label == "shipped":
+                            self.assertEqual("none", p.stdout,
+                                             f"{tag}: `_UNLEASHED_PUBLISH_OK=0` did not suppress the "
+                                             f"publish: {p.stdout!r} {p.stderr!r}")
+                            self.assertFalse(os.path.exists(os.path.join(h, ".claude")),
+                                             f"{tag}: the opt-out composed a ${{HOME}} path anyway: {names}")
+                            self.assertEqual("", p.stderr, f"{tag}: E0 must be silent: {p.stderr!r}")
+                        else:
+                            self.assertEqual("created", p.stdout,
+                                             f"{tag}: the CONTROL did not fail — publication was still "
+                                             f"suppressed with E0 removed: {p.stdout!r} {p.stderr!r}")
+                            self.assertEqual(1, len(names),
+                                             f"{tag}: the CONTROL did not write a store: {names}")
+        finally:
+            os.unlink(mutant)
+        self.assertEqual(real_before, os.path.exists(real),
+                         "this row wrote to the REAL plugin-state store")
 
 
 if __name__ == "__main__":

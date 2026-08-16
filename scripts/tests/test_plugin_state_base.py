@@ -175,11 +175,38 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_plugin_state_mutants.py": "sets/unsets it for fixtures — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/tests/test_plugin_state_store.py": "sets/unsets it for the `set -eu` scenario sweep — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/pre-commit-checks.sh": "comments only",
+        # PUB-9 E2a's rationale has to name the variable to say what it names — the directory the HOST
+        # will use, which on a first session does not exist yet. The publisher receives the VALUE as
+        # `$2` and expands the identifier nowhere; `COMMENT_ONLY` below asserts exactly that, so this
+        # entry buys a comment and not an exemption. (PR #67 pass 17: the fix's own comment tripped
+        # this scan, which is a lexical detector and does not read shell syntax.)
+        "scripts/lib/plugin-state-publisher.sh": "comments only — E2a/E2b's rationale names the "
+                                                 "variable; the value arrives as $2",
         "agents/swift-reviewer.md": "MAJ-6 bridge injection sites — the substitution points",
         "scripts/validate-plan-citations.py": "a citation-assertion PATTERN, not an expansion — the "
                                               "linter searches the PLAN for this text and never "
                                               "reads the variable",
     }
+
+    #: Allowlist entries whose justification is "comments only". An allowlist entry is a hole in the
+    #: scan, and for these two the hole is meant to be exactly as wide as a comment — so the claim is
+    #: ASSERTED rather than trusted: every occurrence must be on a line whose first non-blank
+    #: character is `#`. A later edit that expands the identifier in code in one of these files fails
+    #: here, where the enumerated exemption would otherwise have hidden it.
+    COMMENT_ONLY = ("scripts/pre-commit-checks.sh", "scripts/lib/plugin-state-publisher.sh")
+
+    def test_comment_only_allowlist_entries_really_are_comments(self):
+        for rel in self.COMMENT_ONLY:
+            self.assertIn(rel, self.ALLOWLIST, f"{rel} is not allowlisted at all")
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            hits = [l for l in lines if re.search(r"\bCLAUDE_PLUGIN_DATA\b", l)]
+            self.assertTrue(hits, f"{rel}: no occurrence at all — the allowlist entry is dead and "
+                                  f"should be removed rather than left as a standing exemption")
+            code = [l for l in hits if not l.lstrip().startswith("#")]
+            self.assertEqual([], code,
+                             f"{rel} is allowlisted as COMMENTS ONLY but expands the identifier in "
+                             f"code: {code}")
 
     def test_identifier_appears_only_at_approved_sites(self):
         offenders = {}

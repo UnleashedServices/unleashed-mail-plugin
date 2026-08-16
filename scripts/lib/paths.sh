@@ -185,6 +185,15 @@ fi
 
     # PUB-2's precondition, computed once: HOME must be non-empty AND absolute. Every expansion of
     # HOME on this path uses `${HOME:-}` so a missing HOME under `set -u` never aborts a hook.
+    # PUB-9 E1's precondition. IT CANNOT DETECT AN ABSENT `HOME` UNDER ZSH, and says so rather than
+    # implying otherwise: zsh initialises its special `HOME` parameter FROM THE PASSWD DATABASE before
+    # any sourced line runs, so `env -i zsh` reports `HOME=/Users/<u>` where `env -i bash` reports it
+    # unset (measured). A wrapper or harness that clears `HOME` specifically to prevent persistent
+    # writes is therefore protected in bash and NOT in zsh, where publication proceeds into the real
+    # store (codex, PR #67 pass 17 — reproduced). No post-startup test can distinguish "the caller set
+    # HOME to the passwd value" from "zsh filled it in", so the ONLY reliable opt-out is the explicit
+    # one this library already has: `_UNLEASHED_PUBLISH_OK=0`, which suppresses publication in both
+    # shells. Every harness in this repo that must not write uses it. Stated as a residual in §4.2a-T.
     _unleashed_home_ok() {
         case "${HOME:-}" in
             /*) return 0 ;;

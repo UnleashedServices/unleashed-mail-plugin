@@ -145,9 +145,75 @@ _unleashed_publish() {
     case "$_pb_value" in
         *"$_pb_nl"*) _unleashed_pub_failed "the plugin-data base contains a newline"; return 0 ;;
     esac
+    # E2a — A BASE THAT DOES NOT EXIST YET IS CREATED, not refused. `CLAUDE_PLUGIN_DATA` names the
+    # directory the HOST will use, and on a fresh install nothing has written there yet — while this
+    # library's own writers (`marker_write`, `log_append`, `context_*`) create it lazily with `mkdir -p`
+    # moments later. Refusing here meant every hook of a first session printed a publication failure and
+    # the store was NEVER seeded, on an ordinary healthy machine with no adversary (measured: `state=failed`,
+    # then the very next writer created the directory). So the publisher creates it under the same rule
+    # the store itself is created by, and only a path that is present-but-unusable — a file, a symlink,
+    # a directory the chain refuses — still fails. A creation that does not succeed still fails E2.
+    if [ ! -e "$_pb_value" ] && [ ! -L "$_pb_value" ]; then
+        # THE PARENT IS AUTHENTICATED BEFORE ANYTHING IS CREATED, and the creation is 0700. The first
+        # version ran `mkdir -p` before the chain walk, so an other-writable parent got the directory
+        # created and only THEN refused — a write outside the store on the refusal path, exactly what
+        # PUB-9 E4 step (i) forbids on the store chain. It also inherited the ambient umask: measured,
+        # at `umask 002` the base came out 0775, its own chain then refused it, and every hook reported
+        # `failed` forever after. Both found by the mutant rows. `umask 077` in a subshell covers every
+        # component `-p` creates, not only the leaf.
+        _pb_parent="${_pb_value%/*}"; [ -n "$_pb_parent" ] || _pb_parent=/
+        if ! _unleashed_auth_chain "$_pb_parent"; then
+            _unleashed_pub_failed "the plugin-data base does not exist and its parent does not authenticate"; return 0
+        fi
+        ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :
+    fi
     if [ ! -d "$_pb_value" ] || [ -L "$_pb_value" ]; then
         _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
     fi
+    # E2b — ONE DIRECTORY, ONE KEY. The key is an injective encoding of the VALUE, so two spellings of
+    # one directory published two entries and every later reader reported a permanent `conflict` that
+    # only a manual delete clears: measured, `<d>/sub`, `<d>/./sub` and `<d>/x/../sub` left THREE
+    # entries and a reader at `ok=0 state=conflict` (codex, PR #67 pass 17 — reproduced).
+    # NORMALISED LEXICALLY, NOT PHYSICALLY. `cd -P`/`pwd -P` was the first fix and it introduced a
+    # SHELL DIVERGENCE worse than the defect: measured, for a mis-cased path on this case-insensitive
+    # volume bash returns the spelling it was asked for (`/DATA`) and zsh returns the ON-DISK case
+    # (`/data`), so one base published by a bash hook and a zsh shell produced TWO entries and a
+    # permanent `conflict` that did not exist before — found by the mutant rows, not by review. A
+    # lexical fold is deterministic, identical in both shells, forks nothing, and fixes exactly what
+    # was reported: repeated slashes, `.` components and `..` components. It deliberately does NOT
+    # resolve symlinked PARENTS or case: ENC-4 already declares that cost and it stands.
+    _pb_norm=""; _pb_rest="${_pb_value#/}"
+    while [ -n "$_pb_rest" ]; do
+        _pb_seg="${_pb_rest%%/*}"
+        case "$_pb_rest" in */*) _pb_rest="${_pb_rest#*/}" ;; *) _pb_rest="" ;; esac
+        case "$_pb_seg" in
+            ''|'.') : ;;
+            '..')   _pb_norm="${_pb_norm%/*}" ;;
+            *)      _pb_norm="$_pb_norm/$_pb_seg" ;;
+        esac
+    done
+    _pb_folded="${_pb_norm:-/}"
+    if [ ! -d "$_pb_folded" ] || [ -L "$_pb_folded" ]; then
+        _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
+    fi
+    # ...AND THE FOLD MUST NAME THE SAME DIRECTORY THE CALLER DID. A lexical `..` pops a SYMLINKED
+    # component that the kernel would have followed first, so `<h>/lnk/../x` folds to `<h>/x` while
+    # every writer — which keeps using the caller's own spelling — lands in `<h>/deep/x`: measured, the
+    # entry advertised one directory while the marker was written to another, which is the two-directory
+    # split this whole ticket exists to remove, re-introduced in a narrow shape by the fold itself
+    # (found by the mutant-row author, not by review). So when folding CHANGED the string, both
+    # spellings are stat'd and must name the same inode; anything else fails closed. Ordinary values
+    # fold to themselves and pay nothing.
+    if [ "$_pb_folded" != "$_pb_value" ]; then
+        if ! _u_stat "$_pb_value"; then
+            _unleashed_pub_failed "the plugin-data base cannot be stat'd"; return 0
+        fi
+        _pb_ino="$_U_INO"
+        if ! _u_stat "$_pb_folded" || [ "$_U_INO" != "$_pb_ino" ]; then
+            _unleashed_pub_failed "the plugin-data base's spelling and its normalised form name different directories"; return 0
+        fi
+    fi
+    _pb_value="$_pb_folded"
     if ! _unleashed_auth_chain "$_pb_value"; then
         _unleashed_pub_failed "the plugin-data base's chain does not authenticate"; return 0
     fi
@@ -223,8 +289,25 @@ _unleashed_publish() {
 
     # E7 — publish-then-scan. The publisher applies the SAME ordered reader rules, then the ordered
     # POST-SCAN exits. It does not refuse: it reports what it saw.
+    # E7b — ONE RESCAN BEFORE REPORTING A REPAIR STATE. Two ordinary hooks publishing the SAME base into
+    # a fresh store race each other: the second `mv` replaces the entry between this scan's stat and its
+    # open, ENT-2b's inode binding correctly rejects the object it opened, and the publisher reported
+    # `stale` — or `failed` for its own entry — although the surviving entry is valid and BOTH processes
+    # agree on its content. Measured on a fresh store, 8 concurrent publishers: 3 of 8 reported `stale`
+    # (codex, PR #67 pass 17 — reproduced). It does NOT reach zero and does not claim to: measured over
+    # 8 trials of 8 publishers off a start barrier, the shipped build reports 0-3 repair states per 64
+    # against the mutant's 11-38, because a publisher can lose the race a second time inside the rescan.
+    # The rule asserts a BOUND, not zero. A rescan of a SETTLED store authenticates, while a genuinely
+    # unusable entry fails both times, so this converts the transient case ONLY. EXACTLY ONE retry, never
+    # a loop: under sustained concurrent publication a loop spins, and the honest report for a store that
+    # will not settle is the repair state.
     _unleashed_scan_store "$_pb_store"
-    if ! _unleashed_auth_entry "$_pb_entry"; then
+    _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1
+    if [ "$_pb_own" = 0 ] || [ "$_UNLEASHED_FAILED" -gt 0 ]; then
+        _unleashed_scan_store "$_pb_store"
+        _pb_own=0; _unleashed_auth_entry "$_pb_entry" && _pb_own=1
+    fi
+    if [ "$_pb_own" = 0 ]; then
         _unleashed_pub_failed "this process's own plugin-state entry is missing or unusable"   # P1
     elif [ "$_UNLEASHED_FAILED" -gt 0 ]; then
         _unleashed_pub_state stale                                                             # P2

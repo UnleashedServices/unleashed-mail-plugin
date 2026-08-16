@@ -167,8 +167,21 @@ _unleashed_scan_store() {
     _UNLEASHED_AUTHED=0                              # of those, how many authenticate
     _UNLEASHED_FAILED=0                              # of those, how many do not
     _UNLEASHED_WINNER=""
+    # GLOBBING IS FORCED ON FOR THIS SCAN, AND THE CALLER'S SETTING RESTORED. The store is enumerated
+    # by a pattern, so a caller who disabled globbing — `set -f`, zsh `setopt noglob`, the defensive
+    # `set -euf` idiom in a wrapper, or an inherited `SHELLOPTS=noglob` (bash imports it at startup) —
+    # left the pattern unexpanded: the literal `<store>/base.*` reached the loop, failed rule 0 as
+    # "vanished", and a HEALTHY store reported ZERO entries — `OK=0 SOURCE=unresolved` with no repair
+    # notice, in both shells (codex, PR #67 pass 17 — reproduced). zsh's `local_options` restores the
+    # shell's options at function return; bash has no such scope, so the flag is saved and restored
+    # explicitly, including on every `return` below.
     if [ -n "${ZSH_VERSION:-}" ]; then
-        setopt local_options no_nomatch
+        setopt local_options no_nomatch glob        # `no_noglob` is NOT a zsh option name — measured:
+                                                    # `setopt: no such option: no_noglob`, so the option
+                                                    # never changed and the zsh arm stayed broken.
+        _ss_noglob=0
+    else
+        case $- in *f*) _ss_noglob=1; set +f ;; *) _ss_noglob=0 ;; esac
     fi
     for _ss_f in "$_ss_store"/base.*; do
         # bash expands an unmatched glob to the PATTERN ITSELF, so a literal `base.*` reaches here
@@ -184,6 +197,7 @@ _unleashed_scan_store() {
             _UNLEASHED_FAILED=$(( _UNLEASHED_FAILED + 1 ))
         fi
     done
+    [ "${_ss_noglob:-0}" = 1 ] && set -f          # restore the caller's `noglob`; zsh did it at return
     return 0
 }
 

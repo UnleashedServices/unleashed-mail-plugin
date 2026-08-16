@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 126 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 131 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,27 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Seventeenth review pass (codex) and the honest-run battery — the five category-1 defects that
+  made this store unusable in ordinary conditions.** Every one is triggered by a normal environment
+  with no attacker: (1) the store scan forces globbing on and restores the caller's setting — with
+  `set -f`, `setopt noglob` or an inherited `SHELLOPTS=noglob` a HEALTHY store reported zero entries
+  in both shells; (2) a plugin-data base that does not exist yet is CREATED rather than refused, so a
+  first session seeds instead of printing a publication failure from every hook — the parent chain is
+  authenticated before anything is created and the directory is made at 0700, because the first
+  version wrote before authenticating and inherited the ambient umask (0775 at `umask 002`, which its
+  own chain then refused forever); (3) the published base is folded LEXICALLY so one directory yields
+  one key — `.`, `..` and repeated slashes had produced one entry each and a permanent `conflict` —
+  and, when folding changes the string, both spellings must name the same inode, because a lexical
+  `..` pops a symlinked component the kernel would have followed and the entry then advertised a
+  different directory than the writers used; (4) the publisher rescans once before reporting a repair
+  state, so two hooks publishing the SAME base no longer report a false `stale` (measured 3 of 8
+  before, 0-3 per 64 after, against a mutant's 11-38); (5) PUB-9 E1's HOME precondition states that it
+  cannot detect an absent `HOME` under zsh, which fills it from the passwd database before any sourced
+  line runs — the reliable opt-out is `_UNLEASHED_PUBLISH_OK=0`, verified in both shells.
+  A physical `cd -P`/`pwd -P` fold was tried first and rejected by measurement: bash returns the
+  spelling asked for and zsh the on-disk case, so it introduced a cross-shell divergence worse than
+  the defect. Mutant rows 179-183 pin all five, each measured against a mutant that restores the old
+  behaviour.
 - **Fifteenth review pass (codex) — six findings, each reproduced.** Config-referenced paths are read
   the way Git reads them: `core.hooksPath` with `--path`, so the supported `~/hooks` form is no longer
   fingerprinted as a nonexistent `<root>/~/hooks` while Git executes `$HOME/hooks/pre-commit`. The
