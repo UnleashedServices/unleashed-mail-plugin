@@ -2660,7 +2660,7 @@ class RowsChunk4(unittest.TestCase):
     # ── row 51 ────────────────────────────────────────────────────────────────────────────────
 
     def test_row_051_entries_directly_in_unleashed_mail(self):
-        """Row 51: after a publish the entries live in .../unleashed-mail/bases/ and THAT directory is 0700 asserted directly; unleashed-mail itself may be 0755."""
+        """Row 51: after a publish the entries live in .../unleashed-mail/bases/ and THAT directory is 0700 asserted directly; unleashed-mail itself may be 0755 as a PARENT, but is never itself the store."""
         # The composition site is paths.sh's step-1 publish. `POINTER_STATE=created` is true of
         # both implementations (round 104) and discriminates nothing — the oracle is WHERE the
         # entry sits and the MODE of the directory holding it.
@@ -2682,7 +2682,16 @@ class RowsChunk4(unittest.TestCase):
                             '_UNLEASHED_STATE_LOADED=1; _UNLEASHED_STATE_RC=0\n'
                             f'. "{paths_file}"\n' + self.OUTP)
                     rc, out, err = run_shell(shell, body)
-                    self.assertEqual("1 host-env created", out, f"{shell}: {err}")
+                    # The mutation now ALSO fails on state, not only on location: publishing into
+                    # `unleashed-mail` at 0755 is refused since the publisher applies ST-3 through the
+                    # reader's own `_unleashed_store_ok` (the Fable pre-merge review of 22f9cdf found
+                    # the publisher never applied that test — a 0750/0755/0701 store was written into
+                    # while every reader reported `stale`, silently). The docstring's old premise that
+                    # `created` "discriminates nothing" held only while that gap existed; the oracle
+                    # below — WHERE the entry sits and the MODE of the holding directory — is unchanged
+                    # and still carries the row.
+                    self.assertEqual("1 host-env failed" if is_mutant else "1 host-env created", out,
+                                     f"{shell}: {err}")
                     direct = [f for f in os.listdir(um) if f.startswith("base.")]
                     if not is_mutant:
                         self.assertTrue(os.path.isdir(self.store), f"{shell}: bases/ missing")
@@ -2693,11 +2702,14 @@ class RowsChunk4(unittest.TestCase):
                         self.assertEqual([], direct,
                                          f"{shell}: an entry sits directly in unleashed-mail")
                     else:
-                        # The mutation puts the entry in the 0755 directory and the exact-0700
-                        # store rule is enforced on nothing.
+                        # The mutation targets the 0755 directory, so ST-3 refuses it and NOTHING is
+                        # written — which is the rule's actual requirement ("no file is written into
+                        # it"). Before the publisher applied ST-3 the entry landed there instead; both
+                        # outcomes discriminate, and this one is the correct behaviour.
                         self.assertFalse(os.path.exists(self.store), f"{shell}: CONTROL made bases/")
-                        self.assertEqual(1, len(direct),
-                                         f"{shell}: the CONTROL did not fail")
+                        self.assertEqual([], direct,
+                                         f"{shell}: the CONTROL did not fail — an entry was written "
+                                         f"into a 0755 directory that ST-3 requires be refused")
                         self.assertEqual(0o755, os.stat(um).st_mode & 0o777, f"{shell}")
         finally:
             os.unlink(mutant)
@@ -7364,6 +7376,74 @@ class RowsPass17(unittest.TestCase):
             "then refuses, and every later reader is `stale`")
         i = text.index(self.ROW_184_HEAD)
         return text[i:text.index(self.ROW_184_TAIL, i) + len(self.ROW_184_TAIL)]
+
+    #: Row 185's mutation: the ST-3 guard the publisher applies to an EXISTING store, via the reader's
+    #: own predicate. Removing it restores the state the Fable pre-merge review of 22f9cdf found.
+    ROW_185_GUARD = ('    if [ -e "$_pb_store" ] || [ -L "$_pb_store" ]; then\n'
+                     '        if ! _unleashed_store_ok "$_pb_store"; then\n'
+                     '            _unleashed_pub_failed "the plugin-state store is not a usable 0700 directory"; return 0\n'
+                     '        fi\n'
+                     '    fi\n')
+
+    @unittest.skipUnless(DARWIN, "the store's chain and ACL arms are Darwin-only in this build")
+    def test_row_185_the_publisher_applies_st_3_to_an_existing_store(self):
+        """Row 185 (Fable pre-merge review of 22f9cdf — reproduced): ST-3 says `bases/` is acceptable
+        only at EXACTLY 0700 and that a store in any other state is refused, "never chmod'ed, never
+        repaired, never deleted, AND NO FILE IS WRITTEN INTO IT", and PUB-9 E4 says the publisher
+        refuses. `_unleashed_create_store` authenticates the CHAIN, which refuses group- or
+        other-WRITABLE components — it never applied the exact-0700 test to `bases/` itself. So a store
+        at 0750, 0755 or 0701 (readable, not writable) was ACCEPTED and WRITTEN INTO while the reader's
+        `_unleashed_store_ok`, which does apply ST-3, refused it: the publisher reported `created` with
+        ZERO diagnostics and one entry on disk, and every later reader reported `ok=0 state=stale`,
+        permanently and silently. The specification refuses with one diagnostic and NOTHING written;
+        under the mutation the entry is written and the disagreement returns.
+
+        The fix shares ONE predicate between publisher and reader rather than restating the rule, which
+        is why this row asserts the two sides AGREE: a second copy of a rule is a second thing to drift.
+        0770 is included as a control — it was already refused, by the chain's group-writable clause,
+        so it discriminates nothing here and is asserted equal in both builds.
+        """
+        mutant = with_mutation(self.ROW_185_GUARD, "", path=PUB)
+        try:
+            for shell in SHELLS:
+                for pub_file, is_mutant in ((PUB, False), (mutant, True)):
+                    for mode, discriminating in (("700", False), ("750", True), ("755", True),
+                                                 ("701", True), ("770", False)):
+                        self._wipe()
+                        os.makedirs(self.store)
+                        os.chmod(os.path.join(self.home, ".claude"), 0o700)
+                        os.chmod(os.path.dirname(self.store), 0o700)
+                        os.chmod(self.store, int(mode, 8))
+                        srcs = (AUTH, STORE, READER, pub_file)
+                        body = (f'export HOME="{self.home}"\n'
+                                f'_unleashed_publish "{self.store}" "{self.target}" 2>/dev/null\n'
+                                'printf "%s" "$_UNLEASHED_POINTER_STATE"\n')
+                        rc, out, err = run_shell(shell, body, sources=srcs)
+                        entries = [f for f in os.listdir(self.store) if f.startswith("base.")]
+                        tag = f"{shell} mode={mode} {'mutant' if is_mutant else 'shipped'}"
+                        if mode == "700":
+                            self.assertEqual("created", out, f"{tag}: a healthy 0700 store must publish: {err}")
+                            self.assertEqual(1, len(entries), f"{tag}")
+                        elif not discriminating:
+                            self.assertEqual("failed", out,
+                                             f"{tag}: 0770 is group-writable and the CHAIN refuses it in "
+                                             f"both builds: {err}")
+                            self.assertEqual([], entries, f"{tag}")
+                        elif is_mutant:
+                            self.assertEqual("created", out,
+                                             f"{tag}: the CONTROL did not fail — without the ST-3 guard a "
+                                             f"{mode} store must be accepted, which is the defect: {err}")
+                            self.assertEqual(1, len(entries),
+                                             f"{tag}: the CONTROL did not fail — no entry was written into "
+                                             f"a {mode} store")
+                        else:
+                            self.assertEqual("failed", out,
+                                             f"{tag}: ST-3 requires a {mode} store be refused: {err}")
+                            self.assertEqual([], entries,
+                                             f"{tag}: ST-3 requires that NO FILE be written into a {mode} "
+                                             f"store, and one was")
+        finally:
+            os.unlink(mutant)
 
     def test_row_184_the_folded_value_faces_e2s_constraints_again(self):
         """Row 184 (codex, PR #67 pass 20 — reproduced): E2's constraints were applied to the caller's SPELLING, and the fold can produce a shape they already rejected — `/.` and `/Users/..` both fold to `/`, which is absolute and has no trailing segment but IS a trailing slash. The specification re-applies them to the FOLDED value and refuses before anything is written: `failed`, one diagnostic naming the root, and an EMPTY store, so a later reader reports `none`; under the mutation (the re-application removed) the publisher derives the key of `/`, writes `base._s` holding `/`, and its own post-scan then refuses that entry by TGT-1's trailing-slash clause — the publish reports `failed` HAVING LEFT THE ENTRY BEHIND, and every later reader is `stale` until someone deletes it by hand. **The state string is `failed` in BOTH builds**, so this row's oracle is the STORE and the reader's verdict, never the word: "failed with nothing written" and "failed with a poison entry" are the same word and opposite outcomes. Two positive controls, both in both builds: `<h>/safe/..`, a `..` that folds to a REAL directory, still publishes `created`, and the three ordinary spellings still fold to ONE entry with the reader resolving — so the refusal is scoped to the shape that cannot be an entry, not to `..` in general. Both shells."""

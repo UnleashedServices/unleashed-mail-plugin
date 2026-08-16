@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 132 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 133 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,16 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **The publisher applies ST-3 to an existing store (row 185).** Found by an independent pre-merge
+  review of the unreviewed head. `_unleashed_create_store` authenticates the CHAIN — which refuses
+  group- or other-WRITABLE components — and never applied ST-3's exact-0700 test to `bases/` itself,
+  so a store at 0750, 0755 or 0701 was ACCEPTED and written into while the reader, which does apply
+  that rule, refused the same store: measured in both shells, publish `created` with zero diagnostics
+  and one entry on disk, then `ok=0 state=stale` for every later reader — permanently, and with
+  nothing said. The publisher now uses the READER'S OWN predicate rather than a second copy of the
+  rule, so the two cannot disagree. A fresh install is unaffected (the store is created `mkdir -m
+  700`); the state this fixes arises when a store's mode is changed by something else — a `chmod -R`,
+  an unarchiver applying umask, a sync tool that drops modes.
 - **The hook cost: 783 ms to ~250 ms per hook, in two verified steps.** `swift-lint-check.sh`
   (PostToolUse Write|Edit|MultiEdit) and `swift-build-verify.sh` (PostToolUse Bash) both source the
   state family, so this was paid on every file edit and every shell command. PF-1 batches the auth

@@ -268,6 +268,22 @@ _unleashed_publish() {
     # LEFT IN PLACE on failure: ST-3/ST-4 forbid the plugin removing directories, and a rollback
     # would be the plugin deleting paths it does not own. They are 0700 and euid-owned, so leaving
     # them is harmless and the next run reuses them.
+    # ST-3 IS TESTED BEFORE ANYTHING IS WRITTEN, by the SAME predicate the reader uses. `_unleashed_
+    # create_store` authenticates the CHAIN, which refuses group- or other-WRITABLE components — it does
+    # NOT apply ST-3's exact-0700 test to `bases/` itself. So a store at 0750, 0755 or 0701 (readable,
+    # not writable) was accepted here and WRITTEN INTO, while `_unleashed_store_ok` — the reader's
+    # predicate, which does apply ST-3 — refused it: measured at HEAD, `publish=created` with ZERO
+    # diagnostics and one entry on disk, and every later reader `ok=0 state=stale`, permanently and
+    # silently (Fable pre-merge review of 22f9cdf — reproduced in both shells). ST-3 says such a store
+    # is "never chmod'ed, never repaired, never deleted, AND NO FILE IS WRITTEN INTO IT", and PUB-9 E4
+    # says the publisher refuses. The publisher and the reader must not disagree about whether a store
+    # is usable; sharing one predicate is what makes that structural rather than a matter of upkeep.
+    # Only when the store ALREADY EXISTS: a store this process is about to create cannot be tested.
+    if [ -e "$_pb_store" ] || [ -L "$_pb_store" ]; then
+        if ! _unleashed_store_ok "$_pb_store"; then
+            _unleashed_pub_failed "the plugin-state store is not a usable 0700 directory"; return 0
+        fi
+    fi
     if ! _unleashed_create_store "$_pb_store"; then
         _unleashed_pub_failed "the plugin-state store could not be created or does not authenticate"
         return 0

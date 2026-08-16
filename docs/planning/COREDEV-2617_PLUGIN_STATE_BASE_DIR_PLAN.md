@@ -677,8 +677,8 @@ that concordance is the decision.** Recorded because the reasoning constrains fu
   A diagnosed no-op is strictly more recoverable than a durable write into a store on a countdown to
   orphanhood.
 
-**Consequences, all simplifications:** §4.3's round-6 mandate (`:2510`) and its matrix change (`:2516-2520`)
-stand **exactly as written**; §4.4's quarantine premise and ordering (`:2543-2550`) stand as written;
+**Consequences, all simplifications:** §4.3's round-6 mandate (`:2511`) and its matrix change (`:2517-2521`)
+stand **exactly as written**; §4.4's quarantine premise and ordering (`:2544-2551`) stand as written;
 `test_shell_primitive_drift.py`'s `MATRIX` keeps all four rows unchanged, so the 12 subtests rounds
 19b/20 costed **do not flip**; and the resolution enum needs no `home-fallback` value.
 
@@ -969,7 +969,7 @@ material.
 
 Round 20 (codex #3, kimi #3) found the trust boundary enforced at the pointer and its parent and then
 abandoned at the destination. `sessionstart-restore.sh` injects snapshot fields into the model's context
-via `additionalContext` (§7 row `:2895`), so a pointer naming attacker-writable storage is a
+via `additionalContext` (§7 row `:2896`), so a pointer naming attacker-writable storage is a
 **prompt-injection path**, not merely a state-integrity one. Step 2 accepts the pointer only if **all**
 hold, and falls through to step 3 otherwise:
 
@@ -1289,7 +1289,7 @@ being the one exception, since an invalid entry cannot be rejected without readi
 *(Round 32: §4.1's copy of this invariant was updated in round 31 and this one was not — one family, half
 swept, found by the pre-gate sweep rather than by the gate.)*
 
-§5's inert-gate mitigation (`:2609`) is amended **in place**, not by reference — see the round-21 note
+§5's inert-gate mitigation (`:2610`) is amended **in place**, not by reference — see the round-21 note
 there. Its *"N2 must run the unset case, which is the only case that reproduces the defect"* is still
 true for the no-pointer case and is now joined by step 2's *"no second store is created"*.
 
@@ -1322,7 +1322,7 @@ because the notice is a once-per-session fact, not a per-call one; **§8 Q8** (a
 records the `PostToolUse(Bash)` alternative. *(Round 21 cited "§8 Q6", which is D′'s escape hatch —
 another reference to a question that did not exist.)*
 
-This **amends §7's consumer row** (`:2895`), which currently requires both snapshot scripts to leave
+This **amends §7's consumer row** (`:2896`), which currently requires both snapshot scripts to leave
 *"the hook's own output"* untouched on an unresolved base.
 
 ### The implementing family is FIVE shell files — and the harnesses are a separate list
@@ -1343,7 +1343,7 @@ setters, not just resolvers):** `scripts/tests/test_plugin_state_base.py`,
 **The duplication is priced in, and must be stated rather than left implicit** (round 20, kimi #8). No
 reduced inline fallback is coherent: a reduced copy makes resolution depend on whether `paths.sh` was
 found, which is the drift defect `test_with_paths_sh_absent` (`test_plugin_state_base.py:54-60`) exists
-to kill, and §4.3's round-6 mandate (`:2510`) requires that `paths.sh`'s absence change *who computes* the
+to kill, and §4.3's round-6 mandate (`:2511`) requires that `paths.sh`'s absence change *who computes* the
 answer, never *what the answer is*. So the three-step logic lives in five files **by design**, and N6
 must **prove the arms agree** rather than assume it — on `_UNLEASHED_BASE_RESOLVED`, `_UNLEASHED_BASE_OK`,
 `_UNLEASHED_BASE_SOURCE` **and `_UNLEASHED_POINTER_STATE`**. *(Round 32: the fourth was omitted, and it is
@@ -1583,6 +1583,7 @@ independently"* — a generic sentence is not a mutant, and an unnamed mutation 
 | 182 | **report a repair state from the FIRST post-scan, without one rescan** | a `DEBUG` trap performs exactly what a concurrent publisher of the same base does — replace the entry with an identical-content copy at a NEW inode — inside one authentication: (i) during the post-SCAN the specification rescans and reports `created` while the mutation reports `stale`; (ii) during the OWN-ENTRY check the specification reports `created` and the mutation `failed`. The retry is EXACTLY ONE, counted through a delegating wrapper: one scan on a healthy publish in both builds, two on the repair path, never three. Two controls hold in both builds: a genuinely corrupt sibling entry still reports `stale` (the specification scanning exactly twice to say so), and two publishers of DIFFERENT bases still report `conflict`. Both shells. The population cell — 8 trials of 8 concurrent publishers per shell, released together off a start barrier — asserts a BOUND and not a zero: the mutation reports 11-38 repair states of 64 and the specification 0-3, because a publisher can lose the race a second time inside the rescan. *(PR #67, codex pass 17 — reproduced.)* |
 | 183 | **remove PUB-9 E0's publication opt-out, or leave E1's HOME precondition implying it can detect an absent `HOME`** | `env -i /bin/zsh` reports `HOME` from the PASSWD DATABASE where `env -i /bin/bash` reports it unset (measured; an in-shell `unset HOME` leaves it unset in both), so E1's refusal is UNREACHABLE for an absent `HOME` under zsh and a harness that clears `HOME` to prevent writes is protected in bash only. That divergence has no discriminating mutant — no post-startup test separates it from a caller who set `HOME` to the passwd value — so the row pins the STATEMENT of it in E1's precondition and mutates the mechanism that IS the protection: with `_UNLEASHED_PUBLISH_OK=0` the specification publishes nothing and composes no `${HOME}` path under a scratch home in both shells (`none`), while the mutation (E0's test replaced by `false`) publishes and leaves a store holding one entry. E1 stays reachable in BOTH shells for a `HOME` that is set and EMPTY (`failed`, one diagnostic), and the honest control — without the opt-out both builds publish `created` — is asserted so the cell measures the opt-out and not a resolver that stopped working. *(PR #67, codex pass 17 — reproduced.)* |
 | 184 | **apply E2's constraints only to the caller's SPELLING, not to the FOLDED value** | `/.` and `/Users/..` both fold to `/`: the specification re-applies the constraints after folding and refuses before anything is written — `failed`, one diagnostic naming the root, an EMPTY store, and a later reader at `0 unresolved none`; under the mutation (the re-application removed) the publisher writes `base._s` holding `/`, its own post-scan refuses that entry by TGT-1's trailing-slash clause, the publish reports `failed` WITH the entry left behind, and every later reader is `0 unresolved stale` until it is deleted by hand. **Both builds report `failed`**, so the oracle is the store's contents and the reader's verdict — the row asserts both, because "failed with nothing written" and "failed with a poison entry" are the same word. Two controls hold in both builds: `<h>/safe/..`, a `..` that folds to a REAL directory, still publishes `created` with the entry naming `<h>`, and the three ordinary spellings still fold to ONE entry with the reader resolving. Both shells. *(PR #67, codex pass 20 — reproduced.)* |
+| 185 | **authenticate only the CHAIN before publishing into an existing store, never ST-3's exact-0700 test on `bases/` itself** | a store directory at 0750, 0755 or 0701 — readable but not writable, so the chain's group/other-writable clause passes it — under a healthy chain: the specification applies the reader's own `_unleashed_store_ok` before anything is written, refuses with one diagnostic and leaves the store empty; under the mutation the publisher reports `created` with ZERO diagnostics and writes an entry, while every later reader refuses that same store and reports `stale` — publisher and reader disagreeing, silently and permanently. 0700 publishes and 0770 is refused by the chain in both builds, so neither discriminates and both are asserted equal. Both shells. *(Fable pre-merge review of `22f9cdf` — reproduced.)* |
 
 *(Rows 59-66 are round-31 additions. 59-60 replace the totality proof §6 was citing from **retired** rows
 31-32/40-41 — both arms found that independently, and a citation to a deleted mutant is worse than none
@@ -1677,7 +1678,7 @@ assertion would contradict them — the draft's N6 clause did exactly that.
   falsified in both directions (it says marker.sh *"falls back to ~/.claude/unleashed-mail"*, which D′
   already made false, and *"To wire them up, export CLAUDE_PLUGIN_DATA in your git-hook env"*, which
   step 2 makes unnecessary). **Amend that comment in the same change** (round 20, kimi #11).
-* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2895` amended.
+* **`scripts/sessionstart-restore.sh`** — gains the one-line notice above; §7's row `:2896` amended.
 
 > **ROUND 56 — THIS SECTION IS THE FIX FOR THE PROPAGATION STALL, AND IT IS AUTHORITATIVE.**
 > Twenty-five gate rounds failed on one pattern: a rule stated in three or four places, a fix landing in
@@ -1785,7 +1786,7 @@ This section is the authoritative statement of the §4.2a contract. Every rule b
 
 **ST-2 — Creating the store.** The publisher creates the store with a single `mkdir -m 700 "${HOME}/.claude/unleashed-mail/bases"`. `-p` may not be used, and `mkdir` followed by `chmod` may not be used. `mkdir -m 700` does not create parents, so before that call the publisher creates each missing ancestor of the store, in order — `${HOME}/.claude`, then `${HOME}/.claude/unleashed-mail` — at mode 0700 when it is this publisher that creates it. An ancestor that already exists is used as it stands: it is never re-created, never chmod'ed, and is accepted whenever it satisfies the ancestor requirement of ST-4. **"Already exists" includes exists BY THE TIME THE `mkdir` RAN: a `mkdir` that fails because the component now exists is NOT a failure to create it**, and the publisher authenticates it exactly as it would a pre-existing one. Any other `mkdir` failure is PUB-9's E4. Measured: `mkdir -m 700 d` on an existing `d` exits 1 with `File exists` in both shells, and the exit status ALONE cannot tell the two cases apart — the re-test is what distinguishes them. *(Round 106: TMP-1 handles two publishers racing on the transient and PUB-13 handles two racing on the entry; nothing handled two racing on the ANCESTOR, which is the one creation that happens before either. Both readings conformed and they differ observably — one publishes, the other reports `failed` — and the race is likeliest on FIRST USE after install, when the components are missing and the resolver runs at source time in every shell that loads a family file.)*
 
-**ST-3 — Accepting or refusing the store.** `bases/` is acceptable only if it is a directory, is not a symbolic link, is owned by the effective uid, is exactly mode 0700, and satisfies the ACL clauses that apply to every component of an authentication chain. A `bases/` in any other state is REFUSED: it is never chmod'ed, never repaired, never deleted, and no file is written into it. A reader evaluates this before it examines any entry, and evaluates it even when the store is empty; on refusal it sets `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=stale`, and emits exactly one diagnostic on stderr. A `bases/` that does not exist at all is NOT a refusal: the reader treats the store as holding no entries and sets `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=none`, with one diagnostic on stderr.
+**ST-3 — Accepting or refusing the store.** `bases/` is acceptable only if it is a directory, is not a symbolic link, is owned by the effective uid, is exactly mode 0700, and satisfies the ACL clauses that apply to every component of an authentication chain. A `bases/` in any other state is REFUSED: it is never chmod'ed, never repaired, never deleted, and no file is written into it. **THE PUBLISHER APPLIES THIS TEST TOO, THROUGH THE READER'S OWN `_unleashed_store_ok`, before it writes anything into an EXISTING store.** `_unleashed_create_store` authenticates the CHAIN, which refuses group- or other-WRITABLE components, and never applied the exact-0700 test to `bases/` itself — so a store at 0750, 0755 or 0701 (readable, not writable) was accepted and WRITTEN INTO while the reader, which does apply this rule, refused the same store: measured in both shells, `created` with ZERO diagnostics and one entry on disk, then `ok=0 state=stale` for every later reader, permanently and silently *(Fable pre-merge review of `22f9cdf` — reproduced; row 185)*. The two sides share ONE predicate rather than restating the rule, because a second copy of a rule is a second thing to drift. A reader evaluates this before it examines any entry, and evaluates it even when the store is empty; on refusal it sets `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=stale`, and emits exactly one diagnostic on stderr. A `bases/` that does not exist at all is NOT a refusal: the reader treats the store as holding no entries and sets `_UNLEASHED_BASE_RESOLVED=/dev/null/unresolved-plugin-base`, `_UNLEASHED_BASE_OK=0`, `_UNLEASHED_BASE_SOURCE=unresolved`, `_UNLEASHED_POINTER_STATE=none`, with one diagnostic on stderr.
 
 **ST-4 — The store's ancestors.** Every ancestor of the store — **every component of PCH-1's walk from `/` down to `bases/`, which includes `/`, `/Users` (or the platform equivalent), `${HOME}`, `${HOME}/.claude` and `${HOME}/.claude/unleashed-mail`** — must exist, be neither group- nor world-writable, not be a symbolic link, satisfy the ACL clauses, and be owned by the effective uid AT OR BELOW the trust anchor ANCHOR-1 defines (above it, system ownership is what ANCHOR-1 requires). **The list previously began at `${HOME}`**, which silently excluded every component above it from the ACL clauses while AUTH-1 and PCH-1 required them — see the correction note in PUB-9 E4 for the durable poison that produced. Exact mode 0700 is required of `bases/` alone and is never required of an ancestor: mode 0755 satisfies the ancestor requirement. Entries are never written directly into `${HOME}/.claude/unleashed-mail`; every entry lives in `bases/`, one level below it.
 
