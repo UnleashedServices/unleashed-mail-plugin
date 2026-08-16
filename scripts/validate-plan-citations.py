@@ -64,8 +64,12 @@ INTERNAL_RULES = [
 # A section on an unmerged branch is a promise, not a citation.
 # --------------------------------------------------------------------------------------------------
 EXTERNAL_RULES = [
-    (r"§(\d+\.\d+[a-z]?) of the journal plan", "docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),
-    (r"`COREDEV-2585` §(\d+\.\d+[a-z]?)", "docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),
+    # A TOP-LEVEL SECTION IS A CITABLE SHAPE. Requiring a dot meant `§99 of the journal plan` produced
+    # ZERO checks and no problem, while the journal's own headings are `## 1` … `## 4` — so the one
+    # citation form the pattern could not see was the one naming a whole section (codex, PR #67 pass 20
+    # — reproduced). The sub-section part is now optional, and the heading lookup below accepts both.
+    (r"§(\d+(?:\.\d+[a-z]?)?) of the journal plan", "docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),
+    (r"`COREDEV-2585` §(\d+(?:\.\d+[a-z]?)?)", "docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),
 ]
 
 SELF_QUESTION_RE = re.compile(r"§8 Q(\d+)")
@@ -185,10 +189,18 @@ def _sentence_around(flat, start, end, other_spans=()):
         if s >= end and s < hi:
             hi = s
     post = flat[end:hi]
+    # THE EXEMPTION MUST BE ABOUT THE CITED SECTION, not about whatever the sentence goes on to discuss.
+    # `_POST_NEGATION` scanned the whole remaining clause, so `relies on §9.9z … because the fallback
+    # does not exist` laundered a fabricated reference (codex, PR #67 pass 20 — reproduced). A
+    # SUBORDINATING CONJUNCTION starts a clause about something else, so the slice stops there; `, which
+    # does not exist` — the form a correction actually uses — is kept, because a relative pronoun refers
+    # BACK to the citation.
+    post = _SUBORDINATOR.split(post, 1)[0]
     pre = flat[max(lo, start - 40):start]
     return post, pre
 
 
+_SUBORDINATOR = re.compile(r"\b(?:because|since|so that|although|though|unless|whereas|as long as)\b")
 _POST_NEGATION = re.compile(r"does not exist|does NOT exist|lives only on|unmerged|zero hits|not exist in this tree|prospective")
 # The pre-slice ENDS AT THE CITATION, so it never contains the `§` itself: written as `no §`, that
 # alternative could not match the one form it existed for — `cites no §9.9z of …` was rejected as a
@@ -217,7 +229,8 @@ def check_external(text, repo, problems, flat):
                 problems.append(f"[cite-external] {label}: {relpath} does not exist in this tree")
                 continue
             doc = open(full, encoding="utf-8", errors="replace").read()
-            if re.search(rf"^#{{2,4}} {re.escape(sec)}[ .—-]", doc, re.M):
+            # A top-level heading is `## 4` and may end the line; a sub-section is `### 4.1 — …`.
+            if re.search(rf"^#{{2,4}} {re.escape(sec)}(?:[ .—-]|$)", doc, re.M):
                 continue
             # A CORRECTION is not a claim. The plan deliberately records that §4.5b does NOT exist here;
             # flagging that sentence forever is how a noisy gate becomes a disabled one. The exemption is

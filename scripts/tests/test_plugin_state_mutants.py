@@ -6507,7 +6507,7 @@ import time
 
 @unittest.skipUnless(DARWIN, "the Darwin chain/ACL arm and the Darwin store; on Linux every publish cell is `failed` by design")
 class RowsPass17(unittest.TestCase):
-    """Mutant-table rows 179-183 (PR #67, codex pass 17)."""
+    """Mutant-table rows 179-184 (PR #67, codex passes 17 and 20)."""
 
     #: N6-6's store-level tuple, and the publisher's one-word state.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -7331,6 +7331,103 @@ class RowsPass17(unittest.TestCase):
             os.unlink(mutant)
         self.assertEqual(real_before, os.path.exists(real),
                          "this row wrote to the REAL plugin-state store")
+
+    # ── row 184 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The re-application of E2's constraints to the FOLDED value — the `case` block, head through its
+    #: `esac`. Sliced, not quoted: the block carries a paragraph that will be edited again.
+    ROW_184_HEAD = '    case "$_pb_folded" in\n'
+    ROW_184_TAIL = '    esac\n'
+    #: Values that FOLD to the filesystem root. Both exist, so neither is refused before the fold: `/.`
+    #: drops a `.` segment and `/Users/..` pops the only segment it has.
+    ROW_184_ROOT = ("/.", "/Users/..")
+
+    def _row_184_block(self):
+        with open(PUB, encoding="utf-8") as fh:
+            text = fh.read()
+        assert text.count(self.ROW_184_HEAD) == 1, (
+            "the publisher does not re-apply E2's constraints to the FOLDED value exactly once "
+            "(PUB-9 E2b) — without them a value that folds to `/` writes an entry its own post-scan "
+            "then refuses, and every later reader is `stale`")
+        i = text.index(self.ROW_184_HEAD)
+        return text[i:text.index(self.ROW_184_TAIL, i) + len(self.ROW_184_TAIL)]
+
+    def test_row_184_the_folded_value_faces_e2s_constraints_again(self):
+        """Row 184 (codex, PR #67 pass 20 — reproduced): E2's constraints were applied to the caller's SPELLING, and the fold can produce a shape they already rejected — `/.` and `/Users/..` both fold to `/`, which is absolute and has no trailing segment but IS a trailing slash. The specification re-applies them to the FOLDED value and refuses before anything is written: `failed`, one diagnostic naming the root, and an EMPTY store, so a later reader reports `none`; under the mutation (the re-application removed) the publisher derives the key of `/`, writes `base._s` holding `/`, and its own post-scan then refuses that entry by TGT-1's trailing-slash clause — the publish reports `failed` HAVING LEFT THE ENTRY BEHIND, and every later reader is `stale` until someone deletes it by hand. **The state string is `failed` in BOTH builds**, so this row's oracle is the STORE and the reader's verdict, never the word: "failed with nothing written" and "failed with a poison entry" are the same word and opposite outcomes. Two positive controls, both in both builds: `<h>/safe/..`, a `..` that folds to a REAL directory, still publishes `created`, and the three ordinary spellings still fold to ONE entry with the reader resolving — so the refusal is scoped to the shape that cannot be an entry, not to `..` in general. Both shells."""
+        # Measured, both shells: shipped `/.` and `/Users/..` -> `failed`, 0 entries, reader
+        # `0 unresolved none`, diagnostic "the plugin-data base normalises to the filesystem root";
+        # mutant -> `failed`, ONE entry `base._s` whose content is `/`, reader `0 unresolved stale`,
+        # diagnostic "this process's own plugin-state entry is missing or unusable" (P1 — the publisher
+        # refusing the entry it had just written). Controls in both builds: `<h>/safe/..` `created` with
+        # the entry naming `<h>`; `<h>/safe/../safe` `created`; three spellings `created current current`
+        # with ONE entry and `1 pointer none`.
+        block = self._row_184_block()
+        self.assertIn('_unleashed_pub_failed "the plugin-data base normalises to the filesystem root"', block,
+                      "the folded value no longer faces E2's root/trailing-slash constraints (PUB-9 E2b)")
+        safe = os.path.join(self.home, "safe")
+        os.makedirs(safe)
+        os.chmod(safe, 0o700)
+        d = os.path.join(self.home, "d184")
+        sub = os.path.join(d, "sub")
+        os.makedirs(sub)
+        os.makedirs(os.path.join(d, "x"))
+        for p in (d, sub, os.path.join(d, "x")):
+            os.chmod(p, 0o700)
+        mutant = with_mutation(block, "", path=PUB)
+        try:
+            for shell in SHELLS:
+                for srcs, is_mutant in (((AUTH, STORE, READER, PUB), False),
+                                        ((AUTH, STORE, READER, mutant), True)):
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    for value in self.ROW_184_ROOT:
+                        self._wipe()
+                        rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{value}"\n'
+                                                 + self.PSTATE, sources=srcs)
+                        # THE STATE IS THE SAME IN BOTH BUILDS — asserted, so the row cannot be read as
+                        # discriminating on a word it does not discriminate on.
+                        self.assertEqual("failed", out, f"{tag} [{value}]: {out!r} {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag} [{value}]: {err!r}")
+                        rc2, out2, err2 = run_shell(shell, f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                                    + self.OUTP, sources=srcs)
+                        if not is_mutant:
+                            self.assertEqual([], self._names(),
+                                             f"{tag} [{value}]: a refusal wrote an entry: {self._names()}")
+                            self.assertIn("normalises to the filesystem root", err, f"{tag}: {err!r}")
+                            self.assertEqual("0 unresolved none", out2,
+                                             f"{tag} [{value}]: {out2!r} {err2!r}")
+                        else:
+                            self.assertEqual(["base._s"], self._names(),
+                                             f"{tag} [{value}]: the CONTROL did not fail — the folded "
+                                             f"root was refused without the re-application: {self._names()}")
+                            with open(os.path.join(self.store, "base._s"), encoding="utf-8") as fh:
+                                self.assertEqual("/\n", fh.read(), f"{tag} [{value}]: entry content")
+                            self.assertEqual("0 unresolved stale", out2,
+                                             f"{tag} [{value}]: the poison entry did not poison the "
+                                             f"read: {out2!r} {err2!r}")
+                    # CONTROL 1: a `..` that folds to a REAL directory still publishes, in both builds.
+                    for value, want_content in ((f"{safe}/..", self.home), (f"{safe}/../safe", safe)):
+                        self._wipe()
+                        rc, out, err = run_shell(shell, f'_unleashed_publish "{self.store}" "{value}"\n'
+                                                 + self.PSTATE, sources=srcs)
+                        self.assertEqual("created", out,
+                                         f"{tag} [{value}]: a legitimate `..` was refused: {out!r} {err!r}")
+                        names = self._names()
+                        self.assertEqual(1, len(names), f"{tag} [{value}]: {names}")
+                        with open(os.path.join(self.store, names[0]), encoding="utf-8") as fh:
+                            self.assertEqual(want_content + "\n", fh.read(),
+                                             f"{tag} [{value}]: the entry does not name the folded directory")
+                    # CONTROL 2: the ordinary spellings still fold to ONE entry and still resolve.
+                    self._wipe()
+                    states = [run_shell(shell, f'_unleashed_publish "{self.store}" "{v}" 2>/dev/null\n'
+                                        + self.PSTATE, sources=srcs)[1]
+                              for v in (sub, f"{d}/./sub", f"{d}/x/../sub")]
+                    self.assertEqual(["created", "current", "current"], states, f"{tag}: {states}")
+                    self.assertEqual(1, len(self._names()), f"{tag}: {self._names()}")
+                    rc, out, err = run_shell(shell, f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.OUTP, sources=srcs)
+                    self.assertEqual("1 pointer none", out, f"{tag}: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
 
 
 if __name__ == "__main__":

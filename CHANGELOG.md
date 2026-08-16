@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 131 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 132 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 

@@ -125,13 +125,18 @@ class OneNegationExemptsOneReference(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-def _load_linter():
+def _load_linter(path=None):
     """The validator is a script, not a module — load it by path so the predicate can be exercised
-    directly. Everything else in this file drives it as a subprocess; these four cells are about one
-    regex's SCOPE, which a subprocess cannot show."""
+    directly. Everything else in this file drives it as a subprocess; these cells are about one
+    regex's SCOPE, which a subprocess cannot show.
+
+    `path` loads a MUTATED copy under its own module name, so a control and the specification can be
+    held in one process at the same time (a shared name would return the first one from the cache and
+    the control would silently be the specification)."""
     import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "unleashed_plan_citations", os.path.join(REPO, "scripts", "validate-plan-citations.py"))
+    src = path or os.path.join(REPO, "scripts", "validate-plan-citations.py")
+    name = "unleashed_plan_citations" if path is None else "upc_" + os.path.basename(src).replace(".", "_")
+    spec = importlib.util.spec_from_file_location(name, src)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -179,3 +184,170 @@ class PreNegationSeesOnlyWhatItsSliceContains(unittest.TestCase):
     def test_an_unrelated_no_earlier_in_the_sentence_does_not_exempt(self):
         self.assertFalse(self._exempt("There are no fewer than three reasons; \u00a79.9z governs."),
                          "an unrelated `no` exempted a live citation — the matcher is not anchored")
+
+
+class PostNegationStopsAtASubordinateClause(unittest.TestCase):
+    r"""codex, PR #67 pass 20 — the post-citation slice ran to the end of the sentence, so a clause
+    about something else laundered a fabricated citation: `This rule relies on §9.9z of the journal
+    plan because the fallback does not exist.` was exempt, and the linter stopped checking a reference
+    the sentence RELIES ON. The slice is now cut at a SUBORDINATING CONJUNCTION, because such a clause
+    is about its own subject; `, which does not exist` — the form a real correction uses — is kept,
+    because a relative pronoun refers BACK to the citation.
+
+    The mutation is the cut itself (`post = _SUBORDINATOR.split(post, 1)[0]` removed), and it is applied
+    to a COPY of the linter loaded by path, so both builds run the same predicate on the same strings.
+    EVERY subordinator in the alternation is exercised: the pattern lists eight, and a cell that runs
+    one proves one — the enumeration-is-not-the-class defect this campaign has hit before.
+    """
+
+    CUT = "    post = _SUBORDINATOR.split(post, 1)[0]\n"
+    #: The two forms that MUST stay exempt. `, which …` is what a correction looks like; a negation that
+    #: sits BEFORE the subordinator is inside the kept slice and must survive the cut.
+    KEPT = ("This rule relies on §9.9z of the journal plan, which does not exist.",
+            "§9.9z of the journal plan does not exist, because it was never written.")
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="plan-lint.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.shipped = _load_linter()
+        with open(LINTER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.CUT),
+                         "the post-slice is not cut at a subordinating conjunction — a clause about "
+                         "something else can exempt the citation it follows")
+        copy = os.path.join(self.scratch, "validate-plan-citations-uncut.py")
+        with open(copy, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(self.CUT, "", 1))
+        self.mutant = _load_linter(copy)
+
+    def _exempt(self, mod, sentence):
+        start = sentence.index("§9.9z")
+        end = start + len("§9.9z")
+        post, pre = mod._sentence_around(sentence, start, end, [])
+        return bool(mod._PRE_NEGATION.search(pre) or mod._POST_NEGATION.search(post))
+
+    def test_a_negation_inside_a_subordinate_clause_does_not_exempt(self):
+        for sub in ("because", "since", "so that", "although", "though", "unless", "whereas",
+                    "as long as"):
+            sentence = (f"This rule relies on §9.9z of the journal plan {sub} the fallback "
+                        f"does not exist.")
+            with self.subTest(subordinator=sub):
+                self.assertFalse(self._exempt(self.shipped, sentence),
+                                 f"`{sub}` laundered a fabricated citation the sentence relies on")
+                self.assertTrue(self._exempt(self.mutant, sentence),
+                                f"the CONTROL did not fail for `{sub}` — the uncut slice did not "
+                                f"exempt it either, so this cell measures nothing")
+
+    def test_a_relative_clause_correction_is_still_exempt(self):
+        for sentence in self.KEPT:
+            with self.subTest(sentence=sentence):
+                self.assertTrue(self._exempt(self.shipped, sentence),
+                                "the cut removed a correction the linter must not report")
+                self.assertTrue(self._exempt(self.mutant, sentence),
+                                "the fixture is not the finding: the uncut build did not exempt it either")
+
+
+class ATopLevelSectionIsACitableShape(unittest.TestCase):
+    """codex, PR #67 pass 20 — `EXTERNAL_RULES` required a DOT, so `§99 of the journal plan` produced
+    ZERO checks and no problem, while the journal's own headings are `## 1` … `## 4`: the one citation
+    form the pattern could not see was the one naming a whole section. Two halves, two mutants — the
+    pattern (`\\d+(?:\\.\\d+[a-z]?)?`) and the heading lookup (`(?:[ .—-]|$)`), which accepts a
+    top-level heading that ENDS THE LINE.
+
+    Driven as a subprocess, like the other external-citation cells, because what is being asserted is
+    what the RUN reports; the assertion COUNT is asserted beside it, so "not reported" cannot pass by
+    the citation never having been checked.
+    """
+
+    HEADING = "## 5. Risk register"
+    DOTTED_NEW = ('(r"§(\\d+(?:\\.\\d+[a-z]?)?) of the journal plan", '
+                  '"docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),')
+    DOTTED_OLD = ('(r"§(\\d+\\.\\d+[a-z]?) of the journal plan", '
+                  '"docs/planning/DECISION_JOURNAL_PLAN.md", "journal plan"),')
+    HEAD_NEW = 'if re.search(rf"^#{{2,4}} {re.escape(sec)}(?:[ .—-]|$)", doc, re.M):'
+    HEAD_OLD = 'if re.search(rf"^#{{2,4}} {re.escape(sec)}[ .—-]", doc, re.M):'
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="plan-lint.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        with open(PLAN, encoding="utf-8") as fh:
+            self.src = fh.read()
+        self.assertEqual(1, self.src.count(self.HEADING),
+                         "the fixture plan must carry the §5 heading exactly once")
+
+    def _plan_citing(self, sec, name):
+        """A copy of the plan with ONE sentence citing `§<sec> of the journal plan` inserted."""
+        self.assertNotIn(f"§{sec} of the journal plan", self.src,
+                         f"the plan already cites §{sec} — the fixture would not be the finding")
+        path = os.path.join(self.scratch, name)
+        sentence = f"The design follows §{sec} of the journal plan.\n\n"
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(self.src.replace(self.HEADING, sentence + self.HEADING, 1))
+        return path
+
+    def _mutant(self, old, new, name):
+        with open(LINTER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(old), f"the pinned line is not unique: {old!r}")
+        path = os.path.join(self.scratch, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(old, new, 1))
+        return path
+
+    def _lint(self, plan, linter=LINTER, repo=REPO):
+        p = subprocess.run(["python3", linter, plan, "--repo", repo],
+                           cwd=REPO, capture_output=True, text=True, check=False)
+        out = p.stdout + p.stderr
+        counts = [int(w) for l in out.splitlines() if "assertions" in l
+                  for w in l.replace(",", " ").split() if w.isdigit()]
+        return out, counts[-1] if counts else -1
+
+    def test_an_absent_top_level_section_is_now_checked_and_reported(self):
+        plan = self._plan_citing("99", "plan-99.md")
+        msg = "§99 of the journal plan does NOT exist"
+        out, n = self._lint(plan)
+        self.assertIn(msg, out, f"a fabricated top-level citation was not reported:\n{out}")
+        out2, n2 = self._lint(plan, self._mutant(self.DOTTED_NEW, self.DOTTED_OLD, "dotted-only.py"))
+        self.assertNotIn(msg, out2,
+                         f"the CONTROL did not fail — the dotted-only pattern reported it anyway:\n{out2}")
+        self.assertEqual(n - 1, n2,
+                         f"the dotted-only build checked the same number of things ({n2} vs {n}) — the "
+                         f"citation was not being counted, so 'not reported' proves nothing")
+
+    def test_a_real_top_level_section_passes_and_is_counted(self):
+        # The honest control: §4 IS a heading in the journal (`## 4. Findings, fixes, and proofs`), so
+        # the new pattern must CHECK it and find it. The count is asserted because "not reported" is
+        # also what a citation nobody looked at produces.
+        plan = self._plan_citing("4", "plan-4.md")
+        out, n = self._lint(plan)
+        self.assertNotIn("§4 of the journal plan does NOT exist", out,
+                         f"a REAL top-level section was reported as fabricated:\n{out}")
+        _, n2 = self._lint(plan, self._mutant(self.DOTTED_NEW, self.DOTTED_OLD, "dotted-only-4.py"))
+        self.assertEqual(n - 1, n2, f"§4 was not checked by the shipped build ({n} vs {n2})")
+
+    def test_a_heading_that_ends_the_line_is_found(self):
+        # The second half. The journal's real headings all carry `. `, so the `$` branch needs a
+        # synthetic journal: `## 7` ends its line, `## 8. Named` does not.
+        repo = os.path.join(self.scratch, "synthrepo")
+        os.makedirs(os.path.join(repo, "docs", "planning"))
+        with open(os.path.join(repo, "docs", "planning", "DECISION_JOURNAL_PLAN.md"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("# Journal\n\n## 7\n\nbody\n\n## 8. Named\n")
+        strict = self._mutant(self.HEAD_NEW, self.HEAD_OLD, "heading-strict.py")
+        for sec, ends_the_line in (("7", True), ("8", False)):
+            plan = self._plan_citing(sec, f"plan-syn-{sec}.md")
+            msg = f"§{sec} of the journal plan does NOT exist"
+            out, _ = self._lint(plan, repo=repo)
+            self.assertNotIn(msg, out, f"§{sec} was reported although the synthetic journal has it:\n{out}")
+            out2, _ = self._lint(plan, strict, repo=repo)
+            if ends_the_line:
+                self.assertIn(msg, out2,
+                              f"the CONTROL did not fail — the strict lookup found `## {sec}` anyway:\n{out2}")
+            else:
+                self.assertNotIn(msg, out2,
+                                 f"the strict lookup lost a heading with a trailing `. ` — the mutation "
+                                 f"is not isolated to the line-ending form:\n{out2}")

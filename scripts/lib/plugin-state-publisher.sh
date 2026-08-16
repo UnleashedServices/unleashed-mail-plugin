@@ -206,6 +206,19 @@ _unleashed_publish() {
         esac
     done
     _pb_folded="${_pb_norm:-/}"
+    # THE FOLDED VALUE FACES E2's CONSTRAINTS AGAIN. They were applied to the SPELLING, and folding can
+    # produce a shape they already rejected: `/.` and `/safe/..` both fold to `/`, which passed the
+    # trailing-slash test as written. The publisher then wrote an entry whose CONTENT is `/`, which
+    # `_unleashed_auth_entry` refuses by that same clause — so the publish reported `failed` while
+    # LEAVING `base._s` behind, and every later reader was `stale` until someone deleted it by hand
+    # (codex, PR #67 pass 20 — reproduced). A poison entry is worse than a refusal, and the refusal
+    # belongs here, before anything is written.
+    case "$_pb_folded" in
+        /)  _unleashed_pub_failed "the plugin-data base normalises to the filesystem root"; return 0 ;;
+        */) _unleashed_pub_failed "the plugin-data base has a trailing slash"; return 0 ;;
+        /*) : ;;
+        *)  _unleashed_pub_failed "the plugin-data base is not an absolute path"; return 0 ;;
+    esac
     if [ ! -d "$_pb_folded" ] || [ -L "$_pb_folded" ]; then
         _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
     fi
