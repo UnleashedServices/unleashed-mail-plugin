@@ -24,9 +24,32 @@
 # `_u_acl_ok`'s body replaced by `return 0` — every enumeration, every parse and both of its
 # subshells gone — the bash reader still costs 74.5 ms against this build's 132.6 ms in the same
 # regime, so what is left is not `stat` and `ls`. It is `_u_acl_ok`'s own shape: a command
-# substitution and a pipeline, two SUBSHELL forks per component (measured at 0.69 ms and 1.09 ms in
-# bash 3.2 with builtins on both ends), and neither can go without changing `_u_acl_answer_ok`'s
-# stdin contract, which is out of this change's scope.
+# substitution and a pipeline, two SUBSHELL forks per component.
+#
+# ── PF-2 — the PIPELINE, removed; the COMMAND SUBSTITUTION, deliberately kept ─────────────────────
+# PF-1 left the second of those two subshells in place. PF-2 removes it: `_u_acl_answer_ok`'s machine
+# is now reachable as `_u_acl_answer_ok_var`, which takes the answer as an ARGUMENT and splits it with
+# parameter expansion, so `_u_acl_ok` calls it directly instead of piping into it. The stdin entry
+# point is retained verbatim as a wrapper — the answer-shape obligations feed it by pipe. Measured in
+# the same interleaved regime (MEANS of 10 runs, this build against its parent commit):
+#     no store, nothing to authenticate ....   8.6 /  8.6 ms bash,   9.3 /  9.0 ms zsh   (the floor)
+#     store present, reader path .......... 135.0 /105.6 ms bash,  101.7 / 84.2 ms zsh   1.28x / 1.21x
+#     publish, entry already current ...... 341.1 /258.6 ms bash,  253.9 /203.6 ms zsh   1.32x / 1.25x
+# A publish makes 69 `_u_acl_ok` calls (counted, not derived), and after PF-2 the PARSE is FREE: with
+# `_u_acl_answer_ok_var` ablated to `return 0` the bash publish moves 249.6 -> 251.3 ms, which is
+# 0.99x and therefore no effect at all. What is left inside `_u_acl_ok` is the command substitution
+# alone, worth 89 ms of the 252 ms bash publish (`_u_acl_ok` ablated entirely to `return 0`:
+# 252.1 -> 163.1 ms, 1.55x).
+#
+# THAT LAST SUBSHELL IS LOAD-BEARING AND STAYS. Serving the answer from `_U_ACL_CACHE` inside
+# `_u_acl_ok` — the obvious way to remove it, measured at a further 1.33x — was BUILT, and it
+# FAILS OPEN: `_u_chain_prefetch` fills the cache from the real `/bin/ls` whether or not a fixture has
+# redefined `_u_acl_enumerate`, so the lookup serves the machine's own answer PAST the fixture. On the
+# store fixture used above, three hostile seams the shipped build REFUSES (`stale`) were all ACCEPTED
+# (`OK=1`) by that variant: a failing enumerator, a `group:staff allow write,delete` ACE, and a
+# duplicate-verb answer. Removing it therefore requires migrating the SEAM's contract from stdout to a
+# variable, and with it every `_u_acl_enumerate` fixture in the obligation suite — which is a change to
+# what the obligations test, not to plumbing. See PF-1's note on `_u_acl_cache_get` below.
 #
 # What is removed is the FORK, never the CALL. `_u_chain_prefetch` runs ONE `/usr/bin/stat` and ONE
 # `/bin/ls -lde -d` over every component of the chain that is about to be walked and parses both into
@@ -310,9 +333,37 @@ _u_ace() {
 # ACE was accepted, so a healthy single-entry store resolved with OK=1 instead of refusing.
 # The stat line is RECOGNISED POSITIVELY as `ls -l`'s mode field — "any line not starting with a
 # space" accepted `garbage` as a stat line.
-_u_acl_answer_ok() {                                            # stdin: the enumerator's answer
+#
+# PF-2 — ONE state machine, TWO entry points. The answer always reaches `_u_acl_ok` ALREADY IN A
+# VARIABLE — it is what the enumerator's command substitution captured, whatever the enumerator was —
+# so the shipped predicate calls `_u_acl_answer_ok_var` and walks that variable with parameter
+# expansion. `_u_acl_ok` does NOT read `_U_ACL_CACHE`; see the note on `_u_acl_cache_get` for why.
+# `_u_acl_answer_ok` is retained as a THIN WRAPPER over the identical machine, and its STDIN CONTRACT
+# is unchanged, because the answer-shape obligations feed it by pipe.
+#
+# THE LINE SPLIT IS EXACTLY `IFS= read -r`'s, and the equivalence is the reason the wrapper can
+# delegate rather than duplicate: `read` yields one line per <NL>, yields a final unterminated line
+# through its `|| [ -n ... ]` arm, and yields NOTHING for empty input. `${rest%%<NL>*}` /
+# `${rest#*<NL>}` under `while [ -n "$rest" ]` yields the same sequence for every input, and the ONE
+# input where the two differ — `""` against `"\n"` — reaches `[ "$_u_ans_st" = BODY ]` in state INIT
+# either way and refuses either way. A TRAILING NEWLINE IS THEREFORE IMMATERIAL, which is what makes
+# the captured `$(...)` value (all trailing newlines stripped) and the piped `printf '%s\n'` form
+# decide identically.
+#
+# THE NEWLINE IS A VARIABLE HOLDING A LITERAL ONE, never `$(printf '\n')`: command substitution
+# STRIPS trailing newlines, so that spelling is the EMPTY STRING and `*""*` matches every input.
+# This codebase has been bitten by it twice (`_u_principal`'s line test, and `_u_pf_sep`).
+_u_acl_answer_ok_var() {                                        # $1: the enumerator's answer
     _u_ans_st=INIT
-    while IFS= read -r _u_ans_l || [ -n "$_u_ans_l" ]; do
+    _u_ans_nl='
+'
+    _u_ans_rest="$1"
+    while [ -n "$_u_ans_rest" ]; do
+        case "$_u_ans_rest" in
+            *"$_u_ans_nl"*) _u_ans_l="${_u_ans_rest%%"$_u_ans_nl"*}"
+                            _u_ans_rest="${_u_ans_rest#*"$_u_ans_nl"}" ;;
+            *)              _u_ans_l="$_u_ans_rest"; _u_ans_rest="" ;;
+        esac
         case "$_u_ans_st" in
             INIT) case "$_u_ans_l" in
                       [-dlbcps][-r][-w][-xSs][-r][-w][-xSs][-r][-w][-xTt]*) _u_ans_st=BODY ;;
@@ -329,6 +380,21 @@ _u_acl_answer_ok() {                                            # stdin: the enu
     done
     [ "$_u_ans_st" = BODY ] || return 1                          # an EMPTY answer never reached BODY
     return 0
+}
+
+# The STDIN entry point, unchanged in contract: it reads the whole answer into one variable and
+# delegates. Its own scratch names (`_u_ans_in`, `_u_ans_rl`, `_u_ans_wnl`) are distinct from the
+# machine's, so the delegation cannot clobber what it is still holding. Rebuilding the text line by
+# line appends a trailing newline the input may not have had, which by the equivalence above cannot
+# change a verdict.
+_u_acl_answer_ok() {                                            # stdin: the enumerator's answer
+    _u_ans_wnl='
+'
+    _u_ans_in=""
+    while IFS= read -r _u_ans_rl || [ -n "$_u_ans_rl" ]; do
+        _u_ans_in="$_u_ans_in$_u_ans_rl$_u_ans_wnl"
+    done
+    _u_acl_answer_ok_var "$_u_ans_in"
 }
 
 # ACL-1/ACL-2's verdict on ONE parsed ACE. `deny` entries are ignored ENTIRELY on every platform.
@@ -381,6 +447,12 @@ _u_acl_check_ace() {
 # which removes the lookup along with the fork, so a fixture's answer is still the only answer the
 # predicate can see. A lookup in `_u_acl_ok` would have served a cached `/bin/ls` answer PAST a
 # fixture and silently disarmed every enumerator-output obligation.
+#
+# PF-2 MEASURED THAT, rather than leaving it as an argument. The variant was built — a cache getter
+# writing `_U_ACL_OUT` and consulted at the top of `_u_acl_ok` — and it is 1.33x faster and WRONG:
+# against one healthy store, `_u_acl_enumerate() { return 1; }`, a `group:staff allow write,delete`
+# answer and a duplicate-verb answer each resolved `OK=1` where the shipped build refuses `stale`.
+# Three fixtures, three fail-opens. The lookup stays inside the accessor.
 _u_acl_cache_get() {
     [ -n "${_U_ACL_CACHE:-}" ] || return 1
     _u_pf_sep
@@ -399,7 +471,7 @@ _u_acl_enumerate() {
 
 _u_acl_ok() {
     _u_acl_out="$(_u_acl_enumerate "$1")" || return 1   # a failed enumerator REFUSES
-    printf '%s\n' "$_u_acl_out" | _u_acl_answer_ok
+    _u_acl_answer_ok_var "$_u_acl_out"                  # PF-2: the same machine, without the pipe
 }
 
 # ── PF-1 — ONE lstat and ONE enumeration for the whole chain ──────────────────────────────────────

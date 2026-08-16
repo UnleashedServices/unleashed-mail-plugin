@@ -62,6 +62,22 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **The hook cost: 783 ms to ~250 ms per hook, in two verified steps.** `swift-lint-check.sh`
+  (PostToolUse Write|Edit|MultiEdit) and `swift-build-verify.sh` (PostToolUse Bash) both source the
+  state family, so this was paid on every file edit and every shell command. PF-1 batches the auth
+  chain's syscalls behind the two existing accessors — one `stat` and one `ls -lde` for a whole chain
+  instead of two forks per component — and PF-2 removes the two subshells `_u_acl_ok` spent per
+  component, parsing the enumeration by parameter expansion instead of a pipeline. Measured on the
+  same machine and store: publish 783 → 248 ms (bash) and → 200 ms (zsh), reader 282 → 106 ms.
+  Neither step changes a verdict: PF-1 was proved by 27 fixtures × 2 shells and PF-2 by 18, both at
+  zero divergence, each with negative controls that flip the expected cells, plus a 38-shape
+  differential fuzz of the ACL answer machine matching exact exit codes. RESIDUAL, stated: ~89 ms of
+  what remains is the command substitution in `_u_acl_ok`; removing it requires migrating the ACL
+  seam's contract from stdout to a variable and with it every fixture in the obligation suite — a
+  change to what the obligations test, not plumbing, and deliberately not done here. A cache-served
+  fast path was built, measured at a further 1.33x, and REJECTED: the prefetch fills from the real
+  `/bin/ls` whether or not a fixture redefined the enumerator, so it served the machine's answer past
+  three seams the shipped build refuses and would have silently disarmed some fifteen mutant rows.
 - **Seventeenth review pass (codex) and the honest-run battery — the five category-1 defects that
   made this store unusable in ordinary conditions.** Every one is triggered by a normal environment
   with no attacker: (1) the store scan forces globbing on and restores the caller's setting — with
