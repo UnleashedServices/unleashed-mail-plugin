@@ -6711,10 +6711,18 @@ class RowsPass17(unittest.TestCase):
     #: The two halves the follow-up added, each mutable on its own so each is measured on its own.
     ROW_180_UMASK = '        ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :\n'
     ROW_180_UMASK_GONE = '        /bin/mkdir -p -- "$_pb_value" >/dev/null 2>&1 || :\n'
-    ROW_180_PARENT = ('        _pb_parent="${_pb_value%/*}"; [ -n "$_pb_parent" ] || _pb_parent=/\n'
-                      '        if ! _unleashed_auth_chain "$_pb_parent"; then\n'
-                      '            _unleashed_pub_failed "the plugin-data base does not exist and its parent'
-                      ' does not authenticate"; return 0\n'
+    #: The authentication half, as it stands after pass 19: the walk to the NEAREST EXISTING ancestor
+    #: replaced the immediate parent, because with two or more missing components the parent is itself
+    #: absent and the chain refused it — publication `failed` on every run of a fresh install.
+    ROW_180_PARENT = ('        _pb_anc="$_pb_value"\n'
+                      '        while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]; do\n'
+                      '            _pb_up="${_pb_anc%/*}"; [ -n "$_pb_up" ] || _pb_up=/\n'
+                      '            [ "$_pb_up" != "$_pb_anc" ] || break\n'
+                      '            _pb_anc="$_pb_up"\n'
+                      '        done\n'
+                      '        if ! _unleashed_auth_chain "$_pb_anc"; then\n'
+                      '            _unleashed_pub_failed "the plugin-data base does not exist and its nearest'
+                      ' existing ancestor does not authenticate"; return 0\n'
                       '        fi\n')
 
     def _row_180_block(self):
@@ -6735,7 +6743,11 @@ class RowsPass17(unittest.TestCase):
         # m_order : 0777 parent `failed` WITH the directory created (the state is the same; the
         #           FILESYSTEM is the discriminator, as in row 1's mtime cell).
         block = self._row_180_block()
-        self.assertIn("_unleashed_auth_chain \"$_pb_parent\"", block,
+        # The guard now walks to the NEAREST EXISTING ancestor before authenticating: pinning the
+        # immediate parent was the shape that failed for two or more missing components (codex pass 19).
+        self.assertIn('while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]', block,
+                      "the creation guard no longer walks up to an existing ancestor")
+        self.assertIn("_unleashed_auth_chain \"$_pb_anc\"", block,
                       "E2a no longer authenticates the parent before creating the base (PUB-9 E2a)")
         self.assertIn(self.ROW_180_UMASK, block,
                       "E2a no longer creates the base under `umask 077` (PUB-9 E2a)")
@@ -7179,13 +7191,25 @@ class RowsPass17(unittest.TestCase):
                     self.assertEqual("conflict|0|1", out,
                                      f"{tag}: two bases must still conflict, without a rescan: {out!r} {err!r}")
                 # ── the population measurement: 8 trials of 8 concurrent publishers ───────────
-                ship, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, PUB), 8, 8)
-                mut, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, mutant), 8, 8)
+                # THE POPULATION CELL RESAMPLES, because what it measures is a RACE and a race is not
+                # on demand: measured, the mutant's rate over 64 publishers ranges 11-38 on a busy
+                # machine and fell below 5 on a quiet one, which failed this cell on a build whose
+                # shipped and mutant behaviour were both correct. A stochastic assertion that fails at
+                # random is worse than none — it teaches everyone to re-run until green. So it takes up
+                # to three samples and passes on the first that discriminates; only a mutant that never
+                # produces the race in 192 publishers fails, which is the case this cell exists to catch.
+                # The DETERMINISTIC cells above are what proves the rescan works; this one corroborates.
+                for _attempt in range(3):
+                    ship, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, PUB), 8, 8)
+                    mut, _ = self._row_182_concurrent(shell, (AUTH, STORE, READER, mutant), 8, 8)
+                    if mut >= 5:
+                        break
                 self.assertGreaterEqual(mut, 5,
-                                        f"{shell}: the CONTROL did not fail — 64 concurrent publishers of "
-                                        f"one base produced only {mut} repair states WITHOUT the rescan; "
-                                        f"the race did not occur and this cell measured nothing (the "
-                                        f"deterministic cells above are what proves discrimination)")
+                                        f"{shell}: the CONTROL did not fail — three samples of 64 concurrent "
+                                        f"publishers of one base produced at most {mut} repair states WITHOUT "
+                                        f"the rescan; the race did not occur in 192 publishers and this cell "
+                                        f"measured nothing (the deterministic cells above are what proves "
+                                        f"discrimination)")
                 self.assertLessEqual(ship, 6,
                                      f"{shell}: {ship} of 64 concurrent publishers reported a repair state "
                                      f"WITH the rescan (measured range 0-3); the retry is not converting "

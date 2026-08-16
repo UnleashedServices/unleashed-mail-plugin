@@ -161,9 +161,22 @@ _unleashed_publish() {
         # at `umask 002` the base came out 0775, its own chain then refused it, and every hook reported
         # `failed` forever after. Both found by the mutant rows. `umask 077` in a subshell covers every
         # component `-p` creates, not only the leaf.
-        _pb_parent="${_pb_value%/*}"; [ -n "$_pb_parent" ] || _pb_parent=/
-        if ! _unleashed_auth_chain "$_pb_parent"; then
-            _unleashed_pub_failed "the plugin-data base does not exist and its parent does not authenticate"; return 0
+        # THE NEAREST EXISTING ANCESTOR, not the immediate parent. With two or more missing trailing
+        # components — the ordinary shape of a fresh install, `~/.claude/plugins/data/<id>` on a machine
+        # with no `plugins` directory yet — the immediate parent is itself absent, so the chain walk
+        # refused it and publication `failed` on EVERY run: the very defect E2a exists to remove,
+        # re-introduced by E2a's own guard for the multi-component case (codex, PR #67 pass 19 —
+        # reproduced: one missing component `created`, two `failed`). The walk is applied to the deepest
+        # ancestor that EXISTS; `mkdir -p` then creates the missing tail beneath an authenticated point,
+        # and E2's own `-d`/`-L` tests plus the target-chain walk below still judge the result.
+        _pb_anc="$_pb_value"
+        while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]; do
+            _pb_up="${_pb_anc%/*}"; [ -n "$_pb_up" ] || _pb_up=/
+            [ "$_pb_up" != "$_pb_anc" ] || break
+            _pb_anc="$_pb_up"
+        done
+        if ! _unleashed_auth_chain "$_pb_anc"; then
+            _unleashed_pub_failed "the plugin-data base does not exist and its nearest existing ancestor does not authenticate"; return 0
         fi
         ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :
     fi
@@ -205,11 +218,15 @@ _unleashed_publish() {
     # spellings are stat'd and must name the same inode; anything else fails closed. Ordinary values
     # fold to themselves and pay nothing.
     if [ "$_pb_folded" != "$_pb_value" ]; then
-        if ! _u_stat "$_pb_value"; then
-            _unleashed_pub_failed "the plugin-data base cannot be stat'd"; return 0
-        fi
-        _pb_ino="$_U_INO"
-        if ! _u_stat "$_pb_folded" || [ "$_U_INO" != "$_pb_ino" ]; then
+        # DEVICE AND INODE. An inode number is unique only WITHIN a filesystem, and the two spellings can
+        # land on different mounts precisely when a `..` was popped from under a symlink — so comparing
+        # `_U_INO` alone accepts an ordinary cross-device collision as "the same directory" and restores
+        # the split this check exists to prevent (codex, PR #67 pass 19). `_u_stat` exposes no device id,
+        # and widening it would change the prefetch cache's record format for every caller, so the
+        # comparison takes its own `%d %i` — two forks, and only when folding actually changed the string.
+        _pb_id_raw="$(/usr/bin/stat -f '%d %i' -- "$_pb_value" 2>/dev/null)" || _pb_id_raw=""
+        _pb_id_fold="$(/usr/bin/stat -f '%d %i' -- "$_pb_folded" 2>/dev/null)" || _pb_id_fold=""
+        if [ -z "$_pb_id_raw" ] || [ -z "$_pb_id_fold" ] || [ "$_pb_id_raw" != "$_pb_id_fold" ]; then
             _unleashed_pub_failed "the plugin-data base's spelling and its normalised form name different directories"; return 0
         fi
     fi

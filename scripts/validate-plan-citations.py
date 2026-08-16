@@ -196,7 +196,13 @@ _POST_NEGATION = re.compile(r"does not exist|does NOT exist|lives only on|unmerg
 # reproduced at the function level: pre='…cites no ', post=' of the journal plan …', neither
 # matching). The negation word is what the slice can see, so that is what is matched, anchored to
 # the slice's end so an unrelated "no" earlier in the sentence does not exempt a live citation.
-_PRE_NEGATION = re.compile(r"(?:\bno|there is\s+no|there was\s+no)\s*$|there is\s+no|there was\s+no")
+# EVERY alternative must be anchored, and the way to guarantee that is to have ONE: the first fix
+# left `there is no|there was no` trailing and UNANCHORED, so `there is no doubt: see §9.9z`
+# exempted a live citation — the exact failure the anchoring was added to prevent, in the same
+# commit that explained why it mattered (codex, PR #67 pass 19 — reproduced). Those two are
+# subsumed anyway: both end in `no`, so `\bno\s*$` matches them when they sit against the
+# citation and correctly does not when they modify something else.
+_PRE_NEGATION = re.compile(r"\bno\s*$")
 
 
 def check_external(text, repo, problems, flat):

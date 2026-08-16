@@ -164,6 +164,14 @@ class PreNegationSeesOnlyWhatItsSliceContains(unittest.TestCase):
     def test_there_is_no_remains_exempt(self):
         self.assertTrue(self._exempt("There is no \u00a79.9z in that document."))
 
+    def test_a_negation_that_modifies_something_else_does_not_exempt(self):
+        r"""codex, PR #67 pass 19 — the FIRST fix anchored only its leading alternative and left
+        `there is no|there was no` trailing and unanchored, so `there is no doubt: see §9.9z` exempted a
+        live citation: the exact failure the anchoring was added to prevent, in the same commit that
+        explained why it mattered. There is now ONE alternative, `\bno\s*$`, which subsumes both."""
+        self.assertFalse(self._exempt("there is no doubt: see \u00a79.9z of the journal plan"),
+                         "a negation modifying another noun exempted the citation after it")
+
     def test_a_live_citation_is_still_checked(self):
         self.assertFalse(self._exempt("See \u00a79.9z for the encoder rule."),
                          "a live citation was exempted — the linter would stop checking it")
