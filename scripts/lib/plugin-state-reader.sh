@@ -118,9 +118,68 @@ _unleashed_auth_entry() {
     # C.UTF-8). The length is therefore taken under LC_ALL=C, with the caller's locale saved and
     # restored exactly as ENC-3 requires of the encoder — an EMPTY LC_ALL is not an absent one.
     if [ -n "${LC_ALL+set}" ]; then _ae_lc_set=1; _ae_lc_val="$LC_ALL"; else _ae_lc_set=0; fi
-    LC_ALL=C
+    # A CALLER MAY HAVE MADE `LC_ALL` READONLY, and then this assignment is FATAL, not scoped: measured,
+    # `readonly LC_ALL=C.UTF-8` followed by sourcing killed the shell outright in both shells — before
+    # the protocol variables were established, so a hook died instead of resolving (codex, PR #67 pass
+    # 23 — reproduced). The assignment is attempted in a form whose failure is survivable, and its
+    # SUCCESS is then checked: if the locale could not be set to C, the byte-oriented walk below would
+    # be wrong, so the caller's own value is left alone and _ae_lc_ro records it for the one place
+    # that must then take a different route.
+    # THE ASSIGNMENT IS NOT ATTEMPTED WHEN THE CALLER MADE `LC_ALL` READONLY. Measured: bash aborts the
+    # shell on an assignment to a readonly variable and NO shell-level guard survives it — not `if !`,
+    # not `{ …; } || true`; only a subshell survives, and a subshell cannot set the locale for the walk
+    # that follows. So the attribute is read FIRST, with the same `declare -p`/`typeset -p` parse the
+    # instance stamp uses (measured to detect it in both shells, and not to misfire on a writable one).
+    # If it is readonly and already C or POSIX the walk is byte-oriented anyway and proceeds; if it is
+    # readonly and something else, the byte semantics ENC-1 requires cannot be established, so this
+    # REFUSES rather than encoding under a locale that would make the walk character-oriented — the
+    # `/café` defect ENC-3 exists to prevent. Nothing is fatal either way (codex, PR #67 pass 23 —
+    # reproduced: `readonly LC_ALL=C.UTF-8` killed the sourcing shell in BOTH shells).
+    # THE PROBE MUST NOT FORK. ENC-2 requires the key derivation to fork ZERO times so it still works
+    # under fork exhaustion (`ulimit -u 1`), and row 045 pins that — my first version of this guard read
+    # the attribute with `$( declare -p … )`, which IS a fork, and row 045 caught it. Both probes below
+    # are builtins: zsh reports the attribute in `${(t)var}` (measured: `scalar-readonly-special`), and
+    # bash has no such introspection in 3.2, so it uses `unset -v`, which on a readonly FAILS
+    # NON-FATALLY there (measured) while an assignment would kill the shell. The zsh form is inside a
+    # single-quoted `eval` because bash cannot PARSE `${(t)…}` — verified that a file containing it
+    # parses in both shells.
+    _ae_lc_ro=0
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval 'case "${(t)LC_ALL}" in *readonly*) _ae_lc_ro=1 ;; esac'
+    elif [ "$_ae_lc_set" = 1 ]; then
+        unset -v LC_ALL 2>/dev/null || _ae_lc_ro=1
+    fi
+    case "$_ae_lc_ro" in
+        1)
+            case "${_ae_lc_val:-}" in
+                # 2 = LEAVE IT ENTIRELY ALONE. Not 0: 0 means "was unset, so unset it again" and
+                # `unset` of a readonly is fatal in zsh (measured — it killed the shell on the
+                # RESTORE after this branch had correctly survived the assignment).
+                # ONLY `C` AND `POSIX`. `C.UTF-8` is a UTF-8 locale, so the walk is CHARACTER-wise
+                # there, not byte-wise: measured, a readonly `C.UTF-8` encoded `/café` as
+                # `_scaf_xc3` in bash and `_scaf_xe9` in zsh against the correct `_scaf_xc3_xa9`
+                # — a different key per shell for one directory, which is ENC-1 injectivity gone.
+                # I had listed it as acceptable in the first version of this guard; the keys said
+                # otherwise, which is why this checks the OUTPUT and not merely that nothing died.
+                C|POSIX) _ae_lc_set=2 ;;
+                *) return 1 ;;
+            esac ;;
+        *) LC_ALL=C ;;
+    esac
     _ae_bytes=${#_ae_line}
-    if [ "$_ae_lc_set" = 1 ]; then LC_ALL="$_ae_lc_val"; else unset LC_ALL; fi
+    # RESTORED AS AN EXPORT. bash's only fork-free readonly probe is `unset -v`, and a successful
+    # unset destroys the EXPORT attribute: measured, an exported `LC_ALL` came back as a plain
+    # shell variable, so every child these libraries fork — `/usr/bin/stat`, `/bin/ls -le`,
+    # `/usr/bin/getconf` — ran under the caller's `LANG` instead of their `LC_ALL`. ENC-3 says the
+    # entry state is restored EXACTLY, and the export attribute is part of that state.
+    # STATED DEVIATION, measured and deliberate: a caller whose `LC_ALL` was SET BUT NOT EXPORTED
+    # gets it exported on return, because bash 3.2 offers no fork-free way to tell the two apart
+    # (`export` and `typeset -x` both succeed on a readonly, so neither can even probe; `compgen
+    # -e` needs a command substitution, which ENC-2 forbids). An unexported `LC_ALL` is
+    # pathological — it is an environment variable by convention — and exporting it makes the
+    # children agree with the shell that spawned them, where dropping the export makes them
+    # disagree silently. zsh keeps the attribute through `${(t)…}` and never unsets.
+    case "$_ae_lc_set" in 1) LC_ALL="$_ae_lc_val"; export LC_ALL ;; 0) unset LC_ALL ;; esac
     [ "$_U_SIZE" = "$(( _ae_bytes + 1 ))" ] || return 1                        # (2)
     if [ -n "${ZSH_VERSION:-}" ]; then
         case "$_ae_line" in *$'\0'*) return 1 ;; esac                          # (3)
@@ -182,6 +241,13 @@ _unleashed_scan_store() {
         _ss_noglob=0
     else
         case $- in *f*) _ss_noglob=1; set +f ;; *) _ss_noglob=0 ;; esac
+        # `failglob` IS A SEPARATE OPTION AND IT IS FATAL HERE. With an authenticated but EMPTY store,
+        # bash's `failglob` aborts on the unmatched `base.*` before the loop can apply its own
+        # vanished-entry rule — so sourcing the resolver in a strict shell killed the hook instead of
+        # returning the documented empty-store resolution (codex, PR #67 pass 23 — reproduced). Turning
+        # off `noglob` alone was not enough; both are saved and restored.
+        _ss_failglob=0
+        if shopt -q failglob 2>/dev/null; then _ss_failglob=1; shopt -u failglob 2>/dev/null || :; fi
     fi
     for _ss_f in "$_ss_store"/base.*; do
         # bash expands an unmatched glob to the PATTERN ITSELF, so a literal `base.*` reaches here
@@ -197,6 +263,7 @@ _unleashed_scan_store() {
             _UNLEASHED_FAILED=$(( _UNLEASHED_FAILED + 1 ))
         fi
     done
+    [ "${_ss_failglob:-0}" = 1 ] && shopt -s failglob 2>/dev/null || :
     [ "${_ss_noglob:-0}" = 1 ] && set -f          # restore the caller's `noglob`; zsh did it at return
     return 0
 }

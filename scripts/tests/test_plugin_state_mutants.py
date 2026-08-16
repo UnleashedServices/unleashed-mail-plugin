@@ -32,6 +32,16 @@ yet, a `.` or `..` in the value, two hooks publishing at once, and a harness tha
 is the one row here whose fix is a STATED FACT rather than a behaviour: no post-startup test separates
 zsh's passwd-filled `HOME` from a caller who set it, so that row pins the statement and mutates the
 opt-out that is the actual protection.
+
+Rows 186-188 (PR #67, codex pass 23) join `RowsPass17` and are ONE CLASS with row 179: inherited shell
+state the libraries never neutralised. `failglob` is a separate bash option from row 179's `noglob` and
+is FATAL on an empty store; `nocasematch` makes the encoder's upper-case `case` arms match lower-case
+bytes, so `/a` and `/A` collide and ENC-1's injectivity is gone; and a READONLY `LC_ALL` cannot be
+assigned to at all — the assignment kills the shell in both, and no shell-level guard survives it — so
+the attribute is DETECTED fork-free instead, `C.UTF-8` is REFUSED because it is a UTF-8 locale, and an
+accepted readonly `C` is left entirely alone (a third restore state, because `unset` of a readonly is
+fatal in zsh). Each of those three was reproduced before its fix and each mutation below was checked to
+DISCRIMINATE by a per-mutation sweep — every mutation of a shipped file fails its row when neutered.
 """
 
 import os
@@ -3860,7 +3870,10 @@ class RowsChunk5(unittest.TestCase):
             spec[shell] = out
         self.assertEqual(spec["/bin/bash"], spec["/bin/zsh"], "spec keys must be byte-identical")
         self.assertEqual("_scaf_xc3_xa9", spec["/bin/bash"], "the BYTE-wise walk is the spec")
-        mutant = with_mutation('    LC_ALL=C\n', '    :\n', path=STORE)
+        # RE-PINNED (pass 23): the assignment moved into a `case` arm when the encoder learned to
+        # detect a READONLY `LC_ALL` instead of assigning to it — bash dies outright on that
+        # assignment. Same rule, same mutation, new site; the oracle below is unchanged.
+        mutant = with_mutation('        *) LC_ALL=C ;;\n', '        *) : ;;\n', path=STORE)
         try:
             got = {}
             for shell in SHELLS:
@@ -6523,7 +6536,7 @@ import time
 
 @unittest.skipUnless(DARWIN, "the Darwin chain/ACL arm and the Darwin store; on Linux every publish cell is `failed` by design")
 class RowsPass17(unittest.TestCase):
-    """Mutant-table rows 179-184 (PR #67, codex passes 17 and 20)."""
+    """Mutant-table rows 179-188 (PR #67, codex passes 17, 20 and 23, plus 185's pre-merge review)."""
 
     #: N6-6's store-level tuple, and the publisher's one-word state.
     OUTP = 'printf "%s %s %s" "$_UNLEASHED_BASE_OK" "$_UNLEASHED_BASE_SOURCE" "$_UNLEASHED_POINTER_STATE"'
@@ -7522,6 +7535,620 @@ class RowsPass17(unittest.TestCase):
                     rc, out, err = run_shell(shell, f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
                                              + self.OUTP, sources=srcs)
                     self.assertEqual("1 pointer none", out, f"{tag}: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    # ── row 186 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The scan's `failglob` guard — sliced from the head of its paragraph through the one-liner that
+    #: saves and clears the option — and the restore, which the mutation drops with it. SLICED, not
+    #: quoted: the paragraph is prose and will be edited again, and a quoted anchor would strand this
+    #: row on a comment rewrite (rows 180 and 184's convention).
+    ROW_186_HEAD = "        # `failglob` IS A SEPARATE OPTION AND IT IS FATAL HERE."
+    ROW_186_TAIL = ('        if shopt -q failglob 2>/dev/null; then _ss_failglob=1; '
+                    'shopt -u failglob 2>/dev/null || :; fi\n')
+    ROW_186_RESTORE = '    [ "${_ss_failglob:-0}" = 1 ] && shopt -s failglob 2>/dev/null || :\n'
+    #: Turn `failglob` on where the shell HAS the option. zsh has no such option at all — measured:
+    #: `shopt` is not a zsh builtin (`command not found: shopt`) and `setopt failglob` answers
+    #: `no such option: failglob` — so the zsh arm of every cell below runs with the option ABSENT and
+    #: is asserted EQUAL in both builds rather than claimed to discriminate.
+    ROW_186_ON = "shopt -s failglob 2>/dev/null || :\n"
+    #: The FUNCTIONAL probe for "the caller's `failglob` is still in force", run in a SUBSHELL because
+    #: the option's whole effect is to destroy the command list that expands an unmatched pattern.
+    #: NOT `shopt -q failglob`: row 179's lesson is that an option's NAME and its EFFECT are different
+    #: things. Under zsh it always answers GLOB-FAILED — the default `nomatch` makes every unmatched
+    #: glob an error there — so it discriminates in bash ONLY, which cell (iv) proves by producing
+    #: GLOB-OK from it under bash and asserts equal-in-both-builds under zsh.
+    ROW_186_PROBE = ('( for _p186 in /nonexistent-186/base.*; do :; done ) 2>/dev/null '
+                     '&& printf "GLOB-OK|" || printf "GLOB-FAILED|"\n')
+    #: The store-level tuple with the UNSET case spelled out. The defect this row measures does not
+    #: give a WRONG answer, it gives NO ANSWER — and `"$_UNLEASHED_BASE_OK"` renders unset and empty
+    #: identically, so an oracle built on the class's own OUTP would read the kill as `"  "` and could
+    #: not tell it from a resolver that set every variable to the empty string.
+    ROW_186_OUT = ('printf "%s %s %s" "${_UNLEASHED_BASE_OK-U}" "${_UNLEASHED_BASE_SOURCE-U}" '
+                   '"${_UNLEASHED_POINTER_STATE-U}"')
+    #: The same tuple for the paths.sh route, which is what a hook actually runs.
+    ROW_186_PATHS_OUT = ('printf "%s|%s|%s" "${_UNLEASHED_BASE_OK-U}" "${_UNLEASHED_BASE_SOURCE-U}" '
+                        '"${_UNLEASHED_POINTER_STATE-U}"')
+
+    def _row_186_mutant(self):
+        block = self._slice(READER, self.ROW_186_HEAD, self.ROW_186_TAIL)
+        first = with_mutation(block, "", path=READER)
+        try:
+            return with_mutation(self.ROW_186_RESTORE, "", path=first)
+        finally:
+            os.unlink(first)
+
+    def test_row_186_the_store_scan_neutralises_failglob_as_well_as_noglob(self):
+        """Row 186 (codex, PR #67 pass 23 — reproduced): `failglob` is a SEPARATE bash option from the `noglob` row 179 fixed, and on an authenticated but EMPTY store it is FATAL, not merely wrong — bash aborts the whole command list on the unmatched `<store>/base.*` before the loop can apply rule 0's vanished-entry test, so `_unleashed_scan_store` never returns and the ordered reader never sets a single protocol variable. Measured through the paths.sh route a hook actually runs: the specification answers `0|unresolved|none` with the one "no plugin-state entry is present" notice, while the mutant (the `failglob` save/clear and its restore removed, `noglob` untouched) leaves `_UNLEASHED_BASE_OK`, `_UNLEASHED_BASE_SOURCE`, `_UNLEASHED_POINTER_STATE` and `_UNLEASHED_BASE_RESOLVED` ALL UNSET, emits NO diagnostic, and prints bash's own `no match:` line naming the store — a consumer that calls `unleashed_base_ok` then reads an unset variable, and under `set -e` the sourcing shell EXITS (rc=1, no output at all). bash only: zsh has no `failglob`, so its arm is asserted EQUAL in both builds rather than claimed to discriminate. Three cells hold in BOTH builds so nothing is bought with a regression: the caller's `failglob` is still in force after the read (asserted FUNCTIONALLY, in a subshell, because the option's effect is to kill the shell that expands the pattern), a caller who never set it does NOT acquire it, and a HEALTHY store still resolves `1 pointer none` under `failglob` — the row is scoped to the empty store, which is what a first session has."""
+        # Measured, both shells: (i) direct `_unleashed_read_store`, empty store, failglob on —
+        # shipped `0 unresolved none` + 1 diagnostic in both shells; mutant bash `U U U`, ZERO
+        # diagnostics, `no match:` on stderr; mutant zsh `0 unresolved none` + 1 diagnostic (equal).
+        # (ii) paths.sh — shipped `0|unresolved|none` + 1 diagnostic; mutant bash `U|U|U`, 0
+        # diagnostics, `no match:`; mutant zsh equal to shipped. (iii) `set -e` — shipped rc=0 with the
+        # tuple; mutant bash rc=1 and EMPTY stdout, the shell gone; mutant zsh equal. (iv) the probe:
+        # `GLOB-FAILED|` after the read in both builds when the caller had failglob, `GLOB-OK|` in bash
+        # when the caller did not (so the probe discriminates), `GLOB-FAILED|` in zsh either way.
+        # (v) a healthy store: `1 pointer none` in all four arms.
+        # THE SHIPPED SHAPE FIRST (rows 178/179's convention), so a scan that stops guarding `failglob`
+        # fails HERE — on the rule — and not inside `with_mutation` on an anchor that stopped matching.
+        with open(READER, encoding="utf-8") as fh:
+            shipped = fh.read()
+        self.assertIn("if shopt -q failglob 2>/dev/null; then _ss_failglob=1;", shipped,
+                      "the shipped scan does not save and clear the caller's `failglob` (RD-9)")
+        self.assertIn(self.ROW_186_RESTORE, shipped,
+                      "the shipped scan does not restore the caller's `failglob` (RD-9)")
+        # zsh HAS NO SUCH OPTION — the stated fact the zsh arm rests on, measured rather than assumed.
+        p = subprocess.run(["/bin/zsh", "-c", "setopt failglob"], capture_output=True, text=True)
+        self.assertNotEqual(0, p.returncode, "zsh accepted `setopt failglob` — the zsh arm of this row "
+                                             "is asserted equal on the premise that it cannot")
+        self.assertIn("no such option", p.stderr, f"zsh: {p.stderr!r}")
+        real = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".claude", "unleashed-mail")
+        real_before = os.path.exists(real)
+        mutant = self._row_186_mutant()
+        no_restore = with_mutation(self.ROW_186_RESTORE, "", path=READER)
+        try:
+            machinery = {f: os.path.join(LIBDIR, f) for f in MACHINERY_P7}
+            roots = {
+                "shipped": self._shadow("spec186", dict(machinery, **{"paths.sh": PATHS_C4})),
+                "mutant": self._shadow("mut186", dict(machinery, **{
+                    "plugin-state-reader.sh": mutant, "paths.sh": PATHS_C4})),
+            }
+            for shell in SHELLS:
+                bash = shell == "/bin/bash"
+                for srcs, label in (((AUTH, STORE, READER, PUB), "shipped"),
+                                    ((AUTH, STORE, mutant, PUB), "mutant")):
+                    is_mutant = label == "mutant"
+                    kills = is_mutant and bash          # the defect is bash-only
+                    tag = f"{shell} {label}"
+                    # (i) an EMPTY authenticated store read by a caller who set `failglob`.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self.ROW_186_ON
+                                             + f'_unleashed_read_store "{self.store}"\n'
+                                             + self.ROW_186_OUT, sources=srcs)
+                    if not kills:
+                        self.assertEqual("0 unresolved none", out,
+                                         f"{tag}: an empty store did not resolve under failglob: "
+                                         f"{out!r} {err!r}")
+                        self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                    else:
+                        self.assertEqual("U U U", out,
+                                         f"{tag}: the CONTROL did not fail — the unmatched pattern no "
+                                         f"longer aborted the scan and the reader still answered: "
+                                         f"{out!r} {err!r}")
+                        self.assertEqual([], self._diags(err),
+                                         f"{tag}: the CONTROL did not fail — the kill emitted a "
+                                         f"diagnostic, so it was not a kill: {err!r}")
+                        self.assertIn("no match:", err,
+                                      f"{tag}: bash did not report the failed expansion: {err!r}")
+                    # (ii) THE HOOK ROUTE — paths.sh, sourced, with a scratch HOME and no
+                    # CLAUDE_PLUGIN_DATA, which is exactly step 2 of the resolver.
+                    h = os.path.join(self.home, f"h186-{label}-{os.path.basename(shell)}")
+                    shutil.rmtree(h, ignore_errors=True)
+                    bases = os.path.join(h, ".claude", "unleashed-mail", "bases")
+                    os.makedirs(bases)
+                    for d in (h, os.path.dirname(os.path.dirname(bases)),
+                              os.path.dirname(bases), bases):
+                        os.chmod(d, 0o700)
+                    p = subprocess.run(
+                        [shell, "-c", self.ROW_186_ON + f'. "{roots[label]}/paths.sh"\n'
+                         + self.ROW_186_PATHS_OUT],
+                        capture_output=True, text=True, env={"HOME": h, "PATH": "/usr/bin:/bin"})
+                    if not kills:
+                        self.assertEqual("0|unresolved|none", p.stdout,
+                                         f"{tag}: the hook route did not resolve an empty store under "
+                                         f"failglob: {p.stdout!r} {p.stderr!r}")
+                        self.assertEqual(1, len(self._diags(p.stderr)), f"{tag}: {p.stderr!r}")
+                    else:
+                        self.assertEqual("U|U|U", p.stdout,
+                                         f"{tag}: the CONTROL did not fail — the hook route still set "
+                                         f"the protocol variables: {p.stdout!r} {p.stderr!r}")
+                        self.assertEqual([], self._diags(p.stderr),
+                                         f"{tag}: the CONTROL did not fail: {p.stderr!r}")
+                        self.assertIn("no match:", p.stderr, f"{tag}: {p.stderr!r}")
+                    # (iii) UNDER `set -e` THE SHELL ITSELF GOES.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + "set -e\n" + self.ROW_186_ON
+                                             + f'_unleashed_read_store "{self.store}"\n'
+                                             + self.ROW_186_OUT, sources=srcs)
+                    if not kills:
+                        self.assertEqual(0, rc, f"{tag}: `set -e` aborted a healthy read: {err!r}")
+                        self.assertEqual("0 unresolved none", out, f"{tag}: {out!r} {err!r}")
+                    else:
+                        self.assertNotEqual(0, rc,
+                                            f"{tag}: the CONTROL did not fail — the sourcing shell "
+                                            f"survived `set -e`: rc={rc} {out!r} {err!r}")
+                        self.assertEqual("", out,
+                                         f"{tag}: the CONTROL did not fail — the shell was still "
+                                         f"alive to print: {out!r}")
+                    # (iv) THE CALLER'S OPTION SURVIVES — in BOTH builds, so the fix is not bought
+                    # with a regression; and the probe is shown to be able to answer GLOB-OK.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self.ROW_186_ON
+                                             + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.ROW_186_PROBE + self.ROW_186_OUT, sources=srcs)
+                    self.assertTrue(out.startswith("GLOB-FAILED|"),
+                                    f"{tag}: the scan cleared the caller's failglob: {out!r}")
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore()
+                                             + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.ROW_186_PROBE + self.ROW_186_OUT, sources=srcs)
+                    want = "GLOB-OK|" if bash else "GLOB-FAILED|"
+                    self.assertTrue(out.startswith(want),
+                                    f"{tag}: a caller who never set failglob {'acquired it' if bash else 'diverged'}"
+                                    f" — under bash this is also the proof the probe discriminates: {out!r}")
+                    self.assertTrue(out.endswith("0 unresolved none"), f"{tag}: {out!r} {err!r}")
+                    # (v) THE HONEST CONTROL: a HEALTHY store resolves under failglob in both builds —
+                    # the glob matches, so nothing in this row is about a store that has an entry.
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self._entry() + self.ROW_186_ON
+                                             + f'_unleashed_read_store "{self.store}"\n'
+                                             + self.ROW_186_OUT, sources=srcs)
+                    self.assertEqual("1 pointer none", out,
+                                     f"{tag}: a healthy store did not resolve under failglob: "
+                                     f"{out!r} {err!r}")
+                    self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+                # (vi) THE RESTORE GETS ITS OWN MUTATION. Cell (iv) above holds in both builds — the
+                # whole-guard mutant never clears the option, so it has nothing to put back and the
+                # cell cannot see the restore. Measured with a per-mutation sweep, not assumed: with
+                # the restore line alone removed, a bash caller who had `failglob` loses it across an
+                # ordinary read, which is the same class of defect pointing at the CALLER instead of
+                # at the store.
+                for rd, label in ((READER, "shipped"), (no_restore, "no-restore")):
+                    self._wipe()
+                    rc, out, err = run_shell(shell, self._mkstore() + self.ROW_186_ON
+                                             + f'_unleashed_read_store "{self.store}" 2>/dev/null\n'
+                                             + self.ROW_186_PROBE + self.ROW_186_OUT,
+                                             sources=(AUTH, STORE, rd, PUB))
+                    if not bash:
+                        self.assertTrue(out.startswith("GLOB-FAILED|"),
+                                        f"{shell} {label}: the zsh arm must be equal in both builds "
+                                        f"— it has no `failglob` to lose: {out!r}")
+                    elif label == "shipped":
+                        self.assertTrue(out.startswith("GLOB-FAILED|"),
+                                        f"{shell}: the scan did not restore the caller's failglob: {out!r}")
+                    else:
+                        self.assertTrue(out.startswith("GLOB-OK|"),
+                                        f"{shell}: the CONTROL did not fail — the caller's `failglob` "
+                                        f"survived without the restore line: {out!r}")
+                    self.assertTrue(out.endswith("0 unresolved none"), f"{shell} {label}: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+            os.unlink(no_restore)
+        self.assertEqual(real_before, os.path.exists(real),
+                         "this row wrote to the REAL plugin-state store")
+
+    # ── row 187 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The encoder's `nocasematch` guard and its restore, quoted exactly — two lines of CODE, not
+    #: prose, so a comment rewrite cannot strand them and a code rewrite SHOULD fail here loudly.
+    ROW_187_GUARD = ('    _uk_nocase=0\n'
+                     '    if [ -z "${ZSH_VERSION:-}" ] && shopt -q nocasematch 2>/dev/null; then\n'
+                     '        _uk_nocase=1; shopt -u nocasematch 2>/dev/null || :\n'
+                     '    fi\n')
+    ROW_187_RESTORE = '    [ "${_uk_nocase:-0}" = 1 ] && shopt -s nocasematch 2>/dev/null || :\n'
+    ROW_187_ON = "shopt -s nocasematch 2>/dev/null || :\n"
+    #: The FUNCTIONAL probe for `nocasematch` — a `case` that can only match with the option on. Not
+    #: `shopt -q`: this row is about what `case` DOES, so what `case` does is what is measured.
+    ROW_187_PROBE = 'case ABC in abc) printf "NOCASE-ON|" ;; *) printf "NOCASE-OFF|" ;; esac\n'
+    #: THE ORACLE IS THE KEYS. `/a` and `/A` are the collision, and `/café` shows the blast radius:
+    #: EVERY lowercase letter takes an upper-case arm, so the damage is not one pair.
+    ROW_187_KEYS = ('_unleashed_key /a; printf "%s|" "$_UNLEASHED_KEY"\n'
+                    '_unleashed_key /A; printf "%s|" "$_UNLEASHED_KEY"\n'
+                    '_u187=$(printf %b "/caf\\xc3\\xa9")\n'
+                    '_unleashed_key "$_u187"; printf "%s" "$_UNLEASHED_KEY"\n')
+    #: The canonical answer — what zsh gives, what bash gives with the option off, and what the
+    #: specification gives with it on.
+    ROW_187_CANON = "_sa|_s_ca|_scaf_xc3_xa9"
+
+    def test_row_187_the_encoders_case_arms_are_forced_case_sensitive(self):
+        """Row 187 (codex, PR #67 pass 23 — reproduced): the encoder's walk is a `case` with one arm per UPPER-case letter, and bash's `nocasematch` makes those arms match the LOWER-case bytes too — so with the option inherited from the caller `/a` and `/A` BOTH encode to `_s_ca` and ENC-1's injectivity, which every later step assumes, is simply gone. It is not one pair: `/café` encodes to `_s_cc_ca_cf_xc3_xa9` under the mutation, every lower-case letter having taken an upper-case arm. The user-visible consequence is a store that disagrees with itself — measured end to end, the publisher derives the wrong key, authenticates its OWN wrong key and reports `created` with zero diagnostics, and then every ordinary hook (which has no `nocasematch`) computes the canonical key, finds the ENT-3 name/content pair inconsistent and reports `0 unresolved stale`, permanently and silently. THE ORACLE IS THE KEYS, not that nothing died: every cell here "survives" in both builds. A SECOND mutation pins the other half of the guard — with the restore alone removed the keys are right and the CALLER's `nocasematch` is left switched off, which is the same class of defect pointing the other way. Both shells: zsh has no `nocasematch` for `case`, so its arm is asserted EQUAL in both builds, and the honest control is bash with the option OFF, where every build agrees on the canonical keys."""
+        # Measured, both shells: (i) bash + nocasematch — shipped `_sa|_s_ca|_scaf_xc3_xa9`, mutant
+        # `_s_ca|_s_ca|_s_cc_ca_cf_xc3_xa9`; zsh identical in both builds. (ii) end-to-end — shipped
+        # `created` then `1 pointer none` with 0 diagnostics; mutant bash `created` then
+        # `0 unresolved stale` with 1 diagnostic; mutant zsh equal to shipped. (iii) the restore —
+        # shipped leaves `NOCASE-ON`, the restore-only mutant leaves `NOCASE-OFF`; both leave
+        # `NOCASE-OFF` for a caller who never set it. (iv) control: option off, `_sa|_s_ca|_scaf…`
+        # in every build and both shells.
+        with open(STORE, encoding="utf-8") as fh:
+            shipped = fh.read()
+        self.assertIn(self.ROW_187_GUARD, shipped,
+                      "the shipped encoder does not force its `case` arms case-sensitive (ENC-1)")
+        self.assertIn(self.ROW_187_RESTORE, shipped,
+                      "the shipped encoder does not restore the caller's `nocasematch` (ENC-3)")
+        # zsh HAS NO `shopt` AT ALL — the premise the zsh arm's equality rests on.
+        p = subprocess.run(["/bin/zsh", "-c", "shopt -q nocasematch"], capture_output=True, text=True)
+        self.assertNotEqual(0, p.returncode, "zsh has a working `shopt` — the zsh arm of this row is "
+                                             "asserted equal on the premise that it does not")
+        half = with_mutation(self.ROW_187_GUARD, "", path=STORE)
+        try:
+            # THE MUTATION IS THE WHOLE GUARD — detection, disable AND restore — because that is the
+            # pre-fix file; removing only the disable would leave a restore that switches the option
+            # ON for a caller who never had it, which is a different defect.
+            mutant = with_mutation(self.ROW_187_RESTORE, "", path=half)
+            no_restore = with_mutation(self.ROW_187_RESTORE, "", path=STORE)
+            try:
+                for shell in SHELLS:
+                    bash = shell == "/bin/bash"
+                    for srcs, label in (((AUTH, STORE, READER, PUB), "shipped"),
+                                        ((AUTH, mutant, READER, PUB), "mutant")):
+                        is_mutant = label == "mutant"
+                        breaks = is_mutant and bash
+                        tag = f"{shell} {label}"
+                        # (i) THE KEYS, with the caller's `nocasematch` in force.
+                        rc, out, err = run_shell(shell, self.ROW_187_ON + self.ROW_187_KEYS,
+                                                 sources=srcs)
+                        if not breaks:
+                            self.assertEqual(self.ROW_187_CANON, out,
+                                             f"{tag}: the walk was not byte-exact under nocasematch: "
+                                             f"{out!r} {err!r}")
+                        else:
+                            k_lower, k_upper, k_cafe = out.split("|")
+                            self.assertEqual(k_lower, k_upper,
+                                             f"{tag}: the CONTROL did not fail — `/a` and `/A` still "
+                                             f"encoded differently, so this fixture measures nothing: "
+                                             f"{out!r}")
+                            self.assertEqual("_s_ca", k_lower, f"{tag}: {out!r}")
+                            self.assertEqual("_s_cc_ca_cf_xc3_xa9", k_cafe,
+                                             f"{tag}: the CONTROL did not fail — the damage was not "
+                                             f"the whole lower-case alphabet: {out!r}")
+                        # (iv) THE HONEST CONTROL: with the option OFF every build agrees.
+                        rc, out, err = run_shell(shell, self.ROW_187_KEYS, sources=srcs)
+                        self.assertEqual(self.ROW_187_CANON, out,
+                                         f"{tag}: the keys diverged with `nocasematch` OFF — this row "
+                                         f"is then measuring something other than the option: "
+                                         f"{out!r} {err!r}")
+                        # (ii) END TO END: a publisher that inherited the option, and an ordinary hook.
+                        self._wipe()
+                        rc, out, err = run_shell(shell, self._mkstore() + self.ROW_187_ON
+                                                 + f'_unleashed_publish "{self.store}" "{self.target}"\n'
+                                                 + self.PSTATE, sources=srcs)
+                        self.assertEqual("created", out,
+                                         f"{tag}: the publish did not report `created`, so the read "
+                                         f"below would measure a store nobody wrote: {out!r} {err!r}")
+                        self.assertEqual([], self._diags(err),
+                                         f"{tag}: the wrong key was published WITH a diagnostic: {err!r}")
+                        self.assertEqual(1, len(self._names()), f"{tag}: {self._names()}")
+                        rc, out, err = run_shell(shell, f'_unleashed_read_store "{self.store}"\n'
+                                                 + self.OUTP, sources=srcs)
+                        if not breaks:
+                            self.assertEqual("1 pointer none", out,
+                                             f"{tag}: an ordinary hook did not resolve the store the "
+                                             f"publisher had just created: {out!r} {err!r}")
+                            self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+                        else:
+                            self.assertEqual("0 unresolved stale", out,
+                                             f"{tag}: the CONTROL did not fail — the ordinary hook "
+                                             f"agreed with the publisher's wrong key: {out!r} {err!r}")
+                            self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+                    # (iii) THE RESTORE — its own mutation, because a guard that disables and never
+                    # restores is the same defect pointing at the caller instead of at the store.
+                    for st, label in ((STORE, "shipped"), (no_restore, "no-restore")):
+                        rc, out, err = run_shell(shell, self.ROW_187_ON + self.ROW_187_PROBE,
+                                                 sources=(AUTH, st, READER, PUB))
+                        base = out                    # what the option does BEFORE the encoder runs
+                        rc, out, err = run_shell(shell, self.ROW_187_ON
+                                                 + '_unleashed_key /a\n' + self.ROW_187_PROBE,
+                                                 sources=(AUTH, st, READER, PUB))
+                        if not bash:
+                            self.assertEqual("NOCASE-OFF|", base, f"{shell}: zsh has no nocasematch")
+                            self.assertEqual(base, out, f"{shell} {label}: the zsh arm must be equal")
+                        else:
+                            self.assertEqual("NOCASE-ON|", base,
+                                             f"{shell}: the probe does not discriminate — `case` did "
+                                             f"not match case-insensitively with the option ON: {base!r}")
+                            if label == "shipped":
+                                self.assertEqual("NOCASE-ON|", out,
+                                                 f"{shell}: the encoder left the caller's nocasematch "
+                                                 f"switched off: {out!r}")
+                            else:
+                                self.assertEqual("NOCASE-OFF|", out,
+                                                 f"{shell}: the CONTROL did not fail — the caller's "
+                                                 f"nocasematch survived without the restore: {out!r}")
+                        # …and a caller who never set it does NOT acquire it, in every build.
+                        rc, out, err = run_shell(shell, '_unleashed_key /a\n' + self.ROW_187_PROBE,
+                                                 sources=(AUTH, st, READER, PUB))
+                        self.assertEqual("NOCASE-OFF|", out,
+                                         f"{shell} {label}: the encoder switched `nocasematch` ON for "
+                                         f"a caller who did not have it: {out!r}")
+            finally:
+                os.unlink(no_restore)
+                os.unlink(mutant)
+        finally:
+            os.unlink(half)
+
+    # ── row 188 ───────────────────────────────────────────────────────────────────────────────
+
+    #: The readonly-`LC_ALL` guard, at BOTH sites — the encoder's walk and the reader's byte count.
+    #: Sliced from the flag's initialisation through the `case` that ends in the assignment, so the
+    #: mutation can put the pre-fix `LC_ALL=C` back exactly where it was.
+    ROW_188_HEADS = {STORE: "    _uk_lc_ro=0\n", READER: "    _ae_lc_ro=0\n"}
+    ROW_188_TAILS = {STORE: "        *) LC_ALL=C ;;\n    esac\n",
+                     READER: "        *) LC_ALL=C ;;\n    esac\n"}
+    #: The accepted-locale arm and the THIRD state (`2` = leave it entirely alone), which the two
+    #: remaining mutations attack: (b) puts `C.UTF-8` back on the accepted list, (c) makes the
+    #: readonly-`C` path restore by UNSETTING — `unset` of a readonly is fatal in zsh.
+    ROW_188_ACCEPT = {STORE: "                C|POSIX) _uk_lc_set=2 ;;\n",
+                      READER: "                C|POSIX) _ae_lc_set=2 ;;\n"}
+    ROW_188_ACCEPT_UTF8 = {STORE: "                C|POSIX|C.UTF-8) _uk_lc_set=2 ;;\n",
+                           READER: "                C|POSIX|C.UTF-8) _ae_lc_set=2 ;;\n"}
+    ROW_188_UNSET = {STORE: "                C|POSIX) _uk_lc_set=0 ;;\n",
+                     READER: "                C|POSIX) _ae_lc_set=0 ;;\n"}
+    #: The bash probe, and the FORKING probe my own first version of this guard used. ENC-2 requires
+    #: the key derivation to fork ZERO times and row 045 pins it; this mutation is that first version.
+    ROW_188_PROBE = ('    elif [ "$_uk_lc_set" = 1 ]; then\n'
+                     '        unset -v LC_ALL 2>/dev/null || _uk_lc_ro=1\n'
+                     '    fi\n')
+    ROW_188_FORKING = ('    elif [ "$_uk_lc_set" = 1 ]; then\n'
+                       '        case "$( declare -p LC_ALL 2>/dev/null )" in\n'
+                       '            *"declare -r"*) _uk_lc_ro=1 ;;\n'
+                       '        esac\n'
+                       '    fi\n')
+    #: `/café` as raw bytes, and the answer the byte-wise walk owes for it.
+    ROW_188_CAFE = '_u188=$(printf %b "/caf\\xc3\\xa9")\n'
+    ROW_188_CAFE_KEY = "_scaf_xc3_xa9"
+
+    def _row_188_key_body(self, value, locale_line):
+        """Derive one key under `locale_line`, then report LC_ALL and that the shell is still here.
+
+        The marker is on its OWN LINE because bash does not kill the SHELL on an assignment to a
+        readonly — it destroys the enclosing command LIST, `||` arm and all (measured), so a fallback
+        spelled on the same line as the call would not run either and the two failure modes would be
+        indistinguishable from a caller's point of view.
+        """
+        return (locale_line
+                + f'if _unleashed_key "{value}"; then printf "key=%s|" "$_UNLEASHED_KEY"; '
+                  'else printf "key=REFUSED|"; fi\n'
+                + 'printf "LC=%s|ALIVE" "${LC_ALL-UNSET}"\n')
+
+    def test_row_188_a_readonly_lc_all_is_detected_never_assigned_to(self):
+        """Row 188 (codex, PR #67 pass 23 — reproduced): ENC-3 pins `LC_ALL` to `C` for the byte-wise walk and for the reader's byte count, and a caller may have made `LC_ALL` READONLY — measured, `readonly LC_ALL=C.UTF-8` followed by sourcing was FATAL in both shells, and no shell-level guard survives it (`if !` and `{ …; } || true` both die; only a subshell does, and a subshell cannot set the locale for the walk that follows). The specification DETECTS the attribute instead, fork-free and per shell, and this row pins the three things each of which was a defect in an intermediate version of the fix. ONE: ENC-2 is preserved — the probe forks ZERO times, so the key is still derived under `ulimit -u 1` (the first version read the attribute with `$( declare -p LC_ALL )`, and that mutation produces NO key at all in bash). TWO: `C.UTF-8` REFUSES rather than proceeding — it is a UTF-8 locale, and with it back on the accepted list one directory encodes THREE ways, `_scaf_xc3` in bash and `_scaf_xe9` in zsh against the correct `_scaf_xc3_xa9`; every case "survives", so a survival-only oracle passes that build and the oracle here is the KEYS. THREE: a readonly `C` is left ENTIRELY alone on exit — not unset, not reassigned — because `unset` of a readonly is fatal in zsh, and the mutation that restores by unsetting kills the shell one line after the bug it was written to fix would have. Both shells, and both sites: the reader's byte-count block carries the same guard, and the same two mutations there leave every protocol variable UNSET in bash and kill the zsh shell outright on a store that the specification resolves `1 pointer none`. The honest control throughout is a WRITABLE `LC_ALL`, where every build agrees."""
+        # Measured, both shells. Encoder, readonly LC_ALL=C: shipped `key=_stmp_sabc|LC=C|ALIVE` with
+        # EMPTY stderr; (a) bash `LC=C|ALIVE` with no `key=` at all — the command list destroyed — and
+        # zsh DEAD (rc=1, no output); (c) bash `key=_stmp_sabc|LC=C|ALIVE` but a stray
+        # `unset: LC_ALL: cannot unset: readonly variable` on stderr, zsh DEAD.
+        # Encoder, readonly LC_ALL=C.UTF-8: shipped `key=REFUSED|…|ALIVE` in both shells;
+        # (b) bash `key=_scaf_xc3`, zsh `key=_scaf_xe9` — divergent, and neither the correct key.
+        # ENC-2 under `ulimit -u 1` with LC_ALL SET: shipped `_stmp_sabc` in both shells;
+        # (d) bash produces nothing, zsh unchanged (the mutation is in the bash arm only).
+        # Reader, readonly LC_ALL=C over a store built by a SEPARATE process: shipped
+        # `1 pointer none` with empty stderr; (a) bash `U U U` + shell error, zsh DEAD; (c) bash
+        # resolves but with a stray shell error, zsh DEAD. Reader, readonly C.UTF-8: shipped
+        # `0 unresolved stale` + one diagnostic, both shells.
+        for path, name in ((STORE, "encoder"), (READER, "reader")):
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertIn(self.ROW_188_ACCEPT[path], text,
+                          f"the {name}'s readonly-LC_ALL guard no longer accepts exactly C and POSIX "
+                          f"and leaves the variable entirely alone (ENC-3)")
+            # A LITERAL `C.UTF-8)` APPEARS IN THE READER'S PROSE ("…reproduced in both shells under
+            # C.UTF-8)."), so the check is on the ARM, not on the string — a bare substring test here
+            # would fail on a comment and pass on nothing.
+            self.assertNotIn(self.ROW_188_ACCEPT_UTF8[path], text,
+                             f"the {name} accepts a readonly `C.UTF-8`, under which the walk is "
+                             f"CHARACTER-wise and one directory encodes differently per shell (ENC-1)")
+        # THE PRIMITIVES THIS ROW RESTS ON, measured rather than assumed: an assignment to a readonly
+        # `LC_ALL` is fatal in both shells even for the SAME value, and `unset` of one is fatal in zsh
+        # while bash 3.2 fails it non-fatally — which is why the two shells probe differently.
+        for shell in SHELLS:
+            p = subprocess.run([shell, "-c", "readonly LC_ALL=C; LC_ALL=C; printf ALIVE"],
+                               capture_output=True, text=True)
+            self.assertEqual("", p.stdout,
+                             f"{shell}: assigning a readonly its own value was survivable here — the "
+                             f"defect this row measures cannot occur on this machine: {p.stdout!r}")
+        p = subprocess.run(["/bin/bash", "-c",
+                            "readonly LC_ALL=C; unset -v LC_ALL 2>/dev/null || printf RO; printf ALIVE"],
+                           capture_output=True, text=True)
+        self.assertEqual("ROALIVE", p.stdout, f"bash `unset -v` on a readonly: {p.stdout!r}")
+        p = subprocess.run(["/bin/zsh", "-c", "readonly LC_ALL=C; unset LC_ALL 2>/dev/null; printf ALIVE"],
+                           capture_output=True, text=True)
+        self.assertEqual("", p.stdout,
+                         f"zsh survived `unset` of a readonly — the third state (`2`, leave it alone) "
+                         f"would then be unmotivated: {p.stdout!r}")
+        muts = {}
+        try:
+            for path in (STORE, READER):
+                block = self._slice(path, self.ROW_188_HEADS[path], self.ROW_188_TAILS[path])
+                muts[(path, "a")] = with_mutation(block, "    LC_ALL=C\n", path=path)
+                muts[(path, "b")] = with_mutation(self.ROW_188_ACCEPT[path],
+                                                  self.ROW_188_ACCEPT_UTF8[path], path=path)
+                muts[(path, "c")] = with_mutation(self.ROW_188_ACCEPT[path],
+                                                  self.ROW_188_UNSET[path], path=path)
+            muts[(STORE, "d")] = with_mutation(self.ROW_188_PROBE, self.ROW_188_FORKING, path=STORE)
+            for shell in SHELLS:
+                bash = shell == "/bin/bash"
+                # ── the ENCODER site ─────────────────────────────────────────────────────────────
+                for build in ("shipped", "a", "b", "c", "d"):
+                    st = STORE if build == "shipped" else muts[(STORE, build)]
+                    srcs = (AUTH, st, READER, PUB)
+                    tag = f"{shell} encoder/{build}"
+                    # (1) a readonly `C` — the accepted locale, the walk proceeds, and the variable is
+                    #     left ENTIRELY alone: still `C`, never unset, never reassigned.
+                    rc, out, err = run_shell(shell, self._row_188_key_body("/tmp/abc",
+                                                                           "readonly LC_ALL=C\n"),
+                                             sources=srcs)
+                    if build == "a":
+                        if bash:
+                            self.assertEqual("LC=C|ALIVE", out,
+                                             f"{tag}: the CONTROL did not fail — the unguarded "
+                                             f"assignment did not destroy the caller's command list: "
+                                             f"{out!r} {err!r}")
+                        else:
+                            self.assertEqual("", out,
+                                             f"{tag}: the CONTROL did not fail — zsh survived the "
+                                             f"unguarded assignment: {out!r} {err!r}")
+                    elif build == "c":
+                        if bash:
+                            self.assertEqual("key=_stmp_sabc|LC=C|ALIVE", out, f"{tag}: {out!r} {err!r}")
+                            self.assertNotEqual("", err,
+                                                f"{tag}: the CONTROL did not fail — restoring by "
+                                                f"unsetting a readonly was silent in bash: {err!r}")
+                        else:
+                            self.assertEqual("", out,
+                                             f"{tag}: the CONTROL did not fail — zsh survived `unset` "
+                                             f"of a readonly on the restore: {out!r} {err!r}")
+                    else:
+                        self.assertEqual("key=_stmp_sabc|LC=C|ALIVE", out,
+                                         f"{tag}: a readonly `C` did not derive the key and leave "
+                                         f"LC_ALL alone: {out!r} {err!r}")
+                        self.assertEqual("", err, f"{tag}: the accepted path must be silent: {err!r}")
+                    # (2) a readonly `C.UTF-8` — REFUSED, because the byte semantics ENC-1 needs
+                    #     cannot be established. The oracle is the KEY, never survival.
+                    rc, out, err = run_shell(shell, self.ROW_188_CAFE
+                                             + self._row_188_key_body("$_u188",
+                                                                      "readonly LC_ALL=C.UTF-8\n"),
+                                             sources=srcs)
+                    if build == "a":
+                        self.assertEqual("LC=C.UTF-8|ALIVE" if bash else "", out,
+                                         f"{tag}: the CONTROL did not fail: {out!r} {err!r}")
+                    elif build == "b":
+                        key = out.split("|")[0]
+                        self.assertEqual("key=_scaf_xc3" if bash else "key=_scaf_xe9", key,
+                                         f"{tag}: the CONTROL did not fail — a readonly `C.UTF-8` did "
+                                         f"not make the walk character-wise: {out!r} {err!r}")
+                        self.assertNotEqual(f"key={self.ROW_188_CAFE_KEY}", key,
+                                            f"{tag}: the CONTROL did not fail — the accepted UTF-8 "
+                                            f"locale still produced the byte-wise key: {out!r}")
+                    else:
+                        self.assertEqual("key=REFUSED|LC=C.UTF-8|ALIVE", out,
+                                         f"{tag}: a readonly UTF-8 locale was not refused: "
+                                         f"{out!r} {err!r}")
+                    # (3) ENC-2 — the probe forks ZERO times, so the key survives fork exhaustion.
+                    #     Scoped to the shipped build and to mutation (d), the FORKING probe: (a) and
+                    #     (c) have their own cells above and would fail this one for their own reasons,
+                    #     which would make a green cell here unreadable. `LC_ALL` must be SET for the
+                    #     bash arm's probe to run at all — with it ABSENT the probe is not reached, so
+                    #     that variant is asserted EQUAL rather than claimed to discriminate.
+                    if build in ("shipped", "d"):
+                        for loc, label in (("readonly LC_ALL=C\n", "readonly-C"),
+                                           ("LC_ALL=en_US.UTF-8\n", "writable-UTF-8"),
+                                           ("unset LC_ALL 2>/dev/null\n", "absent")):
+                            rc, out, err = run_shell(
+                                shell, 'ulimit -u 1 2>/dev/null || { printf CANNOT-LIMIT; exit 0; }\n'
+                                       + loc + '_unleashed_key /tmp/abc 2>/dev/null\n'
+                                       'printf "%s" "${_UNLEASHED_KEY-UNSET}"', sources=srcs)
+                            if out == "CANNOT-LIMIT":
+                                continue
+                            if build == "d" and bash and label != "absent":
+                                self.assertNotEqual("_stmp_sabc", out,
+                                                    f"{tag} [{label}]: the CONTROL did not fail — a "
+                                                    f"FORKING probe still derived the key with no fork "
+                                                    f"available, so ENC-2 is not being measured: {out!r}")
+                            else:
+                                self.assertEqual("_stmp_sabc", out,
+                                                 f"{tag} [{label}]: the key was not derived under "
+                                                 f"`ulimit -u 1`: {out!r} {err!r}")
+                    # (4) THE HONEST CONTROL — a WRITABLE `LC_ALL`. Every build agrees, so every cell
+                    #     above is scoped to the READONLY case and to nothing else.
+                    rc, out, err = run_shell(shell, self.ROW_188_CAFE
+                                             + self._row_188_key_body("$_u188",
+                                                                      "LC_ALL=en_US.UTF-8\n"),
+                                             sources=srcs)
+                    self.assertEqual(f"key={self.ROW_188_CAFE_KEY}|LC=en_US.UTF-8|ALIVE", out,
+                                     f"{tag}: a WRITABLE locale must behave identically in every "
+                                     f"build — this row measures the readonly case: {out!r} {err!r}")
+                # ── the READER site ──────────────────────────────────────────────────────────────
+                # The store is built by a SEPARATE process on purpose: building it in the same shell
+                # leaves `_UNLEASHED_KEY` already correct, and ENT-3's re-derivation then passes on a
+                # STALE value even when the encoder refused — a fixture that hides exactly the
+                # difference this cell exists to see (caught while writing this row).
+                for build in ("shipped", "a", "b", "c"):
+                    rd = READER if build == "shipped" else muts[(READER, build)]
+                    srcs = (AUTH, STORE, rd, PUB)
+                    tag = f"{shell} reader/{build}"
+                    for loc, healthy in (("readonly LC_ALL=C\n", True),
+                                         ("readonly LC_ALL=C.UTF-8\n", False)):
+                        self._wipe()
+                        rc0, _, err0 = run_shell("/bin/bash", self._mkstore() + self._entry())
+                        self.assertEqual(0, rc0, f"{tag}: the fixture store was not built: {err0!r}")
+                        rc, out, err = run_shell(shell, loc
+                                                 + f'_unleashed_read_store "{self.store}"\n'
+                                                 + self.ROW_186_OUT, sources=srcs)
+                        if build == "a":
+                            self.assertEqual("U U U" if bash else "", out,
+                                             f"{tag} [{loc.strip()}]: the CONTROL did not fail — the "
+                                             f"unguarded assignment left the reader able to answer: "
+                                             f"{out!r} {err!r}")
+                            self.assertEqual([], self._diags(err), f"{tag}: {err!r}")
+                        elif build == "c" and healthy:
+                            if bash:
+                                self.assertEqual("1 pointer none", out, f"{tag}: {out!r} {err!r}")
+                                self.assertNotEqual("", err,
+                                                    f"{tag}: the CONTROL did not fail — restoring by "
+                                                    f"unsetting was silent in bash: {err!r}")
+                            else:
+                                self.assertEqual("", out,
+                                                 f"{tag}: the CONTROL did not fail — zsh survived "
+                                                 f"`unset` of a readonly: {out!r} {err!r}")
+                        elif healthy:
+                            self.assertEqual("1 pointer none", out,
+                                             f"{tag}: a readonly `C` did not resolve a healthy store: "
+                                             f"{out!r} {err!r}")
+                            self.assertEqual("", err, f"{tag}: {err!r}")
+                        else:
+                            # A readonly UTF-8 locale REFUSES: the byte count clause (2) needs byte
+                            # semantics, so the entry fails and rule 1 reports `stale` with its one
+                            # diagnostic. Mutation (b) is asserted EQUAL here and NOT discriminating —
+                            # the encoder's own refusal at ENT-3 already fail-closes the read, which
+                            # is why (b)'s discriminating site is the KEY and not the resolution.
+                            self.assertEqual("0 unresolved stale", out,
+                                             f"{tag}: a readonly UTF-8 locale was not refused by the "
+                                             f"reader: {out!r} {err!r}")
+                            self.assertEqual(1, len(self._diags(err)), f"{tag}: {err!r}")
+        finally:
+            for m in muts.values():
+                os.unlink(m)
+
+    @unittest.skipUnless(DARWIN, "the store's chain and ACL arms are Darwin-only in this build")
+    def test_row_188b_the_locale_probe_restores_the_export_attribute(self):
+        """Row 188b (found while pinning row 188, by measurement, not by review): bash's only fork-free
+        readonly probe is `unset -v`, and a SUCCESSFUL unset destroys the EXPORT attribute — so an
+        exported `LC_ALL` came back as a plain shell variable and every child these libraries fork
+        (`/usr/bin/stat`, `/bin/ls -le`, `/usr/bin/getconf`) ran under the caller's `LANG` instead of
+        their `LC_ALL`. ENC-3 restores the entry state EXACTLY, and the export attribute is part of it.
+
+        The oracle is the ENVIRONMENT, not the value: the value survived the defect untouched, so a
+        cell that compared `$LC_ALL` would have passed against the broken build. STATED DEVIATION,
+        asserted here so it cannot drift silently: a caller whose `LC_ALL` was set but NOT exported
+        gets it exported on return, because bash 3.2 has no fork-free way to distinguish the two.
+        """
+        mutant = with_mutation('LC_ALL="$_uk_lc_val"; export LC_ALL ;;',
+                               'LC_ALL="$_uk_lc_val" ;;', path=STORE)
+        try:
+            for shell in SHELLS:
+                for store_file, is_mutant in ((STORE, False), (mutant, True)):
+                    body = ('export LC_ALL=en_US.UTF-8\n'
+                            '_unleashed_key /tmp/abc >/dev/null 2>&1\n'
+                            'printf "%s|%s" "$LC_ALL" "$(env | grep -c \'^LC_ALL=\')"\n')
+                    rc, out, err = run_shell(shell, body, sources=(AUTH, store_file))
+                    tag = f"{shell} {'mutant' if is_mutant else 'shipped'}"
+                    if shell.endswith("zsh") or not is_mutant:
+                        self.assertEqual("en_US.UTF-8|1", out,
+                                         f"{tag}: the caller's exported LC_ALL must survive as an EXPORT: {err}")
+                    else:
+                        self.assertEqual("en_US.UTF-8|0", out,
+                                         f"{tag}: the CONTROL did not fail — without the `export` on restore "
+                                         f"bash must leave LC_ALL out of the environment: {err}")
         finally:
             os.unlink(mutant)
 

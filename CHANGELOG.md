@@ -34,7 +34,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
   - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
     in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
-  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 133 rows
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 137 rows
     executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
     shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
 
@@ -62,6 +62,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **Three more pieces of inherited shell state, the same class as the `noglob` defect (rows 186-188b).**
+  Found by codex on the pushed head; each reproduced in both shells before it was fixed, and each is an
+  ORDINARY setting a user or a wrapper script can leave switched on, with no attacker anywhere:
+  (1) `shopt -s failglob` made the store scan **abort the sourcing shell** when the store was empty —
+  `failglob` is a separate option from `noglob` and the round that fixed `noglob` did not cover it, so
+  the scan now saves, clears and restores it beside the `set -f` handling it already had;
+  (2) `shopt -s nocasematch` made the key encoder's `case` arms case-insensitive, so `/A` encoded to
+  `_sa` — the SAME key as `/a` — which is an Invariant P injectivity violation reached without any
+  attacker: two different bases, one file. The encoder now forces case-sensitive matching for the byte
+  walk and restores the caller's setting (`/a` → `_sa`, `/A` → `_s_ca`, matching zsh and the control);
+  (3) a **readonly `LC_ALL`** killed the sourcing shell outright in both shells, because the encoder
+  pins `LC_ALL=C` for its byte walk and an assignment to a readonly is fatal under `set -e`. The
+  encoder now detects the attribute **without forking** — ENC-2 requires the whole key derivation to
+  fork zero times and row 045 pins that with `ulimit -u 1`, which the obvious `declare -p` probe
+  breaks — and accepts a readonly `C` or `POSIX` unchanged while refusing anything else. `C.UTF-8` is
+  refused deliberately: it is a UTF-8 locale, and under it the two shells produced DIFFERENT keys for
+  the same base (`_scaf_xc3` vs `_scaf_xe9`, against the correct `_scaf_xc3_xa9`).
+  A regression inside that third fix is worth recording because tests caught it and re-reading did
+  not: bash's only fork-free readonly probe is `unset -v`, and a *successful* unset destroys the
+  variable's EXPORT attribute, so a caller that had exported `LC_ALL` got it back unexported and
+  child processes silently ran in a different locale. The restore now re-exports (row 188b asserts the
+  ENVIRONMENT, not the value). STATED DEVIATION: a caller whose `LC_ALL` was set but deliberately NOT
+  exported gets it back exported.
 - **E2b's fold runs before E2a creates anything.** A `CLAUDE_PLUGIN_DATA` spelling with `..` ahead of
   an existing symlink had its components created THROUGH that link and outside the authenticated
   chain, and only then was refused: `<h>/new/../link/created` left `<h>/new` and `<d>/outside/created`

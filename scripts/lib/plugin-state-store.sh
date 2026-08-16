@@ -38,7 +38,64 @@ _unleashed_key() {
     # ENC-3: record LC_ALL's exact entry state and restore it on every path by which this ends.
     # An EMPTY LC_ALL is not the same as an absent one, so the two cases are distinguished.
     if [ -n "${LC_ALL+set}" ]; then _uk_lc_set=1; _uk_lc_val="$LC_ALL"; else _uk_lc_set=0; fi
-    LC_ALL=C
+    # A CALLER MAY HAVE MADE `LC_ALL` READONLY, and then this assignment is FATAL, not scoped: measured,
+    # `readonly LC_ALL=C.UTF-8` followed by sourcing killed the shell outright in both shells — before
+    # the protocol variables were established, so a hook died instead of resolving (codex, PR #67 pass
+    # 23 — reproduced). The assignment is attempted in a form whose failure is survivable, and its
+    # SUCCESS is then checked: if the locale could not be set to C, the byte-oriented walk below would
+    # be wrong, so the caller's own value is left alone and _uk_lc_ro records it for the one place
+    # that must then take a different route.
+    # THE ASSIGNMENT IS NOT ATTEMPTED WHEN THE CALLER MADE `LC_ALL` READONLY. Measured: bash aborts the
+    # shell on an assignment to a readonly variable and NO shell-level guard survives it — not `if !`,
+    # not `{ …; } || true`; only a subshell survives, and a subshell cannot set the locale for the walk
+    # that follows. So the attribute is read FIRST, with the same `declare -p`/`typeset -p` parse the
+    # instance stamp uses (measured to detect it in both shells, and not to misfire on a writable one).
+    # If it is readonly and already C or POSIX the walk is byte-oriented anyway and proceeds; if it is
+    # readonly and something else, the byte semantics ENC-1 requires cannot be established, so this
+    # REFUSES rather than encoding under a locale that would make the walk character-oriented — the
+    # `/café` defect ENC-3 exists to prevent. Nothing is fatal either way (codex, PR #67 pass 23 —
+    # reproduced: `readonly LC_ALL=C.UTF-8` killed the sourcing shell in BOTH shells).
+    # THE PROBE MUST NOT FORK. ENC-2 requires the key derivation to fork ZERO times so it still works
+    # under fork exhaustion (`ulimit -u 1`), and row 045 pins that — my first version of this guard read
+    # the attribute with `$( declare -p … )`, which IS a fork, and row 045 caught it. Both probes below
+    # are builtins: zsh reports the attribute in `${(t)var}` (measured: `scalar-readonly-special`), and
+    # bash has no such introspection in 3.2, so it uses `unset -v`, which on a readonly FAILS
+    # NON-FATALLY there (measured) while an assignment would kill the shell. The zsh form is inside a
+    # single-quoted `eval` because bash cannot PARSE `${(t)…}` — verified that a file containing it
+    # parses in both shells.
+    _uk_lc_ro=0
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval 'case "${(t)LC_ALL}" in *readonly*) _uk_lc_ro=1 ;; esac'
+    elif [ "$_uk_lc_set" = 1 ]; then
+        unset -v LC_ALL 2>/dev/null || _uk_lc_ro=1
+    fi
+    case "$_uk_lc_ro" in
+        1)
+            case "${_uk_lc_val:-}" in
+                # 2 = LEAVE IT ENTIRELY ALONE. Not 0: 0 means "was unset, so unset it again" and
+                # `unset` of a readonly is fatal in zsh (measured — it killed the shell on the
+                # RESTORE after this branch had correctly survived the assignment).
+                # ONLY `C` AND `POSIX`. `C.UTF-8` is a UTF-8 locale, so the walk is CHARACTER-wise
+                # there, not byte-wise: measured, a readonly `C.UTF-8` encoded `/café` as
+                # `_scaf_xc3` in bash and `_scaf_xe9` in zsh against the correct `_scaf_xc3_xa9`
+                # — a different key per shell for one directory, which is ENC-1 injectivity gone.
+                # I had listed it as acceptable in the first version of this guard; the keys said
+                # otherwise, which is why this checks the OUTPUT and not merely that nothing died.
+                C|POSIX) _uk_lc_set=2 ;;
+                *) return 1 ;;
+            esac ;;
+        *) LC_ALL=C ;;
+    esac
+    # CASE MATCHING IS FORCED CASE-SENSITIVE FOR THE WALK. bash's `nocasematch` makes the `case` arms
+    # below match lowercase bytes too, so `/a` and `/A` both encoded to `_s_ca` — ONE key for TWO
+    # directories, which is ENC-1 injectivity gone: the publisher authenticates its own wrong key and
+    # reports `created`, then every ordinary hook computes the canonical key, finds the name/content
+    # pair inconsistent, and marks the store `stale` (codex, PR #67 pass 23 — reproduced). zsh has no
+    # such option for `case`. The caller's setting is restored on every path out, beside LC_ALL.
+    _uk_nocase=0
+    if [ -z "${ZSH_VERSION:-}" ] && shopt -q nocasematch 2>/dev/null; then
+        _uk_nocase=1; shopt -u nocasematch 2>/dev/null || :
+    fi
 
     _uk_i=0
     _uk_len=${#_uk_v}
@@ -80,7 +137,20 @@ _unleashed_key() {
         _uk_i=$(( _uk_i + 1 ))
     done
 
-    if [ "$_uk_lc_set" = 1 ]; then LC_ALL="$_uk_lc_val"; else unset LC_ALL; fi
+    # RESTORED AS AN EXPORT. bash's only fork-free readonly probe is `unset -v`, and a successful
+    # unset destroys the EXPORT attribute: measured, an exported `LC_ALL` came back as a plain
+    # shell variable, so every child these libraries fork — `/usr/bin/stat`, `/bin/ls -le`,
+    # `/usr/bin/getconf` — ran under the caller's `LANG` instead of their `LC_ALL`. ENC-3 says the
+    # entry state is restored EXACTLY, and the export attribute is part of that state.
+    # STATED DEVIATION, measured and deliberate: a caller whose `LC_ALL` was SET BUT NOT EXPORTED
+    # gets it exported on return, because bash 3.2 offers no fork-free way to tell the two apart
+    # (`export` and `typeset -x` both succeed on a readonly, so neither can even probe; `compgen
+    # -e` needs a command substitution, which ENC-2 forbids). An unexported `LC_ALL` is
+    # pathological — it is an environment variable by convention — and exporting it makes the
+    # children agree with the shell that spawned them, where dropping the export makes them
+    # disagree silently. zsh keeps the attribute through `${(t)…}` and never unsets.
+    case "$_uk_lc_set" in 1) LC_ALL="$_uk_lc_val"; export LC_ALL ;; 0) unset LC_ALL ;; esac
+    [ "${_uk_nocase:-0}" = 1 ] && shopt -s nocasematch 2>/dev/null || :
     _UNLEASHED_KEY="$_uk_out"
 }
 
