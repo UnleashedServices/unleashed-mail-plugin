@@ -6722,15 +6722,18 @@ class RowsPass17(unittest.TestCase):
     #: follow-up): the block now authenticates the PARENT before it creates anything and creates under
     #: `umask 077`, so it is SLICED from the current file rather than quoted — a comment rewrite inside
     #: it must not strand this row on a pattern that no longer matches.
-    ROW_180_HEAD = '    if [ ! -e "$_pb_value" ] && [ ! -L "$_pb_value" ]; then\n'
+    #: RE-PINNED again (pass 22): E2b's fold now runs BEFORE this block, so creation operates on
+    #: `_pb_folded` — the lexically folded path — rather than the caller's spelling. That reordering is
+    #: the fix for a refusal that created directories through a symlink and outside the chain.
+    ROW_180_HEAD = '    if [ ! -e "$_pb_folded" ] && [ ! -L "$_pb_folded" ]; then\n'
     ROW_180_TAIL = '\n    fi\n'
     #: The two halves the follow-up added, each mutable on its own so each is measured on its own.
-    ROW_180_UMASK = '        ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :\n'
-    ROW_180_UMASK_GONE = '        /bin/mkdir -p -- "$_pb_value" >/dev/null 2>&1 || :\n'
+    ROW_180_UMASK = '        ( umask 077; /bin/mkdir -p -- "$_pb_folded" ) >/dev/null 2>&1 || :\n'
+    ROW_180_UMASK_GONE = '        /bin/mkdir -p -- "$_pb_folded" >/dev/null 2>&1 || :\n'
     #: The authentication half, as it stands after pass 19: the walk to the NEAREST EXISTING ancestor
     #: replaced the immediate parent, because with two or more missing components the parent is itself
     #: absent and the chain refused it — publication `failed` on every run of a fresh install.
-    ROW_180_PARENT = ('        _pb_anc="$_pb_value"\n'
+    ROW_180_PARENT = ('        _pb_anc="$_pb_folded"\n'
                       '        while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]; do\n'
                       '            _pb_up="${_pb_anc%/*}"; [ -n "$_pb_up" ] || _pb_up=/\n'
                       '            [ "$_pb_up" != "$_pb_anc" ] || break\n'

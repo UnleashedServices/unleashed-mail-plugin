@@ -62,6 +62,14 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ### Fixed
 
+- **E2b's fold runs before E2a creates anything.** A `CLAUDE_PLUGIN_DATA` spelling with `..` ahead of
+  an existing symlink had its components created THROUGH that link and outside the authenticated
+  chain, and only then was refused: `<h>/new/../link/created` left `<h>/new` and `<d>/outside/created`
+  on disk while the publish reported `failed`. The fold is purely lexical and needs no path to exist,
+  so it now runs first and the creation authenticates the nearest existing ancestor of the FOLDED
+  path — here the symlink itself, which ST-4 refuses — leaving nothing behind. A refusal that leaves
+  damage is not a refusal; this is the second instance of that shape found on this branch, and both
+  are now guarded by row 180.
 - **The publisher applies ST-3 to an existing store (row 185).** Found by an independent pre-merge
   review of the unreviewed head. `_unleashed_create_store` authenticates the CHAIN — which refuses
   group- or other-WRITABLE components — and never applied ST-3's exact-0700 test to `bases/` itself,

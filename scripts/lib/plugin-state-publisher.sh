@@ -145,44 +145,14 @@ _unleashed_publish() {
     case "$_pb_value" in
         *"$_pb_nl"*) _unleashed_pub_failed "the plugin-data base contains a newline"; return 0 ;;
     esac
-    # E2a — A BASE THAT DOES NOT EXIST YET IS CREATED, not refused. `CLAUDE_PLUGIN_DATA` names the
-    # directory the HOST will use, and on a fresh install nothing has written there yet — while this
-    # library's own writers (`marker_write`, `log_append`, `context_*`) create it lazily with `mkdir -p`
-    # moments later. Refusing here meant every hook of a first session printed a publication failure and
-    # the store was NEVER seeded, on an ordinary healthy machine with no adversary (measured: `state=failed`,
-    # then the very next writer created the directory). So the publisher creates it under the same rule
-    # the store itself is created by, and only a path that is present-but-unusable — a file, a symlink,
-    # a directory the chain refuses — still fails. A creation that does not succeed still fails E2.
-    if [ ! -e "$_pb_value" ] && [ ! -L "$_pb_value" ]; then
-        # THE PARENT IS AUTHENTICATED BEFORE ANYTHING IS CREATED, and the creation is 0700. The first
-        # version ran `mkdir -p` before the chain walk, so an other-writable parent got the directory
-        # created and only THEN refused — a write outside the store on the refusal path, exactly what
-        # PUB-9 E4 step (i) forbids on the store chain. It also inherited the ambient umask: measured,
-        # at `umask 002` the base came out 0775, its own chain then refused it, and every hook reported
-        # `failed` forever after. Both found by the mutant rows. `umask 077` in a subshell covers every
-        # component `-p` creates, not only the leaf.
-        # THE NEAREST EXISTING ANCESTOR, not the immediate parent. With two or more missing trailing
-        # components — the ordinary shape of a fresh install, `~/.claude/plugins/data/<id>` on a machine
-        # with no `plugins` directory yet — the immediate parent is itself absent, so the chain walk
-        # refused it and publication `failed` on EVERY run: the very defect E2a exists to remove,
-        # re-introduced by E2a's own guard for the multi-component case (codex, PR #67 pass 19 —
-        # reproduced: one missing component `created`, two `failed`). The walk is applied to the deepest
-        # ancestor that EXISTS; `mkdir -p` then creates the missing tail beneath an authenticated point,
-        # and E2's own `-d`/`-L` tests plus the target-chain walk below still judge the result.
-        _pb_anc="$_pb_value"
-        while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]; do
-            _pb_up="${_pb_anc%/*}"; [ -n "$_pb_up" ] || _pb_up=/
-            [ "$_pb_up" != "$_pb_anc" ] || break
-            _pb_anc="$_pb_up"
-        done
-        if ! _unleashed_auth_chain "$_pb_anc"; then
-            _unleashed_pub_failed "the plugin-data base does not exist and its nearest existing ancestor does not authenticate"; return 0
-        fi
-        ( umask 077; /bin/mkdir -p -- "$_pb_value" ) >/dev/null 2>&1 || :
-    fi
-    if [ ! -d "$_pb_value" ] || [ -L "$_pb_value" ]; then
-        _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
-    fi
+    # E2b RUNS BEFORE ANYTHING IS CREATED. It used to fold AFTER E2a's `mkdir -p`, so a spelling
+    # with `..` ahead of an existing SYMLINK had its components created through that link and
+    # OUTSIDE the authenticated chain, and only then was refused: measured, `<h>/new/../link/created`
+    # left `<h>/new` and `<d>/outside/created` on disk while the publish reported `failed` (codex,
+    # PR #67 pass 22 — reproduced). Folding first means E2a authenticates the nearest existing
+    # ancestor OF THE FOLDED PATH — `<h>/link`, a symlink, which ST-4 refuses — so nothing is made.
+    # The fold is purely lexical and needs no path to exist; the device:inode check that does need
+    # both to exist stays below, after creation.
     # E2b — ONE DIRECTORY, ONE KEY. The key is an injective encoding of the VALUE, so two spellings of
     # one directory published two entries and every later reader reported a permanent `conflict` that
     # only a manual delete clears: measured, `<d>/sub`, `<d>/./sub` and `<d>/x/../sub` left THREE
@@ -219,9 +189,6 @@ _unleashed_publish() {
         /*) : ;;
         *)  _unleashed_pub_failed "the plugin-data base is not an absolute path"; return 0 ;;
     esac
-    if [ ! -d "$_pb_folded" ] || [ -L "$_pb_folded" ]; then
-        _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
-    fi
     # ...AND THE FOLD MUST NAME THE SAME DIRECTORY THE CALLER DID. A lexical `..` pops a SYMLINKED
     # component that the kernel would have followed first, so `<h>/lnk/../x` folds to `<h>/x` while
     # every writer — which keeps using the caller's own spelling — lands in `<h>/deep/x`: measured, the
@@ -230,6 +197,44 @@ _unleashed_publish() {
     # (found by the mutant-row author, not by review). So when folding CHANGED the string, both
     # spellings are stat'd and must name the same inode; anything else fails closed. Ordinary values
     # fold to themselves and pay nothing.
+    # E2a — A BASE THAT DOES NOT EXIST YET IS CREATED, not refused. `CLAUDE_PLUGIN_DATA` names the
+    # directory the HOST will use, and on a fresh install nothing has written there yet — while this
+    # library's own writers (`marker_write`, `log_append`, `context_*`) create it lazily with `mkdir -p`
+    # moments later. Refusing here meant every hook of a first session printed a publication failure and
+    # the store was NEVER seeded, on an ordinary healthy machine with no adversary (measured: `state=failed`,
+    # then the very next writer created the directory). So the publisher creates it under the same rule
+    # the store itself is created by, and only a path that is present-but-unusable — a file, a symlink,
+    # a directory the chain refuses — still fails. A creation that does not succeed still fails E2.
+    if [ ! -e "$_pb_folded" ] && [ ! -L "$_pb_folded" ]; then
+        # THE PARENT IS AUTHENTICATED BEFORE ANYTHING IS CREATED, and the creation is 0700. The first
+        # version ran `mkdir -p` before the chain walk, so an other-writable parent got the directory
+        # created and only THEN refused — a write outside the store on the refusal path, exactly what
+        # PUB-9 E4 step (i) forbids on the store chain. It also inherited the ambient umask: measured,
+        # at `umask 002` the base came out 0775, its own chain then refused it, and every hook reported
+        # `failed` forever after. Both found by the mutant rows. `umask 077` in a subshell covers every
+        # component `-p` creates, not only the leaf.
+        # THE NEAREST EXISTING ANCESTOR, not the immediate parent. With two or more missing trailing
+        # components — the ordinary shape of a fresh install, `~/.claude/plugins/data/<id>` on a machine
+        # with no `plugins` directory yet — the immediate parent is itself absent, so the chain walk
+        # refused it and publication `failed` on EVERY run: the very defect E2a exists to remove,
+        # re-introduced by E2a's own guard for the multi-component case (codex, PR #67 pass 19 —
+        # reproduced: one missing component `created`, two `failed`). The walk is applied to the deepest
+        # ancestor that EXISTS; `mkdir -p` then creates the missing tail beneath an authenticated point,
+        # and E2's own `-d`/`-L` tests plus the target-chain walk below still judge the result.
+        _pb_anc="$_pb_folded"
+        while [ ! -e "$_pb_anc" ] && [ ! -L "$_pb_anc" ]; do
+            _pb_up="${_pb_anc%/*}"; [ -n "$_pb_up" ] || _pb_up=/
+            [ "$_pb_up" != "$_pb_anc" ] || break
+            _pb_anc="$_pb_up"
+        done
+        if ! _unleashed_auth_chain "$_pb_anc"; then
+            _unleashed_pub_failed "the plugin-data base does not exist and its nearest existing ancestor does not authenticate"; return 0
+        fi
+        ( umask 077; /bin/mkdir -p -- "$_pb_folded" ) >/dev/null 2>&1 || :
+    fi
+    if [ ! -d "$_pb_folded" ] || [ -L "$_pb_folded" ]; then
+        _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
+    fi
     if [ "$_pb_folded" != "$_pb_value" ]; then
         # DEVICE AND INODE. An inode number is unique only WITHIN a filesystem, and the two spellings can
         # land on different mounts precisely when a `..` was popped from under a symlink — so comparing
