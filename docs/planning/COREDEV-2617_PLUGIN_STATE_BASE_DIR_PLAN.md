@@ -3847,3 +3847,81 @@ identical bytes.
 **The gate rule has now paid for itself twice on this ticket alone.** Two double approvals, two
 reproduction failures, two sets of real defects. *An approving pair is a hypothesis; the reproduction is
 the test.*
+
+## 28. The residual register
+
+**This section is the register §4.2a-T promises.** TM-2 closes a category-3 finding by RECORDING it
+rather than fixing it, and TM-5 sends it here; a register that does not exist would make that
+disposition a dismissal wearing a record's clothes. Every finding this ticket closed as a residual is
+below, one line each, so it is stated rather than rediscovered. **Being listed here is not a backlog
+entry.** These are closed. TM-5 re-opens one only by satisfying its question 1 as well — an ordinary
+environment producing the same outcome — at which point it is C1 and is fixed, not recorded.
+
+Twenty-four findings were triaged C3 on PR #67 (of 103 total: 34 C1, all fixed; **0 C2**; 45 C4, which
+are review-harness items and live on COREDEV-2650, not here). Of the 24, **5 are live by decision**,
+**3 reproduce but demonstrate no capability change**, and **16 had their reported INSTANCE fixed while
+the CLASS stays open** — the last group is listed because a fixed instance of an unfixable class is the
+easiest thing on this ticket to mistake for a closed class.
+
+### 28.1 Live by decision — present at HEAD, not fixed
+
+Each requires a same-uid process that already controls the hook's environment. TM-2's first normative
+consequence forbids adding an in-process guard against these on the grounds that it 'raises the bar':
+it raises the reviewer's confidence without raising the attacker's cost.
+
+| id | one line |
+|---|---|
+| `G1/G3/G6` | the instance stamp is only CHECKED when it is PRESENT (`paths.sh:83`), so a parent that fabricates a resolution and simply OMITS the stamp is never tested; an exec-preserved pid plus an `export -f` marker (bash) or a `PATH` executable of the marker's name (zsh) satisfies the per-call guard and all five copies adopt the parent's base |
+| `G5/G7` | bash 3.2 IMPORTS `BASH_SOURCE` from the environment as a scalar that shadows the real array, so `${BASH_SOURCE[0]:-$0}` hands a parent the library directory and the resolver sources four attacker `plugin-state-*.sh` — code execution plus a parent-chosen base, even with `CLAUDE_PLUGIN_DATA` correctly set, and the same variable hijacks every `scripts/*.sh` `_DIR=` loader. Not settable by `export` (bash refuses to export an array); it takes a deliberate `env BASH_SOURCE=…` or a non-bash parent |
+
+### 28.2 Reproduces, no capability change
+
+The mechanism holds exactly as reported; a parent holding the premise already has everything the
+mechanism would obtain. TM-5's fourth rule governs these.
+
+| id | one line |
+|---|---|
+| `G2/G4` | `BASH_ENV` (and `ZDOTDIR` for zsh) runs parent-supplied code inside the child BEFORE our first line, stamping a GENUINE `declare -r` with no pid prediction. The category's defining example, named in TM-2 itself |
+| `F16` | the loader's own PRIMITIVES are shadowable by the same import mechanism — an exported `.` makes the re-source a no-op, an exported `[` answers false to the `-r` test, an exported `unset` truncates `BASH_SOURCE` in bash 3.2. `builtin`, `command` and `unset` are themselves importable, so naming them one at a time closes instances while the class stays open |
+
+### 28.3 Instance fixed, class open
+
+Each was a REAL defect and each is fixed at HEAD — but every one sits on the same premise, so the fix
+closes the reported carrier and not the category. They are recorded so that a later round finding a new
+carrier recognises it as an already-recorded premise (TM-5: *naming a new carrier for an already-recorded
+premise is not a new finding*) rather than as a regression.
+
+| id | the defect | what closed the instance |
+|---|---|---|
+| `F11/F13` | the readonly test globbed the WHOLE `declare -p` line, so `*r*` reached into the attacker-supplied VALUE and a crafted `_UNLEASHED_BASE_INSTANCE` furnished both the `r` and the name | only the flag letters are parsed (`${_ubi_decl%% _UNLEASHED_BASE_INSTANCE*}`) |
+| `T08/T13` | `_u_principal` trusted a caller-set `_U_PRINCIPAL`, then — after the first fix — an equally caller-set `_U_PRINCIPAL_PROBED` flag, so one ACL bypass survived its own remediation | `_u_principal` resets its own cache at the start of resolution — the cache is keyed on state the entry point itself resets |
+| `T16` | `read` opened a `base.*` entry before any size bound applied, so a huge or sparse 0600 entry could hang every hook at source time | refused on `_U_SIZE > ${#name}+1` before the open |
+| `T24` | the transient was created under `set -C` then written through a SECOND redirect, so a substituted symlink was followed or a FIFO blocked the sourcing hook | one open: created and written through fd 9 of the `set -C` create |
+| `T26/T44` | the reader re-opened the predictable pathname after its type/mode/size checks, and validated mode on the PATHNAME, so a replacement was read instead of the validated object | opened once and bound to the validated inode (zsh `sysopen`+`zstat -f`; bash `/dev/fd/9`) |
+| `T28` | an inherited `_UNLEASHED_STATE_LOADED=1` short-circuited the loader, after which the reader branch called an undefined function — `command not found`, four unset protocol variables, a `set -u` consumer aborting | keyed on re-sourcing the files beside the resolver, never on a flag. Recorded because the CONSEQUENCE is honest-run-shaped |
+| `T32` | `[ ! -f ]` FOLLOWED a symlinked `base.<key>`, so ST-7's required refusal was skipped and `mv -f` silently replaced the link | `-L` is an independent refusal, tested first |
+| `T42` | the per-process cache keyed on `$$` alone and `exec` preserves the pid, so a wrapper that exported the protocol variables and exec'd a hook left it on the previous base | the readonly `_UNLEASHED_BASE_INSTANCE` stamp plus a marker function `exec` drops. Its honest-run sibling is T49, classified C1 |
+| `T43/T48/T59` | three successive 'already initialised' guards — one exported function, then a COMPLETE namespace, then the state-machinery four — each trusted inherited definitions, and each was re-fixed as the next carrier replaced the last | definitions are unconditional; the four libraries are re-sourced from beside the resolver whenever readable. Four rounds spent here are TM-2's evidence that this class cannot be closed in-process |
+| `T53` | a component absent during the chain walk but present at creation time was accepted by `[ -d ]`, which follows a symlink, so `mkdir` ran through the link | components appearing since the walk are re-authenticated with the no-follow predicate before anything is created beneath them |
+| `T66` | ENT-2b treated inode equality as proof of a bare pathname, but a rename-aside plus a symlink to the validated inode passes it while the surviving entry is a link ENT-1 forbids | `_u_entry_path_still_bare` re-tests the pathname after the read, in both shell arms |
+
+### 28.4 Stated residuals of the arm — limits of the design, not attack findings
+
+These are not C3 findings; they are places where the shipped behaviour is knowingly less than a reader
+might assume. Each is already stated where it is normative, and is collected here so the register is the
+whole picture rather than half of it.
+
+| residual | where it is stated |
+|---|---|
+| **PUB-9 E1 cannot detect an ABSENT `HOME` under zsh** — zsh fills `HOME` from the passwd database before any sourced line runs, so a harness that clears `HOME` to prevent persistent writes is protected in bash and not in zsh. No post-startup test can distinguish that from a caller setting `HOME` to the same value. The protection is the explicit opt-out `_UNLEASHED_PUBLISH_OK=0` | §4.2a-T, TM-4; mutant row 183 |
+| **The `bash` 3.2 FIFO-substitution window** between TMP-1's presence test and its `set -C` create, which no POSIX shell redirect can close | §4.2a-P, P-5; ST-7, TMP-1 |
+| **Case folding conflicts by design** — `SUB` beside `sub` is TWO entries and resolves as `conflict`, not one entry | ENC-4 |
+| **A tombstoned or obsolete entry is recovered by an operator `rm`**, never automatically: nothing in the store is reaped on age, mtime or count | ST-8 |
+| **~89 ms of the remaining per-hook cost** is the command substitution in `_u_acl_ok`; removing it means migrating the ACL seam from stdout to a variable, and with it every fixture in the obligation suite | CHANGELOG 2.8.0 |
+| **The Linux arms are deliberately unbuilt** until `scripts/review/linux-primitive-probe.sh` has been run on a Linux host and its output transcribed; Darwin arms only | §4.2a-S; README |
+| **A platform with no ACL enumerator** (FreeBSD and kin) has no built arm; the carve-out is stated rather than implemented | §4.2a-S, ACL clauses |
+| **The encoder restores `LC_ALL` as an EXPORT.** bash's only fork-free readonly probe is `unset -v`, and a successful unset destroys the export attribute, so a caller whose `LC_ALL` was set but deliberately NOT exported gets it back exported | CHANGELOG 2.8.0; mutant row 188b |
+
+**What this register does not contain.** No C2 finding, because none was found: 103 findings were
+triaged on this PR and **zero** required a different uid. That is a statement about what was looked for
+and not found, not a proof that none exists.
