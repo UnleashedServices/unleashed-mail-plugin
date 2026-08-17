@@ -368,10 +368,10 @@ Each agent type has minimum tool requirements:
 
 | Agent kind | Required tools |
 |------------|---------------|
-| Reviewers (read-only) | Read, Bash, Grep, Glob — **exception:** `prompt-review` is `Read, Grep, Glob` (Bash deliberately dropped; it inspects AI call sites, not shell state) |
+| Reviewers (read-only) | Read, Grep, Glob — **no `Bash` on any of the five spawned reviewers** (PR #63 P1: they are reachable from model-invocable `pr-review` while processing untrusted PR content; §9.1 records the bound). Their bodies are written shell-free, and `check_bashless_agents_run_no_shell` in `validate-plugin-assembly.py` fails CI if a Bash-less agent's body still invokes shell. (An earlier revision of this row granted reviewers Bash with `prompt-review` as the exception — that described the pre-PR-#63 fleet and was exactly backwards against the shipped frontmatter; obeying it would have re-granted shell to four reviewers. Found by the 2026-08-17 audit, AF-1.) |
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
-| Orchestrator (swift-reviewer) | + Agent (subagent dispatch) |
-| Diagnostic | + WebFetch (look up vendor docs mid-debug) |
+| Orchestrator (swift-reviewer) | Read, Bash, Grep, Glob, Agent (subagent dispatch), plus the bundled synthesizer MCP tool (`mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`) — stated in full because a `+`-row inherits whichever row sits above it, and this row must not silently absorb an edit to that row |
+| Diagnostic | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch (look up vendor docs mid-debug) |
 | Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
 | Personas (read+search) | Read, Grep, Glob |
 | Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` blocks every checkout-write vector — file editors, shell, subagent dispatch — and the github MCP write surface. `Bash` is denied (PR #63 recheck, P1): `swift-reviewer` spawns this agent while processing untrusted review content, and a sub-agent `Bash` cannot be scoped to one command — so the caller passes the PR URL instead of the agent running `gh pr view`. It mutates JIRA via the Atlassian MCP by design, and nothing else. (This row previously listed a `MultiEdit` deny the agent file never carried — Claude Code removed that tool, and the stale-name rule rejects denying it.) |
@@ -389,7 +389,9 @@ shell command with no user gesture.
 
 **Why it is not simply removed.** A sub-agent's `tools:` list takes BARE NAMES — `Bash(...)` scoping is
 silently ignored there — so a sub-agent either has arbitrary shell or none. `swift-reviewer` needs it
-for `changeset.sh` (scope detection) and `build-verify.sh` (Step 4). Dropping `Bash` would not make
+for its inline git scope-detection program in Step 1 (`detect_base()` + `git merge-base`/`git diff
+--name-only` — `changeset.sh` belongs to the `pr-review` skill, not this agent), for
+`reviewer-roster.sh` (Step 2), and for `build-verify.sh` (Step 4). Dropping `Bash` would not make
 those steps safe; it would make them silently produce nothing, which is precisely the worse failure
 mode the `check_bashless_agents_run_no_shell` validator exists to catch — it is what happened to
 `security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
@@ -545,7 +547,7 @@ unchanged and still mandatory.
 | `surface_id` | `producer_id` | `scope` | `anchor` |
 |---|---|---|---|
 | `verdict-report` | `swift-reviewer` | `in` | `agents/swift-reviewer.md:613` |
-| `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:141` |
+| `brainstorm-summary` | `brainstorm` | `in` | `skills/brainstorm/SKILL.md:150` |
 | `implement-wrapup` | `implement` | `in` | `skills/implement/SKILL.md:237` |
 | `pr-review-report` | `pr-review` | `in` | `skills/pr-review/SKILL.md:68` |
 | `security-findings` | `security-reviewer` | `out` | `agents/security-reviewer.md:208` |

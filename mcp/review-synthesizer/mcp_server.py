@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
@@ -216,7 +215,11 @@ def _handle(method: str, params: dict):
             "serverInfo": SERVER_INFO,
         }
     if method == "notifications/initialized":
-        return None  # notification — no response
+        # A well-behaved client sends this as a NOTIFICATION (no id) and the main loop stays
+        # silent. Returning {} instead of None means a buggy client that attaches an id still
+        # gets the JSON-RPC-required response instead of hanging forever on the suppressed
+        # reply (2026-08-17 audit, AF-21).
+        return {}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -247,39 +250,56 @@ def main() -> int:
     # readline() loop, NOT `for line in sys.stdin` — the file iterator's read-ahead
     # buffering can deadlock a bidirectional pipe protocol (it blocks filling its
     # buffer before yielding a line). readline returns each line as soon as it lands.
-    while True:
-        line = sys.stdin.readline()
-        if not line:        # EOF — client closed the pipe
-            break
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        while True:
+            line = sys.stdin.readline()
+            if not line:        # EOF — client closed the pipe
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                # JSON-RPC 2.0 prescribes a Parse Error reply with `id: null` — a client that
+                # sent a malformed REQUEST would otherwise wait until its own timeout on a
+                # silent drop (2026-08-17 audit, AF-20). Still logged for the debug trail.
+                _log("non-JSON line — replying -32700")
+                _send({"jsonrpc": "2.0", "id": None,
+                       "error": {"code": -32700, "message": "parse error: invalid JSON"}})
+                continue
+            if not isinstance(msg, dict):  # e.g. a bare `[]` — don't crash on msg.get()
+                _log("ignored non-object JSON-RPC message")
+                continue
+            # A notification is a request with NO `id` member; an explicit `id: null`
+            # is still a request and must get a reply. Distinguish by membership, not None.
+            has_id = "id" in msg
+            mid = msg.get("id")
+            try:
+                # default only when `params` is ABSENT; a present `[]`/null reaches the
+                # dict-guard in _handle and is rejected (don't let `or {}` mask them).
+                result = _handle(msg.get("method", ""), msg.get("params", {}))
+            except _RpcError as e:
+                if has_id:
+                    _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})
+                continue
+            except Exception as e:  # noqa: BLE001 - tool/internal failure
+                if has_id:
+                    _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
+                continue
+            if has_id and result is not None:  # requests reply; notifications stay silent
+                _send({"jsonrpc": "2.0", "id": mid, "result": result})
+    except BrokenPipeError:
+        # The client closed the read end while we were writing (teardown race). The reader is
+        # gone, so nothing is lost — exit cleanly instead of dying with a traceback and rc 1
+        # (2026-08-17 audit, AF-19). Point stdout at devnull so the interpreter's exit-time
+        # flush of the broken stream cannot raise a second BrokenPipeError.
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            _log("dropped non-JSON line")
-            continue
-        if not isinstance(msg, dict):  # e.g. a bare `[]` — don't crash on msg.get()
-            _log("ignored non-object JSON-RPC message")
-            continue
-        # A notification is a request with NO `id` member; an explicit `id: null`
-        # is still a request and must get a reply. Distinguish by membership, not None.
-        has_id = "id" in msg
-        mid = msg.get("id")
-        try:
-            # default only when `params` is ABSENT; a present `[]`/null reaches the
-            # dict-guard in _handle and is rejected (don't let `or {}` mask them).
-            result = _handle(msg.get("method", ""), msg.get("params", {}))
-        except _RpcError as e:
-            if has_id:
-                _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})
-            continue
-        except Exception as e:  # noqa: BLE001 - tool/internal failure
-            if has_id:
-                _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
-            continue
-        if has_id and result is not None:  # requests reply; notifications don't
-            _send({"jsonrpc": "2.0", "id": mid, "result": result})
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
+        _log("client closed the pipe mid-write — exiting cleanly")
+        return 0
     return 0
 
 

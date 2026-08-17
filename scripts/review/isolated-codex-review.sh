@@ -150,8 +150,13 @@ fi
 # `-s read-only` keeps codex from writing; running in $TREE keeps it from reading the live, swappable
 # plan. The prompt text is fed as codex's argument, exactly as capture-codex-review.sh did — only the
 # working directory and the plan bytes change.
+# `--` ends option parsing so the prompt is always a positional: the codex arm stages the RAW prompt
+# (no --guard prefix — the sandbox enforces read-only instead of prose), so a prompt file that opens
+# with a Markdown bullet ("- item") would otherwise be parsed as a flag and fail the round after a
+# leaf was allocated and the checkout built (2026-08-17 audit, AF-11).
+# stdout only is silenced; pty-capture's stderr diagnostics pass through (AF-10) — see the agy arm.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
-    codex exec -c model_reasoning_effort=xhigh -s read-only "$(cat "$TREE/$PROMPT_REL")" ) >/dev/null 2>&1
+    codex exec -c model_reasoning_effort=xhigh -s read-only -- "$(cat "$TREE/$PROMPT_REL")" ) >/dev/null
 RC=$?
 
 # --- basis check: the plan and prompt codex read must be unchanged; nothing new may appear -------

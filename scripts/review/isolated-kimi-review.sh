@@ -33,15 +33,22 @@
 #   * `EXIT=1` with a large transcript is usually the billing-cycle quota (a 403 in the tail), not a
 #     review failure. Check the tail before treating it as one.
 #
-# Usage: isolated-kimi-review.sh <prompt-file> <out-transcript> <commit> [timeout-seconds]
+# Usage: isolated-kimi-review.sh <prompt-file> <out-transcript> <commit> [timeout-seconds] [plan]
 #   <prompt-file>  path to the review prompt, RELATIVE TO THE REPO ROOT
 #   <out-transcript>  where to write the transcript — NEVER under /tmp
+#   [plan]  repo-relative plan to stage and basis-check (default: the COREDEV-2617 plan this harness
+#           was built for). PASS YOUR PLAN when reviewing anything else — the basis check asserts the
+#           integrity of the plan named HERE, not of whatever the prompt talks about, so a defaulted
+#           plan under a different prompt certifies the wrong document (2026-08-17 audit, AF-12).
 # Exit: 0 captured · 1 setup failure · 3 round VOID (tree or staged basis mutated) · 4 effort unassertable
 set -uo pipefail
 
-[ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout]" >&2; exit 1; }
+[ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
 PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
-PLAN_REL="docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
+PLAN_REL="${5:-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
+# Name the basis-checked plan LOUDLY so a stand-in round (e.g. kimi covering a codex quota outage)
+# cannot silently basis-check the default while the prompt reviews something else.
+printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 cd "$REPO" || exit 1

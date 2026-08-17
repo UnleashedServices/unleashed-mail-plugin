@@ -251,7 +251,11 @@ def main(argv=None) -> int:
         payload = READ_ONLY_GUARD.encode("utf-8") + payload
 
     if arguments.min_bytes and len(payload) < arguments.min_bytes:
-        _refuse(f"assembled prompt is only {len(payload)} bytes — truncated")
+        _refuse(
+            f"assembled prompt is only {len(payload)} bytes — below the {arguments.min_bytes}-byte "
+            "floor. A real gate prompt plus the read-only guard exceeds it; a short assembly usually "
+            "means the prompt file is a stub (see the skill's documented floor) or was truncated"
+        )
     # The codex arm hands the assembled prompt to `codex exec` as ONE argv element, and Linux caps a
     # single argument at `MAX_ARG_STRLEN` (128 KiB) whatever `ARG_MAX` says. Without this the `execvp`
     # fails with E2BIG after a leaf has been reserved and a worktree built (PR #63 recheck).

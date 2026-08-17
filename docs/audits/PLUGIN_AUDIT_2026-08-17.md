@@ -82,7 +82,7 @@ mechanism defects — each has a small, local fix, itemized below.
 | MAJ-7 pre-commit PII scan no-op | ✅ fixed | all staged text files, correct ERE, enforcing `gitleaks --staged` pass |
 | MAJ-8 unscoped Bash on 8 knowledge skills | ✅ fixed | every knowledge skill is `Read, Grep, Glob`; workflow skills use scoped `Bash(...)`/`Agent(...)`/`Write(...)` grants |
 | MAJ-9 `$ARGUMENTS` shell injection (implement) | ✅ fixed | no `$ARGUMENTS` in shell syntax; the heredoc-delimiter attack that defeated the first fix is documented as the design rationale |
-| MAJ-10 fixed `/tmp` capture paths | ✅ fixed | COREDEV-2619 per-run transcript allocation (O_EXCL leafs, `.launch` attestation); `/tmp/agy-out.txt` survives only in doc comments |
+| MAJ-10 fixed `/tmp` capture paths | ✅ fixed | COREDEV-2619 per-run transcript allocation (O_EXCL leafs, `.launch` attestation); the old fixed `/tmp` capture-path spelling survives only in historical doc comments (described, not written — the COREDEV-2619 scanner flags the literal, and correctly flagged this report's first draft for spelling it) |
 
 ### 1.4 Plan-review pipeline (mandatory gate) — exercised and attacked
 
@@ -306,3 +306,66 @@ missing reviewer CLIs (millisecond fail-closed with clear diagnostics, no hangs 
 hallucinated hook-event refutation was caught and discarded this way. All attack claims above were
 reproduced live, not inferred. No repo file was modified during evidence collection; the working tree
 remained clean throughout.*
+
+---
+
+## Addendum — remediation record (same day, same branch, COREDEV-2654)
+
+Remediation was applied on `claude/unleashed-mail-audit-tnfcq4` immediately after the report landed.
+Per-finding status:
+
+| Finding | Status | Where |
+|---|---|---|
+| AF-1 HIGH §9 floor row | **Fixed** | AGENT_CONTRACTS §9 reviewer row now `Read, Grep, Glob` with the inversion's history recorded; Orchestrator/Diagnostic rows restated in full (no `+`-inheritance) |
+| AF-2 zsh ERROR-not-SKIP | **Fixed** | `run_shell()` raises `unittest.SkipTest` on a missing shell; CI's zsh-presence assert still prevents silent skip-loss there |
+| AF-3 debug reviews unreachable | **Fixed (documented)** | Both review skills now state the wrappers are plan-only and give the two debug paths (plan-ify the investigation, or advisory run outside the grants). The scripted `--target` binding stays deferred to COREDEV-2654 — a functional gate change that must go through the plan gate itself |
+| AF-4 uncontained snapshot call | **Fixed** | create-feature-plan documents `snapshot-plan.sh` and gained `allowed-tools` granting exactly it (+ `Edit(docs/planning/**)` scaffold grant with the AF-8 carve-out) |
+| AF-5 freeze-the-tree unstated | **Fixed** | "Scope and round hygiene" section in gemini-review (mirrored in codex-review); consumer gitignore globs added to README Installation |
+| AF-6 bare-canonical drift | **Fixed** | gemini-review:16, codex-review review-tooling line, README process item 2 flipped to namespaced-canonical |
+| AF-7 stale gemini model | **Fixed** | CLAUDE.md now `gemini-3.6-flash-high` |
+| AF-8 `.verdicts` grant question | **Verified + carved out** | Docs confirm gitignore semantics (dot-dirs matched). brainstorm + create-feature-plan carry `disallowed-tools: Edit(docs/planning/.verdicts/**)`; sanctioned writes stay Bash-subprocess-only via `persist-verdict.sh`. Relocating the state dir stays deferred (gate change) |
+| AF-9 undocumented prompt floor | **Fixed** | Floor documented in the hygiene section; `stage-prompt.py` refusal now names the floor and the likely causes (test-pinned prefix retained) |
+| AF-10 discarded pty stderr | **Fixed** | Both harness capture invocations silence stdout only |
+| AF-11 codex leading-dash prompt | **Fixed** | `--` before the positional in the harness and the skill's free-content example |
+| AF-12 kimi hardcoded plan | **Fixed** | Plan is now the optional 5th operand (default preserved for existing invocations/tests); the basis-checked plan is printed loudly per round |
+| AF-13 TTY stdin hangs | **Fixed** | `[ -t 0 ]` refusals with usage in resolve-plan-gate (exit 1) and reviewer-roster (exit 4, its uncertainty code); piped/CI paths unchanged |
+| AF-14 §9.1 wrong citation | **Fixed** | Cites the inline Step-1 git program, reviewer-roster.sh, build-verify.sh |
+| AF-15 README hook-table cell | **Fixed** | swift-build-verify listed under PostToolUse (Bash) |
+| AF-16 stale MultiEdit matcher | **Fixed** | Both matchers now `Write|Edit` (hook harness re-run green) |
+| AF-17 CHANGELOG provenance | **Fixed** | "History starts here" note under [2.2.4] |
+| AF-18 undocumented kill switches | **Fixed** | `UNLEASHED_SENSITIVE_GUARD=off` / `UNLEASHED_STOP_GATE=off` added to the README table |
+| AF-19 BrokenPipe traceback | **Fixed + tested** | Clean exit 0 with devnull re-point; regression test drives a real broken pipe |
+| AF-20 silent malformed-JSON drop | **Fixed + tested** | `-32700` with `id: null`; pre-existing silent-drop test updated to the spec-correct contract |
+| AF-21 notification-with-id hang | **Fixed + tested** | `notifications/initialized` returns `{}`; notification silence (no id) unchanged and still tested |
+| AF-22 unused import | **Fixed** | `import re` removed |
+| AF-23 MCP README content blocks | **Fixed** | `content[0]` corrected; `content[1]` documented |
+| AF-24/25/26 INFO | **Accepted as documented** | Resource caps optional; Darwin-only store by design; §9 machine-check deferred to COREDEV-2654 |
+
+**New finding fixed during remediation — AF-27 (MEDIUM): dead `Write(path)` grants.** While verifying
+AF-8 against the permissions reference: since Claude Code 2.1.210, file-permission rules are consulted
+for `Edit(path)`/`Read(path)` **only** — a `Write(path)` rule "is accepted but never consulted" (the
+docs' own migration line: "Use `Edit(docs/**)` in place of `Write(docs/**)`"). Three shipped grants were
+therefore dead on the CLI this plugin targets (≥ 2.1.219), quietly reintroducing the MIN-27 per-round
+re-prompting they were built to fix: `Write(docs/planning/**)` (brainstorm), `Write(.agy-prompt-*.md)`
+(gemini-review), `Write(.codex-prompt-*.md)` (codex-review). All three are now Edit-form, with the AF-8
+carve-out attached where the grant covers `docs/planning/`.
+
+**Operational note (user-directed, 2026-08-17):** codex has hit a weekly quota; reviews route through
+the kimi harness for now. AF-12's fix makes that workable (`isolated-kimi-review.sh <prompt> <out>
+<commit> [timeout] <plan>` — always pass the plan). The scripted quorum still records `codex=MISSING`
+and the gate still refuses — by design, per the no-scripted-waiver contract; the kimi transcript is the
+captured evidence for the user-directed workflow exception. The codex-review skill documents this flow.
+
+**Deferred to COREDEV-2654 (functional gate changes needing the plan gate itself):** `bind-prompt.py
+`--target` mode for gate-bearing non-plan reviews (AF-3b); relocating `.verdicts/` out of
+`docs/planning/` (AF-8b); machine-checking §9 like §11 (AF-26); MCP resource caps (AF-24).
+
+Validation after remediation: plugin-assembly ✅ · hooks-manifest ✅ · version-sync ✅ · hook harness
+304/304 ✅ · MCP suite 231/231 ✅ (3 new regression tests) · scripts suite 1006 ✅ · shellcheck ✅ ·
+`claude plugin validate` both modes ✅ (CLI 2.1.234) · callers-scan ✅ (exemptions manifest regenerated —
+line-pinned records shifted with the edits) · `git diff --check` ✅. Two frozen manifests were
+re-frozen for legitimate drift, payload-verified: the COREDEV-2619 transcript-path inventory
+(line pins relocated by matching each frozen payload's bytes; the two AF-27 grant lines adopted their
+amended bytes) and the §13 `brainstorm-summary` anchor (heading moved by the frontmatter comment).
+The first run of the suite over the remediated tree was RED (16 failures) — every one a frozen-pin
+drift check doing its job — and was fixed before anything was committed.

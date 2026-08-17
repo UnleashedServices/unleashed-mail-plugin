@@ -43,6 +43,13 @@ if [ "$#" -gt 1 ]; then
 elif [ "$#" -eq 1 ]; then
     ARG="$1"
 else
+    # An interactive terminal would sit at a silent `cat` waiting for EOF a human does not know to
+    # send — refuse with usage instead (2026-08-17 audit, AF-13). Claude Code's Bash tool and the
+    # test harness both provide non-TTY stdin, so the piped path below is unchanged for them.
+    if [ -t 0 ]; then
+        echo "REFUSED: no operand and stdin is a terminal — pass the plan name/path as the single operand." >&2
+        exit 1
+    fi
     # `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaced did, so a
     # well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
     ARG="$(cat)"

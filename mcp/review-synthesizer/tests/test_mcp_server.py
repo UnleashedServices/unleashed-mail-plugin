@@ -67,6 +67,48 @@ class TestProtocol(unittest.TestCase):
                       {"jsonrpc": "2.0", "id": 9, "method": "ping"}])
         self.assertEqual([m.get("id") for m in out], [9])
 
+    def test_notification_method_with_id_is_a_request_and_gets_a_reply(self):
+        # 2026-08-17 audit AF-21: a buggy client that attaches an id to
+        # notifications/initialized has sent a REQUEST; JSON-RPC requires every request be
+        # answered, and the suppressed reply left such a client hanging forever.
+        out, _ = rpc([{"jsonrpc": "2.0", "id": 4, "method": "notifications/initialized"},
+                      {"jsonrpc": "2.0", "id": 9, "method": "ping"}])
+        self.assertEqual([m.get("id") for m in out], [4, 9])
+        self.assertEqual(out[0]["result"], {})
+
+    def test_malformed_json_line_gets_a_parse_error_reply(self):
+        # 2026-08-17 audit AF-20: JSON-RPC 2.0 prescribes -32700 with id null for an
+        # unparseable line; the previous silent drop left a client that sent a malformed
+        # REQUEST waiting until its own timeout. The server must also survive the line.
+        out, _ = rpc(['{"jsonrpc": "2.0", "id": 7, "method"',
+                      {"jsonrpc": "2.0", "id": 9, "method": "ping"}])
+        self.assertEqual(out[0]["error"]["code"], -32700)
+        self.assertIsNone(out[0]["id"])
+        self.assertEqual(out[1]["id"], 9)  # the next request is still served
+
+    def test_broken_stdout_pipe_exits_cleanly(self):
+        # 2026-08-17 audit AF-19: the client vanishing mid-write (teardown race) must exit 0
+        # with no traceback — the reader is gone, so nothing is lost. Close OUR read end of
+        # the server's stdout, then send another request so its reply write hits EPIPE.
+        proc = subprocess.Popen([sys.executable, SERVER], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8")
+        try:
+            proc.stdin.write('{"jsonrpc": "2.0", "id": 1, "method": "ping"}\n')
+            proc.stdin.flush()
+            proc.stdout.readline()  # the ping reply — proves the loop is up before we break it
+            proc.stdout.close()     # server's next write now raises BrokenPipeError
+            proc.stdin.write('{"jsonrpc": "2.0", "id": 2, "method": "ping"}\n')
+            proc.stdin.flush()
+            proc.stdin.close()
+            rc = proc.wait(timeout=30)
+            stderr = proc.stderr.read()
+        finally:
+            proc.kill()
+            proc.stderr.close()
+        self.assertEqual(rc, 0, stderr)
+        self.assertNotIn("Traceback", stderr)
+
     def test_unknown_method_error(self):
         out, _ = rpc([{"jsonrpc": "2.0", "id": 1, "method": "frobnicate"}])
         self.assertEqual(out[0]["error"]["code"], -32601)
@@ -93,8 +135,12 @@ class TestProtocol(unittest.TestCase):
         self.assertIn("non-object", proc.stderr)
 
     def test_non_json_line_does_not_crash(self):
+        # Since the 2026-08-17 audit (AF-20) the unparseable line earns a -32700 Parse Error
+        # reply (id null) instead of a silent drop; the point of THIS test is unchanged — the
+        # server survives the line and keeps serving.
         out, _ = rpc(["this is not json", {"jsonrpc": "2.0", "id": 1, "method": "ping"}])
-        self.assertEqual(out[0]["result"], {})
+        self.assertEqual(out[0]["error"]["code"], -32700)
+        self.assertEqual(out[1]["result"], {})
 
     def test_explicit_null_id_is_a_request_and_gets_a_reply(self):
         # a notification has NO id member; `id: null` is still a request -> reply

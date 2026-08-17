@@ -1,6 +1,14 @@
 ---
 name: create-feature-plan
 description: Scaffold a new FEATURE_NAME_PLAN.md under docs/planning/ using the project template.
+# Grants mirror brainstorm's plan-writing surface (2026-08-17 audit, AF-4): the snapshot step goes
+# through the CONTAINED snapshot-plan.sh entrypoint (the raw `review-verdict.py snapshot` call this
+# skill used to document let the model choose any --plan operand, e.g. under /tmp — the hole PR #63
+# recheck P1 closed for brainstorm), and Edit(docs/planning/**) pre-approves the scaffold write
+# (Edit-form, not Write-form — Write(path) rules are never consulted on CLI >= 2.1.210; AF-27).
+# The .verdicts carve-out keeps the gate's verdict state writable only via granted entrypoints (AF-8).
+allowed-tools: Read, Grep, Glob, Edit(docs/planning/**), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh *)
+disallowed-tools: Edit(docs/planning/.verdicts/**)
 ---
 
 # Create Feature Plan
@@ -69,11 +77,14 @@ Open questions, alternatives considered, lessons learned.
 2. **Snapshot the plan's digest BEFORE dispatching the reviews** — this binds the eventual approval to
    the exact bytes the reviewers saw. It must persist to a FILE, not a shell variable: each skill step
    runs as a separate tool invocation, so a `REVIEWED_PLAN_SHA256=…` shell-local would be gone by the
-   time `/unleashed-mail:review-synthesis` runs (COREDEV-2499). Use the `snapshot` subcommand, which
-   writes a git-ignored sidecar beside the plan:
+   time `/unleashed-mail:review-synthesis` runs (COREDEV-2499). Use the **contained wrapper** — it
+   validates the operand (a non-symlink regular file under `docs/planning` in THIS repository) before
+   delegating to the `snapshot` subcommand of `${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py`, and
+   it is what this skill's `allowed-tools` grants, so the step runs without a permission prompt (the
+   raw `review-verdict.py snapshot` invocation accepted any path on disk and re-prompted every time —
+   2026-08-17 audit, AF-4):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review-verdict.py" snapshot \
-       --plan docs/planning/FEATURE_NAME_PLAN.md
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh" docs/planning/FEATURE_NAME_PLAN.md
    ```
    `review-verdict.py write` auto-reads that sidecar and refuses to record an approval if the plan
    changed after the snapshot — so the synthesis step needs no `--reviewed-sha256` argument.
