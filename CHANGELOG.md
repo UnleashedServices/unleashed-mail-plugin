@@ -13,6 +13,18 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/audits/PLUGIN_AUDIT_2026-08-17.md` — full plugin soundness audit at v2.8.0.** All shipped
+  validators/suites green; the plan-review gate exercised end-to-end and attacked (7 forgery/staleness
+  attacks, all refused); the MCP server driven through a live 35-check JSON-RPC handshake; every claim
+  re-verified against the live Claude Code docs; **all 10 majors from the 2026-07-19 audit verified
+  remediated**. New findings: 1 HIGH (AGENT_CONTRACTS §9 floor row contradicts §9.1 + the shipped
+  reviewer frontmatter), 7 MEDIUM (zsh-absent test errors-not-skips; debug reviews unreachable through
+  the granted wrappers; create-feature-plan's uncontained snapshot call; the unstated freeze-the-tree
+  round rule; bare-vs-namespaced canonical drift; stale gemini model in CLAUDE.md; the `.verdicts/`
+  write-grant verification task), 15 LOW, 3 INFO — none affecting verdict integrity.
+
 ## [2.8.0] — 2026-08-14
 
 ### Added
