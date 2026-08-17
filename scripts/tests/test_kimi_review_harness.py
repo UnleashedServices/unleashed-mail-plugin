@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""`isolated-kimi-review.sh` — the mutation gates, driven end to end with a stub `kimi`.
+
+Every scenario runs the WORKTREE's harness against a PRIVATE clone of this repository, with a stub
+`kimi` on PATH whose behaviour is chosen by `KIMI_STUB_MODE`. The stub prints the session-id line and
+a verdict; the effort cannot be asserted from a stub, so a run whose mutation gates all pass ends
+`EXIT=… TREE=clean … EFFORT=UNKNOWN` and exit 4 — that pair IS "the gates passed". Every mutation the
+harness documents (COREDEV-2607 shapes in the disposable checkout, a commit in the live tree, an
+edited prompt) must exit 3 with its own message; a git-config write inside the disposable checkout
+must stay there. PROMPT= on the summary line is the digest of the ARGUMENT the reviewer received (the
+snapshot's bytes with trailing newlines stripped by command substitution), not of the prompt file; a
+transcript operand that only PHYSICALLY resolves under /tmp — `..` traversal in an absolute path, or a
+symlinked parent — is refused; and a live tracked file hidden with `update-index --assume-unchanged`
+before it is edited still voids the round.
+
+THE PROMPT OPERAND IS CONTAINED and the transcript never lands in the compared tree (codex, PR #67 pass
+12): `../secret.txt`, an in-repo symlink to `/etc/hosts`, and a transcript path inside the live checkout
+each exit 1 with their own message BEFORE the reviewer runs — the stub leaves an invocation marker on
+every run, and these assert the marker is absent and the transcript was never created.
+
+AND A REFUSED TRANSCRIPT OPERAND CREATES NOTHING (codex, PR #67 pass 13): the parent used to be `mkdir -p`'d
+BEFORE the physical resolution and the refusals, so `<clone>/new/nested/kimi.txt` left `<clone>/new/nested/`
+inside the live tree and `<scratch>/other/link/deep/kimi.txt` (the link into `<clone>/.git`) left
+`<clone>/.git/deep/` — both invisible to `status`, which lists no empty directory. The physical path is now
+computed without creating anything; the control — the `mkdir -p` restored ahead of the resolution — is RUN
+on the same operands and does create them.
+
+AND THE RECONSTRUCTED PATH IS NORMALISED (codex, PR #67 pass 14): the re-appended missing tail was kept
+VERBATIM, so `<scratch>/missing/../repo/README.md` (with `<scratch>/repo` the live checkout and `missing`
+absent) passed the repository-prefix refusal, `mkdir -p` created `missing`, and the transcript was written
+INTO the live checkout — over a TRACKED file — before the post-run fingerprint voided the round. It is refused
+now, before the reviewer, creating nothing; the control (the `normpath` line deleted) is RUN and does all of it.
+
+AND SO IS A LEADING `//`, AND THE PHYSICAL PREFIX IS TESTED ON ITS OWN (codex sweep, PR #67 pass 14, two
+more findings). `os.path.normpath` PRESERVES exactly two leading slashes, so an operand whose nearest
+EXISTING ancestor is `/` reconstructed as `//tmp/x` / `//<repo>/tracked` — matching neither prefix refusal
+while the kernel resolves both to exactly those places; the line collapses `^//+` now, and the control
+(the `re.sub` removed, the `normpath` kept) is RUN and overwrites the tracked README.md. And the `|| exit 1`
+after the reconstruction was INERT — an assignment takes the status of its LAST command substitution,
+`basename` — so a `cd -P` that could not enter its target was ignored and the operand was silently
+RE-ROOTED at `/`; the prefix is captured and tested on its own, and the control (the single-assignment
+form restored) is RUN on an unenterable 0000 parent and writes the transcript where the operand never named.
+
+THE EFFORT EVIDENCE IS BOUND TO THE ONE SESSION THE RUN CREATED (codex, PR #67 pass 11): the set
+difference of `$HOME/.kimi-code/sessions/*/session_*` before and after the run — never a session id read
+out of the transcript, which is reviewer-controlled text. Exactly one new session with a `max` wire log
+asserts `max` (exit 0); an older session's id QUOTED in the transcript, with no session created, is not
+evidence (`EFFORT=UNKNOWN`, exit 4) — the previous grep-based selection would have returned that older
+session's `max`, and a control carrying that selection is RUN and does; two new sessions fail closed.
+Every run here has `HOME` re-pointed at a scratch directory, so the sessions the stub creates, and the
+sessions the harness lists, are never the developer's real `~/.kimi-code`.
+
+Linux-safe: git, bash, python3 only. The transcript is written under ~/.claude — the harness refuses
+/tmp, and CI's TMPDIR is /tmp.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HARNESS = os.path.join(REPO, "scripts", "review", "isolated-kimi-review.sh")
+SOURCE_PROMPT = os.path.join(REPO, ".review-prompt-2617r123.md")
+SESSION = "session_00000000-0000-4000-8000-000000000001"
+#: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
+OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"
+NEW_SESSION = "session_22222222-2222-4222-8222-222222222222"
+NEW_SESSION_2 = "session_33333333-3333-4333-8333-333333333333"
+
+KIMI_STUB = f"""#!/usr/bin/env bash
+# cwd = the harness's DISPOSABLE checkout; $KIMI_STUB_CLONE = the live fixture repository.
+# EVERY invocation leaves a marker under the scratch, whatever the mode: an operand the harness must
+# refuse is refused BEFORE the reviewer is launched, and "the stub did not run" is asserted on this file.
+printf '%s\\n' "$$" >> "$KIMI_STUB_SCRATCH/kimi-invoked"
+case "${{KIMI_STUB_MODE:-clean}}" in
+  clean) ;;
+  gitkill)       rm -rf .git; echo x > IMPLEMENTED.sh ;;
+  commit-hide)   echo x >> README.md
+                 git -c user.email=r@r -c user.name=r -c commit.gpgsign=false commit -qam hide ;;
+  nested-ignore) mkdir impl; printf '*\\n' > impl/.gitignore; echo x > impl/x.sh ;;
+  live-commit)   git -C "$KIMI_STUB_CLONE" -c commit.gpgsign=false commit -q --allow-empty -m mid ;;
+  prompt-edit)   printf '\\nEDITED\\n' >> "$KIMI_STUB_CLONE/.review-prompt-x.md" ;;
+  hookspath)     git config core.hooksPath /evil/hooks
+                 printf 'HOOKSPATH=%s\\n' "$(git config --get core.hooksPath)" ;;
+  record-arg)    printf '%s' "$2" > "$KIMI_STUB_SCRATCH/received.bin" ;;   # $1=-p, $2=the prompt text
+  assume-unchanged-live)
+                 git -C "$KIMI_STUB_CLONE" update-index --assume-unchanged README.md
+                 echo x >> "$KIMI_STUB_CLONE/README.md" ;;
+  # The session-binding modes write under $HOME — the harness's HOME, re-pointed at the scratch by the test.
+  new-max)       mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  new-high)      mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  quote-old)     printf 'As in {OLD_SESSION} earlier\\n' ;;      # creates NOTHING; quotes a pre-existing session
+  two-new)       for s in {NEW_SESSION} {NEW_SESSION_2}; do
+                   mkdir -p "$HOME/.kimi-code/sessions/wd_new/$s/agents/main"
+                   printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
+                 done ;;
+esac
+printf '{SESSION}\\nVERDICT: APPROVE\\n'
+"""
+
+
+@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
+class KimiHarnessMutationGates(unittest.TestCase):
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="kimi-harness.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.clone = os.path.join(self.scratch, "repo")
+        subprocess.run(["git", "clone", "-q", REPO, self.clone], check=True, capture_output=True)
+        git = ["git", "-C", self.clone]
+        subprocess.run(git + ["config", "user.email", "fixture@test"], check=True)
+        subprocess.run(git + ["config", "user.name", "fixture"], check=True)
+        # A shallow SOURCE (CI's default depth-1 checkout) makes the harness's `disposable_checkout`
+        # fetch fail — "shallow roots are not allowed to be updated" (measured, git 2.54) — even for a
+        # commit made on top of it. An orphan root carries the same tree with a complete history.
+        subprocess.run(git + ["checkout", "-q", "--orphan", "fixture"], check=True)
+        prompt = os.path.join(self.clone, ".review-prompt-x.md")
+        if os.path.isfile(SOURCE_PROMPT) and os.path.getsize(SOURCE_PROMPT) >= 1000:
+            shutil.copy(SOURCE_PROMPT, prompt)
+        else:
+            with open(prompt, "w", encoding="utf-8") as fh:
+                fh.write("Review the plan for correctness, security and completeness.\n" * 40)
+        with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
+            fh.write(".review-prompt-x.md\n")
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
+        status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertEqual("", status.stdout, "the fixture clone must start clean (the prompt is ignored)")
+        bindir = os.path.join(self.scratch, "bin")
+        os.mkdir(bindir)
+        stub = os.path.join(bindir, "kimi")
+        with open(stub, "w", encoding="utf-8") as fh:
+            fh.write(KIMI_STUB)
+        os.chmod(stub, 0o755)
+        # HOME IS THE SCRATCH for every run: the harness lists `$HOME/.kimi-code/sessions/*/session_*`
+        # before and after the reviewer, and the stub's session-binding modes create sessions there.
+        # A real `~/.kimi-code` (dozens of sessions on a developer machine) must never be listed,
+        # written, or — through a concurrent real session — mistaken for this run's evidence. Git
+        # identity comes from the clone's own config, so no HOME-level gitconfig is needed.
+        self.home = os.path.join(self.scratch, "home")
+        os.mkdir(self.home)
+        self.env = dict(os.environ)
+        self.env["HOME"] = self.home
+        self.env["PATH"] = bindir + os.pathsep + self.env.get("PATH", "")
+        self.env["KIMI_STUB_CLONE"] = self.clone
+        self.env["KIMI_STUB_SCRATCH"] = self.scratch
+        self.prompt = prompt
+
+    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md"):
+        out = out or os.path.join(self.scratch, f"out-{mode}.txt")
+        env = dict(self.env, KIMI_STUB_MODE=mode)
+        p = subprocess.run(["bash", harness, prompt, out, "HEAD", "60"],
+                           cwd=self.clone, env=env, capture_output=True, text=True, check=False, input="")
+        return p, out
+
+    def _stub_ran(self):
+        """True when the stub `kimi` was invoked at least once during this test (its marker file exists)."""
+        return os.path.exists(os.path.join(self.scratch, "kimi-invoked"))
+
+    def _wire(self, wd, session):
+        """The wire-log path of `session` under `wd` in the SCRATCH home."""
+        return os.path.join(self.home, ".kimi-code", "sessions", wd, session, "agents", "main", "wire.jsonl")
+
+    def _seed_session(self, wd, session, effort="max"):
+        path = self._wire(wd, session)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write('{"thinkingEffort":"%s"}\n' % effort)
+        return path
+
+    def _assert_void(self, mode, message):
+        p, _ = self._run(mode)
+        self.assertEqual(3, p.returncode, f"{mode}: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn(message, p.stderr, f"{mode}: {p.stderr!r}")
+        self.assertNotIn("TREE=clean", p.stdout, f"{mode}: a void round printed the clean summary")
+        return p
+
+    def test_clean_run_passes_every_gate_and_stops_only_at_the_effort_assertion(self):
+        self.assertFalse(self._stub_ran(), "the invocation marker pre-exists — the refusal tests' oracle is void")
+        p, out = self._run("clean")
+        self.assertTrue(self._stub_ran(), "the stub ran but left no marker — the refusal tests could not tell")
+        self.assertEqual(4, p.returncode, f"clean: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN\(self-reported\) WIRE=$")
+        self.assertIn("EFFORT NOT ASSERTED", p.stderr)
+        with open(out, encoding="utf-8") as fh:
+            transcript = fh.read()
+        self.assertIn(SESSION, transcript)
+        self.assertIn("VERDICT: APPROVE", transcript)
+
+    def test_deleting_dot_git_and_creating_a_file_in_the_disposable_checkout_voids(self):
+        p = self._assert_void("gitkill", "left edits inside the disposable checkout")
+        self.assertIn('"IMPLEMENTED.sh"', p.stderr, "the diff must name the created file")
+
+    def test_committing_an_edit_inside_the_disposable_checkout_voids(self):
+        p = self._assert_void("commit-hide", "left edits inside the disposable checkout")
+        self.assertIn('"README.md"', p.stderr, "the diff must name the edited file")
+
+    def test_a_nested_self_ignoring_gitignore_voids(self):
+        p = self._assert_void("nested-ignore", "left edits inside the disposable checkout")
+        self.assertIn('"impl/x.sh"', p.stderr, "the diff must name the file the nested .gitignore hid")
+
+    def test_a_commit_in_the_live_repository_voids(self):
+        self._assert_void("live-commit", "real worktree was mutated")
+
+    def test_editing_the_prompt_file_during_the_review_voids(self):
+        self._assert_void("prompt-edit", "prompt file changed")
+
+    def test_a_hooksPath_write_stays_inside_the_private_disposable_checkout(self):
+        p, out = self._run("hookspath")
+        self.assertEqual(4, p.returncode, f"hookspath: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("TREE=clean", p.stdout)
+        with open(out, encoding="utf-8") as fh:
+            self.assertIn("HOOKSPATH=/evil/hooks", fh.read(), "the stub's write never happened")
+        live = subprocess.run(["git", "-C", self.clone, "config", "--get", "core.hooksPath"],
+                              capture_output=True, text=True, check=False)
+        self.assertEqual("", live.stdout.strip(), "the reviewer's git-config write reached the LIVE repository")
+        self.assertNotEqual(0, live.returncode)
+
+    def test_prompt_digest_is_of_the_argument_the_reviewer_received_not_the_file(self):
+        """The stub records `$2` (the `-p` argument) byte-for-byte; PROMPT= must be ITS sha256 — and,
+        because the file ends in newlines that command substitution strips, NOT the file's digest.
+        The prompt is git-ignored in the fixture, so appending to it does not dirty the tree."""
+        with open(self.prompt, "ab") as fh:
+            fh.write(b"\n\n")
+        with open(self.prompt, "rb") as fh:
+            file_bytes = fh.read()
+        self.assertTrue(file_bytes.endswith(b"\n"))
+        p, _ = self._run("record-arg")
+        self.assertEqual(4, p.returncode, f"record-arg: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        m = re.search(r"\bPROMPT=([0-9a-f]{12})\b", p.stdout)
+        self.assertIsNotNone(m, p.stdout)
+        with open(os.path.join(self.scratch, "received.bin"), "rb") as fh:
+            received = fh.read()
+        self.assertEqual(file_bytes.rstrip(b"\n"), received,
+                         "the reviewer did not receive the snapshot's bytes (minus trailing newlines)")
+        self.assertEqual(hashlib.sha256(received).hexdigest()[:12], m.group(1),
+                         "PROMPT= is not the digest of the argument the reviewer received")
+        self.assertNotEqual(hashlib.sha256(file_bytes).hexdigest()[:12], m.group(1),
+                            "PROMPT= equals the FILE's digest — but the reviewer never received the file's "
+                            "trailing newlines, so that digest describes bytes it did not review")
+
+    def _assert_tmp_refused(self, out, leaf):
+        for physical in ("/tmp", "/private/tmp"):
+            self.assertFalse(os.path.lexists(os.path.join(physical, leaf)), f"stale {leaf} under {physical}")
+        p, _ = self._run("clean", out=out)
+        self.assertEqual(1, p.returncode, f"rc {p.returncode} for {out}\n{p.stdout}{p.stderr}")
+        self.assertIn("refusing to write the transcript under /tmp", p.stderr, p.stderr)
+        self.assertNotIn("TREE=clean", p.stdout)
+        for physical in ("/tmp", "/private/tmp"):
+            self.assertFalse(os.path.lexists(os.path.join(physical, leaf)),
+                             f"the refused transcript was written anyway: {physical}/{leaf}")
+
+    def test_an_absolute_transcript_path_traversing_into_tmp_is_refused(self):
+        """An ABSOLUTE operand whose `..` segments physically resolve under /tmp (`/…/scratch/../../tmp/x`)
+        matched neither `/tmp/*` nor `/private/tmp/*` before the parent was resolved with `cd -P`."""
+        leaf = f"kimi-x-{os.path.basename(self.scratch)}.txt"
+        physical_scratch = os.path.realpath(self.scratch)
+        out = os.path.join(physical_scratch, os.path.relpath("/tmp", physical_scratch), leaf)
+        self.assertTrue(out.startswith("/") and "/../" in out and not out.startswith("/tmp/"), out)
+        self.assertEqual(os.path.realpath("/tmp"), os.path.dirname(os.path.realpath(out)))
+        self._assert_tmp_refused(out, leaf)
+
+    def test_a_transcript_path_through_a_symlinked_parent_into_tmp_is_refused(self):
+        """`<scratch>/link -> /tmp`; `<scratch>/link/x` is lexically under ~/.claude and physically under /tmp."""
+        leaf = f"kimi-y-{os.path.basename(self.scratch)}.txt"
+        link = os.path.join(self.scratch, "link")
+        os.symlink("/tmp", link)
+        out = os.path.join(link, leaf)
+        self.assertFalse(out.startswith("/tmp/") or out.startswith("/private/tmp/"), out)
+        self.assertEqual(os.path.realpath("/tmp"), os.path.dirname(os.path.realpath(out)))
+        self._assert_tmp_refused(out, leaf)
+
+    def test_a_live_tracked_file_hidden_by_assume_unchanged_then_edited_voids(self):
+        """The reviewer flags a LIVE tracked file `--assume-unchanged` (status and `diff HEAD` go blind)
+        and then edits it: the content-hashing live probe still sees the edit and voids the round."""
+        self._assert_void("assume-unchanged-live", "real worktree was mutated")
+        # The premise: the index-based views were indeed blind to the edit that voided the round.
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertNotIn("README.md", st.stdout, "status still saw the edit — the fixture is not the finding")
+        with open(os.path.join(self.clone, "README.md"), "rb") as fh:
+            self.assertTrue(fh.read().endswith(b"x\n"), "the stub's edit did not land in the live README.md")
+
+    # ── the operands are contained BEFORE the reviewer runs (codex, PR #67 pass 12) ───────────
+
+    def _assert_refused_before_launch(self, p, out, message):
+        self.assertEqual(1, p.returncode, f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn(message, p.stderr, p.stderr)
+        self.assertNotIn("TREE=clean", p.stdout, "a refused operand printed the clean summary")
+        self.assertFalse(self._stub_ran(), "the reviewer was launched on a refused operand")
+        self.assertFalse(os.path.lexists(out), f"the refused run created the transcript: {out}")
+
+    def test_a_prompt_operand_that_traverses_out_of_the_repo_is_refused(self):
+        """`../secret.txt` — a readable regular file one level ABOVE the clone (`<scratch>/secret.txt`):
+        a bare `[ -r ]` followed it and sent its bytes to the reviewer as the prompt. The containment
+        helper resolves it outside the repository root and refuses; nothing downstream runs."""
+        secret = os.path.join(self.scratch, "secret.txt")
+        with open(secret, "w", encoding="utf-8") as fh:
+            fh.write("this file lives outside the fixture repository\n" * 5)
+        self.assertEqual(os.path.dirname(self.clone), os.path.dirname(secret))
+        self.assertTrue(os.path.isfile(os.path.join(self.clone, "..", "secret.txt")), "the fixture is not the finding")
+        p, out = self._run("clean", prompt="../secret.txt")
+        self._assert_refused_before_launch(p, out, "outside the repository")
+
+    def test_a_prompt_operand_that_is_a_symlink_is_refused(self):
+        """`.link-prompt.md -> /etc/hosts` INSIDE the clone: lexically in-repo, readable, non-empty —
+        and a symbolic link, which the containment helper refuses before resolving anything else."""
+        link = os.path.join(self.clone, ".link-prompt.md")
+        os.symlink("/etc/hosts", link)
+        self.assertTrue(os.path.islink(link) and os.path.isfile(link), "the fixture is not the finding: /etc/hosts unreadable")
+        p, out = self._run("clean", prompt=".link-prompt.md")
+        self._assert_refused_before_launch(p, out, "symbolic link")
+
+    def test_a_transcript_inside_the_live_checkout_is_refused(self):
+        """A transcript operand physically INSIDE the live checkout (`<clone>/docs/planning/.verdicts/kimi.txt`)
+        would be written into the very tree the round is fingerprinted against — voiding a clean round as a
+        live mutation the harness itself caused, and overwriting a tracked file if one were named."""
+        out = os.path.join(self.clone, "docs", "planning", ".verdicts", "kimi.txt")
+        self.assertFalse(os.path.lexists(out))
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+
+    # ── a refused transcript operand creates NOTHING (codex, PR #67 pass 13) ──────────────────
+
+    # The first line of the create-nothing resolution; the control puts the PREVIOUS `mkdir -p` of the
+    # operand's parent back in front of it, exactly where it used to run.
+    RESOLUTION_HEAD = '_out_dir="$(dirname -- "$OUT")"; _out_missing=""\n'
+    MKDIR_FIRST = 'mkdir -p "$(dirname -- "$OUT")" || exit 1\n'
+
+    def _mkdir_first_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.RESOLUTION_HEAD), "the resolution's head line is not unique")
+        # The shipped order: the parent is created AFTER the refusals, and only there.
+        self.assertEqual(1, text.count(self.MKDIR_FIRST), "the shipped harness should mkdir the parent exactly once")
+        self.assertLess(text.index(self.RESOLUTION_HEAD), text.index(self.MKDIR_FIRST),
+                        "the shipped harness creates the parent BEFORE resolving it — the control is the shipped build")
+        return self._laid_out_harness(text.replace(self.RESOLUTION_HEAD, self.MKDIR_FIRST + self.RESOLUTION_HEAD, 1))
+
+    def _refused_creates(self, out, probe, harness=HARNESS):
+        """Run with transcript operand `out`; assert it is refused as inside the live checkout, before the
+        reviewer, with no transcript. Returns whether `probe` (the first component the operand would have
+        created) exists afterwards — the ONLY thing that differs between the shipped build and the control."""
+        self.assertFalse(os.path.lexists(probe), f"the fixture pre-creates {probe}")
+        p, _ = self._run("clean", out=out, harness=harness)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        # `status` lists no EMPTY directory, so a created parent is invisible to it in both builds — the
+        # premise of the finding, asserted rather than assumed: the oracle must be the directory itself.
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"status sees the refused operand's parent: {st.stdout!r}")
+        return os.path.lexists(probe)
+
+    def test_a_refused_transcript_operand_creates_no_directories(self):
+        """`<clone>/new/nested/kimi.txt`: neither `new/` nor `new/nested/` exists after the refusal — the
+        physical path was computed by resolving the nearest EXISTING ancestor and re-appending the missing
+        tail, not by creating it. The control (`mkdir -p` restored ahead of the resolution) refuses with the
+        same message and the same status, and leaves `<clone>/new/nested/` behind (measured)."""
+        out = os.path.join(self.clone, "new", "nested", "kimi.txt")
+        probe = os.path.join(self.clone, "new")
+        self.assertFalse(self._refused_creates(out, probe),
+                         "the refusal left the operand's missing parents inside the live checkout")
+        self.assertFalse(os.path.lexists(os.path.join(self.clone, "new", "nested")))
+        control = self._mkdir_first_control()
+        self.assertTrue(self._refused_creates(out, probe, harness=control),
+                        "the CONTROL (parent created first) did not leave `new/` behind — the fixture is not the finding")
+        self.assertTrue(os.path.isdir(os.path.join(self.clone, "new", "nested")))
+
+    def test_a_symlinked_parent_into_dot_git_creates_nothing_there(self):
+        """`<scratch>/other/link -> <clone>/.git`; the operand `<scratch>/other/link/deep/kimi.txt` is lexically
+        outside the clone and physically inside its `.git`: refused, and `<clone>/.git/deep` does not exist —
+        an `mkdir -p` of the operand's parent would have created it THROUGH the link, in the repository
+        database, before the refusal (the control does — measured)."""
+        other = os.path.join(self.scratch, "other")
+        os.makedirs(other)
+        link = os.path.join(other, "link")
+        os.symlink(os.path.join(self.clone, ".git"), link)
+        self.assertTrue(os.path.islink(link) and os.path.isdir(link), "the fixture is not the finding")
+        out = os.path.join(link, "deep", "kimi.txt")
+        self.assertFalse(out.startswith(self.clone + os.sep), out)               # lexically outside …
+        self.assertEqual(os.path.join(os.path.realpath(self.clone), ".git", "deep"),
+                         os.path.dirname(os.path.realpath(out)))                  # … physically in .git
+        probe = os.path.join(self.clone, ".git", "deep")
+        self.assertFalse(self._refused_creates(out, probe),
+                         "the refusal created a directory inside the live checkout's .git through the link")
+        control = self._mkdir_first_control()
+        self.assertTrue(self._refused_creates(out, probe, harness=control),
+                        "the CONTROL (parent created first) did not create `.git/deep` — the fixture is not the finding")
+
+    # ── the reconstructed physical path is NORMALISED before the refusals (codex, PR #67 pass 14) ──
+
+    # The normalisation line, as shipped; the control DELETES it (the pre-fix resolution kept the missing
+    # tail verbatim, `..` segments included). The line also collapses a leading `//` — `os.path.normpath`
+    # PRESERVES exactly two leading slashes, and that half has its own control below, which removes the
+    # `re.sub` and keeps the `normpath`.
+    NORMPATH_LINE = ('''OUT="$(python3 -c 'import os, re, sys; '''
+                     '''print(re.sub(r"^//+", "/", os.path.normpath(sys.argv[1])))' "$OUT")" || exit 1\n''')
+
+    def _no_normpath_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.NORMPATH_LINE), "the normalisation line is not unique — the control is not the control")
+        # The shipped order: the reconstruction, THEN the normalisation, THEN the repository-prefix refusal.
+        self.assertLess(text.index(self.RESOLUTION_HEAD), text.index(self.NORMPATH_LINE))
+        self.assertLess(text.index(self.NORMPATH_LINE), text.index('    "$REPO_P"/*)\n'))
+        return self._laid_out_harness(text.replace(self.NORMPATH_LINE, "", 1))
+
+    def test_a_transcript_operand_traversing_through_a_missing_directory_into_the_live_checkout_is_refused(self):
+        """codex, PR #67 pass 14 — `<scratch>/missing/../repo/README.md`, where `<scratch>/repo` IS the live
+        checkout and `<scratch>/missing` does not exist: the nearest-existing-ancestor reconstruction stopped
+        at `<scratch>` and re-appended `missing/../repo/README.md` VERBATIM, so the result did not match
+        `"$REPO_P"/*`, `mkdir -p` then created `missing`, and the kernel resolved the write INTO the live
+        checkout — a TRACKED file was overwritten by the transcript before the post-run fingerprint voided the
+        round. The reconstructed path is now `os.path.normpath`-ed: refused as inside the live checkout, before
+        the reviewer, with `missing` never created and README.md untouched. Mutant: the normalisation line
+        deleted — the operand is ACCEPTED, `<scratch>/missing` is created, the reviewer runs, README.md is
+        overwritten with the transcript, and only then is the round VOIDed (rc 3) — measured."""
+        readme = os.path.join(self.clone, "README.md")
+        with open(readme, "rb") as fh:
+            original = fh.read()
+        self.assertTrue(original, "the fixture's README.md is empty")
+        missing = os.path.join(self.scratch, "missing")
+        out = os.path.join(missing, "..", "repo", "README.md")
+        # The premise: lexically it does not start with the clone; physically (once `missing` existed) it
+        # would be the tracked file itself; and `missing` does not exist yet.
+        self.assertFalse(out.startswith(self.clone + os.sep), out)
+        self.assertEqual(os.path.realpath(readme), os.path.realpath(out))
+        self.assertFalse(os.path.lexists(missing), "the fixture pre-creates `missing`")
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        self.assertFalse(os.path.lexists(missing), "the refusal created the missing traversal component")
+        with open(readme, "rb") as fh:
+            self.assertEqual(original, fh.read(), "the refused run overwrote the tracked file")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"the refused run dirtied the live checkout: {st.stdout!r}")
+        # The control: the normalisation removed. The SAME operand is accepted — `missing` is created, the
+        # reviewer runs, the transcript lands ON README.md, and the round is voided only afterwards.
+        control = self._no_normpath_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(3, p.returncode,
+                         f"the CONTROL did not accept the operand and void the round after the fact — the fixture "
+                         f"is not the finding: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("real worktree was mutated", p.stderr, p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        self.assertTrue(os.path.isdir(missing), "the CONTROL did not create `missing` — the fixture is not the finding")
+        with open(readme, "rb") as fh:
+            overwritten = fh.read()
+        self.assertNotEqual(original, overwritten, "the CONTROL did not overwrite README.md — the fixture is not the finding")
+        self.assertIn(SESSION.encode(), overwritten, "README.md was not overwritten WITH the transcript")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertIn(" M README.md", st.stdout, f"the CONTROL's overwrite is not a live tracked change: {st.stdout!r}")
+
+    # ── a leading `//` survives normalisation, and the physical prefix is TESTED (pass 14 sweep) ──
+
+    #: The normalisation line WITHOUT its `//` collapse — the shape that shipped between the pass-14
+    #: `normpath` fix and this sweep. `os.path.normpath` PRESERVES exactly two leading slashes (POSIX
+    #: leaves that spelling implementation-defined), so when the nearest EXISTING ancestor is `/` the
+    #: reconstruction produced `//tmp/x` / `//<repo>/tracked` and neither prefix refusal matched.
+    NORMPATH_NO_COLLAPSE = ('''OUT="$(python3 -c 'import os, sys; '''
+                            '''print(os.path.normpath(sys.argv[1]))' "$OUT")" || exit 1\n''')
+
+    def _no_collapse_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.NORMPATH_LINE),
+                         "the normalisation line is not unique — the control is not the control")
+        self.assertIn('re.sub(r"^//+", "/"', self.NORMPATH_LINE)
+        return self._laid_out_harness(text.replace(self.NORMPATH_LINE, self.NORMPATH_NO_COLLAPSE, 1))
+
+    def test_an_operand_whose_nearest_existing_ancestor_is_the_root_collapses_its_leading_slashes(self):
+        """codex sweep, PR #67 pass 14, finding K1 — when the operand's nearest EXISTING ancestor is `/`,
+        the reconstruction is `pwd -P` (`/`) + `/` + the missing tail, i.e. `//missing/../tmp/x`, and
+        `os.path.normpath` PRESERVES the two leading slashes: the result matched neither the `/tmp/*` nor
+        the `"$REPO_P"/*` refusal while the kernel resolves both to exactly those places. Both spellings
+        are refused now, before the reviewer, creating nothing. Mutant: the `re.sub(r"^//+", "/", …)`
+        removed and `os.path.normpath` kept — the repository operand is ACCEPTED, the reviewer runs, the
+        transcript lands ON the tracked README.md and the round is voided only afterwards (measured).
+
+        The `/tmp` spelling is asserted on the SHIPPED side only: completing its control would write the
+        transcript into the real /tmp, which is the one place this repository forbids. It is the same
+        line, the same `case "$OUT" in <prefix>/*)`, and the repository spelling — the damaging half,
+        since it overwrites a TRACKED file — carries the control."""
+        # The premise the whole finding rests on, pinned here rather than assumed: normpath keeps `//`.
+        self.assertTrue(os.path.normpath("//missing14/../tmp/k.txt").startswith("//"),
+                        "this python's normpath collapses `//` — the fixture is not the finding")
+        # …and the operand's FIRST component must be absent, or the walk stops below `/`, the prefix is
+        # never `/`, and no `//` is ever produced — the fixture would pass for the wrong reason.
+        missing = f"/missing-{os.path.basename(self.scratch)}"
+        self.assertFalse(os.path.lexists(missing), f"the fixture's missing component exists: {missing}")
+        # (a) the /tmp spelling — refused, and nothing appears under either physical spelling of /tmp.
+        leaf = f"kimi-k1-{os.path.basename(self.scratch)}.txt"
+        self._assert_tmp_refused(os.path.join(missing, "..", "tmp", leaf), leaf)
+        self.assertFalse(os.path.lexists(missing), f"the refused run created `{missing}`")
+        # (b) the live-checkout spelling — refused, README.md untouched, the component never created.
+        readme = os.path.join(self.clone, "README.md")
+        with open(readme, "rb") as fh:
+            original = fh.read()
+        self.assertTrue(original, "the fixture's README.md is empty")
+        out = os.path.join(missing, "..", os.path.realpath(self.clone).lstrip("/"), "README.md")
+        self.assertFalse(out.startswith(self.clone + os.sep), out)          # lexically outside …
+        self.assertEqual(os.path.realpath(readme), os.path.realpath(out))    # … physically the tracked file
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "inside the live checkout")
+        self.assertFalse(os.path.lexists(missing), f"the refused run created `{missing}`")
+        with open(readme, "rb") as fh:
+            self.assertEqual(original, fh.read(), "the refused run overwrote the tracked file")
+        st = subprocess.run(["git", "-C", self.clone, "status", "--porcelain"],
+                            capture_output=True, text=True, check=True)
+        self.assertEqual("", st.stdout, f"the refused run dirtied the live checkout: {st.stdout!r}")
+        # The control: the `//` collapse removed. The SAME operand is accepted, the reviewer runs, and
+        # the transcript is written over README.md — the round is voided only after the damage.
+        control = self._no_collapse_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(3, p.returncode,
+                         f"the CONTROL did not accept the `//`-prefixed operand and void the round after "
+                         f"the fact — the fixture is not the finding: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("real worktree was mutated", p.stderr, p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        with open(readme, "rb") as fh:
+            overwritten = fh.read()
+        self.assertNotEqual(original, overwritten, "the CONTROL did not overwrite README.md")
+        self.assertIn(SESSION.encode(), overwritten, "README.md was not overwritten WITH the transcript")
+
+    # The physical prefix, captured and tested on ITS OWN; the control restores the single assignment
+    # whose trailing `|| exit 1` was INERT — for an assignment the status is that of the LAST command
+    # substitution, which is `basename`.
+    OUT_BASE_TESTED = (
+        '''_out_base="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)" || _out_base=""\n'''
+        '''[ -n "$_out_base" ] || { echo "cannot enter the transcript's physical parent: $_out_dir" >&2; exit 1; }\n'''
+        '''OUT="$_out_base/${_out_missing}$(basename -- "$OUT")"\n''')
+    OUT_BASE_OLD = ('''OUT="$(CDPATH='' cd -P -- "$_out_dir" 2>/dev/null && pwd -P)'''
+                    '''/${_out_missing}$(basename -- "$OUT")" || exit 1\n''')
+
+    def _inert_status_control(self):
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.OUT_BASE_TESTED),
+                         "the physical-prefix block is not unique — the control is not the control")
+        return self._laid_out_harness(text.replace(self.OUT_BASE_TESTED, self.OUT_BASE_OLD, 1))
+
+    @unittest.skipIf(os.geteuid() == 0, "root enters a 0000 directory, so the fixture is not the finding")
+    def test_a_transcript_parent_that_cannot_be_entered_is_refused_not_re_rooted(self):
+        """codex sweep, PR #67 pass 14, finding K2 — the `|| exit 1` after the physical-prefix
+        reconstruction was INERT: an assignment takes the status of its LAST command substitution, which
+        was `basename`, so a `cd -P` that could not enter its target was ignored, the empty prefix
+        silently RE-ROOTED the operand at `/`, and the reviewer was launched on a path the operand never
+        named. The prefix is captured and tested on its own now. Mutant: the single-assignment form with
+        the trailing `|| exit 1` restored — the operand is accepted, the reviewer runs, and the transcript
+        is written to `/` + the missing tail (measured).
+
+        The fixture is an operand whose nearest EXISTING ancestor is a directory this process cannot
+        `cd` into (mode 0000), and whose missing tail is the scratch directory's own path minus its
+        leading `/` — so the re-rooted spelling is a REAL, writable place the operand never named."""
+        nocd = os.path.join(self.scratch, "nocd")
+        os.mkdir(nocd)
+        os.chmod(nocd, 0o000)
+        self.addCleanup(os.chmod, nocd, 0o700)               # LIFO: before the scratch is removed
+        rerooted = os.path.join(os.path.realpath(self.scratch), "k2", "kimi.txt")
+        out = os.path.join(nocd, os.path.relpath(rerooted, "/"))
+        self.assertTrue(os.path.isdir(nocd), "the fixture's unenterable parent must still stat as a directory")
+        self.assertFalse(os.path.lexists(os.path.dirname(rerooted)), "the fixture pre-creates the re-rooted parent")
+        p, _ = self._run("clean", out=out)
+        self._assert_refused_before_launch(p, out, "cannot enter the transcript's physical parent")
+        self.assertFalse(os.path.lexists(os.path.dirname(rerooted)),
+                         "the refused run created the RE-ROOTED parent — the operand was resolved at `/`")
+        # The control: the inert `|| exit 1` restored. The same operand is ACCEPTED, the reviewer runs,
+        # and the transcript lands at `/` + the missing tail — a place the operand never named.
+        control = self._inert_status_control()
+        p, _ = self._run("clean", out=out, harness=control)
+        self.assertEqual(4, p.returncode,
+                         f"the CONTROL did not accept the operand — the fixture is not the finding: "
+                         f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("TREE=clean", p.stdout, p.stdout + p.stderr)
+        self.assertTrue(self._stub_ran(), "the CONTROL refused before launch — the fixture is not the finding")
+        self.assertTrue(os.path.isfile(rerooted),
+                        f"the CONTROL did not write the transcript at the re-rooted path {rerooted}")
+        with open(rerooted, encoding="utf-8") as fh:
+            self.assertIn(SESSION, fh.read(), "the re-rooted file is not this run's transcript")
+
+    # ── the effort assertion is bound to the ONE session this run created ─────────────────────
+
+    def test_exactly_one_new_session_with_a_max_wire_log_asserts_max(self):
+        """The stub creates ONE session under the scratch HOME during the run, with `thinkingEffort:max`
+        in its wire log: EFFORT=max, and the harness exits with the reviewer's own status (0)."""
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".kimi-code")), "no session before the run")
+        p, _ = self._run("new-max")
+        self.assertEqual(0, p.returncode, f"new-max: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
+        self.assertNotIn("EFFORT NOT ASSERTED", p.stderr)
+        self.assertTrue(os.path.isfile(self._wire("wd_new", NEW_SESSION)), "the stub's session did not land under the scratch HOME")
+
+    def _quote_old(self, harness):
+        """A `max` session exists BEFORE the run; the stub QUOTES its id and creates no session. Returns
+        the completed process, after asserting the premise: the transcript carries the quoted id."""
+        self._seed_session("wd_old", OLD_SESSION)
+        p, out = self._run("quote-old", harness=harness)
+        with open(out, encoding="utf-8") as fh:
+            self.assertIn(OLD_SESSION, fh.read(), "the fixture is not the finding: the transcript does not quote the old id")
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".kimi-code", "sessions", "wd_new")),
+                         "quote-old must create no session")
+        return p
+
+    def test_an_older_sessions_id_quoted_in_the_transcript_is_not_evidence(self):
+        """No session was created during the run, so there is no evidence — whatever the transcript says.
+        The pre-existing session's `max` log is NOT consulted: EFFORT=UNKNOWN and exit 4."""
+        p = self._quote_old(HARNESS)
+        self.assertEqual(4, p.returncode, f"quote-old: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} EFFORT=UNKNOWN\(self-reported\) WIRE=$")
+        self.assertIn("EFFORT NOT ASSERTED", p.stderr)
+
+    # The set-difference selection, as shipped — replaced by the control with the PREVIOUS selection: the
+    # first `session_<uuid>` grep'd out of the transcript, then that session's wire log.
+    SET_DIFFERENCE_HEAD = 'SESSIONS_AFTER="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"\n'
+    SET_DIFFERENCE_TAIL = '    [ -r "$_w" ] && WIRE="$_w"\nfi\n'
+    TRANSCRIPT_GREP = ('SESSION_ID="$(grep -m1 -oE \'session_[0-9a-f-]{36}\' "$OUT" 2>/dev/null || true)"\n'
+                       'WIRE=""\n'
+                       'if [ -n "$SESSION_ID" ]; then\n'
+                       '    for _w in "$HOME"/.kimi-code/sessions/*/"$SESSION_ID"/agents/main/wire.jsonl; do\n'
+                       '        [ -r "$_w" ] && { WIRE="$_w"; break; }\n'
+                       '    done\n'
+                       'fi\n')
+
+    def _control_harness(self):
+        """A copy of the harness with the transcript-grep selection in place of the set difference, laid
+        out as `<scratch>/scripts/review/isolated-kimi-review.sh` beside `tree-fingerprint.sh` and
+        `containment.py` (the prompt-operand gate, PR #67 pass 12 — the control must reach the reviewer,
+        so it needs the same helpers beside it) and under `<scratch>/scripts/pty-capture.py` — the
+        harness resolves all three from its OWN directory."""
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.SET_DIFFERENCE_HEAD), "the set-difference head is not unique")
+        start = text.index(self.SET_DIFFERENCE_HEAD)
+        self.assertIn(self.SET_DIFFERENCE_TAIL, text[start:], "the set-difference tail was not found after its head")
+        end = text.index(self.SET_DIFFERENCE_TAIL, start) + len(self.SET_DIFFERENCE_TAIL)
+        block = text[start:end]
+        self.assertEqual(1, text.count(block), "the set-difference block is not unique")
+        self.assertIn("NEW_SESSIONS", block)
+        return self._laid_out_harness(text.replace(block, self.TRANSCRIPT_GREP, 1))
+
+    def _laid_out_harness(self, text):
+        """`text` written as `<scratch>/scripts/review/isolated-kimi-review.sh`, beside copies of the helpers
+        the harness resolves from its OWN directory (`tree-fingerprint.sh`, `containment.py`) and under
+        `<scratch>/scripts/pty-capture.py`. One control per test: the directory must not pre-exist."""
+        review_dir = os.path.join(self.scratch, "scripts", "review")
+        os.makedirs(review_dir)
+        for helper in ("tree-fingerprint.sh", "containment.py"):
+            shutil.copy(os.path.join(REPO, "scripts", "review", helper), review_dir)
+        shutil.copy(os.path.join(REPO, "scripts", "pty-capture.py"), os.path.join(self.scratch, "scripts"))
+        control = os.path.join(review_dir, "isolated-kimi-review.sh")
+        with open(control, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return control
+
+    def test_the_control_with_the_transcript_grep_selection_certifies_the_quoted_session(self):
+        """The CONTROL — the previous, transcript-grep selection — on the SAME quote-old fixture returns the
+        older session's `max` and exits 0: it certifies this run on another run's evidence (measured).
+        That is the defect; the shipped set difference above does not do it."""
+        p = self._quote_old(self._control_harness())
+        self.assertEqual(0, p.returncode,
+                         f"the CONTROL did not certify the quoted session — the fixture is not the finding: "
+                         f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r" EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
+
+    def test_two_new_sessions_are_not_evidence(self):
+        """Two sessions created during the run (a concurrent run's shape), both `max`: no single session is
+        this run's, so EFFORT=UNKNOWN and exit 4 — never `max` on the strength of either."""
+        p, _ = self._run("two-new")
+        self.assertEqual(4, p.returncode, f"two-new: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r" EFFORT=UNKNOWN\(self-reported\) WIRE=$")
+        self.assertIn("EFFORT NOT ASSERTED", p.stderr)
+        for s in (NEW_SESSION, NEW_SESSION_2):
+            self.assertTrue(os.path.isfile(self._wire("wd_new", s)), f"the stub did not create {s}")
+
+    # ── what the effort token is EVIDENCE OF, said on the line itself ─────────────────────────────
+
+    #: The summary line as shipped, and the bare `EFFORT=%s` the control restores. The digest line is
+    #: part of the pin: a control that kept it while dropping the label would still print the digest.
+    SUMMARY = ('WIRE_SHA=""\n'
+               '[ -n "$WIRE" ] && WIRE_SHA="$(python3 -c \'import hashlib,sys; '
+               'print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())\' "$WIRE" 2>/dev/null)"\n'
+               '\n'
+               "printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s(self-reported) WIRE=%s\\n' \\\n"
+               '    "$STATUS" "$(wc -c < "$OUT" | tr -d \' \')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" '
+               '"${EFFORTS:-UNKNOWN}" "${WIRE_SHA:0:12}"\n')
+    SUMMARY_OLD = ("printf 'EXIT=%s BYTES=%s TREE=clean BASIS=%s PROMPT=%s EFFORT=%s\\n' \\\n"
+                   '    "$STATUS" "$(wc -c < "$OUT" | tr -d \' \')" "${BASIS:0:12}" "${PROMPT_SHA:0:12}" '
+                   '"${EFFORTS:-UNKNOWN}"\n')
+
+    def test_the_effort_token_is_labelled_self_reported_and_digests_the_wire_log_it_read(self):
+        """codex, PR #67 pass 15 — the wire log lives INSIDE the session tree of the process it describes,
+        under the same `$HOME` and the same uid, and that process has a shell: it can rewrite the file to
+        say `max` before this grep reads it, and no file under a HOME it can write authenticates anything
+        against it. There is no channel at the same uid that would. So the token says what it is —
+        `EFFORT=<v>(self-reported)` — and the digest of the bytes THIS run actually read is printed
+        beside it, so a later dispute has something fixed to point at. The exit-4 assertion is unchanged
+        and still earns its keep against the failure it was written for: a run whose wire log says `high`
+        is refused as evidence about `max`. Mutant: the bare `EFFORT=%s` restored — the line carries
+        neither the label nor the digest, and reads as an assertion about the run."""
+        wire = self._wire("wd_new", NEW_SESSION)
+        p, _ = self._run("new-high", out=os.path.join(self.scratch, "out-high-shipped.txt"))
+        self.assertEqual(4, p.returncode, f"new-high: rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("EFFORT NOT ASSERTED AS max (saw: high,)", p.stderr,
+                      f"a `high` wire log was accepted as evidence about max: {p.stderr!r}")
+        self.assertTrue(os.path.isfile(wire),
+                        "the stub's `high` session did not land under the scratch HOME — there is no "
+                        "wire log for the digest to be OF")
+        with open(wire, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+        self.assertRegex(p.stdout,
+                         r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} PROMPT=[0-9a-f]{12} "
+                         r"EFFORT=high,\(self-reported\) WIRE=" + digest + "$")
+        # The control: the bare token — no label, no digest (which is what the line said before).
+        control = self._laid_out_harness(self._summary_control_text())
+        shutil.rmtree(os.path.join(self.home, ".kimi-code"))     # so the control's run creates it afresh
+        p2, _ = self._run("new-high", out=os.path.join(self.scratch, "out-high-control.txt"),
+                          harness=control)
+        self.assertEqual(4, p2.returncode,
+                         f"the CONTROL did not reach the summary — the fixture is not the finding: "
+                         f"rc {p2.returncode}\n{p2.stdout}{p2.stderr}")
+        self.assertRegex(p2.stdout, r" EFFORT=high,$")
+        self.assertNotIn("self-reported", p2.stdout,
+                         "the CONTROL still labelled the token — it is not the pre-fix line")
+        self.assertNotIn("WIRE=", p2.stdout, "the CONTROL still printed a digest")
+
+    def _summary_control_text(self):
+        """The harness text with the shipped summary block replaced by the bare `EFFORT=%s` line."""
+        with open(HARNESS, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.SUMMARY), "the summary block is not unique — re-derive the pin")
+        return text.replace(self.SUMMARY, self.SUMMARY_OLD, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

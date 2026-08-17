@@ -83,7 +83,6 @@ resolve_in_repo() {
 
 SCR="$(mktemp -d)"
 cleanup() {
-    git worktree remove --force "$SCR/tree" >/dev/null 2>&1
     rm -rf "$SCR"
 }
 trap cleanup EXIT
@@ -102,8 +101,11 @@ fi
 
 # --- disposable detached checkout at the exact reviewed commit --------------------------------
 SHA="$(git rev-parse HEAD)"
-git worktree add --detach "$SCR/tree" "$SHA" >/dev/null 2>&1 \
-    || { echo "could not create the review checkout" >&2; exit 1; }
+# A PRIVATE clone, never a linked worktree — a linked worktree's `.git` points into the maintainer's
+# real repository and every git operation the reviewer runs lands there (see disposable_checkout in
+# tree-fingerprint.sh; adversarial verification, PR #67 pass 6).
+disposable_checkout "$REPO" "$SHA" "$SCR/tree" \
+    || { echo "could not create the private review checkout" >&2; exit 1; }
 TREE="$SCR/tree"
 
 # COPY THE BOUND PLAN INTO THE CHECKOUT. The tree above is detached at HEAD, so `agy` reads the
@@ -142,7 +144,7 @@ if [ -n "$PLAN_REL" ]; then
         || { echo "plan not readable, or outside the repository: $PLAN_OPERAND" >&2; exit 1; }
     [ -r "$PLAN_REL" ] || { echo "plan not readable: $REPO/$PLAN_REL" >&2; exit 1; }
     # The staging destination is built by a DESCRIPTOR WALK inside the python below, not a `mkdir -p` +
-    # `open("$TREE/$PLAN_REL")`. `git worktree add --detach` MATERIALIZES committed tree entries — so if
+    # `open("$TREE/$PLAN_REL")`. the detached checkout MATERIALIZES committed tree entries — so if
     # HEAD records the plan path as a SYMLINK (or any parent as one), the checkout recreates that link,
     # and a plain open followed it to overwrite an outside victim. Reproduced: HEAD carries
     # `docs/planning/X_PLAN.md -> /outside/victim`, the live worktree replaces it with a real plan, and
@@ -219,9 +221,14 @@ if [ -s "$OUT" ]; then
     echo "(it already holds $(wc -c < "$OUT" | tr -d ' ') bytes — allocate a fresh leaf for this round)" >&2
     exit 1
 fi
-# The baseline: everything the HARNESS put in the tree (the prompt, the staged plan). Anything beyond
-# this after the run is the reviewer's doing.
-TREE_BASELINE="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null || true)"
+# The baseline: everything the HARNESS put in the tree (the prompt, the staged plan), by CONTENT.
+# Anything different after the run is the reviewer's doing. NOT `git status`, which the reviewer
+# controls (see disposable_fingerprint), and NOT `|| true` — a probe that fails is not a clean tree
+# (adversarial verification, PR #67 pass 6: this baseline still carried the fallback the post-review
+# probe below had lost in PR #63).
+if ! TREE_BASELINE="$(disposable_fingerprint "$TREE")"; then
+    echo "GATE FAILED — could not fingerprint the disposable checkout before the review" >&2; exit 1
+fi
 
 # Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
@@ -236,7 +243,9 @@ if ! AFTER="$(tree_fingerprint "$REPO")"; then
 fi
 if [ "$BEFORE" != "$AFTER" ]; then
     echo "GATE FAILED — the reviewer MUTATED the working tree during the review:" >&2
-    tree_fingerprint_report "$REPO" "$BEFORE_STATUS"
+    # The first line of the fingerprint is the pre-run HEAD; `$'\n'`, not `\n` — inside a pattern `\n`
+    # is a literal `n` (measured: it stripped at the first `n` of the status text).
+    tree_fingerprint_report "$REPO" "$BEFORE_STATUS" "${BEFORE%%$'\n'*}"
     echo "(round is void — see COREDEV-2607)" >&2
     exit 3
 fi
@@ -277,16 +286,15 @@ fi
 # so a shell-capable reviewer that removed or corrupted the checkout's `.git` file broke the very
 # detector meant to catch it and the round returned 0 with `VERDICT: APPROVE`. The basis files can be
 # byte-identical throughout, so nothing else notices. Any non-zero status here VOIDS the round.
-if ! TREE_AFTER="$(git -C "$TREE" status --porcelain --untracked-files=all 2>/dev/null)"; then
-    { echo "GATE FAILED — could not read the disposable checkout's status after the review (round"
+if ! TREE_AFTER="$(disposable_fingerprint "$TREE")"; then
+    { echo "GATE FAILED — could not re-read the disposable checkout after the review (round"
       echo "void). A reviewer that breaks the checkout must not pass as a clean tree."; } >&2
     exit 3
 fi
-DIRTY="$(printf '%s\n' "$TREE_AFTER" | grep -vxF -- "$TREE_BASELINE" || true)"
-if [ -n "$DIRTY" ]; then
-    { echo "GATE FAILED — the reviewer WROTE inside the disposable checkout (round void — agent-mode"
+if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
+    { echo "GATE FAILED — the reviewer left edits inside the disposable checkout (round void — agent-mode"
       echo "behaviour, the COREDEV-2607 signature):"
-      printf '%s\n' "$DIRTY"; } >&2
+      printf '%s\n' "$TREE_BASELINE" | diff - <(printf '%s\n' "$TREE_AFTER") | sed 's/^/  /' || :; } >&2
     exit 3
 fi
 

@@ -38,6 +38,24 @@
 #                             never on a string comparison against the sentinel — otherwise a caller
 #                             could fake resolution by exporting the sentinel text.
 #   _UNLEASHED_BASE_DIAGNOSED  guards the ONE diagnostic per process.
+#   _UNLEASHED_BASE_PID       the pid of the process that resolved — half of the once-per-process key;
+#                             the other half is the FUNCTION `_unleashed_resolved_in_process`, defined
+#                             at resolution time and never at definition time. `exec` keeps `$$` and
+#                             an `allexport` wrapper carries every variable across it, so a hook exec'd
+#                             after such a wrapper inherited a matching PID and the wrapper's stale base
+#                             (codex, PR #67 pass 11 — reproduced); functions do not cross exec, so the
+#                             marker function is what a fresh shell instance cannot have inherited.
+# NOTHING HERE IS KEYED ON A BARE FLAG, because a flag is inheritable and a function is not (codex,
+# PR #67 pass 7 — each of these was reproduced): a child process that inherited
+# `_UNLEASHED_BASE_OK=1` alone skipped resolution and `marker_dir` returned `/.state` — the ROOT
+# path D′ exists to prevent; an inherited `_UNLEASHED_STATE_LOADED=1` made the loader report the
+# machinery present in a shell where `_unleashed_read_store` was undefined; an inherited
+# `_UNLEASHED_PATHS_SH_LOADED=1` made this file define nothing at all. So: "already sourced" is
+# `command -v` on a function this file defines; "machinery loaded" is `command -v` on its four
+# entry functions; "resolved in this process" is `_UNLEASHED_BASE_PID = $$` — a subshell shares
+# `$$` and the resolution, a child process has its own and resolves afresh, and an environment
+# cannot carry the right value by accident. The resolver RESETS `_UNLEASHED_BASE_DIAGNOSED` on
+# entry for the same reason: cache only on state the entry point itself resets.
 # EAGER: resolution runs at source time, in the sourcing shell — not on first use. A value first
 # assigned inside `$(marker_dir)` lives in that subshell and is gone on return, so a lazily-built
 # "cache" silently re-resolves on every call.
@@ -53,9 +71,44 @@
 # The poisoned sentinel. Literal, fixed and greppable — tests assert on this exact string.
 _UNLEASHED_BASE_SENTINEL='/dev/null/unresolved-plugin-base'
 
-# Idempotent: these libs are frequently sourced more than once in a single shell.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-    _UNLEASHED_PATHS_SH_LOADED=1
+# THE INSTANCE CHECK — once per sourcing, before anything trusts a resolution it may have inherited.
+# `exec` keeps `$$`, an `allexport` wrapper carries every variable across it, and in bash `set -a`
+# carries every FUNCTION too — so after such a wrapper the exec'd hook held a matching pid, the marker
+# function, and the wrapper's stale base (codex, PR #67 pass 11 — reproduced). What NO environment
+# carries is a variable's READONLY attribute: `declare -p` / `typeset -p` show `-r` only in the shell
+# instance that set it (measured: `declare -rx` becomes `declare -x` across exec in bash, `export -r`
+# becomes `export` in zsh; a subshell keeps it). Resolution sets `readonly _UNLEASHED_BASE_INSTANCE`;
+# a value present WITHOUT the attribute is inherited, and the inherited resolution is discarded here.
+# One `declare -p` capture per SOURCING — the per-call guard below stays fork-free.
+if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+    # THE FLAG LETTERS ONLY, never the whole line. `declare -p` prints `declare -<flags> NAME="<value>"`
+    # and the VALUE is attacker-supplied: matched against the whole line, `"declare -"*r*" NAME="*` let a
+    # value of `r _UNLEASHED_BASE_INSTANCE=` provide both the `r` and the name, so an inherited
+    # `declare -x` passed as READONLY and the inherited resolution was trusted (codex sweep, PR #67
+    # pass 14 — reproduced). Everything from the first ` _UNLEASHED_BASE_INSTANCE` on is dropped BEFORE
+    # the test, so only the shell's own flags are read; absent output leaves the empty string, which
+    # matches nothing and discards — the fail-safe direction. Measured shapes: bash `declare -r`,
+    # `declare -rx`, inherited `declare -x`; zsh `typeset -r`, `export -r`, inherited `export`.
+    _ubi_decl="$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )"
+    case "${_ubi_decl%% _UNLEASHED_BASE_INSTANCE*}" in
+        "declare -"*r*|"typeset -"*r*|"export -"*r*|readonly) : ;;
+        # `|| :` on BOTH: zsh's `unset -f` returns 1 for a function that is not defined, and under
+        # `set -e` / `setopt err_return` that killed the sourcing of every copy the moment the stamp
+        # arrived through the environment (codex sweep, PR #67 pass 14 — reproduced, zsh only).
+        *)  unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null || : ;;
+    esac
+    unset _ubi_decl 2>/dev/null || :
+fi
+
+# THE DEFINITIONS BELOW ARE UNCONDITIONAL — sourcing this file ALWAYS (re)defines every function it
+# owns. Every guard tried here trusted something an environment can carry: a flag (inheritable — pass
+# 7), one function (`export -f` — pass 11), and then "the complete API is present" — which bash `set -a`
+# also satisfies, because it exports every function defined while it is active, so a child inherited
+# all six names with an ATTACKER'S `unleashed_resolve_base` and the guard skipped the definitions and
+# the eager call ran the inherited code (codex, PR #67 pass 12 — reproduced: `_UNLEASHED_BASE_RESOLVED=
+# /attacker`). A namespace is never proof that THIS library populated it; redefining is idempotent and
+# cheap, and it replaces an imported copy of any of these functions with this file's own definition.
+{
 
     # The pre-2617 expansion. Kept ONLY so the drift matrix can assert the legacy behaviour it
     # documents; no primitive calls it.
@@ -63,19 +116,148 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
         printf '%s' "${CLAUDE_PLUGIN_DATA:-${HOME:-}/.claude/unleashed-mail}"
     }
 
-    # Eager, source-time resolution. Sets the three protocol variables exactly once per process.
+    # ── COREDEV-2617 §4.2a — the store, and why this is not just the D′ expansion ─────────────────
+    # D′ made an unset variable resolve to the sentinel. That is safe but it is not a CAPABILITY: a
+    # git hook or an ordinary terminal, which never receive the variable, still cannot find the base.
+    # §4.2a adds the store — each publisher records its base under a name that is an injective
+    # encoding of the value, so a reader can discover it and a disagreement is visible as a conflict
+    # rather than as a silent second directory.
+    #
+    # The machinery lives in `plugin-state-{auth,store,reader,publisher}.sh`, NOT inline here, and it
+    # is sourced independently of this file. That matters: the other family files must be able to
+    # resolve from the store when THIS file cannot be located, so the machinery cannot hang off it.
+    # If the machinery itself is missing, the resolution degrades to the D′ envelope — sentinel,
+    # `OK=0`, one diagnostic — which is exactly the pre-2617 behaviour and is never worse than it.
+    # THE DIRECTORY IS CAPTURED AT SOURCE TIME, NOT INSIDE THE FUNCTION, AND THAT IS LOAD-BEARING.
+    # `${BASH_SOURCE[0]:-$0}` is cross-shell at TOP LEVEL — measured: bash sets BASH_SOURCE to the
+    # sourced file and zsh sets `$0` to it, so `dirname` is correct in both, for absolute, relative
+    # and nested-source invocations alike. INSIDE A FUNCTION the two diverge: bash's BASH_SOURCE[0]
+    # is still the defining file, while zsh sets `$0` to the FUNCTION NAME (FUNCTION_ARGZERO, on by
+    # default). Measured: the first version of this loader ran that expansion inside the function,
+    # resolved its directory to `.`, found none of the four libraries, and silently degraded zsh to
+    # the D′ envelope — the variable-set branch reported `none` instead of `created` and a subsequent
+    # reader resolved nothing, while bash did the right thing.
+    # NO EXTERNAL COMMAND MAY TAKE PART IN THIS. `dirname` is resolved through PATH, and the parent
+    # that supplies a tampered function set supplies PATH too: with `/usr/bin` off it `dirname` was
+    # not found, the directory fell back to the caller's cwd, the four libraries "were not readable"
+    # although they sit right beside this file, and the loader's presence fallback then trusted the
+    # imported machinery — RESOLVED=/attacker in all five copies (codex sweep, PR #67 pass 14 —
+    # reproduced). The directory now comes from a parameter expansion, and `cd`/`pwd` are shell
+    # BUILTINS, so nothing on this path consults PATH.
+    _UNLEASHED_LIB_DIR="${BASH_SOURCE[0]:-$0}"
+    case "$_UNLEASHED_LIB_DIR" in
+        */*) _UNLEASHED_LIB_DIR="${_UNLEASHED_LIB_DIR%/*}"; [ -n "$_UNLEASHED_LIB_DIR" ] || _UNLEASHED_LIB_DIR="/" ;;
+        *)   _UNLEASHED_LIB_DIR="." ;;
+    esac
+    _UNLEASHED_LIB_DIR="$( { CDPATH='' cd -P -- "$_UNLEASHED_LIB_DIR" && pwd -P; } 2>/dev/null )" || _UNLEASHED_LIB_DIR="."
+    [ -n "$_UNLEASHED_LIB_DIR" ] || _UNLEASHED_LIB_DIR="."
+
+    _unleashed_load_state_machinery() {
+        # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+        # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+        # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+        # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+        # AND "THE FUNCTIONS EXIST" IS NOT "THE FUNCTIONS ARE OURS": bash `set -a` exports functions,
+        # so a parent could export a tampered `_unleashed_read_store` beside a genuine name set, and
+        # keyed on presence this branch skipped all four libraries and let the import set
+        # `_UNLEASHED_BASE_RESOLVED=/attacker` (codex, PR #67 pass 14 — reproduced). So the machinery
+        # is RE-SOURCED from the files beside this resolver whenever they are readable — the same
+        # replace-imports rule the resolver's own definition block follows — and the functions already
+        # present are used ONLY where the files are not readable (a copy of the resolver placed away
+        # from its libraries, as the mutant fixtures do; a plugin install always has them).
+        _usm_d="$_UNLEASHED_LIB_DIR"; _usm_readable=1
+        for _usm_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+            [ -r "$_usm_d/$_usm_f.sh" ] || { _usm_readable=0; break; }
+        done
+        if [ "$_usm_readable" = 1 ]; then
+            for _usm_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+                # shellcheck source=/dev/null
+                . "$_usm_d/$_usm_f.sh"
+            done
+            return 0
+        fi
+        if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+            && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+            return 0
+        fi
+        return 1
+    }
+
+    # PUB-2's precondition, computed once: HOME must be non-empty AND absolute. Every expansion of
+    # HOME on this path uses `${HOME:-}` so a missing HOME under `set -u` never aborts a hook.
+    # PUB-9 E1's precondition. IT CANNOT DETECT AN ABSENT `HOME` UNDER ZSH, and says so rather than
+    # implying otherwise: zsh initialises its special `HOME` parameter FROM THE PASSWD DATABASE before
+    # any sourced line runs, so `env -i zsh` reports `HOME=/Users/<u>` where `env -i bash` reports it
+    # unset (measured). A wrapper or harness that clears `HOME` specifically to prevent persistent
+    # writes is therefore protected in bash and NOT in zsh, where publication proceeds into the real
+    # store (codex, PR #67 pass 17 — reproduced). No post-startup test can distinguish "the caller set
+    # HOME to the passwd value" from "zsh filled it in", so the ONLY reliable opt-out is the explicit
+    # one this library already has: `_UNLEASHED_PUBLISH_OK=0`, which suppresses publication in both
+    # shells. Every harness in this repo that must not write uses it. Stated as a residual in §4.2a-T.
+    _unleashed_home_ok() {
+        case "${HOME:-}" in
+            /*) return 0 ;;
+            *)  return 1 ;;
+        esac
+    }
+
+    # Eager, source-time resolution. Sets the four protocol variables exactly once per process.
     unleashed_resolve_base() {
-        [ -n "${_UNLEASHED_BASE_OK:-}" ] && return 0        # already resolved in this shell
+        # already resolved in THIS shell instance: same pid AND the marker function this instance defined
+        [ "${_UNLEASHED_BASE_PID:-}" = "$$" ] && command -v _unleashed_resolved_in_process >/dev/null 2>&1 && return 0
+        _UNLEASHED_BASE_DIAGNOSED=                           # the entry point resets what it caches on
         if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
+            # Step 1 — the variable wins, and it is the ONLY branch from which a publish is
+            # reachable (PUB-1). The publish is a side effect of having resolved, never a condition
+            # of it: whatever it reports, this shell's base is the variable's value.
             _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
             _UNLEASHED_BASE_OK=1
+            _UNLEASHED_BASE_SOURCE='host-env'
+            _UNLEASHED_POINTER_STATE=none
+            # PUB-9's exits, in order: E0 (publishing disabled) -> `none`; E1 (HOME unusable) ->
+            # `failed` WITH its one diagnostic — an unavailable publication must not read as one that
+            # was deliberately disabled (codex, PR #67); otherwise publish, which sets the state.
+            if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then
+                :                                            # E0: none, silent
+            elif ! _unleashed_home_ok; then
+                _UNLEASHED_POINTER_STATE=failed              # E1
+                printf 'unleashed-mail: plugin-state publication failed: HOME is empty or not absolute\n' >&2
+            elif _unleashed_load_state_machinery; then
+                _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
+                # The publish sets POINTER_STATE and may set SOURCE; the resolved value is unchanged.
+                _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+                _UNLEASHED_BASE_OK=1
+            fi
+        elif _unleashed_home_ok && _unleashed_load_state_machinery; then
+            # Step 2 — the store. The ordered reader rules set all four variables and emit at most
+            # one diagnostic; rule 3 emits none, because a resolution is the ordinary case.
+            # THIS file owns the wording about the environment variable — the reader is told the
+            # prefix and never names it, which keeps N5's allowlist tight.
+            _UNLEASHED_UNRESOLVED_PREFIX='CLAUDE_PLUGIN_DATA is unset and '
+            _unleashed_read_store "${HOME:-}/.claude/unleashed-mail/bases"
         else
+            # Step 3 — the D′ envelope: no variable, and no store to consult.
             _UNLEASHED_BASE_RESOLVED="$_UNLEASHED_BASE_SENTINEL"
             _UNLEASHED_BASE_OK=0
+            _UNLEASHED_BASE_SOURCE=unresolved
+            _UNLEASHED_POINTER_STATE=none
             if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
                 _UNLEASHED_BASE_DIAGNOSED=1
                 printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
             fi
+        fi
+        _UNLEASHED_BASE_PID=$$
+        _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"       # the environment this resolution was made under
+        _unleashed_resolved_in_process() { :; }             # the marker a fork/subshell keeps and exec drops
+        # THE STAMP — the attribute NO environment carries (see top). Set ONCE, only when absent, and errexit-
+        # safe: the bridge re-resolves an already-stamped instance, and bash treats `readonly X=1` on a readonly
+        # X as a FATAL assignment error under `set -e`, even behind `|| :` — the sourcing shell exited (codex,
+        # PR #67 pass 14 — reproduced). "Absent" is the right test because the sourcing-time check above already
+        # discarded any inherited value, so a present value here is this instance's own. Under zsh the stamp is
+        # declared GLOBAL: a bare `readonly` inside a function is function-local there, so the resolver's stamp
+        # vanished at return and the zsh arm never held the attribute (measured, same pass).
+        if [ -z "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+            if [ -n "${ZSH_VERSION:-}" ]; then typeset -g -r _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; else readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; fi
         fi
         return 0
     }
@@ -91,5 +273,8 @@ if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
         [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]
     }
 
-    unleashed_resolve_base        # EAGER — at source time, in the sourcing shell.
-fi
+}
+# EAGER — at source time, in the sourcing shell — after the definitions, which are always this file's.
+# Fork-free when already resolved in this instance (pid + marker function); the instance check above
+# discards a resolution that arrived through the environment.
+unleashed_resolve_base

@@ -5,6 +5,8 @@ N2  an unresolved base performs no persistent WRITE, and creates nothing at `/`
 N3  the libs delegate to paths.sh, and still work when it is absent
 N4  every path-returning primitive returns the poisoned sentinel when unresolved
 N5  the identifier CLAUDE_PLUGIN_DATA is expanded only at enumerated sites
+N6  the agent-env bridge re-resolves from the value it exports, even after an earlier resolution
+    in the same shell (with_mutation control: the bridge's reset line deleted)
 
 Each cell starts a FRESH SHELL that sets the environment and *then* sources: resolution is eager and
 process-stable, so mutating the environment after sourcing cannot change the resolved base. A test
@@ -27,6 +29,11 @@ def run(script, env=None, shell="bash", libdir=None):
     """Run `script` in a fresh shell with a clean environment."""
     e = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT")}
     e["_LIBDIR"] = libdir or LIB
+    # COREDEV-2617 §4.2a: these cells source family libs with the variable SET, which publishes
+    # into ${HOME}/.claude/unleashed-mail/bases/. This suite tests the D′ envelope, not the store,
+    # so publication is off — a real HOME must never receive an entry from a test cell (codex,
+    # PR #67). Cells that need to assert on the store set _UNLEASHED_PUBLISH_OK themselves.
+    e.setdefault("_UNLEASHED_PUBLISH_OK", "0")
     e.update(env or {})
     return subprocess.run([shell, "-c", script], capture_output=True, text=True, env=e)
 
@@ -165,9 +172,41 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_shell_primitive_drift.py": "asserts the expansion FORM",
         "scripts/tests/test_plugin_state_base.py": "this file",
         "scripts/tests/test_reviewer_roster.py": "sets it for a fixture",
+        "scripts/tests/test_plugin_state_mutants.py": "sets/unsets it for fixtures — a test harness exercising the resolver, not a primitive re-deriving the base",
+        "scripts/tests/test_plugin_state_store.py": "sets/unsets it for the `set -eu` scenario sweep — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/pre-commit-checks.sh": "comments only",
+        # PUB-9 E2a's rationale has to name the variable to say what it names — the directory the HOST
+        # will use, which on a first session does not exist yet. The publisher receives the VALUE as
+        # `$2` and expands the identifier nowhere; `COMMENT_ONLY` below asserts exactly that, so this
+        # entry buys a comment and not an exemption. (PR #67 pass 17: the fix's own comment tripped
+        # this scan, which is a lexical detector and does not read shell syntax.)
+        "scripts/lib/plugin-state-publisher.sh": "comments only — E2a/E2b's rationale names the "
+                                                 "variable; the value arrives as $2",
         "agents/swift-reviewer.md": "MAJ-6 bridge injection sites — the substitution points",
+        "scripts/validate-plan-citations.py": "a citation-assertion PATTERN, not an expansion — the "
+                                              "linter searches the PLAN for this text and never "
+                                              "reads the variable",
     }
+
+    #: Allowlist entries whose justification is "comments only". An allowlist entry is a hole in the
+    #: scan, and for these two the hole is meant to be exactly as wide as a comment — so the claim is
+    #: ASSERTED rather than trusted: every occurrence must be on a line whose first non-blank
+    #: character is `#`. A later edit that expands the identifier in code in one of these files fails
+    #: here, where the enumerated exemption would otherwise have hidden it.
+    COMMENT_ONLY = ("scripts/pre-commit-checks.sh", "scripts/lib/plugin-state-publisher.sh")
+
+    def test_comment_only_allowlist_entries_really_are_comments(self):
+        for rel in self.COMMENT_ONLY:
+            self.assertIn(rel, self.ALLOWLIST, f"{rel} is not allowlisted at all")
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+            hits = [l for l in lines if re.search(r"\bCLAUDE_PLUGIN_DATA\b", l)]
+            self.assertTrue(hits, f"{rel}: no occurrence at all — the allowlist entry is dead and "
+                                  f"should be removed rather than left as a standing exemption")
+            code = [l for l in hits if not l.lstrip().startswith("#")]
+            self.assertEqual([], code,
+                             f"{rel} is allowlisted as COMMENTS ONLY but expands the identifier in "
+                             f"code: {code}")
 
     def test_identifier_appears_only_at_approved_sites(self):
         offenders = {}
@@ -209,6 +248,75 @@ class N5LexicalDrift(unittest.TestCase):
                     with open(os.path.join(dirpath, n), encoding="utf-8") as fh:
                         body = fh.read()
                     self.assertNotIn("${!", body, f"{n}: indirect expansion in a state library")
+
+
+class N6BridgeReResolves(unittest.TestCase):
+    """The bridge establishes the ENVIRONMENT'S base, so it discards this instance's earlier resolution.
+
+    Sourced after paths.sh had already resolved `<a>` in the same shell, the bridge exports `<b>` and
+    then sources paths.sh again; paths.sh's once-per-instance guard (pid + the marker function) would
+    treat the earlier resolution as current — `CLAUDE_PLUGIN_DATA=<b>` beside
+    `_UNLEASHED_BASE_RESOLVED=<a>` (codex, PR #67 pass 12 — reproduced). The bridge clears the marker
+    function and the pid before it sources paths.sh, so the eager resolve runs again from the value it
+    just exported. Linux-safe: `_UNLEASHED_PUBLISH_OK=0` (E0) and the variable is set in every cell, so
+    no store is read, written, or needed; the scratch HOME is under ~/.claude only for hygiene.
+    """
+
+    #: The reset the bridge performs right after exporting the value — the control deletes exactly this.
+    #: (`|| :` since PR #67 pass 14: zsh's `unset -f` returns 1 for a function that is not defined, and
+    #: under `set -e` that killed the sourcing — row 175. The line the control deletes is the same one.)
+    RESET_LINE = "unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=\n"
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="bridge-reresolve.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.a = os.path.join(self.scratch, "base-a")
+        self.b = os.path.join(self.scratch, "base-b")
+        os.mkdir(self.a)
+        os.mkdir(self.b)
+
+    def _control_bridge(self):
+        """A copy of the bridge with its reset line deleted — asserted present exactly once first, so a
+        control built from a pattern that no longer matches cannot silently pass as 'discriminating'."""
+        src = os.path.join(LIB, "agent-env-bridge.sh")
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.RESET_LINE), "the bridge's reset line is not unique — the control anchor drifted")
+        control = os.path.join(self.scratch, "agent-env-bridge.control.sh")
+        with open(control, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(self.RESET_LINE, "", 1))
+        return control
+
+    def _cell(self, shell, bridge):
+        # The bridge takes ($1 = the value to export, $2 = the plugin root it sources paths.sh from);
+        # the shipped paths.sh is sourced FIRST so the shell already holds a resolution of <a>.
+        script = (f'export HOME="{self.scratch}" CLAUDE_PLUGIN_DATA="{self.a}" _UNLEASHED_PUBLISH_OK=0; '
+                  f'. "{LIB}/paths.sh"; . "{bridge}" "{self.b}" "{ROOT}"; '
+                  'printf "%s|%s" "$CLAUDE_PLUGIN_DATA" "$_UNLEASHED_BASE_RESOLVED"')
+        return run(script, shell=shell)
+
+    def test_the_bridge_re_resolves_after_an_earlier_resolution_in_the_same_shell(self):
+        control = self._control_bridge()
+        for shell in ("bash", "zsh"):
+            if not shutil.which(shell):
+                self.skipTest(f"{shell} not available")
+            with self.subTest(shell=shell, build="shipped"):
+                r = self._cell(shell, os.path.join(LIB, "agent-env-bridge.sh"))
+                self.assertEqual(0, r.returncode, r.stderr)
+                self.assertNotIn("command not found", r.stderr)
+                self.assertEqual(f"{self.b}|{self.b}", r.stdout,
+                                 "the bridge exported <b> but the shell kept its earlier resolution of <a>: "
+                                 f"{r.stdout!r} {r.stderr!r}")
+            with self.subTest(shell=shell, build="control"):
+                r = self._cell(shell, control)
+                self.assertEqual(0, r.returncode, r.stderr)
+                self.assertEqual(f"{self.b}|{self.a}", r.stdout,
+                                 "the CONTROL did not fail — without the reset line the bridge still "
+                                 f"re-resolved, so this test cannot discriminate: {r.stdout!r} {r.stderr!r}")
+            self.assertFalse(os.path.exists(os.path.join(self.scratch, ".claude")),
+                             f"{shell}: E0 must leave no store under the scratch HOME")
 
 
 if __name__ == "__main__":

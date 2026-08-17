@@ -13,6 +13,300 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.0] — 2026-08-14
+
+### Added
+
+- **COREDEV-2617 §4.2a — the plugin-state base store.** A shell that never receives
+  `CLAUDE_PLUGIN_DATA` — a git hook, an ordinary terminal — can now discover the plugin-data base
+  anyway. Each publisher records its base in `~/.claude/unleashed-mail/bases/` under a name that is
+  an injective encoding of the value, so two publishers holding different bases never write the same
+  file and a disagreement surfaces as a visible `conflict` instead of a silent second directory.
+  Darwin arms only; the Linux arms remain deliberately unbuilt until
+  `scripts/review/linux-primitive-probe.sh` has been run on a Linux host and its output transcribed.
+  - `scripts/lib/plugin-state-store.sh` — the Invariant P key encoder (a single byte walk under
+    `LC_ALL=C`, four disjoint markers, zero forks), the nearest-existing-ancestor walk, the
+    `NAME_MAX` budget, and store creation in the order that validates the existing prefix *before*
+    creating anything.
+  - `scripts/lib/plugin-state-auth.sh` — the one authentication predicate both the reader and the
+    publisher call, the chain walk with its trust-anchor ownership rule, and the Darwin ACL arm.
+  - `scripts/lib/plugin-state-reader.sh` — the ordered reader rules −1 through 4.
+  - `scripts/lib/plugin-state-publisher.sh` — publish-then-scan with its ordered exits.
+  - `scripts/tests/test_plugin_state_store.py` — 32 behavioural tests that execute the shipped shell
+    in **both** bash 3.2.57 and zsh 5.9, four of them carrying positive controls that must fail.
+  - `scripts/tests/test_plugin_state_mutants.py` — the plan's mutant-obligation table RUN: 137 rows
+    executed as spec-vs-mutant tests in both shells (each builds the row's mutation against the
+    shipped shell and asserts the two builds DIFFER; a row whose builds agree cannot fail).
+
+### Changed
+
+- `scripts/lib/paths.sh` resolves in three steps: the environment variable wins and is the only
+  branch a publish is reachable from; otherwise the store is consulted; otherwise the pre-existing
+  unresolved envelope, unchanged.
+- `scripts/test-hooks.sh` disables publication (`_UNLEASHED_PUBLISH_OK=0`). It tests hooks, not
+  publication, and its temporary plugin-data directory lands under `/tmp`, which on Darwin is a
+  symlink to a world-writable directory — so the publisher correctly declines to publish there and
+  said so on stderr, inside assertions that require it to be empty.
+- **The three review-isolation harnesses (`isolated-agy-review.sh`, `isolated-codex-review.sh`,
+  `isolated-kimi-review.sh`) review a PRIVATE clone and compare it by CONTENT.** The disposable
+  checkout was a `git worktree add` — a linked worktree whose `.git` points into the maintainer's
+  real repository, so a shell-capable reviewer's `git config core.hooksPath`, `git commit` or
+  `git stash` landed in the live `.git` — and the "did the reviewer write anything" probe was
+  `git status`, which is metadata the reviewer controls (commit it, `--assume-unchanged` it, drop
+  a nested self-ignoring `.gitignore`, repoint `.git`); every one of those passed. The checkout is
+  now `git init` + a fetch of the one commit (no remote, no alternates, no hardlinks — the
+  reviewer's git is usable and fully private), and both harness probes hash every path's bytes
+  through the shared `disposable_fingerprint`, failing closed when the tree cannot be read. The
+  live-checkout fingerprint additionally covers the gate-bearing, git-ignored
+  `docs/planning/.verdicts/`. (PR #67 review pass 6, and its adversarial verification.)
+
+### Fixed
+
+- **Three more pieces of inherited shell state, the same class as the `noglob` defect (rows 186-188b).**
+  Found by codex on the pushed head; each reproduced in both shells before it was fixed, and each is an
+  ORDINARY setting a user or a wrapper script can leave switched on, with no attacker anywhere:
+  (1) `shopt -s failglob` made the store scan **abort the sourcing shell** when the store was empty —
+  `failglob` is a separate option from `noglob` and the round that fixed `noglob` did not cover it, so
+  the scan now saves, clears and restores it beside the `set -f` handling it already had;
+  (2) `shopt -s nocasematch` made the key encoder's `case` arms case-insensitive, so `/A` encoded to
+  `_sa` — the SAME key as `/a` — which is an Invariant P injectivity violation reached without any
+  attacker: two different bases, one file. The encoder now forces case-sensitive matching for the byte
+  walk and restores the caller's setting (`/a` → `_sa`, `/A` → `_s_ca`, matching zsh and the control);
+  (3) a **readonly `LC_ALL`** killed the sourcing shell outright in both shells, because the encoder
+  pins `LC_ALL=C` for its byte walk and an assignment to a readonly is fatal under `set -e`. The
+  encoder now detects the attribute **without forking** — ENC-2 requires the whole key derivation to
+  fork zero times and row 045 pins that with `ulimit -u 1`, which the obvious `declare -p` probe
+  breaks — and accepts a readonly `C` or `POSIX` unchanged while refusing anything else. `C.UTF-8` is
+  refused deliberately: it is a UTF-8 locale, and under it the two shells produced DIFFERENT keys for
+  the same base (`_scaf_xc3` vs `_scaf_xe9`, against the correct `_scaf_xc3_xa9`).
+  A regression inside that third fix is worth recording because tests caught it and re-reading did
+  not: bash's only fork-free readonly probe is `unset -v`, and a *successful* unset destroys the
+  variable's EXPORT attribute, so a caller that had exported `LC_ALL` got it back unexported and
+  child processes silently ran in a different locale. The restore now re-exports (row 188b asserts the
+  ENVIRONMENT, not the value). STATED DEVIATION: a caller whose `LC_ALL` was set but deliberately NOT
+  exported gets it back exported.
+- **E2b's fold runs before E2a creates anything.** A `CLAUDE_PLUGIN_DATA` spelling with `..` ahead of
+  an existing symlink had its components created THROUGH that link and outside the authenticated
+  chain, and only then was refused: `<h>/new/../link/created` left `<h>/new` and `<d>/outside/created`
+  on disk while the publish reported `failed`. The fold is purely lexical and needs no path to exist,
+  so it now runs first and the creation authenticates the nearest existing ancestor of the FOLDED
+  path — here the symlink itself, which ST-4 refuses — leaving nothing behind. A refusal that leaves
+  damage is not a refusal; this is the second instance of that shape found on this branch, and both
+  are now guarded by row 180.
+- **The publisher applies ST-3 to an existing store (row 185).** Found by an independent pre-merge
+  review of the unreviewed head. `_unleashed_create_store` authenticates the CHAIN — which refuses
+  group- or other-WRITABLE components — and never applied ST-3's exact-0700 test to `bases/` itself,
+  so a store at 0750, 0755 or 0701 was ACCEPTED and written into while the reader, which does apply
+  that rule, refused the same store: measured in both shells, publish `created` with zero diagnostics
+  and one entry on disk, then `ok=0 state=stale` for every later reader — permanently, and with
+  nothing said. The publisher now uses the READER'S OWN predicate rather than a second copy of the
+  rule, so the two cannot disagree. A fresh install is unaffected (the store is created `mkdir -m
+  700`); the state this fixes arises when a store's mode is changed by something else — a `chmod -R`,
+  an unarchiver applying umask, a sync tool that drops modes.
+- **The hook cost: 783 ms to ~250 ms per hook, in two verified steps.** `swift-lint-check.sh`
+  (PostToolUse Write|Edit|MultiEdit) and `swift-build-verify.sh` (PostToolUse Bash) both source the
+  state family, so this was paid on every file edit and every shell command. PF-1 batches the auth
+  chain's syscalls behind the two existing accessors — one `stat` and one `ls -lde` for a whole chain
+  instead of two forks per component — and PF-2 removes the two subshells `_u_acl_ok` spent per
+  component, parsing the enumeration by parameter expansion instead of a pipeline. Measured on the
+  same machine and store: publish 783 → 248 ms (bash) and → 200 ms (zsh), reader 282 → 106 ms.
+  Neither step changes a verdict: PF-1 was proved by 27 fixtures × 2 shells and PF-2 by 18, both at
+  zero divergence, each with negative controls that flip the expected cells, plus a 38-shape
+  differential fuzz of the ACL answer machine matching exact exit codes. RESIDUAL, stated: ~89 ms of
+  what remains is the command substitution in `_u_acl_ok`; removing it requires migrating the ACL
+  seam's contract from stdout to a variable and with it every fixture in the obligation suite — a
+  change to what the obligations test, not plumbing, and deliberately not done here. A cache-served
+  fast path was built, measured at a further 1.33x, and REJECTED: the prefetch fills from the real
+  `/bin/ls` whether or not a fixture redefined the enumerator, so it served the machine's answer past
+  three seams the shipped build refuses and would have silently disarmed some fifteen mutant rows.
+- **Seventeenth review pass (codex) and the honest-run battery — the five category-1 defects that
+  made this store unusable in ordinary conditions.** Every one is triggered by a normal environment
+  with no attacker: (1) the store scan forces globbing on and restores the caller's setting — with
+  `set -f`, `setopt noglob` or an inherited `SHELLOPTS=noglob` a HEALTHY store reported zero entries
+  in both shells; (2) a plugin-data base that does not exist yet is CREATED rather than refused, so a
+  first session seeds instead of printing a publication failure from every hook — the parent chain is
+  authenticated before anything is created and the directory is made at 0700, because the first
+  version wrote before authenticating and inherited the ambient umask (0775 at `umask 002`, which its
+  own chain then refused forever); (3) the published base is folded LEXICALLY so one directory yields
+  one key — `.`, `..` and repeated slashes had produced one entry each and a permanent `conflict` —
+  and, when folding changes the string, both spellings must name the same inode, because a lexical
+  `..` pops a symlinked component the kernel would have followed and the entry then advertised a
+  different directory than the writers used; (4) the publisher rescans once before reporting a repair
+  state, so two hooks publishing the SAME base no longer report a false `stale` (measured 3 of 8
+  before, 0-3 per 64 after, against a mutant's 11-38); (5) PUB-9 E1's HOME precondition states that it
+  cannot detect an absent `HOME` under zsh, which fills it from the passwd database before any sourced
+  line runs — the reliable opt-out is `_UNLEASHED_PUBLISH_OK=0`, verified in both shells.
+  A physical `cd -P`/`pwd -P` fold was tried first and rejected by measurement: bash returns the
+  spelling asked for and zsh the on-disk case, so it introduced a cross-shell divergence worse than
+  the defect. Mutant rows 179-183 pin all five, each measured against a mutant that restores the old
+  behaviour.
+- **Fifteenth review pass (codex) — six findings, each reproduced.** Config-referenced paths are read
+  the way Git reads them: `core.hooksPath` with `--path`, so the supported `~/hooks` form is no longer
+  fingerprinted as a nonexistent `<root>/~/hooks` while Git executes `$HOME/hooks/pre-commit`. The
+  files config POINTS AT are recorded, not just the text naming them — `core.excludesFile`,
+  `core.attributesFile`, and every `file:` origin reported by `--show-origin`, which also covers
+  `include.path` / `includeIf` and the global and system config and closes the "a file outside the
+  repository is not covered" residual. The tracked half records STAGED OBJECT IDS (`ls-files --stage`):
+  `update-index --cacheinfo` swapped the staged blob while `status` printed the same `MM` and the
+  fingerprint did not move. `tree_fingerprint_report` runs its probes through the safe git wrapper, so
+  a planted `core.fsmonitor` is not executed by the report that runs after a mutation is detected. The
+  reader re-tests the entry PATHNAME after the read (ENT-2c): an equal inode proved the bytes, not that
+  `base.<key>` is still the bare file ENT-1 validated — a rename-aside plus a symlink at the entry name
+  was accepted (row 178). And the kimi harness now labels its effort token `(self-reported)` with the
+  digest of the bytes it read: that log lives inside the reviewed process's own writable session tree,
+  so it attests to an honest run's tier and to nothing about an adversarial one.
+- **Pre-push sweep of the fourteenth pass — eight more findings, each reproduced, five of them in the
+  state libraries.** The library directory every resolver copy sources from is derived without any
+  external command (`dirname` is PATH-resolved, and dropping `/usr/bin` from PATH made the four
+  libraries "unreadable" beside the file, so the presence fallback trusted an imported reader — row
+  174). Discarding an inherited instance stamp is errexit-safe: zsh's `unset -f` returns 1 for an
+  undefined function and killed the sourcing of every copy under `set -e` (row 175). The readonly-
+  attribute test reads the flag letters only — the attacker-supplied VALUE could furnish both the `r`
+  and the variable name and pass as readonly (row 176). `$EUID` is never consulted: bash 3.2 imports
+  it from the environment, so `EUID=4242` turned a healthy store `stale` and a publish `failed`; the
+  effective uid is now a seam-probed, per-resolution value (row 177). In the review harness: the
+  transcript operand's reconstructed path collapses a leading `//` (POSIX keeps it, so `//tmp/x` and
+  `//<repo>/tracked` passed both refusals and a tracked file was overwritten) and its physical prefix
+  is now tested on its own (the old `|| exit 1` sat on an assignment whose last substitution was
+  `basename`, and was inert). The live-tree fingerprint resolves the real git directories instead of
+  assuming `$root/.git` is one — in a linked worktree, which is where this campaign's own reviews run,
+  `.git` is a FILE and `config`/`info/exclude` were recorded ABSENT, so `core.hooksPath` tampering
+  passed every gate — and it now records `HEAD`, `config.worktree`, `info/attributes`,
+  `objects/info/alternates`, every entry of the hooks directories, and macOS ACLs (`chmod +a` left
+  every record byte-identical). Probes run with `--no-optional-locks -c core.fsmonitor=false` so the
+  gate never writes the live index or executes a planted fsmonitor hook.
+- **Fourteenth review pass (codex) — six findings, each reproduced.** The state-machinery loader
+  re-sources its four libraries whenever they are readable beside it instead of trusting a present
+  namespace: bash `set -a` exports functions, so a parent's tampered `_unleashed_read_store` beside
+  genuine names was trusted and resolved `/attacker` (row 172; all five resolver copies). The instance
+  stamp is set once, only when absent, and globally — bash treats a repeated `readonly X=1` under
+  `set -e` as fatal even behind `|| :`, so the bridge's legitimate re-resolution exited the sourcing
+  shell; and zsh's `readonly` inside a function was function-local, so the zsh arm never held the
+  attribute (row 173). The live fingerprint records the checkout root's own lstat (`chmod 777
+  <checkout>` was invisible), every record's identity (`dev:inode:nlink` — a hard-link swap with
+  identical bytes was invisible), and `.git/config` / `.git/info/exclude` by lstat before content (a
+  symlink to an identical external copy hashed the same). The kimi harness normalises the reconstructed
+  transcript path lexically before the refusals (`/x/missing/../repo/tracked` passed the prefix check
+  and overwrote a tracked file before the void).
+- **Thirteenth review pass (codex) — four findings, each reproduced.** Store creation (E4 step ii)
+  authenticates a component that is present but was absent at step (i) before creating anything
+  beneath it — a symlink planted in between had the next `mkdir` create a directory outside the store
+  (row 171). The live fingerprint records the lstat of every tracked path's ancestor directories
+  (`chmod 777 scripts` was invisible). The kimi harness computes the transcript's physical path
+  without creating anything and applies every refusal before its first `mkdir` (a refused operand
+  used to leave its parents behind, even through a symlink into `.git`). The plan-citation linter's
+  negation exemption is asymmetric — post-position negations belong to the citation they follow,
+  pre-position forms must sit immediately before it — so one negation no longer exempts two
+  references in one sentence; codex's example is a self-test seed.
+- **Twelfth review pass (codex) — four findings, each reproduced.** `paths.sh`'s definitions are
+  now unconditional (bash `set -a` exports every function, so "the complete API is present" was
+  satisfied by an inherited namespace carrying an attacker's resolver — the guard skipped the
+  definitions and the eager call ran it); the family files source `paths.sh` unconditionally when
+  readable and define their fallback state test unconditionally. The agent bridge discards this
+  instance's resolution before resolving (sourced after another resolver it left
+  `_UNLEASHED_BASE_RESOLVED=A` beside `CLAUDE_PLUGIN_DATA=B`). The kimi harness contains its prompt
+  operand through the shared `containment.py` (a `../` traversal or an in-repo symlink sent any
+  readable file to the reviewer) and refuses a transcript inside the live checkout (the harness would
+  void its own round, or overwrite a tracked file). Row 170; rows 158/167 reshaped.
+- **External audit of PR #67 (review 4943022906) — the two findings its five had left open.** The
+  audit was a body-only review with no inline threads, and the remediation loop triaged threads, so
+  findings 1 and 5 were missed until asked about; findings 2, 3 and 4 had been fixed through the
+  overlapping codex threads. (1) The ACL principal is now resolved by NAME and by UUID
+  (`/usr/bin/dsmemberutil getuuid -U <name>`, one fork per resolution, fail-closed to "no self
+  UUID"): on hosts where `ls -lde` renders the effective user's own ACE as a bare UUID, that ACE was
+  refused as foreign and the publisher reported `failed`; a bare UUID equal to the resolved UUID is
+  now self, every other bare UUID stays foreign (row 129 refined, row 169). The Darwin ACL fixture
+  fails loudly if `chmod +a` fails and asserts the ACE landed. (5) A two-process acceptance test:
+  a hook-shaped process publishes through the real `marker_write`, a fresh standalone process
+  reads and writes through the same entry points into ONE file, through `paths.sh` and each
+  fallback copy, both shells; and set-publisher → unset-reader agreement through every resolver
+  copy. The audit's macOS PR-gate recommendation is a billing decision left to the maintainer.
+- **Eleventh review pass (codex) — five findings, each reproduced.** The once-per-process key
+  gains what no environment carries: `exec` keeps `$$` and an `allexport` wrapper carries every
+  variable (in bash, every function) across it, so an exec'd hook kept the wrapper's stale base;
+  resolution now stamps `readonly _UNLEASHED_BASE_INSTANCE`, and each sourcing discards a value that
+  arrived without the attribute (`declare -p`/`typeset -p` show `-r` only in the setting instance).
+  `paths.sh`'s definition guard requires the complete resolver API, not one `export -f`-able
+  function. The reader binds the opened entry to the INODE ENT-1 validated (bash `/dev/fd/N`
+  reports it; zsh `zstat -f`), so a same-uid `0644` copy with valid content is refused without a
+  second mode check that would mask ENT-1's mutants. The live fingerprint hashes the union of
+  HEAD-tracked and index-tracked paths (a staged-deleted, ignored file's edits were invisible). The
+  kimi harness binds its effort evidence to the ONE session directory created during the run — set
+  difference before/after — never to an id read out of reviewer-controlled transcript text. Rows
+  166–168.
+- **Tenth review pass (codex) — four findings, three reproduced, one closed on principle.** The
+  live-checkout fingerprint no longer trusts the live index: `git diff HEAD` (which
+  `update-index --assume-unchanged` / `--skip-worktree` silence) is replaced by a per-tracked-file
+  content probe (type/mode/size/sha256, JSON paths, fail-closed on a failed listing), plus the
+  repo's own `.git/info/exclude` and `.git/config`, and the `.verdicts` root's own lstat (a symlink
+  swap of the directory is recorded even under an ignore rule that would hide it from `status`).
+  The kimi harness snapshots the prompt ONCE (`cp` into its private directory, created before any
+  fingerprint), derives the reviewer's argument from that snapshot alone, reports `PROMPT=` as the
+  digest of the ARGUMENT bytes (the file's digest differs by the trailing newlines command
+  substitution strips), and compares the live file byte-for-byte with the snapshot after the run;
+  and it canonicalises every transcript operand physically (`cd -P`/`pwd -P`) before the `/tmp`
+  refusal — an absolute `/repo/../../tmp/x` or a symlinked parent had slipped past it.
+- **Ninth review pass (codex) — four findings, each reproduced.** `disposable_fingerprint`'s
+  serialisation is injective (path and link-target fields JSON-encoded): a reviewer that deleted
+  `b` and renamed `a` to `a<newline><b's record>` produced a byte-identical fingerprint. The kimi
+  harness binds its prompt: bytes captured before any fingerprint, `PROMPT=<digest>` on the summary
+  line, and a prompt file that changes during the round voids it (the prompt is git-ignored, so no
+  tree fingerprint could see it). The SessionStart store notice is evaluated before the hook's
+  source filter and kill switch, so `conflict`/`stale`/`failed` reach `clear` sessions too.
+  `validate-plan-citations.py --fix-citations` exits non-zero when an anchor is unresolved instead
+  of reporting a repair it did not make. Row 165; a first test file for the kimi harness.
+- **Eighth review pass (codex) — three findings, each reproduced.** The live-checkout fingerprint the
+  three review harnesses compare around a round now includes the resolved HEAD: `status` and
+  `diff HEAD` are both empty before and after a clean commit made mid-round, so an author who edited
+  and committed while the arms ran left the fingerprint identical (rule: an author commit voids the
+  round). The publisher's ST-7 presence test tests `-L` independently of `-f` (which follows a
+  link): a `base.<key>` symlink to a regular file was `mv -f`'d over and reported `created`. The
+  reader's rule 4 ("the store does not exist at all") is decided by a walk from `/`, not by `-e` on
+  the full path: a store hidden behind an unsearchable ancestor was reported `none` (silent) instead
+  of rule −1's `stale` (which fires the SessionStart notice). Rows 163–164; a harness test for the
+  mid-round commit.
+- **Seventh review pass (codex) — five findings, and what executing them uncovered.**
+  - The family's "already resolved / already loaded / already sourced" guards were bare flags
+    (`_UNLEASHED_BASE_OK`, `_UNLEASHED_STATE_LOADED`, `_UNLEASHED_PATHS_SH_LOADED`) that a child
+    process inherits from its environment without inheriting the functions or the meaning: an
+    inherited `_UNLEASHED_BASE_OK=1` alone made `marker_dir` return `/.state` — the root path D′
+    exists to prevent; an inherited `_UNLEASHED_STATE_LOADED=1` produced `command not found` and
+    every protocol variable unset. The keys are now process identity (`_UNLEASHED_BASE_PID = $$`)
+    and function presence, in all five resolver copies; the resolver resets its diagnostic guard
+    on entry.
+  - The publisher's two status captures were bare calls (`cmd; rc=$?`), which under `set -e` abort
+    the sourcing shell before the E5/E6 classification — measured: `set -e; . paths.sh` with the
+    store unwritable exited 2 with no diagnostic. Both are errexit-safe; a 48-scenario `set -eu`
+    sweep across publish/read/family passes in both shells.
+  - The reader opened the entry a SECOND time to read it after validating the pathname; a FIFO or a
+    large file substituted in between was read instead of what was checked. The entry is opened
+    once and validated on the descriptor before a bounded read (zsh: `sysopen -o nonblock` /
+    `zstat -f` / `sysread`; bash: `/dev/fd/N` + `read -n`, with the FIFO window stated as P-5's
+    residual).
+  - `log_append` stamps `base_resolution` on every JSON-object record — the four log producers
+    never did, so `pointer` and `host-env` records were indistinguishable.
+  - The plan-citation linter's negation exemption is scoped to the citing sentence (a 260-char
+    window let a neighbouring "does not exist" launder an unrelated fabricated reference).
+  - **Pre-existing zsh defects the new fixtures exposed:** `log_append`, `marker_write`,
+    `marker_field`, `marker_mtime`, `context_review_round_bind` and `_lookup` declared `path`
+    (zsh's `PATH`-tied array — the function's `PATH` became empty and `mkdir` was not found, so
+    `log_append` had been a silent no-op under zsh since it was written) or `status` (read-only in
+    zsh — `marker_write` aborted); `marker_write`'s sentinel glob aborted under zsh's `nomatch`;
+    `marker_field` read captures from `BASH_REMATCH`, which zsh does not fill. All fixed; the writers
+    now behave identically in both shells. Mutant rows 156–162.
+- `plugin-state-publisher.sh` wrote the transient in TWO opens — an exclusive create, then a plain
+  `>` on the same pathname to write the value — and the second open had none of the first one's
+  protection: a symlink substituted between them was followed and its target overwritten (both
+  shells). The value is now written through the descriptor the exclusive create returned; a
+  refused create with the name present is a lost race (one TMP-1 attempt), with the name absent
+  it is E6; `SIGXFSZ` is ignored inside the subshell so a size limit is `EFBIG` and not a signal
+  death bash reports on the caller's stderr; zsh's `CLOBBER_EMPTY` is pinned off. Mutant rows
+  153–155 execute the three outcomes. (PR #67 review pass 6.)
+- `scripts/lib/context.sh` derived its own directory *inside a function*, where `$0` is the function
+  name in zsh rather than the sourced file. The returned path lost `scripts/lib` — wrong by two
+  levels — on the very path the plugin documents for a zsh Bash tool. It is now captured at source
+  time.
+
 ## [2.7.1] — 2026-08-08
 
 Seven successive review passes over the 2.7.0 bytes, newest first. Every fix carries a proof

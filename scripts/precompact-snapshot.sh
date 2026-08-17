@@ -70,8 +70,9 @@ PLAN_JSON="$(json_escape "$PLAN")"
 # `2>/dev/null` BEFORE `> "$TMP"` so an open failure (state dir unwritable) is suppressed too
 # (bash applies redirects left-to-right; a trailing `2>/dev/null` would let the open error —
 # which echoes the full PII-bearing tmp path — reach stderr). EXIT trap removes the tmp.
-printf '{"ticket":"%s","branch_slug":"%s","plan":%s,"round":"%s","snapshot_time":%s}\n' \
-    "$TICKET" "$SLUG" "$PLAN_JSON" "$ROUND" "$SNAPTIME" 2>/dev/null > "$TMP" || exit 0
+# COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
+printf '{"ticket":"%s","branch_slug":"%s","plan":%s,"round":"%s","snapshot_time":%s,"base_resolution":"%s"}\n' \
+    "$TICKET" "$SLUG" "$PLAN_JSON" "$ROUND" "$SNAPTIME" "${_UNLEASHED_BASE_SOURCE:-unresolved}" 2>/dev/null > "$TMP" || exit 0
 mv "$TMP" "$SNAP" 2>/dev/null || exit 0
 trap - EXIT
 exit 0

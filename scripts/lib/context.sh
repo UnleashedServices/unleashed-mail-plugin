@@ -31,31 +31,152 @@
 #
 # The one-diagnostic-per-process guard is the shared FLAG, not this file: with paths.sh absent, two
 # or three libs sourced in one shell would otherwise each emit one.
-if [ -z "${_UNLEASHED_PATHS_SH_LOADED:-}" ]; then
-    _upb_d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || _upb_d="."
-    # shellcheck source=scripts/lib/paths.sh
-    [ -r "$_upb_d/paths.sh" ] && . "$_upb_d/paths.sh"
+# Captured at SOURCE TIME and unconditionally, because it is needed whether or not paths.sh was
+# already loaded — and because the expansion below is only cross-shell AT TOP LEVEL. Inside a
+# function bash keeps BASH_SOURCE[0] as the defining file while zsh sets `$0` to the FUNCTION
+# NAME (FUNCTION_ARGZERO, on by default), so the same line resolves to the caller's CWD there.
+# NO EXTERNAL COMMAND MAY TAKE PART IN THIS. `dirname` is resolved through PATH, and the parent
+# that supplies a tampered function set supplies PATH too: with `/usr/bin` off it `dirname` was
+# not found, the directory fell back to the caller's cwd, the four libraries "were not readable"
+# although they sit right beside this file, and the loader's presence fallback then trusted the
+# imported machinery — RESOLVED=/attacker in all five copies (codex sweep, PR #67 pass 14 —
+# reproduced). The directory now comes from a parameter expansion, and `cd`/`pwd` are shell
+# BUILTINS, so nothing on this path consults PATH.
+_UNLEASHED_CONTEXT_LIB_DIR="${BASH_SOURCE[0]:-$0}"
+case "$_UNLEASHED_CONTEXT_LIB_DIR" in
+    */*) _UNLEASHED_CONTEXT_LIB_DIR="${_UNLEASHED_CONTEXT_LIB_DIR%/*}"; [ -n "$_UNLEASHED_CONTEXT_LIB_DIR" ] || _UNLEASHED_CONTEXT_LIB_DIR="/" ;;
+    *)   _UNLEASHED_CONTEXT_LIB_DIR="." ;;
+esac
+_UNLEASHED_CONTEXT_LIB_DIR="$( { CDPATH='' cd -P -- "$_UNLEASHED_CONTEXT_LIB_DIR" && pwd -P; } 2>/dev/null )" || _UNLEASHED_CONTEXT_LIB_DIR="."
+[ -n "$_UNLEASHED_CONTEXT_LIB_DIR" ] || _UNLEASHED_CONTEXT_LIB_DIR="."
+# THE INSTANCE CHECK — once per sourcing, before anything trusts a resolution it may have inherited.
+# `exec` keeps `$$`, an `allexport` wrapper carries every variable across it, and in bash `set -a`
+# carries every FUNCTION too — so after such a wrapper the exec'd hook held a matching pid, the marker
+# function, and the wrapper's stale base (codex, PR #67 pass 11 — reproduced). What NO environment
+# carries is a variable's READONLY attribute: `declare -p` / `typeset -p` show `-r` only in the shell
+# instance that set it (measured: `declare -rx` becomes `declare -x` across exec in bash, `export -r`
+# becomes `export` in zsh; a subshell keeps it). Resolution sets `readonly _UNLEASHED_BASE_INSTANCE`;
+# a value present WITHOUT the attribute is inherited, and the inherited resolution is discarded here.
+# One `declare -p` capture per SOURCING — the per-call guard below stays fork-free.
+if [ -n "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+    # THE FLAG LETTERS ONLY, never the whole line. `declare -p` prints `declare -<flags> NAME="<value>"`
+    # and the VALUE is attacker-supplied: matched against the whole line, `"declare -"*r*" NAME="*` let a
+    # value of `r _UNLEASHED_BASE_INSTANCE=` provide both the `r` and the name, so an inherited
+    # `declare -x` passed as READONLY and the inherited resolution was trusted (codex sweep, PR #67
+    # pass 14 — reproduced). Everything from the first ` _UNLEASHED_BASE_INSTANCE` on is dropped BEFORE
+    # the test, so only the shell's own flags are read; absent output leaves the empty string, which
+    # matches nothing and discards — the fail-safe direction. Measured shapes: bash `declare -r`,
+    # `declare -rx`, inherited `declare -x`; zsh `typeset -r`, `export -r`, inherited `export`.
+    _ubi_decl="$( { declare -p _UNLEASHED_BASE_INSTANCE 2>/dev/null || typeset -p _UNLEASHED_BASE_INSTANCE 2>/dev/null; } )"
+    case "${_ubi_decl%% _UNLEASHED_BASE_INSTANCE*}" in
+        "declare -"*r*|"typeset -"*r*|"export -"*r*|readonly) : ;;
+        # `|| :` on BOTH: zsh's `unset -f` returns 1 for a function that is not defined, and under
+        # `set -e` / `setopt err_return` that killed the sourcing of every copy the moment the stamp
+        # arrived through the environment (codex sweep, PR #67 pass 14 — reproduced, zsh only).
+        *)  unset -f _unleashed_resolved_in_process 2>/dev/null || :; _UNLEASHED_BASE_PID=; unset _UNLEASHED_BASE_INSTANCE 2>/dev/null || : ;;
+    esac
+    unset _ubi_decl 2>/dev/null || :
 fi
-if [ -z "${_UNLEASHED_BASE_OK:-}" ]; then
+# paths.sh is sourced UNCONDITIONALLY when readable — never behind "its API is already present":
+# bash `set -a` exports every function, so a present namespace can be an inherited one, attacker's
+# resolver included (codex, PR #67 pass 12). Sourcing it again is idempotent.
+_upb_d="$_UNLEASHED_CONTEXT_LIB_DIR"
+# shellcheck source=scripts/lib/paths.sh
+if [ -r "$_upb_d/paths.sh" ]; then . "$_upb_d/paths.sh"; fi
+# COREDEV-2617 §4.2a: the fallback is the FULL three-step resolution, not the D′ two-step — this is
+# one of the five resolver copies FAM-1 names, and arm equivalence (rows 99/100/103) requires all
+# five to report ALL FOUR protocol variables identically in every cell. The machinery loads from
+# this file's own directory; when it is absent the resolution degrades to the D′ envelope, which is
+# never worse than the pre-2617 behaviour.
+_upb_state_load() {
+    # LOADED means THE FUNCTIONS EXIST — never a flag. A flag lives in the environment and a child
+    # process inherits it while inheriting no functions; keyed on the flag, this returned "loaded"
+    # into a shell where `_unleashed_read_store` was undefined, and the resolver died with
+    # `command not found`, every protocol variable unset (codex, PR #67 pass 7 — reproduced).
+    # AND "THE FUNCTIONS EXIST" IS NOT "THE FUNCTIONS ARE OURS": bash `set -a` exports functions, so
+    # keyed on presence this skipped the libraries and trusted an imported `_unleashed_read_store`
+    # (codex, PR #67 pass 14 — reproduced). Re-source from the files beside this loader whenever they
+    # are readable; the functions already present are used only where the files are not.
+    _upb_readable=1
+    for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+        [ -r "${_upb_d:-.}/$_upb_f.sh" ] || { _upb_readable=0; break; }
+    done
+    if [ "$_upb_readable" = 1 ]; then
+        for _upb_f in plugin-state-auth plugin-state-store plugin-state-reader plugin-state-publisher; do
+            # shellcheck source=/dev/null
+            . "${_upb_d:-.}/$_upb_f.sh"
+        done
+        return 0
+    fi
+    if command -v _unleashed_key >/dev/null 2>&1 && command -v _unleashed_auth_chain >/dev/null 2>&1 \
+        && command -v _unleashed_read_store >/dev/null 2>&1 && command -v _unleashed_publish >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+if [ "${_UNLEASHED_BASE_PID:-}" != "$$" ] || ! command -v _unleashed_resolved_in_process >/dev/null 2>&1; then   # resolved in THIS shell instance? pid + marker function
+    _UNLEASHED_BASE_DIAGNOSED=                          # the entry point resets what it caches on
     if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
         _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
         _UNLEASHED_BASE_OK=1
-    else
-        _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
-        _UNLEASHED_BASE_OK=0
-        if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
-            _UNLEASHED_BASE_DIAGNOSED=1
-            printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+        _UNLEASHED_BASE_SOURCE='host-env'
+        _UNLEASHED_POINTER_STATE=none
+        # PUB-1: this file is one of the four PUBLISHING family files, and the publish is reachable
+        # ONLY from this branch. The publish is a side effect of having resolved, never a condition.
+        # PUB-9 E0 -> `none` silent; E1 (HOME unusable) -> `failed` with its diagnostic; else publish.
+        if [ "${_UNLEASHED_PUBLISH_OK:-1}" = 0 ]; then
+            :
+        else
+            case "${HOME:-}" in
+                /*) if _upb_state_load; then
+                        _unleashed_publish "${HOME:-}/.claude/unleashed-mail/bases" "$CLAUDE_PLUGIN_DATA"
+                        _UNLEASHED_BASE_RESOLVED="$CLAUDE_PLUGIN_DATA"
+                        _UNLEASHED_BASE_OK=1
+                    fi ;;
+                *)  _UNLEASHED_POINTER_STATE=failed
+                    printf 'unleashed-mail: plugin-state publication failed: HOME is empty or not absolute\n' >&2 ;;
+            esac
         fi
+    else
+        _upb_home_ok=0
+        case "${HOME:-}" in /*) _upb_home_ok=1 ;; esac
+        if [ "$_upb_home_ok" = 1 ] && _upb_state_load; then
+            # Step 2 — the store, through the ordered reader rules. The prefix keeps the D′ wording
+            # contract; the reader itself never names the environment variable.
+            _UNLEASHED_UNRESOLVED_PREFIX='CLAUDE_PLUGIN_DATA is unset and '
+            _unleashed_read_store "${HOME:-}/.claude/unleashed-mail/bases"
+        else
+            _UNLEASHED_BASE_RESOLVED='/dev/null/unresolved-plugin-base'
+            _UNLEASHED_BASE_OK=0
+            _UNLEASHED_BASE_SOURCE=unresolved
+            _UNLEASHED_POINTER_STATE=none
+            if [ -z "${_UNLEASHED_BASE_DIAGNOSED:-}" ]; then
+                _UNLEASHED_BASE_DIAGNOSED=1
+                printf 'unleashed-mail: CLAUDE_PLUGIN_DATA is unset; plugin state will not be read or written this run\n' >&2
+            fi
+        fi
+    fi
+    _UNLEASHED_BASE_PID=$$
+    _UNLEASHED_BASE_ENV="${CLAUDE_PLUGIN_DATA:-}"           # the environment this resolution was made under
+    _unleashed_resolved_in_process() { :; }
+    # THE STAMP — the attribute NO environment carries (see top). Set ONCE, only when absent, and errexit-
+    # safe: the bridge re-resolves an already-stamped instance, and bash treats `readonly X=1` on a readonly
+    # X as a FATAL assignment error under `set -e`, even behind `|| :` — the sourcing shell exited (codex,
+    # PR #67 pass 14 — reproduced). "Absent" is the right test because the sourcing-time check above already
+    # discarded any inherited value, so a present value here is this instance's own. Under zsh the stamp is
+    # declared GLOBAL: a bare `readonly` inside a function is function-local there, so the resolver's stamp
+    # vanished at return and the zsh arm never held the attribute (measured, same pass).
+    if [ -z "${_UNLEASHED_BASE_INSTANCE+set}" ]; then
+        if [ -n "${ZSH_VERSION:-}" ]; then typeset -g -r _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; else readonly _UNLEASHED_BASE_INSTANCE=1 2>/dev/null; fi
     fi
 fi
 # The state test MUST exist even when paths.sh was not found — otherwise `unleashed_base_ok` is an
 # undefined command (exit 127) and every guarded writer would skip on a PERFECTLY VALID base. That
 # fail-open -> fail-closed inversion is exactly what COREDEV-2617's round-18 reproduction caught in
 # the agent fence; it must not be re-introduced one layer down.
-if ! command -v unleashed_base_ok >/dev/null 2>&1; then
-    unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
-fi
+# Defined UNCONDITIONALLY: an imported (`set -a`-exported) copy must be replaced, not kept (codex,
+# PR #67 pass 12).
+unleashed_base_ok() { [ "${_UNLEASHED_BASE_OK:-0}" = 1 ]; }
 
 
 context_base() {
@@ -248,11 +369,13 @@ _context_round_sweep() {
 
 # Locate the synthesizer package (capture.py + schema.py) relative to this lib, so the producer can
 # REUSE capture.is_final_capture for its advance decision (single-sourcing that subtle predicate).
-# BASH_SOURCE[0] is this file even inside a function (defining file). $0 fallback for non-bash sourcing.
+# Uses the SOURCE-TIME capture. The previous version derived the directory INSIDE this function
+# and its comment claimed the `$0` fallback covered non-bash sourcing — it does not. Measured:
+# in zsh `$0` inside a function is the FUNCTION NAME, so `dirname` gave `.`, `cd . && pwd` gave
+# the CALLER'S CWD, and the returned path lost `scripts/lib` — wrong by two levels. That path is
+# reachable: swift-reviewer sources this lib ALONE into a zsh Bash tool.
 _context_capture_dir() {
-    local d
-    d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || d="."
-    printf '%s/../../mcp/review-synthesizer' "$d"
+    printf '%s/../../mcp/review-synthesizer' "$_UNLEASHED_CONTEXT_LIB_DIR"
 }
 
 # Should the producer ADVANCE past `$2` (the highest existing round) for `$3` (agent), or REUSE it?
@@ -294,7 +417,7 @@ context_review_round_bind() {
     # executes even when the write has already failed, so merely skipping the write would still
     # hand a consumer a round number that was never stored.
     unleashed_base_ok || return 0
-    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now path dir
+    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" slug base highest round now _rb_path dir
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
     slug="$(context_branch_slug "$(context_branch)")"
     base="$(context_reviews_dir)/$slug"
@@ -310,15 +433,16 @@ context_review_round_bind() {
     # session_id is an opaque CC id; hard-restrict to a JSON-safe charset (and cap) so the bash-written
     # JSON can never be malformed by an unexpected value. agent is hook-allowlisted; slug is a safe token.
     sid="$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9._-' | cut -c1-128)"
-    path="$(context_round_binding_path "$agent_id")"
-    dir="$(dirname "$path")"
+    _rb_path="$(context_round_binding_path "$agent_id")"
+    dir="$(dirname "$_rb_path")"
     mkdir -p "$dir" 2>/dev/null || true
     _context_round_sweep "$dir" "${now:-0}"
-    if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s}\n' \
-        "$round" "$agent" "$slug" "$sid" "${now:-0}" > "$path.tmp.$$" 2>/dev/null; then
-        mv -f "$path.tmp.$$" "$path" 2>/dev/null || rm -f "$path.tmp.$$" 2>/dev/null
+    # COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
+    if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s,"base_resolution":"%s"}\n' \
+        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$_rb_path.tmp.$$" 2>/dev/null; then
+        mv -f "$_rb_path.tmp.$$" "$_rb_path" 2>/dev/null || rm -f "$_rb_path.tmp.$$" 2>/dev/null
     else
-        rm -f "$path.tmp.$$" 2>/dev/null
+        rm -f "$_rb_path.tmp.$$" 2>/dev/null
     fi
     printf '%s' "$round"
 }
@@ -329,10 +453,10 @@ context_review_round_bind() {
 # Anything off -> nothing -> the caller leaves UNLEASHED_REVIEW_ROUND unset -> capture.py infers.
 # Stdlib python3 (already a hard capture dependency). $1 = agent_type, $2 = agent_id, $3 = session_id.
 context_review_round_lookup() {
-    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" path slug
+    local agent="${1:-}" agent_id="${2:-}" sid="${3:-}" _rl_path slug
     [ -n "$agent" ] && [ -n "$agent_id" ] || return 0
-    path="$(context_round_binding_path "$agent_id")"
-    [ -f "$path" ] || return 0
+    _rl_path="$(context_round_binding_path "$agent_id")"
+    [ -f "$_rl_path" ] || return 0
     command -v python3 >/dev/null 2>&1 || return 0
     slug="$(context_branch_slug "$(context_branch)")"
     UNLEASHED_RB_AGENT="$agent" UNLEASHED_RB_SLUG="$slug" UNLEASHED_RB_SID="$sid" \
@@ -367,7 +491,7 @@ if ttl > 0 and now > 0 and isinstance(t, (int, float)) and not isinstance(t, boo
     if now - t > ttl:
         sys.exit(0)
 sys.stdout.write(str(r))
-' "$path" 2>/dev/null
+' "$_rl_path" 2>/dev/null
 }
 
 # Consume-once: delete a subagent's binding after its SubagentStop has read it (so a later duplicate

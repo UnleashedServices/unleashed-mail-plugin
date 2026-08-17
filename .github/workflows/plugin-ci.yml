@@ -60,7 +60,7 @@ jobs:
 
       - name: Byte-compile Python (MCP + load-bearing scripts)
         id: py_compile
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
 
       - name: pty-capture.py smoke test (--timeout + capture)
         id: pty_smoke
@@ -198,6 +198,16 @@ jobs:
         id: hooks_manifest
         run: python3 scripts/validate-hooks.py --root . --strict --require-manifest
 
+      # COREDEV-2617: the plan-citation linter was only BYTE-COMPILED here, so a stale `:N`, an
+      # undeclared enum value or an inconsistent phrase family stayed green as long as the Python
+      # parsed — defeating the reason the validator exists (codex, PR #67). Both modes run: the
+      # self-test proves the linter can fail, then it lints the plan it guards.
+      - name: Plan-citation linter (self-test + the COREDEV-2617 plan)
+        id: plan_lint
+        run: |
+          python3 scripts/validate-plan-citations.py --selftest docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+          python3 scripts/validate-plan-citations.py docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md
+
       - name: Hook stdin-simulation tests (COREDEV-2324)
         id: hook_tests
         run: bash scripts/test-hooks.sh
@@ -243,7 +253,7 @@ jobs:
         with:
           python-version: '3.9'
       - name: Byte-compile load-bearing scripts on 3.9 (catches PEP-604 / match / walrus regressions)
-        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plugin-assembly.py
+        run: python3 -m py_compile mcp/review-synthesizer/*.py scripts/lib/bash-write-scan.py scripts/pty-capture.py scripts/review-verdict.py scripts/review/bind-prompt.py scripts/review/callers_scan.py scripts/review/cleanup_coredev_2619_leaks.py scripts/review/containment.py scripts/review/generate-callers-exemptions.py scripts/review/snapshot-operands.py scripts/review/stage-bound-plan.py scripts/review/stage-prompt.py scripts/validate-hooks.py scripts/validate-plan-citations.py scripts/validate-plugin-assembly.py
       - name: bind-prompt.py real invocation on 3.9
         # bind-prompt.py runs inside the BLOCKING plan-review gate on macOS stock 3.9, and byte-compile
         # cannot catch a runtime-evaluated union or an fd-API mismatch (PR #63 recheck, P3 — the same
@@ -331,6 +341,27 @@ jobs:
           python3 scripts/pty-capture.py "$link" -- echo pwned || true
           test ! -s "$victim" || { echo "capture wrote THROUGH a symlink"; exit 1; }
           echo "pty-capture on 3.9: capture + capture-id + 0600 + symlink-refusal OK"
+
+  linux-primitive-probe:
+    # COREDEV-2617 — MEASURE §4.2a-P's Linux arms rather than writing them from documentation.
+    # Two independent plan reviewers concurrently found that §4.2a-S plus §4.2a-P cannot be
+    # implemented on Linux: P-2's Linux format, ACL-3's `getfacl` grammar and P-4's behaviour under a
+    # POSIX default ACL are all unexecuted, because the development machine is Darwin. Every defect
+    # P-2 has had came from a format written from documentation — decimal where the other arm gave
+    # octal, then a stripped setuid bit, then the symlink measured instead of the target. This job
+    # prints what the primitives actually return so the plan can record measurements. It asserts
+    # nothing and gates nothing: `continue-on-error` keeps a missing tool from turning CI red, since
+    # its output is read by a human, not by an oracle.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install acl tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq acl zsh
+      - name: Probe the Linux primitives
+        run: bash scripts/review/linux-primitive-probe.sh
 
   load-check:
     # COREDEV-2598 — prove the plugin LOADS, not merely that it validates. `claude plugin validate

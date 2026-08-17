@@ -724,6 +724,48 @@ class PlanReferencesRequireABoundaryAfterTheSuffix(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("never names a plan", result.stderr)
 
+    def test_an_empty_transcript_operand_is_refused(self):
+        """`required=True` only means PRESENT: argparse accepts "", and every sidecar is written as
+        `transcript + ".prompt"`, so an empty value scatters `.prompt`/`.promptsha256`/`.plan`/
+        `.planbytes` into the CURRENT DIRECTORY — the repo root for every caller here. Hit for real
+        when `allocate-transcript.sh` rejected a non-numeric round and the caller passed its empty
+        stdout on, while two plan reviews were fingerprinting the tree for mutation."""
+        prompt = self.repo / ".prompt.md"
+        prompt.write_text("REVIEW TARGET: docs/planning/X_PLAN.md\n", encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(BIND_PROMPT), "--prompt", ".prompt.md",
+             "--transcript", "", "--plan", "docs/planning/X_PLAN.md"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        # Test the DELETION, not the message: no sidecar may appear in the working directory.
+        for suffix in (".prompt", ".promptsha256", ".plan", ".planbytes"):
+            self.assertFalse((self.repo / suffix).exists(),
+                             f"an empty transcript operand wrote {suffix} into the working directory")
+
+    def test_a_relative_transcript_operand_is_refused(self):
+        """allocate-transcript.sh emits an absolute path; a relative one lands wherever cwd happens
+        to be, which is the same failure with a different spelling."""
+        prompt = self.repo / ".prompt.md"
+        prompt.write_text("REVIEW TARGET: docs/planning/X_PLAN.md\n", encoding="utf-8")
+        # The directory must EXIST, or the sidecar write fails for its own reasons and this test
+        # passes without the guard — proving nothing. Verified: with the guard removed and `some/`
+        # present, the bind succeeds and writes into the repo, so this assertion discriminates.
+        (self.repo / "some").mkdir()
+        result = subprocess.run(
+            ["python3", str(BIND_PROMPT), "--prompt", ".prompt.md",
+             "--transcript", "some/leaf.txt", "--plan", "docs/planning/X_PLAN.md"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertFalse((self.repo / "some" / "leaf.txt.prompt").exists())
+
+    def test_an_absolute_transcript_operand_still_binds(self):
+        """The control that makes the two refusals above evidence rather than a blanket rejection."""
+        result = self.bind("REVIEW TARGET: docs/planning/X_PLAN.md", "ok.txt")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue((self.transcripts / "ok.txt.promptsha256").exists())
+
     def test_the_spellings_prose_produces_still_bind(self):
         """Controls. A sentence-ending period, a comma and a closing bracket are NOT extensions."""
         for index, body in enumerate((

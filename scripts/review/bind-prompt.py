@@ -270,6 +270,22 @@ def main(argv=None) -> int:
     parser.add_argument("--plan", required=True)
     arguments = parser.parse_args(argv)
 
+    # THE TRANSCRIPT OPERAND IS CONTAINED TOO. `required=True` only means the flag was PRESENT:
+    # argparse accepts `--transcript ""`, and every sidecar below is written as `arguments.transcript
+    # + ".prompt"`, so an empty value writes `.prompt`, `.promptsha256`, `.plan` and `.planbytes` into
+    # the CURRENT WORKING DIRECTORY — which, for every caller in this repo, is the repository root.
+    # Hit for real: `allocate-transcript.sh` rejects a non-numeric round ("the round must be digits
+    # only") and the caller captured its empty stdout, so this file scattered four files into the tree
+    # while two plan reviews were fingerprinting it for mutation. This file already contains the prompt
+    # and plan operands; it contained one of three, which is the half-a-family shape it exists to stop.
+    if not arguments.transcript.strip():
+        _refuse("transcript path is empty — refusing to write sidecars into the working directory")
+    if not os.path.isabs(arguments.transcript):
+        _refuse(
+            f"transcript path must be absolute, as allocate-transcript.sh emits it: "
+            f"{arguments.transcript}"
+        )
+
     prompt = contained_regular_file(arguments.prompt, "prompt file")
     plan = contained_regular_file(arguments.plan, "plan file")
 
