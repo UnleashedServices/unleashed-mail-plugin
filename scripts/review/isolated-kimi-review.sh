@@ -77,8 +77,21 @@ printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 # matters here because the BASIS is now read from git objects, so a poisoned environment would let
 # the round certify bytes from a repository nobody reviewed. Unsetting is done once, at the top,
 # before the first `git` call, so no later command can be the first to see a stale value.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-      GIT_COMMON_DIR GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
+# EVERY `GIT_*` VARIABLE IS CLEARED, not a hand-picked list. Naming them one at a time was wrong
+# twice over: the first list covered repository SELECTION and missed configuration INJECTION, and
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` are UNBOUNDED, so no fixed list can be
+# complete. Measured: with those three set, `core.hooksPath` survived the old unset block
+# (`git config --show-origin core.hooksPath` -> `command line: /attacker/hooks`), which means
+# `disposable_checkout`'s `git checkout` would run an attacker `post-checkout` INSIDE the private
+# tree BEFORE `TREE_BASELINE` is captured — mutation the baseline then treats as pristine
+# (codex, PR #69 round 3). Enumerating the environment and clearing the whole namespace is the only
+# form of this that cannot be outrun by a variable someone adds later.
+while IFS='=' read -r _gv _; do
+    case "$_gv" in GIT_*) unset "$_gv" ;; esac
+done <<EOF
+$(env)
+EOF
+unset _gv
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 # ...and the gitdir must belong to the checkout we just resolved, so a future edit that reintroduces
 # an inherited selection variable fails loudly instead of silently reading elsewhere.
@@ -229,19 +242,37 @@ case "$PLAN_MODE" in
     120000) echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2; exit 1 ;;
     *)   echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2; exit 1 ;;
 esac
-# THE PROMPT MUST NAME THE DOCUMENT THE BASIS CERTIFIES (codex, PR #69 round 2). Proving the
-# operand is a tracked regular blob says only that it is SOME committed file: `README.md` passed
-# every mode/blob gate while the prompt asked for the audit, so the printed BASIS certified a
-# document the reviewer was never pointed at. This is the same binding `bind-prompt.py` enforces
-# for the plan skills, applied here — and it is deliberately a SUBSTRING test on the exact
-# repo-relative spelling, because that spelling is what the operand and the diagnostic both use;
-# an alias that resolves to the same file is refused rather than guessed at.
-case "$PROMPT_TEXT" in
-    *"$PLAN_REL"*) : ;;
-    *) echo "the prompt does not name $PLAN_REL, so nothing ties the review to the BASIS it would certify" >&2
-       echo "(state the document by its repo-relative path in the prompt, e.g. 'Plan under review: $PLAN_REL')" >&2
-       exit 1 ;;
-esac
+# THE PROMPT MUST DECLARE THE DOCUMENT THE BASIS CERTIFIES, ANCHORED.
+# A substring test was not enough and was bypassed four ways (codex, PR #69 round 3): a `.bak`
+# suffix, an `old-` path prefix, the path quoted inside a sentence that then says "actual review:
+# README.md", and a prompt naming TWO documents. Proving the operand appears SOMEWHERE says nothing
+# about what the reviewer was told to read. So: exactly ONE declaration line, and its whole value
+# must equal the operand — the same boundary-aware shape `bind-prompt.py` enforces for the plan
+# skills, rather than a second, weaker copy of that rule.
+_BIND_RC=0
+PLAN_REL="$PLAN_REL" python3 - "$PROMPT_SNAP" <<'PYBIND' || _BIND_RC=$?
+import os, re, sys
+want = os.environ["PLAN_REL"]
+text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+# `Plan under review: <value>` / `Document under review: <value>`, value optionally in backticks
+# or quotes, optional trailing period. Anchored to the whole line so trailing prose cannot ride along.
+pat = re.compile(r'^[ \t]*(?:Plan|Document) under review[ \t]*:[ \t]*[`"\']?([^`"\'\n]+?)[`"\']?[ \t]*\.?[ \t]*$',
+                 re.MULTILINE)
+found = [m.group(1).strip() for m in pat.finditer(text)]
+if not found:
+    sys.stderr.write("the prompt has no anchored target declaration; add a line reading exactly:\n"
+                     "  Plan under review: %s\n" % want)
+    raise SystemExit(1)
+if len(set(found)) > 1:
+    sys.stderr.write("the prompt declares more than one target (%s) — exactly one is required\n"
+                     % ", ".join(sorted(set(found))))
+    raise SystemExit(1)
+if found[0] != want:
+    sys.stderr.write("the prompt declares %r but the BASIS would certify %r — refusing to review one "
+                     "document and certify another\n" % (found[0], want))
+    raise SystemExit(1)
+PYBIND
+[ "$_BIND_RC" = 0 ] || exit 1
 BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" \
     | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {
     echo "could not digest the plan blob from $SHA" >&2; exit 1; }

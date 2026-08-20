@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import unicodedata
 import json
 import os
 import re
@@ -154,7 +155,16 @@ def validate_matcher(event: str, matcher: str, where: str,
     # nothing at runtime (verified in node: false for Task, MultiEdit and Edit alike), so a padded
     # stale name was a silently dead hook. A plain ASCII space is LEGAL here — the grammar allows
     # it around list items — so only control characters and non-space whitespace are refused.
-    _bad = [c for c in matcher if ord(c) < 32 or ord(c) == 127 or (c.isspace() and c != " ")]
+    # `str.isspace()` is not the right predicate on its own: ZERO-WIDTH and default-ignorable
+    # format characters are not "space", so U+200B, U+FEFF, U+2060 and U+180E sailed through and
+    # reclassified a stale name as a regex that matches nothing (codex, PR #69 round 3, verified in
+    # node: matches_bare=false for all four). Unicode category Cf (format) and Cc (control) cover
+    # the class; U+180E is Cf in current Unicode but was Zs historically, so category lookup is the
+    # instrument rather than an enumerated blocklist that the next codepoint outruns.
+    _bad = [c for c in matcher
+            if ord(c) < 32 or ord(c) == 127
+            or unicodedata.category(c) in ("Cc", "Cf", "Co", "Cs")
+            or (c.isspace() and c != " ")]
     if _bad:
         problems.append(
             f"{where}: matcher {matcher!r} contains {_bad[0]!r} — a control character or non-space "

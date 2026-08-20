@@ -767,36 +767,71 @@ class KimiHarnessMutationGates(unittest.TestCase):
         or the cell is measuring nothing.
         """
         p, out = self._run("clean", plan="README.md")
-        self.assertIn("the prompt does not name README.md", p.stderr,
+        self.assertIn("refusing to review one document and certify another", p.stderr,
                       f"a mismatched operand was accepted: rc {p.returncode}\n{p.stderr}")
+        self.assertIn("README.md", p.stderr, "the refusal must name the operand it rejected")
         self.assertNotEqual(0, p.returncode)
 
         control, _ = self._run("clean", plan=DEFAULT_PLAN)
-        self.assertNotIn("does not name", control.stderr,
+        self.assertNotIn("refusing to review one document", control.stderr,
                          "CONTROL FAILED — the named operand was refused too, so the check above "
                          f"is not discriminating:\n{control.stderr}")
 
     def test_git_selection_env_cannot_redirect_the_basis(self):
-        """`git -C "$REPO"` does not anchor the repository; the harness must clear the env itself.
+        """A poisoned git environment must not change the BYTES the round certifies.
 
-        With GIT_DIR/GIT_WORK_TREE inherited, `--show-toplevel` still answers this checkout while
-        every object lookup resolves elsewhere — so the BASIS would certify bytes from a repository
-        nobody reviewed (codex, PR #69 round 2, reproduced).
+        The oracle is the `BASIS=<digest>` token on the CLEAN SUMMARY, not the `BASIS plan = <path>`
+        diagnostic. An earlier version of this test compared the path line — which is identical in
+        both runs by construction, so it reported equality even when the digests differed and could
+        not have detected the defect it was written for (codex, PR #69 round 3). It also poisoned
+        toward THIS repository, where the plan bytes are the same, so there was nothing to see.
+
+        So: a genuinely separate repository whose plan bytes DIFFER, the poison derived from the
+        fixture's own env, both runs required to reach the clean summary, and the digests compared.
         """
-        poisoned = dict(os.environ)
-        poisoned["GIT_DIR"] = os.path.join(self.clone, ".git")
-        poisoned["GIT_WORK_TREE"] = self.clone
-        clean_run, _ = self._run("clean")
-        dirty_run, _ = self._run("clean", env=poisoned)
-        self.assertEqual(
-            self._basis_of(clean_run), self._basis_of(dirty_run),
-            "a poisoned git environment changed the BASIS the round certifies")
+        other = os.path.join(self.scratch, "otherrepo")
+        os.makedirs(other)
+        git = ["git", "-C", other, "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(["git", "init", "-q", other], check=True)
+        os.makedirs(os.path.dirname(os.path.join(other, DEFAULT_PLAN)), exist_ok=True)
+        with open(os.path.join(other, DEFAULT_PLAN), "w", encoding="utf-8") as fh:
+            fh.write("DIFFERENT PLAN BYTES — this repository was never reviewed.\n")
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "other"],
+                       check=True, capture_output=True)
 
-    def _basis_of(self, proc):
-        for line in (proc.stderr or "").splitlines():
-            if line.startswith("kimi-review: BASIS plan ="):
-                return line.strip()
-        return None
+        clean, _ = self._run("clean")
+        basis_clean = self._basis_digest(clean)
+        self.assertIsNotNone(basis_clean,
+                             f"CONTROL FAILED — the clean run never printed a summary:\n{clean.stdout}{clean.stderr}")
+
+        poisoned_env = dict(self.env)
+        poisoned_env["GIT_DIR"] = os.path.join(other, ".git")
+        poisoned_env["GIT_WORK_TREE"] = other
+        poisoned_env["GIT_CONFIG_COUNT"] = "1"
+        poisoned_env["GIT_CONFIG_KEY_0"] = "core.hooksPath"
+        poisoned_env["GIT_CONFIG_VALUE_0"] = os.path.join(self.scratch, "attacker-hooks")
+        poisoned, _ = self._run("clean", env=poisoned_env)
+        basis_poisoned = self._basis_digest(poisoned)
+        self.assertIsNotNone(basis_poisoned,
+                             f"the poisoned run never reached the summary, so the digests were never "
+                             f"compared:\n{poisoned.stdout}{poisoned.stderr}")
+        self.assertEqual(basis_clean, basis_poisoned,
+                         "a poisoned git environment changed the BASIS digest the round certifies")
+
+        # And the fixture must actually be capable of showing a difference, or the assertion above
+        # is vacuous: the other repository's plan bytes must digest differently.
+        import hashlib
+        with open(os.path.join(other, DEFAULT_PLAN), "rb") as fh:
+            other_digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+        self.assertNotEqual(basis_clean, other_digest,
+                            "FIXTURE IS VACUOUS — the decoy repository's plan digests the same as "
+                            "the real one, so redirection would be invisible")
+
+    def _basis_digest(self, proc):
+        """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
+        m = re.search(r"\bBASIS=([0-9a-f]{12})\b", proc.stdout or "")
+        return m.group(1) if m else None
 
 
 if __name__ == "__main__":

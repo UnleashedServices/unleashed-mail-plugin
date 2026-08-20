@@ -387,9 +387,16 @@ PY
 disposable_checkout() {
     _dc_repo="$1"; _dc_sha="$2"; _dc_dest="$3"
     [ ! -e "$_dc_dest" ] || return 1
-    git init -q -- "$_dc_dest" >/dev/null 2>&1 || return 1
-    git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
-    git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
+    # HOOKS ARE DISABLED EXPLICITLY for every command here. `checkout` fires `post-checkout`, and
+    # this runs BEFORE the caller captures its baseline, so a hook firing inside the private tree is
+    # mutation the baseline would then record as pristine. The caller clears the whole `GIT_*`
+    # namespace, which is the primary defence; `-c core.hooksPath=/dev/null` is the second, because
+    # `core.hooksPath` also reaches git through config FILES this harness does not own
+    # (codex, PR #69 round 3 — reproduced via GIT_CONFIG_COUNT).
+    _dc_git="git -c core.hooksPath=/dev/null"
+    $_dc_git init -q -- "$_dc_dest" >/dev/null 2>&1 || return 1
+    $_dc_git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
+    $_dc_git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
     rm -f "$_dc_dest/.git/FETCH_HEAD"
     [ "$(git -C "$_dc_dest" rev-parse HEAD 2>/dev/null)" = "$_dc_sha" ] || return 1
 }

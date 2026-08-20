@@ -416,3 +416,27 @@ the grant removal was **sufficient**: the remaining non-allocated `pty-capture` 
 editing it broke eight tests, so it was deferred. **Codex's judgment, stated in both rounds, is that
 deferring it is the wrong release boundary** — the live instruction stays unsafe, and the region
 should be re-anchored deliberately with its tests. That decision is the maintainer's.
+
+### Round 3 (`85d242e`) — 3×P1 + 2×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | The prompt/target binding was a **substring** test and bypassable four ways: a `.bak` suffix, an `old-` path prefix, the path quoted in a sentence that then said "actual review: README.md", and a prompt naming two documents | Fixed — exactly ONE anchored declaration line whose whole value equals the operand; all four bypasses refused, three legitimate spellings accepted |
+| P1 | **Git configuration injection**, missed by round 2's fix. `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` survived the hand-picked unset list and injected `core.hooksPath`, so `disposable_checkout`'s `git checkout` would fire an attacker `post-checkout` **inside the private tree before `TREE_BASELINE` was captured** — mutation the baseline then records as pristine | Fixed — the whole `GIT_*` namespace is enumerated and cleared (an indexed, unbounded family cannot be covered by a fixed list), and `disposable_checkout` additionally runs every command with `-c core.hooksPath=/dev/null` |
+| P1 | A full stderr pipe **still** exited 120. Round 2's `print(..., flush=True)` left the failed non-blocking write buffered in `TextIOWrapper`; the interpreter's EOF flush retried it and died — the ping succeeded and the process still exited 120 | Fixed — diagnostics go through raw `os.write`, which has no buffer to leave anything in |
+| P2 | Zero-width and default-ignorable Unicode (U+200B, U+FEFF, U+2060, U+180E) still bypassed matcher validation, because `str.isspace()` is false for them | Fixed — rejection is by Unicode CATEGORY (Cc/Cf/Co/Cs), not an enumerated blocklist the next codepoint outruns |
+| P2 | **The round-2 regression test did not test what it claimed.** `_basis_of()` read the `BASIS plan = <path>` diagnostic rather than the `BASIS=<digest>` summary, so it reported equality even when the digests differed; and it poisoned toward this same repository, where the bytes are identical, so there was nothing to detect | Fixed — a genuinely separate repository with different plan bytes, the poison derived from the fixture's own env, both runs required to reach the clean summary, digests compared, plus a vacuity check that the decoy really does digest differently |
+
+**The lesson this round records.** Round 2 claimed both new tests were "proven discriminating by
+mutation" — and they were, in the sense that the mutant failed them. But one of them failed for a
+reason unrelated to its oracle. *A mutation that turns a test red does not prove the test measures
+the right thing.* The rewritten test's oracle is the digest itself, so the same mutation now fails it
+for the reason the test exists.
+
+### Cumulative
+
+Three rounds, fourteen findings, every one reproduced. Round 2 contained two defects created by
+round 1's repairs; round 3 contained one created by round 2's. Rounds continue until one returns
+clean **and** that clean round reproduces on identical bytes — on this ticket family two double
+approvals have already failed reproduction, and both re-runs found real defects the approving runs
+had certified clean.

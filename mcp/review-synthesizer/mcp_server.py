@@ -115,7 +115,12 @@ def _log(msg: str) -> None:
         except (OSError, ValueError, AttributeError):
             pass
     try:
-        print(f"[review-synthesizer] {msg}", file=sys.stderr, flush=True)
+        # RAW os.write, NOT print(). `print(..., flush=True)` on a non-blocking fd leaves the failed
+        # write sitting in TextIOWrapper's buffer, and the interpreter's EOF flush retries it and
+        # exits **120** — the full-pipe case answered the queued ping and then died anyway
+        # (codex, PR #69 round 3). os.write has no buffer to leave anything in: EAGAIN surfaces here
+        # and the line is simply dropped.
+        os.write(sys.stderr.fileno(), f"[review-synthesizer] {msg}\n".encode("utf-8", "replace"))
     except BlockingIOError:
         # The reader is alive but not keeping up. Drop this line and keep serving; do NOT mark
         # stderr dead, because the condition is transient.
