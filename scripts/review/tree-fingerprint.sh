@@ -393,12 +393,31 @@ PY
 # Only the kimi harness cleared the namespace, while all three call this helper, so agy and codex
 # were still exposed. Sanitising here covers every caller and cannot be forgotten by the next one.
 _tf_sanitize_git_env() {
-    while IFS='=' read -r _tf_v _; do
-        case "$_tf_v" in GIT_*) unset "$_tf_v" ;; esac
-    done <<TFEOF
-$(env)
-TFEOF
+    # ALLOCATION-FREE AND FAIL-CLOSED. The first version read `$(env)` through a here-document, and
+    # a here-doc needs a TEMP FILE: in a sandbox where that is denied the shell printed "cannot
+    # create temp file for here document", the loop never ran, every `GIT_*` survived — and the
+    # source still returned 0. A security boundary that fails OPEN and silently is worse than none
+    # (codex, PR #69 round 7, reproduced in bash and zsh). Name expansion allocates nothing, and the
+    # result is VERIFIED afterwards: if anything survives, the shell dies rather than proceeding.
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval 'for _tf_v in ${(k)parameters[(I)GIT_*]}; do unset "$_tf_v" 2>/dev/null; done'
+    else
+        eval 'for _tf_v in ${!GIT_*}; do unset "$_tf_v" 2>/dev/null; done'
+    fi
     unset _tf_v
+    _tf_left=""
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval '_tf_left="${(k)parameters[(I)GIT_*]}"'
+    else
+        eval '_tf_left="${!GIT_*}"'
+    fi
+    if [ -n "$_tf_left" ]; then
+        printf 'tree-fingerprint: REFUSING to run — could not clear the git environment (%s)\n' \
+            "$_tf_left" >&2
+        unset _tf_left
+        exit 1
+    fi
+    unset _tf_left
 }
 
 # ...AND IT RUNS AT SOURCE TIME, not merely inside `disposable_checkout`.

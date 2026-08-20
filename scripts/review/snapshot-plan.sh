@@ -20,6 +20,16 @@
 # Exit: review-verdict's status, or 1 on a refused operand. Nothing is written on refusal.
 set -uo pipefail
 
+# THE GIT ENVIRONMENT IS SANITISED BEFORE THE FIRST `git`. Inherited `GIT_DIR`/`GIT_WORK_TREE`
+# silently redirect which repository this script reads, and `GIT_CONFIG_COUNT` can inject
+# executable config (`core.fsmonitor`, `url.<ext::cmd>.insteadOf`). `changeset.sh` was shown
+# reporting a base commit from a DIFFERENT worktree under exactly that (codex, PR #69 round 7);
+# these three siblings invoke git too and had the same exposure, so the whole class is closed
+# here rather than the one instance. The helper fails CLOSED if it cannot clear.
+_CS_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=scripts/review/tree-fingerprint.sh
+. "${_CS_DIR}/tree-fingerprint.sh"
+
 die() { printf 'snapshot-plan: %s\n' "$1" >&2; exit 1; }
 
 PLAN="${1-}"

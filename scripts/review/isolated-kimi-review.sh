@@ -86,12 +86,14 @@ printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 # tree BEFORE `TREE_BASELINE` is captured — mutation the baseline then treats as pristine
 # (codex, PR #69 round 3). Enumerating the environment and clearing the whole namespace is the only
 # form of this that cannot be outrun by a variable someone adds later.
-while IFS='=' read -r _gv _; do
-    case "$_gv" in GIT_*) unset "$_gv" ;; esac
-done <<EOF
-$(env)
-EOF
-unset _gv
+# ...AND THE SHARED BOUNDARY IS SOURCED BEFORE THE FIRST `git`, not after it. This script used to
+# carry its own copy of the clearing loop here and source tree-fingerprint.sh two hundred lines
+# later, which meant the claim "all four consumers source the boundary before their first git call"
+# was FALSE for this one (codex, PR #69 round 7). SCRIPT_DIR is therefore established here rather
+# than further down, and sourcing runs `_tf_sanitize_git_env`, which fails CLOSED.
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=scripts/review/tree-fingerprint.sh
+. "${SCRIPT_DIR}/tree-fingerprint.sh"
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
 # ...and the gitdir must belong to the checkout we just resolved, so a future edit that reintroduces
 # an inherited selection variable fails loudly instead of silently reading elsewhere.
@@ -285,10 +287,17 @@ if not first.startswith(PREFIX):
     sys.stderr.write("the prompt's FIRST line must be exactly:\n  Plan under review: %s\n"
                      "(found: %r)\n" % (want, first[:120].decode("utf-8", "replace")))
     raise SystemExit(1)
-declared = first[len(PREFIX):].decode("utf-8", "replace").rstrip()
-if declared != want:
+# COMPARED AS BYTES, because "byte-exact" was not true of the previous version (codex, PR #69
+# round 7): `.decode("utf-8", "replace")` maps ANY invalid byte to U+FFFD, so `\xff` aliased a real
+# U+FFFD filename and was accepted as the same declaration; and `.rstrip()` accepted extra trailing
+# spaces while making a tracked filename that ENDS in a space impossible to declare. Only the
+# intentional CRLF handling above touches the bytes; nothing else is normalised.
+declared = first[len(PREFIX):]
+want_bytes = os.fsencode(want)
+if declared != want_bytes:
     sys.stderr.write("the prompt declares %r but the BASIS would certify %r — refusing to review one "
-                     "document and certify another\n" % (declared, want))
+                     "document and certify another\n"
+                     % (declared.decode("utf-8", "backslashreplace"), want))
     raise SystemExit(1)
 PYBIND
 [ "$_BIND_RC" = 0 ] || exit 1

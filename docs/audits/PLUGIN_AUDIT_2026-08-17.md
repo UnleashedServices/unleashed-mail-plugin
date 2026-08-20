@@ -495,3 +495,17 @@ scanner refused are therefore accepted now. That is the correct answer under thi
 than a regression — what the reviewer chooses to read has never been knowable from the harness,
 which is what the BASIS line's own header comment has said since round 1. Policing prose is the
 thing that kept failing.
+
+### Round 7 (`3be042e`) — 2×P1 + 2×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | **`changeset.sh` reviewed a different checkout** under inherited selection variables — a git-invoking script that never sourced the boundary at all | Fixed as a CLASS: `changeset.sh`, `persist-verdict.sh`, `resolve-plan-gate.sh` and `snapshot-plan.sh` all source the boundary before their first git. Codex named one; the same exposure existed in four |
+| P1 | **"Byte-exact" was not true.** `.decode("utf-8","replace")` maps any invalid byte to U+FFFD, so `\xff` aliased a real U+FFFD filename and was accepted as the same declaration; `.rstrip()` accepted extra trailing spaces while making a filename that ENDS in a space impossible to declare | Fixed — the comparison is raw bytes against `os.fsencode(want)`, with only the intentional CRLF handling. Trailing spaces now refused, a space-terminated filename representable, `\xff` no longer aliases |
+| P2 | **The source-time sanitiser failed OPEN.** It read `$(env)` through a here-document, which needs a temp file; where that was denied the shell printed an error, the loop never ran, every `GIT_*` survived — and the source still returned 0. My claim that all four consumers source before their first git was also **false**: Kimi ran git at line 95 and sourced at line 210 | Fixed — the sanitiser is allocation-free (shell name expansion, no temp file, no subshell), VERIFIES afterwards and exits non-zero if anything survives, and Kimi now sources the boundary before its first git |
+| P2 | A basename-only BASIS implementation still passed: the two accepted operands had **different basenames**, so resolving the leaf against any directory worked | Fixed — the alternate plan now shares the default's basename in a different directory, forcing the digest to depend on the full path. Verified against all three wrong implementations proposed in rounds 4-7 |
+
+**Codex judged the round-6 scope trade sound**, unprompted by me beyond asking: *"accepting a
+declaration for A whose body discusses B is appropriate because this gate binds the declaration to
+BASIS, not prose semantics."* It also independently confirmed the default-ignorable range table
+matches Node's `Default_Ignorable_Code_Point` property exactly — missing 0, extra 0.
