@@ -254,18 +254,53 @@ PLAN_REL="$PLAN_REL" python3 - "$PROMPT_SNAP" <<'PYBIND' || _BIND_RC=$?
 import os, re, sys
 want = os.environ["PLAN_REL"]
 text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
-# `Plan under review: <value>` / `Document under review: <value>`, value optionally in backticks
-# or quotes, optional trailing period. Anchored to the whole line so trailing prose cannot ride along.
-pat = re.compile(r'^[ \t]*(?:Plan|Document) under review[ \t]*:[ \t]*[`"\']?([^`"\'\n]+?)[`"\']?[ \t]*\.?[ \t]*$',
-                 re.MULTILINE)
-found = [m.group(1).strip() for m in pat.finditer(text)]
+
+# FENCED AND INDENTED REGIONS ARE NOT OPERATIVE TEXT. A prompt can QUOTE a declaration as an
+# example — a prior transcript, a usage snippet — and then redirect the reviewer in its real
+# instruction. Scanning every line accepted exactly that (codex, PR #69 round 4). Fenced blocks are
+# blanked (line count preserved so nothing else shifts) and so are 4-space-indented lines.
+lines = text.replace("\r\n", "\n").split("\n")
+out, fence = [], None
+for line in lines:
+    stripped = line.lstrip()
+    marker = None
+    if stripped.startswith("```"):
+        marker = "```"
+    elif stripped.startswith("~~~"):
+        marker = "~~~"
+    if marker and fence is None:
+        fence = marker; out.append(""); continue
+    if marker and fence == marker:
+        fence = None; out.append(""); continue
+    if fence is not None or line.startswith("    ") or line.startswith("\t"):
+        out.append(""); continue
+    out.append(line)
+operative = "\n".join(out)
+
+# The value is the rest of the line; ONE wrapping pair of matching quotes/backticks is stripped, so
+# a PLAN_REL containing a backtick is still representable (the old character-class form could not
+# express one at all).
+pat = re.compile(r'^[ \t]*(?:Plan|Document) under review[ \t]*:[ \t]*(.+?)[ \t]*$', re.MULTILINE)
+found = []
+for m in pat.finditer(operative):
+    v = m.group(1).strip()
+    if v.endswith(".") and not v.endswith(".."):
+        v = v[:-1].strip()
+    for q in ("`", '"', "'"):
+        if len(v) >= 2 and v[0] == q and v[-1] == q:
+            v = v[1:-1]
+            break
+    found.append(v.strip())
+
 if not found:
-    sys.stderr.write("the prompt has no anchored target declaration; add a line reading exactly:\n"
-                     "  Plan under review: %s\n" % want)
+    sys.stderr.write("the prompt has no operative target declaration (fenced and indented examples "
+                     "do not count); add a line reading exactly:\n  Plan under review: %s\n" % want)
     raise SystemExit(1)
-if len(set(found)) > 1:
-    sys.stderr.write("the prompt declares more than one target (%s) — exactly one is required\n"
-                     % ", ".join(sorted(set(found))))
+# EXACTLY ONE, not "one distinct value": two identical declarations are still two, and a prompt that
+# says it twice is a prompt whose operative instruction is ambiguous.
+if len(found) != 1:
+    sys.stderr.write("the prompt carries %d target declarations (%s) — exactly one is required\n"
+                     % (len(found), ", ".join(repr(f) for f in found)))
     raise SystemExit(1)
 if found[0] != want:
     sys.stderr.write("the prompt declares %r but the BASIS would certify %r — refusing to review one "

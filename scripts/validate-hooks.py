@@ -171,6 +171,18 @@ def validate_matcher(event: str, matcher: str, where: str,
             f"whitespace. It fails the exact-matcher grammar, is treated as a regex, and matches no "
             f"tool; remove it (a plain space is fine)")
         return
+    # NFKC-EQUIVALENT SPELLINGS ARE REFUSED. Full-width `Ｅｄｉｔ` and `ＭｕｌｔｉＥｄｉｔ` are LETTERS, so
+    # the category guard above does not touch them — they fail the ASCII exact-matcher grammar,
+    # become regexes, skip the known/stale checks, and match nothing at runtime (codex, PR #69
+    # round 4, verified in node: false for the bare name). The test is normalisation: if a matcher
+    # is not already canonical AND its NFKC form would be accepted by the exact grammar, it is a
+    # homoglyph of a tool name rather than a deliberate regex.
+    _nfkc = unicodedata.normalize("NFKC", matcher)
+    if _nfkc != matcher and EXACT_MATCHER.match(_nfkc):
+        problems.append(
+            f"{where}: matcher {matcher!r} is a non-canonical spelling of {_nfkc!r} — it fails the "
+            f"exact-matcher grammar, is treated as a regex, and matches no tool; write it in ASCII")
+        return
     if EXACT_MATCHER.match(matcher):
         # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
         # (PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/Denied). CC tool names

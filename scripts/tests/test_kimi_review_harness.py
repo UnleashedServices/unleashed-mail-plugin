@@ -819,9 +819,20 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertEqual(basis_clean, basis_poisoned,
                          "a poisoned git environment changed the BASIS digest the round certifies")
 
-        # And the fixture must actually be capable of showing a difference, or the assertion above
-        # is vacuous: the other repository's plan bytes must digest differently.
+        # THE POSITIVE ORACLE. `clean == poisoned` and `clean != decoy` are both satisfied by an
+        # implementation that consistently digests the WRONG file — hashing README.md every time
+        # would pass both (codex, PR #69 round 4). So assert what the digest must actually BE:
+        # the blob of the reviewed plan at the reviewed commit, computed here independently of the
+        # harness.
         import hashlib
+        expected = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        self.assertEqual(expected, basis_clean,
+                         "the BASIS is not the digest of the reviewed plan's blob — it certifies "
+                         "some other bytes, consistently")
+
+        # ...and the fixture must be capable of showing a difference, or the equality above is
+        # vacuous: the decoy's plan bytes must digest differently.
         with open(os.path.join(other, DEFAULT_PLAN), "rb") as fh:
             other_digest = hashlib.sha256(fh.read()).hexdigest()[:12]
         self.assertNotEqual(basis_clean, other_digest,

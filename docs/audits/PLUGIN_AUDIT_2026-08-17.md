@@ -440,3 +440,19 @@ round 1's repairs; round 3 contained one created by round 2's. Rounds continue u
 clean **and** that clean round reproduces on identical bytes — on this ticket family two double
 approvals have already failed reproduction, and both re-runs found real defects the approving runs
 had certified clean.
+
+### Round 4 (`2343736`) — 2×P1 + 3×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | The anchored binding scanned every line without tracking Markdown fences, so a declaration QUOTED as an example was operative while the real instruction redirected elsewhere; two identical declarations also passed (the check was `len(set)`, not `len`); and a `PLAN_REL` containing a backtick could not be represented at all | Fixed — fenced and indented regions blanked before scanning, `len(found) != 1` refused, and one wrapping quote pair stripped so any value is representable |
+| P1 | The disposable checkout still consumed **executable** configuration. `-c core.hooksPath=/dev/null` disables hooks only; global/system config still defines `filter.*`, `core.attributesFile` and `insteadOf`, and a smudge filter runs a shell command over bytes entering the tree — reproduced, a filter EXECUTED with hooks already disabled | Fixed — `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` point at `/dev/null`, `init --template=` is empty, and `core.attributesFile` is pinned; the reproduction now shows zero filter executions |
+| P2 | `_log()` set `O_NONBLOCK` on **inherited fd 2**, and `F_SETFL` mutates the open file DESCRIPTION, which is shared across fork/dup — so the server changed its launcher's stderr | Fixed — and note the obvious repair FAILED: duping the descriptor and setting the flag on the copy changes the same description, measured. Writability is now TESTED with `select` and no flag is changed at all |
+| P2 | NFKC-equivalent matchers still validated cleanly: full-width `Ｅｄｉｔ` and `ＭｕｌｔｉＥｄｉｔ` are LETTERS, so the category guard did not touch them | Fixed — a non-canonical matcher whose NFKC form would satisfy the exact grammar is refused as a homoglyph |
+| P2 | **The rewritten BASIS test still had an incomplete oracle.** `clean == poisoned` and `clean != decoy` are both satisfied by an implementation that consistently digests the WRONG file | Fixed — the test now asserts the digest EQUALS the reviewed plan's blob, computed independently; verified against a mutant that digests README.md, which the previous oracle passed |
+
+**Three consecutive rounds found a defect in the test written to prove the previous round's fix.**
+Round 2's test read the wrong line; round 3's compared the right line but only for inequality;
+round 4's finally asserts the positive fact. The through-line is that each oracle was chosen to
+detect the defect I had just fixed, rather than to state what must be TRUE — and "not wrong in the
+way I was wrong last time" is a weaker claim than it sounds.

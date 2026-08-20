@@ -21,8 +21,8 @@ All logging goes to stderr — stdout is the protocol channel, never print to it
 from __future__ import annotations
 
 import json
-import fcntl
 import os
+import select
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
@@ -82,7 +82,6 @@ TOOL = {
 
 
 _STDERR_DEAD = False
-_STDERR_NONBLOCKING = False
 
 
 def _log(msg: str) -> None:
@@ -99,21 +98,20 @@ def _log(msg: str) -> None:
     BUFFERED and the interpreter's exit-time flush would raise again — which CPython reports as
     rc 120. The flag then keeps every later call cheap.
     """
-    global _STDERR_DEAD, _STDERR_NONBLOCKING
+    global _STDERR_DEAD
     if _STDERR_DEAD:
         return
-    if not _STDERR_NONBLOCKING:
-        # A CLOSED stderr raises; a FULL one just BLOCKS, and blocking here stops the protocol
-        # loop dead — measured: with stderr never drained the server never answered a queued
-        # `ping`, and draining it released the reply immediately (codex, PR #69 round 2). O_NONBLOCK
-        # converts that stall into a BlockingIOError we can drop. Diagnostics are lossy under
-        # back-pressure by design; the protocol on stdout is not.
-        _STDERR_NONBLOCKING = True
-        try:
-            _fd = sys.stderr.fileno()
-            fcntl.fcntl(_fd, fcntl.F_SETFL, fcntl.fcntl(_fd, fcntl.F_GETFL) | os.O_NONBLOCK)
-        except (OSError, ValueError, AttributeError):
-            pass
+    # NO FLAG IS EVER CHANGED ON fd 2. The obvious repair — dup the descriptor and set O_NONBLOCK
+    # on the copy — DOES NOT WORK: `dup` shares the open file DESCRIPTION, and `F_SETFL` mutates
+    # exactly that, so the launcher's stderr went non-blocking anyway (measured; the first attempt
+    # at this fix failed its own test). Writability is TESTED instead, which changes nothing that
+    # any other process can observe. A diagnostic is one short line, well under PIPE_BUF, so a pipe
+    # reported writable accepts it without blocking (codex, PR #69 rounds 3-4).
+    try:
+        if not select.select([], [sys.stderr.fileno()], [], 0)[1]:
+            return                      # reader is not keeping up; drop this line, keep serving
+    except (OSError, ValueError):
+        pass
     try:
         # RAW os.write, NOT print(). `print(..., flush=True)` on a non-blocking fd leaves the failed
         # write sitting in TextIOWrapper's buffer, and the interpreter's EOF flush retries it and

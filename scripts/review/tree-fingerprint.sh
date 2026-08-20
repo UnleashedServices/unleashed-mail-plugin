@@ -393,8 +393,20 @@ disposable_checkout() {
     # namespace, which is the primary defence; `-c core.hooksPath=/dev/null` is the second, because
     # `core.hooksPath` also reaches git through config FILES this harness does not own
     # (codex, PR #69 round 3 — reproduced via GIT_CONFIG_COUNT).
-    _dc_git="git -c core.hooksPath=/dev/null"
-    $_dc_git init -q -- "$_dc_dest" >/dev/null 2>&1 || return 1
+    # THE CHECKOUT IS BUILT WITH NO INHERITED EXECUTABLE CONFIGURATION.
+    # `-c core.hooksPath=/dev/null` disables HOOKS and nothing else, and round 4 reproduced a
+    # smudge FILTER executing during checkout with hooks already disabled: global and system
+    # config still define `filter.*`, `core.attributesFile`, `insteadOf` and friends, and a filter
+    # runs a shell command over the bytes on their way into the tree. Measured on this machine,
+    # `filter.lfs.process` and three siblings were reachable from ~/.gitconfig with hooksPath
+    # disabled, and empty once GIT_CONFIG_GLOBAL/SYSTEM point at /dev/null.
+    #   * GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM=/dev/null removes both files, so no filter, attribute
+    #     or url-rewrite definition survives to be triggered by a `.gitattributes` in the commit;
+    #   * `--template=` gives `init` an EMPTY template, so no hooks or config are copied in;
+    #   * core.attributesFile and core.hooksPath are pinned as well, belt and braces.
+    _dc_gitenv="GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null"
+    _dc_git="env $_dc_gitenv git -c core.hooksPath=/dev/null -c core.attributesFile=/dev/null"
+    $_dc_git init -q --template= -- "$_dc_dest" >/dev/null 2>&1 || return 1
     $_dc_git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
     $_dc_git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
     rm -f "$_dc_dest/.git/FETCH_HEAD"
