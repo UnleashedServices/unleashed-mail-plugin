@@ -140,6 +140,26 @@ def _is_shell_script(path: Path) -> bool:
     return interp in SHELL_INTERPRETERS
 
 
+def _is_default_ignorable(ch: str) -> bool:
+    """True for codepoints that render as nothing — the class that makes a matcher silently dead.
+
+    Enumerated by RANGE rather than by name: the Unicode Default_Ignorable_Code_Point property is
+    not exposed by `unicodedata`, and a name-based list is outrun by the next codepoint.
+    """
+    o = ord(ch)
+    return (o in (0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
+            or 0x180B <= o <= 0x180F
+            or 0x200B <= o <= 0x200F
+            or 0x202A <= o <= 0x202E
+            or 0x2060 <= o <= 0x206F
+            or 0xFE00 <= o <= 0xFE0F
+            or o == 0xFEFF
+            or 0xFFF0 <= o <= 0xFFF8
+            or 0x1BCA0 <= o <= 0x1BCA3
+            or 0x1D173 <= o <= 0x1D17A
+            or 0xE0000 <= o <= 0xE0FFF)
+
+
 def validate_matcher(event: str, matcher: str, where: str,
                      problems: list[str], warnings: list[str]) -> None:
     """Validate a hook matcher against the documented grammar (hooks reference "Matcher value"
@@ -164,6 +184,11 @@ def validate_matcher(event: str, matcher: str, where: str,
     _bad = [c for c in matcher
             if ord(c) < 32 or ord(c) == 127
             or unicodedata.category(c) in ("Cc", "Cf", "Co", "Cs")
+            # Mn (nonspacing marks) are NOT rejected wholesale — a legitimate regex may contain
+            # accented text — but the DEFAULT-IGNORABLE ones are invisible and matched nothing:
+            # VARIATION SELECTOR-16 and COMBINING GRAPHEME JOINER survived both earlier guards
+            # because they are Mn and NFKC preserves them (codex, PR #69 round 5).
+            or (unicodedata.category(c) == "Mn" and _is_default_ignorable(c))
             or (c.isspace() and c != " ")]
     if _bad:
         problems.append(

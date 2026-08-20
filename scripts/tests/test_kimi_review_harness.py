@@ -68,6 +68,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HARNESS = os.path.join(REPO, "scripts", "review", "isolated-kimi-review.sh")
 SOURCE_PROMPT = os.path.join(REPO, ".review-prompt-2617r123.md")
 DEFAULT_PLAN = "docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
+ALT_PLAN = "docs/planning/COREDEV-2654_ALTERNATE_PLAN.md"
 SESSION = "session_00000000-0000-4000-8000-000000000001"
 #: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
 OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"
@@ -138,8 +139,19 @@ class KimiHarnessMutationGates(unittest.TestCase):
             with open(prompt, "w", encoding="utf-8") as fh:
                 fh.write(_plan_line)
                 fh.write("Review the plan for correctness, security and completeness.\n" * 40)
+        # An ALTERNATE committed plan with DIFFERENT bytes, and a prompt that declares it. Without
+        # one, the only positive digest oracle used DEFAULT_PLAN and the only alternate operand
+        # (README.md) was refused before the digest — so an implementation that ALWAYS hashes the
+        # default passed every assertion (codex, PR #69 round 5).
+        alt_abs = os.path.join(self.clone, ALT_PLAN)
+        os.makedirs(os.path.dirname(alt_abs), exist_ok=True)
+        with open(alt_abs, "w", encoding="utf-8") as fh:
+            fh.write("ALTERNATE PLAN — distinct bytes so the digest cannot coincide.\n")
+        with open(os.path.join(self.clone, ".review-prompt-alt.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + ALT_PLAN + "\n")
+            fh.write("Review the alternate plan.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
-            fh.write(".review-prompt-x.md\n")
+            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
         status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
@@ -830,6 +842,21 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertEqual(expected, basis_clean,
                          "the BASIS is not the digest of the reviewed plan's blob — it certifies "
                          "some other bytes, consistently")
+
+        # THE DIGEST MUST FOLLOW THE OPERAND. Everything above still passes an implementation that
+        # always hashes DEFAULT_PLAN, because DEFAULT_PLAN is the only operand that reaches the
+        # digest in those cells. So run an ACCEPTED alternate and require its own blob.
+        alt, _ = self._run("clean", prompt=".review-prompt-alt.md", plan=ALT_PLAN)
+        basis_alt = self._basis_digest(alt)
+        self.assertIsNotNone(basis_alt,
+                             f"the alternate-plan run never reached the summary:\n{alt.stdout}{alt.stderr}")
+        expected_alt = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{ALT_PLAN}"])).hexdigest()[:12]
+        self.assertEqual(expected_alt, basis_alt,
+                         "the BASIS did not follow the plan operand — it certifies the same bytes "
+                         "whatever it is asked to certify")
+        self.assertNotEqual(basis_clean, basis_alt,
+                            "FIXTURE IS VACUOUS — the two plans digest identically")
 
         # ...and the fixture must be capable of showing a difference, or the equality above is
         # vacuous: the decoy's plan bytes must digest differently.

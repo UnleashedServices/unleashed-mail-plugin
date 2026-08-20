@@ -456,3 +456,24 @@ Round 2's test read the wrong line; round 3's compared the right line but only f
 round 4's finally asserts the positive fact. The through-line is that each oracle was chosen to
 detect the defect I had just fixed, rather than to state what must be TRUE — and "not wrong in the
 way I was wrong last time" is a weaker claim than it sounds.
+
+### Round 5 (`326f4cc`) — 2×P1 + 2×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | The fence stripper ignored opening-fence length and trailing text, and tested the marker before indentation — so a four-space-indented ``` opened a fence, a shorter nested fence closed an outer one, and ``` followed by text counted as a close. Three prompts with a quoted declaration and an operative redirect were accepted | Fixed — real fence rules: character, opening run length, indentation < 4, and a close requiring an equal-or-longer run with nothing after it. An unclosed fence swallows the remainder, which fails safe |
+| P1 | **`disposable_checkout` was still exposed in the agy and codex harnesses.** `GIT_CONFIG_GLOBAL`/`SYSTEM=/dev/null` do not remove `GIT_CONFIG_COUNT`, whose indexed pairs arrive as command-line config and outrank both — and with `url.<ext::cmd>.insteadOf` plus `protocol.ext.allow` that is **code execution through the fetch transport**, reproduced. Only the kimi harness cleared the namespace, while all three call the shared helper | Fixed at the shared boundary — `_tf_sanitize_git_env` clears the whole `GIT_*` namespace inside `disposable_checkout`, so every caller is covered and the next one cannot forget |
+| P2 | VARIATION SELECTOR-16 and COMBINING GRAPHEME JOINER are category `Mn` and NFKC preserves them, so they passed both guards and produced matchers that match nothing | Fixed — default-ignorable codepoints are rejected by RANGE (the Unicode property is not exposed by `unicodedata`, and a name list is outrun by the next codepoint). `Mn` is not rejected wholesale: `café.*` still validates |
+| P2 | **The BASIS oracle still did not prove the digest follows the operand.** Every positive assertion used `DEFAULT_PLAN`, and the only alternate operand was refused before the digest — so an implementation that always hashes the default passed | Fixed — an accepted committed ALTERNATE plan with distinct bytes, its own declaring prompt, and its independently computed digest asserted. Verified against the always-default mutant, which the previous oracle passed |
+
+**No logging finding this round** — `/dev/null`, a full 64 KiB stderr pipe and a closed stderr all
+returned rc 0 with the ping and `-32700` replies intact. That surface is now settled after three
+rounds of defects.
+
+### Cumulative after five rounds
+
+Twenty-three findings, every one reproduced. Four of the five rounds found at least one defect
+created by the previous round's repair, and rounds 2-5 each found a defect in the TEST written to
+prove the previous round's fix. The tests now assert positive facts — that the digest equals the
+reviewed plan's blob, and that it CHANGES when the operand changes — rather than only that the
+previous defect is absent.

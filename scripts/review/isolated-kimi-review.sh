@@ -260,21 +260,44 @@ text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
 # instruction. Scanning every line accepted exactly that (codex, PR #69 round 4). Fenced blocks are
 # blanked (line count preserved so nothing else shifts) and so are 4-space-indented lines.
 lines = text.replace("\r\n", "\n").split("\n")
-out, fence = [], None
+out, fence_char, fence_len = [], None, 0
 for line in lines:
-    stripped = line.lstrip()
-    marker = None
-    if stripped.startswith("```"):
-        marker = "```"
-    elif stripped.startswith("~~~"):
-        marker = "~~~"
-    if marker and fence is None:
-        fence = marker; out.append(""); continue
-    if marker and fence == marker:
-        fence = None; out.append(""); continue
-    if fence is not None or line.startswith("    ") or line.startswith("\t"):
-        out.append(""); continue
+    indent = len(line) - len(line.lstrip(" "))
+    body = line[indent:]
+    # A FOUR-SPACE-INDENTED LINE IS AN INDENTED CODE BLOCK, never a fence opener. Checking the
+    # marker before the indentation let `    ```` open a fence and swallow the operative line that
+    # followed (codex, PR #69 round 5).
+    indented_code = indent >= 4
+    marker_char = body[0] if body[:1] in ("`", "~") else None
+    run = 0
+    if marker_char:
+        while run < len(body) and body[run] == marker_char:
+            run += 1
+    if fence_char is None:
+        # Opening fence: >= 3 markers, indented < 4, and for backticks no backtick in the info
+        # string. Otherwise it is ordinary text.
+        if marker_char and run >= 3 and not indented_code and \
+           not (marker_char == "`" and "`" in body[run:]):
+            fence_char, fence_len = marker_char, run
+            out.append("")
+            continue
+    else:
+        # Closing fence: same character, run at least as long as the opening, and NOTHING but
+        # whitespace after it. "``` not-a-closing-fence" does NOT close, so treating it as a close
+        # re-exposed everything below it.
+        if marker_char == fence_char and run >= fence_len and body[run:].strip() == "" \
+           and not indented_code:
+            fence_char, fence_len = None, 0
+            out.append("")
+            continue
+        out.append("")
+        continue
+    if indented_code or line.startswith("\t"):
+        out.append("")
+        continue
     out.append(line)
+# An unclosed fence swallows the rest of the prompt, which is the safe direction: the declaration
+# simply is not found and the round refuses.
 operative = "\n".join(out)
 
 # The value is the rest of the line; ONE wrapping pair of matching quotes/backticks is stripped, so

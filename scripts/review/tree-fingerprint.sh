@@ -384,7 +384,25 @@ PY
 # detached checkout. No remote, no alternates, no hardlinks; `FETCH_HEAD` — the one file that names the
 # source path — is removed. The reviewer's git is fully usable and fully private. Measured: 3.8 MB and
 # under a second for this repository.
+# THE GIT ENVIRONMENT IS SANITISED AT THE SHARED BOUNDARY, not in one caller.
+# `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` do NOT remove `GIT_CONFIG_COUNT`,
+# whose indexed `GIT_CONFIG_KEY_n`/`VALUE_n` pairs arrive as command-line config and outrank both.
+# That is not merely a data leak: with `url.<ext::cmd>.insteadOf` plus `protocol.ext.allow=always`
+# it is CODE EXECUTION through the same URL-resolution transport `fetch` uses (codex, PR #69
+# round 5, reproduced — output from an injected `/bin/echo` appeared in git's protocol error).
+# Only the kimi harness cleared the namespace, while all three call this helper, so agy and codex
+# were still exposed. Sanitising here covers every caller and cannot be forgotten by the next one.
+_tf_sanitize_git_env() {
+    while IFS='=' read -r _tf_v _; do
+        case "$_tf_v" in GIT_*) unset "$_tf_v" ;; esac
+    done <<TFEOF
+$(env)
+TFEOF
+    unset _tf_v
+}
+
 disposable_checkout() {
+    _tf_sanitize_git_env
     _dc_repo="$1"; _dc_sha="$2"; _dc_dest="$3"
     [ ! -e "$_dc_dest" ] || return 1
     # HOOKS ARE DISABLED EXPLICITLY for every command here. `checkout` fires `post-checkout`, and
