@@ -76,6 +76,16 @@ TOOL_MATCHER_EVENTS = {
 # under the 0.7 cutoff. So the two validators disagreed: assembly hard-rejected `MultiEdit` while a
 # hooks matcher reintroducing it validated clean (2026-08-17 audit remediation, AF-16 sweep).
 STALE_TOOLS = {"Task", "MultiEdit"}
+# Mirrors validate-plugin-assembly.py exactly, and for the same two reasons (codex, PR #69):
+# the membership test is CASE-INSENSITIVE, because `multiedit` sailed past a case-sensitive set
+# here while assembly rejected it; and the reason is PER TOOL, because one shared message is FALSE
+# for the other name — this file used to tell you `Task` should be `Edit`, when the sub-agent
+# dispatcher is `Agent`. Keyed lowercase to match the folded check.
+_STALE_TOOL_REASONS = {
+    "task": "the sub-agent dispatcher is `Agent`, not `Task` (AGENT_CONTRACTS §9)",
+    "multiedit": "`MultiEdit` was removed from Claude Code; use `Edit` (COREDEV-2583 §4.5)",
+}
+_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}
 
 KNOWN_TOOLS = {
     "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "Write",
@@ -144,10 +154,10 @@ def validate_matcher(event: str, matcher: str, where: str,
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
-            if token in STALE_TOOLS:
+            if token.lower() in _STALE_TOOLS_LOWER:
                 problems.append(
-                    f"{where}: matcher token {token!r} is not a real tool — it was removed from "
-                    f"Claude Code and matches nothing; the current name for an edit is 'Edit'")
+                    f"{where}: matcher token {token!r} is a stale/invalid tool name — "
+                    f"{_STALE_TOOL_REASONS[token.lower()]}")
                 continue
             if not token or token in KNOWN_TOOLS:
                 continue

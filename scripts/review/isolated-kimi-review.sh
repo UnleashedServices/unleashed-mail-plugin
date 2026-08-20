@@ -45,7 +45,10 @@ set -uo pipefail
 
 [ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
 PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
-PLAN_REL="${5:-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
+# `${5-...}`, NOT `${5:-...}`: the colon form substitutes the default for an EXPLICITLY EMPTY
+# operand too, so the `""` arm below was DEAD and an empty model-supplied operand silently
+# certified the default plan — the exact mismatch this guard exists to prevent (codex, PR #69).
+PLAN_REL="${5-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
 # THE PLAN OPERAND IS CONTAINED TOO. It was not, and it is model-chosen: `codex-review/SKILL.md`
 # says the stand-in is invoked "always passing <plan>". Unlike the prompt four lines below it went
 # straight into `$TREE/tree/$PLAN_REL`, so `../../etc/passwd` or an absolute path made the round's
@@ -57,6 +60,11 @@ case "$PLAN_REL" in
     /*)        echo "plan operand must be repository-relative, not absolute: $PLAN_REL" >&2; exit 1 ;;
     ..|../*|*/..|*/../*) echo "plan operand must not traverse upward: $PLAN_REL" >&2; exit 1 ;;
     "")        echo "plan operand must not be empty" >&2; exit 1 ;;
+esac
+# A NEWLINE in the operand forged a multiline "BASIS plan = ..." diagnostic, so the printed basis
+# could claim one plan while the digest covered another (codex, PR #69). Refuse any control byte.
+case "$PLAN_REL" in
+    *[[:cntrl:]]*) echo "plan operand must not contain control characters" >&2; exit 1 ;;
 esac
 # Name the basis-checked plan LOUDLY so a stand-in round (e.g. kimi covering a codex quota outage)
 # cannot silently basis-check the default while the prompt reviews something else.
@@ -182,13 +190,26 @@ SHA="$(git rev-parse --verify "${COMMIT}^{commit}" 2>/dev/null)" || {
     echo "not a commit: $COMMIT" >&2; exit 1; }
 disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
     echo "could not build the private review checkout for $COMMIT" >&2; exit 1; }
-# `-L` FIRST and independently: `-f` FOLLOWS a link, so a committed symlink at this path would
-# have digested its target — bytes the reviewed commit does not contain (same shape as ST-7's
-# publisher precondition on COREDEV-2617).
-[ ! -L "$TREE/tree/$PLAN_REL" ] || { echo "plan is a symlink in the staged checkout: $PLAN_REL" >&2; exit 1; }
-[ -f "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
-[ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan not readable in the staged checkout" >&2; exit 1; }
-BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
+# THE BASIS IS DIGESTED FROM THE GIT OBJECT, NOT FROM A PATH IN THE CHECKOUT (codex, PR #69).
+# Filesystem tests on `$TREE/tree/$PLAN_REL` cannot establish what this digest has to mean, which
+# is "these bytes are in the reviewed commit". Three ways they failed, each reproduced:
+#   * `-L`/`-f`/`-r` all PASS for `.git/config` — `disposable_checkout` uses `git init`, so that
+#     path exists in the staged tree and is not a commit object at all;
+#   * `-L` tests only the LEAF, so an INTERMEDIATE symlinked component (`escape -> /outside`,
+#     committed in the tree) is followed straight out of the checkout;
+#   * containment of the spelling says nothing about what the kernel resolves.
+# `git cat-file` answers the actual question. The mode check keeps a committed SYMLINK (mode
+# 120000, whose blob content is its target path) from being digested as though it were the plan.
+PLAN_MODE="$(git -C "$REPO" ls-tree --format='%(objectmode)' "$SHA" -- "$PLAN_REL" 2>/dev/null)"
+case "$PLAN_MODE" in
+    100644|100755) : ;;
+    "")  echo "plan is not tracked in the reviewed commit $SHA: $PLAN_REL" >&2; exit 1 ;;
+    120000) echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2; exit 1 ;;
+    *)   echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2; exit 1 ;;
+esac
+BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" \
+    | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {
+    echo "could not digest the plan blob from $SHA" >&2; exit 1; }
 # The disposable checkout's CONTENT fingerprint — every path, hashed — so that a reviewer which
 # IMPLEMENTS the plan and leaves any file created or edited other than the plan itself voids the
 # round. Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to
@@ -204,7 +225,12 @@ fi
 # the harness captures nothing (codex, PR #67). The wrapper also owns the allocated transcript leaf.
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # No `--allocated`: this harness takes an <out-transcript> path it creates itself, not a leaf
-# reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist.
+# reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist. THAT IS WHY
+# IT IS NOT GRANTED to the codex-review skill: a pre-approved `Bash(... isolated-kimi-review.sh *)`
+# let a nominally read-only review skill create-and-truncate an ARBITRARY single-linked user file
+# with no further prompt (codex, PR #69 — reproduced under ~/Documents with the write mocked). The
+# fix is at the permission layer: the stand-in is invoked with explicit per-round approval until a
+# `capture-kimi-review.sh` exists that owns its allocation, as agy and codex have.
 # THE SESSIONS THAT EXIST BEFORE THE RUN — the effort assertion below binds to the ONE session this
 # invocation creates, by set difference, never to an identifier read out of the transcript.
 SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
@@ -216,7 +242,9 @@ STATUS=$?
 # the snapshot the reviewer's argument was derived from (PROMPT= on the summary line is that argument's digest).
 if cmp -s -- "$PROMPT_ABS" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
 
-AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
+AFTER_BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" 2>/dev/null \
+    | python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); print(hashlib.sha256(d).hexdigest() if d else "MISSING")' \
+    || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
     echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2; exit 3
 fi

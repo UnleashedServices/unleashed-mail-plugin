@@ -80,8 +80,38 @@ TOOL = {
 }
 
 
+_STDERR_DEAD = False
+
+
 def _log(msg: str) -> None:
-    print(f"[review-synthesizer] {msg}", file=sys.stderr, flush=True)
+    """Best-effort. A broken LOG channel must never affect the PROTOCOL on stdout (codex, PR #69).
+
+    Two failures came from letting it: with only stderr closed, a malformed request got no
+    `-32700` response at all — the diagnostic raised, the outer `except BrokenPipeError` mistook a
+    dead log channel for dead protocol stdout, redirected healthy stdout and exited 0; and closing
+    both read ends BEFORE the startup "ready" line still exited 120, because that log sits ahead of
+    the loop's guard. Swallowing here fixes both, and is correct on the merits: stderr is
+    diagnostics, stdout is the protocol, and the two must fail independently.
+
+    On the first failure stderr is pointed at devnull, because a raised write leaves the text
+    BUFFERED and the interpreter's exit-time flush would raise again — which CPython reports as
+    rc 120. The flag then keeps every later call cheap.
+    """
+    global _STDERR_DEAD
+    if _STDERR_DEAD:
+        return
+    try:
+        print(f"[review-synthesizer] {msg}", file=sys.stderr, flush=True)
+    except OSError:
+        _STDERR_DEAD = True
+        try:
+            _devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(_devnull, sys.stderr.fileno())
+            finally:
+                os.close(_devnull)
+        except OSError:
+            pass
 
 
 def _blockers_to_verify(review) -> list[dict]:
@@ -313,17 +343,7 @@ def main() -> int:
         # Measured, all four builds: shipped 120; catching alone 120; redirecting stderr
         # unconditionally exits 0 but LOSES the diagnostic even when stderr is healthy. So: try to
         # say it, and only if that fails point stderr at devnull so nothing remains to flush.
-        try:
-            _log("client closed the pipe mid-write — exiting cleanly")
-        except OSError:
-            try:
-                _devnull = os.open(os.devnull, os.O_WRONLY)
-                try:
-                    os.dup2(_devnull, sys.stderr.fileno())
-                finally:
-                    os.close(_devnull)
-            except OSError:
-                pass
+        _log("client closed the pipe mid-write — exiting cleanly")
         return 0
     return 0
 

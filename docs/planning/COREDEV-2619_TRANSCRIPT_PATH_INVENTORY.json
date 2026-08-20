@@ -304,9 +304,9 @@
       "destination": {
         "line": 14,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read"
         ],
-        "payloadSha256": "0282e005bd663cb27e059615b4806f3b6fee53377ea1b6069e84bf8b2ed36d79"
+        "payloadSha256": "d8b4474c976604451fb342877654f25b1f9aaf49f773f822aca635b44d3edb0d"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -405,7 +405,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 94,
+        "line": 104,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -428,7 +428,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 232,
+        "line": 242,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],

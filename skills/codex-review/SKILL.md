@@ -11,7 +11,7 @@ description: Read-only Codex CLI review for plans, debug sessions, and post-impl
 # `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
 # "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
 # CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read
 ---
 
 # Codex CLI Review
@@ -29,10 +29,20 @@ All plans and debugging sessions must also be reviewed by Codex CLI — non-nego
 
 > **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
 >
-> **Codex quota outage → kimi stand-in (user-directed).** A weekly/billing quota hit is the
+> **Codex quota outage → kimi stand-in (user-directed).** Preflight the stand-in with
+> `command -v kimi` (fail-closed if absent, exactly as for codex), and write its prompt to a
+> `.kimi-prompt-<round>.md` file — both are covered by this skill's grants. A weekly/billing quota hit is the
 > "capture the review elsewhere" recovery: at the user's direction, capture the second review with the
 > kimi harness instead —
 > `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh" <prompt-file> <out-transcript> <commit> [timeout] <plan>`
+> — **this one is deliberately NOT pre-approved and will prompt.** Unlike the agy and codex harnesses it
+> owns its output path rather than taking an allocator's reserved leaf, so it uses non-allocated
+> `pty-capture`, which creates and truncates whatever single-linked path it is handed. A blanket
+> `Bash(... isolated-kimi-review.sh *)` grant therefore turned this read-only review skill into a way to
+> overwrite an arbitrary user file with no further prompt (codex, PR #69 — reproduced under `~/Documents`
+> with the write mocked). The grant was removed rather than narrowed; approve the stand-in per round,
+> and read the path you approve. **Follow-up:** a `capture-kimi-review.sh` that owns its allocation, as
+> `capture-codex-review.sh` does, would make a safe grant possible
 > — **always passing `<plan>`** (the harness basis-checks the plan named on its command line, defaulting
 > to the COREDEV-2617 plan it was built for; a defaulted plan under a different prompt certifies the
 > wrong document). Kimi's own quota symptom, for recognition: `EXIT=1` with a large transcript and a
