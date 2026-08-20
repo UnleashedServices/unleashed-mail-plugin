@@ -251,83 +251,44 @@ esac
 # skills, rather than a second, weaker copy of that rule.
 _BIND_RC=0
 PLAN_REL="$PLAN_REL" python3 - "$PROMPT_SNAP" <<'PYBIND' || _BIND_RC=$?
-import os, re, sys
+import os, sys
 want = os.environ["PLAN_REL"]
-text = open(sys.argv[1], "r", encoding="utf-8", errors="replace").read()
+raw = open(sys.argv[1], "rb").read()
 
-# FENCED AND INDENTED REGIONS ARE NOT OPERATIVE TEXT. A prompt can QUOTE a declaration as an
-# example — a prior transcript, a usage snippet — and then redirect the reviewer in its real
-# instruction. Scanning every line accepted exactly that (codex, PR #69 round 4). Fenced blocks are
-# blanked (line count preserved so nothing else shifts) and so are 4-space-indented lines.
-lines = text.replace("\r\n", "\n").split("\n")
-out, fence_char, fence_len = [], None, 0
-for line in lines:
-    indent = len(line) - len(line.lstrip(" "))
-    body = line[indent:]
-    # A FOUR-SPACE-INDENTED LINE IS AN INDENTED CODE BLOCK, never a fence opener. Checking the
-    # marker before the indentation let `    ```` open a fence and swallow the operative line that
-    # followed (codex, PR #69 round 5).
-    indented_code = indent >= 4
-    marker_char = body[0] if body[:1] in ("`", "~") else None
-    run = 0
-    if marker_char:
-        while run < len(body) and body[run] == marker_char:
-            run += 1
-    if fence_char is None:
-        # Opening fence: >= 3 markers, indented < 4, and for backticks no backtick in the info
-        # string. Otherwise it is ordinary text.
-        if marker_char and run >= 3 and not indented_code and \
-           not (marker_char == "`" and "`" in body[run:]):
-            fence_char, fence_len = marker_char, run
-            out.append("")
-            continue
-    else:
-        # Closing fence: same character, run at least as long as the opening, and NOTHING but
-        # whitespace after it. "``` not-a-closing-fence" does NOT close, so treating it as a close
-        # re-exposed everything below it.
-        if marker_char == fence_char and run >= fence_len and body[run:].strip() == "" \
-           and not indented_code:
-            fence_char, fence_len = None, 0
-            out.append("")
-            continue
-        out.append("")
-        continue
-    if indented_code or line.startswith("\t"):
-        out.append("")
-        continue
-    out.append(line)
-# An unclosed fence swallows the rest of the prompt, which is the safe direction: the declaration
-# simply is not found and the round refuses.
-operative = "\n".join(out)
-
-# The value is the rest of the line; ONE wrapping pair of matching quotes/backticks is stripped, so
-# a PLAN_REL containing a backtick is still representable (the old character-class form could not
-# express one at all).
-pat = re.compile(r'^[ \t]*(?:Plan|Document) under review[ \t]*:[ \t]*(.+?)[ \t]*$', re.MULTILINE)
-found = []
-for m in pat.finditer(operative):
-    v = m.group(1).strip()
-    if v.endswith(".") and not v.endswith(".."):
-        v = v[:-1].strip()
-    for q in ("`", '"', "'"):
-        if len(v) >= 2 and v[0] == q and v[-1] == q:
-            v = v[1:-1]
-            break
-    found.append(v.strip())
-
-if not found:
-    sys.stderr.write("the prompt has no operative target declaration (fenced and indented examples "
-                     "do not count); add a line reading exactly:\n  Plan under review: %s\n" % want)
+# A RIGID FORMAT, NOT A MARKDOWN PARSER.
+# Four rounds were spent hardening a prose scanner and it lost every time: substring match, then
+# fenced quotation, then fence length and trailing text, then list containers, HTML comments and
+# space-then-tab indentation — and that last set included a REFUSE -> ACCEPT regression, where
+# blanking merged two raw declarations into one acceptable one. Deciding which prose is "operative"
+# means reimplementing CommonMark, and a partial CommonMark is a bypass generator.
+#
+# So the declaration is not searched for. It IS the first line, byte-exactly:
+#
+#     Plan under review: <repo-relative path>
+#
+# No leading whitespace, no quoting, no alternate keyword, nothing before it. Every other byte in
+# the prompt is free text this check never inspects, so no construct anywhere in the body can forge,
+# hide or duplicate a declaration.
+#
+# SCOPE, STATED PLAINLY. This binds the DECLARATION to the BASIS: they cannot disagree, and the
+# declaration cannot be forged by formatting. It does NOT police the BODY, and deliberately so —
+# a prompt whose first line declares A and whose prose then discusses B is ACCEPTED, because the
+# BASIS honestly certifies A. Two cases that the old scanner refused are therefore accepted now,
+# and that is the correct answer under this property rather than a regression: what the reviewer
+# chooses to read has never been knowable from here, which is exactly what the BASIS line's own
+# header comment has said since round 1. Policing prose was the thing that kept failing.
+PREFIX = b"Plan under review: "
+first = raw.split(b"\n", 1)[0]
+if first.endswith(b"\r"):
+    first = first[:-1]
+if not first.startswith(PREFIX):
+    sys.stderr.write("the prompt's FIRST line must be exactly:\n  Plan under review: %s\n"
+                     "(found: %r)\n" % (want, first[:120].decode("utf-8", "replace")))
     raise SystemExit(1)
-# EXACTLY ONE, not "one distinct value": two identical declarations are still two, and a prompt that
-# says it twice is a prompt whose operative instruction is ambiguous.
-if len(found) != 1:
-    sys.stderr.write("the prompt carries %d target declarations (%s) — exactly one is required\n"
-                     % (len(found), ", ".join(repr(f) for f in found)))
-    raise SystemExit(1)
-if found[0] != want:
+declared = first[len(PREFIX):].decode("utf-8", "replace").rstrip()
+if declared != want:
     sys.stderr.write("the prompt declares %r but the BASIS would certify %r — refusing to review one "
-                     "document and certify another\n" % (found[0], want))
+                     "document and certify another\n" % (declared, want))
     raise SystemExit(1)
 PYBIND
 [ "$_BIND_RC" = 0 ] || exit 1

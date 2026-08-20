@@ -68,7 +68,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 HARNESS = os.path.join(REPO, "scripts", "review", "isolated-kimi-review.sh")
 SOURCE_PROMPT = os.path.join(REPO, ".review-prompt-2617r123.md")
 DEFAULT_PLAN = "docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
-ALT_PLAN = "docs/planning/COREDEV-2654_ALTERNATE_PLAN.md"
+# A DIFFERENT DIRECTORY, not just a different basename: both accepted operands used to live
+# under `docs/planning/`, so an implementation that hard-coded that prefix and used only the
+# basename passed every assertion — and would have failed on the real `docs/audits/` operand
+# this branch is reviewed with (codex, PR #69 round 6).
+ALT_PLAN = "docs/audits/COREDEV-2654_ALTERNATE_PLAN.md"
 SESSION = "session_00000000-0000-4000-8000-000000000001"
 #: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
 OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"

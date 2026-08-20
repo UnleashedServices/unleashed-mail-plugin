@@ -477,3 +477,21 @@ created by the previous round's repair, and rounds 2-5 each found a defect in th
 prove the previous round's fix. The tests now assert positive facts — that the digest equals the
 reviewed plan's blob, and that it CHANGES when the operand changes — rather than only that the
 previous defect is absent.
+
+### Round 6 (`6fe87f2`) — 2×P1 + 2×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | **Sanitisation ran too late.** `_tf_sanitize_git_env` was called from `disposable_checkout`, but every harness runs `git rev-parse --show-toplevel`, `git status --porcelain` and `tree_fingerprint` first — and inherited config executes there: `core.fsmonitor=/bin/echo` spawned a child on a plain `git status` in **both shells**, and selection poisoning made `--show-toplevel` answer a different repository, so the round fingerprinted and reviewed a checkout nobody asked for | Fixed — the sanitiser now runs **at source time**. All four consumers source this file before their first git call, so every one is covered and the next harness cannot forget. Verified in bash and zsh: zero child processes, correct repository |
+| P1 | The hand-written Markdown classifier accepted three more mismatches — a fenced block inside a list container, an HTML comment, and space-then-tab indentation — and the list case was the **refuse→accept regression** I had asked to be hunted: blanking merged two raw declarations into one acceptable one | Fixed by **deleting the parser**. The declaration is now the first line, byte-exactly `Plan under review: <path>`; nothing else in the prompt is inspected. Four rounds of hardening a prose scanner lost every time, because deciding which prose is "operative" means reimplementing CommonMark, and a partial CommonMark is a bypass generator |
+| P2 | Default-ignorable rejection was gated on category `Mn`, which was itself a bypass: U+2065 and U+FFF0 are `Cn`, U+3164 HANGUL FILLER is `Lo`, and all three are invisible and match nothing | Fixed — the property is checked regardless of category, and the range table widened. Eight codepoints across four categories refused; `café.*` and `naïve|Edit` still accepted |
+| P2 | The BASIS oracle still permitted a legacy-prefix implementation: **both** accepted operands lived under `docs/planning/`, so hard-coding that prefix and using only the basename passed — and would have failed on the real `docs/audits/` operand this branch is reviewed with | Fixed — the alternate plan moved to `docs/audits/`, so the two accepted operands differ in directory. Verified against both the legacy-prefix and always-default mutants |
+
+**A scope statement, because the rigid format changes what is guaranteed.** The binding now
+guarantees that the DECLARATION and the BASIS cannot disagree, and that the declaration cannot be
+forged by formatting. It does **not** police the body: a prompt whose first line declares A and
+whose prose then discusses B is ACCEPTED, because the BASIS honestly certifies A. Two cases the old
+scanner refused are therefore accepted now. That is the correct answer under this property rather
+than a regression — what the reviewer chooses to read has never been knowable from the harness,
+which is what the BASIS line's own header comment has said since round 1. Policing prose is the
+thing that kept failing.

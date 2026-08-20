@@ -401,6 +401,17 @@ TFEOF
     unset _tf_v
 }
 
+# ...AND IT RUNS AT SOURCE TIME, not merely inside `disposable_checkout`.
+# Every harness runs `git rev-parse --show-toplevel`, `git status --porcelain` and
+# `tree_fingerprint` BEFORE it ever reaches a checkout, and inherited config executes there:
+# `core.fsmonitor=/bin/echo` spawned a child on plain `git status` in BOTH shells, and
+# repository-selection poisoning made `--show-toplevel` answer a DIFFERENT repository, so the
+# round fingerprinted and reviewed a checkout nobody asked for (codex, PR #69 round 6, reproduced).
+# All four consumers source this file before their first git call, so sanitising here covers every
+# one of them and cannot be forgotten by the next harness. This is a deliberate side effect of
+# sourcing: the file IS the git-safety boundary for the review harnesses.
+_tf_sanitize_git_env
+
 disposable_checkout() {
     _tf_sanitize_git_env
     _dc_repo="$1"; _dc_sha="$2"; _dc_dest="$3"

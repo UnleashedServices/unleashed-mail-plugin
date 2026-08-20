@@ -147,7 +147,9 @@ def _is_default_ignorable(ch: str) -> bool:
     not exposed by `unicodedata`, and a name-based list is outrun by the next codepoint.
     """
     o = ord(ch)
-    return (o in (0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
+    return (o in (0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
+            or 0x2060 <= o <= 0x2064
+            or 0x2065 <= o <= 0x2069
             or 0x180B <= o <= 0x180F
             or 0x200B <= o <= 0x200F
             or 0x202A <= o <= 0x202E
@@ -184,11 +186,12 @@ def validate_matcher(event: str, matcher: str, where: str,
     _bad = [c for c in matcher
             if ord(c) < 32 or ord(c) == 127
             or unicodedata.category(c) in ("Cc", "Cf", "Co", "Cs")
-            # Mn (nonspacing marks) are NOT rejected wholesale — a legitimate regex may contain
-            # accented text — but the DEFAULT-IGNORABLE ones are invisible and matched nothing:
-            # VARIATION SELECTOR-16 and COMBINING GRAPHEME JOINER survived both earlier guards
-            # because they are Mn and NFKC preserves them (codex, PR #69 round 5).
-            or (unicodedata.category(c) == "Mn" and _is_default_ignorable(c))
+            # DEFAULT-IGNORABLE IS CHECKED REGARDLESS OF CATEGORY. Gating it on `Mn` was itself a
+            # bypass: U+2065 and U+FFF0 are `Cn`, U+3164 HANGUL FILLER is `Lo`, and all three are
+            # default-ignorable and matched nothing (codex, PR #69 round 6). The property is what
+            # makes a matcher silently dead; the category is incidental to it. Ordinary marks are
+            # still fine — `café.*` contains none of these.
+            or _is_default_ignorable(c)
             or (c.isspace() and c != " ")]
     if _bad:
         problems.append(
