@@ -89,8 +89,10 @@ Before any implementation begins:
     contains only the plan. Gating in one checkout and implementing in another fails the gate on a
     genuine approval — hit on COREDEV-2583 with byte-identical plan content and a five-round approval.
     CI and a second developer cannot verify an approval at all, by design; do not expect them to.
-0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**: `review-verdict.py snapshot
-   --plan <PLAN>`. This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
+0. Plan author **snapshots the plan digest BEFORE dispatching the reviews**, through the CONTAINED
+   entrypoint: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh" <PLAN>`. The raw
+   `review-verdict.py snapshot --plan` call this replaces accepted ANY path on disk and wrote the
+   snapshot sidecar beside it (PR #63 recheck, P1 — reproduced against a file under `/tmp`). This binds the eventual approval to the reviewed bytes; an APPROVING `write` (3a) now
    fails closed without it. Re-run it on any plan revision.
 0b. **Freeze the plan for the duration of a review round.** No edits between dispatching a review and
     recording its verdict. A reviewer that re-reads the target mid-run will refuse — *"a mandatory
@@ -111,8 +113,10 @@ loop with no escape.
 - **Preflight (run first):** route the `agy` smoke test through the PTY wrapper so a healthy install
   isn't misread as unavailable, and allocate the ping path PER RUN — a shared one lets a preflight that
   died before writing leave the previous `pong` for the next reader, so a dead CLI reads as healthy —
-  `command -v agy && PING="$(mktemp "${TMPDIR:-/tmp}/agy-ping.XXXXXX")" && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/pty-capture.py"
-  --timeout 60 "$PING" -- agy -p "ping"`, then check that same `"$PING"` for `pong` with `grep -qi` — NOT the literal `Pong!`, which agy returns
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh"`, which is the EXTRACTED form of the
+  inline recipe this used to spell out (v2.7.0). Do not hand-roll the inline `mktemp` + `pty-capture`
+  version again: it polluted the caller's cwd — which under AF-5's freeze rule can now VOID a round —
+  and checked no exit status. The wrapper greps case-insensitively for `pong` — NOT the literal `Pong!`, which agy returns
   only ~2 runs in 3 (it also answers a bare lowercase `pong`), so an exact check reports a healthy CLI as
   unavailable and sends you down the recovery path for no reason (bare
   `agy -p` writes 0 bytes from a non-TTY context like Claude's Bash tool / CI even when it succeeds). For
@@ -372,7 +376,7 @@ Each agent type has minimum tool requirements:
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
 | Orchestrator (swift-reviewer) | Read, Bash, Grep, Glob, Agent (subagent dispatch), plus the bundled synthesizer MCP tool (`mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`) — stated in full because a `+`-row inherits whichever row sits above it, and this row must not silently absorb an edit to that row |
 | Diagnostic | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch (look up vendor docs mid-debug) |
-| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit/Agent + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: mcp__github`, which denies repo mutation from an agent that fetches UNTRUSTED web/Context7 content. Bash is deliberately retained (the preloaded `create-feature-plan` skill runs `review-verdict.py snapshot` as part of the gate) |
+| Planner (modern-standards-planner) | Context7 MCP + WebFetch/WebSearch/Write/Edit + Bash — **inherited by omitting `tools:`** (an allowlist would block the install-specific MCP prefix); scoped with `disallowedTools: Agent, mcp__github`, which denies repo mutation AND subagent dispatch from an agent that fetches UNTRUSTED web/Context7 content — **`Agent` is denied on the shipped agent and this row omitted it, so a maintainer obeying this table would have re-granted subagent dispatch to the one agent that ingests untrusted content.** Bash is deliberately retained (the preloaded `create-feature-plan` skill runs the contained `snapshot-plan.sh` as part of the gate) |
 | Personas (read+search) | Read, Grep, Glob |
 | Project (jira-manager) | Atlassian MCP **inherited by omitting `tools:`** (portable across install prefixes); `disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` blocks every checkout-write vector — file editors, shell, subagent dispatch — and the github MCP write surface. `Bash` is denied (PR #63 recheck, P1): `swift-reviewer` spawns this agent while processing untrusted review content, and a sub-agent `Bash` cannot be scoped to one command — so the caller passes the PR URL instead of the agent running `gh pr view`. It mutates JIRA via the Atlassian MCP by design, and nothing else. (This row previously listed a `MultiEdit` deny the agent file never carried — Claude Code removed that tool, and the stale-name rule rejects denying it.) |
 

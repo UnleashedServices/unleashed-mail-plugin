@@ -1,6 +1,6 @@
 ---
 name: codex-review
-description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
+description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /unleashed-mail:gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
 # The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
@@ -11,12 +11,12 @@ description: Read-only Codex CLI review for plans, debug sessions, and post-impl
 # `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
 # "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
 # CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Edit(.codex-prompt-*.md)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read
 ---
 
 # Codex CLI Review
 
-All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/gemini-review` (not as a replacement). Post-implementation audits also run Codex.
+All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/unleashed-mail:gemini-review` (not as a replacement). Post-implementation audits also run Codex.
 
 > **Scope and round hygiene:** the granted capture wrapper is **plan-only** — `bind-prompt.py` binds
 > `docs/planning/*_PLAN.md` documents and refuses a prompt naming no plan before the reviewer launches;
@@ -202,7 +202,7 @@ General form: `codex exec -c model_reasoning_effort=xhigh -s read-only "/<skill-
 
 **Infrastructure:** `/agent-orchestration`
 
-**Review tooling (v2.4.1):** `/gemini-review`, `/codex-review`, `/create-feature-plan` (namespaced forms — `/unleashed-mail:gemini-review` etc. — are canonical and always resolve; the bare names resolve only where the consumer workspace ships local copies)
+**Review tooling:** `/unleashed-mail:gemini-review`, `/unleashed-mail:codex-review`, `/unleashed-mail:create-feature-plan` — the namespaced forms are canonical and always resolve; the bare names resolve only where the consumer workspace ships local copies
 
 If a skill is missing from a given install, list `~/.codex/skills/` before falling back to a free-form prompt.
 

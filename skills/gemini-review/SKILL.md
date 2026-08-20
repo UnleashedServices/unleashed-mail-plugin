@@ -13,7 +13,7 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
 # CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
 # An Edit(path) allow rule covers all built-in file-editing tools on that path, the Write tool included.
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Edit(.agy-prompt-*.md)
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Edit(.agy-prompt-*.md), Read
 ---
 
 # Antigravity (`agy`) Review
@@ -272,7 +272,7 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that
    allocated file back into context; do not reconstruct its name.
 7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke
+8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke
    `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer
    "<name>=<STATUS>:<allocated-path>"` argument. Make sure each review prompt asks the reviewer to finish
    with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the

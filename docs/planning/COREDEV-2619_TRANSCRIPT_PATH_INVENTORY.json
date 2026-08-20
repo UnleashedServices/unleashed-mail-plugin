@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1963",
+      "location": "CHANGELOG.md:2012",
       "path": "CHANGELOG.md",
-      "line": 1963,
+      "line": 2012,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -304,9 +304,9 @@
       "destination": {
         "line": 14,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Edit(.codex-prompt-*.md)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read"
         ],
-        "payloadSha256": "603a45446e223004b971cc85e6b60c38068d0da9372191c915d07ab339ca4e63"
+        "payloadSha256": "0282e005bd663cb27e059615b4806f3b6fee53377ea1b6069e84bf8b2ed36d79"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -452,9 +452,9 @@
       "destination": {
         "line": 16,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Edit(.agy-prompt-*.md)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Edit(.agy-prompt-*.md), Read"
         ],
-        "payloadSha256": "cbd531bf8a6b90a4578a025ab46da9c89f81a293f497bbd6175bfef3e8da64e2"
+        "payloadSha256": "b7d2a7566ae856be5b435ca8e0ab2c0a694ca9f2b1292f84396fe5d92917e562"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
@@ -548,13 +548,13 @@
       "destination": {
         "line": 275,
         "payloads": [
-          "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
+          "8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
           "   \"<name>=<STATUS>:<allocated-path>\"` argument. Make sure each review prompt asks the reviewer to finish",
           "   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the",
           "   synthesis can read it deterministically."
         ],
-        "payloadSha256": "32d57d69d0ef0edc8a1a773acaaca69b4fa8dc4e08f86724941bf7f5b06cac5e"
+        "payloadSha256": "45f55f0f17999e4529714f9eba7728e35fb1b781637eb4232158a9810cc368a4"
       },
       "sourceSha256": "ed22e9edc7d8a3ffe5028b2ee66fd6933789aad09f530bb47167e5ced441bbfd",
       "precedingAnchorLine": 198,
@@ -642,7 +642,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 159,
+        "line": 160,
         "payloads": [
           "    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"
         ],
@@ -664,7 +664,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 160,
+        "line": 161,
         "payloads": [
           "    --reviewer \"$CODEX_REVIEWER_SPEC\""
         ],

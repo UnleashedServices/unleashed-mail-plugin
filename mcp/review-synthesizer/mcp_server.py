@@ -198,7 +198,11 @@ class _RpcError(Exception):
 
 
 def _handle(method: str, params: dict):
-    """Return a result dict, or None for notifications (no reply)."""
+    """Return a result dict. Never None: in JSON-RPC 2.0 every message carrying an `id` is a
+    Request and MUST receive a Response, so a handler that returned None for one would leave the
+    client hanging. Notifications are discriminated by the ABSENCE of `id` in the main loop, not by
+    a None return (gemini-code-assist, PR #69).
+    """
     if not isinstance(params, dict):
         # JSON-RPC permits array params, but every method here is by-name; reject a
         # non-object `params` with Invalid Params instead of crashing on .get() (-32603).
@@ -287,7 +291,7 @@ def main() -> int:
                 if has_id:
                     _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
                 continue
-            if has_id and result is not None:  # requests reply; notifications stay silent
+            if has_id:  # a Request ALWAYS replies; notifications (no id) stay silent
                 _send({"jsonrpc": "2.0", "id": mid, "result": result})
     except BrokenPipeError:
         # The client closed the read end while we were writing (teardown race). The reader is
@@ -295,10 +299,31 @@ def main() -> int:
         # (2026-08-17 audit, AF-19). Point stdout at devnull so the interpreter's exit-time
         # flush of the broken stream cannot raise a second BrokenPipeError.
         try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            _devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(_devnull, sys.stdout.fileno())
+            finally:
+                os.close(_devnull)
         except OSError:
             pass
-        _log("client closed the pipe mid-write — exiting cleanly")
+        # The diagnostic goes to STDERR, which on a real client teardown is broken too — both pipe
+        # read ends close together. `print(..., flush=True)` then raises a SECOND BrokenPipeError,
+        # and merely catching it is NOT enough: the failed write leaves the text buffered and the
+        # interpreter's exit-time flush raises again, which CPython reports as **rc 120**, not 1.
+        # Measured, all four builds: shipped 120; catching alone 120; redirecting stderr
+        # unconditionally exits 0 but LOSES the diagnostic even when stderr is healthy. So: try to
+        # say it, and only if that fails point stderr at devnull so nothing remains to flush.
+        try:
+            _log("client closed the pipe mid-write — exiting cleanly")
+        except OSError:
+            try:
+                _devnull = os.open(os.devnull, os.O_WRONLY)
+                try:
+                    os.dup2(_devnull, sys.stderr.fileno())
+                finally:
+                    os.close(_devnull)
+            except OSError:
+                pass
         return 0
     return 0
 

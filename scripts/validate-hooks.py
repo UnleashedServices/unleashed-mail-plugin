@@ -70,8 +70,15 @@ TOOL_MATCHER_EVENTS = {
 # contributed tools), so an unrecognized tool token is a non-blocking warning — a real typo and
 # a valid-but-unlisted tool are indistinguishable here. The subagent dispatcher is `Agent`, not
 # `Task` (AGENT_CONTRACTS.md §9). MCP tools (`mcp__server__tool`) are allowed through implicitly.
+# Stale/invalid tool names to HARD-reject, mirroring validate-plugin-assembly.py's STALE_TOOLS.
+# Merely dropping a name from KNOWN_TOOLS is NOT enough: an unrecognised token only lands in
+# `warnings` unless difflib finds a close match, and "MultiEdit" scores ~0.62 against "Edit" —
+# under the 0.7 cutoff. So the two validators disagreed: assembly hard-rejected `MultiEdit` while a
+# hooks matcher reintroducing it validated clean (2026-08-17 audit remediation, AF-16 sweep).
+STALE_TOOLS = {"Task", "MultiEdit"}
+
 KNOWN_TOOLS = {
-    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit", "Write",
+    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "Write",
     "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", "Monitor",
     "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete",
 }
@@ -137,6 +144,11 @@ def validate_matcher(event: str, matcher: str, where: str,
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
+            if token in STALE_TOOLS:
+                problems.append(
+                    f"{where}: matcher token {token!r} is not a real tool — it was removed from "
+                    f"Claude Code and matches nothing; the current name for an edit is 'Edit'")
+                continue
             if not token or token in KNOWN_TOOLS:
                 continue
             if token.startswith("mcp__"):

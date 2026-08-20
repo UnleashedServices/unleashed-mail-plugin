@@ -46,6 +46,18 @@ set -uo pipefail
 [ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
 PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
 PLAN_REL="${5:-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
+# THE PLAN OPERAND IS CONTAINED TOO. It was not, and it is model-chosen: `codex-review/SKILL.md`
+# says the stand-in is invoked "always passing <plan>". Unlike the prompt four lines below it went
+# straight into `$TREE/tree/$PLAN_REL`, so `../../etc/passwd` or an absolute path made the round's
+# printed BASIS digest certify bytes OUTSIDE the reviewed commit — the exact class the prompt
+# operand's containment exists to stop. The spelling is checked here (the staged checkout does not
+# exist yet); the OBJECT is re-checked against $TREE/tree below, because a spelling that cannot
+# escape is not the same claim as a file that is not a symlink.
+case "$PLAN_REL" in
+    /*)        echo "plan operand must be repository-relative, not absolute: $PLAN_REL" >&2; exit 1 ;;
+    ..|../*|*/..|*/../*) echo "plan operand must not traverse upward: $PLAN_REL" >&2; exit 1 ;;
+    "")        echo "plan operand must not be empty" >&2; exit 1 ;;
+esac
 # Name the basis-checked plan LOUDLY so a stand-in round (e.g. kimi covering a codex quota outage)
 # cannot silently basis-check the default while the prompt reviews something else.
 printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
@@ -170,7 +182,12 @@ SHA="$(git rev-parse --verify "${COMMIT}^{commit}" 2>/dev/null)" || {
     echo "not a commit: $COMMIT" >&2; exit 1; }
 disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
     echo "could not build the private review checkout for $COMMIT" >&2; exit 1; }
-[ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
+# `-L` FIRST and independently: `-f` FOLLOWS a link, so a committed symlink at this path would
+# have digested its target — bytes the reviewed commit does not contain (same shape as ST-7's
+# publisher precondition on COREDEV-2617).
+[ ! -L "$TREE/tree/$PLAN_REL" ] || { echo "plan is a symlink in the staged checkout: $PLAN_REL" >&2; exit 1; }
+[ -f "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
+[ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan not readable in the staged checkout" >&2; exit 1; }
 BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
 # The disposable checkout's CONTENT fingerprint — every path, hashed — so that a reviewer which
 # IMPLEMENTS the plan and leaves any file created or edited other than the plan itself voids the
@@ -192,7 +209,7 @@ PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # invocation creates, by set difference, never to an identifier read out of the transcript.
 SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 ( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
-    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null 2>&1
+    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null
 STATUS=$?
 
 # The prompt file must still be the bytes this round was launched with — compared byte-for-byte with
