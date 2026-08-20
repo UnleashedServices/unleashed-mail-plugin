@@ -21,6 +21,7 @@ All logging goes to stderr — stdout is the protocol channel, never print to it
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import sys
 
@@ -81,6 +82,7 @@ TOOL = {
 
 
 _STDERR_DEAD = False
+_STDERR_NONBLOCKING = False
 
 
 def _log(msg: str) -> None:
@@ -97,11 +99,27 @@ def _log(msg: str) -> None:
     BUFFERED and the interpreter's exit-time flush would raise again — which CPython reports as
     rc 120. The flag then keeps every later call cheap.
     """
-    global _STDERR_DEAD
+    global _STDERR_DEAD, _STDERR_NONBLOCKING
     if _STDERR_DEAD:
         return
+    if not _STDERR_NONBLOCKING:
+        # A CLOSED stderr raises; a FULL one just BLOCKS, and blocking here stops the protocol
+        # loop dead — measured: with stderr never drained the server never answered a queued
+        # `ping`, and draining it released the reply immediately (codex, PR #69 round 2). O_NONBLOCK
+        # converts that stall into a BlockingIOError we can drop. Diagnostics are lossy under
+        # back-pressure by design; the protocol on stdout is not.
+        _STDERR_NONBLOCKING = True
+        try:
+            _fd = sys.stderr.fileno()
+            fcntl.fcntl(_fd, fcntl.F_SETFL, fcntl.fcntl(_fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+        except (OSError, ValueError, AttributeError):
+            pass
     try:
         print(f"[review-synthesizer] {msg}", file=sys.stderr, flush=True)
+    except BlockingIOError:
+        # The reader is alive but not keeping up. Drop this line and keep serving; do NOT mark
+        # stderr dead, because the condition is transient.
+        return
     except OSError:
         _STDERR_DEAD = True
         try:

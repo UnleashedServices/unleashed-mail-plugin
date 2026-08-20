@@ -67,6 +67,7 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HARNESS = os.path.join(REPO, "scripts", "review", "isolated-kimi-review.sh")
 SOURCE_PROMPT = os.path.join(REPO, ".review-prompt-2617r123.md")
+DEFAULT_PLAN = "docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
 SESSION = "session_00000000-0000-4000-8000-000000000001"
 #: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
 OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"
@@ -124,10 +125,18 @@ class KimiHarnessMutationGates(unittest.TestCase):
         # commit made on top of it. An orphan root carries the same tree with a complete history.
         subprocess.run(git + ["checkout", "-q", "--orphan", "fixture"], check=True)
         prompt = os.path.join(self.clone, ".review-prompt-x.md")
+        # The prompt must NAME the document the BASIS certifies — the harness refuses otherwise, so
+        # that a round cannot review one file while certifying another (codex, PR #69 round 2). Every
+        # fixture prompt therefore states the plan path it is reviewing, exactly as a real one must.
+        _plan_line = "Plan under review: " + DEFAULT_PLAN + "\n"
         if os.path.isfile(SOURCE_PROMPT) and os.path.getsize(SOURCE_PROMPT) >= 1000:
-            shutil.copy(SOURCE_PROMPT, prompt)
+            with open(SOURCE_PROMPT, "r", encoding="utf-8") as src, \
+                 open(prompt, "w", encoding="utf-8") as fh:
+                fh.write(_plan_line)
+                fh.write(src.read())
         else:
             with open(prompt, "w", encoding="utf-8") as fh:
+                fh.write(_plan_line)
                 fh.write("Review the plan for correctness, security and completeness.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
             fh.write(".review-prompt-x.md\n")
@@ -155,11 +164,21 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.env["KIMI_STUB_SCRATCH"] = self.scratch
         self.prompt = prompt
 
-    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md"):
+    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md",
+             plan=None, env=None):
+        """`plan` names the 5th operand (the BASIS target); `env` replaces the child environment.
+
+        Both exist for the round-2 guards: the operand must be the document the PROMPT names, and a
+        poisoned git environment must not be able to redirect which repository the BASIS is read
+        from. Callers that pass neither get the harness's own default, as before.
+        """
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
-        env = dict(self.env, KIMI_STUB_MODE=mode)
-        p = subprocess.run(["bash", harness, prompt, out, "HEAD", "60"],
-                           cwd=self.clone, env=env, capture_output=True, text=True, check=False, input="")
+        child_env = dict(env or self.env, KIMI_STUB_MODE=mode)
+        argv = ["bash", harness, prompt, out, "HEAD", "60"]
+        if plan is not None:
+            argv.append(plan)
+        p = subprocess.run(argv, cwd=self.clone, env=child_env,
+                           capture_output=True, text=True, check=False, input="")
         return p, out
 
     def _stub_ran(self):
@@ -737,6 +756,47 @@ class KimiHarnessMutationGates(unittest.TestCase):
             text = fh.read()
         self.assertEqual(1, text.count(self.SUMMARY), "the summary block is not unique — re-derive the pin")
         return text.replace(self.SUMMARY, self.SUMMARY_OLD, 1)
+
+
+    def test_a_prompt_that_does_not_name_the_operand_is_refused(self):
+        """The BASIS must certify the document the prompt actually asks for.
+
+        `README.md` is a tracked regular blob and passes every mode/blob gate, so proving
+        "committed file" proved nothing about WHICH committed file (codex, PR #69 round 2). The
+        control is the same run with the operand the prompt names: it must get PAST this refusal,
+        or the cell is measuring nothing.
+        """
+        p, out = self._run("clean", plan="README.md")
+        self.assertIn("the prompt does not name README.md", p.stderr,
+                      f"a mismatched operand was accepted: rc {p.returncode}\n{p.stderr}")
+        self.assertNotEqual(0, p.returncode)
+
+        control, _ = self._run("clean", plan=DEFAULT_PLAN)
+        self.assertNotIn("does not name", control.stderr,
+                         "CONTROL FAILED — the named operand was refused too, so the check above "
+                         f"is not discriminating:\n{control.stderr}")
+
+    def test_git_selection_env_cannot_redirect_the_basis(self):
+        """`git -C "$REPO"` does not anchor the repository; the harness must clear the env itself.
+
+        With GIT_DIR/GIT_WORK_TREE inherited, `--show-toplevel` still answers this checkout while
+        every object lookup resolves elsewhere — so the BASIS would certify bytes from a repository
+        nobody reviewed (codex, PR #69 round 2, reproduced).
+        """
+        poisoned = dict(os.environ)
+        poisoned["GIT_DIR"] = os.path.join(self.clone, ".git")
+        poisoned["GIT_WORK_TREE"] = self.clone
+        clean_run, _ = self._run("clean")
+        dirty_run, _ = self._run("clean", env=poisoned)
+        self.assertEqual(
+            self._basis_of(clean_run), self._basis_of(dirty_run),
+            "a poisoned git environment changed the BASIS the round certifies")
+
+    def _basis_of(self, proc):
+        for line in (proc.stderr or "").splitlines():
+            if line.startswith("kimi-review: BASIS plan ="):
+                return line.strip()
+        return None
 
 
 if __name__ == "__main__":

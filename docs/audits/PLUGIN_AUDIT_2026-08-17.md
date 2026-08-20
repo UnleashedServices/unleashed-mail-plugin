@@ -369,3 +369,50 @@ re-frozen for legitimate drift, payload-verified: the COREDEV-2619 transcript-pa
 amended bytes) and the §13 `brainstorm-summary` anchor (heading moved by the frontmatter comment).
 The first run of the suite over the remediated tree was RED (16 failures) — every one a frozen-pin
 drift check doing its job — and was fixed before anything was committed.
+
+## Addendum 2 — two Codex review rounds against the remediation itself (PR #69)
+
+The remediation above was reviewed by Codex twice. **Both rounds returned `REQUEST_CHANGES`, and
+every finding was against the remediation's own code rather than the original audit's subject.** The
+record is kept here because an audit whose remediation was itself defective is only accurate if it
+says so.
+
+### Round 1 (`bed8551`) — 3×P1 + 1×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | The AF-19 broken-pipe fix did not survive a real teardown. Measured rc **120**, not 1 — CPython's exit-time flush. Wrapping `_log` in `try/except OSError` was **also** insufficient: the failed write leaves the text buffered for that flush | Fixed — log, and neutralise stderr only on failure |
+| P1 | The Kimi plan operand was uncontained: `..`/absolute/empty spellings made the printed BASIS certify bytes outside the reviewed commit | Fixed — see round 2, which found the first repair still incomplete |
+| P1 | The new `Bash(… isolated-kimi-review.sh *)` grant enabled **arbitrary out-of-tree overwrite**: that harness alone uses non-allocated `pty-capture`, which creates and truncates any single-linked path | Fixed at the permission layer — grant removed |
+| P2 | The two validators still disagreed on stale tool names, and `Task` was told to become `Edit` rather than `Agent` | Fixed — mirrors assembly's folded set and per-tool reasons |
+
+**A repair that was reverted.** The first attempt at the grant P1 changed `isolated-kimi-review.sh`
+to require an allocated leaf. It broke **19 of that harness's own tests**, whose whole contract is
+that it owns its output path. That was the wrong layer; Codex had already said to grant a wrapper
+instead. Reverted, and the grant removed instead. `capture-kimi-review.sh` remains the follow-up
+that would make a safe grant possible.
+
+### Round 2 (`f21c902`) — 3×P1 + 2×P2 + 1×P3, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | The plan operand accepted **any tracked blob**, so the prompt and the certified target could disagree — `README.md` passed every mode/blob gate while the prompt named the audit | Fixed — the prompt must name the operand's repo-relative path |
+| P1 | `git -C "$REPO"` does **not** anchor the repository: with `GIT_DIR`/`GIT_WORK_TREE` inherited, `--show-toplevel` still answered this checkout while every object lookup resolved in another repository. **Introduced by round 1's own fix**, which moved the digest to git objects | Fixed — selection variables cleared before the first `git`, and the resolved gitdir proved to belong to the checkout |
+| P1 | A **full** stderr pipe still blocked the protocol. `_log` handled a failed write, but a blocking pipe never raises — the server stalled before a queued `ping`; draining stderr released it | Fixed — logging is non-blocking and lossy under back-pressure; diagnostics are droppable, the protocol is not |
+| P2 | Whitespace bypassed stale-tool validation entirely: `\tTask\t`, `Task `, `Edit\n` validated with **neither problem nor warning**, because the padding breaks the exact-matcher grammar and the token is then classified as a regex — matching nothing at runtime | Fixed — control characters and non-space whitespace refused **before** classification; `KNOWN_TOOLS` also synced (it was 13 entries behind assembly) |
+| P2 | This audit record was not updated for round 1 | Fixed by this addendum |
+| P3 | The claim "every remaining grant is exercised by its body" was **not literal** — `Bash(command -v agy)` sat in gemini-review's frontmatter with zero body occurrences | Fixed — grant removed; the body's real preflight is `preflight-agy.sh`, which does the check internally |
+
+### What both rounds confirmed
+
+Nothing found in either round produces a wrong verdict or a corrupted gate. Round 2 also confirmed
+the grant removal was **sufficient**: the remaining non-allocated `pty-capture` callers
+(`audit-codex.sh`, `preflight-agy.sh`) allocate their own leaves and are not caller-controlled.
+
+### Still open
+
+`agents/modern-standards-planner.md:44` continues to show the raw, uncontained
+`review-verdict.py snapshot` call. It sits inside a digest-frozen callers-scan migration region;
+editing it broke eight tests, so it was deferred. **Codex's judgment, stated in both rounds, is that
+deferring it is the wrong release boundary** — the live instruction stays unsafe, and the region
+should be re-anchored deliberately with its tests. That decision is the maintainer's.

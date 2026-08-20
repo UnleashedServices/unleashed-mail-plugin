@@ -70,7 +70,29 @@ esac
 # cannot silently basis-check the default while the prompt reviews something else.
 printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 
+# GIT'S REPOSITORY-SELECTION ENVIRONMENT IS CLEARED BEFORE ANY git RUNS (codex, PR #69 round 2).
+# `git -C "$REPO"` does NOT anchor the repository: with `GIT_DIR` and `GIT_WORK_TREE` inherited,
+# `--show-toplevel` still answers THIS checkout while every object lookup resolves in ANOTHER
+# repository — measured, `cat-file blob HEAD:README.md` returned a different digest entirely. That
+# matters here because the BASIS is now read from git objects, so a poisoned environment would let
+# the round certify bytes from a repository nobody reviewed. Unsetting is done once, at the top,
+# before the first `git` call, so no later command can be the first to see a stale value.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      GIT_COMMON_DIR GIT_NAMESPACE GIT_CEILING_DIRECTORIES GIT_DISCOVERY_ACROSS_FILESYSTEM
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
+# ...and the gitdir must belong to the checkout we just resolved, so a future edit that reintroduces
+# an inherited selection variable fails loudly instead of silently reading elsewhere.
+_REPO_GITDIR="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null)" || {
+    echo "could not resolve the gitdir for $REPO" >&2; exit 1; }
+case "$_REPO_GITDIR" in
+    "$REPO"/.git|"$REPO"/.git/*) : ;;
+    *) # a linked worktree's gitdir lives under the MAIN repo, which is legitimate; prove the link
+       _MAIN_TOP="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+       case "$_REPO_GITDIR" in
+           "${_MAIN_TOP%/.git}"/.git/worktrees/*|"$_MAIN_TOP"/worktrees/*) : ;;
+           *) echo "gitdir $_REPO_GITDIR does not belong to $REPO — refusing" >&2; exit 1 ;;
+       esac ;;
+esac
 cd "$REPO" || exit 1
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # THE PROMPT OPERAND IS CONTAINED — the shared helper proves it is a non-symlink regular file inside the
@@ -206,6 +228,19 @@ case "$PLAN_MODE" in
     "")  echo "plan is not tracked in the reviewed commit $SHA: $PLAN_REL" >&2; exit 1 ;;
     120000) echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2; exit 1 ;;
     *)   echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2; exit 1 ;;
+esac
+# THE PROMPT MUST NAME THE DOCUMENT THE BASIS CERTIFIES (codex, PR #69 round 2). Proving the
+# operand is a tracked regular blob says only that it is SOME committed file: `README.md` passed
+# every mode/blob gate while the prompt asked for the audit, so the printed BASIS certified a
+# document the reviewer was never pointed at. This is the same binding `bind-prompt.py` enforces
+# for the plan skills, applied here — and it is deliberately a SUBSTRING test on the exact
+# repo-relative spelling, because that spelling is what the operand and the diagnostic both use;
+# an alias that resolves to the same file is refused rather than guessed at.
+case "$PROMPT_TEXT" in
+    *"$PLAN_REL"*) : ;;
+    *) echo "the prompt does not name $PLAN_REL, so nothing ties the review to the BASIS it would certify" >&2
+       echo "(state the document by its repo-relative path in the prompt, e.g. 'Plan under review: $PLAN_REL')" >&2
+       exit 1 ;;
 esac
 BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" \
     | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {

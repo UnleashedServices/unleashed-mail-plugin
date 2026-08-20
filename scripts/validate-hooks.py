@@ -88,7 +88,12 @@ _STALE_TOOL_REASONS = {
 _STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}
 
 KNOWN_TOOLS = {
-    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "Write",
+    # Kept in step with validate-plugin-assembly.py's KNOWN_TOOLS — it had drifted 13 entries
+    # ahead, so a hook matcher naming a REAL current tool was reported as unrecognised while the
+    # assembly validator accepted the same name (codex, PR #69 round 2).
+    "Agent", "Artifact", "AskUserQuestion", "Bash", "BashOutput", "EnterWorktree", "ExitWorktree",
+    "Glob", "Grep", "KillShell", "PowerShell", "Read", "Edit", "ScheduleWakeup", "SendMessage",
+    "SlashCommand", "TaskOutput", "TaskStop", "ToolSearch", "Workflow", "Write",
     "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", "Monitor",
     "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete",
 }
@@ -141,6 +146,20 @@ def validate_matcher(event: str, matcher: str, where: str,
     `|`/`,`-separated list of exact strings (optional surrounding whitespace); anything else is
     a JavaScript regex."""
     if matcher in ("", "*"):
+        return
+    # CONTROL BYTES AND EXOTIC WHITESPACE ARE REFUSED BEFORE CLASSIFICATION (codex, PR #69 r2).
+    # `\tTask\t`, `Task\u00a0` and `MultiEdit\u00a0` validated CLEAN — neither problem nor warning —
+    # because the padding breaks EXACT_MATCHER's `[A-Za-z0-9_ ,|]` grammar, so each was classified
+    # as a JavaScript REGEX and skipped the tool-name checks entirely. As a regex it then matched
+    # nothing at runtime (verified in node: false for Task, MultiEdit and Edit alike), so a padded
+    # stale name was a silently dead hook. A plain ASCII space is LEGAL here — the grammar allows
+    # it around list items — so only control characters and non-space whitespace are refused.
+    _bad = [c for c in matcher if ord(c) < 32 or ord(c) == 127 or (c.isspace() and c != " ")]
+    if _bad:
+        problems.append(
+            f"{where}: matcher {matcher!r} contains {_bad[0]!r} — a control character or non-space "
+            f"whitespace. It fails the exact-matcher grammar, is treated as a regex, and matches no "
+            f"tool; remove it (a plain space is fine)")
         return
     if EXACT_MATCHER.match(matcher):
         # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
