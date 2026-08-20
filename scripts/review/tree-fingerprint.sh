@@ -392,6 +392,8 @@ PY
 # round 5, reproduced — output from an injected `/bin/echo` appeared in git's protocol error).
 # Only the kimi harness cleared the namespace, while all three call this helper, so agy and codex
 # were still exposed. Sanitising here covers every caller and cannot be forgotten by the next one.
+# shellcheck disable=SC2120  # the `$#` below is a SUBSHELL's positional count, not this
+# function's arguments — it is how the check avoids a variable name a caller could freeze.
 _tf_sanitize_git_env() {
     # ALLOCATION-FREE AND FAIL-CLOSED. The first version read `$(env)` through a here-document, and
     # a here-doc needs a TEMP FILE: in a sandbox where that is denied the shell printed "cannot
@@ -405,19 +407,40 @@ _tf_sanitize_git_env() {
         eval 'for _tf_v in ${!GIT_*}; do unset "$_tf_v" 2>/dev/null; done'
     fi
     unset _tf_v
-    _tf_left=""
-    if [ -n "${ZSH_VERSION:-}" ]; then
-        eval '_tf_left="${(k)parameters[(I)GIT_*]}"'
-    else
-        eval '_tf_left="${!GIT_*}"'
+    # THE VERIFICATION USES NO VARIABLE NAME AT ALL.
+    # Two earlier versions kept a scratch variable, and a caller that pre-declared it `readonly`
+    # blocked every assignment: the verifier then read an empty value, concluded "nothing survived"
+    # and returned 0 while a readonly `GIT_DIR` was still in the environment (codex, PR #69 round 8;
+    # my first repair kept a scratch name and the bypass survived it, measured). Positional
+    # parameters cannot be made readonly, and inside a SUBSHELL setting them cannot disturb the
+    # caller's own `$@` — so the check needs neither a name the caller can freeze nor a temp file.
+    if ! ( if [ -n "${ZSH_VERSION:-}" ]; then
+               eval 'set -- ${(k)parameters[(I)GIT_*]}'
+           else
+               eval 'set -- ${!GIT_*}'
+           fi
+           [ "$#" -eq 0 ] ) 2>/dev/null; then
+        printf 'tree-fingerprint: REFUSING to run — the git environment could not be cleared\n' >&2
+        exit 1
     fi
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval '_tf_left="${(k)parameters[(I)GIT_*]}"' 2>/dev/null || _tf_left="__TF_ASSIGN_FAILED__"
+    else
+        eval '_tf_left="${!GIT_*}"' 2>/dev/null || _tf_left="__TF_ASSIGN_FAILED__"
+    fi
+    # If even THAT assignment could not take, the variable still holds whatever the caller froze —
+    # so prove the verifier works by writing a known value and reading it back.
+    if ! eval '_tf_probe_ok=1' 2>/dev/null || [ "${_tf_probe_ok:-}" != 1 ]; then
+        printf 'tree-fingerprint: REFUSING to run — the environment verifier cannot allocate\n' >&2
+        exit 1
+    fi
+    unset _tf_probe_ok 2>/dev/null
     if [ -n "$_tf_left" ]; then
         printf 'tree-fingerprint: REFUSING to run — could not clear the git environment (%s)\n' \
             "$_tf_left" >&2
-        unset _tf_left
         exit 1
     fi
-    unset _tf_left
+    unset _tf_left 2>/dev/null
 }
 
 # ...AND IT RUNS AT SOURCE TIME, not merely inside `disposable_checkout`.

@@ -57,8 +57,16 @@ def repository_root() -> str:
         # traceback rather than a refusal. Reproduced with a repository named with byte 0xff.
         # `os.fsdecode` uses surrogateescape, which is how Python names such a path everywhere else,
         # so the value round-trips through `os.path` and `os.open` unchanged.
+        # THE GIT ENVIRONMENT IS STRIPPED FOR THIS CALL. `GIT_DIR`/`GIT_WORK_TREE` inherited from
+        # the caller made `--show-toplevel` answer an arbitrary directory, and since that answer IS
+        # the containment boundary, `/etc/hosts` resolved as "inside the repository" and was handed
+        # to the reviewer — defeating `audit-codex.sh`'s disclosure boundary entirely (codex, PR #69
+        # round 8, reproduced). The shell harnesses clear the namespace, but this is reached
+        # directly from Python and never passed through that boundary.
+        _clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
+            env=_clean_env,
             capture_output=True, check=False,
         )
     except OSError as error:

@@ -75,7 +75,10 @@ DEFAULT_PLAN = "docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
 # THE SAME BASENAME, a DIFFERENT DIRECTORY, and different bytes. Distinct basenames still let a
 # basename-only implementation pass by resolving the leaf against any directory; only a shared
 # basename forces the digest to depend on the FULL path (codex, PR #69 round 7).
-ALT_PLAN = "docs/audits/" + DEFAULT_PLAN.rsplit("/", 1)[1]
+# The alternate shares BOTH the basename and the immediate parent, differing only in a HIGHER
+# ancestor. Sharing the basename alone still let an implementation using the last TWO path
+# components pass; only this forces the digest to depend on the FULL path (codex, round 8).
+ALT_PLAN = "archive/" + DEFAULT_PLAN
 SESSION = "session_00000000-0000-4000-8000-000000000001"
 #: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
 OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"

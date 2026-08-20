@@ -509,3 +509,18 @@ thing that kept failing.
 declaration for A whose body discusses B is appropriate because this gate binds the declaration to
 BASIS, not prose semantics."* It also independently confirmed the default-ignorable range table
 matches Node's `Default_Ignorable_Code_Point` property exactly — missing 0, extra 0.
+
+### Round 8 (`911069d`) — 1×P1 + 2×P2, all reproduced
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | **`containment.py` inherited `GIT_DIR`/`GIT_WORK_TREE`**, and since `--show-toplevel` IS the containment boundary, `/etc/hosts` resolved as "inside the repository" and would have been handed to the reviewer — defeating `audit-codex.sh`'s disclosure boundary. It is reached directly from Python and never passed through the shell boundary | Fixed — the `git` call runs with a `GIT_*`-stripped environment. Poisoned and control runs both refuse; legitimate operands still resolve |
+| P2 | **The fail-closed verifier could be disabled by its own scratch variable.** A caller pre-declaring `readonly _tf_left=""` blocked every assignment; the verifier read empty, concluded "nothing survived" and returned 0 with a readonly `GIT_DIR` still set. Readonly `GIT_*` alone already failed closed — it was the NAME COLLISION that opened it | Fixed — and my first repair kept a scratch name and the bypass **survived it**, measured. The check now uses no variable name at all: positional parameters inside a subshell, which cannot be made readonly and cannot disturb the caller's `$@` |
+| P2 | The BASIS fixture still did not force the full path: the two operands shared a basename but differed in the immediate parent, so an implementation using the last TWO components passed | Fixed — the alternate now shares basename AND immediate parent, differing only in a higher ancestor. Verified against all four wrong implementations proposed in rounds 4-8 |
+
+**The verifier fix is the campaign's clearest example of measuring the outcome rather than the
+mechanism.** My first repair looked right, parsed, and passed shellcheck — and the reproduction
+showed the bypass still open, because the harness I first wrote measured `env | grep -c '^GIT_'`
+inside a shell that `exit` had already killed, and `readonly` without `export` never appears in
+`env` at all. Only after rewriting the probe to capture the shell's exit status **from outside**
+did the real behaviour appear.
