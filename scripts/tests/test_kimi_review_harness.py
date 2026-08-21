@@ -145,6 +145,13 @@ case "${{KIMI_STUB_MODE:-clean}}" in
                  {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
                     printf '{{"type":"llm.request","thinkingEffort":123}}\\n'
                  }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-badutf8) # max request + a request whose TYPE carries an invalid UTF-8 byte. Replacement
+                 # decoding would make this parse as a DIFFERENT record type and skip it silently.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.requ\\377st","thinkingEffort":"high"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   mixed-malform) # max request + an UNPARSEABLE line: the natural way to hide a low-tier request
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
@@ -1241,6 +1248,24 @@ class KimiHarnessMutationGates(unittest.TestCase):
         leaving the `max` ones visible. Skipping it certifies `max,`.
         """
         self._assert_unknown_not_max("mixed-malform", "an unparseable wire record")
+
+    def test_invalid_utf8_cannot_reclassify_a_request_away(self):
+        """A corrupt byte must not silently turn a request into "some other record type".
+
+        `errors="replace"` maps an invalid byte to U+FFFD, so `{"type":"llm.requ\\xffst",...}` PARSES
+        — as a non-request. It is then skipped, and an earlier `max` survives to pass the gate.
+        Reproduced by codex (PR #69 round 19) as `EFFORTS=max, would_max_gate_pass=yes`.
+
+        This is the round-18 hiding place reached through a different door: that fix assumed
+        "unreadable" meant "unparseable", but replacement decoding makes a corrupt record readable
+        and RECLASSIFIED. Reading raw bytes puts invalid UTF-8 back on the UNKNOWN path.
+
+        Mutating the open back to `open(path, errors="replace")` turns this cell red while every
+        other effort cell stays green — the byte here is inside the `type` value, so no other
+        fixture reaches it.
+        """
+        self._assert_unknown_not_max("mixed-badutf8",
+                                     "a request reclassified by an invalid UTF-8 byte")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""

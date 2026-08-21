@@ -625,22 +625,25 @@ is recorded so the approval is not read as broader than it is.
 
 ## Campaign summary
 
-**Eighteen rounds. 55 findings, every one reproduced before it was fixed.
+**Nineteen rounds. 56 findings, every one reproduced before it was fixed.**
 (Counted from the per-round headings, which include round 2's audit-record P2. Earlier
 paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41 for rounds
-1-12, and 14 more across rounds 13-18.)** Trend, by round:
+1-12, and 15 more across rounds 13-19.) Trend, by round:
 
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 | 1 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 |
 
 The trend is not one curve but two. Rounds 1-12 ran at `model_reasoning_effort=xhigh` and decayed
-monotonically to zero. Rounds 13-18 ran at `max` **on code the xhigh rounds had twice approved**,
+monotonically to zero. Rounds 13-19 ran at `max` **on code the xhigh rounds had twice approved**,
 and did not decay — each found an axis the previous rounds had never sampled. A falling finding
 count measures the reviewer's reach as much as the code's quality, and the reach is a setting.
 
 Four of the first twelve rounds found a defect created by the previous round's repair, and
-round 17 did the same to round 16's provenance filter and round 18 to round 17's — six of eighteen. Rounds 2-5 each
+round 17 did the same to round 16's provenance filter, round 18 to round 17's, and round 19 to
+round 18's — seven of nineteen. Rounds 2-5 each
 found a defect in the test written to prove the previous round's fix. The recurring shape was never
 a missing check — it was **a check that could not fail**: an oracle comparing the wrong line, a
 mutation that turned a test red for an unrelated reason, a regression that skipped on CI, a verifier
@@ -980,3 +983,46 @@ gemini arm, the tests did not.
 **All 72 are deferred.** They are pre-existing, none is introduced by this PR, and remediating them
 is a campaign of its own rather than a tail on this one. The full structured findings are preserved
 at `~/.claude/audit-artifacts/2654-guards-without-tests-sweep.json`.
+
+### Round 19 (`81f123e`, effort=max) — 1×P2. **The same hiding place, through a different door.**
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **Invalid UTF-8 reclassified a request instead of failing closed.** The extractor opened the wire log with `errors="replace"`, which maps a bad byte to U+FFFD — so `{"type":"llm.requ\xffst",...}` *parses*, as a record of a different type. It was skipped as a non-request and an earlier `max` survived to pass the gate. Reproduced with the production extractor verbatim: `EFFORTS=max, would_max_gate_pass=yes` | Fixed — the log is now read as raw bytes and parsed strictly, so invalid UTF-8 reaches the existing UNKNOWN path |
+
+**Why round 18's guard did not already cover this.** That fix assumed *unreadable* meant
+*unparseable*. Replacement decoding makes a corrupt record **readable and reclassified** — the line
+parses cleanly, just as something else. So the guard that was written precisely to stop a malformed
+record hiding a low-tier request was walked around by corrupting a different field. Three rounds have
+now attacked the same gate from three directions: the record TYPE that counts (round 18's sweep), the
+records that cannot be read (round 18), and the records that read as something they are not (19).
+
+Both directions re-verified, as every filter change on this campaign now must be: the byte-strict
+distribution over 63 real logs is **unchanged** at 49 `max,` / 7 empty / 6 `high,` / 1 `on,`.
+
+Mutant G restores `errors="replace"` and turns **only** the new `mixed-badutf8` cell red — the bad
+byte sits inside the `type` value, which no other fixture reaches.
+
+**The reviewer answered all three questions I put to it, and it agreed with me on the one I had
+decided against its own advice.**
+
+1. *Was going stricter than you hedged a fail-closed risk?* It ran its own live scan and reproduced
+   my numbers exactly — `logs=63 nonempty_lines=12094 unparseable=0 bad_final=0 bad_internal=0
+   no_terminal_newline=0 llm_requests=1454 invalid_tier=0`, distribution `49/7/6/1` — then went
+   further than I had: installed Kimi 0.38.0 writes newline-terminated JSON, awaits the write and
+   `fsync`, and flushes on close, and its torn-final-line recovery is explicitly for crash-mid-flush.
+   Verdict: *"I found no honest successful-round false close."* This matched the answer I had derived
+   independently while waiting (a timed-out round never reaches the filter, because `WIRE` is gated
+   on `[ -s "$OUT" ]`). **Two independent derivations, same conclusion** — which is worth more than
+   either alone, and is the first time this campaign has had that.
+2. *Is deferring the 72 guard gaps sound?* Accepted: they are pre-existing coverage gaps rather than
+   reproduced behaviour defects, and none warrants expanding this repair. It independently named the
+   **codex-arm VOID tests as the highest-priority follow-up** — the same item I had put first.
+3. *Do the cells and mutants E/F really discriminate?* It re-derived the table from the extracted
+   parser rather than trusting mine, and confirmed valid `max` stayed accepted and `max+high` stayed
+   rejected under all three implementations, so the failures bind to the intended guards.
+
+It also noted honestly that the unittest cells could not create scratch directories in its read-only
+sandbox and that it therefore **did not count those setup errors as test results** — the same
+discipline this campaign had to learn the hard way when a mutation harness reported `FAILED` while
+testing nothing.

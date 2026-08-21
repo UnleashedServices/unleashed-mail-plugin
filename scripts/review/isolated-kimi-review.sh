@@ -497,6 +497,14 @@ EFFORTS=""
 # `malformed_request_record` all yielding `EFFORTS=max, would_max_gate_pass=yes`). A request whose
 # tier cannot be read is a request this round cannot account for, so the round is not evidence.
 #
+# READ BYTES, NOT REPLACEMENT-DECODED TEXT. `errors="replace"` turns an invalid byte into U+FFFD,
+# which makes the line PARSE — as a record of a different type. `{"type":"llm.requ\xffst",...}`
+# decodes to `llm.requ\ufffdst`, is skipped as a non-request, and an earlier `max` survives to pass
+# the gate (codex, PR #69 round 19: `EFFORTS=max, would_max_gate_pass=yes`). That is the same hiding
+# place the round-18 guard was meant to close, reached through a different door: the round-18 fix
+# assumed "unreadable" meant "unparseable", but replacement decoding makes a corrupt record readable
+# and RECLASSIFIED. Parsing the raw bytes puts invalid UTF-8 back on the UNKNOWN path, where a record
+# this round cannot account for belongs.
 # Strictness is free here and closes a hole. Measured over the real store: 12094 non-empty wire lines,
 # ZERO unparseable, and ZERO of the `llm.request` records lacking a valid string tier — so no genuine
 # round loses its certification. And the log is written by the reviewed process (see the caveat below),
@@ -506,7 +514,7 @@ EFFORTS=""
 # outside the documented `low|high|max`. Any set other than exactly `max,` still fails the gate.
 [ -n "$WIRE" ] && EFFORTS="$(python3 -c 'import json,sys
 vals=set()
-for line in open(sys.argv[1],errors="replace"):
+for line in open(sys.argv[1],"rb"):
     line=line.strip()
     if not line:
         continue
