@@ -21,6 +21,16 @@
 # Exit: 0 gate passed · 1 refused / no plan / gate failed · 2 ambiguous, the caller must name one.
 set -uo pipefail
 
+# THE GIT ENVIRONMENT IS SANITISED BEFORE THE FIRST `git`. Inherited `GIT_DIR`/`GIT_WORK_TREE`
+# silently redirect which repository this script reads, and `GIT_CONFIG_COUNT` can inject
+# executable config (`core.fsmonitor`, `url.<ext::cmd>.insteadOf`). `changeset.sh` was shown
+# reporting a base commit from a DIFFERENT worktree under exactly that (codex, PR #69 round 7);
+# these three siblings invoke git too and had the same exposure, so the whole class is closed
+# here rather than the one instance. The helper fails CLOSED if it cannot clear.
+_CS_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=scripts/review/tree-fingerprint.sh
+. "${_CS_DIR}/tree-fingerprint.sh"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SCRIPTS_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)" || exit 1
 
@@ -43,6 +53,13 @@ if [ "$#" -gt 1 ]; then
 elif [ "$#" -eq 1 ]; then
     ARG="$1"
 else
+    # An interactive terminal would sit at a silent `cat` waiting for EOF a human does not know to
+    # send — refuse with usage instead (2026-08-17 audit, AF-13). Claude Code's Bash tool and the
+    # test harness both provide non-TTY stdin, so the piped path below is unchanged for them.
+    if [ -t 0 ]; then
+        echo "REFUSED: no operand and stdin is a terminal — pass the plan name/path as the single operand." >&2
+        exit 1
+    fi
     # `$(cat)` strips trailing newlines exactly as the heredoc command substitution it replaced did, so a
     # well-formed single-line argument is unchanged and a crafted multi-line one still shows its newline.
     ARG="$(cat)"

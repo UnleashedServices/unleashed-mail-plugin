@@ -14,7 +14,7 @@ model: inherit
 # Scoped by DENY-LIST (not an allowlist) so the install-specific Context7 MCP prefix is still inherited
 # (an allowlist would block it). This planner researches UNTRUSTED web/Context7 content, so it must not be
 # able to mutate the repo: deny the whole github MCP write surface. Bash is intentionally RETAINED — the
-# preloaded create-feature-plan skill runs `review-verdict.py snapshot` (a Bash command) as part of the
+# preloaded create-feature-plan skill runs the CONTAINED `snapshot-plan.sh` (a Bash command) as part of the
 # plan-review gate (COREDEV-2525 MIN-6; see AGENT_CONTRACTS §9).
 # `Agent` is DENIED: omitting `tools:` inherits it exactly as it inherits the MCP prefix, and this body
 # spawns nobody — an unused capability on an agent reading untrusted content is pure downside. The

@@ -813,8 +813,13 @@ class DeepReviewP2Fixes(unittest.TestCase):
                     source,
                     f"{rel} still documents a fixed shared preflight path",
                 )
-                if rel.startswith("skills/"):
-                    # The skill now calls the wrapper, which allocates and re-reads the path itself.
+                if rel.startswith("skills/") or "scripts/review/preflight-agy.sh" in source:
+                    # The caller routes through the wrapper, which allocates and re-reads the path
+                    # itself. AGENT_CONTRACTS.md §2 joined the skills here (2026-08-17 remediation):
+                    # it had gone on teaching the INLINE recipe the wrapper was extracted to replace,
+                    # whose reproduced defects are cwd pollution — which can now VOID a round under
+                    # AF-5's freeze rule — and no exit-status check. The property this gate protects
+                    # (a ping path allocated per run) is asserted on the wrapper below either way.
                     self.assertIn(
                         "scripts/review/preflight-agy.sh",
                         source,

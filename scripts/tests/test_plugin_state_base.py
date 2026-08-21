@@ -12,6 +12,7 @@ Each cell starts a FRESH SHELL that sets the environment and *then* sources: res
 process-stable, so mutating the environment after sourcing cannot change the resolved base. A test
 that exported first would be testing its own ordering, not the contract.
 """
+import atexit
 import os
 import re
 import shutil
@@ -25,6 +26,12 @@ LIB = os.path.join(ROOT, "scripts", "lib")
 SENTINEL = "/dev/null/unresolved-plugin-base"
 
 
+# A process-lifetime scratch HOME. It is deliberately EMPTY: the point is a home with no
+# plugin-state store, not a fixture (see the HOME note in run()).
+_SANDBOX_HOME = tempfile.mkdtemp(prefix="plugin-state-base-home.")
+atexit.register(shutil.rmtree, _SANDBOX_HOME, True)
+
+
 def run(script, env=None, shell="bash", libdir=None):
     """Run `script` in a fresh shell with a clean environment."""
     e = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT")}
@@ -34,6 +41,15 @@ def run(script, env=None, shell="bash", libdir=None):
     # so publication is off — a real HOME must never receive an entry from a test cell (codex,
     # PR #67). Cells that need to assert on the store set _UNLEASHED_PUBLISH_OK themselves.
     e.setdefault("_UNLEASHED_PUBLISH_OK", "0")
+    # ...and HOME is sandboxed, because suppressing PUBLICATION is not the same as suppressing
+    # DISCOVERY. Every cell here asserts the D-prime envelope — "no CLAUDE_PLUGIN_DATA means
+    # unresolved" — and once COREDEV-2617 shipped, a developer's REAL ${HOME} holds a populated
+    # store, so the resolver legitimately resolves a real base and 26 of these cells fail. They
+    # passed before only because no store existed anywhere yet; CI stays green because a Linux
+    # runner has no store either, so this could not surface there. Measured on a machine with a
+    # live store: real HOME -> 26 failures, scratch HOME -> 14 tests OK. A cell that needs the
+    # store sets HOME itself.
+    e["HOME"] = _SANDBOX_HOME          # NOT setdefault: `e` is seeded from os.environ, which has HOME
     e.update(env or {})
     return subprocess.run([shell, "-c", script], capture_output=True, text=True, env=e)
 

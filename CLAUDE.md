@@ -84,7 +84,7 @@ Linux-friendly plugin repo — no Xcode).
 ## Mandatory processes
 
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
-  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.1-pro`) and `/unleashed-mail:codex-review`
+  reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.6-flash-high`) and `/unleashed-mail:codex-review`
   (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.

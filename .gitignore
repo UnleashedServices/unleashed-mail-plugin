@@ -39,7 +39,8 @@ __pycache__/
 *.py[cod]
 
 # Hook state/logs (COREDEV-2324/2325). Markers, diagnostic logs, compaction snapshots,
-# and reviewer captures live under the plugin data dir (~/.claude/unleashed-mail),
+# and reviewer captures live under the plugin data dir (~/.claude/plugins/data/{id}, discovered via
+# the plugin-state store at ~/.claude/unleashed-mail/bases/ — the store is NOT the data dir),
 # outside the repo — these entries are defensive, in case state ever lands in-tree.
 .state/
 logs/

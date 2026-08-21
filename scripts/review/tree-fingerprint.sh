@@ -384,12 +384,102 @@ PY
 # detached checkout. No remote, no alternates, no hardlinks; `FETCH_HEAD` — the one file that names the
 # source path — is removed. The reviewer's git is fully usable and fully private. Measured: 3.8 MB and
 # under a second for this repository.
+# THE GIT ENVIRONMENT IS SANITISED AT THE SHARED BOUNDARY, not in one caller.
+# `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` do NOT remove `GIT_CONFIG_COUNT`,
+# whose indexed `GIT_CONFIG_KEY_n`/`VALUE_n` pairs arrive as command-line config and outrank both.
+# That is not merely a data leak: with `url.<ext::cmd>.insteadOf` plus `protocol.ext.allow=always`
+# it is CODE EXECUTION through the same URL-resolution transport `fetch` uses (codex, PR #69
+# round 5, reproduced — output from an injected `/bin/echo` appeared in git's protocol error).
+# Only the kimi harness cleared the namespace, while all three call this helper, so agy and codex
+# were still exposed. Sanitising here covers every caller and cannot be forgotten by the next one.
+# shellcheck disable=SC2120  # the `$#` below is a SUBSHELL's positional count, not this
+# function's arguments — it is how the check avoids a variable name a caller could freeze.
+_tf_sanitize_git_env() {
+    # ALLOCATION-FREE AND FAIL-CLOSED. The first version read `$(env)` through a here-document, and
+    # a here-doc needs a TEMP FILE: in a sandbox where that is denied the shell printed "cannot
+    # create temp file for here document", the loop never ran, every `GIT_*` survived — and the
+    # source still returned 0. A security boundary that fails OPEN and silently is worse than none
+    # (codex, PR #69 round 7, reproduced in bash and zsh). Name expansion allocates nothing, and the
+    # result is VERIFIED afterwards: if anything survives, the shell dies rather than proceeding.
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval 'for _tf_v in ${(k)parameters[(I)GIT_*]}; do unset "$_tf_v" 2>/dev/null; done'
+    else
+        eval 'for _tf_v in ${!GIT_*}; do unset "$_tf_v" 2>/dev/null; done'
+    fi
+    unset _tf_v
+    # THE VERIFICATION USES NO VARIABLE NAME AT ALL.
+    # Two earlier versions kept a scratch variable, and a caller that pre-declared it `readonly`
+    # blocked every assignment: the verifier then read an empty value, concluded "nothing survived"
+    # and returned 0 while a readonly `GIT_DIR` was still in the environment (codex, PR #69 round 8;
+    # my first repair kept a scratch name and the bypass survived it, measured). Positional
+    # parameters cannot be made readonly, and inside a SUBSHELL setting them cannot disturb the
+    # caller's own `$@` — so the check needs neither a name the caller can freeze nor a temp file.
+    if ! ( if [ -n "${ZSH_VERSION:-}" ]; then
+               eval 'set -- ${(k)parameters[(I)GIT_*]}'
+           else
+               eval 'set -- ${!GIT_*}'
+           fi
+           [ "$#" -eq 0 ] ) 2>/dev/null; then
+        printf 'tree-fingerprint: REFUSING to run — the git environment could not be cleared\n' >&2
+        exit 1
+    fi
+    if [ -n "${ZSH_VERSION:-}" ]; then
+        eval '_tf_left="${(k)parameters[(I)GIT_*]}"' 2>/dev/null || _tf_left="__TF_ASSIGN_FAILED__"
+    else
+        eval '_tf_left="${!GIT_*}"' 2>/dev/null || _tf_left="__TF_ASSIGN_FAILED__"
+    fi
+    # If even THAT assignment could not take, the variable still holds whatever the caller froze —
+    # so prove the verifier works by writing a known value and reading it back.
+    if ! eval '_tf_probe_ok=1' 2>/dev/null || [ "${_tf_probe_ok:-}" != 1 ]; then
+        printf 'tree-fingerprint: REFUSING to run — the environment verifier cannot allocate\n' >&2
+        exit 1
+    fi
+    unset _tf_probe_ok 2>/dev/null
+    if [ -n "$_tf_left" ]; then
+        printf 'tree-fingerprint: REFUSING to run — could not clear the git environment (%s)\n' \
+            "$_tf_left" >&2
+        exit 1
+    fi
+    unset _tf_left 2>/dev/null
+}
+
+# ...AND IT RUNS AT SOURCE TIME, not merely inside `disposable_checkout`.
+# Every harness runs `git rev-parse --show-toplevel`, `git status --porcelain` and
+# `tree_fingerprint` BEFORE it ever reaches a checkout, and inherited config executes there:
+# `core.fsmonitor=/bin/echo` spawned a child on plain `git status` in BOTH shells, and
+# repository-selection poisoning made `--show-toplevel` answer a DIFFERENT repository, so the
+# round fingerprinted and reviewed a checkout nobody asked for (codex, PR #69 round 6, reproduced).
+# All four consumers source this file before their first git call, so sanitising here covers every
+# one of them and cannot be forgotten by the next harness. This is a deliberate side effect of
+# sourcing: the file IS the git-safety boundary for the review harnesses.
+_tf_sanitize_git_env
+
 disposable_checkout() {
+    _tf_sanitize_git_env
     _dc_repo="$1"; _dc_sha="$2"; _dc_dest="$3"
     [ ! -e "$_dc_dest" ] || return 1
-    git init -q -- "$_dc_dest" >/dev/null 2>&1 || return 1
-    git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
-    git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
+    # HOOKS ARE DISABLED EXPLICITLY for every command here. `checkout` fires `post-checkout`, and
+    # this runs BEFORE the caller captures its baseline, so a hook firing inside the private tree is
+    # mutation the baseline would then record as pristine. The caller clears the whole `GIT_*`
+    # namespace, which is the primary defence; `-c core.hooksPath=/dev/null` is the second, because
+    # `core.hooksPath` also reaches git through config FILES this harness does not own
+    # (codex, PR #69 round 3 — reproduced via GIT_CONFIG_COUNT).
+    # THE CHECKOUT IS BUILT WITH NO INHERITED EXECUTABLE CONFIGURATION.
+    # `-c core.hooksPath=/dev/null` disables HOOKS and nothing else, and round 4 reproduced a
+    # smudge FILTER executing during checkout with hooks already disabled: global and system
+    # config still define `filter.*`, `core.attributesFile`, `insteadOf` and friends, and a filter
+    # runs a shell command over the bytes on their way into the tree. Measured on this machine,
+    # `filter.lfs.process` and three siblings were reachable from ~/.gitconfig with hooksPath
+    # disabled, and empty once GIT_CONFIG_GLOBAL/SYSTEM point at /dev/null.
+    #   * GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM=/dev/null removes both files, so no filter, attribute
+    #     or url-rewrite definition survives to be triggered by a `.gitattributes` in the commit;
+    #   * `--template=` gives `init` an EMPTY template, so no hooks or config are copied in;
+    #   * core.attributesFile and core.hooksPath are pinned as well, belt and braces.
+    _dc_gitenv="GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null"
+    _dc_git="env $_dc_gitenv git -c core.hooksPath=/dev/null -c core.attributesFile=/dev/null"
+    $_dc_git init -q --template= -- "$_dc_dest" >/dev/null 2>&1 || return 1
+    $_dc_git -C "$_dc_dest" fetch -q --no-tags -- "$_dc_repo" "$_dc_sha" >/dev/null 2>&1 || return 1
+    $_dc_git -C "$_dc_dest" checkout -q --detach FETCH_HEAD >/dev/null 2>&1 || return 1
     rm -f "$_dc_dest/.git/FETCH_HEAD"
     [ "$(git -C "$_dc_dest" rev-parse HEAD 2>/dev/null)" = "$_dc_sha" ] || return 1
 }

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
+import select
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # find schema/synthesize
@@ -81,8 +81,58 @@ TOOL = {
 }
 
 
+_STDERR_DEAD = False
+
+
 def _log(msg: str) -> None:
-    print(f"[review-synthesizer] {msg}", file=sys.stderr, flush=True)
+    """Best-effort. A broken LOG channel must never affect the PROTOCOL on stdout (codex, PR #69).
+
+    Two failures came from letting it: with only stderr closed, a malformed request got no
+    `-32700` response at all — the diagnostic raised, the outer `except BrokenPipeError` mistook a
+    dead log channel for dead protocol stdout, redirected healthy stdout and exited 0; and closing
+    both read ends BEFORE the startup "ready" line still exited 120, because that log sits ahead of
+    the loop's guard. Swallowing here fixes both, and is correct on the merits: stderr is
+    diagnostics, stdout is the protocol, and the two must fail independently.
+
+    On the first failure stderr is pointed at devnull, because a raised write leaves the text
+    BUFFERED and the interpreter's exit-time flush would raise again — which CPython reports as
+    rc 120. The flag then keeps every later call cheap.
+    """
+    global _STDERR_DEAD
+    if _STDERR_DEAD:
+        return
+    # NO FLAG IS EVER CHANGED ON fd 2. The obvious repair — dup the descriptor and set O_NONBLOCK
+    # on the copy — DOES NOT WORK: `dup` shares the open file DESCRIPTION, and `F_SETFL` mutates
+    # exactly that, so the launcher's stderr went non-blocking anyway (measured; the first attempt
+    # at this fix failed its own test). Writability is TESTED instead, which changes nothing that
+    # any other process can observe. A diagnostic is one short line, well under PIPE_BUF, so a pipe
+    # reported writable accepts it without blocking (codex, PR #69 rounds 3-4).
+    try:
+        if not select.select([], [sys.stderr.fileno()], [], 0)[1]:
+            return                      # reader is not keeping up; drop this line, keep serving
+    except (OSError, ValueError):
+        pass
+    try:
+        # RAW os.write, NOT print(). `print(..., flush=True)` on a non-blocking fd leaves the failed
+        # write sitting in TextIOWrapper's buffer, and the interpreter's EOF flush retries it and
+        # exits **120** — the full-pipe case answered the queued ping and then died anyway
+        # (codex, PR #69 round 3). os.write has no buffer to leave anything in: EAGAIN surfaces here
+        # and the line is simply dropped.
+        os.write(sys.stderr.fileno(), f"[review-synthesizer] {msg}\n".encode("utf-8", "replace"))
+    except BlockingIOError:
+        # The reader is alive but not keeping up. Drop this line and keep serving; do NOT mark
+        # stderr dead, because the condition is transient.
+        return
+    except OSError:
+        _STDERR_DEAD = True
+        try:
+            _devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(_devnull, sys.stderr.fileno())
+            finally:
+                os.close(_devnull)
+        except OSError:
+            pass
 
 
 def _blockers_to_verify(review) -> list[dict]:
@@ -199,7 +249,11 @@ class _RpcError(Exception):
 
 
 def _handle(method: str, params: dict):
-    """Return a result dict, or None for notifications (no reply)."""
+    """Return a result dict. Never None: in JSON-RPC 2.0 every message carrying an `id` is a
+    Request and MUST receive a Response, so a handler that returned None for one would leave the
+    client hanging. Notifications are discriminated by the ABSENCE of `id` in the main loop, not by
+    a None return (gemini-code-assist, PR #69).
+    """
     if not isinstance(params, dict):
         # JSON-RPC permits array params, but every method here is by-name; reject a
         # non-object `params` with Invalid Params instead of crashing on .get() (-32603).
@@ -216,7 +270,11 @@ def _handle(method: str, params: dict):
             "serverInfo": SERVER_INFO,
         }
     if method == "notifications/initialized":
-        return None  # notification — no response
+        # A well-behaved client sends this as a NOTIFICATION (no id) and the main loop stays
+        # silent. Returning {} instead of None means a buggy client that attaches an id still
+        # gets the JSON-RPC-required response instead of hanging forever on the suppressed
+        # reply (2026-08-17 audit, AF-21).
+        return {}
     if method == "ping":
         return {}
     if method == "tools/list":
@@ -247,39 +305,67 @@ def main() -> int:
     # readline() loop, NOT `for line in sys.stdin` — the file iterator's read-ahead
     # buffering can deadlock a bidirectional pipe protocol (it blocks filling its
     # buffer before yielding a line). readline returns each line as soon as it lands.
-    while True:
-        line = sys.stdin.readline()
-        if not line:        # EOF — client closed the pipe
-            break
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        while True:
+            line = sys.stdin.readline()
+            if not line:        # EOF — client closed the pipe
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                # JSON-RPC 2.0 prescribes a Parse Error reply with `id: null` — a client that
+                # sent a malformed REQUEST would otherwise wait until its own timeout on a
+                # silent drop (2026-08-17 audit, AF-20). Still logged for the debug trail.
+                _log("non-JSON line — replying -32700")
+                _send({"jsonrpc": "2.0", "id": None,
+                       "error": {"code": -32700, "message": "parse error: invalid JSON"}})
+                continue
+            if not isinstance(msg, dict):  # e.g. a bare `[]` — don't crash on msg.get()
+                _log("ignored non-object JSON-RPC message")
+                continue
+            # A notification is a request with NO `id` member; an explicit `id: null`
+            # is still a request and must get a reply. Distinguish by membership, not None.
+            has_id = "id" in msg
+            mid = msg.get("id")
+            try:
+                # default only when `params` is ABSENT; a present `[]`/null reaches the
+                # dict-guard in _handle and is rejected (don't let `or {}` mask them).
+                result = _handle(msg.get("method", ""), msg.get("params", {}))
+            except _RpcError as e:
+                if has_id:
+                    _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})
+                continue
+            except Exception as e:  # noqa: BLE001 - tool/internal failure
+                if has_id:
+                    _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
+                continue
+            if has_id:  # a Request ALWAYS replies; notifications (no id) stay silent
+                _send({"jsonrpc": "2.0", "id": mid, "result": result})
+    except BrokenPipeError:
+        # The client closed the read end while we were writing (teardown race). The reader is
+        # gone, so nothing is lost — exit cleanly instead of dying with a traceback and rc 1
+        # (2026-08-17 audit, AF-19). Point stdout at devnull so the interpreter's exit-time
+        # flush of the broken stream cannot raise a second BrokenPipeError.
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            _log("dropped non-JSON line")
-            continue
-        if not isinstance(msg, dict):  # e.g. a bare `[]` — don't crash on msg.get()
-            _log("ignored non-object JSON-RPC message")
-            continue
-        # A notification is a request with NO `id` member; an explicit `id: null`
-        # is still a request and must get a reply. Distinguish by membership, not None.
-        has_id = "id" in msg
-        mid = msg.get("id")
-        try:
-            # default only when `params` is ABSENT; a present `[]`/null reaches the
-            # dict-guard in _handle and is rejected (don't let `or {}` mask them).
-            result = _handle(msg.get("method", ""), msg.get("params", {}))
-        except _RpcError as e:
-            if has_id:
-                _send({"jsonrpc": "2.0", "id": mid, "error": {"code": e.code, "message": e.message}})
-            continue
-        except Exception as e:  # noqa: BLE001 - tool/internal failure
-            if has_id:
-                _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(e)}})
-            continue
-        if has_id and result is not None:  # requests reply; notifications don't
-            _send({"jsonrpc": "2.0", "id": mid, "result": result})
+            _devnull = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(_devnull, sys.stdout.fileno())
+            finally:
+                os.close(_devnull)
+        except OSError:
+            pass
+        # The diagnostic goes to STDERR, which on a real client teardown is broken too — both pipe
+        # read ends close together. `print(..., flush=True)` then raises a SECOND BrokenPipeError,
+        # and merely catching it is NOT enough: the failed write leaves the text buffered and the
+        # interpreter's exit-time flush raises again, which CPython reports as **rc 120**, not 1.
+        # Measured, all four builds: shipped 120; catching alone 120; redirecting stderr
+        # unconditionally exits 0 but LOSES the diagnostic even when stderr is healthy. So: try to
+        # say it, and only if that fails point stderr at devnull so nothing remains to flush.
+        _log("client closed the pipe mid-write — exiting cleanly")
+        return 0
     return 0
 
 

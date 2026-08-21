@@ -1,20 +1,55 @@
 ---
 name: codex-review
-description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /gemini-review.
+description: Read-only Codex CLI review for plans, debug sessions, and post-implementation audits. Paired with /unleashed-mail:gemini-review.
 # MIN-27: scope the Bash grant to exactly what the body runs (plugin scripts, CLI probe, `codex`) so the
 # 2-6 gate rounds stop re-prompting for the same pty-capture pipelines. No unscoped Bash.
 # The prompt file this body REQUIRES writing is granted narrowly. Without it the mandatory first
 # step prompted for permission (or was denied) before the newly narrowed capture grant could run —
 # so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
 # per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)
+# Edit(...), NOT Write(...): since Claude Code 2.1.210 file-permission rules are consulted for
+# `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
+# "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
+# CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read
 ---
 
 # Codex CLI Review
 
-All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/gemini-review` (not as a replacement). Post-implementation audits also run Codex.
+All plans and debugging sessions must also be reviewed by Codex CLI — non-negotiable, runs alongside `/unleashed-mail:gemini-review` (not as a replacement). Post-implementation audits also run Codex.
+
+> **Scope and round hygiene:** the granted capture wrapper is **plan-only** — `bind-prompt.py` binds
+> `docs/planning/*_PLAN.md` documents and refuses a prompt naming no plan before the reviewer launches;
+> debug reviews are **advisory** (no verdict artifact) unless the investigation is written up as a
+> `*_PLAN.md`. And write **both** per-round prompt files (`.agy-prompt-*`, `.codex-prompt-*`) **before**
+> launching either arm, then freeze the working tree until both rounds land — the isolation harnesses
+> void a round on any live-tree change, a new untracked file included. Consumer repos must ignore
+> `.agy-*.md` / `.codex-*.md` / `.kimi-*.md` / `.gate-*-prompt.md`. Full rules: the "Scope and round
+> hygiene" section of `/unleashed-mail:gemini-review`. (2026-08-17 audit, AF-3/AF-5.)
 
 > **Preflight:** `command -v codex && codex --version`. If `codex` is unavailable (fresh machine / CI), the gate is **fail-closed** — do NOT count it as APPROVE. **There is no scripted waiver**: stop and let the *user* choose the recovery (install/authenticate the CLI, capture the review elsewhere, or explicitly direct work outside `/implement` — a workflow exception, not a passed gate). Present the choices; never select, infer, or self-waive. See "Preflight & unavailable-reviewer recovery" in `AGENT_CONTRACTS.md` §2.
+>
+> **Codex quota outage → kimi stand-in (user-directed).** Preflight the stand-in with
+> `command -v kimi` (fail-closed if absent, exactly as for codex), and write its prompt to a
+> `.kimi-prompt-<round>.md` file — both are covered by this skill's grants. A weekly/billing quota hit is the
+> "capture the review elsewhere" recovery: at the user's direction, capture the second review with the
+> kimi harness instead —
+> `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/isolated-kimi-review.sh" <prompt-file> <out-transcript> <commit> [timeout] <plan>`
+> — **this one is deliberately NOT pre-approved and will prompt.** Unlike the agy and codex harnesses it
+> owns its output path rather than taking an allocator's reserved leaf, so it uses non-allocated
+> `pty-capture`, which creates and truncates whatever single-linked path it is handed. A blanket
+> `Bash(... isolated-kimi-review.sh *)` grant therefore turned this read-only review skill into a way to
+> overwrite an arbitrary user file with no further prompt (codex, PR #69 — reproduced under `~/Documents`
+> with the write mocked). The grant was removed rather than narrowed; approve the stand-in per round,
+> and read the path you approve. **Follow-up:** a `capture-kimi-review.sh` that owns its allocation, as
+> `capture-codex-review.sh` does, would make a safe grant possible
+> — **always passing `<plan>`** (the harness basis-checks the plan named on its command line, defaulting
+> to the COREDEV-2617 plan it was built for; a defaulted plan under a different prompt certifies the
+> wrong document). Kimi's own quota symptom, for recognition: `EXIT=1` with a large transcript and a
+> 403 in the tail. **This does not change the scripted quorum:** `review-verdict.py` still records
+> `codex=MISSING`, and the gate refuses — by design. The kimi transcript is the captured evidence the
+> user cites when explicitly directing the workflow exception per §2; it is persisted alongside, never
+> silently substituted as codex's verdict. (Harness parameterized 2026-08-17, audit AF-12.)
 
 Docs: https://developers.openai.com/codex/cli/reference
 
@@ -177,7 +212,7 @@ General form: `codex exec -c model_reasoning_effort=xhigh -s read-only "/<skill-
 
 **Infrastructure:** `/agent-orchestration`
 
-**Review tooling (v2.4.1):** `/gemini-review`, `/codex-review`, `/create-feature-plan` (canonical bare workspace names; the plugin also bundles them namespaced as `/unleashed-mail:gemini-review` etc.)
+**Review tooling:** `/unleashed-mail:gemini-review`, `/unleashed-mail:codex-review`, `/unleashed-mail:create-feature-plan` — the namespaced forms are canonical and always resolve; the bare names resolve only where the consumer workspace ships local copies
 
 If a skill is missing from a given install, list `~/.codex/skills/` before falling back to a free-form prompt.
 
@@ -197,8 +232,9 @@ codex exec -c model_reasoning_effort=xhigh -s read-only "/swift-reviewer [PRIOR_
 # Implementation consult
 codex exec -c model_reasoning_effort=xhigh -s read-only "/grdb-patterns How should I add a ValueObservation for [TABLE]?"
 
-# Plan / debug (unstructured — when no skill is a good fit)
-codex exec -c model_reasoning_effort=xhigh -s read-only "PLAN_OR_DEBUG_CONTENT"
+# Plan / debug (unstructured — when no skill is a good fit). `--` ends option parsing so
+# free-form content that begins with `-` (a Markdown bullet) cannot be read as a flag (AF-11).
+codex exec -c model_reasoning_effort=xhigh -s read-only -- "PLAN_OR_DEBUG_CONTENT"
 ```
 
 ## Full workflow (plan or debug → implementation → post-impl audit)

@@ -2,7 +2,16 @@
 name: brainstorm
 description: Brainstorm and design a feature — research modern approaches, then pressure-test with enterprise and SMB stakeholder personas before planning
 argument-hint: [feature description]
-allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Write(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
+# Edit(docs/planning/**), NOT Write(...): since Claude Code 2.1.210 file-permission rules are consulted
+# for `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but never consulted, so the
+# previous Write-form grant was dead and plan writes re-prompted (2026-08-17 audit, AF-27).
+# disallowed-tools carves the gate's verdict state out of that grant: gitignore `**` matches
+# dot-directories, so an effective Edit(docs/planning/**) would otherwise pre-approve direct writes to
+# docs/planning/.verdicts/ — the artifact `resolve-plan-gate.sh verify` trusts. Verdict artifacts are
+# written ONLY through the granted persist-verdict.sh entrypoint (a Bash subprocess, which file rules
+# do not govern); Claude editing them directly must prompt (2026-08-17 audit, AF-8).
+allowed-tools: Read, Grep, Glob, WebFetch, WebSearch, AskUserQuestion, Edit(docs/planning/**), Agent(enterprise-stakeholder), Agent(unleashed-mail:enterprise-stakeholder), Agent(smb-entrepreneur), Agent(unleashed-mail:smb-entrepreneur), Agent(jira-manager), Agent(unleashed-mail:jira-manager), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/snapshot-plan.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
+disallowed-tools: Edit(docs/planning/.verdicts/**)
 ---
 
 # Feature Brainstorm: $ARGUMENTS

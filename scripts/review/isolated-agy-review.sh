@@ -231,8 +231,12 @@ if ! TREE_BASELINE="$(disposable_fingerprint "$TREE")"; then
 fi
 
 # Preserve the allocator's reserved leaf for pty-capture.py --allocated to open.
+# stdout only is silenced; pty-capture's STDERR passes through so its diagnostics (timeout notice,
+# allocated-leaf/launch refusal reasons, capture-write failures) reach the operator instead of the
+# round ending as a bare EXIT=n with the reason discarded (2026-08-17 audit, AF-10). The transcript
+# itself still goes to $OUT, not to either stream.
 ( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
-    agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null 2>&1
+    agy --add-dir "$TREE" --model "$MODEL" --print-timeout 28m -p "Read and follow $TREE/$PROMPT_REL" ) >/dev/null
 RC=$?
 
 # --- after: the assertion that would have caught COREDEV-2607 --------------------------------

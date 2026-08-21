@@ -8,17 +8,51 @@ description: Plan and debug review via the Antigravity CLI (binary `agy`, model 
 # step prompted for permission (or was denied) before the newly narrowed capture grant could run —
 # so tightening the capture command had made the flow LESS usable, not more. The glob is the exact
 # per-round filename shape the recipe derives, not a general repo write (PR #63 recheck, P2).
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Write(.agy-prompt-*.md)
+# Edit(...), NOT Write(...): since Claude Code 2.1.210 file-permission rules are consulted for
+# `Edit(path)`/`Read(path)` only — a `Write(path)` rule is accepted but NEVER consulted (docs:
+# "Use Edit(docs/**) in place of Write(docs/**)"), so the previous Write-form grant was dead on the
+# CLI this plugin targets (>= 2.1.219) and every round re-prompted anyway (2026-08-17 audit, AF-27).
+# An Edit(path) allow rule covers all built-in file-editing tools on that path, the Write tool included.
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Edit(.agy-prompt-*.md), Read
 ---
 
 # Antigravity (`agy`) Review
 
-All plans and debugging sessions must be reviewed by the `agy` CLI before implementation. Non-negotiable — paired with `/codex-review`. The canonical workspace command is the bare `/gemini-review` (the plugin also bundles it as `/unleashed-mail:gemini-review`); the name is kept for muscle memory while the underlying CLI is Antigravity (Google retired the older `gemini` CLI in May 2026).
+All plans and debugging sessions must be reviewed by the `agy` CLI before implementation. Non-negotiable — paired with `/codex-review`. **The canonical invocation is the namespaced `/unleashed-mail:gemini-review`** — the plugin registers its skills namespaced, so that form always resolves; the bare `/gemini-review` resolves only where the consumer workspace ships its own local copy (AGENT_CONTRACTS Cross-references; 2026-08-17 audit, AF-6). The `gemini` name is kept for muscle memory while the underlying CLI is Antigravity (Google retired the older `gemini` CLI in May 2026).
 
 | Trigger | When |
 |---------|------|
 | New plan or architecture decision | BEFORE any code is written |
 | Bug investigation or debugging | BEFORE proposing fixes |
+
+## Scope and round hygiene (read before dispatching)
+
+- **The granted capture wrapper is PLAN-ONLY.** `capture-gemini-review.sh` requires a `<plan>` operand
+  and `bind-prompt.py` binds only `docs/planning/*_PLAN.md` documents — a prompt naming no plan (or a
+  non-plan target like `docs/planning/ISSUE-42.md`) is refused with "the prompt never names a plan"
+  **before the reviewer launches**. This is by design: the digest-bound, gate-bearing artifact chain
+  exists for plans. **Debug/bug-investigation reviews are ADVISORY** — they produce no verdict artifact
+  and never satisfy the `/unleashed-mail:implement` gate. Run them either by (a) writing the
+  investigation up as a `*_PLAN.md` (a diagnosis plan is a plan — this makes the round gate-bearing), or
+  (b) invoking `agy` through `pty-capture.py` directly with the debug system prompt below — that
+  invocation is outside this skill's grants, so expect a permission prompt; that is intentional for a
+  non-gate round. Do not fight the "never names a plan" refusal by renaming arbitrary files to
+  `*_PLAN.md`. (2026-08-17 audit, AF-3; a scripted non-plan `--target` binding is tracked in
+  COREDEV-2654.)
+- **Write BOTH per-round prompt files BEFORE launching either arm, then freeze the tree.** The
+  isolation harnesses fingerprint the live checkout before and after each round and **void the round on
+  ANY difference — a new untracked file included** (exit 3). Writing `.codex-prompt-*.md` while the
+  ~28-minute gemini round is still running voids that round at the finish line in any repo that does
+  not git-ignore these files; so does unrelated untracked churn (build logs, editor droppings). Order:
+  write `.agy-prompt-<T>r<N>.md` AND `.codex-prompt-<T>r<N>.md`, then dispatch both captures, and make
+  no working-tree changes until both rounds land. **Consumer repos must add the ignore globs**
+  `.agy-*.md`, `.codex-*.md`, `.kimi-*.md`, `.gate-*-prompt.md` (see README → Installation).
+  (2026-08-17 audit, AF-5.)
+- **The assembled prompt has a 1000-byte floor.** The wrapper passes `--min-bytes 1000` to
+  `stage-prompt.py`; the read-only guard it prepends is ~381 bytes, so your prompt file itself must
+  carry a real review specification (roughly 620+ bytes — the schematic example under "Invocation
+  patterns" is illustrative, not sufficient). A refusal naming the floor means the prompt was too
+  thin or truncated, not that the CLI failed. (2026-08-17 audit, AF-9.)
 
 ## Setup
 
@@ -138,9 +172,11 @@ Do not paste or re-derive the recipe inline — invoke the committed [`scripts/p
 Put the full review/task spec in a PER-ROUND workspace markdown file — `.agy-prompt-${TICKET}r${ROUND}.md`, never a shared `.agy-prompt.md`, because two concurrent rounds sharing one prompt cross-wire prompt and transcript (deep review, P1) — then pass a short `-p` that points to it. Keeps argv small AND makes the prompt editable/version-controllable.
 
 # 1. WRITE the prompt to the per-round workspace file with the **Write tool**, not a shell heredoc.
-#    This skill grants `Write(.agy-prompt-*.md)`; a `cat > … <<EOF` is a Bash redirect matching no Bash
+#    This skill grants `Edit(.agy-prompt-*.md)` (the Edit-form rule pre-approves all built-in
+#    file-editing tools on that path, Write included; a Write-form rule is never consulted on
+#    CLI >= 2.1.210); a `cat > … <<EOF` is a Bash redirect matching no Bash
 #    grant, so it PROMPTS on every gate round — the exact reprompt the granted flow exists to avoid
-#    (PR #63 recheck, P2). Same shape as codex-review's `Write(.codex-prompt-*.md)` step. Give the file
+#    (PR #63 recheck, P2). Same shape as codex-review's `Edit(.codex-prompt-*.md)` step. Give the file
 #    an absolute plan reference so agy resolves it regardless of how it was launched, e.g.:
 #
 #        Write(.agy-prompt-${TICKET}r${ROUND}.md):
@@ -236,7 +272,7 @@ Slash commands are NOT available via `-p`; you must be inside an interactive `ag
 6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that
    allocated file back into context; do not reconstruct its name.
 7. **Incorporate** the feedback into the plan; iterate until APPROVE or APPROVE_WITH_NOTES.
-8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke
+8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke
    `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer
    "<name>=<STATUS>:<allocated-path>"` argument. Make sure each review prompt asks the reviewer to finish
    with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the

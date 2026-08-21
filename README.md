@@ -288,6 +288,19 @@ claude plugin install unleashed-mail
 # 3. Restart Claude Code so the new agents/skills/commands load
 ```
 
+**Consumer-repo setup (one-time, per repo using the review gate):** add the per-round reviewer
+prompt files to the repo's `.gitignore` — the review harnesses fingerprint the live checkout and
+**void a round on any working-tree change, a new untracked file included**, so an un-ignored prompt
+file written while the other arm's ~28-minute round is still running voids that round at the finish
+line (2026-08-17 audit, AF-5):
+
+```gitignore
+.agy-*.md
+.codex-*.md
+.kimi-*.md
+.gate-*-prompt.md
+```
+
 To pull a newer version after upstream changes:
 
 ```bash
@@ -449,7 +462,7 @@ Agents are designed for **flexible parallel execution** in any combination. The 
 The plugin enforces these non-negotiable processes:
 
 1. **Planning document** — `docs/planning/FEATURE_NAME_PLAN.md` for every feature (no exceptions)
-2. **Plan review gate** — Every plan or debug session must be reviewed by **both** `/gemini-review` (Antigravity CLI `agy`) and `/codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Bare workspace names are canonical; the plugin also bundles them as `/unleashed-mail:gemini-review` / `/unleashed-mail:codex-review`.)
+2. **Plan review gate** — Every plan must be reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity CLI `agy`) and `/unleashed-mail:codex-review` before implementation. Both must produce APPROVE / APPROVE_WITH_NOTES; iterate (typically 2–6 rounds) until both converge. (Namespaced names are canonical — the plugin registers its skills namespaced, so those invocations always resolve; the bare `/gemini-review` / `/codex-review` forms resolve only where the consumer workspace ships its own local copies. The scripted, digest-bound gate binds `docs/planning/*_PLAN.md` documents; debug/bug-investigation reviews reuse the same reviewers in advisory mode — see the review skills.)
 3. **Context7 usage** — Mandatory for code generation, setup, config, API docs lookup
 4. **Jira ticket hygiene** — Every change tracked at `https://unleashedservices.atlassian.net/` (project key `COREDEV`), updated throughout, with Epic association
 5. **Provider parity** — Gmail ↔ Graph implementations stay in sync; views/ViewModels obtain providers via `AccountScopedServiceProvider`, never concrete types
@@ -467,10 +480,10 @@ The plugin registers hooks on 10 Claude Code events (see [`hooks/hooks.json`](ho
 
 | Event | Script | Behavior | Default | Kill switch |
 |---|---|---|---|---|
-| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` |
+| PreToolUse (Write/Edit/Bash) | `sensitive-file-guard.sh` | Flags edits to sensitive files (Keychain/OAuth/entitlements/DB/WebView). `ask` = permission prompt (non-interactive / `dontAsk` / `-p` contexts **deny** the operation); `warn` = advisory only | `ask` | `UNLEASHED_SENSITIVE_GUARD_MODE` = `ask`/`warn`/`off` (or `UNLEASHED_SENSITIVE_GUARD=off`) |
 | PostToolUse (Write/Edit) | `swift-lint-check.sh` | Swift syntax + SwiftLint + `try!`/`as!`/token-log checks. Feeds findings back to the model via the PostToolUse JSON contract (`decision:block` reason / `additionalContext`) | on | `UNLEASHED_LINT_CHECK=off` |
-| PostToolUse (Write/Edit, Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
-| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` |
+| PostToolUse (Bash) | `swift-build-verify.sh` | Build/test-command advisories via `additionalContext` | on | `UNLEASHED_FAILURE_LOG=off` (telemetry only) |
+| Stop | `stop-quality-marker-gate.sh` | Blocks the turn once (via `decision:block`+`reason`) if a lint-fail marker is set — fail-open, TTL/commit-guarded. `enforce` = block; `warn` = silent log | `enforce` | `UNLEASHED_STOP_GATE_MODE` = `enforce`/`warn`/`off` (or `UNLEASHED_STOP_GATE=off`) |
 | StopFailure | `stop-failure-log.sh` | Observe-only failure telemetry (class only, no PII) | on | `UNLEASHED_FAILURE_LOG=off` |
 | PermissionDenied | `permission-denied-log.sh` | Observe-only denial telemetry | on | `UNLEASHED_DENY_LOG=off` |
 | PostToolUseFailure (Bash) | `build-failure-log.sh` | Observe-only build-failure telemetry | on | `UNLEASHED_FAILURE_LOG=off` |

@@ -9,7 +9,8 @@ name: plugin-ci
 
 on:
   push:
-    # `alpha` is the integration branch releases are cut from — it MUST be gated. Until COREDEV-2494
+    # `main` is the trunk releases are cut from; `alpha` is a gated pre-release branch. BOTH are
+    # gated, which is the point of this filter. Until COREDEV-2494
     # this triggered on `main` only, so 56 of alpha's 57 commits merged with ZERO checks: every audit
     # PR targeted alpha and reported "no checks". Worse, PR #36 ADDED `claude plugin validate` and #31
     # added actionlint — neither ever executed on the branch they were added to.

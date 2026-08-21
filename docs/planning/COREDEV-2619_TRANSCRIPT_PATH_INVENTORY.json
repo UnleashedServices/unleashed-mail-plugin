@@ -81,9 +81,9 @@
   },
   "sites": [
     {
-      "location": "CHANGELOG.md:1913",
+      "location": "CHANGELOG.md:2012",
       "path": "CHANGELOG.md",
-      "line": 1913,
+      "line": 2012,
       "class": "quote-keep",
       "reason": "Released behavior is a historical changelog record and must not be rewritten.",
       "sourceSha256": "5640256c55df5d7c7cc22b5ec9d775d7b755b2e4b84c03320ecc8d1ed0c083f1"
@@ -258,7 +258,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 193,
+        "line": 202,
         "payloads": [
           "       --reviewer \"gemini=${GEMINI_STATUS}:${GEMINI_TRANSCRIPT}\" \\"
         ],
@@ -280,7 +280,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 194,
+        "line": 203,
         "payloads": [
           "       --reviewer \"codex=${CODEX_STATUS}:${CODEX_TRANSCRIPT}\""
         ],
@@ -302,11 +302,11 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 10,
+        "line": 14,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Write(.codex-prompt-*.md)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/audit-codex.sh *), Bash(command -v codex), Bash(codex --version), Bash(command -v kimi), Edit(.codex-prompt-*.md), Edit(.kimi-prompt-*.md), Read"
         ],
-        "payloadSha256": "4f823cd491422129775226420675695c2632c146202d603a71cd9c9fa5ce62f7"
+        "payloadSha256": "d8b4474c976604451fb342877654f25b1f9aaf49f773f822aca635b44d3edb0d"
       },
       "sourceSha256": "b72ef68c9a3e84e8bac9ed47c673793b08f682ccffa52dbbc7182f480e747f0d",
       "precedingAnchorLine": 6,
@@ -405,7 +405,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 69,
+        "line": 104,
         "payloads": [
           "# Captured output is in the exact allocated path held by CODEX_TRANSCRIPT; the wrapper's exit code",
           "# matches codex's. Preserve the marker remainder byte-for-byte for synthesis."
@@ -428,7 +428,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 206,
+        "line": 242,
         "payloads": [
           "1. **Plan review:** `codex exec -c model_reasoning_effort=xhigh -s read-only \"PLAN_CONTENT\"` — **end the prompt asking Codex to finish with an explicit `VERDICT: APPROVE | APPROVE_WITH_NOTES | REQUEST_CHANGES` line** so the synthesis step can parse it deterministically. Once gemini's paired transcript is also captured, invoke `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer \"<name>=<STATUS>:<allocated-path>\"` argument to produce the auditable **Combined verdict** block before implementation."
         ],
@@ -450,11 +450,11 @@
         "S-PRECLEAN"
       ],
       "destination": {
-        "line": 11,
+        "line": 16,
         "payloads": [
-          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Bash(command -v agy), Write(.agy-prompt-*.md)"
+          "allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh *), Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/preflight-agy.sh), Edit(.agy-prompt-*.md), Read"
         ],
-        "payloadSha256": "7ebd82d12f3ea56c27ab79bfc84d0545dcf4ee126b56996360f9e8253c7e69b5"
+        "payloadSha256": "3f07e0bd106eb9ad2bbb7073b40fc9edbd75178c1fa3d0fdd71aabd7d17f4471"
       },
       "sourceSha256": "f272d0ef534d15c57c4fcce8cad5988df6857794d2c1f4542e41168f42bc3622",
       "precedingAnchorLine": 7,
@@ -473,7 +473,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 86,
+        "line": 120,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
           "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
@@ -498,7 +498,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 174,
+        "line": 210,
         "payloads": [
           "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-gemini-review.sh\" \\",
           "    \"$TICKET\" \"$ROUND\" \".agy-prompt-${TICKET}r${ROUND}.md\" \"$PLAN\" 1800",
@@ -523,7 +523,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 236,
+        "line": 272,
         "payloads": [
           "6. **Capture output** — the isolated helper writes to the exact path in `GEMINI_TRANSCRIPT`. Read that",
           "   allocated file back into context; do not reconstruct its name."
@@ -546,15 +546,15 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 239,
+        "line": 275,
         "payloads": [
-          "8. **Synthesize both reviews** — once the paired `/codex-review` transcript is also captured, invoke",
+          "8. **Synthesize both reviews** — once the paired `/unleashed-mail:codex-review` transcript is also captured, invoke",
           "   `/unleashed-mail:review-synthesis` with each allocated path as one quoted `--reviewer",
           "   \"<name>=<STATUS>:<allocated-path>\"` argument. Make sure each review prompt asks the reviewer to finish",
           "   with an explicit `VERDICT:` line (e.g. `APPROVE / APPROVE_WITH_NOTES / REQUEST_CHANGES`) so the",
           "   synthesis can read it deterministically."
         ],
-        "payloadSha256": "32d57d69d0ef0edc8a1a773acaaca69b4fa8dc4e08f86724941bf7f5b06cac5e"
+        "payloadSha256": "45f55f0f17999e4529714f9eba7728e35fb1b781637eb4232158a9810cc368a4"
       },
       "sourceSha256": "ed22e9edc7d8a3ffe5028b2ee66fd6933789aad09f530bb47167e5ced441bbfd",
       "precedingAnchorLine": 198,
@@ -642,7 +642,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 159,
+        "line": 160,
         "payloads": [
           "    --reviewer \"$GEMINI_REVIEWER_SPEC\" \\"
         ],
@@ -664,7 +664,7 @@
         "S-THREAD"
       ],
       "destination": {
-        "line": 160,
+        "line": 161,
         "payloads": [
           "    --reviewer \"$CODEX_REVIEWER_SPEC\""
         ],

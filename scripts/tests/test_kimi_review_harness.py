@@ -67,6 +67,18 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HARNESS = os.path.join(REPO, "scripts", "review", "isolated-kimi-review.sh")
 SOURCE_PROMPT = os.path.join(REPO, ".review-prompt-2617r123.md")
+DEFAULT_PLAN = "docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
+# A DIFFERENT DIRECTORY, not just a different basename: both accepted operands used to live
+# under `docs/planning/`, so an implementation that hard-coded that prefix and used only the
+# basename passed every assertion — and would have failed on the real `docs/audits/` operand
+# this branch is reviewed with (codex, PR #69 round 6).
+# THE SAME BASENAME, a DIFFERENT DIRECTORY, and different bytes. Distinct basenames still let a
+# basename-only implementation pass by resolving the leaf against any directory; only a shared
+# basename forces the digest to depend on the FULL path (codex, PR #69 round 7).
+# The alternate shares BOTH the basename and the immediate parent, differing only in a HIGHER
+# ancestor. Sharing the basename alone still let an implementation using the last TWO path
+# components pass; only this forces the digest to depend on the FULL path (codex, round 8).
+ALT_PLAN = "archive/" + DEFAULT_PLAN
 SESSION = "session_00000000-0000-4000-8000-000000000001"
 #: A session that exists BEFORE the run (the test creates it), and the one/two the stub creates DURING it.
 OLD_SESSION = "session_11111111-1111-4111-8111-111111111111"
@@ -89,18 +101,115 @@ case "${{KIMI_STUB_MODE:-clean}}" in
   hookspath)     git config core.hooksPath /evil/hooks
                  printf 'HOOKSPATH=%s\\n' "$(git config --get core.hooksPath)" ;;
   record-arg)    printf '%s' "$2" > "$KIMI_STUB_SCRATCH/received.bin" ;;   # $1=-p, $2=the prompt text
+  record-checkout) # what the REVIEWER actually sees: its cwd's HEAD and the plan bytes there
+                 git rev-parse HEAD > "$KIMI_STUB_SCRATCH/seen-head" 2>/dev/null
+                 shasum -a 256 "$KIMI_STUB_PLAN" 2>/dev/null | cut -d' ' -f1 \
+                   > "$KIMI_STUB_SCRATCH/seen-plan" ;;
+  fail-nonzero)  printf 'reviewer failed\\n' >&2; exit 7 ;;
+  slow)          sleep 30 ;;
   assume-unchanged-live)
                  git -C "$KIMI_STUB_CLONE" update-index --assume-unchanged README.md
                  echo x >> "$KIMI_STUB_CLONE/README.md" ;;
   # The session-binding modes write under $HOME — the harness's HOME, re-pointed at the scratch by the test.
   new-max)       mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   new-high)      mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
-                 printf '{{"thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   quote-old)     printf 'As in {OLD_SESSION} earlier\\n' ;;      # creates NOTHING; quotes a pre-existing session
+  foreign-only)  # a stranger's session: correct shape, but recorded under a DIFFERENT cwd
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"/nowhere/else"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  no-state)      # a new session with NO state.json at all: provenance is unknowable, not assumed
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  workdir-max)   # THE EIGHTH AXIS: the REAL majority schema, which records `workDir`, not `cwd`
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"workDir":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  alias-conflict) # two recorded cwds that DISAGREE: ambiguous provenance, not resolvable by order
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s","workDir":"/nowhere/else"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nofield) # max request + a request with NO tier: the round cannot account for the second
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nonstr)  # max request + a request whose tier is a NUMBER, not a string
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":123}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nultier) # max request + a tier of "m\\u0000ax": NOT "max" in Python, but bash DELETES NUL
+                 # in command substitution, so it arrives at the gate as exactly `max,`.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"m\\u0000ax"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-type)      # a high request HIDDEN by a duplicate `type` name: last-wins makes it stop
+                 # looking like a request at all.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"high","type":"metadata"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-tier)      # one request naming TWO tiers: last-wins rewrites high to max
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"high","thinkingEffort":"max"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-cwd)       # duplicate `cwd` in state.json: last-wins collapses it to ONE key BEFORE the
+                 # conflicting-alias guard can see a conflict, so that guard could never fire.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"/nowhere/else","cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  slow-loud)     # a TIMED-OUT round that nevertheless emitted bytes AND created a session, so it
+                 # reaches the WIRE block (pty-capture writes the partial transcript on timeout).
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
+                 printf 'partial output before the hang\\n'
+                 sleep 30 ;;
+  mixed-badutf8) # max request + a request whose TYPE carries an invalid UTF-8 byte. Replacement
+                 # decoding would make this parse as a DIFFERENT record type and skip it silently.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.requ\\377st","thinkingEffort":"high"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-malform) # max request + an UNPARSEABLE line: the natural way to hide a low-tier request
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{not json\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  bind-only)     # THE MODEL NEVER RAN: profile.bind records the CONFIGURED tier, nothing was asked
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"metadata"}}\\n'
+                    printf '{{"type":"profile.bind","modelAlias":"kimi-code/k3","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"permission.set_mode","mode":"auto"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  malformed-alias) # OUR cwd in one alias, a NON-STRING in another: must not be waved through
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s","workDir":12345}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  empty-plus-one) # THE SEVENTH AXIS: no transcript bytes AND exactly one new session
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
+                 exit 0 ;;   # ...and print NOTHING, so the capture is empty
   two-new)       for s in {NEW_SESSION} {NEW_SESSION_2}; do
                    mkdir -p "$HOME/.kimi-code/sessions/wd_new/$s/agents/main"
-                   printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
+                   printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/$s/state.json"
+                   printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
                  done ;;
 esac
 printf '{SESSION}\\nVERDICT: APPROVE\\n'
@@ -124,15 +233,77 @@ class KimiHarnessMutationGates(unittest.TestCase):
         # commit made on top of it. An orphan root carries the same tree with a complete history.
         subprocess.run(git + ["checkout", "-q", "--orphan", "fixture"], check=True)
         prompt = os.path.join(self.clone, ".review-prompt-x.md")
+        # The prompt must NAME the document the BASIS certifies — the harness refuses otherwise, so
+        # that a round cannot review one file while certifying another (codex, PR #69 round 2). Every
+        # fixture prompt therefore states the plan path it is reviewing, exactly as a real one must.
+        _plan_line = "Plan under review: " + DEFAULT_PLAN + "\n"
         if os.path.isfile(SOURCE_PROMPT) and os.path.getsize(SOURCE_PROMPT) >= 1000:
-            shutil.copy(SOURCE_PROMPT, prompt)
+            with open(SOURCE_PROMPT, "r", encoding="utf-8") as src, \
+                 open(prompt, "w", encoding="utf-8") as fh:
+                fh.write(_plan_line)
+                fh.write(src.read())
         else:
             with open(prompt, "w", encoding="utf-8") as fh:
+                fh.write(_plan_line)
                 fh.write("Review the plan for correctness, security and completeness.\n" * 40)
+        # An ALTERNATE committed plan with DIFFERENT bytes, and a prompt that declares it. Without
+        # one, the only positive digest oracle used DEFAULT_PLAN and the only alternate operand
+        # (README.md) was refused before the digest — so an implementation that ALWAYS hashes the
+        # default passed every assertion (codex, PR #69 round 5).
+        # A THIRD plan at an UNPREDICTABLE path. Two fixed operands can always be special-cased —
+        # codex showed a mutant branching on the first path component that satisfied both — and so
+        # can three, and four. What cannot be special-cased is a path the implementation could not
+        # know at authoring time, so this one is derived from the per-run scratch name (codex,
+        # PR #69 round 9). It is the same assertion, made unguessable.
+        # ...and its STRICT SUFFIX is another tracked plan with different bytes. A random path alone
+        # was still satisfied by an implementation that strips a leading component: it resolved to
+        # something that happened to be right for all three operands (codex, PR #69 round 10). With
+        # the suffix being DEFAULT_PLAN, any generic "drop the first component" resolves the WRONG
+        # tracked file and the digest disagrees — and the prefix stays unguessable, so a hard-coded
+        # strip cannot target it either.
+        self.rand_plan = "r%s/%s" % (os.path.basename(self.scratch)[-8:], DEFAULT_PLAN)
+        # A FOURTH operand with a DIFFERENT BASENAME. The other three deliberately share one, to
+        # kill basename-only resolution — but that let a resolver key on THAT basename, use the full
+        # path for it and strip otherwise, passing all three (codex, PR #69 round 11, raised as a
+        # note rather than a finding). Varying the basename too closes it.
+        self.odd_plan = "docs/audits/COREDEV-2654_ODD_%s.md" % os.path.basename(self.scratch)[-6:]
+        odd_abs = os.path.join(self.clone, self.odd_plan)
+        os.makedirs(os.path.dirname(odd_abs), exist_ok=True)
+        with open(odd_abs, "w", encoding="utf-8") as fh:
+            fh.write("ODD-BASENAME PLAN — distinct bytes again.\n")
+        with open(os.path.join(self.clone, ".review-prompt-odd.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + self.odd_plan + "\n")
+            fh.write("Review the odd-basename plan.\n" * 40)
+        rand_abs = os.path.join(self.clone, self.rand_plan)
+        os.makedirs(os.path.dirname(rand_abs), exist_ok=True)
+        with open(rand_abs, "w", encoding="utf-8") as fh:
+            fh.write("UNPREDICTABLE PLAN %s — distinct bytes.\n" % self.rand_plan)
+        with open(os.path.join(self.clone, ".review-prompt-rand.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + self.rand_plan + "\n")
+            fh.write("Review the unpredictable plan.\n" * 40)
+        alt_abs = os.path.join(self.clone, ALT_PLAN)
+        os.makedirs(os.path.dirname(alt_abs), exist_ok=True)
+        with open(alt_abs, "w", encoding="utf-8") as fh:
+            fh.write("ALTERNATE PLAN — distinct bytes so the digest cannot coincide.\n")
+        with open(os.path.join(self.clone, ".review-prompt-alt.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + ALT_PLAN + "\n")
+            fh.write("Review the alternate plan.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
-            fh.write(".review-prompt-x.md\n")
+            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n.review-prompt-odd.md\n.review-prompt-nul.md\n.review-prompt-nonul.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
+        # A SECOND COMMIT that CHANGES the default plan's bytes. Without it every cell passed the
+        # literal "HEAD" as the commit operand and computed every expectation from `HEAD:` too — so
+        # an implementation that IGNORES $SHA and hard-codes HEAD satisfied all four path operands
+        # (codex, PR #69 round 13 at effort=max; two xhigh rounds had approved this). Varying the
+        # COMMIT axis is what that sampling missed.
+        self.first_sha = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True,
+                                        text=True, check=True).stdout.strip()
+        with open(os.path.join(self.clone, DEFAULT_PLAN), "a", encoding="utf-8") as fh:
+            fh.write("A LATER REVISION — these bytes exist only at HEAD, not at first_sha.\n")
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "second"],
+                       check=True, capture_output=True)
         status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
         self.assertEqual("", status.stdout, "the fixture clone must start clean (the prompt is ignored)")
         bindir = os.path.join(self.scratch, "bin")
@@ -155,11 +326,22 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.env["KIMI_STUB_SCRATCH"] = self.scratch
         self.prompt = prompt
 
-    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md"):
+    def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md",
+             plan=None, env=None, commit="HEAD", timeout=60):
+        """`plan` names the 5th operand (the BASIS target); `env` replaces the child environment.
+
+        Both exist for the round-2 guards: the operand must be the document the PROMPT names, and a
+        poisoned git environment must not be able to redirect which repository the BASIS is read
+        from. Callers that pass neither get the harness's own default, as before.
+        """
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
-        env = dict(self.env, KIMI_STUB_MODE=mode)
-        p = subprocess.run(["bash", harness, prompt, out, "HEAD", "60"],
-                           cwd=self.clone, env=env, capture_output=True, text=True, check=False, input="")
+        child_env = dict(env or self.env, KIMI_STUB_MODE=mode,
+                         KIMI_STUB_PLAN=(plan or DEFAULT_PLAN))
+        argv = ["bash", harness, prompt, out, commit, str(timeout)]
+        if plan is not None:
+            argv.append(plan)
+        p = subprocess.run(argv, cwd=self.clone, env=child_env,
+                           capture_output=True, text=True, check=False, input="")
         return p, out
 
     def _stub_ran(self):
@@ -174,7 +356,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         path = self._wire(wd, session)
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write('{"thinkingEffort":"%s"}\n' % effort)
+            fh.write('{"type":"llm.request","thinkingEffort":"%s"}\n' % effort)
         return path
 
     def _assert_void(self, mode, message):
@@ -737,6 +919,436 @@ class KimiHarnessMutationGates(unittest.TestCase):
             text = fh.read()
         self.assertEqual(1, text.count(self.SUMMARY), "the summary block is not unique — re-derive the pin")
         return text.replace(self.SUMMARY, self.SUMMARY_OLD, 1)
+
+
+    def test_a_prompt_that_does_not_name_the_operand_is_refused(self):
+        """The BASIS must certify the document the prompt actually asks for.
+
+        `README.md` is a tracked regular blob and passes every mode/blob gate, so proving
+        "committed file" proved nothing about WHICH committed file (codex, PR #69 round 2). The
+        control is the same run with the operand the prompt names: it must get PAST this refusal,
+        or the cell is measuring nothing.
+        """
+        p, out = self._run("clean", plan="README.md")
+        self.assertIn("refusing to review one document and certify another", p.stderr,
+                      f"a mismatched operand was accepted: rc {p.returncode}\n{p.stderr}")
+        self.assertIn("README.md", p.stderr, "the refusal must name the operand it rejected")
+        self.assertNotEqual(0, p.returncode)
+
+        control, _ = self._run("clean", plan=DEFAULT_PLAN)
+        self.assertNotIn("refusing to review one document", control.stderr,
+                         "CONTROL FAILED — the named operand was refused too, so the check above "
+                         f"is not discriminating:\n{control.stderr}")
+
+    def test_git_selection_env_cannot_redirect_the_basis(self):
+        """A poisoned git environment must not change the BYTES the round certifies.
+
+        The oracle is the `BASIS=<digest>` token on the CLEAN SUMMARY, not the `BASIS plan = <path>`
+        diagnostic. An earlier version of this test compared the path line — which is identical in
+        both runs by construction, so it reported equality even when the digests differed and could
+        not have detected the defect it was written for (codex, PR #69 round 3). It also poisoned
+        toward THIS repository, where the plan bytes are the same, so there was nothing to see.
+
+        So: a genuinely separate repository whose plan bytes DIFFER, the poison derived from the
+        fixture's own env, both runs required to reach the clean summary, and the digests compared.
+        """
+        other = os.path.join(self.scratch, "otherrepo")
+        os.makedirs(other)
+        git = ["git", "-C", other, "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(["git", "init", "-q", other], check=True)
+        os.makedirs(os.path.dirname(os.path.join(other, DEFAULT_PLAN)), exist_ok=True)
+        with open(os.path.join(other, DEFAULT_PLAN), "w", encoding="utf-8") as fh:
+            fh.write("DIFFERENT PLAN BYTES — this repository was never reviewed.\n")
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "other"],
+                       check=True, capture_output=True)
+
+        clean, _ = self._run("clean")
+        basis_clean = self._basis_digest(clean)
+        self.assertIsNotNone(basis_clean,
+                             f"CONTROL FAILED — the clean run never printed a summary:\n{clean.stdout}{clean.stderr}")
+
+        poisoned_env = dict(self.env)
+        poisoned_env["GIT_DIR"] = os.path.join(other, ".git")
+        poisoned_env["GIT_WORK_TREE"] = other
+        poisoned_env["GIT_CONFIG_COUNT"] = "1"
+        poisoned_env["GIT_CONFIG_KEY_0"] = "core.hooksPath"
+        poisoned_env["GIT_CONFIG_VALUE_0"] = os.path.join(self.scratch, "attacker-hooks")
+        poisoned, _ = self._run("clean", env=poisoned_env)
+        basis_poisoned = self._basis_digest(poisoned)
+        self.assertIsNotNone(basis_poisoned,
+                             f"the poisoned run never reached the summary, so the digests were never "
+                             f"compared:\n{poisoned.stdout}{poisoned.stderr}")
+        self.assertEqual(basis_clean, basis_poisoned,
+                         "a poisoned git environment changed the BASIS digest the round certifies")
+
+        # THE POSITIVE ORACLE. `clean == poisoned` and `clean != decoy` are both satisfied by an
+        # implementation that consistently digests the WRONG file — hashing README.md every time
+        # would pass both (codex, PR #69 round 4). So assert what the digest must actually BE:
+        # the blob of the reviewed plan at the reviewed commit, computed here independently of the
+        # harness.
+        import hashlib
+        expected = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        self.assertEqual(expected, basis_clean,
+                         "the BASIS is not the digest of the reviewed plan's blob — it certifies "
+                         "some other bytes, consistently")
+
+        # THE DIGEST MUST FOLLOW THE OPERAND. Everything above still passes an implementation that
+        # always hashes DEFAULT_PLAN, because DEFAULT_PLAN is the only operand that reaches the
+        # digest in those cells. So run an ACCEPTED alternate and require its own blob.
+        alt, _ = self._run("clean", prompt=".review-prompt-alt.md", plan=ALT_PLAN)
+        basis_alt = self._basis_digest(alt)
+        self.assertIsNotNone(basis_alt,
+                             f"the alternate-plan run never reached the summary:\n{alt.stdout}{alt.stderr}")
+        expected_alt = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{ALT_PLAN}"])).hexdigest()[:12]
+        self.assertEqual(expected_alt, basis_alt,
+                         "the BASIS did not follow the plan operand — it certifies the same bytes "
+                         "whatever it is asked to certify")
+        self.assertNotEqual(basis_clean, basis_alt,
+                            "FIXTURE IS VACUOUS — the two plans digest identically")
+
+        # THE UNGUESSABLE OPERAND. This is the assertion a hard-coded implementation cannot satisfy
+        # by construction, whatever mapping it hard-codes.
+        rand, _ = self._run("clean", prompt=".review-prompt-rand.md", plan=self.rand_plan)
+        basis_rand = self._basis_digest(rand)
+        self.assertIsNotNone(basis_rand,
+                             f"the unpredictable-plan run never reached the summary:\n{rand.stdout}{rand.stderr}")
+        expected_rand = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{self.rand_plan}"])).hexdigest()[:12]
+        self.assertEqual(expected_rand, basis_rand,
+                         "the BASIS did not follow an operand the implementation could not have "
+                         "anticipated — the digest is not derived from the full path")
+
+        odd, _ = self._run("clean", prompt=".review-prompt-odd.md", plan=self.odd_plan)
+        basis_odd = self._basis_digest(odd)
+        self.assertIsNotNone(basis_odd,
+                             f"the odd-basename run never reached the summary:\n{odd.stdout}{odd.stderr}")
+        expected_odd = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{self.odd_plan}"])).hexdigest()[:12]
+        self.assertEqual(expected_odd, basis_odd,
+                         "the BASIS did not follow an operand whose BASENAME differs from the others")
+
+        # THE COMMIT AXIS. Same plan path, an EARLIER commit: the digest must be that commit's blob,
+        # not HEAD's. This is the assertion a hard-coded-HEAD resolver cannot satisfy.
+        older, _ = self._run("clean", commit=self.first_sha)
+        basis_older = self._basis_digest(older)
+        self.assertIsNotNone(basis_older,
+                             f"the earlier-commit run never reached the summary:\n{older.stdout}{older.stderr}")
+        expected_older = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"{self.first_sha}:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        expected_head = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        self.assertNotEqual(expected_older, expected_head,
+                            "FIXTURE IS VACUOUS — the plan's bytes are identical at both commits, so "
+                            "a hard-coded HEAD would be indistinguishable")
+        self.assertEqual(expected_older, basis_older,
+                         "the BASIS did not follow the COMMIT operand — it certifies HEAD whatever "
+                         "commit it is asked to certify")
+
+        # ...and the fixture must be capable of showing a difference, or the equality above is
+        # vacuous: the decoy's plan bytes must digest differently.
+        with open(os.path.join(other, DEFAULT_PLAN), "rb") as fh:
+            other_digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+        self.assertNotEqual(basis_clean, other_digest,
+                            "FIXTURE IS VACUOUS — the decoy repository's plan digests the same as "
+                            "the real one, so redirection would be invisible")
+
+    def test_the_reviewer_sees_the_commit_the_basis_certifies(self):
+        """Binding the BASIS blob is not the same as putting the reviewer in that commit.
+
+        The round-13 cell proved the DIGEST followed the commit operand — and a mutant that computes
+        the BASIS from the right commit while checking out HEAD passed it anyway
+        (`basis_oracle=PASS reviewer_bytes=WRONG`, codex round 14 at max). So this asserts what the
+        reviewer's own working directory contains, recorded by the stub from inside it.
+        """
+        proc, _ = self._run("record-checkout", commit=self.first_sha)
+        seen_head = os.path.join(self.scratch, "seen-head")
+        seen_plan = os.path.join(self.scratch, "seen-plan")
+        self.assertTrue(os.path.exists(seen_head),
+                        f"the stub never recorded its checkout:\n{proc.stdout}{proc.stderr}")
+        with open(seen_head, encoding="utf-8") as fh:
+            self.assertEqual(self.first_sha, fh.read().strip(),
+                             "the reviewer was placed in a different commit than the BASIS certifies")
+        expected = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"{self.first_sha}:{DEFAULT_PLAN}"])).hexdigest()
+        with open(seen_plan, encoding="utf-8") as fh:
+            self.assertEqual(expected, fh.read().strip(),
+                             "the plan bytes in the reviewer's checkout are not the certified ones")
+
+    def test_a_prompt_containing_a_nul_is_refused(self):
+        """Command substitution DELETES NULs, so the reviewer would get different bytes than are bound.
+
+        `bind-prompt.py` already refuses this for the plan skills; the kimi harness did not, and the
+        divergence was measured: documented length 91, bash argv length 90, bytes_equal=False
+        (codex, PR #69 round 14 at max). The control is an ordinary prompt of the SAME length with
+        no NUL — it must still be accepted, or this cell proves only that the harness refuses things.
+        """
+        nul_prompt = ".review-prompt-nul.md"
+        with open(os.path.join(self.clone, nul_prompt), "wb") as fh:
+            fh.write(b"Plan under review: " + DEFAULT_PLAN.encode() + b"\n")
+            fh.write(b"body with a NUL\x00 inside\n" * 20)
+        proc, _ = self._run("clean", prompt=nul_prompt)
+        self.assertNotEqual(0, proc.returncode,
+                            f"a prompt containing a NUL was accepted:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("NUL", proc.stderr,
+                      f"the refusal did not name the cause:\n{proc.stderr}")
+
+        control_prompt = ".review-prompt-nonul.md"
+        with open(os.path.join(self.clone, control_prompt), "wb") as fh:
+            fh.write(b"Plan under review: " + DEFAULT_PLAN.encode() + b"\n")
+            fh.write(b"body with a NUL. inside\n" * 20)      # same shape, no NUL
+        control, _ = self._run("clean", prompt=control_prompt)
+        self.assertNotIn("NUL", control.stderr,
+                         f"CONTROL FAILED — an ordinary prompt was refused as containing a NUL:\n"
+                         f"{control.stderr}")
+        # "did not mention NUL" is not "was accepted" — a run that dies for ANY other reason also
+        # omits the word, so the control proved nothing about the guard (codex, PR #69 round 15).
+        # Require it to get PAST the binder and reach the capture summary.
+        self.assertIn("BASIS=", control.stdout,
+                      f"CONTROL FAILED — the ordinary prompt never reached the capture, so this cell "
+                      f"does not show the guard admits valid prompts:\n{control.stdout}{control.stderr}")
+
+    def test_a_nonzero_reviewer_status_is_preserved(self):
+        """Every stub mode terminated with an approving printf, so no failing reviewer was sampled."""
+        proc, _ = self._run("fail-nonzero")
+        self.assertNotEqual(0, proc.returncode,
+                            f"a reviewer exiting 7 was reported as success:\n{proc.stdout}{proc.stderr}")
+        # `TREE=clean` is a statement about the FINGERPRINT — the reviewer mutated nothing — and is
+        # correct here. The reviewer's own status is carried separately, and that is what must
+        # survive. (My first assertion conflated the two and would have "fixed" correct behaviour.)
+        self.assertIn("EXIT=7", proc.stdout,
+                      f"the reviewer's exit status was not carried into the summary:\n{proc.stdout}")
+
+    def test_a_timeout_is_reported_and_not_silently_clean(self):
+        """The timeout was hard-coded to 60 in every cell, so the timeout path was never exercised."""
+        proc, _ = self._run("slow", timeout=2)
+        self.assertNotEqual(0, proc.returncode,
+                            f"a timed-out round reported success:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("EXIT=124", proc.stdout,
+                      f"a timeout was not reported as 124 in the summary:\n{proc.stdout}")
+        self.assertIn("BYTES=0", proc.stdout,
+                      "a timed-out round should have captured no transcript bytes")
+
+    def test_a_foreign_session_is_not_this_runs_evidence(self):
+        """A stranger's concurrent session must not be read as this round's effort.
+
+        Set difference cannot tell it from ours — reproduced in round 16 as
+        `reviewer_sessions_created=0 foreign_sessions_created=1 would_pass_max_gate=yes`. Provenance
+        now comes from the launch: kimi files each session under a namespace derived from its cwd,
+        and this harness launches from a unique per-invocation directory.
+        """
+        p, _ = self._run("foreign-only")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a foreign session was certified as this run's effort:\n{p.stdout}")
+
+    def test_a_session_without_recorded_provenance_is_not_this_runs_evidence(self):
+        """No `state.json` means the cwd is unknowable — which must fail closed, not default to ours.
+
+        The foreign-session cell alone did not cover this: that fixture HAS a state.json recording a
+        different cwd, so a variant that treats an unreadable state as "ours" passed it. Found by
+        mutating toward the pre-round-16 count-only selection.
+        """
+        p, _ = self._run("no-state")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a session with no recorded cwd was treated as this run's:\n{p.stdout}")
+
+    def test_an_empty_capture_with_one_new_session_is_not_evidence(self):
+        """The seventh axis: (empty transcript, exactly one new session).
+
+        Cells covered (nonempty, one) and (empty, zero); the combination the guard actually decides
+        was never sampled, so the guard had no regression (codex, PR #69 round 16).
+        """
+        p, _ = self._run("empty-plus-one")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"an empty capture certified an effort from a session it did not "
+                            f"produce:\n{p.stdout}")
+
+    def test_the_real_workdir_schema_is_accepted_as_this_runs_evidence(self):
+        """THE EIGHTH AXIS: state-schema variation across Kimi versions.
+
+        Real sessions record the cwd under `workDir` (the 0.32.0-era schema this repo's own
+        KIMI_REVIEW_ARM_PLAN pins as the baseline) or under `cwd` (the newer `version=2` schema).
+        Measured across 63 stored sessions on the development machine: 38 `workDir` to 25 `cwd`,
+        never both. The round-16 filter read only `cwd`/`workingDirectory`, so it rejected the
+        MAJORITY of real sessions and broke the arm closed with `EFFORT=UNKNOWN` exit 4
+        (codex, PR #69 round 17).
+
+        This is the first POSITIVE provenance cell. Every other one asserts a rejection, so a
+        filter that rejects EVERYTHING satisfied all of them - which is precisely how a
+        fail-closed break survived three rounds of adversarial review. Dropping `workDir` from
+        the accepted spellings turns this red.
+        """
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".kimi-code")), "no session before the run")
+        p, _ = self._run("workdir-max")
+        self.assertEqual(0, p.returncode,
+                         f"a valid max-effort round on the majority schema exited nonzero - the arm "
+                         f"fails closed on real input:\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} "
+                                   r"PROMPT=[0-9a-f]{12} EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
+        self.assertNotIn("EFFORT NOT ASSERTED", p.stderr)
+
+    def test_conflicting_recorded_cwd_aliases_fail_closed(self):
+        """Two aliases naming DIFFERENT directories cannot both be this run's provenance.
+
+        Accepting all three spellings invites a first-truthy read, which a crafted `state.json`
+        steers just by choosing which alias to populate: put ours in the alias that wins and a
+        stranger's in the other. Disagreement is unknowable, and unknowable fails closed.
+        Mutating the parser back to first-truthy (`d.get("cwd") or ... or d.get("workDir")`)
+        turns this red while the positive cell above stays green.
+        """
+        p, _ = self._run("alias-conflict")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"an ambiguous provenance record was resolved by alias precedence "
+                            f"instead of failing closed:\n{p.stdout}")
+
+    def test_a_malformed_alias_fails_closed_rather_than_being_ignored(self):
+        """A non-string alias makes the record unreadable as written - which is unknowable, not ours.
+
+        `{"cwd": <ours>, "workDir": 12345}` names our directory in one alias and garbage in another.
+        Ignoring the bad alias accepts it; that is the permissive direction, and it was also
+        UNDETECTABLE - mutation gate C deleted the type check and every cell still passed, so the
+        first draft of this fix shipped a guard no test could fail on. Failing closed is both safer
+        and observable: mutating this back to "ignore non-strings" turns this cell red while the
+        `workdir-max` and `alias-conflict` cells stay green.
+        """
+        p, _ = self._run("malformed-alias")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a state.json with a non-string alias was accepted as this run's "
+                            f"provenance instead of failing closed:\n{p.stdout}")
+
+    def test_a_configured_tier_is_not_evidence_that_the_model_ran(self):
+        """THE NINTH AXIS: the effort token proves CONFIGURATION, not EXECUTION.
+
+        `thinkingEffort` appears in six record types across the real store, and only `llm.request`
+        means the model was actually asked at that tier. `profile.bind` is written when the session
+        binds its profile, before any inference — a statement of intent.
+
+        Two REAL sessions in this harness's own `wd_tree_*` namespace hold exactly
+        `metadata` + `profile.bind` + `permission.set_mode`, with zero `llm.request` records, and the
+        unfiltered extraction reported `max,` and PASSED the gate — certifying a tier for a round in
+        which the model was never called. Seven of 63 real sessions carry an effort token with no
+        `llm.request` at all.
+
+        The filter was checked in both directions against the real store before shipping: 51 sessions
+        yielded `max,` unfiltered and 49 do filtered, and the only two that change are exactly those
+        two zero-inference sessions. Deleting the `d.get("type")!="llm.request"` guard turns this red.
+        """
+        p, _ = self._run("bind-only")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a round in which the model never ran was certified at the tier its "
+                            f"profile was merely BOUND to:\n{p.stdout}")
+        self.assertNotEqual(0, p.returncode,
+                            f"a round with no inference exited success:\n{p.stdout}{p.stderr}")
+
+    def _assert_unknown_not_max(self, mode, what):
+        """A round whose wire log this harness cannot fully account for is not evidence about max."""
+        p, _ = self._run(mode)
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"{what} still certified max — the mixed known/unknown axis is "
+                            f"fail-OPEN:\n{p.stdout}")
+        self.assertNotEqual(0, p.returncode,
+                            f"{what} exited success:\n{p.stdout}{p.stderr}")
+
+    def test_a_request_with_no_recorded_tier_forces_unknown(self):
+        """THE NINTH AXIS, second half: mixed KNOWN and UNKNOWN requests (codex, PR #69 round 18).
+
+        Skipping an unreadable `llm.request` is fail-OPEN: if an earlier request recorded `max`, the
+        surviving set is still exactly `max,` and the gate passes. Reproduced by the reviewer as
+        `unknown_missing_field EFFORTS=max, would_max_gate_pass=yes`.
+
+        Strictness is free: the real store has 12094 non-empty wire lines, ZERO unparseable and ZERO
+        `llm.request` records lacking a valid string tier, and the filtered distribution over 63 real
+        logs is unchanged at 49/7/6/1.
+        """
+        self._assert_unknown_not_max("mixed-nofield", "a request with no recorded tier")
+
+    def test_a_request_with_a_nonstring_tier_forces_unknown(self):
+        """`{"type":"llm.request","thinkingEffort":123}` — a tier that cannot be read as written.
+
+        A separate code path from the missing-field case: the key is present and truthy, so a guard
+        keyed only on presence would pass it through.
+        """
+        self._assert_unknown_not_max("mixed-nonstr", "a request with a non-string tier")
+
+    def test_an_unparseable_wire_record_forces_unknown(self):
+        """An unreadable line is how a low-tier request would be HIDDEN from the set.
+
+        The wire log is written by the reviewed process at the same uid (see the self-reported
+        caveat), so emitting one malformed line is the cheapest way to drop a `high` request while
+        leaving the `max` ones visible. Skipping it certifies `max,`.
+        """
+        self._assert_unknown_not_max("mixed-malform", "an unparseable wire record")
+
+    def test_invalid_utf8_cannot_reclassify_a_request_away(self):
+        """A corrupt byte must not silently turn a request into "some other record type".
+
+        `errors="replace"` maps an invalid byte to U+FFFD, so `{"type":"llm.requ\\xffst",...}` PARSES
+        — as a non-request. It is then skipped, and an earlier `max` survives to pass the gate.
+        Reproduced by codex (PR #69 round 19) as `EFFORTS=max, would_max_gate_pass=yes`.
+
+        This is the round-18 hiding place reached through a different door: that fix assumed
+        "unreadable" meant "unparseable", but replacement decoding makes a corrupt record readable
+        and RECLASSIFIED. Reading raw bytes puts invalid UTF-8 back on the UNKNOWN path.
+
+        Mutating the open back to `open(path, errors="replace")` turns this cell red while every
+        other effort cell stays green — the byte here is inside the `type` value, so no other
+        fixture reaches it.
+        """
+        self._assert_unknown_not_max("mixed-badutf8",
+                                     "a request reclassified by an invalid UTF-8 byte")
+
+    def test_a_nul_in_the_tier_cannot_become_max_in_transit(self):
+        """The tier is validated in PYTHON but transported through COMMAND SUBSTITUTION, and bash
+        deletes NUL bytes. `"m\\u0000ax"` parses as `m\\x00ax` — provably not `max` — passes an
+        `isinstance(v,str) and v` check, and arrives at the gate as exactly `max,` (codex, PR #69
+        round 20: `parsed='m\\x00ax' exact_max=False ... shell_EFFORTS=max, length=4 gate=PASS`).
+
+        The check and the use were in two languages with different string semantics. The tier is now
+        constrained to bytes that mean the same thing on both sides: ASCII, alphabetic, lower-case —
+        structural, not a vocabulary of known tiers.
+        """
+        self._assert_unknown_not_max("mixed-nultier", "a tier whose NUL is deleted in transit")
+
+    def test_a_duplicate_type_cannot_hide_a_request(self):
+        """`{"type":"llm.request","thinkingEffort":"high","type":"metadata"}` — last-wins makes an
+        explicit `high` request stop looking like a request, so the earlier `max` stands alone."""
+        self._assert_unknown_not_max("dup-type", "a request hidden by a duplicate `type`")
+
+    def test_a_duplicate_tier_cannot_rewrite_the_tier(self):
+        """One request naming TWO tiers. `json.loads` is last-wins, which is silent rewriting."""
+        self._assert_unknown_not_max("dup-tier", "a tier rewritten by a duplicate name")
+
+    def test_a_duplicate_cwd_cannot_bypass_the_alias_guard(self):
+        """The conflicting-alias guard could not fire, because last-wins collapsed the conflict first.
+
+        `{"cwd":"/nowhere/else","cwd":"<ours>"}` reaches the guard as a single `cwd` — so the guard
+        that refuses DISAGREEING aliases never saw a disagreement. Walking around a guard by
+        preventing it from seeing its own input is the same shape as the round-19 reclassification.
+        """
+        self._assert_unknown_not_max("dup-cwd", "a duplicate `cwd` collapsed before the guard")
+
+    def test_a_timeout_that_emitted_bytes_is_still_not_a_pass(self):
+        """A timed-out round CAN reach the effort block — the claim that it cannot was false.
+
+        `pty-capture.py` deliberately writes the partial transcript on timeout (its own comments at
+        lines 21, 404, 612), and the WIRE block never inspects `STATUS`. So `[ -s "$OUT" ]` is
+        satisfiable with `STATUS=124`, reproduced by codex as
+        `STATUS=124 OUT_BYTES=53239 reaches_WIRE_block=yes`. This cell exists because the audit
+        claimed the opposite and was wrong; the safety property — a timed-out round is never a pass —
+        is real and is what is asserted here.
+        """
+        p, _ = self._run("slow-loud", timeout=2)
+        self.assertNotEqual(0, p.returncode,
+                            f"a timed-out round that emitted bytes reported success:\n{p.stdout}{p.stderr}")
+        self.assertIn("EXIT=124", p.stdout,
+                      f"a timeout was not reported as 124:\n{p.stdout}")
+
+    def _basis_digest(self, proc):
+        """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
+        m = re.search(r"\bBASIS=([0-9a-f]{12})\b", proc.stdout or "")
+        return m.group(1) if m else None
 
 
 if __name__ == "__main__":

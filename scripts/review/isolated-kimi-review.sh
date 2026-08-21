@@ -33,17 +33,81 @@
 #   * `EXIT=1` with a large transcript is usually the billing-cycle quota (a 403 in the tail), not a
 #     review failure. Check the tail before treating it as one.
 #
-# Usage: isolated-kimi-review.sh <prompt-file> <out-transcript> <commit> [timeout-seconds]
+# Usage: isolated-kimi-review.sh <prompt-file> <out-transcript> <commit> [timeout-seconds] [plan]
 #   <prompt-file>  path to the review prompt, RELATIVE TO THE REPO ROOT
 #   <out-transcript>  where to write the transcript — NEVER under /tmp
+#   [plan]  repo-relative plan to stage and basis-check (default: the COREDEV-2617 plan this harness
+#           was built for). PASS YOUR PLAN when reviewing anything else — the basis check asserts the
+#           integrity of the plan named HERE, not of whatever the prompt talks about, so a defaulted
+#           plan under a different prompt certifies the wrong document (2026-08-17 audit, AF-12).
 # Exit: 0 captured · 1 setup failure · 3 round VOID (tree or staged basis mutated) · 4 effort unassertable
 set -uo pipefail
 
-[ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout]" >&2; exit 1; }
+[ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
 PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
-PLAN_REL="docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md"
+# `${5-...}`, NOT `${5:-...}`: the colon form substitutes the default for an EXPLICITLY EMPTY
+# operand too, so the `""` arm below was DEAD and an empty model-supplied operand silently
+# certified the default plan — the exact mismatch this guard exists to prevent (codex, PR #69).
+PLAN_REL="${5-docs/planning/COREDEV-2617_PLUGIN_STATE_BASE_DIR_PLAN.md}"
+# THE PLAN OPERAND IS CONTAINED TOO. It was not, and it is model-chosen: `codex-review/SKILL.md`
+# says the stand-in is invoked "always passing <plan>". Unlike the prompt four lines below it went
+# straight into `$TREE/tree/$PLAN_REL`, so `../../etc/passwd` or an absolute path made the round's
+# printed BASIS digest certify bytes OUTSIDE the reviewed commit — the exact class the prompt
+# operand's containment exists to stop. The spelling is checked here (the staged checkout does not
+# exist yet); the OBJECT is re-checked against $TREE/tree below, because a spelling that cannot
+# escape is not the same claim as a file that is not a symlink.
+case "$PLAN_REL" in
+    /*)        echo "plan operand must be repository-relative, not absolute: $PLAN_REL" >&2; exit 1 ;;
+    ..|../*|*/..|*/../*) echo "plan operand must not traverse upward: $PLAN_REL" >&2; exit 1 ;;
+    "")        echo "plan operand must not be empty" >&2; exit 1 ;;
+esac
+# A NEWLINE in the operand forged a multiline "BASIS plan = ..." diagnostic, so the printed basis
+# could claim one plan while the digest covered another (codex, PR #69). Refuse any control byte.
+case "$PLAN_REL" in
+    *[[:cntrl:]]*) echo "plan operand must not contain control characters" >&2; exit 1 ;;
+esac
+# Name the basis-checked plan LOUDLY so a stand-in round (e.g. kimi covering a codex quota outage)
+# cannot silently basis-check the default while the prompt reviews something else.
+printf 'kimi-review: BASIS plan = %s\n' "$PLAN_REL" >&2
 
+# GIT'S REPOSITORY-SELECTION ENVIRONMENT IS CLEARED BEFORE ANY git RUNS (codex, PR #69 round 2).
+# `git -C "$REPO"` does NOT anchor the repository: with `GIT_DIR` and `GIT_WORK_TREE` inherited,
+# `--show-toplevel` still answers THIS checkout while every object lookup resolves in ANOTHER
+# repository — measured, `cat-file blob HEAD:README.md` returned a different digest entirely. That
+# matters here because the BASIS is now read from git objects, so a poisoned environment would let
+# the round certify bytes from a repository nobody reviewed. Unsetting is done once, at the top,
+# before the first `git` call, so no later command can be the first to see a stale value.
+# EVERY `GIT_*` VARIABLE IS CLEARED, not a hand-picked list. Naming them one at a time was wrong
+# twice over: the first list covered repository SELECTION and missed configuration INJECTION, and
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` are UNBOUNDED, so no fixed list can be
+# complete. Measured: with those three set, `core.hooksPath` survived the old unset block
+# (`git config --show-origin core.hooksPath` -> `command line: /attacker/hooks`), which means
+# `disposable_checkout`'s `git checkout` would run an attacker `post-checkout` INSIDE the private
+# tree BEFORE `TREE_BASELINE` is captured — mutation the baseline then treats as pristine
+# (codex, PR #69 round 3). Enumerating the environment and clearing the whole namespace is the only
+# form of this that cannot be outrun by a variable someone adds later.
+# ...AND THE SHARED BOUNDARY IS SOURCED BEFORE THE FIRST `git`, not after it. This script used to
+# carry its own copy of the clearing loop here and source tree-fingerprint.sh two hundred lines
+# later, which meant the claim "all four consumers source the boundary before their first git call"
+# was FALSE for this one (codex, PR #69 round 7). SCRIPT_DIR is therefore established here rather
+# than further down, and sourcing runs `_tf_sanitize_git_env`, which fails CLOSED.
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+# shellcheck source=scripts/review/tree-fingerprint.sh
+. "${SCRIPT_DIR}/tree-fingerprint.sh"
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not a git repo" >&2; exit 1; }
+# ...and the gitdir must belong to the checkout we just resolved, so a future edit that reintroduces
+# an inherited selection variable fails loudly instead of silently reading elsewhere.
+_REPO_GITDIR="$(git -C "$REPO" rev-parse --absolute-git-dir 2>/dev/null)" || {
+    echo "could not resolve the gitdir for $REPO" >&2; exit 1; }
+case "$_REPO_GITDIR" in
+    "$REPO"/.git|"$REPO"/.git/*) : ;;
+    *) # a linked worktree's gitdir lives under the MAIN repo, which is legitimate; prove the link
+       _MAIN_TOP="$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+       case "$_REPO_GITDIR" in
+           "${_MAIN_TOP%/.git}"/.git/worktrees/*|"$_MAIN_TOP"/worktrees/*) : ;;
+           *) echo "gitdir $_REPO_GITDIR does not belong to $REPO — refusing" >&2; exit 1 ;;
+       esac ;;
+esac
 cd "$REPO" || exit 1
 SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # THE PROMPT OPERAND IS CONTAINED — the shared helper proves it is a non-symlink regular file inside the
@@ -73,6 +137,20 @@ trap cleanup EXIT INT TERM HUP
 # round voids it, as the staged plan does, because the round's basis must survive the round.
 PROMPT_SNAP="$TREE/prompt.snapshot"
 cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || { echo "prompt unreadable: $PROMPT_ABS" >&2; exit 1; }
+# A NUL IN THE PROMPT IS REFUSED AT THE SOURCE, exactly as `bind-prompt.py` already does for the
+# plan skills. Command substitution SILENTLY DELETES NULs, so the reviewer receives different bytes
+# than PROMPT_SHA digests — the binding says one thing and the transport delivers another
+# (codex, PR #69 round 14 at effort=max: documented_expected_len=91 bash_argv_len=90,
+# bytes_equal=False). Refused here rather than escaped at the call site: a review prompt containing
+# a NUL is never legitimate, and every transport added later would otherwise need its own defence.
+# Detected in python3, NOT with a shell pattern: bash cannot hold a NUL in a variable, so the
+# obvious `grep -q $'\000'` compiles to an EMPTY pattern that matches every file — a guard that
+# refuses everything and detects nothing. (Written that way first here; the control caught it.)
+if python3 -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1],"rb").read() else 1)' "$PROMPT_SNAP"; then
+    echo "prompt contains a NUL byte, which shell command substitution deletes — the reviewer would" >&2
+    echo "receive different bytes than are being bound: $PROMPT_REL" >&2
+    exit 1
+fi
 PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
 [ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"
@@ -163,8 +241,83 @@ SHA="$(git rev-parse --verify "${COMMIT}^{commit}" 2>/dev/null)" || {
     echo "not a commit: $COMMIT" >&2; exit 1; }
 disposable_checkout "$REPO" "$SHA" "$TREE/tree" || {
     echo "could not build the private review checkout for $COMMIT" >&2; exit 1; }
-[ -r "$TREE/tree/$PLAN_REL" ] || { echo "plan missing in the staged checkout" >&2; exit 1; }
-BASIS="$(_sha256 "$TREE/tree/$PLAN_REL")"
+# THE BASIS IS DIGESTED FROM THE GIT OBJECT, NOT FROM A PATH IN THE CHECKOUT (codex, PR #69).
+# Filesystem tests on `$TREE/tree/$PLAN_REL` cannot establish what this digest has to mean, which
+# is "these bytes are in the reviewed commit". Three ways they failed, each reproduced:
+#   * `-L`/`-f`/`-r` all PASS for `.git/config` — `disposable_checkout` uses `git init`, so that
+#     path exists in the staged tree and is not a commit object at all;
+#   * `-L` tests only the LEAF, so an INTERMEDIATE symlinked component (`escape -> /outside`,
+#     committed in the tree) is followed straight out of the checkout;
+#   * containment of the spelling says nothing about what the kernel resolves.
+# `git cat-file` answers the actual question. The mode check keeps a committed SYMLINK (mode
+# 120000, whose blob content is its target path) from being digested as though it were the plan.
+PLAN_MODE="$(git -C "$REPO" ls-tree --format='%(objectmode)' "$SHA" -- "$PLAN_REL" 2>/dev/null)"
+case "$PLAN_MODE" in
+    100644|100755) : ;;
+    "")  echo "plan is not tracked in the reviewed commit $SHA: $PLAN_REL" >&2; exit 1 ;;
+    120000) echo "plan is a symlink in the reviewed commit: $PLAN_REL" >&2; exit 1 ;;
+    *)   echo "plan is not a regular file in the reviewed commit (mode $PLAN_MODE): $PLAN_REL" >&2; exit 1 ;;
+esac
+# THE PROMPT MUST DECLARE THE DOCUMENT THE BASIS CERTIFIES, ANCHORED.
+# A substring test was not enough and was bypassed four ways (codex, PR #69 round 3): a `.bak`
+# suffix, an `old-` path prefix, the path quoted inside a sentence that then says "actual review:
+# README.md", and a prompt naming TWO documents. Proving the operand appears SOMEWHERE says nothing
+# about what the reviewer was told to read. So: exactly ONE declaration line, and its whole value
+# must equal the operand — the same boundary-aware shape `bind-prompt.py` enforces for the plan
+# skills, rather than a second, weaker copy of that rule.
+_BIND_RC=0
+PLAN_REL="$PLAN_REL" python3 - "$PROMPT_SNAP" <<'PYBIND' || _BIND_RC=$?
+import os, sys
+want = os.environ["PLAN_REL"]
+raw = open(sys.argv[1], "rb").read()
+
+# A RIGID FORMAT, NOT A MARKDOWN PARSER.
+# Four rounds were spent hardening a prose scanner and it lost every time: substring match, then
+# fenced quotation, then fence length and trailing text, then list containers, HTML comments and
+# space-then-tab indentation — and that last set included a REFUSE -> ACCEPT regression, where
+# blanking merged two raw declarations into one acceptable one. Deciding which prose is "operative"
+# means reimplementing CommonMark, and a partial CommonMark is a bypass generator.
+#
+# So the declaration is not searched for. It IS the first line, byte-exactly:
+#
+#     Plan under review: <repo-relative path>
+#
+# No leading whitespace, no quoting, no alternate keyword, nothing before it. Every other byte in
+# the prompt is free text this check never inspects, so no construct anywhere in the body can forge,
+# hide or duplicate a declaration.
+#
+# SCOPE, STATED PLAINLY. This binds the DECLARATION to the BASIS: they cannot disagree, and the
+# declaration cannot be forged by formatting. It does NOT police the BODY, and deliberately so —
+# a prompt whose first line declares A and whose prose then discusses B is ACCEPTED, because the
+# BASIS honestly certifies A. Two cases that the old scanner refused are therefore accepted now,
+# and that is the correct answer under this property rather than a regression: what the reviewer
+# chooses to read has never been knowable from here, which is exactly what the BASIS line's own
+# header comment has said since round 1. Policing prose was the thing that kept failing.
+PREFIX = b"Plan under review: "
+first = raw.split(b"\n", 1)[0]
+if first.endswith(b"\r"):
+    first = first[:-1]
+if not first.startswith(PREFIX):
+    sys.stderr.write("the prompt's FIRST line must be exactly:\n  Plan under review: %s\n"
+                     "(found: %r)\n" % (want, first[:120].decode("utf-8", "replace")))
+    raise SystemExit(1)
+# COMPARED AS BYTES, because "byte-exact" was not true of the previous version (codex, PR #69
+# round 7): `.decode("utf-8", "replace")` maps ANY invalid byte to U+FFFD, so `\xff` aliased a real
+# U+FFFD filename and was accepted as the same declaration; and `.rstrip()` accepted extra trailing
+# spaces while making a tracked filename that ENDS in a space impossible to declare. Only the
+# intentional CRLF handling above touches the bytes; nothing else is normalised.
+declared = first[len(PREFIX):]
+want_bytes = os.fsencode(want)
+if declared != want_bytes:
+    sys.stderr.write("the prompt declares %r but the BASIS would certify %r — refusing to review one "
+                     "document and certify another\n"
+                     % (declared.decode("utf-8", "backslashreplace"), want))
+    raise SystemExit(1)
+PYBIND
+[ "$_BIND_RC" = 0 ] || exit 1
+BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" \
+    | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" || {
+    echo "could not digest the plan blob from $SHA" >&2; exit 1; }
 # The disposable checkout's CONTENT fingerprint — every path, hashed — so that a reviewer which
 # IMPLEMENTS the plan and leaves any file created or edited other than the plan itself voids the
 # round. Checking only the plan's digest recreates the COREDEV-2607 failure the isolation exists to
@@ -180,19 +333,26 @@ fi
 # the harness captures nothing (codex, PR #67). The wrapper also owns the allocated transcript leaf.
 PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # No `--allocated`: this harness takes an <out-transcript> path it creates itself, not a leaf
-# reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist.
+# reserved by allocate-transcript.sh, and --allocated REQUIRES the leaf to pre-exist. THAT IS WHY
+# IT IS NOT GRANTED to the codex-review skill: a pre-approved `Bash(... isolated-kimi-review.sh *)`
+# let a nominally read-only review skill create-and-truncate an ARBITRARY single-linked user file
+# with no further prompt (codex, PR #69 — reproduced under ~/Documents with the write mocked). The
+# fix is at the permission layer: the stand-in is invoked with explicit per-round approval until a
+# `capture-kimi-review.sh` exists that owns its allocation, as agy and codex have.
 # THE SESSIONS THAT EXIST BEFORE THE RUN — the effort assertion below binds to the ONE session this
 # invocation creates, by set difference, never to an identifier read out of the transcript.
 SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 ( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
-    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null 2>&1
+    kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null
 STATUS=$?
 
 # The prompt file must still be the bytes this round was launched with — compared byte-for-byte with
 # the snapshot the reviewer's argument was derived from (PROMPT= on the summary line is that argument's digest).
 if cmp -s -- "$PROMPT_ABS" "$PROMPT_SNAP" 2>/dev/null; then PROMPT_INTACT=1; else PROMPT_INTACT=0; fi
 
-AFTER_BASIS="$(_sha256 "$TREE/tree/$PLAN_REL" 2>/dev/null || echo MISSING)"
+AFTER_BASIS="$(git -C "$REPO" cat-file blob "$SHA:$PLAN_REL" 2>/dev/null \
+    | python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); print(hashlib.sha256(d).hexdigest() if d else "MISSING")' \
+    || echo MISSING)"
 if ! AFTER="$(tree_fingerprint "$REPO")"; then
     echo "GATE FAILED — could not fingerprint the live checkout after the review (round void)" >&2; exit 3
 fi
@@ -239,13 +399,166 @@ fi
 SESSIONS_AFTER="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 NEW_SESSIONS="$(printf '%s\n' "$SESSIONS_AFTER" | grep -vxF -- "$SESSIONS_BEFORE" | grep -v '^$' || true)"
 WIRE=""
-if [ "$(printf '%s\n' "$NEW_SESSIONS" | grep -c .)" = 1 ]; then
-    _w="$NEW_SESSIONS/agents/main/wire.jsonl"
+# PROVENANCE COMES FROM THE LAUNCH, NOT FROM SET DIFFERENCE.
+# The previous version selected "the one new session" and recorded the concurrent-foreign case as a
+# residual it could not close. That was wrong, and it was the convenient thing to believe: this
+# harness ALREADY launches kimi from a unique per-invocation directory (`$TREE/tree`, a mktemp
+# path), and kimi files each session under a namespace derived from that exact cwd — verified here
+# against 25 stored sessions, 24 exact and 1 differing only by case-folding of the basename. So a
+# session belonging to THIS invocation is identifiable directly, and a stranger's is excluded by
+# construction rather than by hoping the count is one (codex, PR #69 round 16, which reproduced
+# `ours_plus_foreign global_candidates=2 cwd_matches=1` and `foreign_only … cwd_matches=0`).
+#
+# The cwd RECORDED BY KIMI is compared, rather than the namespace hash recomputed: the hash formula
+# is kimi's implementation detail, the recorded cwd is the fact we actually need, and matching on it
+# cannot drift when that formula changes.
+_KIMI_CWD="$(cd -P -- "$TREE/tree" 2>/dev/null && pwd -P)"
+_OURS=""
+_OURS_N=0
+for _cand in $NEW_SESSIONS; do
+    [ -n "$_cand" ] || continue
+    _state="$_cand/state.json"
+    [ -r "$_state" ] || continue
+    # WHICH KEY RECORDS THE CWD IS VERSION-DEPENDENT - measured, not assumed. Across 63 real sessions
+    # on the development machine, 38 record `workDir` (the 0.32.0-era schema that this repo's own
+    # KIMI_REVIEW_ARM_PLAN pins as the baseline) and 25 record `cwd` (the newer `version=2` schema);
+    # none carried both. Reading only `cwd`/`workingDirectory` therefore rejected the MAJORITY of real
+    # sessions, producing `_OURS_N=0` and a spurious `EFFORT=UNKNOWN` exit 4 - a fail-CLOSED break of
+    # the whole arm (codex, PR #69 round 17). Every cell that existed synthesized `cwd`, because the
+    # fixtures were written from the same assumption as the code, so no test could fail on it.
+    #
+    # All three spellings are accepted, and ANY malformed record fails closed - printing nothing, so
+    # the caller's emptiness check skips the session. Three ways to be malformed, one rule:
+    #   - aliases that DISAGREE          -> ambiguous origin, not resolvable by alias precedence
+    #   - an alias that is not a string  -> `{"cwd": <ours>, "workDir": 12345}` must not be waved
+    #                                       through by IGNORING the bad alias; a record that cannot
+    #                                       be read as written is unknowable, and unknowable is not
+    #                                       ours. (The first draft of this fix ignored non-strings,
+    #                                       which is the permissive direction AND was undetectable:
+    #                                       deleting the check changed no test. Mutation gate C.)
+    #   - no alias present at all        -> nothing recorded (see the no-state cell)
+    _their_cwd="$(python3 -c 'import json,sys
+def _p(pairs):
+    seen={}
+    for k,v in pairs:
+        if k in seen:
+            raise ValueError("duplicate name")
+        seen[k]=v
+    return seen
+try:
+    d=json.load(open(sys.argv[1]),object_pairs_hook=_p)
+except Exception:
+    sys.exit(0)
+vals=set()
+for k in ("cwd","workingDirectory","workDir"):
+    v=d.get(k)
+    if v is None or v=="":
+        continue
+    if not isinstance(v,str):
+        sys.exit(0)
+    vals.add(v)
+if len(vals)==1:
+    print(vals.pop())' "$_state" 2>/dev/null)"
+    [ -n "$_their_cwd" ] || continue
+    _their_real="$(cd -P -- "$_their_cwd" 2>/dev/null && pwd -P)"
+    [ -n "$_their_real" ] || _their_real="$_their_cwd"
+    if [ "$_their_real" = "$_KIMI_CWD" ] || [ "$_their_cwd" = "$TREE/tree" ]; then
+        _OURS="$_cand"
+        _OURS_N=$((_OURS_N + 1))
+    fi
+done
+# PROVENANCE FILTERS; THE COUNT STILL DECIDES. Matching the cwd excludes a stranger's session, but
+# it does not make TWO sessions in our own namespace unambiguous — and real kimi files exactly one
+# per namespace (codex measured `max_sessions_per_namespace=1` across 20 stored sessions), so two is
+# anomalous and stays UNKNOWN rather than being resolved by picking the first.
+# AND AN EMPTY CAPTURE ATTRIBUTES NOTHING. This guard was added in round 15, then silently DROPPED
+# when this block was rewritten for provenance in round 16 — the `(empty capture, exactly one
+# session)` cell caught the regression on its first run, which is the whole reason that combination
+# needed a cell of its own. Both conditions are required: the session must be ours, and this
+# invocation must have produced something.
+if [ "$_OURS_N" = 1 ] && [ -s "$OUT" ]; then
+    _w="$_OURS/agents/main/wire.jsonl"
     [ -r "$_w" ] && WIRE="$_w"
 fi
+unset _cand _state _their_cwd _their_real _OURS _OURS_N
 EFFORTS=""
-[ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
-    | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"
+# ONLY `llm.request` RECORDS COUNT. The key appears in SIX record types, and five of them record the
+# CONFIGURED tier rather than a tier the model was actually asked at. Measured across 63 real sessions:
+# `llm.request` 1867, `config.update` 53, `profile.bind` 37, `task.started` 9, `task.terminated` 7,
+# `context.append_loop_event` 2. Seven real sessions carry an effort token with ZERO `llm.request`
+# records, and TWO of those are this harness's own (`wd_tree_*`, cwd under `kimi-review.XXXXXX/tree`):
+# each holds exactly `metadata` + `profile.bind` + `permission.set_mode`, and the unfiltered grep
+# reported `max,` and PASSED the gate below — certifying a tier for a round in which the model was
+# never called at all. `profile.bind` is written when the session binds its profile, before any
+# inference; it is a statement of intent, not of what happened.
+#
+# Verified in BOTH directions before shipping, which is the round-17 lesson: a filter that fails closed
+# on real input is a break, not a fix. Across those same 63 sessions the unfiltered grep yields `max,`
+# for 51 and this filtered one for 49, and the only two that change are exactly the two zero-inference
+# sessions above. No genuine max round loses its certification.
+#
+# AND AN UNREADABLE RECORD FORCES UNKNOWN, rather than being skipped. Skipping is fail-OPEN on the
+# mixed known/unknown axis: if an earlier `llm.request` recorded `max` and a later one is malformed or
+# carries no readable tier, the surviving set is still exactly `max,` and the gate passes (codex, PR
+# #69 round 18, which reproduced `unknown_missing_field`, `unknown_nonstring_field` and
+# `malformed_request_record` all yielding `EFFORTS=max, would_max_gate_pass=yes`). A request whose
+# tier cannot be read is a request this round cannot account for, so the round is not evidence.
+#
+# THE TIER MUST SURVIVE TRANSPORT, NOT MERELY PARSE. Validation happens in Python; the value is then
+# carried to the gate through COMMAND SUBSTITUTION, and bash DELETES NUL bytes. So a tier of
+# `"m\u0000ax"` parses as `m\x00ax` — provably not `max` — passes an `isinstance(v,str) and v` check,
+# and arrives at the gate as exactly `max,` (codex, PR #69 round 20: `parsed='m\x00ax' exact_max=False
+# ... shell_EFFORTS=max, length=4 gate=PASS`). The check and the use were in two languages with
+# different string semantics. The tier must therefore be constrained to bytes that mean the same thing
+# on both sides: ASCII, alphabetic, lower-case. That is STRUCTURAL, not a vocabulary of known tiers —
+# round 18 already established that a hand-listed vocabulary is open-ended and gets the answer wrong.
+#
+# DUPLICATE JSON NAMES ARE REFUSED, in this parser and the provenance one. `json.loads` is last-wins,
+# which is silent rewriting: `{"type":"llm.request","thinkingEffort":"high","type":"metadata"}` hides
+# an explicit `high` request by making it stop looking like a request at all, and
+# `{"thinkingEffort":"high","thinkingEffort":"max"}` rewrites the tier outright. The same trick
+# bypassed the provenance conflicting-alias guard entirely — `{"cwd":"/foreign","cwd":"/ours"}`
+# collapses to ONE key before that guard can see a conflict, so the guard could not fire. Measured:
+# 0 of 16425 real wire records carry a duplicate name, so refusing them costs nothing.
+# READ BYTES, NOT REPLACEMENT-DECODED TEXT. `errors="replace"` turns an invalid byte into U+FFFD,
+# which makes the line PARSE — as a record of a different type. `{"type":"llm.requ\xffst",...}`
+# decodes to `llm.requ\ufffdst`, is skipped as a non-request, and an earlier `max` survives to pass
+# the gate (codex, PR #69 round 19: `EFFORTS=max, would_max_gate_pass=yes`). That is the same hiding
+# place the round-18 guard was meant to close, reached through a different door: the round-18 fix
+# assumed "unreadable" meant "unparseable", but replacement decoding makes a corrupt record readable
+# and RECLASSIFIED. Parsing the raw bytes puts invalid UTF-8 back on the UNKNOWN path, where a record
+# this round cannot account for belongs.
+# Strictness is free here and closes a hole. Measured over the real store: 12094 non-empty wire lines,
+# ZERO unparseable, and ZERO of the `llm.request` records lacking a valid string tier — so no genuine
+# round loses its certification. And the log is written by the reviewed process (see the caveat below),
+# so a deliberately malformed line is exactly how a low-tier request would be hidden from this set.
+# This also confines the value set. Folding `config.update` in produced multi-valued results from a
+# single session (one real session yields `high,max,on,`), and real logs record `"on"`, which is
+# outside the documented `low|high|max`. Any set other than exactly `max,` still fails the gate.
+[ -n "$WIRE" ] && EFFORTS="$(python3 -c 'import json,sys
+def _p(pairs):
+    seen={}
+    for k,v in pairs:
+        if k in seen:
+            raise ValueError("duplicate name")
+        seen[k]=v
+    return seen
+vals=set()
+for line in open(sys.argv[1],"rb"):
+    line=line.strip()
+    if not line:
+        continue
+    try:
+        d=json.loads(line,object_pairs_hook=_p)
+    except Exception:
+        sys.exit(0)
+    if d.get("type")!="llm.request":
+        continue
+    v=d.get("thinkingEffort")
+    if not (isinstance(v,str) and v.isascii() and v.isalpha() and v.islower()):
+        sys.exit(0)
+    vals.add(v)
+sys.stdout.write(",".join(sorted(vals))+"," if vals else "")' "$WIRE" 2>/dev/null)"
 
 # WHAT THIS LINE IS EVIDENCE OF, EXACTLY. The wire log lives inside the session tree of the process it
 # describes, and that process is shell-capable with this same `$HOME` and uid — it can rewrite the file
@@ -255,7 +568,10 @@ EFFORTS=""
 # labelled for what it is — SELF-REPORTED — and the digest of the bytes this run actually read is
 # printed beside it, so a later dispute has something fixed to point at. The assertion below still
 # earns its keep against the failure it was written for (a run that silently used the default tier),
-# and claims nothing about an adversarial one.
+# and claims nothing about an adversarial one. That first clause was FALSE until the record-type
+# filter above was added: reading any `thinkingEffort` token certified the tier a session was
+# CONFIGURED with, so a run that used the default tier — or ran no inference at all — passed. The
+# property is purchased by that filter, not inherent to reading this file.
 WIRE_SHA=""
 [ -n "$WIRE" ] && WIRE_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WIRE" 2>/dev/null)"
 

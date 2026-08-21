@@ -1,6 +1,6 @@
 ---
 name: review-synthesis
-description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /gemini-review and /codex-review transcripts are captured, before implementation begins.
+description: Synthesize the two plan-review transcripts (gemini + codex) into one auditable combined-verdict block. Source-preserving (never edits the plan or sources) but persists the digest-bound Combined verdict under .verdicts/; run AFTER both /unleashed-mail:gemini-review and /unleashed-mail:codex-review transcripts are captured, before implementation begins.
 allowed-tools: Read, Grep, Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/review/persist-verdict.sh *)
 ---
 
@@ -16,8 +16,8 @@ nothing automatically; it produces a Markdown block for the human running the ga
 > `.verdicts/` dir (step below). "Source-preserving, session-state-writing" is the accurate description;
 > the earlier "read-only" label was wrong about the write (full review, #41).
 
-Run it **after** both review transcripts are captured (see `/gemini-review` and
-`/codex-review`). Supply the two allocated paths explicitly; there are no shared default paths:
+Run it **after** both review transcripts are captured (see `/unleashed-mail:gemini-review` and
+`/unleashed-mail:codex-review`). Supply the two allocated paths explicitly; there are no shared default paths:
 
 ```text
 /unleashed-mail:review-synthesis \
@@ -117,13 +117,14 @@ After emitting the block, **persist the Combined verdict as a plan-digest-bound 
 `implement`'s Design Gate can verify it deterministically (and detect an approve-then-edit).
 
 **Prerequisite — the reviewed digest was snapshotted at gate LAUNCH.** `create-feature-plan` runs
-`review-verdict.py snapshot --plan …` *before* dispatching `/gemini-review` + `/codex-review`, writing
+`snapshot-plan.sh <PLAN>` (the contained entrypoint) *before* dispatching
+`/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review`, writing
 a git-ignored `.reviewed-sha256` sidecar beside the plan. That snapshot binds the approval to the bytes
 the reviewers actually saw. It CANNOT be a shell variable — each skill step is a separate tool
 invocation, so a `REVIEWED_PLAN_SHA256=…` shell-local would be empty here (#44 review §4; COREDEV-2499).
 If no valid pre-review snapshot exists — none was taken, or the plan was edited AFTER the reviews ran —
 do **NOT** snapshot the current bytes here and continue: that would bind the approval to bytes the
-reviewers never saw. Instead **re-run `/gemini-review` + `/codex-review` on the current plan** (with a
+reviewers never saw. Instead **re-run `/unleashed-mail:gemini-review` + `/unleashed-mail:codex-review` on the current plan** (with a
 fresh `snapshot` taken before dispatch), then synthesize those transcripts. An approval is only valid for
 the exact plan the reviewers actually reviewed.
 

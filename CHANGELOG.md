@@ -13,6 +13,105 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **COREDEV-2654 second pass — what a full re-review of the remediation found.** Every item below was
+  reproduced before it was fixed; the first two are defects in the remediation's OWN code.
+  - **AF-19's broken-pipe fix did not survive a real client teardown, and the obvious repair does not
+    work either.** The handler re-pointed stdout at devnull and then called `_log`, which writes to
+    **stderr** — and on a genuine teardown both pipe read ends close together, so the diagnostic
+    raises a second `BrokenPipeError`. Measured across four builds: shipped **rc 120** (not 1 — the
+    failure is CPython's exit-time flush, so anyone grepping for rc 1 would not find it); wrapping
+    `_log` in `try/except OSError` **still 120**, because the failed write leaves the text buffered
+    for the exit flush; redirecting stderr unconditionally exits 0 but LOSES the diagnostic even when
+    stderr is healthy. Shipped: log, and only if that raises point stderr at devnull.
+  - **The kimi harness's new plan operand was completely uncontained** while the prompt operand four
+    lines above it goes through `containment.py`. `codex-review/SKILL.md` invokes the stand-in
+    "always passing `<plan>`", so the operand is model-chosen: an absolute path or `..` made the
+    round's printed BASIS digest certify bytes OUTSIDE the reviewed commit. Now the spelling is
+    refused at parse time (absolute, `..`, empty) and the staged object is refused if it is a symlink
+    — `-L` tested independently of `-f`, which follows links. `..hidden/` and `a..b/` still resolve.
+  - **AF-10 was fixed in the agy and codex harnesses and missed in kimi** — the one this PR promotes
+    to the documented codex-quota stand-in. `isolated-kimi-review.sh` still ended `>/dev/null 2>&1`,
+    so a non-numeric `--timeout` refusal died as an unexplained exit 4.
+  - **AF-16's `MultiEdit` sweep left the two validators disagreeing.** `validate-hooks.py` still
+    listed it in `KNOWN_TOOLS`, and merely dropping it is a NO-OP: an unrecognised token only becomes
+    an error when difflib finds a close match, and `MultiEdit` scores ~0.62 against `Edit`, under the
+    0.7 cutoff. It now hard-rejects via `STALE_TOOLS`, mirroring `validate-plugin-assembly.py`
+    (verified discriminating: a `MultiEdit` matcher fails, an `Edit` matcher passes).
+  - **AF-1's own failure shape survived in §9's Planner row** — it listed `Agent` in the inherited
+    floor and described the scoping as `disallowedTools: mcp__github`, while the shipped agent denies
+    `Agent, mcp__github`. A maintainer obeying the source of truth would have re-granted subagent
+    dispatch to the one agent that ingests untrusted web/Context7 content.
+  - **AF-4's uncontained `review-verdict.py snapshot` was still the documented procedure** at §2 step
+    0, the §9 Planner row, and both `modern-standards-planner` sites — which additionally claimed the
+    preloaded skill "carries the exact `snapshot` command" when it carries the contained wrapper.
+  - **AF-27's re-prompting is only half closed**: both review skills mandate reading the allocated
+    transcript back into context, and neither granted `Read` (`review-synthesis` grants it for the
+    same files). Granted. The kimi stand-in flow was likewise ungranted — no
+    `isolated-kimi-review.sh`, no `Edit(.kimi-prompt-*.md)` — so every stand-in round re-prompted.
+  - **AF-6's bare canonical names survived in the third gate skill** (`review-synthesis`, including an
+    actionable "re-run `/gemini-review` + `/codex-review`") and in `codex-review`'s description.
+  - **Doc drift a reviewer would flag**: §2 still taught the inline `mktemp`+`pty-capture` agy ping
+    that `preflight-agy.sh` was extracted to replace (cwd pollution can now VOID a round under AF-5);
+    `.gitignore` and `pre-commit-checks.sh` still described the pre-COREDEV-2617 world, the latter
+    claiming marker writes reach the Stop gate only if you export `CLAUDE_PLUGIN_DATA` — denying the
+    store-discovery capability that IS v2.8.0's headline feature; and `SECURITY.md` /
+    `plugin-ci.yml` called `alpha` "the integration branch releases are cut from" while `CLAUDE.md`
+    and `AGENT_CONTRACTS.md` name `main` the trunk.
+  - **Both open review threads on PR #69 addressed** (gemini-code-assist): the `result is not None`
+    reply-guard was dead code AND a latent hang — AF-21 made the last `None`-returning handler return
+    `{}`, so a Request now always replies and `_handle`'s stale "or None for notifications" docstring
+    is corrected; and the devnull descriptor is closed after `dup2` at BOTH sites, including the one
+    this pass added.
+- **COREDEV-2654 — the 2026-08-17 audit's remediation batch** (details per finding in the report's
+  addendum). Highlights:
+  - **AF-1 (HIGH):** `AGENT_CONTRACTS.md` §9's reviewer capability-floor row granted reviewers Bash —
+    the exact inverse of §9.1 and of all five shipped reviewer frontmatters; obeying it as the
+    source of truth would have re-granted shell to four read-only reviewers (the PR #63 P1). The row
+    now states `Read, Grep, Glob`, and the Orchestrator/Diagnostic rows are restated in full instead
+    of `+`-inheriting.
+  - **AF-27 (MEDIUM, found during remediation):** since Claude Code 2.1.210 a `Write(path)`
+    permission rule is accepted but **never consulted** (docs: "Use `Edit(docs/**)` in place of
+    `Write(docs/**)`"), so three shipped grants were dead on the CLI this plugin targets and every
+    gate round re-prompted for the prompt-file/plan writes — the exact MIN-27 problem they existed to
+    fix. `brainstorm`, `gemini-review` and `codex-review` now carry Edit-form grants, and
+    (AF-8) `brainstorm`/`create-feature-plan` carve `docs/planning/.verdicts/**` back out via
+    `disallowed-tools`, so gitignore-`**` dot-directory matching cannot pre-approve direct edits of
+    the gate's verdict artifacts.
+  - **AF-2:** `test_plugin_state_store.py`'s dual-shell tests now SKIP (not ERROR) when a shell is
+    absent — a zsh-less Linux box no longer gets a false-red from the CLAUDE.md validation list; CI
+    still asserts zsh presence so the arm cannot silently skip there.
+  - **AF-3/4/5/9:** the review skills now state the wrapper contract they enforce — plan-only
+    binding with the debug-review paths spelled out, write-both-prompts-then-freeze-the-tree round
+    hygiene (with the consumer-repo gitignore globs in README Installation), and the 1000-byte
+    assembled-prompt floor (whose refusal message now says what to do about it).
+    `create-feature-plan` routes its snapshot through the contained `snapshot-plan.sh` wrapper.
+  - **AF-12:** `isolated-kimi-review.sh` takes the plan as an operand (default unchanged) and
+    prints the basis-checked plan per round — usable as the codex-quota stand-in; the codex-review
+    skill documents that flow (the scripted quorum still records `codex=MISSING` by design).
+  - **AF-19/20/21 (MCP, each with a new regression test):** clean exit 0 on a client-teardown broken
+    pipe; JSON-RPC `-32700` (id null) for malformed lines instead of a silent drop; a reply for a
+    buggy request-shaped `notifications/initialized`.
+  - Plus the LOW batch: harness stderr no longer discarded (AF-10), `--` before codex's positional
+    prompt (AF-11), TTY-stdin refusals in `resolve-plan-gate.sh`/`reviewer-roster.sh` (AF-13),
+    stale `MultiEdit` dropped from both hook matchers (AF-16), §9.1's script citation corrected
+    (AF-14), README hook-table/kill-switch corrections (AF-15/18), CHANGELOG provenance note
+    (AF-17), MCP `import re`/README `content[]` cleanups (AF-22/23). The callers-scan exemptions
+    manifest is regenerated (line-pinned records shifted with the edits).
+
+### Added
+
+- **`docs/audits/PLUGIN_AUDIT_2026-08-17.md` — full plugin soundness audit at v2.8.0.** All shipped
+  validators/suites green; the plan-review gate exercised end-to-end and attacked (7 forgery/staleness
+  attacks, all refused); the MCP server driven through a live 35-check JSON-RPC handshake; every claim
+  re-verified against the live Claude Code docs; **all 10 majors from the 2026-07-19 audit verified
+  remediated**. New findings: 1 HIGH (AGENT_CONTRACTS §9 floor row contradicts §9.1 + the shipped
+  reviewer frontmatter), 7 MEDIUM (zsh-absent test errors-not-skips; debug reviews unreachable through
+  the granted wrappers; create-feature-plan's uncontained snapshot call; the unstated freeze-the-tree
+  round rule; bare-vs-namespaced canonical drift; stale gemini model in CLAUDE.md; the `.verdicts/`
+  write-grant verification task), 15 LOW, 3 INFO — none affecting verdict integrity.
+
 ## [2.8.0] — 2026-08-14
 
 ### Added
@@ -2050,6 +2149,9 @@ and needed no change.)
   duplicate of the shipped server; its design is captured in the server's README.
 
 ## [2.2.4] — 2026-06-25
+
+> **History starts here.** This changelog was adopted at v2.2.4; releases v2.2.0–v2.2.3 predate it
+> and are summarized only in the README's What's-New section (2026-08-17 audit, AF-17).
 
 ### Added
 - Shared PTY capture wrapper (`scripts/pty-capture.py`) so the `codex-review` and

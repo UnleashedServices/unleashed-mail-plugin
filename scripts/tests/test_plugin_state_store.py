@@ -33,7 +33,16 @@ DARWIN = os.uname().sysname == "Darwin"
 
 
 def run_shell(shell, body, env=None, sources=(AUTH, STORE, READER, PUB)):
-    """Run `body` with the shipped libraries sourced. Returns (rc, stdout, stderr)."""
+    """Run `body` with the shipped libraries sourced. Returns (rc, stdout, stderr).
+
+    SKIP, never ERROR, on a missing shell (2026-08-17 audit, AF-2): without this, an absent
+    /bin/zsh made subprocess raise FileNotFoundError and ten dual-shell tests reported ERROR on any
+    zsh-less Linux box — a false-red indistinguishable from a regression for anyone running the
+    CLAUDE.md validation list. CI cannot silently lose the zsh arm to this skip: its workflow
+    installs zsh and separately asserts `command -v zsh` before the suite runs.
+    """
+    if shutil.which(shell) is None:
+        raise unittest.SkipTest(f"{shell} not installed — the dual-shell arm needs it (CI asserts presence)")
     src = "".join(f'. "{s}"\n' for s in sources) + body
     e = dict(os.environ)
     if env:

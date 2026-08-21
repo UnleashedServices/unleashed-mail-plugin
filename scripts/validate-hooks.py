@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import unicodedata
 import json
 import os
 import re
@@ -70,8 +71,30 @@ TOOL_MATCHER_EVENTS = {
 # contributed tools), so an unrecognized tool token is a non-blocking warning — a real typo and
 # a valid-but-unlisted tool are indistinguishable here. The subagent dispatcher is `Agent`, not
 # `Task` (AGENT_CONTRACTS.md §9). MCP tools (`mcp__server__tool`) are allowed through implicitly.
+# Stale/invalid tool names to HARD-reject, mirroring validate-plugin-assembly.py's STALE_TOOLS.
+# Merely dropping a name from KNOWN_TOOLS is NOT enough: an unrecognised token only lands in
+# `warnings` unless difflib finds a close match, and "MultiEdit" scores ~0.62 against "Edit" —
+# under the 0.7 cutoff. So the two validators disagreed: assembly hard-rejected `MultiEdit` while a
+# hooks matcher reintroducing it validated clean (2026-08-17 audit remediation, AF-16 sweep).
+STALE_TOOLS = {"Task", "MultiEdit"}
+# Mirrors validate-plugin-assembly.py exactly, and for the same two reasons (codex, PR #69):
+# the membership test is CASE-INSENSITIVE, because `multiedit` sailed past a case-sensitive set
+# here while assembly rejected it; and the reason is PER TOOL, because one shared message is FALSE
+# for the other name — this file used to tell you `Task` should be `Edit`, when the sub-agent
+# dispatcher is `Agent`. Keyed lowercase to match the folded check.
+_STALE_TOOL_REASONS = {
+    "task": "the sub-agent dispatcher is `Agent`, not `Task` (AGENT_CONTRACTS §9)",
+    "multiedit": "`MultiEdit` was removed from Claude Code; use `Edit` (COREDEV-2583 §4.5)",
+}
+_STALE_TOOLS_LOWER = {t.lower() for t in STALE_TOOLS}
+
 KNOWN_TOOLS = {
-    "Agent", "AskUserQuestion", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit", "Write",
+    # Kept in step with validate-plugin-assembly.py's KNOWN_TOOLS — it had drifted 13 entries
+    # ahead, so a hook matcher naming a REAL current tool was reported as unrecognised while the
+    # assembly validator accepted the same name (codex, PR #69 round 2).
+    "Agent", "Artifact", "AskUserQuestion", "Bash", "BashOutput", "EnterWorktree", "ExitWorktree",
+    "Glob", "Grep", "KillShell", "PowerShell", "Read", "Edit", "ScheduleWakeup", "SendMessage",
+    "SlashCommand", "TaskOutput", "TaskStop", "ToolSearch", "Workflow", "Write",
     "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", "Monitor",
     "EnterPlanMode", "ExitPlanMode", "CronCreate", "CronList", "CronDelete",
 }
@@ -117,6 +140,28 @@ def _is_shell_script(path: Path) -> bool:
     return interp in SHELL_INTERPRETERS
 
 
+def _is_default_ignorable(ch: str) -> bool:
+    """True for codepoints that render as nothing — the class that makes a matcher silently dead.
+
+    Enumerated by RANGE rather than by name: the Unicode Default_Ignorable_Code_Point property is
+    not exposed by `unicodedata`, and a name-based list is outrun by the next codepoint.
+    """
+    o = ord(ch)
+    return (o in (0x00AD, 0x034F, 0x061C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0)
+            or 0x2060 <= o <= 0x2064
+            or 0x2065 <= o <= 0x2069
+            or 0x180B <= o <= 0x180F
+            or 0x200B <= o <= 0x200F
+            or 0x202A <= o <= 0x202E
+            or 0x2060 <= o <= 0x206F
+            or 0xFE00 <= o <= 0xFE0F
+            or o == 0xFEFF
+            or 0xFFF0 <= o <= 0xFFF8
+            or 0x1BCA0 <= o <= 0x1BCA3
+            or 0x1D173 <= o <= 0x1D17A
+            or 0xE0000 <= o <= 0xE0FFF)
+
+
 def validate_matcher(event: str, matcher: str, where: str,
                      problems: list[str], warnings: list[str]) -> None:
     """Validate a hook matcher against the documented grammar (hooks reference "Matcher value"
@@ -124,6 +169,47 @@ def validate_matcher(event: str, matcher: str, where: str,
     `|`/`,`-separated list of exact strings (optional surrounding whitespace); anything else is
     a JavaScript regex."""
     if matcher in ("", "*"):
+        return
+    # CONTROL BYTES AND EXOTIC WHITESPACE ARE REFUSED BEFORE CLASSIFICATION (codex, PR #69 r2).
+    # `\tTask\t`, `Task\u00a0` and `MultiEdit\u00a0` validated CLEAN — neither problem nor warning —
+    # because the padding breaks EXACT_MATCHER's `[A-Za-z0-9_ ,|]` grammar, so each was classified
+    # as a JavaScript REGEX and skipped the tool-name checks entirely. As a regex it then matched
+    # nothing at runtime (verified in node: false for Task, MultiEdit and Edit alike), so a padded
+    # stale name was a silently dead hook. A plain ASCII space is LEGAL here — the grammar allows
+    # it around list items — so only control characters and non-space whitespace are refused.
+    # `str.isspace()` is not the right predicate on its own: ZERO-WIDTH and default-ignorable
+    # format characters are not "space", so U+200B, U+FEFF, U+2060 and U+180E sailed through and
+    # reclassified a stale name as a regex that matches nothing (codex, PR #69 round 3, verified in
+    # node: matches_bare=false for all four). Unicode category Cf (format) and Cc (control) cover
+    # the class; U+180E is Cf in current Unicode but was Zs historically, so category lookup is the
+    # instrument rather than an enumerated blocklist that the next codepoint outruns.
+    _bad = [c for c in matcher
+            if ord(c) < 32 or ord(c) == 127
+            or unicodedata.category(c) in ("Cc", "Cf", "Co", "Cs")
+            # DEFAULT-IGNORABLE IS CHECKED REGARDLESS OF CATEGORY. Gating it on `Mn` was itself a
+            # bypass: U+2065 and U+FFF0 are `Cn`, U+3164 HANGUL FILLER is `Lo`, and all three are
+            # default-ignorable and matched nothing (codex, PR #69 round 6). The property is what
+            # makes a matcher silently dead; the category is incidental to it. Ordinary marks are
+            # still fine — `café.*` contains none of these.
+            or _is_default_ignorable(c)
+            or (c.isspace() and c != " ")]
+    if _bad:
+        problems.append(
+            f"{where}: matcher {matcher!r} contains {_bad[0]!r} — a control character or non-space "
+            f"whitespace. It fails the exact-matcher grammar, is treated as a regex, and matches no "
+            f"tool; remove it (a plain space is fine)")
+        return
+    # NFKC-EQUIVALENT SPELLINGS ARE REFUSED. Full-width `Ｅｄｉｔ` and `ＭｕｌｔｉＥｄｉｔ` are LETTERS, so
+    # the category guard above does not touch them — they fail the ASCII exact-matcher grammar,
+    # become regexes, skip the known/stale checks, and match nothing at runtime (codex, PR #69
+    # round 4, verified in node: false for the bare name). The test is normalisation: if a matcher
+    # is not already canonical AND its NFKC form would be accepted by the exact grammar, it is a
+    # homoglyph of a tool name rather than a deliberate regex.
+    _nfkc = unicodedata.normalize("NFKC", matcher)
+    if _nfkc != matcher and EXACT_MATCHER.match(_nfkc):
+        problems.append(
+            f"{where}: matcher {matcher!r} is a non-canonical spelling of {_nfkc!r} — it fails the "
+            f"exact-matcher grammar, is treated as a regex, and matches no tool; write it in ASCII")
         return
     if EXACT_MATCHER.match(matcher):
         # Exact string or exact-string list. Tool-name check, ONLY where matchers select a tool
@@ -137,6 +223,11 @@ def validate_matcher(event: str, matcher: str, where: str,
             return
         for raw in re.split(r"[|,]", matcher):
             token = raw.strip()
+            if token.lower() in _STALE_TOOLS_LOWER:
+                problems.append(
+                    f"{where}: matcher token {token!r} is a stale/invalid tool name — "
+                    f"{_STALE_TOOL_REASONS[token.lower()]}")
+                continue
             if not token or token in KNOWN_TOOLS:
                 continue
             if token.startswith("mcp__"):
