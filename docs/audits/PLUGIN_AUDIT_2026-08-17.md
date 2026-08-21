@@ -524,3 +524,27 @@ showed the bypass still open, because the harness I first wrote measured `env | 
 inside a shell that `exit` had already killed, and `readonly` without `export` never appears in
 `env` at all. Only after rewriting the probe to capture the shell's exit status **from outside**
 did the real behaviour appear.
+
+### Round 9 (`1dd5dd1`) — 1×P1 + 2×P2; two fixed, one RECORDED AS A RESIDUAL
+
+| # | finding | disposition |
+|---|---|---|
+| P1 | **`callers_scan.py` trusted caller-controlled git selection.** `git -C <root>` selects a DIRECTORY; it does not neutralise the environment, and `GIT_INDEX_FILE` pointing at another worktree's index made `ls-files` report a different file set — so the scan PASSED against a manifest it should have rejected, which is the scanner's entire purpose | Fixed — the call runs with a `GIT_*`-stripped environment, matching `containment.py`. Poisoned and control now agree (both reject the filtered manifest), and the unfiltered manifest still passes |
+| P2 | The BASIS fixture still did not force the full path: with only two fixed operands, a mutant branching on the first path component satisfied both | Fixed by defeating the CLASS rather than adding a third sample. Any finite operand set can be special-cased, so the test now uses a third plan whose path is derived from the per-run scratch name — **unguessable at authoring time**. Verified against all five wrong implementations from rounds 4-9, including codex's own first-component branch |
+| P2 | The verifier is fail-open through a **shadowed `eval`/`exit`** | **NOT FIXED — recorded as a residual (C3).** See below |
+
+**Why the shadowed-builtin finding is recorded rather than fixed.** It reproduces exactly as
+reported. But its premise is a parent that can `export -f eval` into our shell, and that parent
+already has arbitrary code execution by a cheaper route — measured here: `BASH_ENV=<file>` ran code
+*before any line of the script*, printing "ARBITRARY CODE RAN BEFORE ANY LINE OF THE SCRIPT" and
+then letting the script proceed. So the finding demonstrates **no capability change over what its
+own premise already grants**, which is precisely the disposition rule §4.2a-T TM-5 states and §28.1
+records ("an exported function, a `PATH` executable, a crafted `declare -p` value and an imported
+`BASH_SOURCE` are four carriers of one premise, and the premise is what was recorded").
+
+Hardening it would also repeat a mistake this campaign already made: TM-2's first normative
+consequence forbids adding an in-process guard against a same-uid parent on "raises the bar"
+grounds, *because this ticket spent four separate rounds re-fixing one such guard as each round's
+carrier was replaced by the next*. `builtin eval` is shadowable by a function named `builtin`; there
+is no fixed point. **If the reviewer disagrees that the review harness inherits this threat model,
+that is the argument to make — the disposition, not the reproduction, is what is in dispute.**

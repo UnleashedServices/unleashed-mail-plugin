@@ -490,10 +490,17 @@ def validate_migration_destinations(files: Mapping[str, bytes]) -> tuple[str, ..
 
 
 def read_tracked_files(root: Path) -> dict[str, bytes]:
+    # THE GIT ENVIRONMENT IS STRIPPED, same reason as containment.py. `git -C <root>` does NOT
+    # anchor which INDEX is read: `GIT_INDEX_FILE` pointing at another worktree's index made
+    # `ls-files` report a different file set, so the scan passed against a manifest that should have
+    # REJECTED — the whole point of this scanner (codex, PR #69 round 9, reproduced under zsh).
+    # `-C` selects a directory; it does not neutralise the environment.
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     result = subprocess.run(
         ["git", "-C", os.fspath(root), "ls-files", "-z"],
         check=False,
         capture_output=True,
+        env=clean_env,
     )
     if result.returncode != 0:
         diagnostic = result.stderr.decode("utf-8", "replace").strip()

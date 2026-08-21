@@ -153,6 +153,21 @@ class KimiHarnessMutationGates(unittest.TestCase):
         # one, the only positive digest oracle used DEFAULT_PLAN and the only alternate operand
         # (README.md) was refused before the digest — so an implementation that ALWAYS hashes the
         # default passed every assertion (codex, PR #69 round 5).
+        # A THIRD plan at an UNPREDICTABLE path. Two fixed operands can always be special-cased —
+        # codex showed a mutant branching on the first path component that satisfied both — and so
+        # can three, and four. What cannot be special-cased is a path the implementation could not
+        # know at authoring time, so this one is derived from the per-run scratch name (codex,
+        # PR #69 round 9). It is the same assertion, made unguessable.
+        self.rand_plan = "r%s/p%s/n%s.md" % (
+            os.path.basename(self.scratch)[-6:], os.path.basename(self.scratch)[:6],
+            abs(hash(self.scratch)) % 100000)
+        rand_abs = os.path.join(self.clone, self.rand_plan)
+        os.makedirs(os.path.dirname(rand_abs), exist_ok=True)
+        with open(rand_abs, "w", encoding="utf-8") as fh:
+            fh.write("UNPREDICTABLE PLAN %s — distinct bytes.\n" % self.rand_plan)
+        with open(os.path.join(self.clone, ".review-prompt-rand.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + self.rand_plan + "\n")
+            fh.write("Review the unpredictable plan.\n" * 40)
         alt_abs = os.path.join(self.clone, ALT_PLAN)
         os.makedirs(os.path.dirname(alt_abs), exist_ok=True)
         with open(alt_abs, "w", encoding="utf-8") as fh:
@@ -161,7 +176,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
             fh.write("Plan under review: " + ALT_PLAN + "\n")
             fh.write("Review the alternate plan.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
-            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n")
+            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
         status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
@@ -867,6 +882,18 @@ class KimiHarnessMutationGates(unittest.TestCase):
                          "whatever it is asked to certify")
         self.assertNotEqual(basis_clean, basis_alt,
                             "FIXTURE IS VACUOUS — the two plans digest identically")
+
+        # THE UNGUESSABLE OPERAND. This is the assertion a hard-coded implementation cannot satisfy
+        # by construction, whatever mapping it hard-codes.
+        rand, _ = self._run("clean", prompt=".review-prompt-rand.md", plan=self.rand_plan)
+        basis_rand = self._basis_digest(rand)
+        self.assertIsNotNone(basis_rand,
+                             f"the unpredictable-plan run never reached the summary:\n{rand.stdout}{rand.stderr}")
+        expected_rand = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{self.rand_plan}"])).hexdigest()[:12]
+        self.assertEqual(expected_rand, basis_rand,
+                         "the BASIS did not follow an operand the implementation could not have "
+                         "anticipated — the digest is not derived from the full path")
 
         # ...and the fixture must be capable of showing a difference, or the equality above is
         # vacuous: the decoy's plan bytes must digest differently.
