@@ -37,6 +37,17 @@ CODEX_STUB = """#!/usr/bin/env bash
 printf 'VERDICT: APPROVE\\n'
 """
 
+# A REVIEWER THAT MISBEHAVES. The stub above only ever writes OUTSIDE the checkout, so it can never
+# take any of the harness's six post-run round-VOID branches — which is why, before these cells, the
+# codex arm had no test asserting that machinery at all while its agy twin had seven. Measured on
+# PR #69: forcing the arm to VOID unconditionally (`if true`) left all fourteen codex-arm tests
+# green, and a reachability probe showed the post-run block executes thirteen times across the suite
+# with nothing asserting on it in either direction.
+MUTATING_CODEX_STUB = """#!/usr/bin/env bash
+%s
+printf 'VERDICT: APPROVE\\n'
+"""
+
 
 class CodexReviewsTheBoundPlan(unittest.TestCase):
     def setUp(self) -> None:
@@ -68,6 +79,7 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_CODEX_SAW"] = str(self.saw)
+        self.env["UM_LIVE_ROOT"] = str(self.root)
 
     def capture(self, round_value: str):
         return subprocess.run(
@@ -75,6 +87,95 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
              ".codex-prompt-COREDEV-9999r1.md", "docs/planning/FEATURE_PLAN.md", "30"],
             cwd=self.root, env=self.env, capture_output=True, text=True, check=False, input="",
         )
+
+    def install_mutating_stub(self, body: str) -> None:
+        """Replace the well-behaved codex stub with one that tampers, then prints an APPROVAL.
+
+        The approval matters: every cell below asserts the round is VOIDED despite the reviewer
+        reporting success, which is the property the guards exist for.
+        """
+        stub = self.root / ".stubs" / "codex"
+        stub.write_text(MUTATING_CODEX_STUB % body, encoding="utf-8")
+        stub.chmod(0o755)
+
+    def assert_voided(self, result, needle: str) -> None:
+        self.assertEqual(3, result.returncode,
+                         f"the round was not VOIDED (rc={result.returncode}):\n"
+                         f"{result.stdout}{result.stderr}")
+        self.assertIn(needle, result.stderr,
+                      f"VOIDED, but not for the expected reason:\n{result.stdout}{result.stderr}")
+        self.assertNotIn("TREE=clean", result.stdout,
+                         f"a VOIDED round still printed a clean-tree summary:\n{result.stdout}")
+
+    def test_a_reviewer_that_MUTATES_THE_LIVE_TREE_voids_the_round(self):
+        """isolated-codex-review.sh:168 — the live working tree must be untouched by the review."""
+        self.install_mutating_stub('printf \'x\\n\' > "$UM_LIVE_ROOT/EVIL-LIVE.txt"')
+        self.assert_voided(self.capture("1"), "MUTATED the real working tree")
+
+    def test_a_reviewer_that_REWRITES_THE_STAGED_PLAN_voids_the_round(self):
+        """isolated-codex-review.sh:177 — the plan the round certifies must be the plan codex read.
+
+        This is the COREDEV-2607 signature: a reviewer that edits the staged plan mid-review makes
+        the artifact attest bytes nobody reviewed.
+        """
+        self.install_mutating_stub("printf 'TAMPERED\\n' >> docs/planning/FEATURE_PLAN.md")
+        self.assert_voided(self.capture("1"), "STAGED PLAN was modified")
+
+    def test_a_reviewer_that_REWRITES_ITS_OWN_PROMPT_voids_the_round(self):
+        """isolated-codex-review.sh:183 — the assembled prompt must be unchanged after the run.
+
+        The file to tamper with is the ASSEMBLED prompt, not the source name. `PROMPT_REL` is the
+        absolute path of the transcript's `.prompt` snapshot, so `stage-prompt.py` recreates that
+        whole absolute path as nested directories inside the checkout and stages the assembled body
+        at `$TREE/<abs path>`. That deep copy is both what codex is handed (`cat "$TREE/$PROMPT_REL"`)
+        and what this guard hashes.
+
+        Writing to the `.codex-prompt-*.md` at the checkout root instead would tamper with a git
+        artifact of this fixture — which the harness correctly ignores, and which VOIDs the round for
+        the unrelated disposable-edit reason. That mistake is worth naming: the first draft of this
+        cell did exactly that, went red, and looked like a defect in the guard.
+        """
+        self.install_mutating_stub(
+            r"""find . -name '*.txt.prompt' -type f -print0 |"""
+            "\n" + r"""  while IFS= read -r -d '' f; do printf 'TAMPERED\n' >> "$f"; done""")
+        self.assert_voided(self.capture("1"), "assembled PROMPT was modified")
+
+    def test_a_reviewer_that_WRITES_SCRATCH_IN_THE_CHECKOUT_voids_the_round(self):
+        """isolated-codex-review.sh:197 — a read-only review may leave nothing behind."""
+        self.install_mutating_stub("printf 'x\\n' > SCRATCH-FROM-REVIEWER.txt")
+        self.assert_voided(self.capture("1"), "left edits inside the disposable checkout")
+
+    def test_a_reviewer_that_DELETES_DOT_GIT_voids_the_round(self):
+        """Destroying `.git` VOIDs the round — via the CONTENT comparison, not the fail-closed arm.
+
+        Named for what it actually exercises. `disposable_fingerprint` walks the tree and lists
+        `.git` as an entry without descending it, so removing `.git` does not make the fingerprint
+        FAIL — it makes it DIFFER, and line 197 catches that. Disabling line 197 turns this cell red,
+        which is how the distinction was established rather than assumed.
+        """
+        self.install_mutating_stub("rm -rf .git")
+        self.assert_voided(self.capture("1"), "left edits inside the disposable checkout")
+
+    def test_a_reviewer_that_MAKES_THE_CHECKOUT_UNREADABLE_voids_the_round(self):
+        """isolated-codex-review.sh:192 — a fingerprint that cannot be TAKEN is not a clean tree.
+
+        This is the fail-closed arm proper. `disposable_fingerprint` hashes every regular file, so a
+        file the walk cannot open raises and the helper returns non-zero. Before it fail-closed, a
+        `|| true` turned that into an EMPTY string which compared equal to an empty baseline — so a
+        reviewer that broke the detector passed with an APPROVAL.
+        """
+        # NOT the plan or the prompt: making either unreadable trips the earlier staged-plan /
+        # staged-prompt digest guards (they fail closed to "unreadable"), so the round would VOID for
+        # the wrong reason. A NEW unreadable file reaches the fingerprint first — line 192 precedes
+        # the content comparison at 197.
+        self.install_mutating_stub(
+            "printf 'x\\n' > UNREADABLE.txt && chmod 000 UNREADABLE.txt")
+        result = self.capture("1")
+        self.assertEqual(3, result.returncode,
+                         f"an unreadable checkout did not VOID the round:\n"
+                         f"{result.stdout}{result.stderr}")
+        self.assertIn("could not re-read the disposable checkout", result.stderr,
+                      f"VOIDED, but not through the fail-closed arm:\n{result.stdout}{result.stderr}")
 
     def test_codex_reviews_an_isolated_checkout_not_the_live_repo(self):
         """The deterministic isolation property (PR #63 recheck, P1).
