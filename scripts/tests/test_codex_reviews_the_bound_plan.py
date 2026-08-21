@@ -156,23 +156,38 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.install_mutating_stub("rm -rf .git")
         self.assert_voided(self.capture("1"), "left edits inside the disposable checkout")
 
-    def test_a_reviewer_that_MAKES_THE_CHECKOUT_UNREADABLE_voids_the_round(self):
+    def test_a_reviewer_that_MAKES_THE_CHECKOUT_UNFINGERPRINTABLE_voids_the_round(self):
         """isolated-codex-review.sh:192 — a fingerprint that cannot be TAKEN is not a clean tree.
+
+        Named for the mechanism, not for permissions: the checkout is made UNFINGERPRINTABLE by a
+        path longer than PATH_MAX, NOT by `chmod`. See the comment in the body for why.
 
         This is the fail-closed arm proper. `disposable_fingerprint` hashes every regular file, so a
         file the walk cannot open raises and the helper returns non-zero. Before it fail-closed, a
         `|| true` turned that into an EMPTY string which compared equal to an empty baseline — so a
         reviewer that broke the detector passed with an APPROVAL.
         """
-        # NOT the plan or the prompt: making either unreadable trips the earlier staged-plan /
-        # staged-prompt digest guards (they fail closed to "unreadable"), so the round would VOID for
-        # the wrong reason. A NEW unreadable file reaches the fingerprint first — line 192 precedes
-        # the content comparison at 197.
+        # The failure must NOT depend on permission bits. `chmod 000` does not stop UID 0, so under
+        # root — which is normal in CI containers — the file is read anyway, the fingerprint SUCCEEDS,
+        # the round VOIDs for the ordinary content-difference reason, and this cell both fails and
+        # stops exercising the branch it exists for. Found independently by two reviewers on PR #70.
+        #
+        # `@unittest.skipIf(root)` was the other suggestion and is rejected deliberately: it would
+        # leave this guard untested in exactly the environment CI runs, which is the
+        # "covered only by a test that can skip" class this whole sweep was built to find.
+        #
+        # A path longer than PATH_MAX fails for every uid. Each `mkdir`/`cd` is short and succeeds,
+        # but the ABSOLUTE path the walk reconstructs exceeds the limit, so `lstat`/`open` raises and
+        # `disposable_fingerprint` returns non-zero. Measured here: 3700 chars against PATH_MAX 1024.
+        # It must also NOT be the plan or the prompt: making either unreadable trips the earlier
+        # staged-plan / staged-prompt digest guards, so the round would VOID for the wrong reason.
         self.install_mutating_stub(
-            "printf 'x\\n' > UNREADABLE.txt && chmod 000 UNREADABLE.txt")
+            'd=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n'
+            'for i in $(seq 1 40); do mkdir -p "$d" && cd "$d" || break; done\n'
+            "printf 'x\\n' > deep.txt")
         result = self.capture("1")
         self.assertEqual(3, result.returncode,
-                         f"an unreadable checkout did not VOID the round:\n"
+                         f"an unfingerprintable checkout did not VOID the round:\n"
                          f"{result.stdout}{result.stderr}")
         self.assertIn("could not re-read the disposable checkout", result.stderr,
                       f"VOIDED, but not through the fail-closed arm:\n{result.stdout}{result.stderr}")
