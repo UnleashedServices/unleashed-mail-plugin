@@ -1337,7 +1337,8 @@ class PlanBindingProofs(FreshnessFixture):
     """
 
     def write_with_binding(self, label: str, bound_digest, verdict: str = "APPROVE",
-                           bind_to_this_plan: bool = False, bound_identity: str = None):
+                           bind_to_this_plan: bool = False, bound_identity: str = None,
+                           after_binding=None):
         case_root = self.next_case_root(label)
         plan = case_root / "PLAN.md"
         plan.write_text("# Plan\nthe bytes being approved\n", encoding="utf-8")
@@ -1376,6 +1377,12 @@ class PlanBindingProofs(FreshnessFixture):
                 )
                 write_prompt_binding(transcript)
             transcripts.append(transcript)
+
+        # DAMAGE ONE SIDECAR AFTER A VALID BINDING EXISTS. The prompt-binding branches can only be
+        # isolated this way: every path that skips `write_prompt_binding` also skips `.plan`, so the
+        # EARLIER plan-binding refusal fires first and masks them.
+        if after_binding is not None:
+            after_binding(transcripts)
 
         arguments = ["write", "--plan", str(plan), "--verdict", verdict]
         for reviewer, transcript in zip(("gemini", "codex"), transcripts):
@@ -1424,6 +1431,50 @@ class PlanBindingProofs(FreshnessFixture):
         output = result.stdout + result.stderr
         self.assertNotEqual(0, result.returncode, output)
         self.assertIn("no plan binding", output)
+
+    def test_an_absent_PROMPT_binding_is_refused_while_the_plan_binding_is_intact(self):
+        """`review-verdict.py:994` — the prompt sidecar is REQUIRED, not optional.
+
+        The guard exists because the fail-open shipped once: deleting `.promptsha256` turned the
+        check off, "the same 'absent means unchecked' fail-open the plan binding above was written
+        to close, reintroduced one field over" (PR #63 recheck). It had no test, so a regression
+        would silently restore a known-shipped bug.
+
+        `test_an_absent_binding_is_refused_rather_than_skipped` looks like this cell and is not: it
+        omits `.plan` AND `.promptsha256` together, so the EARLIER plan-binding refusal fires and
+        line 994 is never reached. This cell leaves `.plan`/`.planbytes`/`.prompt` valid and removes
+        only the prompt DIGEST, and asserts the distinguishing message rather than a bare non-zero
+        exit — otherwise the plan branch would satisfy it.
+        """
+        def drop_prompt_digest(transcripts):
+            os.unlink(str(transcripts[0]) + ".promptsha256")
+
+        result, _ = self.write_with_binding(
+            "prompt-digest-absent", None, bind_to_this_plan=True,
+            after_binding=drop_prompt_digest,
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("no prompt binding", output)
+
+    def test_a_TAMPERED_prompt_snapshot_is_refused(self):
+        """`review-verdict.py:1014` — the snapshot must still hash to the digest bound to it.
+
+        Tamper the `.prompt` SNAPSHOT, not the `.promptsha256` record: corrupting the record trips
+        the earlier malformed-binding or absent-sidecar refusals and proves nothing about this line.
+        """
+        def tamper_snapshot(transcripts):
+            Path(str(transcripts[0]) + ".prompt").write_bytes(
+                b"bytes the reviewer never saw\n"
+            )
+
+        result, _ = self.write_with_binding(
+            "prompt-snapshot-tampered", None, bind_to_this_plan=True,
+            after_binding=tamper_snapshot,
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(0, result.returncode, output)
+        self.assertIn("no longer matches the digest recorded", output)
 
     def test_a_nonapproving_verdict_is_still_recordable_without_a_binding(self):
         """Refusing REQUEST_CHANGES on a binding problem would block the gate from recording a

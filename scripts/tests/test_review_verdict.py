@@ -194,6 +194,31 @@ class ReviewVerdictTest(unittest.TestCase):
                 v = run("verify", "--plan", self.plan)
                 self.assertNotEqual(v.returncode, 0, f"{bad!r} is not a sha256 and must not pass")
 
+    def test_a_NON_DICT_reviewer_entry_cannot_pad_an_approving_quorum(self):
+        """`_quorum_problem` (review-verdict.py:86) — the length comparison.
+
+        `names` is built with an `isinstance(r, dict)` filter, so a non-dict entry makes it SHORTER
+        than `reviewers`; comparing the two lengths is the only thing that notices. Delete it and the
+        malformed entry is silently dropped: the two required names are still present, there are no
+        duplicates, and the stray check never sees the non-dict — so a tampered artifact verifies.
+        """
+        import glob                            # local, matching every sibling cell in this class
+        self.assertEqual(self._write().returncode, 0)
+        art = glob.glob(os.path.join(self.d, ".verdicts", "*.json"))[0]
+        with open(art, encoding="utf-8") as fh:
+            d = json.load(fh)
+        d["verdict"] = "APPROVE"
+        for r in d["reviewers"]:
+            r["status"] = "APPROVE"
+        d["reviewers"].append("mallory")          # a bare string where a dict is required
+        with open(art, "w", encoding="utf-8") as fh:
+            json.dump(d, fh)
+        v = run("verify", "--plan", self.plan)
+        output = v.stdout + v.stderr
+        self.assertNotEqual(v.returncode, 0,
+                            "a non-dict reviewer entry padded an approving quorum")
+        self.assertIn("malformed reviewer entries", output)
+
     def test_uppercase_and_padded_digests_are_normalized_not_rejected(self):
         """The hex check must not be over-strict: hex is case-insensitive, and the digest is stripped
         before matching, so `A...A` and ` a...a ` are REAL digests in a different skin. A check that
@@ -1155,6 +1180,109 @@ class WriteTextNofollowTest(unittest.TestCase):
             import shutil; shutil.rmtree(d, ignore_errors=True)
 
 
+class TheRepoBranchStateWriterRefusesPlantedOccupants(unittest.TestCase):
+    """`_write_state_file`'s REPO branch — the half most fixtures never reach.
+
+    `_plan_directory_fd` returns a descriptor only inside a git repo; without one the function takes
+    the path-based fallback. `ReviewVerdictTest` roots its fixture in `tempfile.mkdtemp()`, so its
+    ~70 cells exercise the fallback exclusively — which is why the repo branch's own refusals had no
+    coverage and deleting them left the suite green.
+
+    Two guards live here and each needs BOTH of its cells:
+
+      * `.verdicts` OCCUPANT (`follow_symlinks=False`, must be a directory). A symlink and a plain
+        file are different halves: `follow_symlinks=True` alone still catches the plain file.
+      * `.gitignore` CREATION (`O_CREAT|O_EXCL|O_NOFOLLOW`). `O_EXCL` and `O_NOFOLLOW` are redundant
+        on the symlink axis but NOT on the hard-link axis — a hard link is a regular file, so
+        `O_NOFOLLOW` is indifferent to it and only `O_EXCL` refuses. A symlink cell alone leaves the
+        `O_EXCL`-only drop alive.
+
+    MEASURED, including what these cells CANNOT catch:
+
+        mutant              symlink cell   hard-link cell
+        drop O_EXCL             pass           FAIL
+        drop O_NOFOLLOW         pass           pass
+        drop BOTH               FAIL           FAIL
+
+    Dropping `O_NOFOLLOW` ALONE is undetectable here, and that is correct rather than a gap: on an
+    `O_CREAT` open, `O_EXCL` already refuses any existing entry — symlink or not — so the flag is
+    subsumed and its removal changes no behaviour. Recorded so a later reader does not add a cell
+    chasing a mutant that cannot be killed.
+    """
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
+        self.repo = os.path.join(self.base, "repo")
+        self.plandir = os.path.join(self.repo, "docs", "planning")
+        os.makedirs(self.plandir)
+        subprocess.run(["git", "init", "-q", self.repo], check=True,
+                       capture_output=True, text=True)
+        self.plan = os.path.join(self.plandir, "FEATURE_PLAN.md")
+        with open(self.plan, "w", encoding="utf-8") as fh:
+            fh.write("# Plan\nbytes\n")
+        self.verdicts = os.path.join(self.plandir, ".verdicts")
+        self.module = _load_verdict_module("rv_repo_branch")
+
+    def _write(self):
+        return self.module._write_state_file(
+            self.plan, "FEATURE_PLAN.md.reviewed-sha256", "deadbeef\n")
+
+    def test_an_ordinary_repo_branch_write_succeeds(self):
+        """The positive control. Without it every refusal below is satisfied by refusing everything."""
+        dest = self._write()
+        self.assertTrue(os.path.isfile(dest), dest)
+        with open(os.path.join(self.verdicts, ".gitignore"), encoding="utf-8") as fh:
+            self.assertEqual("*\n", fh.read())
+
+    def test_a_DANGLING_SYMLINKED_gitignore_is_not_written_through(self):
+        """`os.path.exists` is FALSE for a dangling symlink, so a "not there, create it" branch
+        would follow it. `O_CREAT|O_EXCL|O_NOFOLLOW` refuses instead — and the write continues."""
+        victim = os.path.join(self.base, "VICTIM_IGNORE")
+        os.mkdir(self.verdicts, 0o700)
+        os.symlink(victim, os.path.join(self.verdicts, ".gitignore"))
+        dest = self._write()
+        self.assertFalse(os.path.exists(victim),
+                         "wrote through a dangling symlinked .gitignore")
+        self.assertTrue(os.path.isfile(dest),
+                        "the refusal swallowed the state write as well")
+
+    def test_a_HARD_LINKED_gitignore_is_not_written_through(self):
+        """The half a symlink cell cannot reach. A hard link is a regular file, so `O_NOFOLLOW` is
+        indifferent to it; only `O_EXCL` refuses. Dropping `O_EXCL` alone appends to the victim."""
+        victim = os.path.join(self.base, "VICTIM_LINK")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS OUTSIDE DATA\n")
+        os.mkdir(self.verdicts, 0o700)
+        os.link(victim, os.path.join(self.verdicts, ".gitignore"))
+        dest = self._write()
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS OUTSIDE DATA\n", fh.read(),
+                             "wrote through a hard-linked .gitignore")
+        self.assertTrue(os.path.isfile(dest))
+
+    def test_a_SYMLINKED_verdicts_dir_is_refused_CLEANLY(self):
+        """Asserting the message, not just a non-zero exit: with the occupant check deleted the run
+        still fails, but with an ENOTDIR traceback saying "Not a directory" — a cell asserting only
+        failure would pass against the mutant."""
+        outside = os.path.join(self.base, "outside")
+        os.mkdir(outside)
+        os.symlink(outside, self.verdicts)
+        with self.assertRaises(SystemExit) as caught:
+            self._write()
+        self.assertIn("refusing a symlinked or non-directory verdict dir", str(caught.exception))
+        self.assertEqual([], os.listdir(outside), "wrote into the symlink target")
+
+    def test_a_REGULAR_FILE_verdicts_occupant_is_refused_CLEANLY(self):
+        """The half `follow_symlinks=True` would still catch — kept so the guard's two axes are
+        asserted separately rather than one standing in for both."""
+        with open(self.verdicts, "w", encoding="utf-8") as fh:
+            fh.write("not a directory\n")
+        with self.assertRaises(SystemExit) as caught:
+            self._write()
+        self.assertIn("refusing a symlinked or non-directory verdict dir", str(caught.exception))
+
+
 class COREDEV2603_RepoRelativePlanIdentity(unittest.TestCase):
     """Repo-relative plan identity (COREDEV-2603 item C2).
 
@@ -1531,6 +1659,37 @@ class TheVerdictWritersRefuseAPlantedTarget(unittest.TestCase):
             self.assertEqual("PRECIOUS OUTSIDE DATA\n", fh.read(),
                              "the victim was emptied — the refusal came after O_TRUNC")
 
+    def test_a_hard_linked_DESCRIPTOR_RELATIVE_target_is_refused_with_the_victim_INTACT(self):
+        """The same guard, in the OTHER writer of the family.
+
+        `_write_text_nofollow` (path-relative) is covered by the cell above. `_write_text_at`
+        (descriptor-relative) carries the IDENTICAL `st_nlink != 1` refusal and had no test —
+        deleting it left the whole suite green. One member of a two-member family tested is the
+        shape this campaign keeps finding, so the family is asserted together here.
+
+        The second assertion is what makes it discriminating: with the guard deleted the victim is
+        emptied by `ftruncate` and rewritten, so checking the bytes proves the refusal came BEFORE
+        the damage rather than merely that an error was raised.
+        """
+        victim = os.path.join(self.d, "PRECIOUS_AT")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("PRECIOUS OUTSIDE DATA\n")
+        state = os.path.join(self.d, "state_at")
+        os.mkdir(state)
+        name = "artifact.json.tmp.999"
+        os.link(victim, os.path.join(state, name))
+
+        state_fd = os.open(state, os.O_RDONLY)
+        try:
+            with self.assertRaises(OSError) as caught:
+                self.module._write_text_at(state_fd, name, "attacker artifact")
+        finally:
+            os.close(state_fd)
+        self.assertEqual(errno.EMLINK, caught.exception.errno)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual("PRECIOUS OUTSIDE DATA\n", fh.read(),
+                             "the victim was emptied — the refusal came after ftruncate")
+
     def test_an_ordinary_rewrite_still_works_and_leaves_no_stale_tail(self):
         """Discrimination, and the deletion test for dropping O_TRUNC.
 
@@ -1667,6 +1826,24 @@ class OneArmCannotSatisfyTheDualGate(unittest.TestCase):
         result = self._write(self._allocated("gemini", "one"), self._allocated("gemini", "two"))
         self.assertNotEqual(0, result.returncode, result.stdout)
         self.assertIn("mislabelled", result.stderr)
+
+    def test_a_RENAMED_leaf_whose_FILENAME_disagrees_with_its_allocator_record_is_refused(self):
+        """`_reviewer_identity_mismatch`'s SECOND arm (review-verdict.py:1076) — the rename itself.
+
+        The first arm compares ATTESTED against DECLARED. This one compares the FILENAME against the
+        attested record, and only fires when the other two agree: rename the leaf and `.launch` still
+        attests `gemini`, the caller still declares `gemini`, so every other check passes while the
+        evidence's own name says something else. Deleting this arm left the suite green.
+
+        The comment above it calls that "the rename attack itself" — and it had no test.
+        """
+        gemini = self._allocated("gemini", "g")
+        renamed = gemini.replace("-gemini-", "-codex-")
+        for suffix in ("", ".launch", ".plan", ".planbytes", ".prompt", ".promptsha256"):
+            os.rename(gemini + suffix, renamed + suffix)
+        result = self._write(renamed, self._allocated("codex", "c"))
+        self.assertNotEqual(0, result.returncode, result.stdout)
+        self.assertIn("the leaf was renamed", result.stderr)
 
     def test_a_genuine_pair_still_passes(self):
         """Control: the rule must reject MISLABELLING, not the dual review itself."""
