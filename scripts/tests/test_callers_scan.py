@@ -141,10 +141,19 @@ def reference_manifest(files: dict[str, bytes]) -> bytes:
 
 
 def load_final_tree() -> dict[str, bytes]:
+    """The INDEPENDENT reference inventory — which must not be steerable by the ambient environment.
+
+    `git -C <root>` selects a directory, not an index: with `GIT_INDEX_FILE` pointing at another
+    worktree's index this helper silently inventoried 13 FEWER files, and the "final tree matches an
+    independent reference" proof stayed GREEN in both states — so the reference it compared against
+    was the poisoned one (codex, PR #69 round 10, reproduced). A reference that the thing under test
+    can influence is not a reference.
+    """
     result = subprocess.run(
         ["git", "-C", str(REPO), "ls-files", "-z"],
         check=True,
         capture_output=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     )
     files: dict[str, bytes] = {}
     for encoded_path in result.stdout.split(b"\x00"):
@@ -856,6 +865,52 @@ class M513CallersScanTests(CallersScanProof):
                 text=True,
             )
             self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_git_selection_env_cannot_steer_the_inventory(self):
+        """`GIT_INDEX_FILE` must not change what production or the reference helper inventories.
+
+        `git -C <root>` selects a DIRECTORY, not an index. Under a sibling worktree's index the
+        scanner reported a different file set — passing a manifest it should have rejected — and the
+        reference helper silently lost 13 files while its own proof stayed GREEN (codex, PR #69
+        rounds 9-10). Both are asserted here, because before this test the sanitisation could be
+        DELETED without any focused regression failing, which is the same as not having it.
+        """
+        candidates = sorted((REPO / ".git" / "worktrees").glob("*/index"))
+        if not candidates:
+            main_git = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--git-common-dir"],
+                                      capture_output=True, text=True,
+                                      env={k: v for k, v in os.environ.items()
+                                           if not k.startswith("GIT_")})
+            if main_git.returncode == 0:
+                candidates = sorted(Path(main_git.stdout.strip()).glob("worktrees/*/index"))
+        if not candidates:
+            self.skipTest("no sibling worktree index on this machine to poison with")
+        poison_index = str(candidates[0])
+
+        control = load_final_tree()
+        saved = dict(os.environ)
+        try:
+            os.environ["GIT_INDEX_FILE"] = poison_index
+            poisoned = load_final_tree()
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        self.assertEqual(len(control), len(poisoned),
+                         "the reference inventory changed under a poisoned GIT_INDEX_FILE — "
+                         "it is not independent of the thing it is meant to check")
+
+        script = REPO / "scripts" / "review" / "callers_scan.py"
+        manifest = REPO / "scripts" / "review" / "callers-scan-exemptions.tsv"
+        argv = [sys.executable, str(script), "--root", str(REPO), "--manifest", str(manifest)]
+        clean = subprocess.run(argv, capture_output=True)
+        dirty = subprocess.run(argv, capture_output=True,
+                               env=dict(os.environ, GIT_INDEX_FILE=poison_index))
+        self.assertEqual(0, clean.returncode,
+                         f"CONTROL FAILED — the shipped manifest must pass:\n"
+                         f"{clean.stderr.decode('utf-8', 'replace')[:400]}")
+        self.assertEqual(clean.returncode, dirty.returncode,
+                         f"the production scan changed verdict under a poisoned index "
+                         f"(clean={clean.returncode} poisoned={dirty.returncode})")
 
 
 class M514InvocationSyntaxTests(CallersScanProof):

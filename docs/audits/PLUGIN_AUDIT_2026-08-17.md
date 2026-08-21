@@ -548,3 +548,24 @@ grounds, *because this ticket spent four separate rounds re-fixing one such guar
 carrier was replaced by the next*. `builtin eval` is shadowable by a function named `builtin`; there
 is no fixed point. **If the reviewer disagrees that the review harness inherits this threat model,
 that is the argument to make — the disposition, not the reproduction, is what is in dispute.**
+
+### Round 10 (`3450354`) — 2×P2, **no P1**
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **My "last Python git consumer" claim was false**, and the caller-scan REFERENCE helper was poisonable: under a sibling worktree's index `load_final_tree()` silently inventoried 13 fewer files, while the "final tree matches an independent reference" proof stayed **green in both states** — so the reference it compared against was the poisoned one. Worse, the round-9 sanitisation could be **deleted with no focused regression failing** | Fixed — the helper strips `GIT_*` too, and a poison/control regression now covers **both** the helper and the production CLI. Verified load-bearing: deleting either sanitisation fails the test |
+| P2 | The randomised BASIS operand still did not force full-path handling — an implementation stripping a leading component satisfied all three operands | Fixed — the random operand's **strict suffix is now another tracked plan with different bytes**, so any generic prefix-strip resolves the wrong file, while the prefix stays unguessable. Verified against six wrong implementations from rounds 4-10 |
+
+**A claim withdrawn.** Earlier entries said the unguessable operand "defeats the class". It does not,
+and codex is right to push back: no finite fixture can prove a property of an arbitrary
+implementation, only sample it. What these operands do is defeat every *concrete* wrong
+implementation proposed across seven rounds — basename-only, last-two-components, legacy-prefix,
+always-default, first-component-branch and prefix-strip. That is a stronger sample, not a proof, and
+the audit should not have said otherwise.
+
+**The residual disposition is settled.** Codex, unprompted beyond being asked: *"Residual
+disposition: agreed. I would not re-file the shadowed `eval`/`exit` carrier… A parent capable of
+importing the shadow already controls code executed before the harness body."* It reproduced
+`BASH_ENV` itself to check. It noted correctly that §4.2a-T is formally scoped to the store rather
+than automatically governing the review harness — the reasoning transfers, the section's authority
+does not, and that distinction is worth keeping.

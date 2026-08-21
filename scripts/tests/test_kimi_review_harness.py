@@ -158,9 +158,13 @@ class KimiHarnessMutationGates(unittest.TestCase):
         # can three, and four. What cannot be special-cased is a path the implementation could not
         # know at authoring time, so this one is derived from the per-run scratch name (codex,
         # PR #69 round 9). It is the same assertion, made unguessable.
-        self.rand_plan = "r%s/p%s/n%s.md" % (
-            os.path.basename(self.scratch)[-6:], os.path.basename(self.scratch)[:6],
-            abs(hash(self.scratch)) % 100000)
+        # ...and its STRICT SUFFIX is another tracked plan with different bytes. A random path alone
+        # was still satisfied by an implementation that strips a leading component: it resolved to
+        # something that happened to be right for all three operands (codex, PR #69 round 10). With
+        # the suffix being DEFAULT_PLAN, any generic "drop the first component" resolves the WRONG
+        # tracked file and the digest disagrees — and the prefix stays unguessable, so a hard-coded
+        # strip cannot target it either.
+        self.rand_plan = "r%s/%s" % (os.path.basename(self.scratch)[-8:], DEFAULT_PLAN)
         rand_abs = os.path.join(self.clone, self.rand_plan)
         os.makedirs(os.path.dirname(rand_abs), exist_ok=True)
         with open(rand_abs, "w", encoding="utf-8") as fh:
