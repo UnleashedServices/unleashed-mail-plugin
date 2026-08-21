@@ -625,7 +625,9 @@ is recorded so the approval is not read as broader than it is.
 
 ## Campaign summary
 
-**Twelve rounds. Forty findings, every one reproduced before it was fixed.** Trend:
+**Twelve rounds. Forty-one findings, every one reproduced before it was fixed.
+(Counted from the per-round headings, which include round 2's audit-record P2. Earlier
+paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41.)** Trend:
 4, 6, 5, 5, 4, 4, 4, 3, 3, 2, 1, 0.
 
 Four of the twelve rounds found a defect created by the previous round's repair. Rounds 2-5 each
@@ -663,3 +665,27 @@ are evidence about that depth. The reproduction rule (run it again on identical 
 **Method note for future gates on this repo:** a dual approval at one effort tier is not a clean
 gate. Vary the tier before believing it — the cost here was one 20-minute round, and it found a real
 sampling gap that twelve rounds had certified clean.
+
+### Round 14 (`532ae12`, effort=max) — 3×P2 + 1×P3
+
+Asked directly "**name any other axis the fixtures never vary**", the reviewer named two more and a
+third fell out of them. That question was worth more than another operand mutant.
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The commit test bound the BASIS blob but not the checkout the reviewer sees.** A mutant computing the BASIS from the right commit while checking out `HEAD` passed the round-13 cell: `basis_oracle=PASS reviewer_bytes=WRONG` | Fixed — a `record-checkout` stub mode records `git rev-parse HEAD` and the plan digest **from inside the reviewer's own working directory**, and both must correspond to the requested commit |
+| P2 | **Axis three: reviewer-process behaviour.** Every stub mode ended with an approving `printf`; no non-zero reviewer exit was ever sampled. **Axis four: the timeout**, hard-coded to 60 in every cell | Fixed — `fail-nonzero` and `slow` stub modes, `_run(timeout=…)` parameterised, and cells asserting `EXIT=7` and `EXIT=124` survive into the summary |
+| P2 | **Axis five: prompt encoding.** The binder accepted a NUL, but bash command substitution silently DELETES it, so the reviewer receives different bytes than `PROMPT_SHA` digests (documented length 91, argv length 90, `bytes_equal=False`). `bind-prompt.py` already refused this for the plan skills; the kimi harness did not | Fixed — refused at the source, detected in python3 with a control proving ordinary prompts still pass |
+| P3 | **The campaign totals in this document were arithmetically wrong** — the per-round headings sum to 41 through round 12 while the prose said 40 | Fixed, with the counting convention stated |
+
+**Two mistakes of mine inside this round, both caught by running things.** First, the NUL guard was
+written as `grep -qU $'\000'` — and bash cannot hold a NUL in a variable, so that compiles to an
+EMPTY pattern matching every file: a guard that refuses everything and detects nothing. The control
+caught it inverted (NUL file "ACCEPT", ordinary file "REFUSE"). Second, my first assertions for the
+new exit-status and timeout cells demanded the absence of `TREE=clean` — but that token reports the
+FINGERPRINT, not the round's success, and the harness was already behaving correctly. I would have
+"fixed" working code to satisfy a wrong oracle.
+
+And a third: the NUL guard shipped with **no test**, so a mutation check reported `TEST NOT FOUND`.
+That is exactly the gap round 10 raised — a sanitiser that can be deleted with nothing failing —
+repeated four rounds later. All four new cells are now mutation-verified.

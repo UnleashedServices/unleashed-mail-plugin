@@ -137,6 +137,20 @@ trap cleanup EXIT INT TERM HUP
 # round voids it, as the staged plan does, because the round's basis must survive the round.
 PROMPT_SNAP="$TREE/prompt.snapshot"
 cp -- "$PROMPT_ABS" "$PROMPT_SNAP" || { echo "prompt unreadable: $PROMPT_ABS" >&2; exit 1; }
+# A NUL IN THE PROMPT IS REFUSED AT THE SOURCE, exactly as `bind-prompt.py` already does for the
+# plan skills. Command substitution SILENTLY DELETES NULs, so the reviewer receives different bytes
+# than PROMPT_SHA digests — the binding says one thing and the transport delivers another
+# (codex, PR #69 round 14 at effort=max: documented_expected_len=91 bash_argv_len=90,
+# bytes_equal=False). Refused here rather than escaped at the call site: a review prompt containing
+# a NUL is never legitimate, and every transport added later would otherwise need its own defence.
+# Detected in python3, NOT with a shell pattern: bash cannot hold a NUL in a variable, so the
+# obvious `grep -q $'\000'` compiles to an EMPTY pattern that matches every file — a guard that
+# refuses everything and detects nothing. (Written that way first here; the control caught it.)
+if python3 -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1],"rb").read() else 1)' "$PROMPT_SNAP"; then
+    echo "prompt contains a NUL byte, which shell command substitution deletes — the reviewer would" >&2
+    echo "receive different bytes than are being bound: $PROMPT_REL" >&2
+    exit 1
+fi
 PROMPT_TEXT="$(cat "$PROMPT_SNAP")"
 [ -n "$PROMPT_TEXT" ] || { echo "prompt is empty: $REPO/$PROMPT_REL" >&2; exit 1; }
 PROMPT_SHA="$(printf '%s' "$PROMPT_TEXT" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')"

@@ -101,6 +101,12 @@ case "${{KIMI_STUB_MODE:-clean}}" in
   hookspath)     git config core.hooksPath /evil/hooks
                  printf 'HOOKSPATH=%s\\n' "$(git config --get core.hooksPath)" ;;
   record-arg)    printf '%s' "$2" > "$KIMI_STUB_SCRATCH/received.bin" ;;   # $1=-p, $2=the prompt text
+  record-checkout) # what the REVIEWER actually sees: its cwd's HEAD and the plan bytes there
+                 git rev-parse HEAD > "$KIMI_STUB_SCRATCH/seen-head" 2>/dev/null
+                 shasum -a 256 "$KIMI_STUB_PLAN" 2>/dev/null | cut -d' ' -f1 \
+                   > "$KIMI_STUB_SCRATCH/seen-plan" ;;
+  fail-nonzero)  printf 'reviewer failed\\n' >&2; exit 7 ;;
+  slow)          sleep 30 ;;
   assume-unchanged-live)
                  git -C "$KIMI_STUB_CLONE" update-index --assume-unchanged README.md
                  echo x >> "$KIMI_STUB_CLONE/README.md" ;;
@@ -192,7 +198,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
             fh.write("Plan under review: " + ALT_PLAN + "\n")
             fh.write("Review the alternate plan.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
-            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n.review-prompt-odd.md\n")
+            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n.review-prompt-odd.md\n.review-prompt-nul.md\n.review-prompt-nonul.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
         # A SECOND COMMIT that CHANGES the default plan's bytes. Without it every cell passed the
@@ -230,7 +236,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.prompt = prompt
 
     def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md",
-             plan=None, env=None, commit="HEAD"):
+             plan=None, env=None, commit="HEAD", timeout=60):
         """`plan` names the 5th operand (the BASIS target); `env` replaces the child environment.
 
         Both exist for the round-2 guards: the operand must be the document the PROMPT names, and a
@@ -238,8 +244,9 @@ class KimiHarnessMutationGates(unittest.TestCase):
         from. Callers that pass neither get the harness's own default, as before.
         """
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
-        child_env = dict(env or self.env, KIMI_STUB_MODE=mode)
-        argv = ["bash", harness, prompt, out, commit, "60"]
+        child_env = dict(env or self.env, KIMI_STUB_MODE=mode,
+                         KIMI_STUB_PLAN=(plan or DEFAULT_PLAN))
+        argv = ["bash", harness, prompt, out, commit, str(timeout)]
         if plan is not None:
             argv.append(plan)
         p = subprocess.run(argv, cwd=self.clone, env=child_env,
@@ -956,6 +963,76 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertNotEqual(basis_clean, other_digest,
                             "FIXTURE IS VACUOUS — the decoy repository's plan digests the same as "
                             "the real one, so redirection would be invisible")
+
+    def test_the_reviewer_sees_the_commit_the_basis_certifies(self):
+        """Binding the BASIS blob is not the same as putting the reviewer in that commit.
+
+        The round-13 cell proved the DIGEST followed the commit operand — and a mutant that computes
+        the BASIS from the right commit while checking out HEAD passed it anyway
+        (`basis_oracle=PASS reviewer_bytes=WRONG`, codex round 14 at max). So this asserts what the
+        reviewer's own working directory contains, recorded by the stub from inside it.
+        """
+        proc, _ = self._run("record-checkout", commit=self.first_sha)
+        seen_head = os.path.join(self.scratch, "seen-head")
+        seen_plan = os.path.join(self.scratch, "seen-plan")
+        self.assertTrue(os.path.exists(seen_head),
+                        f"the stub never recorded its checkout:\n{proc.stdout}{proc.stderr}")
+        with open(seen_head, encoding="utf-8") as fh:
+            self.assertEqual(self.first_sha, fh.read().strip(),
+                             "the reviewer was placed in a different commit than the BASIS certifies")
+        expected = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"{self.first_sha}:{DEFAULT_PLAN}"])).hexdigest()
+        with open(seen_plan, encoding="utf-8") as fh:
+            self.assertEqual(expected, fh.read().strip(),
+                             "the plan bytes in the reviewer's checkout are not the certified ones")
+
+    def test_a_prompt_containing_a_nul_is_refused(self):
+        """Command substitution DELETES NULs, so the reviewer would get different bytes than are bound.
+
+        `bind-prompt.py` already refuses this for the plan skills; the kimi harness did not, and the
+        divergence was measured: documented length 91, bash argv length 90, bytes_equal=False
+        (codex, PR #69 round 14 at max). The control is an ordinary prompt of the SAME length with
+        no NUL — it must still be accepted, or this cell proves only that the harness refuses things.
+        """
+        nul_prompt = ".review-prompt-nul.md"
+        with open(os.path.join(self.clone, nul_prompt), "wb") as fh:
+            fh.write(b"Plan under review: " + DEFAULT_PLAN.encode() + b"\n")
+            fh.write(b"body with a NUL\x00 inside\n" * 20)
+        proc, _ = self._run("clean", prompt=nul_prompt)
+        self.assertNotEqual(0, proc.returncode,
+                            f"a prompt containing a NUL was accepted:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("NUL", proc.stderr,
+                      f"the refusal did not name the cause:\n{proc.stderr}")
+
+        control_prompt = ".review-prompt-nonul.md"
+        with open(os.path.join(self.clone, control_prompt), "wb") as fh:
+            fh.write(b"Plan under review: " + DEFAULT_PLAN.encode() + b"\n")
+            fh.write(b"body with a NUL. inside\n" * 20)      # same shape, no NUL
+        control, _ = self._run("clean", prompt=control_prompt)
+        self.assertNotIn("NUL", control.stderr,
+                         f"CONTROL FAILED — an ordinary prompt was refused as containing a NUL:\n"
+                         f"{control.stderr}")
+
+    def test_a_nonzero_reviewer_status_is_preserved(self):
+        """Every stub mode terminated with an approving printf, so no failing reviewer was sampled."""
+        proc, _ = self._run("fail-nonzero")
+        self.assertNotEqual(0, proc.returncode,
+                            f"a reviewer exiting 7 was reported as success:\n{proc.stdout}{proc.stderr}")
+        # `TREE=clean` is a statement about the FINGERPRINT — the reviewer mutated nothing — and is
+        # correct here. The reviewer's own status is carried separately, and that is what must
+        # survive. (My first assertion conflated the two and would have "fixed" correct behaviour.)
+        self.assertIn("EXIT=7", proc.stdout,
+                      f"the reviewer's exit status was not carried into the summary:\n{proc.stdout}")
+
+    def test_a_timeout_is_reported_and_not_silently_clean(self):
+        """The timeout was hard-coded to 60 in every cell, so the timeout path was never exercised."""
+        proc, _ = self._run("slow", timeout=2)
+        self.assertNotEqual(0, proc.returncode,
+                            f"a timed-out round reported success:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("EXIT=124", proc.stdout,
+                      f"a timeout was not reported as 124 in the summary:\n{proc.stdout}")
+        self.assertIn("BYTES=0", proc.stdout,
+                      "a timed-out round should have captured no transcript bytes")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
