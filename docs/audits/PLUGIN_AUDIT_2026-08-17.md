@@ -625,22 +625,22 @@ is recorded so the approval is not read as broader than it is.
 
 ## Campaign summary
 
-**Seventeen rounds. Fifty-three findings, every one reproduced before it was fixed.
+**Eighteen rounds. 55 findings, every one reproduced before it was fixed.
 (Counted from the per-round headings, which include round 2's audit-record P2. Earlier
 paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41 for rounds
-1-12, and 12 more across rounds 13-17, so 53.)** Trend, by round:
+1-12, and 14 more across rounds 13-18.)** Trend, by round:
 
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 |
-|---|---|---|---|---|---|---|---|---|----|----|----|----|----|----|----|----|
-| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2  | 1  | 0  | 1  | 4  | 3  | 3  | 1  |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 |
 
 The trend is not one curve but two. Rounds 1-12 ran at `model_reasoning_effort=xhigh` and decayed
-monotonically to zero. Rounds 13-17 ran at `max` **on code the xhigh rounds had twice approved**,
+monotonically to zero. Rounds 13-18 ran at `max` **on code the xhigh rounds had twice approved**,
 and did not decay — each found an axis the previous rounds had never sampled. A falling finding
 count measures the reviewer's reach as much as the code's quality, and the reach is a setting.
 
 Four of the first twelve rounds found a defect created by the previous round's repair, and
-round 17 did the same to round 16's provenance filter — five of seventeen. Rounds 2-5 each
+round 17 did the same to round 16's provenance filter and round 18 to round 17's — six of eighteen. Rounds 2-5 each
 found a defect in the test written to prove the previous round's fix. The recurring shape was never
 a missing check — it was **a check that could not fail**: an oracle comparing the wrong line, a
 mutation that turned a test red for an unrelated reason, a regression that skipped on CI, a verifier
@@ -876,8 +876,19 @@ checking is not behaviour checking; the four-case functional table is what caugh
 **Corrections to the sweep's own findings, since a finding is a claim like any other.** Its single
 P1 — "a codex run that produced no review reports a verdict" — named `COREDEV-2617r65` with
 `BYTES=13560`. **That artefact does not exist**: the r65 capture on disk is a *Kimi* OAuth failure of
-8058 bytes, on which the harness grep correctly returns nothing. Across all 329 stored transcripts,
-the three that genuinely carry a reviewer-failure marker are all `agy`, and **none** yields a verdict.
+8058 bytes, on which the harness grep correctly returns nothing. Of the stored top-level transcripts
+(330 as of round 18 — the corpus grows by one each round), **five** begin with an `Error:` line; they
+are all `agy`, and **none** yields a verdict.
+
+> **Count corrected by round 18 — this said *three*.** It came from grepping a hand-listed set of
+> failure phrases, which missed `Error: Eligibility check failed: RESOURCE_EXHAUSTED (code 429)`
+> (`2619r12-agy.txt`, 112 B) and `Error: timeout waiting for response` (`2619r3-agy.txt`, 36 B).
+> The robust marker is **structural** — the first line begins with `Error:` — not a vocabulary of
+> known failure phrases, because that vocabulary is open-ended and each reviewer version extends
+> it. The safety conclusion is unchanged and was re-verified across all five: all `agy`, zero
+> anchored verdicts. But a miscounted denominator is a false measured claim, which is the class
+> this campaign has now corrected four times.
+
 The *mechanism*, however, is real and was reproduced independently: in `2617r10-codex.txt` the
 harness's anchored grep matches four lines, and lines 71-73 are the **echoed prompt template** —
 `VERDICT: APPROVE`, `VERDICT: APPROVE_WITH_NOTES`, `VERDICT: REQUEST_CHANGES`, each bare at
@@ -895,3 +906,77 @@ codex/agy verdict grammar above; `isolated-agy-review.sh:308` rejecting real agy
 for the whole sourcing shell; `sensitive-file-guard.sh:99` reading only `Bash.command` while real
 sessions carry shell in `Monitor.command` and `Workflow`; and `pty-capture.py:69`'s overstated
 capture margin.
+
+### Round 18 (`8d46bc4`, effort=max) — 1×P2 + 1×P3. **The repair had its own fail-open.**
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The mixed known/unknown axis was fail-OPEN.** The round-17/sweep filter *skipped* an `llm.request` whose `thinkingEffort` was missing, non-string, or whose line was unparseable. If an earlier request recorded `max`, the surviving set was still exactly `max,` and the gate passed. Reproduced by the reviewer with the production extractor verbatim: `unknown_missing_field`, `unknown_nonstring_field` and `malformed_request_record` all yielded `EFFORTS=max, would_max_gate_pass=yes` | Fixed — an unreadable record now forces UNKNOWN rather than being skipped |
+| P3 | **The "three reviewer-failure transcripts" count was wrong** — five, not three | Corrected above, with the *method* replaced, not just the number |
+
+**Strictness was free, and that was measured before it was written.** The real store holds 12094
+non-empty wire lines with **zero** unparseable, and **zero** of its `llm.request` records lack a
+valid string tier. The filtered distribution over 63 real logs is **unchanged** at 49 `max,` / 7
+empty / 6 `high,` / 1 `on,`. So no genuine round loses its certification — the round-17 lesson
+applied *before* shipping rather than after being caught.
+
+The reviewer hedged ("*arguably* any malformed wire record"); this went strict on both. The
+justification is in the file's own caveat: the wire log is written by the reviewed process at the
+same uid, so a single deliberately-malformed line is the cheapest way to drop a `high` request while
+leaving the `max` ones visible. A skipped record is exactly the hiding place.
+
+Three cells, one per code path, each discriminating:
+
+| mutant | `mixed-nofield` | `mixed-nonstr` | `mixed-malform` |
+|---|---|---|---|
+| **E** — skip malformed lines | PASS | PASS | **FAIL** |
+| **F** — skip requests with an unreadable tier | **FAIL** | **FAIL** | PASS |
+
+**Every claim I asked the reviewer to check against me was checked, and one favoured me.** I had
+downgraded the sweep's P1 to P2 on my own authority and refuted its named instance — both convenient
+conclusions. The reviewer reproduced all of it independently and stated *"I agree with the downgrade
+to P2 rather than P1 for the current ordering"*, confirmed the `COREDEV-2617-r65` artefact is indeed
+nonexistent (8058 B, Kimi OAuth failure, no anchored verdict), reproduced the `71-73` template
+mechanism, the `63/25/38/0` provenance split, and the `51 → 49` bidirectional effort measurement.
+Asking a reviewer to audit one's own corrections is worth the round: this campaign has already had a
+residual asserted rather than tested (round 16) and two false self-critical claims (round 15).
+
+**This round's transcript is itself the best evidence for a deferred finding.** The anchored verdict
+grep matches **64** lines in `2654r18-codex-MAX.txt` — the reviewer read the audit file, which quotes
+verdicts throughout. The real verdict is line 4271. `tail -1` resolves it correctly, but the margin
+is one reviewer-reading-a-file wide.
+
+### Sweep 2: guards no test can fail on — 72 confirmed, deferred in full
+
+The class corrected round after round here is not a missing check, it is **a check that cannot
+fail**. So the whole production surface was mapped against the test suite: for every guard, which
+test turns red if it is deleted? Five surfaces, read-only inspection, each candidate re-verified by a
+separate pass defaulting to REFUTED.
+
+| outcome | n |
+|---|---|
+| confirmed untested/under-tested guards | **72** (7×P1, 29×P2, 36×P3) |
+| refuted on verification | 4 |
+| guards checked and found properly covered | 103 |
+
+By reason: 55 have **no test at all**, 6 have only negative cells and **no positive** (the shape that
+hid the round-17 break for sixteen rounds), 5 have an assertion too weak to distinguish, 3 rely on a
+fixture unlike real data, 3 are covered only by a test that can **skip**.
+
+**Honest limit on this number: I independently verified one of the 72 — the P1 below. The rest carry
+the sweep's own verification, not mine.** The confirm rate here (72 of 76) is far higher than the
+first sweep's (9 of 16), which is expected for a mechanically checkable class — test *absence* is
+decidable by search, unlike a behavioural claim — but it is also the shape a rubber-stamp would take,
+and it is recorded as unconfirmed rather than presented as established.
+
+**The P1 I did verify.** `isolated-codex-review.sh` and `isolated-agy-review.sh` each carry **seven**
+`exit 3` round-VOID guards. Every VOID assertion in the suite belongs to the agy or kimi harness;
+**no test file asserts a single codex-arm VOID message.** So mutating the codex arm's tree-mutation,
+staged-plan, staged-prompt and disposable-edit comparisons to `if false` would leave the entire suite
+green — and a codex reviewer that rewrote the staged plan and emitted an approval would be certified
+clean. This is drift the file's own header already predicted: the hardening propagated from the
+gemini arm, the tests did not.
+
+**All 72 are deferred.** They are pre-existing, none is introduced by this PR, and remediating them
+is a campaign of its own rather than a tail on this one. The full structured findings are preserved
+at `~/.claude/audit-artifacts/2654-guards-without-tests-sweep.json`.

@@ -133,6 +133,24 @@ case "${{KIMI_STUB_MODE:-clean}}" in
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s","workDir":"/nowhere/else"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
                  printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nofield) # max request + a request with NO tier: the round cannot account for the second
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nonstr)  # max request + a request whose tier is a NUMBER, not a string
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":123}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-malform) # max request + an UNPARSEABLE line: the natural way to hide a low-tier request
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{not json\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   bind-only)     # THE MODEL NEVER RAN: profile.bind records the CONFIGURED tier, nothing was asked
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
@@ -1184,6 +1202,45 @@ class KimiHarnessMutationGates(unittest.TestCase):
                             f"profile was merely BOUND to:\n{p.stdout}")
         self.assertNotEqual(0, p.returncode,
                             f"a round with no inference exited success:\n{p.stdout}{p.stderr}")
+
+    def _assert_unknown_not_max(self, mode, what):
+        """A round whose wire log this harness cannot fully account for is not evidence about max."""
+        p, _ = self._run(mode)
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"{what} still certified max — the mixed known/unknown axis is "
+                            f"fail-OPEN:\n{p.stdout}")
+        self.assertNotEqual(0, p.returncode,
+                            f"{what} exited success:\n{p.stdout}{p.stderr}")
+
+    def test_a_request_with_no_recorded_tier_forces_unknown(self):
+        """THE NINTH AXIS, second half: mixed KNOWN and UNKNOWN requests (codex, PR #69 round 18).
+
+        Skipping an unreadable `llm.request` is fail-OPEN: if an earlier request recorded `max`, the
+        surviving set is still exactly `max,` and the gate passes. Reproduced by the reviewer as
+        `unknown_missing_field EFFORTS=max, would_max_gate_pass=yes`.
+
+        Strictness is free: the real store has 12094 non-empty wire lines, ZERO unparseable and ZERO
+        `llm.request` records lacking a valid string tier, and the filtered distribution over 63 real
+        logs is unchanged at 49/7/6/1.
+        """
+        self._assert_unknown_not_max("mixed-nofield", "a request with no recorded tier")
+
+    def test_a_request_with_a_nonstring_tier_forces_unknown(self):
+        """`{"type":"llm.request","thinkingEffort":123}` — a tier that cannot be read as written.
+
+        A separate code path from the missing-field case: the key is present and truthy, so a guard
+        keyed only on presence would pass it through.
+        """
+        self._assert_unknown_not_max("mixed-nonstr", "a request with a non-string tier")
+
+    def test_an_unparseable_wire_record_forces_unknown(self):
+        """An unreadable line is how a low-tier request would be HIDDEN from the set.
+
+        The wire log is written by the reviewed process at the same uid (see the self-reported
+        caveat), so emitting one malformed line is the cheapest way to drop a `high` request while
+        leaving the `max` ones visible. Skipping it certifies `max,`.
+        """
+        self._assert_unknown_not_max("mixed-malform", "an unparseable wire record")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""

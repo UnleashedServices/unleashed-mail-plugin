@@ -490,6 +490,17 @@ EFFORTS=""
 # for 51 and this filtered one for 49, and the only two that change are exactly the two zero-inference
 # sessions above. No genuine max round loses its certification.
 #
+# AND AN UNREADABLE RECORD FORCES UNKNOWN, rather than being skipped. Skipping is fail-OPEN on the
+# mixed known/unknown axis: if an earlier `llm.request` recorded `max` and a later one is malformed or
+# carries no readable tier, the surviving set is still exactly `max,` and the gate passes (codex, PR
+# #69 round 18, which reproduced `unknown_missing_field`, `unknown_nonstring_field` and
+# `malformed_request_record` all yielding `EFFORTS=max, would_max_gate_pass=yes`). A request whose
+# tier cannot be read is a request this round cannot account for, so the round is not evidence.
+#
+# Strictness is free here and closes a hole. Measured over the real store: 12094 non-empty wire lines,
+# ZERO unparseable, and ZERO of the `llm.request` records lacking a valid string tier — so no genuine
+# round loses its certification. And the log is written by the reviewed process (see the caveat below),
+# so a deliberately malformed line is exactly how a low-tier request would be hidden from this set.
 # This also confines the value set. Folding `config.update` in produced multi-valued results from a
 # single session (one real session yields `high,max,on,`), and real logs record `"on"`, which is
 # outside the documented `low|high|max`. Any set other than exactly `max,` still fails the gate.
@@ -502,12 +513,13 @@ for line in open(sys.argv[1],errors="replace"):
     try:
         d=json.loads(line)
     except Exception:
-        continue
+        sys.exit(0)
     if d.get("type")!="llm.request":
         continue
     v=d.get("thinkingEffort")
-    if isinstance(v,str) and v:
-        vals.add(v)
+    if not (isinstance(v,str) and v):
+        sys.exit(0)
+    vals.add(v)
 sys.stdout.write(",".join(sorted(vals))+"," if vals else "")' "$WIRE" 2>/dev/null)"
 
 # WHAT THIS LINE IS EVIDENCE OF, EXACTLY. The wire log lives inside the session tree of the process it
