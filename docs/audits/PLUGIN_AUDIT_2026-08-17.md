@@ -569,3 +569,23 @@ importing the shadow already controls code executed before the harness body."* I
 `BASH_ENV` itself to check. It noted correctly that §4.2a-T is formally scoped to the store rather
 than automatically governing the review harness — the reasoning transfers, the section's authority
 does not, and that distinction is worth keeping.
+
+### Round 11 (`fa27847`) — 1×P2, no P1
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The "load-bearing" poison regression could pass without exercising the sanitisers.** It depended on a sibling worktree index existing — and CI checks out with `fetch-depth: 0` and creates no worktrees, so on CI the test **skipped silently** ("OK (skipped=1)"), absent exactly where it matters most. Its oracle was also `len(control) == len(poisoned)` rather than inventory equality, so equal-sized but different file sets passed | Fixed — the test now **builds its own decoy repository and index**, so there is nothing to skip on (verified with every sibling index hidden: still runs), compares inventories **exactly**, and carries two vacuity checks that the decoy is actually distinguishable. Both sanitisations re-verified load-bearing |
+| — | *Note, not filed as a finding:* all three positive BASIS operands shared one basename, so a resolver keyed on that basename could use the full path for it and strip otherwise | Closed anyway — a fourth operand with a **differing** basename. All seven concrete wrong implementations from rounds 4-11 now fail |
+
+**The finding I had flagged myself.** I asked codex in the round-11 prompt whether the `skipTest`
+was a hole. It was, and worse than I guessed: not merely *could* it skip, it skips on CI
+specifically. That is the same shape as the campaign's recurring defect — a check that examines
+nothing reads as coverage — and the fix is the same one that worked for the BASIS oracle: stop
+depending on the environment to supply the adversarial condition, and construct it.
+
+**Negative evidence codex recorded this round**, which is the first substantial body of it:
+`helper control=197 poisoned=197 exact=True`; `production clean_rc=0 poisoned_rc=0`; the
+production-tree Python git-consumer scan found only `containment.py` and `callers_scan.py`, both
+stripping `GIT_*`; the binder compares raw bytes against `os.fsencode` and removes only a terminal
+CR; and the audit's withdrawal paragraph correctly corrects the earlier "defeats the class"
+language. Those are four claims of mine it checked rather than accepted.

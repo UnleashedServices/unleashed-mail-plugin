@@ -165,6 +165,18 @@ class KimiHarnessMutationGates(unittest.TestCase):
         # tracked file and the digest disagrees — and the prefix stays unguessable, so a hard-coded
         # strip cannot target it either.
         self.rand_plan = "r%s/%s" % (os.path.basename(self.scratch)[-8:], DEFAULT_PLAN)
+        # A FOURTH operand with a DIFFERENT BASENAME. The other three deliberately share one, to
+        # kill basename-only resolution — but that let a resolver key on THAT basename, use the full
+        # path for it and strip otherwise, passing all three (codex, PR #69 round 11, raised as a
+        # note rather than a finding). Varying the basename too closes it.
+        self.odd_plan = "docs/audits/COREDEV-2654_ODD_%s.md" % os.path.basename(self.scratch)[-6:]
+        odd_abs = os.path.join(self.clone, self.odd_plan)
+        os.makedirs(os.path.dirname(odd_abs), exist_ok=True)
+        with open(odd_abs, "w", encoding="utf-8") as fh:
+            fh.write("ODD-BASENAME PLAN — distinct bytes again.\n")
+        with open(os.path.join(self.clone, ".review-prompt-odd.md"), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + self.odd_plan + "\n")
+            fh.write("Review the odd-basename plan.\n" * 40)
         rand_abs = os.path.join(self.clone, self.rand_plan)
         os.makedirs(os.path.dirname(rand_abs), exist_ok=True)
         with open(rand_abs, "w", encoding="utf-8") as fh:
@@ -180,7 +192,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
             fh.write("Plan under review: " + ALT_PLAN + "\n")
             fh.write("Review the alternate plan.\n" * 40)
         with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
-            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n")
+            fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n.review-prompt-odd.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
         status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
@@ -898,6 +910,15 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertEqual(expected_rand, basis_rand,
                          "the BASIS did not follow an operand the implementation could not have "
                          "anticipated — the digest is not derived from the full path")
+
+        odd, _ = self._run("clean", prompt=".review-prompt-odd.md", plan=self.odd_plan)
+        basis_odd = self._basis_digest(odd)
+        self.assertIsNotNone(basis_odd,
+                             f"the odd-basename run never reached the summary:\n{odd.stdout}{odd.stderr}")
+        expected_odd = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{self.odd_plan}"])).hexdigest()[:12]
+        self.assertEqual(expected_odd, basis_odd,
+                         "the BASIS did not follow an operand whose BASENAME differs from the others")
 
         # ...and the fixture must be capable of showing a difference, or the equality above is
         # vacuous: the decoy's plan bytes must digest differently.

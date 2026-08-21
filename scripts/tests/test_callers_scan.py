@@ -875,42 +875,53 @@ class M513CallersScanTests(CallersScanProof):
         rounds 9-10). Both are asserted here, because before this test the sanitisation could be
         DELETED without any focused regression failing, which is the same as not having it.
         """
-        candidates = sorted((REPO / ".git" / "worktrees").glob("*/index"))
-        if not candidates:
-            main_git = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--git-common-dir"],
-                                      capture_output=True, text=True,
-                                      env={k: v for k, v in os.environ.items()
-                                           if not k.startswith("GIT_")})
-            if main_git.returncode == 0:
-                candidates = sorted(Path(main_git.stdout.strip()).glob("worktrees/*/index"))
-        if not candidates:
-            self.skipTest("no sibling worktree index on this machine to poison with")
-        poison_index = str(candidates[0])
+        # THE POISON INDEX IS BUILT HERE, not borrowed from the machine. Depending on a sibling
+        # worktree existing meant this test SKIPPED on CI — which checks out with `fetch-depth: 0`
+        # and creates no worktrees — so the regression was absent exactly where it matters most
+        # (codex, PR #69 round 11: "skipped 'no sibling worktree index'… OK (skipped=1)").
+        import tempfile
+        with tempfile.TemporaryDirectory() as decoy:
+            sp_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            subprocess.run(["git", "init", "-q", decoy], check=True, env=sp_env)
+            (Path(decoy) / "only-in-the-decoy.txt").write_text("decoy\n", encoding="utf-8")
+            subprocess.run(["git", "-C", decoy, "add", "-A"], check=True,
+                           capture_output=True, env=sp_env)
+            poison_index = str(Path(decoy) / ".git" / "index")
+            self.assertTrue(os.path.exists(poison_index), "failed to build a decoy index")
 
-        control = load_final_tree()
-        saved = dict(os.environ)
-        try:
-            os.environ["GIT_INDEX_FILE"] = poison_index
-            poisoned = load_final_tree()
-        finally:
-            os.environ.clear()
-            os.environ.update(saved)
-        self.assertEqual(len(control), len(poisoned),
-                         "the reference inventory changed under a poisoned GIT_INDEX_FILE — "
-                         "it is not independent of the thing it is meant to check")
+            control = load_final_tree()
+            saved = dict(os.environ)
+            try:
+                os.environ["GIT_INDEX_FILE"] = poison_index
+                poisoned = load_final_tree()
+            finally:
+                os.environ.clear()
+                os.environ.update(saved)
+            # EXACT inventories, not their sizes: equal-length but different file sets passed the
+            # length oracle (codex demonstrated `{'a'} vs {'b'}` as "equal"). Same reason the BASIS
+            # oracle had to assert the digest rather than merely that two digests matched.
+            self.assertEqual(
+                sorted(control), sorted(poisoned),
+                "the reference inventory changed under a poisoned GIT_INDEX_FILE — it is not "
+                "independent of the thing it is meant to check")
+            self.assertIn("only-in-the-decoy.txt", os.listdir(decoy),
+                          "FIXTURE IS VACUOUS — the decoy has no distinguishing file")
+            self.assertNotIn("only-in-the-decoy.txt", control,
+                             "FIXTURE IS VACUOUS — the decoy's file is already in the real tree, so "
+                             "a poisoned inventory would be indistinguishable")
 
-        script = REPO / "scripts" / "review" / "callers_scan.py"
-        manifest = REPO / "scripts" / "review" / "callers-scan-exemptions.tsv"
-        argv = [sys.executable, str(script), "--root", str(REPO), "--manifest", str(manifest)]
-        clean = subprocess.run(argv, capture_output=True)
-        dirty = subprocess.run(argv, capture_output=True,
-                               env=dict(os.environ, GIT_INDEX_FILE=poison_index))
-        self.assertEqual(0, clean.returncode,
-                         f"CONTROL FAILED — the shipped manifest must pass:\n"
-                         f"{clean.stderr.decode('utf-8', 'replace')[:400]}")
-        self.assertEqual(clean.returncode, dirty.returncode,
-                         f"the production scan changed verdict under a poisoned index "
-                         f"(clean={clean.returncode} poisoned={dirty.returncode})")
+            script = REPO / "scripts" / "review" / "callers_scan.py"
+            manifest = REPO / "scripts" / "review" / "callers-scan-exemptions.tsv"
+            argv = [sys.executable, str(script), "--root", str(REPO), "--manifest", str(manifest)]
+            clean = subprocess.run(argv, capture_output=True)
+            dirty = subprocess.run(argv, capture_output=True,
+                                   env=dict(os.environ, GIT_INDEX_FILE=poison_index))
+            self.assertEqual(0, clean.returncode,
+                             f"CONTROL FAILED — the shipped manifest must pass:\n"
+                             f"{clean.stderr.decode('utf-8', 'replace')[:400]}")
+            self.assertEqual(clean.returncode, dirty.returncode,
+                             f"the production scan changed verdict under a poisoned index "
+                             f"(clean={clean.returncode} poisoned={dirty.returncode})")
 
 
 class M514InvocationSyntaxTests(CallersScanProof):
