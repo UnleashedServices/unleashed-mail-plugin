@@ -112,6 +112,20 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.install_mutating_stub('printf \'x\\n\' > "$UM_LIVE_ROOT/EVIL-LIVE.txt"')
         self.assert_voided(self.capture("1"), "MUTATED the real working tree")
 
+    def test_a_reviewer_that_BREAKS_THE_LIVE_CHECKOUT_voids_the_round(self):
+        """isolated-codex-review.sh:163 — a LIVE fingerprint that cannot be TAKEN is not a clean tree.
+
+        Distinct from the live-tree MUTATION guard at 168. That one compares two fingerprints; this
+        one fires when the second fingerprint cannot be produced at all. Destroying the live `.git`
+        makes `tree_fingerprint "$REPO"` return non-zero, so 163 fires before 168 is ever evaluated.
+
+        Added on PR #70 review: the six post-run branches were 163/168/177/183/192/197, and the
+        original six cells covered 168, 177, 183, 192 and 197 (twice) — leaving 163 untested while
+        the PR claimed one cell per guard. The agy twin already asserts this message.
+        """
+        self.install_mutating_stub('rm -rf "$UM_LIVE_ROOT/.git"')
+        self.assert_voided(self.capture("1"), "could not fingerprint the live checkout")
+
     def test_a_reviewer_that_REWRITES_THE_STAGED_PLAN_voids_the_round(self):
         """isolated-codex-review.sh:177 — the plan the round certifies must be the plan codex read.
 
@@ -187,15 +201,21 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         # pass on Linux and fail on macOS - the same platform-dependence in the other direction.
         self.install_mutating_stub(
             'd=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n'
-            'lim=$(getconf PATH_MAX / 2>/dev/null || echo 4096)\n'
+            'lim=$(getconf PATH_MAX / 2>/dev/null)\n'
+            # `${lim:-4096}` not `|| echo 4096`: getconf can exit 0 with empty output, and bash
+            # arithmetic silently treats empty/non-numeric as 0 — so the target would become 300 and
+            # the loop would not run. (It is NOT a syntax error, as suggested on PR #70; measured.)
+            # The premise assertion below would catch it, but a wrong limit should not be reachable.
+            'lim=${lim:-4096}\n'
             'i=0\n'
-            'while [ "$(printf %s "$PWD" | wc -c | tr -d " ")" -le "$((lim + 300))" ] '
-            '&& [ "$i" -lt 400 ]; do\n'
+            # `${#PWD}` in-process: the previous `printf | wc -c | tr` spawned three subshells per
+            # iteration, up to 1200 processes.
+            'while [ "${#PWD}" -le "$((lim + 300))" ] && [ "$i" -lt 400 ]; do\n'
             '  mkdir -p "$d" && cd "$d" || break; i=$((i+1))\n'
             'done\n'
             "printf 'x\\n' > deep.txt\n"
             # Record the premise so the cell can assert it, rather than silently testing another guard.
-            'printf \'%s %s\\n\' "$(printf %s "$PWD" | wc -c | tr -d " ")" "$lim" > "$UM_CODEX_SAW"')
+            'printf \'%s %s\\n\' "${#PWD}" "$lim" > "$UM_CODEX_SAW"')
 
         result = self.capture("1")
         # THE FIXTURE IS NOT THE FINDING: prove the nest actually exceeded this platform's limit.
