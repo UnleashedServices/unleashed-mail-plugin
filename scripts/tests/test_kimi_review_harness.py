@@ -145,6 +145,38 @@ case "${{KIMI_STUB_MODE:-clean}}" in
                  {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
                     printf '{{"type":"llm.request","thinkingEffort":123}}\\n'
                  }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  mixed-nultier) # max request + a tier of "m\\u0000ax": NOT "max" in Python, but bash DELETES NUL
+                 # in command substitution, so it arrives at the gate as exactly `max,`.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"m\\u0000ax"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-type)      # a high request HIDDEN by a duplicate `type` name: last-wins makes it stop
+                 # looking like a request at all.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"high","type":"metadata"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-tier)      # one request naming TWO tiers: last-wins rewrites high to max
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"llm.request","thinkingEffort":"high","thinkingEffort":"max"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  dup-cwd)       # duplicate `cwd` in state.json: last-wins collapses it to ONE key BEFORE the
+                 # conflicting-alias guard can see a conflict, so that guard could never fire.
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"/nowhere/else","cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  slow-loud)     # a TIMED-OUT round that nevertheless emitted bytes AND created a session, so it
+                 # reaches the WIRE block (pty-capture writes the partial transcript on timeout).
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
+                 printf 'partial output before the hang\\n'
+                 sleep 30 ;;
   mixed-badutf8) # max request + a request whose TYPE carries an invalid UTF-8 byte. Replacement
                  # decoding would make this parse as a DIFFERENT record type and skip it silently.
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
@@ -1266,6 +1298,52 @@ class KimiHarnessMutationGates(unittest.TestCase):
         """
         self._assert_unknown_not_max("mixed-badutf8",
                                      "a request reclassified by an invalid UTF-8 byte")
+
+    def test_a_nul_in_the_tier_cannot_become_max_in_transit(self):
+        """The tier is validated in PYTHON but transported through COMMAND SUBSTITUTION, and bash
+        deletes NUL bytes. `"m\\u0000ax"` parses as `m\\x00ax` — provably not `max` — passes an
+        `isinstance(v,str) and v` check, and arrives at the gate as exactly `max,` (codex, PR #69
+        round 20: `parsed='m\\x00ax' exact_max=False ... shell_EFFORTS=max, length=4 gate=PASS`).
+
+        The check and the use were in two languages with different string semantics. The tier is now
+        constrained to bytes that mean the same thing on both sides: ASCII, alphabetic, lower-case —
+        structural, not a vocabulary of known tiers.
+        """
+        self._assert_unknown_not_max("mixed-nultier", "a tier whose NUL is deleted in transit")
+
+    def test_a_duplicate_type_cannot_hide_a_request(self):
+        """`{"type":"llm.request","thinkingEffort":"high","type":"metadata"}` — last-wins makes an
+        explicit `high` request stop looking like a request, so the earlier `max` stands alone."""
+        self._assert_unknown_not_max("dup-type", "a request hidden by a duplicate `type`")
+
+    def test_a_duplicate_tier_cannot_rewrite_the_tier(self):
+        """One request naming TWO tiers. `json.loads` is last-wins, which is silent rewriting."""
+        self._assert_unknown_not_max("dup-tier", "a tier rewritten by a duplicate name")
+
+    def test_a_duplicate_cwd_cannot_bypass_the_alias_guard(self):
+        """The conflicting-alias guard could not fire, because last-wins collapsed the conflict first.
+
+        `{"cwd":"/nowhere/else","cwd":"<ours>"}` reaches the guard as a single `cwd` — so the guard
+        that refuses DISAGREEING aliases never saw a disagreement. Walking around a guard by
+        preventing it from seeing its own input is the same shape as the round-19 reclassification.
+        """
+        self._assert_unknown_not_max("dup-cwd", "a duplicate `cwd` collapsed before the guard")
+
+    def test_a_timeout_that_emitted_bytes_is_still_not_a_pass(self):
+        """A timed-out round CAN reach the effort block — the claim that it cannot was false.
+
+        `pty-capture.py` deliberately writes the partial transcript on timeout (its own comments at
+        lines 21, 404, 612), and the WIRE block never inspects `STATUS`. So `[ -s "$OUT" ]` is
+        satisfiable with `STATUS=124`, reproduced by codex as
+        `STATUS=124 OUT_BYTES=53239 reaches_WIRE_block=yes`. This cell exists because the audit
+        claimed the opposite and was wrong; the safety property — a timed-out round is never a pass —
+        is real and is what is asserted here.
+        """
+        p, _ = self._run("slow-loud", timeout=2)
+        self.assertNotEqual(0, p.returncode,
+                            f"a timed-out round that emitted bytes reported success:\n{p.stdout}{p.stderr}")
+        self.assertIn("EXIT=124", p.stdout,
+                      f"a timeout was not reported as 124:\n{p.stdout}")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""

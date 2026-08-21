@@ -438,8 +438,15 @@ for _cand in $NEW_SESSIONS; do
     #                                       deleting the check changed no test. Mutation gate C.)
     #   - no alias present at all        -> nothing recorded (see the no-state cell)
     _their_cwd="$(python3 -c 'import json,sys
+def _p(pairs):
+    seen={}
+    for k,v in pairs:
+        if k in seen:
+            raise ValueError("duplicate name")
+        seen[k]=v
+    return seen
 try:
-    d=json.load(open(sys.argv[1]))
+    d=json.load(open(sys.argv[1]),object_pairs_hook=_p)
 except Exception:
     sys.exit(0)
 vals=set()
@@ -497,6 +504,22 @@ EFFORTS=""
 # `malformed_request_record` all yielding `EFFORTS=max, would_max_gate_pass=yes`). A request whose
 # tier cannot be read is a request this round cannot account for, so the round is not evidence.
 #
+# THE TIER MUST SURVIVE TRANSPORT, NOT MERELY PARSE. Validation happens in Python; the value is then
+# carried to the gate through COMMAND SUBSTITUTION, and bash DELETES NUL bytes. So a tier of
+# `"m\u0000ax"` parses as `m\x00ax` — provably not `max` — passes an `isinstance(v,str) and v` check,
+# and arrives at the gate as exactly `max,` (codex, PR #69 round 20: `parsed='m\x00ax' exact_max=False
+# ... shell_EFFORTS=max, length=4 gate=PASS`). The check and the use were in two languages with
+# different string semantics. The tier must therefore be constrained to bytes that mean the same thing
+# on both sides: ASCII, alphabetic, lower-case. That is STRUCTURAL, not a vocabulary of known tiers —
+# round 18 already established that a hand-listed vocabulary is open-ended and gets the answer wrong.
+#
+# DUPLICATE JSON NAMES ARE REFUSED, in this parser and the provenance one. `json.loads` is last-wins,
+# which is silent rewriting: `{"type":"llm.request","thinkingEffort":"high","type":"metadata"}` hides
+# an explicit `high` request by making it stop looking like a request at all, and
+# `{"thinkingEffort":"high","thinkingEffort":"max"}` rewrites the tier outright. The same trick
+# bypassed the provenance conflicting-alias guard entirely — `{"cwd":"/foreign","cwd":"/ours"}`
+# collapses to ONE key before that guard can see a conflict, so the guard could not fire. Measured:
+# 0 of 16425 real wire records carry a duplicate name, so refusing them costs nothing.
 # READ BYTES, NOT REPLACEMENT-DECODED TEXT. `errors="replace"` turns an invalid byte into U+FFFD,
 # which makes the line PARSE — as a record of a different type. `{"type":"llm.requ\xffst",...}`
 # decodes to `llm.requ\ufffdst`, is skipped as a non-request, and an earlier `max` survives to pass
@@ -513,19 +536,26 @@ EFFORTS=""
 # single session (one real session yields `high,max,on,`), and real logs record `"on"`, which is
 # outside the documented `low|high|max`. Any set other than exactly `max,` still fails the gate.
 [ -n "$WIRE" ] && EFFORTS="$(python3 -c 'import json,sys
+def _p(pairs):
+    seen={}
+    for k,v in pairs:
+        if k in seen:
+            raise ValueError("duplicate name")
+        seen[k]=v
+    return seen
 vals=set()
 for line in open(sys.argv[1],"rb"):
     line=line.strip()
     if not line:
         continue
     try:
-        d=json.loads(line)
+        d=json.loads(line,object_pairs_hook=_p)
     except Exception:
         sys.exit(0)
     if d.get("type")!="llm.request":
         continue
     v=d.get("thinkingEffort")
-    if not (isinstance(v,str) and v):
+    if not (isinstance(v,str) and v.isascii() and v.isalpha() and v.islower()):
         sys.exit(0)
     vals.add(v)
 sys.stdout.write(",".join(sorted(vals))+"," if vals else "")' "$WIRE" 2>/dev/null)"

@@ -625,25 +625,25 @@ is recorded so the approval is not read as broader than it is.
 
 ## Campaign summary
 
-**Nineteen rounds. 56 findings, every one reproduced before it was fixed.**
+**Twenty rounds. 60 findings, every one reproduced before it was fixed.**
 (Counted from the per-round headings, which include round 2's audit-record P2. Earlier
-paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41 for rounds
-1-12, and 15 more across rounds 13-19.) Trend, by round:
+paragraphs said 40; codex round 14 caught the discrepancy - the headings sum to 41 for rounds
+1-12, and 19 more across rounds 13-20.) Trend, by round:
 
-| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 |
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 | 1 | 4 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 | 1 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2 | 1 | 0 | 1 | 4 | 3 | 3 | 1 | 2 |
 
 The trend is not one curve but two. Rounds 1-12 ran at `model_reasoning_effort=xhigh` and decayed
-monotonically to zero. Rounds 13-19 ran at `max` **on code the xhigh rounds had twice approved**,
+monotonically to zero. Rounds 13-20 ran at `max` **on code the xhigh rounds had twice approved**,
 and did not decay — each found an axis the previous rounds had never sampled. A falling finding
 count measures the reviewer's reach as much as the code's quality, and the reach is a setting.
 
 Four of the first twelve rounds found a defect created by the previous round's repair, and
-round 17 did the same to round 16's provenance filter, round 18 to round 17's, and round 19 to
-round 18's — seven of nineteen. Rounds 2-5 each
+round 17 did the same to round 16's provenance filter, round 18 to round 17's, round 19 to
+round 18's, and round 20 to round 19's — eight of twenty. Rounds 2-5 each
 found a defect in the test written to prove the previous round's fix. The recurring shape was never
 a missing check — it was **a check that could not fail**: an oracle comparing the wrong line, a
 mutation that turned a test red for an unrelated reason, a regression that skipped on CI, a verifier
@@ -1011,10 +1011,21 @@ decided against its own advice.**
    no_terminal_newline=0 llm_requests=1454 invalid_tier=0`, distribution `49/7/6/1` — then went
    further than I had: installed Kimi 0.38.0 writes newline-terminated JSON, awaits the write and
    `fsync`, and flushes on close, and its torn-final-line recovery is explicitly for crash-mid-flush.
-   Verdict: *"I found no honest successful-round false close."* This matched the answer I had derived
-   independently while waiting (a timed-out round never reaches the filter, because `WIRE` is gated
-   on `[ -s "$OUT" ]`). **Two independent derivations, same conclusion** — which is worth more than
-   either alone, and is the first time this campaign has had that.
+   Verdict: *"I found no honest successful-round false close."*
+
+   > **RETRACTED by round 20 — the half of this I contributed was WRONG.** I wrote that a timed-out
+   > round never reaches the filter because `WIRE` is gated on `[ -s "$OUT" ]`, and called that an
+   > independent derivation converging with the reviewer's. It does not converge, because it is
+   > false: `pty-capture.py` **deliberately writes the partial transcript on timeout** — its own
+   > comments say so at lines 21, 404 and 612 — and the WIRE block never inspects `STATUS`.
+   > Reproduced: `STATUS=124 OUT_BYTES=53239 reaches_WIRE_block=yes`.
+   >
+   > Nothing shipped was wrong: a timed-out round still fails closed, through exit 124. The
+   > *reasoning* was wrong, and I published it as a strength of this campaign — "the first time this
+   > campaign has had that". One correct derivation plus one false one is not two independent
+   > derivations; it is a coincidence that flattered the person counting. The reviewer's half stands
+   > on its own evidence. This is the fifth false claim of mine this campaign has had to correct, and
+   > the second that was self-congratulatory rather than self-critical.
 2. *Is deferring the 72 guard gaps sound?* Accepted: they are pre-existing coverage gaps rather than
    reproduced behaviour defects, and none warrants expanding this repair. It independently named the
    **codex-arm VOID tests as the highest-priority follow-up** — the same item I had put first.
@@ -1026,3 +1037,45 @@ It also noted honestly that the unittest cells could not create scratch director
 sandbox and that it therefore **did not count those setup errors as test results** — the same
 discipline this campaign had to learn the hard way when a mutation harness reported `FAILED` while
 testing nothing.
+
+### Round 20 (`efc5004`, effort=max) - 2xP2 + 2xP3. **The component was not closed. Two more doors.**
+
+I asked this round a direct question instead of assuming: rounds 18 and 19 were *not* two new axes,
+they were **one ~20-line block failing twice**, so is that block now closed? The answer was no, with
+two further doors - and two corrections to my own record.
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **A NUL in the tier becomes `max` in transit.** The tier is validated in *Python*, then carried to the gate through *command substitution* - and bash **deletes NUL bytes**. A tier written as `"m\u0000ax"` parses to a 5-character string that is provably not `max`, passes an `isinstance(v,str) and v` check, and arrives at the gate as exactly `max,`. Reproduced: `exact_max=False ... shell_EFFORTS=max, length=4 gate=PASS` | Fixed - the tier must now be ASCII, alphabetic and lower-case, so it means the same thing on both sides of the transport |
+| P2 | **Duplicate JSON names are last-wins in BOTH parsers.** `{"type":"llm.request","thinkingEffort":"high","type":"metadata"}` hides an explicit `high` request by making it stop looking like a request; `{"thinkingEffort":"high","thinkingEffort":"max"}` rewrites the tier. It also **bypassed the provenance conflicting-alias guard entirely**: `{"cwd":"/foreign","cwd":"/ours"}` collapses to one key *before* that guard can see a conflict | Fixed - both parsers refuse duplicate names via `object_pairs_hook` |
+| P3 | **The claimed convergence on timeouts was false** - see the retraction in the round-19 entry | Retracted, and a `slow-loud` cell added |
+| P3 | **The trend table carried a stale 18-round row**, left by my own regex replacement | Removed |
+
+**The NUL finding is the sharpest of the campaign, because the check and the use were in different
+languages.** Every previous fix on this gate asked "is this value acceptable?" in Python. This one
+showed that the *answer* then travels through a shell that mutates it. So the constraint is no longer
+"is it a plausible tier" but "does it survive transport unchanged" - hence a structural predicate
+(ASCII / alphabetic / lower-case) rather than a vocabulary of known tiers, which round 18 already
+established is the wrong shape.
+
+**Duplicate names defeated a guard by preventing it from seeing its own input.** The
+conflicting-alias check added in round 17 refuses `cwd` and `workDir` when they disagree. It could
+not fire against a duplicated `cwd`, because `json.loads` had already collapsed the conflict. That is
+the same shape as round 19's reclassification: not defeating the guard's logic, but arranging for the
+guard never to be asked. Measured: 0 of 16425 real wire records carry a duplicate name, so refusing
+them costs nothing.
+
+Every door from rounds 18-20 now fails closed, with both controls still passing and the real corpus
+distribution unchanged at 49 `max,` / 7 empty / 6 `high,` / 1 `on,`:
+
+| mutant | NUL tier | dup `type` | dup tier | dup `cwd` |
+|---|---|---|---|---|
+| **H** - drop the transport-safe tier predicate | **FAIL** | PASS | PASS | PASS |
+| **I** - wire parser accepts duplicate names | PASS | **FAIL** | **FAIL** | PASS |
+| **J** - provenance parser accepts duplicate names | PASS | PASS | PASS | **FAIL** |
+
+**Honest limit on one of the five new cells.** `slow-loud` - a timed-out round that emitted bytes and
+created a session - is a **characterization test, not a guard test**. It locks the safety property
+(a timed-out round is never a pass) but has no discriminating mutant of its own, because the
+behaviour it documents is produced by the timeout machinery rather than by a guard. It is recorded as
+that rather than counted as mutation-verified.
