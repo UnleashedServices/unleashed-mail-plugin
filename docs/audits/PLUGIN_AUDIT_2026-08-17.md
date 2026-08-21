@@ -704,7 +704,7 @@ session — but "shipped" was false, and an overstated confession is its own ina
 
 | # | finding | disposition |
 |---|---|---|
-| P2 | **Axis six: session provenance under concurrency.** The effort assertion picks "the one new session" by set difference — which cannot tell a session THIS invocation created from one a concurrent foreign `kimi` created in the same window. Reproduced: reviewer created none, a stranger created one, and the difference was still exactly one, whose wire log was read and reported as this round's effort (`would_pass_max_gate=yes`) | **Half closed, half recorded.** If this capture produced no bytes the reviewer did not run, so no new session can be ours and none is attributed — that closes the demonstrated case. The expensive half (two processes running, one ours) is **not** closable by set difference and is stated as a residual rather than papered over: it needs an isolated session namespace per invocation, a change to how kimi is launched, not to how its output is read |
+| P2 | *(Superseded by round 16 — the residual below was NOT honestly scoped, and the concurrent case turned out to be closable. See round 16.)* **Axis six: session provenance under concurrency.** The effort assertion picks "the one new session" by set difference — which cannot tell a session THIS invocation created from one a concurrent foreign `kimi` created in the same window. Reproduced: reviewer created none, a stranger created one, and the difference was still exactly one, whose wire log was read and reported as this round's effort (`would_pass_max_gate=yes`) | **Half closed, half recorded.** If this capture produced no bytes the reviewer did not run, so no new session can be ours and none is attributed — that closes the demonstrated case. The expensive half (two processes running, one ours) is **not** closable by set difference and is stated as a residual rather than papered over: it needs an isolated session namespace per invocation, a change to how kimi is launched, not to how its output is read |
 | P2 | **The NUL control proved nothing.** It asserted only that the word "NUL" was absent from stderr — which is also true of a run that dies for any other reason | Fixed — the control must now reach the capture summary (`BASIS=`), so it demonstrates the guard ADMITS valid prompts rather than merely being quiet about them |
 | P3 | **Two of my three self-reported round-14 mistakes were described wrongly** | Corrected in place — see the round-14 entry. The `grep -qU` guard matched EVERYTHING in both shells (verified: bash `pattern_len=0`, zsh `1`, `rc=0` on both files, and a NUL cannot enter `argv` at all); the "inverted control" result I reported does not reproduce and its stated mechanism was invented after the fact. And the NUL guard did **not** "ship" untested — `git log -S` shows guard and test in the same commit; the `TEST NOT FOUND` was an uncommitted intermediate draft |
 
@@ -713,3 +713,29 @@ permanent record were wrong — one describing an observation that does not repr
 an error into something that never shipped. Both were self-critical claims, which is precisely the
 kind nobody checks: an admission reads as candour and gets waved through. The campaign's rule about
 verifying claims applies to claims against oneself.
+
+### Round 16 (`f008a74`, effort=max) — 2×P2 + 1×P3. **A residual of mine was refuted.**
+
+I asked the reviewer directly whether the round-15 provenance residual was honestly scoped, flagging
+that both halves of my claim were convenient for me. Both were wrong.
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The provenance residual was not honestly scoped: the launch ALREADY provides a per-invocation namespace.** kimi files each session under a namespace derived from its exact cwd, and this harness has always launched from a unique `mktemp` directory. Measured across 20 stored sessions: namespace hash matched 20/20, `distinct_namespaces=20`, `max_sessions_per_namespace=1`. An exact-cwd filter separated the cases cleanly — `ours_plus_foreign … cwd_matches=1`, `foreign_only … cwd_matches=0` | **Closed, not recorded.** Session selection now filters candidates by the cwd kimi itself recorded, then still requires exactly one — provenance filters, the count decides. I verified the derivation independently (24/25 exact; the one difference is case-folding of the basename, which the reviewer's all-lowercase samples could not have shown) |
+| P2 | **Axis seven: `(empty transcript × exactly one session)`.** Cells covered `(nonempty, one)` and `(empty, zero)`; the combination the round-15 guard actually decides had no test | Fixed — and the new cell **immediately caught a regression I had just introduced**: rewriting that block for provenance, I silently dropped the empty-capture guard. `BYTES=0` with `EFFORT=max` on its first run |
+| P3 | "Empty capture means the reviewer did not run" remained a false claim in the audit | Corrected — an empty transcript does not prove the reviewer never ran; it proves this invocation captured nothing, which is why it may not attribute a session |
+
+**What I got wrong, and why it is a pattern worth naming.** I declared a limitation ("not closable
+by set difference; needs a change to how kimi is launched") without checking whether the launch
+already supplied what I needed. The claim had two convenient properties: it credited me with fixing
+the demonstrated half, and it placed the rest outside my scope. Every earlier residual on this
+campaign was verified before being recorded — the shadowed-`eval` carrier was tested against
+`BASH_ENV` first, and the reviewer independently agreed. This one was asserted.
+
+**A residual is a claim like any other and needs the same evidence.** "Cannot be fixed" is the most
+self-serving sentence available to whoever is doing the fixing.
+
+Three further cells were added while proving the fix discriminates: a foreign-cwd session, a session
+with no `state.json` at all, and the empty-plus-one combination. The middle one exists because a
+mutation toward the pre-round-16 count-only selection **passed** the foreign-session cell — that
+fixture records a different cwd, so it could not exercise the unreadable-provenance path.

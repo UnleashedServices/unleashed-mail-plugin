@@ -399,25 +399,54 @@ fi
 SESSIONS_AFTER="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 NEW_SESSIONS="$(printf '%s\n' "$SESSIONS_AFTER" | grep -vxF -- "$SESSIONS_BEFORE" | grep -v '^$' || true)"
 WIRE=""
-# EXACTLY ONE NEW SESSION IS NOT PROOF THAT IT IS OURS. The set difference cannot tell a session
-# THIS invocation created from one a CONCURRENT foreign `kimi` created in the same window: with the
-# reviewer creating none and a stranger creating one, the difference is still exactly one and its
-# wire log was read and reported as this round's effort (codex, PR #69 round 15 — reproduced:
-# `reviewer_sessions_created=0 foreign_sessions_created=1 would_pass_max_gate=yes`).
+# PROVENANCE COMES FROM THE LAUNCH, NOT FROM SET DIFFERENCE.
+# The previous version selected "the one new session" and recorded the concurrent-foreign case as a
+# residual it could not close. That was wrong, and it was the convenient thing to believe: this
+# harness ALREADY launches kimi from a unique per-invocation directory (`$TREE/tree`, a mktemp
+# path), and kimi files each session under a namespace derived from that exact cwd — verified here
+# against 25 stored sessions, 24 exact and 1 differing only by case-folding of the basename. So a
+# session belonging to THIS invocation is identifiable directly, and a stranger's is excluded by
+# construction rather than by hoping the count is one (codex, PR #69 round 16, which reproduced
+# `ours_plus_foreign global_candidates=2 cwd_matches=1` and `foreign_only … cwd_matches=0`).
 #
-# The cheap half is closable and is closed here: if THIS capture produced no bytes, the reviewer did
-# not run, so no new session can be ours and none is selected. The expensive half — two processes
-# both running, one of them ours — is NOT closable by set difference, and this line does not pretend
-# otherwise. It is a STATED RESIDUAL: the effort token has always been printed
-# `EFFORT=…(self-reported)`, and under concurrency its PROVENANCE is unproven as well as its value.
-# Closing it needs an isolated session namespace per invocation, which is a change to how kimi is
-# launched rather than to how its output is read.
-if [ ! -s "$OUT" ]; then
-    :   # no capture, so nothing this invocation produced — decline to attribute any session
-elif [ "$(printf '%s\n' "$NEW_SESSIONS" | grep -c .)" = 1 ]; then
-    _w="$NEW_SESSIONS/agents/main/wire.jsonl"
+# The cwd RECORDED BY KIMI is compared, rather than the namespace hash recomputed: the hash formula
+# is kimi's implementation detail, the recorded cwd is the fact we actually need, and matching on it
+# cannot drift when that formula changes.
+_KIMI_CWD="$(cd -P -- "$TREE/tree" 2>/dev/null && pwd -P)"
+_OURS=""
+_OURS_N=0
+for _cand in $NEW_SESSIONS; do
+    [ -n "$_cand" ] || continue
+    _state="$_cand/state.json"
+    [ -r "$_state" ] || continue
+    _their_cwd="$(python3 -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print(d.get("cwd") or d.get("workingDirectory") or "")' "$_state" 2>/dev/null)"
+    [ -n "$_their_cwd" ] || continue
+    _their_real="$(cd -P -- "$_their_cwd" 2>/dev/null && pwd -P)"
+    [ -n "$_their_real" ] || _their_real="$_their_cwd"
+    if [ "$_their_real" = "$_KIMI_CWD" ] || [ "$_their_cwd" = "$TREE/tree" ]; then
+        _OURS="$_cand"
+        _OURS_N=$((_OURS_N + 1))
+    fi
+done
+# PROVENANCE FILTERS; THE COUNT STILL DECIDES. Matching the cwd excludes a stranger's session, but
+# it does not make TWO sessions in our own namespace unambiguous — and real kimi files exactly one
+# per namespace (codex measured `max_sessions_per_namespace=1` across 20 stored sessions), so two is
+# anomalous and stays UNKNOWN rather than being resolved by picking the first.
+# AND AN EMPTY CAPTURE ATTRIBUTES NOTHING. This guard was added in round 15, then silently DROPPED
+# when this block was rewritten for provenance in round 16 — the `(empty capture, exactly one
+# session)` cell caught the regression on its first run, which is the whole reason that combination
+# needed a cell of its own. Both conditions are required: the session must be ours, and this
+# invocation must have produced something.
+if [ "$_OURS_N" = 1 ] && [ -s "$OUT" ]; then
+    _w="$_OURS/agents/main/wire.jsonl"
     [ -r "$_w" ] && WIRE="$_w"
 fi
+unset _cand _state _their_cwd _their_real _OURS _OURS_N
 EFFORTS=""
 [ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
     | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"

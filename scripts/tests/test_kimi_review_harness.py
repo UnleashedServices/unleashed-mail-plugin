@@ -112,12 +112,27 @@ case "${{KIMI_STUB_MODE:-clean}}" in
                  echo x >> "$KIMI_STUB_CLONE/README.md" ;;
   # The session-binding modes write under $HOME — the harness's HOME, re-pointed at the scratch by the test.
   new-max)       mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
                  printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   new-high)      mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
                  printf '{{"thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   quote-old)     printf 'As in {OLD_SESSION} earlier\\n' ;;      # creates NOTHING; quotes a pre-existing session
+  foreign-only)  # a stranger's session: correct shape, but recorded under a DIFFERENT cwd
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"/nowhere/else"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/state.json"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  no-state)      # a new session with NO state.json at all: provenance is unknowable, not assumed
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  empty-plus-one) # THE SEVENTH AXIS: no transcript bytes AND exactly one new session
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
+                 exit 0 ;;   # ...and print NOTHING, so the capture is empty
   two-new)       for s in {NEW_SESSION} {NEW_SESSION_2}; do
                    mkdir -p "$HOME/.kimi-code/sessions/wd_new/$s/agents/main"
+                   printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/$s/state.json"
                    printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
                  done ;;
 esac
@@ -1039,6 +1054,40 @@ class KimiHarnessMutationGates(unittest.TestCase):
                       f"a timeout was not reported as 124 in the summary:\n{proc.stdout}")
         self.assertIn("BYTES=0", proc.stdout,
                       "a timed-out round should have captured no transcript bytes")
+
+    def test_a_foreign_session_is_not_this_runs_evidence(self):
+        """A stranger's concurrent session must not be read as this round's effort.
+
+        Set difference cannot tell it from ours — reproduced in round 16 as
+        `reviewer_sessions_created=0 foreign_sessions_created=1 would_pass_max_gate=yes`. Provenance
+        now comes from the launch: kimi files each session under a namespace derived from its cwd,
+        and this harness launches from a unique per-invocation directory.
+        """
+        p, _ = self._run("foreign-only")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a foreign session was certified as this run's effort:\n{p.stdout}")
+
+    def test_a_session_without_recorded_provenance_is_not_this_runs_evidence(self):
+        """No `state.json` means the cwd is unknowable — which must fail closed, not default to ours.
+
+        The foreign-session cell alone did not cover this: that fixture HAS a state.json recording a
+        different cwd, so a variant that treats an unreadable state as "ours" passed it. Found by
+        mutating toward the pre-round-16 count-only selection.
+        """
+        p, _ = self._run("no-state")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a session with no recorded cwd was treated as this run's:\n{p.stdout}")
+
+    def test_an_empty_capture_with_one_new_session_is_not_evidence(self):
+        """The seventh axis: (empty transcript, exactly one new session).
+
+        Cells covered (nonempty, one) and (empty, zero); the combination the guard actually decides
+        was never sampled, so the guard had no regression (codex, PR #69 round 16).
+        """
+        p, _ = self._run("empty-plus-one")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"an empty capture certified an effort from a session it did not "
+                            f"produce:\n{p.stdout}")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
