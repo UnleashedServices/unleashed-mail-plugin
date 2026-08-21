@@ -167,25 +167,45 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         `|| true` turned that into an EMPTY string which compared equal to an empty baseline — so a
         reviewer that broke the detector passed with an APPROVAL.
         """
-        # The failure must NOT depend on permission bits. `chmod 000` does not stop UID 0, so under
-        # root — which is normal in CI containers — the file is read anyway, the fingerprint SUCCEEDS,
-        # the round VOIDs for the ordinary content-difference reason, and this cell both fails and
-        # stops exercising the branch it exists for. Found independently by two reviewers on PR #70.
+        # The failure must depend on NEITHER permission bits NOR a hard-coded path length.
         #
-        # `@unittest.skipIf(root)` was the other suggestion and is rejected deliberately: it would
-        # leave this guard untested in exactly the environment CI runs, which is the
-        # "covered only by a test that can skip" class this whole sweep was built to find.
+        # `chmod 000` does not stop UID 0, so under root - normal in CI containers - the file is read
+        # anyway, the fingerprint SUCCEEDS, and the round VOIDs for the ordinary content-difference
+        # reason at 197. Found independently by two reviewers on PR #70.
         #
-        # A path longer than PATH_MAX fails for every uid. Each `mkdir`/`cd` is short and succeeds,
-        # but the ABSOLUTE path the walk reconstructs exceeds the limit, so `lstat`/`open` raises and
-        # `disposable_fingerprint` returns non-zero. Measured here: 3700 chars against PATH_MAX 1024.
-        # It must also NOT be the plan or the prompt: making either unreadable trips the earlier
-        # staged-plan / staged-prompt digest guards, so the round would VOID for the wrong reason.
+        # `@unittest.skipIf(root)` was suggested and is rejected deliberately: it would leave this
+        # guard untested in exactly the environment CI runs, which is the "covered only by a test
+        # that can skip" class this sweep was built to find.
+        #
+        # A path longer than PATH_MAX raises for every uid - but PATH_MAX IS NOT A CONSTANT ACROSS
+        # PLATFORMS. A fixed 40-level nest (~2400 chars) exceeded macOS's 1024 and NOT Linux's 4096,
+        # so the first version of this cell passed locally and failed on CI: the walk succeeded, the
+        # round VOIDed at 197, and the assertion below caught it. The depth is therefore derived from
+        # `getconf PATH_MAX` at runtime rather than assumed.
+        #
+        # An invalid-UTF-8 filename was also tried: APFS refuses it outright (Errno 92), so it would
+        # pass on Linux and fail on macOS - the same platform-dependence in the other direction.
         self.install_mutating_stub(
             'd=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n'
-            'for i in $(seq 1 40); do mkdir -p "$d" && cd "$d" || break; done\n'
-            "printf 'x\\n' > deep.txt")
+            'lim=$(getconf PATH_MAX / 2>/dev/null || echo 4096)\n'
+            'i=0\n'
+            'while [ "$(printf %s "$PWD" | wc -c | tr -d " ")" -le "$((lim + 300))" ] '
+            '&& [ "$i" -lt 400 ]; do\n'
+            '  mkdir -p "$d" && cd "$d" || break; i=$((i+1))\n'
+            'done\n'
+            "printf 'x\\n' > deep.txt\n"
+            # Record the premise so the cell can assert it, rather than silently testing another guard.
+            'printf \'%s %s\\n\' "$(printf %s "$PWD" | wc -c | tr -d " ")" "$lim" > "$UM_CODEX_SAW"')
+
         result = self.capture("1")
+        # THE FIXTURE IS NOT THE FINDING: prove the nest actually exceeded this platform's limit.
+        # Without this, a nest that fell short would VOID at 197 and look like a different bug.
+        self.assertTrue(self.saw.is_file(),
+                        f"the stub never ran:\n{result.stdout}{result.stderr}")
+        achieved, limit = (int(x) for x in self.saw.read_text(encoding="utf-8").split())
+        self.assertGreater(achieved, limit,
+                           f"fixture premise failed: nested path {achieved} chars did not exceed "
+                           f"PATH_MAX {limit}, so this cell would exercise the wrong guard")
         self.assertEqual(3, result.returncode,
                          f"an unfingerprintable checkout did not VOID the round:\n"
                          f"{result.stdout}{result.stderr}")
