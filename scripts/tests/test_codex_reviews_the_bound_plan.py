@@ -150,8 +150,8 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         cell did exactly that, went red, and looked like a defect in the guard.
         """
         self.install_mutating_stub(
-            r"""find . -name '*.txt.prompt' -type f -print0 |"""
-            "\n" + r"""  while IFS= read -r -d '' f; do printf 'TAMPERED\n' >> "$f"; done""")
+            r"""find . -name '*.txt.prompt' -type f -print0 |
+  while IFS= read -r -d '' f; do printf 'TAMPERED\n' >> "$f"; done""")
         self.assert_voided(self.capture("1"), "assembled PROMPT was modified")
 
     def test_a_reviewer_that_WRITES_SCRATCH_IN_THE_CHECKOUT_voids_the_round(self):
@@ -201,7 +201,12 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         # pass on Linux and fail on macOS - the same platform-dependence in the other direction.
         self.install_mutating_stub(
             'd=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n'
-            'lim=$(getconf PATH_MAX / 2>/dev/null)\n'
+            # `.` not `/`: pathconf is defined PER PATH, and the nesting happens in the disposable
+            # checkout, which can sit on a different filesystem from the root. Measured on the
+            # dev machine it makes no difference (1024 for `/`, $TMPDIR, $HOME and a real mktemp
+            # dir, across two filesystems), so this is robustness rather than a fix. `.` is the
+            # checkout root here - the loop's `cd` calls happen after this line.
+            'lim=$(getconf PATH_MAX . 2>/dev/null)\n'
             # SANITISE TO A DECIMAL, do not merely default the empty case. `getconf` can exit 0 with
             # output that is empty, `undefined` (POSIX, for an indeterminate limit), or unit-suffixed.
             # Measured against bash arithmetic:
