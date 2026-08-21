@@ -824,3 +824,74 @@ data against a schema the author assumed rather than checked* — the response t
 only to fix the instance but to sweep the class. That sweep is a separate piece of work over every
 surface where the review harnesses read a file written by another program; **this commit contains
 only the `state.json` fix**, and whatever the sweep finds is recorded in its own round below.
+
+### Sweep of the class (not a review round) — 9 confirmed, 7 refuted
+
+Round 17 was the fifth consecutive `max` finding, and the fifth to name a genuinely new axis rather
+than a variant of the last. Rather than wait for round 18 to surface the sixth one at a time, the
+recurring class was swept directly: **harness code that parses externally-produced data against a
+schema the author assumed rather than checked.** Five surfaces, each required to check its
+assumptions against real files on disk (`~/.kimi-code`, `~/.codex`, `~/.claude/review-transcripts`,
+`~/.claude/plugins/data`), with every candidate finding independently re-verified by a separate
+adversarial pass whose default was REFUTED.
+
+| outcome | n |
+|---|---|
+| confirmed (contradiction reproduced against real data) | **9** |
+| refuted on verification | 7 |
+| assumptions checked and found CORRECT *(as reported by the sweep; not independently re-checked)* | 61 |
+| unverifiable — no real data exists to check against *(a reportable state, not a pass)* | 25 |
+
+That 7-of-16 refutation rate is the useful signal: the verifiers were adversarial rather than
+confirming, so the 9 survivors mean something.
+
+**Fixed in this commit — both halves of the same defect, at `isolated-kimi-review.sh:478`:**
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The effort assertion proved CONFIGURATION, not EXECUTION.** `thinkingEffort` appears in six record types; only `llm.request` means the model was actually asked at that tier. `profile.bind` is written when the session binds its profile, before any inference. Seven of 63 real sessions carry an effort token with **zero** `llm.request` records — and **two are this harness's own** (`wd_tree_*`, cwd under `kimi-review.XXXXXX/tree`), holding exactly `metadata` + `profile.bind` + `permission.set_mode`. Both reported `max,` and **passed the gate**, certifying a tier for a round in which the model was never called | Fixed — extraction filters to `llm.request` records |
+| P3 | **The value set was not confined to the documented tiers.** Real logs record `"thinkingEffort":"on"` (5 occurrences), outside `low\|high\|max`, and folding `config.update` in let one session yield `high,max,on,` | Fixed by the same filter; any set other than exactly `max,` still fails the gate |
+
+**Verified in both directions before shipping, which is the round-17 lesson made procedure.** A
+filter that fails closed on real input is a break, not a fix. Run over all 63 real wire logs, the
+unfiltered extraction yields `max,` for **51** sessions and the shipped filtered one for **49** — and
+the only two that change are exactly the two zero-inference sessions. No genuine max round loses its
+certification. Mutation gate D deletes the record-type guard and turns **only** the new
+`bind-only` cell red, leaving all six other provenance cells green.
+
+**The fixtures were part of the defect, again.** Every fixture wrote `{"thinkingEffort":"max"}` with
+**no `type` field**, which no real wire record lacks. So the fixtures could not have exercised a
+record-type filter in either direction. All nine stub records and the `_seed_session` helper now
+write the real shape, `{"type":"llm.request",...}`. This is the same pathology as round 17's `cwd`
+fixtures: **a fixture written from the same assumption as the code cannot test that assumption.**
+
+**A defect of mine that `bash -n` approved.** The first attempt at this filter was written into the
+script through a Python heredoc using the shell idiom `'"'"'`, which is only meaningful to a *shell*
+— from Python it landed as literal text. `bash -n` passed. The block was nonetheless inert: a
+functional test on a wire log that *did* contain `llm.request` returned `EFFORTS=[]`. Note the
+direction of that failure — empty fails closed, so the broken filter would have looked *safe* while
+breaking the whole arm, which is precisely the round-17 defect repeated inside its own repair. Syntax
+checking is not behaviour checking; the four-case functional table is what caught it.
+
+**Corrections to the sweep's own findings, since a finding is a claim like any other.** Its single
+P1 — "a codex run that produced no review reports a verdict" — named `COREDEV-2617r65` with
+`BYTES=13560`. **That artefact does not exist**: the r65 capture on disk is a *Kimi* OAuth failure of
+8058 bytes, on which the harness grep correctly returns nothing. Across all 329 stored transcripts,
+the three that genuinely carry a reviewer-failure marker are all `agy`, and **none** yields a verdict.
+The *mechanism*, however, is real and was reproduced independently: in `2617r10-codex.txt` the
+harness's anchored grep matches four lines, and lines 71-73 are the **echoed prompt template** —
+`VERDICT: APPROVE`, `VERDICT: APPROVE_WITH_NOTES`, `VERDICT: REQUEST_CHANGES`, each bare at
+start-of-line. `tail -1` picks the real verdict at line 5424 only because the reviewer answered; a
+codex process that died after echoing the prompt would report line 73. Severity is **P2, not P1**:
+the last template line is the conservative verdict, so the observed failure mode wastes a round
+rather than approving bad code — but that safety rests on incidental template ordering, and reversing
+the list would turn it into a false APPROVE.
+
+**Deferred to the follow-up PR** (out of scope for this one, and recorded so they are not lost): the
+codex/agy verdict grammar above; `isolated-agy-review.sh:308` rejecting real agy spellings
+(`**VERDICT: X**`, bolded or appended to prose) and so reporting two real completed reviews as
+`<none — FAILED REVIEW>`; `mcp_server.py:200` accepting C-quoted non-ASCII paths from
+`git diff --name-only`; `plugin-state-auth.sh:151` where `zmodload zsh/stat` shadows `/usr/bin/stat`
+for the whole sourcing shell; `sensitive-file-guard.sh:99` reading only `Bash.command` while real
+sessions carry shell in `Monitor.command` and `Workflow`; and `pty-capture.py:69`'s overstated
+capture margin.

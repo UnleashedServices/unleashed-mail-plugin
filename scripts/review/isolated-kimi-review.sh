@@ -475,8 +475,40 @@ if [ "$_OURS_N" = 1 ] && [ -s "$OUT" ]; then
 fi
 unset _cand _state _their_cwd _their_real _OURS _OURS_N
 EFFORTS=""
-[ -n "$WIRE" ] && EFFORTS="$(grep -o '"thinkingEffort":"[a-z]*"' "$WIRE" 2>/dev/null \
-    | sed 's/.*:"//;s/"//' | LC_ALL=C sort -u | tr '\n' ',')"
+# ONLY `llm.request` RECORDS COUNT. The key appears in SIX record types, and five of them record the
+# CONFIGURED tier rather than a tier the model was actually asked at. Measured across 63 real sessions:
+# `llm.request` 1867, `config.update` 53, `profile.bind` 37, `task.started` 9, `task.terminated` 7,
+# `context.append_loop_event` 2. Seven real sessions carry an effort token with ZERO `llm.request`
+# records, and TWO of those are this harness's own (`wd_tree_*`, cwd under `kimi-review.XXXXXX/tree`):
+# each holds exactly `metadata` + `profile.bind` + `permission.set_mode`, and the unfiltered grep
+# reported `max,` and PASSED the gate below — certifying a tier for a round in which the model was
+# never called at all. `profile.bind` is written when the session binds its profile, before any
+# inference; it is a statement of intent, not of what happened.
+#
+# Verified in BOTH directions before shipping, which is the round-17 lesson: a filter that fails closed
+# on real input is a break, not a fix. Across those same 63 sessions the unfiltered grep yields `max,`
+# for 51 and this filtered one for 49, and the only two that change are exactly the two zero-inference
+# sessions above. No genuine max round loses its certification.
+#
+# This also confines the value set. Folding `config.update` in produced multi-valued results from a
+# single session (one real session yields `high,max,on,`), and real logs record `"on"`, which is
+# outside the documented `low|high|max`. Any set other than exactly `max,` still fails the gate.
+[ -n "$WIRE" ] && EFFORTS="$(python3 -c 'import json,sys
+vals=set()
+for line in open(sys.argv[1],errors="replace"):
+    line=line.strip()
+    if not line:
+        continue
+    try:
+        d=json.loads(line)
+    except Exception:
+        continue
+    if d.get("type")!="llm.request":
+        continue
+    v=d.get("thinkingEffort")
+    if isinstance(v,str) and v:
+        vals.add(v)
+sys.stdout.write(",".join(sorted(vals))+"," if vals else "")' "$WIRE" 2>/dev/null)"
 
 # WHAT THIS LINE IS EVIDENCE OF, EXACTLY. The wire log lives inside the session tree of the process it
 # describes, and that process is shell-capable with this same `$HOME` and uid — it can rewrite the file
@@ -486,7 +518,10 @@ EFFORTS=""
 # labelled for what it is — SELF-REPORTED — and the digest of the bytes this run actually read is
 # printed beside it, so a later dispute has something fixed to point at. The assertion below still
 # earns its keep against the failure it was written for (a run that silently used the default tier),
-# and claims nothing about an adversarial one.
+# and claims nothing about an adversarial one. That first clause was FALSE until the record-type
+# filter above was added: reading any `thinkingEffort` token certified the tier a session was
+# CONFIGURED with, so a run that used the default tier — or ran no inference at all — passed. The
+# property is purchased by that filter, not inherent to reading this file.
 WIRE_SHA=""
 [ -n "$WIRE" ] && WIRE_SHA="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WIRE" 2>/dev/null)"
 

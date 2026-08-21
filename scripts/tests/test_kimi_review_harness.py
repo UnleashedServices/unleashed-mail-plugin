@@ -113,39 +113,46 @@ case "${{KIMI_STUB_MODE:-clean}}" in
   # The session-binding modes write under $HOME — the harness's HOME, re-pointed at the scratch by the test.
   new-max)       mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   new-high)      mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"high"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   quote-old)     printf 'As in {OLD_SESSION} earlier\\n' ;;      # creates NOTHING; quotes a pre-existing session
   foreign-only)  # a stranger's session: correct shape, but recorded under a DIFFERENT cwd
                  mkdir -p "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"/nowhere/else"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_foreign/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   no-state)      # a new session with NO state.json at all: provenance is unknowable, not assumed
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   workdir-max)   # THE EIGHTH AXIS: the REAL majority schema, which records `workDir`, not `cwd`
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"workDir":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   alias-conflict) # two recorded cwds that DISAGREE: ambiguous provenance, not resolvable by order
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s","workDir":"/nowhere/else"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  bind-only)     # THE MODEL NEVER RAN: profile.bind records the CONFIGURED tier, nothing was asked
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 {{ printf '{{"type":"metadata"}}\\n'
+                    printf '{{"type":"profile.bind","modelAlias":"kimi-code/k3","thinkingEffort":"max"}}\\n'
+                    printf '{{"type":"permission.set_mode","mode":"auto"}}\\n'
+                 }} > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   malformed-alias) # OUR cwd in one alias, a NON-STRING in another: must not be waved through
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s","workDir":12345}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   empty-plus-one) # THE SEVENTH AXIS: no transcript bytes AND exactly one new session
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
-                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
+                 printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl"
                  exit 0 ;;   # ...and print NOTHING, so the capture is empty
   two-new)       for s in {NEW_SESSION} {NEW_SESSION_2}; do
                    mkdir -p "$HOME/.kimi-code/sessions/wd_new/$s/agents/main"
                    printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/$s/state.json"
-                   printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
+                   printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
                  done ;;
 esac
 printf '{SESSION}\\nVERDICT: APPROVE\\n'
@@ -292,7 +299,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         path = self._wire(wd, session)
         os.makedirs(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write('{"thinkingEffort":"%s"}\n' % effort)
+            fh.write('{"type":"llm.request","thinkingEffort":"%s"}\n' % effort)
         return path
 
     def _assert_void(self, mode, message):
@@ -1153,6 +1160,30 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertNotRegex(p.stdout, r"EFFORT=max",
                             f"a state.json with a non-string alias was accepted as this run's "
                             f"provenance instead of failing closed:\n{p.stdout}")
+
+    def test_a_configured_tier_is_not_evidence_that_the_model_ran(self):
+        """THE NINTH AXIS: the effort token proves CONFIGURATION, not EXECUTION.
+
+        `thinkingEffort` appears in six record types across the real store, and only `llm.request`
+        means the model was actually asked at that tier. `profile.bind` is written when the session
+        binds its profile, before any inference — a statement of intent.
+
+        Two REAL sessions in this harness's own `wd_tree_*` namespace hold exactly
+        `metadata` + `profile.bind` + `permission.set_mode`, with zero `llm.request` records, and the
+        unfiltered extraction reported `max,` and PASSED the gate — certifying a tier for a round in
+        which the model was never called. Seven of 63 real sessions carry an effort token with no
+        `llm.request` at all.
+
+        The filter was checked in both directions against the real store before shipping: 51 sessions
+        yielded `max,` unfiltered and 49 do filtered, and the only two that change are exactly those
+        two zero-inference sessions. Deleting the `d.get("type")!="llm.request"` guard turns this red.
+        """
+        p, _ = self._run("bind-only")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a round in which the model never ran was certified at the tier its "
+                            f"profile was merely BOUND to:\n{p.stdout}")
+        self.assertNotEqual(0, p.returncode,
+                            f"a round with no inference exited success:\n{p.stdout}{p.stderr}")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
