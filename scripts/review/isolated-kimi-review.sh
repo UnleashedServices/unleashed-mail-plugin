@@ -419,12 +419,39 @@ for _cand in $NEW_SESSIONS; do
     [ -n "$_cand" ] || continue
     _state="$_cand/state.json"
     [ -r "$_state" ] || continue
+    # WHICH KEY RECORDS THE CWD IS VERSION-DEPENDENT - measured, not assumed. Across 63 real sessions
+    # on the development machine, 38 record `workDir` (the 0.32.0-era schema that this repo's own
+    # KIMI_REVIEW_ARM_PLAN pins as the baseline) and 25 record `cwd` (the newer `version=2` schema);
+    # none carried both. Reading only `cwd`/`workingDirectory` therefore rejected the MAJORITY of real
+    # sessions, producing `_OURS_N=0` and a spurious `EFFORT=UNKNOWN` exit 4 - a fail-CLOSED break of
+    # the whole arm (codex, PR #69 round 17). Every cell that existed synthesized `cwd`, because the
+    # fixtures were written from the same assumption as the code, so no test could fail on it.
+    #
+    # All three spellings are accepted, and ANY malformed record fails closed - printing nothing, so
+    # the caller's emptiness check skips the session. Three ways to be malformed, one rule:
+    #   - aliases that DISAGREE          -> ambiguous origin, not resolvable by alias precedence
+    #   - an alias that is not a string  -> `{"cwd": <ours>, "workDir": 12345}` must not be waved
+    #                                       through by IGNORING the bad alias; a record that cannot
+    #                                       be read as written is unknowable, and unknowable is not
+    #                                       ours. (The first draft of this fix ignored non-strings,
+    #                                       which is the permissive direction AND was undetectable:
+    #                                       deleting the check changed no test. Mutation gate C.)
+    #   - no alias present at all        -> nothing recorded (see the no-state cell)
     _their_cwd="$(python3 -c 'import json,sys
 try:
     d=json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(0)
-print(d.get("cwd") or d.get("workingDirectory") or "")' "$_state" 2>/dev/null)"
+vals=set()
+for k in ("cwd","workingDirectory","workDir"):
+    v=d.get(k)
+    if v is None or v=="":
+        continue
+    if not isinstance(v,str):
+        sys.exit(0)
+    vals.add(v)
+if len(vals)==1:
+    print(vals.pop())' "$_state" 2>/dev/null)"
     [ -n "$_their_cwd" ] || continue
     _their_real="$(cd -P -- "$_their_cwd" 2>/dev/null && pwd -P)"
     [ -n "$_their_real" ] || _their_real="$_their_cwd"

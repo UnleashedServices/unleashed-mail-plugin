@@ -125,6 +125,18 @@ case "${{KIMI_STUB_MODE:-clean}}" in
   no-state)      # a new session with NO state.json at all: provenance is unknowable, not assumed
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  workdir-max)   # THE EIGHTH AXIS: the REAL majority schema, which records `workDir`, not `cwd`
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"workDir":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  alias-conflict) # two recorded cwds that DISAGREE: ambiguous provenance, not resolvable by order
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s","workDir":"/nowhere/else"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
+  malformed-alias) # OUR cwd in one alias, a NON-STRING in another: must not be waved through
+                 mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
+                 printf '{{"cwd":"%s","workDir":12345}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
+                 printf '{{"thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main/wire.jsonl" ;;
   empty-plus-one) # THE SEVENTH AXIS: no transcript bytes AND exactly one new session
                  mkdir -p "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/agents/main"
                  printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/{NEW_SESSION}/state.json"
@@ -1088,6 +1100,59 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertNotRegex(p.stdout, r"EFFORT=max",
                             f"an empty capture certified an effort from a session it did not "
                             f"produce:\n{p.stdout}")
+
+    def test_the_real_workdir_schema_is_accepted_as_this_runs_evidence(self):
+        """THE EIGHTH AXIS: state-schema variation across Kimi versions.
+
+        Real sessions record the cwd under `workDir` (the 0.32.0-era schema this repo's own
+        KIMI_REVIEW_ARM_PLAN pins as the baseline) or under `cwd` (the newer `version=2` schema).
+        Measured across 63 stored sessions on the development machine: 38 `workDir` to 25 `cwd`,
+        never both. The round-16 filter read only `cwd`/`workingDirectory`, so it rejected the
+        MAJORITY of real sessions and broke the arm closed with `EFFORT=UNKNOWN` exit 4
+        (codex, PR #69 round 17).
+
+        This is the first POSITIVE provenance cell. Every other one asserts a rejection, so a
+        filter that rejects EVERYTHING satisfied all of them - which is precisely how a
+        fail-closed break survived three rounds of adversarial review. Dropping `workDir` from
+        the accepted spellings turns this red.
+        """
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".kimi-code")), "no session before the run")
+        p, _ = self._run("workdir-max")
+        self.assertEqual(0, p.returncode,
+                         f"a valid max-effort round on the majority schema exited nonzero - the arm "
+                         f"fails closed on real input:\n{p.stdout}{p.stderr}")
+        self.assertRegex(p.stdout, r"^EXIT=0 BYTES=\d+ TREE=clean BASIS=[0-9a-f]{12} "
+                                   r"PROMPT=[0-9a-f]{12} EFFORT=max,\(self-reported\) WIRE=[0-9a-f]{12}$")
+        self.assertNotIn("EFFORT NOT ASSERTED", p.stderr)
+
+    def test_conflicting_recorded_cwd_aliases_fail_closed(self):
+        """Two aliases naming DIFFERENT directories cannot both be this run's provenance.
+
+        Accepting all three spellings invites a first-truthy read, which a crafted `state.json`
+        steers just by choosing which alias to populate: put ours in the alias that wins and a
+        stranger's in the other. Disagreement is unknowable, and unknowable fails closed.
+        Mutating the parser back to first-truthy (`d.get("cwd") or ... or d.get("workDir")`)
+        turns this red while the positive cell above stays green.
+        """
+        p, _ = self._run("alias-conflict")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"an ambiguous provenance record was resolved by alias precedence "
+                            f"instead of failing closed:\n{p.stdout}")
+
+    def test_a_malformed_alias_fails_closed_rather_than_being_ignored(self):
+        """A non-string alias makes the record unreadable as written - which is unknowable, not ours.
+
+        `{"cwd": <ours>, "workDir": 12345}` names our directory in one alias and garbage in another.
+        Ignoring the bad alias accepts it; that is the permissive direction, and it was also
+        UNDETECTABLE - mutation gate C deleted the type check and every cell still passed, so the
+        first draft of this fix shipped a guard no test could fail on. Failing closed is both safer
+        and observable: mutating this back to "ignore non-strings" turns this cell red while the
+        `workdir-max` and `alias-conflict` cells stay green.
+        """
+        p, _ = self._run("malformed-alias")
+        self.assertNotRegex(p.stdout, r"EFFORT=max",
+                            f"a state.json with a non-string alias was accepted as this run's "
+                            f"provenance instead of failing closed:\n{p.stdout}")
 
     def _basis_digest(self, proc):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""

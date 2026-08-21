@@ -625,12 +625,22 @@ is recorded so the approval is not read as broader than it is.
 
 ## Campaign summary
 
-**Twelve rounds. Forty-one findings, every one reproduced before it was fixed.
+**Seventeen rounds. Fifty-three findings, every one reproduced before it was fixed.
 (Counted from the per-round headings, which include round 2's audit-record P2. Earlier
-paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41.)** Trend:
-4, 6, 5, 5, 4, 4, 4, 3, 3, 2, 1, 0.
+paragraphs said 40; codex round 14 caught the discrepancy — the headings sum to 41 for rounds
+1-12, and 12 more across rounds 13-17, so 53.)** Trend, by round:
 
-Four of the twelve rounds found a defect created by the previous round's repair. Rounds 2-5 each
+| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 |
+|---|---|---|---|---|---|---|---|---|----|----|----|----|----|----|----|----|
+| 4 | 6 | 5 | 5 | 4 | 4 | 4 | 3 | 3 | 2  | 1  | 0  | 1  | 4  | 3  | 3  | 1  |
+
+The trend is not one curve but two. Rounds 1-12 ran at `model_reasoning_effort=xhigh` and decayed
+monotonically to zero. Rounds 13-17 ran at `max` **on code the xhigh rounds had twice approved**,
+and did not decay — each found an axis the previous rounds had never sampled. A falling finding
+count measures the reviewer's reach as much as the code's quality, and the reach is a setting.
+
+Four of the first twelve rounds found a defect created by the previous round's repair, and
+round 17 did the same to round 16's provenance filter — five of seventeen. Rounds 2-5 each
 found a defect in the test written to prove the previous round's fix. The recurring shape was never
 a missing check — it was **a check that could not fail**: an oracle comparing the wrong line, a
 mutation that turned a test red for an unrelated reason, a regression that skipped on CI, a verifier
@@ -739,3 +749,78 @@ Three further cells were added while proving the fix discriminates: a foreign-cw
 with no `state.json` at all, and the empty-plus-one combination. The middle one exists because a
 mutation toward the pre-round-16 count-only selection **passed** the foreign-session cell — that
 fixture records a different cwd, so it could not exercise the unreadable-provenance path.
+
+### Round 17 (`6d9b16c`, effort=max) — 1×P2. **The eighth axis: the schema itself.**
+
+I asked this round for a specific stopping signal — approve *and* state that a further axis was
+looked for and not found — because four REQUEST_CHANGES in a row could equally mean "converging" or
+"I have not exhausted the reviewer's reach". The signal did not come, and the reason was a defect in
+the round-16 fix itself.
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The provenance filter rejected the majority of real sessions.** Round 16 bound provenance to the cwd Kimi records in `state.json`, reading it as key `cwd` or `workingDirectory`. Real Kimi records it as **`workDir`** in the 0.32.0-era schema — the version this repo's own `KIMI_REVIEW_ARM_PLAN.md` pins as the baseline. A legitimate max-effort run therefore yielded `_OURS_N=0`, `EFFORT=UNKNOWN`, exit 4 | Fixed — all three spellings accepted, with every malformed record failing closed |
+
+**The measurement, because the round-16 comment claimed one and this replaces it.** Across 63 real
+`state.json` files under `~/.kimi-code/sessions`:
+
+| recorded key | count | co-occurring keys |
+|---|---|---|
+| `workDir` | **38** | no `id`, no `version`, no `archived` — the 0.32.0-era schema |
+| `cwd` | 25 | `id`, `version=2`, `archived` — the newer schema |
+| both | **0** | — |
+
+So the round-16 filter did not merely miss an edge case; it rejected **60% of real input**, and it
+broke the arm **closed** — no review rather than a wrong review, which is the safe direction but is
+still a total failure of the thing it was added to protect.
+
+**Why sixteen rounds could not see it.** Every fixture synthesized `{"cwd": ...}`, because the
+fixtures were written from the same assumption as the code. And every provenance cell asserted a
+*rejection* — foreign cwd, no `state.json`, empty capture, two sessions. A filter that rejects
+**everything** satisfies all of them. There was no positive cell, so "accepts valid input" was never
+a property under test. This is the campaign's recurring defect in its purest form: **a check that
+cannot fail.**
+
+The mutation table now shows exactly that, with mutant A being the shipped round-16 code:
+
+| mutant | `workdir-max` | `alias-conflict` | `malformed-alias` | the 4 pre-existing cells |
+|---|---|---|---|---|
+| **A** — read only `cwd`/`workingDirectory` (**the shipped bug**) | FAIL | FAIL | FAIL | **all PASS** |
+| **B** — first-truthy across all three | PASS | FAIL | FAIL | all PASS |
+| **C** — accept all three but *ignore* non-strings | PASS | PASS | **FAIL** | all PASS |
+
+Row A is the finding reproduced as a control: the entire pre-existing suite stays green while the
+arm is broken. Row C is discriminated by exactly one cell, the one that exists because of it.
+
+**Two defects I introduced while fixing this one, both caught by the discipline rather than by
+review.**
+
+*The first draft of the fix contained an untestable guard.* It ignored a non-string alias
+(`isinstance(...) and d[k]` inside a set comprehension). Mutation gate C deleted that check and
+**every cell still passed** — so it was decoration, not a guard. Worse, it was permissive in the
+wrong direction: `{"cwd": <ours>, "workDir": 12345}` was waved through by discarding the malformed
+half. The rule is now stated normatively — disagreeing aliases, a non-string alias, and no alias at
+all are three ways to be malformed, and all three fail closed — and the `malformed-alias` cell makes
+it observable.
+
+*The mutation harness itself was a pass-shaped nothing.* Its first version ran
+`python3 -m unittest $CELLS` unquoted under **zsh**, which does not word-split unquoted parameter
+expansions. The whole list arrived as one test name, unittest reported a loader `AttributeError`,
+and the run printed `FAILED` — which reads exactly like "the mutant was caught". Nothing had been
+tested. This is the same family as the `Ran 0 tests` incident and the `grep -qU` non-control: a
+harness whose failure is indistinguishable from the result it was built to detect. It was caught by
+naming each cell explicitly and printing a per-cell PASS/FAIL, so a discriminating result has to
+*look* discriminating.
+
+*And the corrected harness nearly shipped a mutant.* A quoting error killed the script at the
+mutant-C stage, **before its restore line** — leaving mutant C live in the working tree. Re-reading
+the file afterward is the only reason it was not committed as the fix. The restore is now an `EXIT`
+trap rather than a trailing statement, and the file is verified by digest after every mutation run.
+
+**What the fifth consecutive `max` finding says about the campaign.** Rounds 13–17 each found a
+genuinely new axis rather than a variant of the last, which does not support the convergence
+hypothesis. Since the recurring class is now legible — *harness code parsing externally-produced
+data against a schema the author assumed rather than checked* — the response to this round is not
+only to fix the instance but to sweep the class. That sweep is a separate piece of work over every
+surface where the review harnesses read a file written by another program; **this commit contains
+only the `state.json` fix**, and whatever the sweep finds is recorded in its own round below.
