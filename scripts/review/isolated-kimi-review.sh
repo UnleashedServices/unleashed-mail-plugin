@@ -399,7 +399,22 @@ fi
 SESSIONS_AFTER="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
 NEW_SESSIONS="$(printf '%s\n' "$SESSIONS_AFTER" | grep -vxF -- "$SESSIONS_BEFORE" | grep -v '^$' || true)"
 WIRE=""
-if [ "$(printf '%s\n' "$NEW_SESSIONS" | grep -c .)" = 1 ]; then
+# EXACTLY ONE NEW SESSION IS NOT PROOF THAT IT IS OURS. The set difference cannot tell a session
+# THIS invocation created from one a CONCURRENT foreign `kimi` created in the same window: with the
+# reviewer creating none and a stranger creating one, the difference is still exactly one and its
+# wire log was read and reported as this round's effort (codex, PR #69 round 15 — reproduced:
+# `reviewer_sessions_created=0 foreign_sessions_created=1 would_pass_max_gate=yes`).
+#
+# The cheap half is closable and is closed here: if THIS capture produced no bytes, the reviewer did
+# not run, so no new session can be ours and none is selected. The expensive half — two processes
+# both running, one of them ours — is NOT closable by set difference, and this line does not pretend
+# otherwise. It is a STATED RESIDUAL: the effort token has always been printed
+# `EFFORT=…(self-reported)`, and under concurrency its PROVENANCE is unproven as well as its value.
+# Closing it needs an isolated session namespace per invocation, which is a change to how kimi is
+# launched rather than to how its output is read.
+if [ ! -s "$OUT" ]; then
+    :   # no capture, so nothing this invocation produced — decline to attribute any session
+elif [ "$(printf '%s\n' "$NEW_SESSIONS" | grep -c .)" = 1 ]; then
     _w="$NEW_SESSIONS/agents/main/wire.jsonl"
     [ -r "$_w" ] && WIRE="$_w"
 fi

@@ -1012,6 +1012,12 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.assertNotIn("NUL", control.stderr,
                          f"CONTROL FAILED — an ordinary prompt was refused as containing a NUL:\n"
                          f"{control.stderr}")
+        # "did not mention NUL" is not "was accepted" — a run that dies for ANY other reason also
+        # omits the word, so the control proved nothing about the guard (codex, PR #69 round 15).
+        # Require it to get PAST the binder and reach the capture summary.
+        self.assertIn("BASIS=", control.stdout,
+                      f"CONTROL FAILED — the ordinary prompt never reached the capture, so this cell "
+                      f"does not show the guard admits valid prompts:\n{control.stdout}{control.stderr}")
 
     def test_a_nonzero_reviewer_status_is_preserved(self):
         """Every stub mode terminated with an approving printf, so no failing reviewer was sampled."""

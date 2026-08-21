@@ -678,14 +678,38 @@ third fell out of them. That question was worth more than another operand mutant
 | P2 | **Axis five: prompt encoding.** The binder accepted a NUL, but bash command substitution silently DELETES it, so the reviewer receives different bytes than `PROMPT_SHA` digests (documented length 91, argv length 90, `bytes_equal=False`). `bind-prompt.py` already refused this for the plan skills; the kimi harness did not | Fixed — refused at the source, detected in python3 with a control proving ordinary prompts still pass |
 | P3 | **The campaign totals in this document were arithmetically wrong** — the per-round headings sum to 41 through round 12 while the prose said 40 | Fixed, with the counting convention stated |
 
-**Two mistakes of mine inside this round, both caught by running things.** First, the NUL guard was
-written as `grep -qU $'\000'` — and bash cannot hold a NUL in a variable, so that compiles to an
-EMPTY pattern matching every file: a guard that refuses everything and detects nothing. The control
-caught it inverted (NUL file "ACCEPT", ordinary file "REFUSE"). Second, my first assertions for the
-new exit-status and timeout cells demanded the absence of `TREE=clean` — but that token reports the
-FINGERPRINT, not the round's success, and the harness was already behaving correctly. I would have
-"fixed" working code to satisfy a wrong oracle.
+**Mistakes of mine inside this round — as corrected in round 15, because two of the three were
+described wrongly.** The first is real: the NUL guard was written `grep -qU $'\000'`, and a NUL
+cannot survive into `argv` at all (`embedded null byte`), so the pattern reaches grep EMPTY and
+matches everything — a guard that would refuse every prompt. Measured in both shells: bash
+`pattern_len=0`, zsh `1`, and **`rc=0` for both a NUL file and an ordinary one**.
 
-And a third: the NUL guard shipped with **no test**, so a mutation check reported `TEST NOT FOUND`.
-That is exactly the gap round 10 raised — a sanitiser that can be deleted with nothing failing —
-repeated four rounds later. All four new cells are now mutation-verified.
+**But the result I reported for it was wrong.** The entry originally said the control caught it
+"inverted (NUL file ACCEPT, ordinary REFUSE)". That cannot follow from a pattern that matches
+everything, codex was right to say so, and under controlled re-measurement it does not reproduce.
+A one-off probe printed that pairing and I explained it with a mechanism I had not verified. The
+accurate statement is the one above: the guard matched everything, in both shells.
+
+The second is real: my first assertions for the exit-status and timeout cells demanded the absence
+of `TREE=clean`, but that token reports the FINGERPRINT, not the round's success. The harness was
+already correct and I would have "fixed" working code to satisfy a wrong oracle.
+
+**The third was overstated.** I wrote that the NUL guard "shipped with no test". It did not ship
+that way: `git log -S` shows the guard and its test first appear in the SAME commit (`3c79fcf`).
+What happened is that I ran a mutation check against an uncommitted intermediate draft and got
+`TEST NOT FOUND`. That is worth recording — it is the round-10 gap recurring inside a working
+session — but "shipped" was false, and an overstated confession is its own inaccuracy in the record.
+
+### Round 15 (`3c79fcf`, effort=max) — 2×P2 + 1×P3
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **Axis six: session provenance under concurrency.** The effort assertion picks "the one new session" by set difference — which cannot tell a session THIS invocation created from one a concurrent foreign `kimi` created in the same window. Reproduced: reviewer created none, a stranger created one, and the difference was still exactly one, whose wire log was read and reported as this round's effort (`would_pass_max_gate=yes`) | **Half closed, half recorded.** If this capture produced no bytes the reviewer did not run, so no new session can be ours and none is attributed — that closes the demonstrated case. The expensive half (two processes running, one ours) is **not** closable by set difference and is stated as a residual rather than papered over: it needs an isolated session namespace per invocation, a change to how kimi is launched, not to how its output is read |
+| P2 | **The NUL control proved nothing.** It asserted only that the word "NUL" was absent from stderr — which is also true of a run that dies for any other reason | Fixed — the control must now reach the capture summary (`BASIS=`), so it demonstrates the guard ADMITS valid prompts rather than merely being quiet about them |
+| P3 | **Two of my three self-reported round-14 mistakes were described wrongly** | Corrected in place — see the round-14 entry. The `grep -qU` guard matched EVERYTHING in both shells (verified: bash `pattern_len=0`, zsh `1`, `rc=0` on both files, and a NUL cannot enter `argv` at all); the "inverted control" result I reported does not reproduce and its stated mechanism was invented after the fact. And the NUL guard did **not** "ship" untested — `git log -S` shows guard and test in the same commit; the `TEST NOT FOUND` was an uncommitted intermediate draft |
+
+**Asking the reviewer to fact-check my own confession was worth it.** Two of three claims in a
+permanent record were wrong — one describing an observation that does not reproduce, one overstating
+an error into something that never shipped. Both were self-critical claims, which is precisely the
+kind nobody checks: an admission reads as candour and gets waved through. The campaign's rule about
+verifying claims applies to claims against oneself.
