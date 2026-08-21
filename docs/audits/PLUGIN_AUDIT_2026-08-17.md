@@ -589,3 +589,77 @@ production-tree Python git-consumer scan found only `containment.py` and `caller
 stripping `GIT_*`; the binder compares raw bytes against `os.fsencode` and removes only a terminal
 CR; and the audit's withdrawal paragraph correctly corrects the earlier "defeats the class"
 language. Those are four claims of mine it checked rather than accepted.
+
+### Round 12 (`385c1f3`) — APPROVE, **and the approval reproduced**
+
+Round 12 returned `VERDICT: APPROVE` with no findings. On this ticket family that is a hypothesis,
+not a result: two double approvals have previously failed reproduction on byte-identical input, and
+both re-runs found real defects the approving runs had certified clean. So round 12 was **re-run at
+the same commit with the same prompt bytes** (head `385c1f3`, prompt sha256 `3bfbb386…`, worktree
+clean before and after).
+
+**Both runs approved.** This is the first reproduction on this ticket that has held.
+
+What the two rounds exercised, between them:
+
+- **Decoy construction cannot fail silently** — the failure mode I asked to be attacked, one layer
+  below the `skipTest` hole of round 11. A sandbox-denied `TemporaryDirectory`, a missing `git`, and
+  a failing `git init` each produce `errors=1`; none skips and none passes. `check=True` on both git
+  commands and an explicit assertion on the index file.
+- **Both sanitisations remain load-bearing**, shown against a real sibling index:
+  `unsanitized git inventory control=197 poisoned=184 exact=False`, while
+  `helper control=197 poisoned=197 keys_exact=True contents_exact=True` and
+  `production clean_rc=0 poisoned_rc=0`.
+- **An eighth mutation boundary was raised and deliberately not filed**: a "keep the last four
+  components" resolver survives all four operands but mishandles a five-component path. It is not a
+  finding because the audit no longer claims a finite fixture proves anything about arbitrary
+  implementations — the withdrawal from round 10 doing its job.
+- Read-only validation: callers manifest up to date (412 records), both changed test files parse,
+  assembly 21/21/0/1, hooks manifest 10 events / 12 invocations / 11 scripts, version-sync OK.
+
+**Stated limits of this evidence.** Neither run could reach GitHub (`gh pr view` failed to connect
+from the sandbox), so live PR/CI state is asserted from this machine, not by the reviewer. Neither
+could run the write-heavy 1008-cell suite in a read-only sandbox; that is run here instead. A nested
+independent reviewer could not initialise. None of that is evidence of anything either way, and it
+is recorded so the approval is not read as broader than it is.
+
+## Campaign summary
+
+**Twelve rounds. Forty findings, every one reproduced before it was fixed.** Trend:
+4, 6, 5, 5, 4, 4, 4, 3, 3, 2, 1, 0.
+
+Four of the twelve rounds found a defect created by the previous round's repair. Rounds 2-5 each
+found a defect in the test written to prove the previous round's fix. The recurring shape was never
+a missing check — it was **a check that could not fail**: an oracle comparing the wrong line, a
+mutation that turned a test red for an unrelated reason, a regression that skipped on CI, a verifier
+its own scratch name disabled, and a security boundary that failed open when a temp file could not
+be allocated.
+
+One finding was **declined and settled**: the shadowed-`eval`/`exit` carrier is recorded as a
+residual, and the reviewer agreed after reproducing `BASH_ENV` itself. One claim was **withdrawn**:
+no finite fixture "defeats the class".
+
+### Round 13 (`385c1f3`, effort=**max**) — 1×P2. **The dual approval was a ceiling artifact.**
+
+Rounds 12 and 12b both approved at `model_reasoning_effort=xhigh`. Round 13 re-ran the **same prompt
+bytes** (sha256 `3bfbb386…`) against the **same tree** (`221d9ee6…`, worktree clean, verified before
+and after) changing exactly one variable — effort `xhigh` → `max` — and returned `REQUEST_CHANGES`.
+
+| # | finding | disposition |
+|---|---|---|
+| P2 | **The BASIS oracle never varied the COMMIT operand.** Every harness invocation passed the literal `HEAD`, and every expected digest was computed from `HEAD:` too — so an implementation that ignores `$SHA` and hard-codes `HEAD` satisfied all four path operands | Fixed — the fixture now makes a **second commit that changes the default plan's bytes**, and a cell runs the harness at the EARLIER sha and requires that commit's blob, with a vacuity check that the two commits' bytes actually differ. Verified: a `HEAD:`-hardcoding mutant now fails |
+
+**What this says about the campaign's own method.** Eleven rounds of `xhigh` sampled the *path*
+operand exhaustively — eight concrete wrong resolvers, culminating in an unguessable path whose
+suffix is another tracked plan. Not one of them varied the *commit* operand. The blind spot was not
+in the code under review; it was in the axis the fixture explored, and two clean rounds at the same
+depth could not see it because they were the same search.
+
+That is the campaign's recurring defect, one level up: **a check cannot find what it is not looking
+for**, and repeating the same check does not change what it looks for. Two approvals at one depth
+are evidence about that depth. The reproduction rule (run it again on identical bytes) tests
+*stability*; it does not test *reach*.
+
+**Method note for future gates on this repo:** a dual approval at one effort tier is not a clean
+gate. Vary the tier before believing it — the cost here was one 20-minute round, and it found a real
+sampling gap that twelve rounds had certified clean.

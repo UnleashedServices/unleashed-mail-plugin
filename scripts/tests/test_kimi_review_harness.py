@@ -195,6 +195,18 @@ class KimiHarnessMutationGates(unittest.TestCase):
             fh.write(".review-prompt-x.md\n.review-prompt-alt.md\n.review-prompt-rand.md\n.review-prompt-odd.md\n")
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], check=True)
+        # A SECOND COMMIT that CHANGES the default plan's bytes. Without it every cell passed the
+        # literal "HEAD" as the commit operand and computed every expectation from `HEAD:` too — so
+        # an implementation that IGNORES $SHA and hard-codes HEAD satisfied all four path operands
+        # (codex, PR #69 round 13 at effort=max; two xhigh rounds had approved this). Varying the
+        # COMMIT axis is what that sampling missed.
+        self.first_sha = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True,
+                                        text=True, check=True).stdout.strip()
+        with open(os.path.join(self.clone, DEFAULT_PLAN), "a", encoding="utf-8") as fh:
+            fh.write("A LATER REVISION — these bytes exist only at HEAD, not at first_sha.\n")
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "second"],
+                       check=True, capture_output=True)
         status = subprocess.run(git + ["status", "--porcelain"], capture_output=True, text=True, check=True)
         self.assertEqual("", status.stdout, "the fixture clone must start clean (the prompt is ignored)")
         bindir = os.path.join(self.scratch, "bin")
@@ -218,7 +230,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         self.prompt = prompt
 
     def _run(self, mode, out=None, harness=HARNESS, prompt=".review-prompt-x.md",
-             plan=None, env=None):
+             plan=None, env=None, commit="HEAD"):
         """`plan` names the 5th operand (the BASIS target); `env` replaces the child environment.
 
         Both exist for the round-2 guards: the operand must be the document the PROMPT names, and a
@@ -227,7 +239,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         """
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
         child_env = dict(env or self.env, KIMI_STUB_MODE=mode)
-        argv = ["bash", harness, prompt, out, "HEAD", "60"]
+        argv = ["bash", harness, prompt, out, commit, "60"]
         if plan is not None:
             argv.append(plan)
         p = subprocess.run(argv, cwd=self.clone, env=child_env,
@@ -919,6 +931,23 @@ class KimiHarnessMutationGates(unittest.TestCase):
             ["git", "-C", self.clone, "show", f"HEAD:{self.odd_plan}"])).hexdigest()[:12]
         self.assertEqual(expected_odd, basis_odd,
                          "the BASIS did not follow an operand whose BASENAME differs from the others")
+
+        # THE COMMIT AXIS. Same plan path, an EARLIER commit: the digest must be that commit's blob,
+        # not HEAD's. This is the assertion a hard-coded-HEAD resolver cannot satisfy.
+        older, _ = self._run("clean", commit=self.first_sha)
+        basis_older = self._basis_digest(older)
+        self.assertIsNotNone(basis_older,
+                             f"the earlier-commit run never reached the summary:\n{older.stdout}{older.stderr}")
+        expected_older = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"{self.first_sha}:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        expected_head = hashlib.sha256(subprocess.check_output(
+            ["git", "-C", self.clone, "show", f"HEAD:{DEFAULT_PLAN}"])).hexdigest()[:12]
+        self.assertNotEqual(expected_older, expected_head,
+                            "FIXTURE IS VACUOUS — the plan's bytes are identical at both commits, so "
+                            "a hard-coded HEAD would be indistinguishable")
+        self.assertEqual(expected_older, basis_older,
+                         "the BASIS did not follow the COMMIT operand — it certifies HEAD whatever "
+                         "commit it is asked to certify")
 
         # ...and the fixture must be capable of showing a difference, or the equality above is
         # vacuous: the decoy's plan bytes must digest differently.
