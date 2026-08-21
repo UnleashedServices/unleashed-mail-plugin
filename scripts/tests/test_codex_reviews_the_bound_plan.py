@@ -202,11 +202,20 @@ class CodexReviewsTheBoundPlan(unittest.TestCase):
         self.install_mutating_stub(
             'd=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n'
             'lim=$(getconf PATH_MAX / 2>/dev/null)\n'
-            # `${lim:-4096}` not `|| echo 4096`: getconf can exit 0 with empty output, and bash
-            # arithmetic silently treats empty/non-numeric as 0 — so the target would become 300 and
-            # the loop would not run. (It is NOT a syntax error, as suggested on PR #70; measured.)
-            # The premise assertion below would catch it, but a wrong limit should not be reachable.
-            'lim=${lim:-4096}\n'
+            # SANITISE TO A DECIMAL, do not merely default the empty case. `getconf` can exit 0 with
+            # output that is empty, `undefined` (POSIX, for an indeterminate limit), or unit-suffixed.
+            # Measured against bash arithmetic:
+            #     ""  "abc"  "undefined" -> 300   (valid identifiers, expand to 0: silently WRONG)
+            #     "0x10"                 -> 316   (parsed as hex)
+            #     "-1"                   -> 299
+            #     "1a"  "2 kB"  "+"      -> rc=1, ABORTS the stub
+            # So `${lim:-4096}` was not enough: it covers only the empty case, and `undefined` — the
+            # most likely real output — sailed through it. Raised on PR #70; I first argued the abort
+            # could not happen, which was wrong: my test used "abc", a valid bash identifier, so it
+            # expanded to 0 rather than erroring. An all-digits check covers every case above.
+            # A implausibly large value still passes the digit check, but then the 400-level cap and
+            # the premise assertion below make it fail loudly rather than silently.
+            "case \"$lim\" in ''|*[!0-9]*) lim=4096 ;; esac\n"
             'i=0\n'
             # `${#PWD}` in-process: the previous `printf | wc -c | tr` spawned three subshells per
             # iteration, up to 1200 processes.
