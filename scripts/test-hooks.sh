@@ -675,6 +675,59 @@ printf '{"ticket":"COREDEV-2325","branch_slug":"COREDEV-2325","plan":"docs/plann
 OUT="$(printf '{"source":"compact"}' | LC_ALL=C bash "$SESSION_RESTORE" 2>/dev/null)"
 if is_valid_json "$OUT"; then ok; else fail "restore unicode under C locale -> valid JSON"; fi
 
+# 31c. THE RESTORE HINT IS REDACTED (sessionstart-restore.sh:108) — and TRUNCATED (:109).
+#      Neither line had a cell. The nine `redact` cells above all drive stop-failure-log.sh and
+#      permission-denied-log.sh; nothing drove this hook, which is the one that injects text straight
+#      into the model's SessionStart context. Measured with the redaction removed: an operator email
+#      and home directory reach additionalContext verbatim.
+#      A MUTANT COPY is used for the control rather than editing the shipped file. It lives beside a
+#      `lib` symlink because the hook resolves its libraries from its own directory ($_DIR/lib).
+rm -f "$SNAP" 2>/dev/null
+PII_SLUG='jane.doe@corp.example.com at /Users/janedoe/secret'
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$PII_SLUG" "$(date +%s)" > "$SNAP"
+OUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_contains     "restore hint redacts the email"      "$OUT" '[redacted-email]'
+assert_contains     "restore hint redacts the home path"  "$OUT" '/Users/[redacted]'
+assert_not_contains "restore hint leaks no raw email"     "$OUT" 'jane.doe@corp.example.com'
+assert_not_contains "restore hint leaks no raw username"  "$OUT" '/Users/janedoe'
+
+# 31d. MUTANT CONTROL for 31c. Without it, 31c would pass against a hook that emitted nothing at all
+#      — and it is what proves the fixture's PII actually reaches the hint in the first place.
+MUTDIR="$TMPROOT/ss-mutant"
+mkdir -p "$MUTDIR"
+ln -sfn "$_DIR/lib" "$MUTDIR/lib"
+sed 's#^HINT="\$(hook_redact_pii "\$HINT")"#HINT="$HINT"#' "$SESSION_RESTORE" > "$MUTDIR/sessionstart-restore.sh"
+if [ "$(grep -c '^HINT="\$HINT"' "$MUTDIR/sessionstart-restore.sh")" = "1" ]; then ok; else
+    fail "31d mutant was not applied — the control proves nothing"; fi
+if [ "$(wc -l < "$MUTDIR/sessionstart-restore.sh")" = "$(wc -l < "$SESSION_RESTORE")" ]; then ok; else
+    fail "31d mutant changed the line count"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$PII_SLUG" "$(date +%s)" > "$SNAP"
+MUTOUT="$(printf '{"source":"compact"}' | bash "$MUTDIR/sessionstart-restore.sh" 2>/dev/null)"
+assert_contains "control: unredacted hint leaks the email"    "$MUTOUT" 'jane.doe@corp.example.com'
+assert_contains "control: unredacted hint leaks the username" "$MUTOUT" '/Users/janedoe'
+
+# 31e. The 400-char cap (:109). A long slug must not push an unbounded blob into SessionStart context.
+rm -f "$SNAP" 2>/dev/null
+LONGSLUG="$(printf 'A%.0s' $(seq 1 900))"
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$LONGSLUG" "$(date +%s)" > "$SNAP"
+LONGOUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+if [ "${#LONGOUT}" -lt 700 ]; then ok; else
+    fail "restore hint is not capped: emitted ${#LONGOUT} bytes for a 900-char slug"; fi
+# MUTANT CONTROL: with the cap removed the same slug produces a materially longer emission.
+sed 's#^HINT="\${HINT:0:400}"#HINT="$HINT"#' "$SESSION_RESTORE" > "$MUTDIR/nocap.sh"
+if [ "$(grep -c '^HINT="\$HINT"' "$MUTDIR/nocap.sh")" = "1" ]; then ok; else
+    fail "31e mutant was not applied — the control proves nothing"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$LONGSLUG" "$(date +%s)" > "$SNAP"
+NOCAPOUT="$(printf '{"source":"compact"}' | bash "$MUTDIR/nocap.sh" 2>/dev/null)"
+if [ "${#NOCAPOUT}" -gt "${#LONGOUT}" ]; then ok; else
+    fail "control: uncapped emission (${#NOCAPOUT}) was not longer than capped (${#LONGOUT})"; fi
+
 # 32. Snapshot kill switch.
 rm -f "$SNAP" 2>/dev/null
 ( cd "$_DIR/.." && printf '{}' | UNLEASHED_COMPACT_SNAPSHOT=off bash "$PRECOMPACT" 2>/dev/null )
