@@ -38,6 +38,39 @@ class StaleToolRejectTest(unittest.TestCase):
         vpa.check_agent_fields(Path("agents/x.md"), {"tools": tools}, p, w)
         return p
 
+    def test_kebab_allowed_tools_on_an_AGENT_is_a_hard_problem_with_the_reason(self):
+        """`allowed-tools` is a skills/commands key. On a SUB-AGENT the runtime ignores it, so every
+        restriction it expresses evaporates and the agent inherits ALL tools.
+
+        The check exists to stop that recurring (audit pm-diagnostic.1 / orchestration.1) and had no
+        test: adding `allowed-tools` to KNOWN_AGENT_KEYS, or neutering the hint branch, left the whole
+        suite green while an agent carrying it validated clean.
+
+        The hint text is asserted, not just the rejection. `allowed-tools` would otherwise fall
+        through to the generic "unknown agent frontmatter key" message, which is also a hard problem —
+        so a cell asserting only that SOME problem was raised passes with the specific branch gone,
+        and the author never learns why their restriction did nothing.
+        """
+        problems: list[str] = []
+        warnings: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"), {"name": "x", "allowed-tools": "Read, Grep"},
+                               problems, warnings)
+        self.assertTrue(problems, "`allowed-tools` on an agent must be a hard problem")
+        joined = " ".join(problems)
+        self.assertIn("allowed-tools", joined)
+        self.assertIn("inherits ALL tools", joined,
+                      f"rejected, but without the reason — the author cannot tell that the "
+                      f"restriction is silently ignored:\n{problems}")
+
+    def test_a_legitimate_agent_key_is_not_rejected(self):
+        """The control: `disallowedTools` IS a legal sub-agent key, and only the 'allowed' side is
+        inert. Without this, a check that rejected every key would satisfy the cell above."""
+        problems: list[str] = []
+        warnings: list[str] = []
+        vpa.check_agent_fields(Path("agents/x.md"),
+                               {"name": "x", "disallowedTools": "Bash"}, problems, warnings)
+        self.assertEqual([], problems, f"a legal sub-agent key was rejected: {problems}")
+
     def test_task_is_hard_rejected(self):
         # B4: `Task` is stale; the difflib guard finds no close match so it would slip through. An explicit
         # STALE_TOOLS reject is required (merely dropping it from KNOWN_TOOLS is a no-op).

@@ -54,17 +54,50 @@ class AuditCodexOperandContainment(unittest.TestCase):
         self.env["PATH"] = f"{self.stubs}{os.pathsep}{self.env['PATH']}"
 
     def run_audit(self, *operands, cwd=None):
-        """Returns (exit code, what codex received) — empty string when codex never ran."""
+        """Returns (exit code, what codex received) — empty string when codex never ran.
+
+        `self.last_stderr` carries the refusal DIAGNOSTIC for cells that must assert WHY a run was
+        refused, not merely that it was. Several operand guards fail into each other — delete the
+        control-character check and the operand is still refused, one reason later — so a cell
+        asserting only a non-zero exit passes against the mutant and proves nothing.
+        """
         result = subprocess.run(
             ["bash", str(WRAPPER), *operands], cwd=str(cwd or REPO), env=self.env,
             capture_output=True, text=True, check=False, input="",
         )
+        self.last_stderr = result.stderr
         transcript = result.stdout.splitlines()[0] if result.stdout.strip() else ""
         received = ""
         if transcript and os.path.isfile(transcript):
             received = Path(transcript).read_text(encoding="utf-8", errors="replace")
             os.unlink(transcript)
         return result.returncode, received
+
+    def test_a_CONTROL_CHARACTER_operand_is_refused_FOR_THAT_REASON(self):
+        """`containment.py:107` — the control-character rejection, asserted by CAUSE.
+
+        This guard runs FIRST, before the symlink, regular-file, size and containment checks. Delete
+        it and the operand is still refused — by a later guard, with a different diagnostic and the
+        same non-zero exit. That is why this cell asserts the message: a `returncode != 0` assertion
+        is satisfied by the mutant, which is the shape the sweep flagged as an assertion too weak to
+        discriminate.
+
+        The control character is embedded in an operand naming a REAL, in-repo, non-empty regular
+        file, so every later guard would ACCEPT it once the name is cleaned — leaving this rejection
+        as the only thing that can fire.
+
+        The reviewer operand is REQUIRED first: without it the wrapper refuses with "unknown
+        reviewer" before containment is reached at all. The first draft of this cell omitted it and
+        went red — the message assertion is what identified that as a fixture error rather than a
+        finding, which a bare `returncode != 0` assertion could not have done.
+        """
+        code, received = self.run_audit("/security-reviewer", "Sources/File\tSwift.swift")
+        self.assertNotEqual(0, code, "a control-character operand was accepted")
+        self.assertIn("control characters", self.last_stderr,
+                      f"refused, but NOT by the control-character guard — a later guard fired "
+                      f"instead, so this cell would not notice the guard being deleted:\n"
+                      f"{self.last_stderr}")
+        self.assertEqual("", received, "codex received an operand it should never have seen")
 
     def _throwaway_repo(self) -> Path:
         """A git repo OUTSIDE the real tree — `containment` resolves the repo from cwd, so an in-fixture

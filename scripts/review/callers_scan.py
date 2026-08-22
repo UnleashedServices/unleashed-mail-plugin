@@ -375,6 +375,12 @@ def _validate_manifest_path(path_bytes: bytes) -> str:
         path = path_bytes.decode("utf-8", "strict")
     except UnicodeDecodeError as error:
         raise ManifestError("manifest path is not UTF-8") from error
+    # UNREACHABLE WHILE THE DECODE ABOVE IS STRICT, and kept deliberately. `decode("utf-8","strict")`
+    # already rejects overlong forms, surrogates and invalid bytes, so anything reaching here is
+    # canonical and re-encodes identically — measured: zero counterexamples across the entire 1- and
+    # 2-byte space, and every classic non-canonical form is refused at 375. This is insurance against
+    # someone relaxing that decode to "surrogateescape"/"replace", at which point it becomes live.
+    # `test_the_manifest_path_decode_is_strict` pins the precondition, since no test can reach here.
     if path.encode("utf-8") != path_bytes:
         raise ManifestError("manifest path is not canonically encoded")
     return path

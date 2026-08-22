@@ -190,7 +190,9 @@ def validate_matcher(event: str, matcher: str, where: str,
             # bypass: U+2065 and U+FFF0 are `Cn`, U+3164 HANGUL FILLER is `Lo`, and all three are
             # default-ignorable and matched nothing (codex, PR #69 round 6). The property is what
             # makes a matcher silently dead; the category is incidental to it. Ordinary marks are
-            # still fine — `café.*` contains none of these.
+            # still fine — and the example must actually CONTAIN one: `café.*` spelled with the
+            # precomposed U+00E9 is all letters (Ll) and demonstrates nothing. The decomposed
+            # `cafe\u0301.*` carries U+0301 COMBINING ACUTE (Mn) and is the case that matters.
             or _is_default_ignorable(c)
             or (c.isspace() and c != " ")]
     if _bad:

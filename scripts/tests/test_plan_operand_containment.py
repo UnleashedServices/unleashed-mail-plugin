@@ -78,6 +78,46 @@ class PlanOperandContainment(unittest.TestCase):
         self.assertNotIn("src/EVIL_PLAN.md", result.stdout,
                          "the symlinked subtree laundered a file outside docs/planning")
 
+    def test_a_POISONED_GIT_ENVIRONMENT_cannot_move_the_containment_root(self):
+        """`containment.py:66` — `GIT_*` is stripped before `git rev-parse --show-toplevel`.
+
+        The comment above that line records the exploit: `GIT_DIR`/`GIT_WORK_TREE` inherited from the
+        caller made `--show-toplevel` answer an arbitrary directory, and since that answer IS the
+        containment boundary, `/etc/hosts` resolved as "inside the repository" and was handed to the
+        reviewer (codex, PR #69 round 8, reproduced).
+
+        The shell harnesses clear the namespace, but this path is reached DIRECTLY from Python and
+        never passes through that boundary — `audit-codex.sh` does not clear `GIT_*` itself. So this
+        one comprehension is the whole disclosure boundary, and deleting it left the suite green.
+
+        The control matters as much as the refusal: without it, a guard that refused EVERYTHING would
+        satisfy the first half. It asserts a legitimate in-repo operand still resolves WITH the poison
+        set, so the cell fails on over-broad rejection too.
+        """
+        decoy = self.root.parent / (self.root.name + "-decoy")
+        decoy.mkdir()
+        self.addCleanup(shutil.rmtree, decoy, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", "."], cwd=decoy, check=True)
+        secret = decoy / "secret.txt"
+        secret.write_text("SECRET BYTES\n", encoding="utf-8")
+
+        poisoned = dict(os.environ, GIT_DIR=str(decoy / ".git"), GIT_WORK_TREE=str(decoy))
+        # `sys.executable`, not a bare "python3": guarantees the SAME interpreter the suite runs
+        # under, and matches the convention already used elsewhere in this file.
+        argv = [sys.executable, str(REPO / "scripts" / "review" / "containment.py"),
+                "--tool", "probe", "--label", "plan", "--"]
+
+        refused = subprocess.run(argv + [str(secret)], cwd=self.root, env=poisoned,
+                                 capture_output=True, text=True, check=False)
+        self.assertNotEqual(0, refused.returncode,
+                            f"a poisoned git environment moved the containment root and an "
+                            f"out-of-repo file resolved as inside: {refused.stdout!r}")
+
+        accepted = subprocess.run(argv + ["docs/planning/FEATURE_PLAN.md"], cwd=self.root,
+                                  env=poisoned, capture_output=True, text=True, check=False)
+        self.assertEqual(0, accepted.returncode,
+                         f"a legitimate in-repo operand was refused: {accepted.stderr}")
+
     def test_a_checkout_whose_path_ends_in_a_space_still_works(self):
         """`strip()` on `git rev-parse` output ate a legal path character (PR #63 recheck).
 
@@ -450,6 +490,47 @@ class ContainedReadWalksEveryComponent(unittest.TestCase):
         "fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)\n"
         "sys.stdout.write(containment.read_leaf(fd, 'plan file').decode())\n"
     )
+
+    NON_REGULAR = (
+        "import os\n"
+        "fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)\n"
+        "sys.stdout.write(containment.read_leaf(fd, 'plan file').decode())\n"
+    )
+
+    @unittest.skipIf(not hasattr(os, "mkfifo"), "os.mkfifo is not available on this platform")
+    def test_a_NON_REGULAR_descriptor_is_refused_AT_READ_TIME(self):
+        """`containment.py:154` — `S_ISREG` is checked against THE DESCRIPTOR, not the name.
+
+        A name that passed `contained_regular_file()` can still be a different object by the time it
+        is opened, and a FIFO is the case that matters: reading one BLOCKS rather than returning
+        bytes, so without this refusal the gate hangs instead of failing. Deleting the check left the
+        whole suite green — every other cell in this class supplies a regular file.
+
+        `O_NONBLOCK` is required to open the FIFO at all; without it `os.open` itself blocks waiting
+        for a writer and the cell never reaches the code under test.
+
+        ON THE `skipIf`: a skip that fires where CI runs is how a guard goes unexercised, and one was
+        REJECTED on PR #70 for exactly that reason — `skipIf(root)` would have fired in CI containers
+        and hidden the guard where it mattered most. This is the opposite case: CI is ubuntu + macOS
+        with no Windows leg, so `os.mkfifo` is always present and the skip can never fire on a
+        supported platform. Portability insurance, not a coverage hole — and it matches the
+        `skipUnless(hasattr(os, ...))` already used in this suite.
+        """
+        fifo = self.root / "real" / "planning" / "PIPE_PLAN.md"
+        os.mkfifo(fifo)
+        result = self.read(fifo, self.NON_REGULAR)
+        self.assertNotEqual(0, result.returncode,
+                            f"a FIFO was read as a plan: {result.stdout!r}")
+        self.assertIn("is not a regular file at read time", result.stderr,
+                      f"refused, but not by the descriptor check:\n{result.stderr}")
+
+    def test_a_REGULAR_descriptor_is_still_read(self):
+        """The control. Without it, a check that refused every descriptor would satisfy the cell
+        above — and this whole class exists because a guard that refuses everything looks identical
+        to one that discriminates."""
+        result = self.read(self.plan, self.NON_REGULAR)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("real bytes", result.stdout)
 
     def test_the_name_containment_accepts_is_still_refused_when_a_PARENT_is_a_link(self):
         from importlib import util
