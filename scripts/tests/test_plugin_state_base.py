@@ -190,6 +190,7 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_reviewer_roster.py": "sets it for a fixture",
         "scripts/tests/test_plugin_state_mutants.py": "sets/unsets it for fixtures — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/tests/test_plugin_state_store.py": "sets/unsets it for the `set -eu` scenario sweep — a test harness exercising the resolver, not a primitive re-deriving the base",
+        "scripts/tests/test_writer_redirect_order.py": "sets it to a scratch base so `marker_path` resolves inside the fixture — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/pre-commit-checks.sh": "comments only",
         # PUB-9 E2a's rationale has to name the variable to say what it names — the directory the HOST
         # will use, which on a first session does not exist yet. The publisher receives the VALUE as
