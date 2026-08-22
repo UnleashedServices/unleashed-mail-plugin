@@ -106,6 +106,12 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         self.env["PATH"] = f"{stubs}{os.pathsep}{self.env.get('PATH', os.defpath)}"
         self.env["HOME"] = str(self.home)
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
+        # `/etc/gitconfig` is the THIRD way in, after HOME and XDG_CONFIG_HOME: it can set
+        # `commit.gpgsign`, `core.hooksPath` or an init template, so a fixture commit could fail
+        # for want of a signing key, or run a machine-level hook, before any guard under test is
+        # reached. `sanitized()` strips `GIT_*`, which would also strip a caller-supplied
+        # `GIT_CONFIG_NOSYSTEM`, so it is set back AFTER sanitising (codex, PR #73).
+        self.env["GIT_CONFIG_NOSYSTEM"] = "1"
         self.env["UM_HARNESS_WITNESS"] = str(self.witness)
 
         self.build_repo(self.repo)

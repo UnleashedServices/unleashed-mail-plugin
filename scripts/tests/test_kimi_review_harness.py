@@ -1488,11 +1488,33 @@ class KimiHarnessMutationGates(unittest.TestCase):
         """`isolated-kimi-review.sh:373` — the COREDEV-2607 staged-basis signature.
 
         The sweep called this branch unreachable, on the grounds that BASIS and AFTER_BASIS are read
-        from the same live git object. That holds on the stub axis but not in general: AFTER_BASIS is
+        from the same git object. That holds on the stub axis but not in general: AFTER_BASIS is
         computed with `2>/dev/null … || echo MISSING`, so it becomes the literal string `MISSING`
         whenever the live repository stops answering for that blob after the run — which a reviewer
-        with write access to the checkout can arrange. That is what this stub mode does.
+        with write access to the checkout can arrange. That is what the stub mode does.
+
+        THE BLOB IS MADE LOOSE ON PURPOSE. A local `git clone` HARDLINKS the source object store, so
+        whether this blob is loose or packed is inherited from whatever state the source repo happened
+        to be in — and `git gc --auto` can repack it at any time, after which deleting the loose path
+        is a silent no-op and the round reaches the ordinary exit 4 instead of the asserted void
+        (codex, PR #73). Committing unique bytes writes a brand-new object, which git always writes
+        loose, so the fixture no longer depends on the clone's storage layout. The premise is then
+        ASSERTED rather than assumed.
         """
+        marker = f"\n<!-- basis-destroy {os.getpid()} -->\n"
+        plan_path = os.path.join(self.clone, DEFAULT_PLAN)
+        with open(plan_path, "a", encoding="utf-8") as fh:
+            fh.write(marker)
+        git = ["git", "-C", self.clone]
+        subprocess.run(git + ["add", "--", DEFAULT_PLAN], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "unique basis"],
+                       check=True, capture_output=True)
+        blob = subprocess.check_output(
+            git + ["rev-parse", f"HEAD:{DEFAULT_PLAN}"], text=True).strip()
+        loose = os.path.join(self.clone, ".git", "objects", blob[:2], blob[2:])
+        self.assertTrue(os.path.isfile(loose),
+                        f"the basis blob {blob[:12]} is not a loose object, so the stub's delete would "
+                        f"be a no-op and this cell would pass for the wrong reason")
         self._assert_void("basis-destroy", "modified the staged plan")
 
 
