@@ -59,7 +59,11 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
         (self.scratch / "home").mkdir()
         (self.scratch / "data").mkdir()
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        # `XDG_CONFIG_HOME` goes too: redirecting HOME alone is NOT hermetic, because git also reads
+        # `$XDG_CONFIG_HOME/git/config` and it wins (measured — gemini raised this on the sibling file
+        # in PR #73; this file had the same hole).
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith("GIT_") and k != "XDG_CONFIG_HOME"}
         self.env.update(HOME=str(self.scratch / "home"),
                         CLAUDE_PLUGIN_DATA=str(self.scratch / "data"),
                         LC_ALL="C", LANG="C")
