@@ -82,13 +82,6 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         (self.shadow_dir / "docs" / "planning").mkdir(parents=True)
         (self.shadow_dir / self.plan_rel).write_text("# Plan\nSHADOW VERSION\n", encoding="utf-8")
 
-        for command in (["git", "init", "-q", "."],
-                        ["git", "config", "user.email", "probe@test"],
-                        ["git", "config", "user.name", "probe"],
-                        ["git", "add", "-A"],
-                        ["git", "commit", "-qm", "init"]):
-            subprocess.run(command, cwd=self.repo, check=True, capture_output=True)
-
         self.witness = self.root / "REVIEWER_RAN.txt"
         stubs = self.root / "stubs"
         stubs.mkdir()
@@ -97,7 +90,14 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
             stub.write_text(REVIEWER_STUB, encoding="utf-8")
             stub.chmod(0o755)
 
-        self.env = dict(os.environ)
+        # THE ENVIRONMENT IS BUILT BEFORE THE FIXTURE'S OWN GIT CALLS, AND SANITISED.
+        # An inherited `GIT_DIR`/`GIT_WORK_TREE` silently redirects which repository git operates on —
+        # the very thing `_tf_sanitize_git_env` exists to stop in the code under test, reproduced here
+        # in the fixture that tests it (codex, PR #73). Measured before fixing: with `GIT_DIR` naming a
+        # bare repository, this loop wrote `user.email=probe@test` and `user.name=probe` INTO THAT
+        # REPOSITORY and then errored at `git add` with status 128 — mutating unrelated state and
+        # failing before a single guard ran.
+        self.env = self.sanitized(os.environ)
         # `os.defpath`, not `""`: `shutil.which` in the class decorator falls back to it when PATH is
         # unset, so the child gets the same search path the skip decision was made against. Falling
         # back to an EMPTY string would hand the child a PATH containing only the stub directory and
@@ -106,6 +106,26 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         self.env["HOME"] = str(self.home)
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_HARNESS_WITNESS"] = str(self.witness)
+
+        self.build_repo(self.repo)
+
+    #: The fixture's own git invocations, factored out so a cell can run them against a chosen
+    #: directory and prove they are not steerable by the caller's environment.
+    FIXTURE_GIT = (["git", "init", "-q", "."],
+                   ["git", "config", "user.email", "probe@test"],
+                   ["git", "config", "user.name", "probe"],
+                   ["git", "add", "-A"],
+                   ["git", "commit", "-qm", "init"])
+
+    @staticmethod
+    def sanitized(env):
+        """`env` without any `GIT_*`, which is what makes the fixture's git calls unsteerable."""
+        return {k: v for k, v in env.items() if not k.startswith("GIT_")}
+
+    def build_repo(self, path, env=None):
+        for command in self.FIXTURE_GIT:
+            subprocess.run(command, cwd=str(path), check=True, capture_output=True,
+                           env=env if env is not None else self.env)
 
     # ── fixtures ──────────────────────────────────────────────────────────────────────────────────
 
@@ -152,6 +172,38 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
                          f"the reviewer was launched despite the refusal: {output}")
 
     # ── the family itself ─────────────────────────────────────────────────────────────────────────
+
+    def test_the_FIXTURE_ITSELF_is_not_steerable_by_an_inherited_GIT_DIR(self):
+        """codex, PR #73 — reproduced before fixing, and pinned here.
+
+        The fixture's git calls inherited `os.environ`, so an exported `GIT_DIR` pointed them at an
+        EXTERNAL repository. Measured: with `GIT_DIR` naming a bare repo, the run wrote
+        `user.email=probe@test` and `user.name=probe` into it and then errored at `git add` with
+        status 128 — mutating unrelated state AND failing before any guard executed.
+
+        `test_changeset.py` already filtered `GIT_*` and this twin did not: the same
+        fix-one-member-of-a-family defect this module exists to prevent, in the module itself.
+
+        The cell is discriminating: neuter `sanitized()` to return its argument unchanged and the
+        victim's config picks up `probe@test`, which the last assertion catches.
+        """
+        victim = self.root / "victim.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(victim)],
+                       check=True, capture_output=True, env=self.env)
+        fresh = self.root / "fresh"
+        (fresh / "docs" / "planning").mkdir(parents=True)
+        (fresh / self.plan_rel).write_text(PLAN_TEXT, encoding="utf-8")
+
+        poisoned = dict(os.environ, GIT_DIR=str(victim), GIT_WORK_TREE=str(victim))
+        self.build_repo(fresh, env=self.sanitized(poisoned))
+
+        self.assertTrue((fresh / ".git").is_dir(),
+                        "the fixture repo was not built in place — the git calls went elsewhere")
+        config = subprocess.run(["git", "--git-dir", str(victim), "config", "--list", "--local"],
+                                capture_output=True, text=True, env=self.env)
+        self.assertNotIn("probe@test", config.stdout,
+                         f"the fixture's git calls wrote into the repository GIT_DIR named:\n"
+                         f"{config.stdout}")
 
     def test_the_families_are_not_empty(self):
         """Every other cell loops over a family derived by searching for a message. If a message is
