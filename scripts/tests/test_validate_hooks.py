@@ -134,10 +134,20 @@ class TheMatcherRejectionVocabularyIsExercised(unittest.TestCase):
 
     def test_the_carve_outs_still_pass(self):
         """The guard must not be over-broad. `c != " "` keeps a plain space legal, and the
-        default-ignorable check is by PROPERTY, not "non-ASCII" — `café.*` carries ordinary
-        combining marks and must still validate."""
-        for label, matcher in {"plain space in a list": "Write, Edit",
-                               "ordinary accented regex": "caf\u00e9.*"}.items():
+        default-ignorable check is by PROPERTY, not "non-ASCII" — an accented regex must still
+        validate in BOTH of its Unicode spellings."""
+        for label, matcher in {
+            "plain space in a list": "Write, Edit",
+            # PRECOMPOSED e-acute (U+00E9) is category Ll — a LETTER. On its own it pins nothing
+            # about combining marks, which is what this carve-out claims to protect (codex, PR #72).
+            "precomposed accent": "caf\u00e9.*",
+            # DECOMPOSED: e + U+0301 COMBINING ACUTE ACCENT, category Mn — an ACTUAL combining mark.
+            # Broaden `_is_default_ignorable` to reject every Mn and only THIS case goes red.
+            # It must also survive the NFKC branch: NFKC folds it to the precomposed spelling, so a
+            # homoglyph check that fired on "not already canonical" alone would reject a legitimate
+            # decomposed regex.
+            "decomposed combining mark": "cafe\u0301.*",
+        }.items():
             with self.subTest(case=label, matcher=matcher):
                 result = self._matcher(matcher)
                 self.assertEqual(0, result.returncode,

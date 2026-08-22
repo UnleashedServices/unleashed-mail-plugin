@@ -102,7 +102,9 @@ class PlanOperandContainment(unittest.TestCase):
         secret.write_text("SECRET BYTES\n", encoding="utf-8")
 
         poisoned = dict(os.environ, GIT_DIR=str(decoy / ".git"), GIT_WORK_TREE=str(decoy))
-        argv = ["python3", str(REPO / "scripts" / "review" / "containment.py"),
+        # `sys.executable`, not a bare "python3": guarantees the SAME interpreter the suite runs
+        # under, and matches the convention already used elsewhere in this file.
+        argv = [sys.executable, str(REPO / "scripts" / "review" / "containment.py"),
                 "--tool", "probe", "--label", "plan", "--"]
 
         refused = subprocess.run(argv + [str(secret)], cwd=self.root, env=poisoned,
@@ -495,6 +497,7 @@ class ContainedReadWalksEveryComponent(unittest.TestCase):
         "sys.stdout.write(containment.read_leaf(fd, 'plan file').decode())\n"
     )
 
+    @unittest.skipIf(not hasattr(os, "mkfifo"), "os.mkfifo is not available on this platform")
     def test_a_NON_REGULAR_descriptor_is_refused_AT_READ_TIME(self):
         """`containment.py:154` — `S_ISREG` is checked against THE DESCRIPTOR, not the name.
 
@@ -505,6 +508,13 @@ class ContainedReadWalksEveryComponent(unittest.TestCase):
 
         `O_NONBLOCK` is required to open the FIFO at all; without it `os.open` itself blocks waiting
         for a writer and the cell never reaches the code under test.
+
+        ON THE `skipIf`: a skip that fires where CI runs is how a guard goes unexercised, and one was
+        REJECTED on PR #70 for exactly that reason — `skipIf(root)` would have fired in CI containers
+        and hidden the guard where it mattered most. This is the opposite case: CI is ubuntu + macOS
+        with no Windows leg, so `os.mkfifo` is always present and the skip can never fire on a
+        supported platform. Portability insurance, not a coverage hole — and it matches the
+        `skipUnless(hasattr(os, ...))` already used in this suite.
         """
         fifo = self.root / "real" / "planning" / "PIPE_PLAN.md"
         os.mkfifo(fifo)
