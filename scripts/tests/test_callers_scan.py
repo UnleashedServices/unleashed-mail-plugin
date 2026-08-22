@@ -335,6 +335,39 @@ def identity_for(path: str, zero_based_line: int, payload: bytes) -> ReferenceId
     )
 
 
+class TheManifestPathDecodeIsPinned(unittest.TestCase):
+    """The canonical-encoding guard in `callers_scan.py` cannot be reached — so pin what makes it so.
+
+    `_manifest_path` decodes with `("utf-8", "strict")` and then re-checks that re-encoding matches
+    the original bytes. That second check is UNSATISFIABLE while the first is strict: strict decoding
+    already rejects overlong forms, surrogates and invalid bytes, so whatever survives is canonical.
+    Measured: zero counterexamples across every 1- and 2-byte sequence, and every classic
+    non-canonical form is refused by the decode itself.
+
+    A sweep flagged the re-check as an untested guard. It is untested because NO INPUT CAN REACH IT.
+    Deleting it would remove insurance against someone later relaxing the decode; writing a covering
+    cell for it is impossible. So this pins the PRECONDITION instead — relax the decode and the first
+    cell fails, which is exactly the moment the guard stops being dead and needs a real test.
+    """
+
+    def test_the_manifest_path_decode_is_strict(self):
+        source = (Path(__file__).resolve().parents[1] / "review" / "callers_scan.py").read_text(
+            encoding="utf-8")
+        self.assertIn('decode("utf-8", "strict")', source,
+                      "the manifest-path decode is no longer strict — the canonical-encoding "
+                      "re-check below it is now REACHABLE and needs its own test")
+
+    def test_strict_decoding_makes_the_recheck_unsatisfiable(self):
+        """The measurement behind the claim, kept executable rather than asserted in a comment."""
+        for raw in (b"\xc0\xaf", b"\xc0\x80", b"\xed\xa0\x80", b"\xf8\x88\x80\x80\x80"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(UnicodeDecodeError):
+                    raw.decode("utf-8", "strict")
+        for raw in (b"docs/planning/X.md", "caf\u00e9/plan.md".encode(), b"\xef\xbb\xbf"):
+            with self.subTest(raw=raw):
+                self.assertEqual(raw, raw.decode("utf-8", "strict").encode("utf-8"))
+
+
 class CallersScanProof(unittest.TestCase):
     maxDiff = None
 
