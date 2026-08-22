@@ -38,7 +38,7 @@ exec {real} "$@"
 
 
 @unittest.skipUnless(CHANGESET.is_file(), "changeset.sh not present")
-@unittest.skipUnless(GIT, "git not on PATH")
+@unittest.skipUnless(GIT and shutil.which("bash"), "needs git and bash")
 class ChangesetFixture(unittest.TestCase):
     """A throwaway origin + worktree, hermetic against the developer's own git configuration."""
 
@@ -295,7 +295,9 @@ class ChangesetRefusesAnUnreadableDiff(ChangesetFixture):
         shim = self.stub / "git"
         shim.write_text(GIT_DIFF_FAILS.format(real=GIT), encoding="utf-8")
         shim.chmod(0o755)
-        self.shim_env = dict(self.env, PATH=str(self.stub) + os.pathsep + self.env["PATH"])
+        # `os.defpath` rather than `""` — see the note in test_isolated_harness_preconditions.py.
+        self.shim_env = dict(self.env,
+                             PATH=str(self.stub) + os.pathsep + self.env.get("PATH", os.defpath))
 
     def test_every_diffing_mode_refuses_rather_than_narrowing(self):
         for mode in ("files", "stat", "untested"):

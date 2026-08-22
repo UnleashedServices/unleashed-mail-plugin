@@ -61,6 +61,7 @@ def reviewer_binary(harness: Path) -> str:
     return match.group(1)
 
 
+@unittest.skipUnless(shutil.which("git") and shutil.which("bash"), "needs git and bash")
 class IsolatedHarnessPreconditions(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="harness-precond-"))
@@ -97,7 +98,11 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
             stub.chmod(0o755)
 
         self.env = dict(os.environ)
-        self.env["PATH"] = f"{stubs}{os.pathsep}{self.env['PATH']}"
+        # `os.defpath`, not `""`: `shutil.which` in the class decorator falls back to it when PATH is
+        # unset, so the child gets the same search path the skip decision was made against. Falling
+        # back to an EMPTY string would hand the child a PATH containing only the stub directory and
+        # fail later with the wrong cause — see `test_changeset.py`'s scratch-allocation cell.
+        self.env["PATH"] = f"{stubs}{os.pathsep}{self.env.get('PATH', os.defpath)}"
         self.env["HOME"] = str(self.home)
         self.env["XDG_STATE_HOME"] = str(self.root / "state")
         self.env["UM_HARNESS_WITNESS"] = str(self.witness)
