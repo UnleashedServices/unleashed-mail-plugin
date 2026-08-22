@@ -1359,7 +1359,12 @@ class SourcingIsTheGitSafetyBoundary(unittest.TestCase):
         self.assertIn("REFUSING to run", p.stderr, p.stderr)
 
 
-@unittest.skipIf(os.geteuid() == 0, "mode-000 is readable by uid 0, so the premise would not hold")
+# `os.name != "posix"` FIRST, so `os.geteuid` — which does not exist off POSIX — is never reached.
+# Not `getattr(os, "geteuid", lambda: -1)()`: that spelling avoids the AttributeError but makes the
+# class RUN where `chmod 000` does not make a file unreadable, so the premise fails and the cells
+# fail with it. The condition has to skip the platform, not just survive importing on it.
+@unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
+                 "mode-000 is meaningful only on POSIX, and is readable by uid 0 anyway")
 class AnUnreadableRegularFileVoidsTheRound(unittest.TestCase):
     """`tree-fingerprint.sh:223`. A present-but-unreadable regular file must FAIL the round.
 

@@ -29,6 +29,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 REVIEW = REPO / "scripts" / "review"
@@ -119,8 +120,15 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
 
     @staticmethod
     def sanitized(env):
-        """`env` without any `GIT_*`, which is what makes the fixture's git calls unsteerable."""
-        return {k: v for k, v in env.items() if not k.startswith("GIT_")}
+        """`env` without any `GIT_*` — and without `XDG_CONFIG_HOME`, which is the OTHER way in.
+
+        Redirecting `HOME` alone is not hermetic: git also reads `$XDG_CONFIG_HOME/git/config`, and
+        it wins. Measured — with `HOME` pointed at an empty directory and `XDG_CONFIG_HOME` at one
+        containing a planted `git/config`, `git config --get user.email` returns the planted value;
+        with the variable dropped it returns nothing (gemini, PR #73).
+        """
+        return {k: v for k, v in env.items()
+                if not k.startswith("GIT_") and k != "XDG_CONFIG_HOME"}
 
     def build_repo(self, path, env=None):
         for command in self.FIXTURE_GIT:
@@ -194,10 +202,29 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
         (fresh / "docs" / "planning").mkdir(parents=True)
         (fresh / self.plan_rel).write_text(PLAN_TEXT, encoding="utf-8")
 
-        poisoned = dict(os.environ, GIT_DIR=str(victim), GIT_WORK_TREE=str(victim))
-        self.build_repo(fresh, env=self.sanitized(poisoned))
+        # THE POISON GOES INTO `os.environ`, AND `setUp` RUNS AGAIN UNDER IT.
+        # An earlier draft sanitised the poisoned environment here and passed the RESULT to
+        # `build_repo`. That proved only that `sanitized()` works — if the wiring in `setUp` regressed
+        # to `self.env = dict(os.environ)`, an ordinary CI run has no `GIT_DIR` to expose it and this
+        # cell stayed green (codex, PR #73). The fixture's REAL construction path has to be the thing
+        # under test, so a second instance is built through it with the environment already poisoned.
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(victim),
+                                          "GIT_WORK_TREE": str(victim),
+                                          "XDG_CONFIG_HOME": str(self.root / "xdg")}):
+            probe = type(self)("test_the_families_are_not_empty")
+            probe.setUp()
+            self.addCleanup(probe.doCleanups)
+            probe_env = probe.env
+            probe_repo = probe.repo
 
-        self.assertTrue((fresh / ".git").is_dir(),
+        self.assertNotIn("GIT_DIR", probe_env,
+                         "setUp's environment carried an inherited GIT_DIR — the sanitisation is not "
+                         "wired into the fixture's construction path")
+        self.assertNotIn("GIT_WORK_TREE", probe_env, "setUp's environment carried GIT_WORK_TREE")
+        self.assertNotIn("XDG_CONFIG_HOME", probe_env,
+                         "XDG_CONFIG_HOME survived — git reads $XDG_CONFIG_HOME/git/config even with "
+                         "HOME redirected, so redirecting HOME alone is not hermetic")
+        self.assertTrue((probe_repo / ".git").is_dir(),
                         "the fixture repo was not built in place — the git calls went elsewhere")
         config = subprocess.run(["git", "--git-dir", str(victim), "config", "--list", "--local"],
                                 capture_output=True, text=True, env=self.env)
