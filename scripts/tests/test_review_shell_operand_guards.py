@@ -65,14 +65,19 @@ class TheReviewShellsRefuseMalformedOperands(unittest.TestCase):
         on `cat` forever, so a hang IS the failure being detected.
         """
         primary, secondary = pty.openpty()
-        proc = subprocess.Popen(
-            ["bash", str(RESOLVE)], cwd=self.repo, stdin=secondary,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            start_new_session=True,     # its own process group, so the whole tree can be reaped
-        )
-        os.close(secondary)
         hung = False
         try:
+            # BOTH descriptors are closed on EVERY path. Closing `secondary` after the Popen call
+            # leaks it when Popen raises — and leaks `primary` with it — so the outer `finally` owns
+            # `primary` and this inner one owns `secondary`, whatever happens in between.
+            try:
+                proc = subprocess.Popen(
+                    ["bash", str(RESOLVE)], cwd=self.repo, stdin=secondary,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    start_new_session=True,   # its own group, so the whole tree can be reaped
+                )
+            finally:
+                os.close(secondary)
             try:
                 _, err = proc.communicate(timeout=20)
             except subprocess.TimeoutExpired:

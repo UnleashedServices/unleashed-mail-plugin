@@ -18,6 +18,7 @@ distinguishing string `a missing transcript cannot produce approval` is emitted 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -35,7 +36,7 @@ class AMissingTranscriptCannotProduceApproval(unittest.TestCase):
         # ("not inside a Git worktree" / "not an in-repo docs/planning file") long before the
         # invariant under test, so a bare tmpdir fixture would fail for the wrong reason.
         self.d = Path(tempfile.mkdtemp(prefix="persist-verdict-"))
-        self.addCleanup(lambda: __import__("shutil").rmtree(self.d, ignore_errors=True))
+        self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
         self.repo = self.d / "repo"
         plandir = self.repo / "docs" / "planning"
         plandir.mkdir(parents=True)
