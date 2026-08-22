@@ -448,6 +448,47 @@ printf '{"stop_hook_active":false,"session_id":"A2-ATTACKER"}' | UNLEASHED_STOP_
 if [ "$(cat "$_A2VICTIM" 2>/dev/null)" = "PRECIOUS_DO_NOT_TOUCH" ]; then ok; else fail "A2: sentinel write clobbered the symlink victim"; fi
 if [ -L "$_A2SENT" ]; then fail "A2: sentinel is still a symlink (not replaced)"; else ok; fi
 
+# (e2) A2b: THE READ PATH. A2 above proves the WRITE path drops a planted symlink — but it cannot
+#      reach the read guard at stop-quality-marker-gate.sh:101, because its victim holds
+#      `PRECIOUS_DO_NOT_TOUCH`, so the next conjunct (`cat == $HEAD_COMMIT`) fails whether or not
+#      `[ ! -L "$SENTINEL" ]` is there. Deleting that clause left every assertion in this harness
+#      green — measured.
+#      The case that discriminates is a symlink whose TARGET CONTENT IS the short HEAD hash: a
+#      same-uid process can point the sentinel at any file already containing it (a `.git` ref
+#      fragment will do) and permanently suppress the enforce-mode Stop block for that session.
+reset_markers; marker_write lint fail
+_A2BHEAD="$(git rev-parse --short HEAD 2>/dev/null)"
+if [ -n "$_A2BHEAD" ]; then ok; else fail "A2b: no HEAD commit — the fixture cannot be built"; fi
+_A2BVICTIM="$(marker_dir)/a2b-head-hash"; printf '%s' "$_A2BHEAD" > "$_A2BVICTIM"
+_A2BSENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str 'A2B-ATTACKER')"
+ln -sf "$_A2BVICTIM" "$_A2BSENT"
+# Premise, asserted rather than assumed: the planted link really does read back as the HEAD hash, so
+# a failure below is the guard's doing and not a broken fixture.
+if [ "$(cat "$_A2BSENT" 2>/dev/null)" = "$_A2BHEAD" ]; then ok; else
+    fail "A2b: the planted symlink does not read back as the HEAD hash — fixture is not the finding"; fi
+assert_contains "A2b: a symlink holding the HEAD hash does not suppress the block" \
+    "$(printf '{"stop_hook_active":false,"session_id":"A2B-ATTACKER"}' \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" \
+    '"decision":"block"'
+# MUTANT CONTROL: with the read-path symlink clause removed, `[ -f ]` follows the link, the content
+# matches, and the gate exits 0 — the block is SUPPRESSED. Without this control the cell above would
+# also pass against a gate that blocked unconditionally.
+_A2BMUT="$TMPROOT/stopgate-nolink.sh"
+mkdir -p "$TMPROOT/sgmut" && ln -sfn "$_DIR/lib" "$TMPROOT/sgmut/lib"
+_A2BMUT="$TMPROOT/sgmut/stop-quality-marker-gate.sh"
+sed 's#\[ -f "\$SENTINEL" \] \&\& \[ ! -L "\$SENTINEL" \]#[ -f "$SENTINEL" ]                            #' \
+    "$STOP" > "$_A2BMUT"
+if [ "$(wc -l < "$_A2BMUT")" = "$(wc -l < "$STOP")" ]; then ok; else
+    fail "A2b control: mutant changed the line count"; fi
+if grep -q '\[ ! -L "\$SENTINEL" \] \\' "$_A2BMUT"; then
+    fail "A2b control: the read-path clause was NOT removed — the control proves nothing"; else ok; fi
+reset_markers; marker_write lint fail
+printf '%s' "$_A2BHEAD" > "$_A2BVICTIM"; ln -sf "$_A2BVICTIM" "$_A2BSENT"
+assert_empty "A2b control: without the symlink clause the block IS suppressed" \
+    "$(printf '{"stop_hook_active":false,"session_id":"A2B-ATTACKER"}' \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$_A2BMUT" 2>/dev/null)"
+rm -f "$_A2BSENT" "$_A2BVICTIM" 2>/dev/null || true
+
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers
 marker_write lint fail
