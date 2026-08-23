@@ -350,9 +350,14 @@ class KimiHarnessMutationGates(unittest.TestCase):
         poisoned git environment must not be able to redirect which repository the BASIS is read
         from. Callers that pass neither get the harness's own default, as before.
         """
-        out = out or os.path.join(self.scratch, f"out-{mode}.txt")
+        # `is not None` on ALL THREE, not truthiness. An empty string is a REAL operand here —
+        # `test_a_plan_operand_that_escapes_the_repository_is_refused` passes `plan=""` — and `argv`
+        # below already honours it via `if plan is not None`. With `plan or DEFAULT_PLAN` the child's
+        # `KIMI_STUB_PLAN` said `DEFAULT_PLAN` while argv said `""`, so the stub environment
+        # contradicted the operand under test and could mask a guard failure (gemini, PR #73).
+        out = out if out is not None else os.path.join(self.scratch, f"out-{mode}.txt")
         child_env = dict(env if env is not None else self.env, KIMI_STUB_MODE=mode,
-                         KIMI_STUB_PLAN=(plan or DEFAULT_PLAN))
+                         KIMI_STUB_PLAN=(plan if plan is not None else DEFAULT_PLAN))
         argv = ["bash", harness, prompt, out, commit, str(timeout)]
         if plan is not None:
             argv.append(plan)
