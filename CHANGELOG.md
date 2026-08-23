@@ -13,8 +13,41 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.1] — 2026-08-23
+
 ### Fixed
 
+- **COREDEV-2703 — `swift-reviewer` could not spawn a single one of its five specialists.**
+  Measured on Claude Code 2.1.241 / plugin 2.8.0 by spawning the agent and asking it to enumerate its
+  tools: it received only `Read`, `Bash` and `mcp__…__synthesize_review`. `Grep`, `Glob` and `Agent`
+  were all declared in its `tools:` line and all absent from the function schema; asked to call them
+  it reported `AGENT: NO_SUCH_TOOL` / `GREP: NO_SUCH_TOOL`. This is **not** the documented spawn-depth
+  floor (`AGENT_CONTRACTS.md` §5, needs ≥ 2.1.219) — the reproduction is on 2.1.241 with
+  `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` unset. Consequence was contained but total: every panel round
+  recorded `UNATTRIBUTED` for all five reviewers, which `reviewer-roster.sh` treats as "could not
+  review" and never as "clean", so the verdict failed closed to NEEDS DISCUSSION rather than
+  publishing an unreviewed APPROVE. The regression window is v2.7.0–v2.8.0; v2.5.3, whose
+  `swift-reviewer` carried a bare `Agent` grant and no `disallowedTools`, was unaffected.
+  - **Root cause, isolated by three throwaway probe agents differing in exactly one field.** A bare
+    `Agent` grant with a bare-name deny-list keeps the tool; adding a single
+    `Agent(unleashed-mail:ui-engineer)` entry to `disallowedTools` removes `Agent` entirely; and an
+    `Agent(<type>)` entry in `tools:` **is** honoured. So the trigger is the specifier syntax inside
+    the deny-list — not the deny-list, and not the specifier form as such. `swift-reviewer` was the
+    only agent in the plugin using that form, with 26 such entries.
+  - **The fix moves the constraint to the documented allowlist form** — a scoped `Agent(...)` grant
+    in `tools:`, naming the five reviewers plus `jira-manager` in both the bare and the
+    `unleashed-mail:` spelling — and reduces
+    `disallowedTools` to `Write, Edit, NotebookEdit`. An allowlist is also the safer direction: a
+    deny-list re-opens the moment a new writing agent is added. `validate-plugin-assembly.py` now
+    checks a scoped `Agent(...)` grant against the writer roster on disk and fails if the grant
+    admits one, so the PR #63 P1 (a prompt-injected finding steering the reviewer into a file-writing
+    agent while it reads untrusted PR content) stays closed.
+  - **What is measured and what is not.** The probes covered a *single-type* specifier; the shipped
+    grant names twelve types inside one set of parentheses, and that form has not yet been observed on
+    a real install — a plugin cannot be reinstalled from within the session that would test it, and
+    v2.8.0's own file was never replaced because the fix carried no version bump. Cutting this release
+    is what makes that measurement possible. It cannot regress v2.8.0, which had no `Agent` tool at
+    all; at worst the panel stays down and the deny-specifier that also ate `Grep`/`Glob` is gone.
 - **COREDEV-2654 second pass — what a full re-review of the remediation found.** Every item below was
   reproduced before it was fixed; the first two are defects in the remediation's OWN code.
   - **AF-19's broken-pipe fix did not survive a real client teardown, and the obvious repair does not
