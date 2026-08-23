@@ -90,7 +90,7 @@ class ChangesetFixture(unittest.TestCase):
     def run_changeset(self, mode, script=None, env=None, cwd=None):
         result = subprocess.run(
             ["bash", str(script or CHANGESET), mode],
-            cwd=str(cwd if cwd is not None else self.wt), env=env or self.env,
+            cwd=str(cwd if cwd is not None else self.wt), env=env if env is not None else self.env,
             capture_output=True, text=True, check=False, input="",
         )
         return result, result.stdout + result.stderr

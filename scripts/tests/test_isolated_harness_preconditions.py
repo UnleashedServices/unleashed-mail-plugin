@@ -218,8 +218,14 @@ class IsolatedHarnessPreconditions(unittest.TestCase):
                                           "GIT_WORK_TREE": str(victim),
                                           "XDG_CONFIG_HOME": str(self.root / "xdg")}):
             probe = type(self)("test_the_families_are_not_empty")
-            probe.setUp()
+            # REGISTERED BEFORE `setUp`, not after. `probe.setUp()` creates its temp root and only
+            # then runs `git`; if one of those calls fails it raises, this method unwinds, and a
+            # cleanup registered on the NEXT line would never be reached — leaking the directory
+            # probe.setUp() had already registered against itself. Measured: with the two lines in
+            # the other order a raising setUp leaks one temp dir, and in this order it leaks none
+            # (gemini, PR #73).
             self.addCleanup(probe.doCleanups)
+            probe.setUp()
             probe_env = probe.env
             probe_repo = probe.repo
 

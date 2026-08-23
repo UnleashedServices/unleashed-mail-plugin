@@ -351,7 +351,7 @@ class KimiHarnessMutationGates(unittest.TestCase):
         from. Callers that pass neither get the harness's own default, as before.
         """
         out = out or os.path.join(self.scratch, f"out-{mode}.txt")
-        child_env = dict(env or self.env, KIMI_STUB_MODE=mode,
+        child_env = dict(env if env is not None else self.env, KIMI_STUB_MODE=mode,
                          KIMI_STUB_PLAN=(plan or DEFAULT_PLAN))
         argv = ["bash", harness, prompt, out, commit, str(timeout)]
         if plan is not None:
