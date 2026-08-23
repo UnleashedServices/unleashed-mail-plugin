@@ -82,6 +82,50 @@ class TestAuditPR53CLIHardening(unittest.TestCase):
             self.assertEqual(S.main([p, "--chnged", ch]), 2, "an unknown --flag must fail closed (exit 2)")
 
 
+class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
+    """S1: `--changed` present but EMPTY (or all-blank, or `.`-only) scoped every finding to
+    pre-existing and exited 0 APPROVE — a CI-gating fail-open reachable from a real shell mistake
+    (`git diff --name-only base..head > changed.txt` on an empty range writes a 0-byte file). The
+    guard must refuse (exit 2) instead of certifying an unreviewed changeset clean."""
+
+    # A finding that is VALID (sourceAgent + evidence present, relative path) so it LOADS rather than
+    # being quarantined. An earlier reproduction of this bug was masked exactly there: a fixture
+    # missing sourceAgent/evidence is quarantined, and quarantine forces NEEDS_DISCUSSION/rc=1 — a
+    # plausible-looking refusal that hides the APPROVE. The control cell below pins that distinction.
+    _BLOCKER = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                    category="credential", file="MyApp/RealFile.swift", line=1, lineEnd=1,
+                    finding="hardcoded token", evidence="let t = \"AKIA...\"", fix="move to Keychain")
+
+    def _run(self, changed_text):
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [self._BLOCKER]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write(changed_text)
+            return S.main([fp, "--changed", ch])
+
+    def test_zero_byte_changed_file_refuses(self):
+        self.assertEqual(self._run(""), 2,
+                         "a 0-byte --changed file must fail closed, not APPROVE every finding as pre-existing")
+
+    def test_blank_lines_only_refuses(self):
+        self.assertEqual(self._run("\n   \n\t\n\n"), 2,
+                         "an all-whitespace --changed file must fail closed")
+
+    def test_dot_only_refuses(self):
+        # `.` canonicalises to the empty path, so it is an empty changeset wearing a plausible disguise.
+        self.assertEqual(self._run(".\n"), 2, "a `.`-only --changed file must fail closed")
+
+    def test_control_real_path_still_reviews(self):
+        # CONTROL — without this the three cells above pass against a synthesizer that refuses
+        # EVERYTHING, proving nothing. The same fixture and the same blocker must reach a real verdict
+        # (REQUEST_CHANGES, rc=1) as soon as the changeset names the file the finding is in.
+        self.assertEqual(self._run("MyApp/RealFile.swift\n"), 1,
+                         "a real changed path must still produce REQUEST_CHANGES, not the refusal")
+
+
 class TestExactDedup(unittest.TestCase):
     def test_byte_identical_duplicates_collapse(self):
         # MIN-14: the SAME finding ingested twice (a capture replay unioned with fresh arrays) must

@@ -449,6 +449,32 @@ def main(argv: list[str]) -> int:
     if os.path.exists(changed_path):
         with open(changed_path, encoding="utf-8") as fh:
             changed = {ln.strip() for ln in fh if ln.strip()}
+    # THE EMPTY CHANGESET, refused here exactly as `mcp_server.py:185` refuses it. This arm had NO
+    # equivalent: a MISSING twin, not an untested one. Reproduced on shipped code with one
+    # high-confidence `credential` blocker (a hardcoded API token) and a real findings file:
+    #
+    #     --changed <empty> / <blank lines> / "." / "./" / "..."  ->  rc 0, **APPROVE**
+    #     --changed MyApp/Auth.swift                              ->  rc 1, **REQUEST_CHANGES**
+    #
+    # Every entry canonicalises to "", so nothing is in scope, every finding is demoted to
+    # pre-existing, and the CLI approves — while this module's own docstring advertises it for CI
+    # gating. The MCP arm refused all five with -32602 the whole time.
+    #
+    # CANONICALISED, not list-truthiness. `canonical_path` is the SAME function `synthesize()` scopes
+    # against (line 270), so the two sides cannot disagree; a bare `if not changed` would still let
+    # "." and "./" through, which is precisely the bypass mcp_server.py's comment records.
+    #
+    # Ordered BEFORE the absolute/traversal check to match the MCP arm, so an input that is both
+    # all-collapsing and absolute produces the same diagnostic on both arms.
+    #
+    # Demo mode is unaffected: it is gated on `findings_explicit`, and pure demo mode supplies the
+    # bundled changeset. An empty changeset legitimately has nothing to review and therefore no
+    # findings; a genuinely clean review passes findings with an empty list, not an empty changeset.
+    if findings_explicit and not {p for p in (canonical_path(c) for c in changed) if p}:
+        print("error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
+              "refusing to synthesize (every finding would mis-scope to pre-existing and yield a "
+              "bogus APPROVE)", file=sys.stderr)
+        return 2
     # A2/F3: refuse an absolute/traversal changed entry (git diff --name-only never emits these) — it can
     # only mis-scope findings to a bogus APPROVE. Fail CLOSED, matching mcp_server.py's changed_files guard.
     _bad_changed = sorted({c for c in changed if is_abs_or_traversal(c)})
