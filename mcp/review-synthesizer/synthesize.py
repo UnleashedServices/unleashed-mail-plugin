@@ -485,14 +485,14 @@ def main(argv: list[str]) -> int:
     # reach APPROVE. Testing path-was-supplied refused exactly that, and diverged from the MCP twin,
     # which guards on `findings_in`. `bad` counts too: a row that only quarantined is still a row,
     # and would still mis-scope. Demo mode is unaffected — it supplies the bundled changeset.
-    if (findings or bad) and not {p for p in (canonical_path(c) for c in changed) if p}:
+    if (findings or bad) and not any(canonical_path(c) for c in changed):
         # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
         # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES
         # or its scope is "structural-pipeline", so those rows would NOT mis-scope. They are refused
         # alongside the rest deliberately: the refusal is per-INPUT, not per-row, and splitting it
         # would diverge from the MCP twin. Keep this cause clause byte-identical to mcp_server.py's.
-        print("error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
-              "refusing to synthesize (" + _EMPTY_CHANGESET_CAUSE + ")", file=sys.stderr)
+        print(f"error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
+              f"refusing to synthesize ({_EMPTY_CHANGESET_CAUSE})", file=sys.stderr)
         return 2
     # A2/F3: refuse an absolute/traversal changed entry (git diff --name-only never emits these) — it can
     # only mis-scope findings to a bogus APPROVE. Fail CLOSED, matching mcp_server.py's changed_files guard.

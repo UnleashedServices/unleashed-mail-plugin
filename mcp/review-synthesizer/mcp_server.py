@@ -182,11 +182,11 @@ def _call_synthesize(arguments: dict) -> dict:
     # two sides agree: a plain `not changed_files` list-truthiness check let `[""]`/`["./"]` slip a
     # real blocker straight to APPROVE (adversarial verify, Item 17). An empty changeset legitimately
     # has nothing to review and therefore no findings; a genuinely clean review sends findings: [].
-    if findings_in and not {p for p in (canonical_path(c) for c in changed_files) if p}:
+    if findings_in and not any(canonical_path(c) for c in changed_files):
         raise _RpcError(
             -32602,
             "changed_files is empty (or all-blank/'.'-only) but findings were provided; refusing "
-            "to synthesize (" + _EMPTY_CHANGESET_CAUSE + ")",
+            f"to synthesize ({_EMPTY_CHANGESET_CAUSE})",
         )
     # Fail CLOSED on ABSOLUTE or TRAVERSAL entries. `git diff --name-only` only ever emits repo-relative
     # paths with no leading `/` and no `..` component. An absolute path (`/etc/passwd`) or `../..` escape
