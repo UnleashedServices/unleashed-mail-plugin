@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.0
+# UnleashedMail — Claude Code Plugin v2.8.1
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,21 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.1
+
+- **`swift-reviewer` gets its review panel back (`COREDEV-2703`)** — on v2.8.0 the orchestrator
+  received only `Read`, `Bash` and the synthesizer MCP tool: `Grep`, `Glob` and `Agent` were all
+  declared in its `tools:` line and all silently absent, so it could not spawn any of the five
+  specialists. Every round came back `UNATTRIBUTED` for all five — which fails closed to NEEDS
+  DISCUSSION, never to "clean", so no unreviewed verdict was ever published. The trigger was the
+  `Agent(<type>)` specifier syntax used inside `disallowedTools`; a sibling reviewer whose deny-list
+  uses bare names keeps every tool it declares. The spawn set is now an **allowlist** —
+  `Agent(<the five reviewers + jira-manager>)` in `tools:` — with `disallowedTools` reduced to
+  `Write, Edit, NotebookEdit`. The writer-agent restriction (PR #63 P1: a prompt-injected finding
+  must not be able to steer the reviewer into a file-writing agent while it reads untrusted PR
+  content) is preserved, and `validate-plugin-assembly.py` now checks a scoped `Agent(...)` grant
+  against the writer roster on disk, so the grant cannot drift open when a new writing agent lands.
 
 ### v2.8.0
 
