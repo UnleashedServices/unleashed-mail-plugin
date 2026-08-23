@@ -352,10 +352,28 @@ def _tool_tokens(value: str) -> "set[str]":
 
     MEMBERSHIP USED TO BE TESTED BY SUBSTRING (`"Edit" in tools`), so `NotebookEdit` satisfied an
     `Edit` probe: an agent denying `Write, NotebookEdit` — but not `Edit` — passed the two-token
-    denial check with `Edit` still live (PR #63 recheck). Scoped entries like `Agent(name)` survive as
-    single tokens because the separator is the comma, not whitespace.
+    denial check with `Edit` still live (PR #63 recheck).
+
+    SPLITTING ON EVERY COMMA WAS WRONG for the documented multi-type form. The sub-agents reference
+    spells a scoped grant `Agent(worker, researcher)` — the types are comma-separated INSIDE the
+    parentheses — and a naive split yielded `Agent(worker` and `researcher)`, two tokens that match
+    nothing. That mis-parse is why no gate caught COREDEV-2703: the validator's model of this field
+    could not represent the form the runtime actually documents. Commas inside parentheses are now
+    type separators; only top-level commas separate tokens.
     """
-    return {token.strip() for token in value.split(",") if token.strip()}
+    tokens, current, depth = [], [], 0
+    for ch in value:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            tokens.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    tokens.append("".join(current))
+    return {token.strip() for token in tokens if token.strip()}
 
 
 # Everything that lets an agent MODIFY THE CHECKOUT. `Bash` belongs here because a sub-agent tool list
@@ -364,6 +382,13 @@ def _tool_tokens(value: str) -> "set[str]":
 # that no longer exists must not force inherit-all agents into stale denies that the stale-name rule
 # in this same file rejects.
 _WRITE_VECTORS = frozenset({"Write", "Edit", "NotebookEdit", "Bash"})
+
+
+def _agent_specifier_members(token: str) -> "list[str]":
+    """`Agent(a, unleashed-mail:b)` -> ['a', 'unleashed-mail:b']. Bare `Agent` -> []."""
+    if not token.startswith("Agent(") or not token.endswith(")"):
+        return []
+    return [m.strip() for m in token[len("Agent("):-1].split(",") if m.strip()]
 
 
 def _live_tools(frontmatter: dict) -> "set[str]":
@@ -546,7 +571,7 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
     `Bash`, so the previous explicit-list-only detection skipped every inherit-all agent — a spawner
     nobody had to declare was a spawner nobody checked.
     """
-    writers, spawners = [], []
+    writers, spawners, scoped_spawners = [], [], []
     for path in sorted((root / "agents").glob("*.md")):
         frontmatter = parse_frontmatter(path.read_text(encoding="utf-8")) or {}
         if not frontmatter:
@@ -554,8 +579,28 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         live = _live_tools(frontmatter)
         if live & _WRITE_VECTORS:
             writers.append(path.stem)
+        # A BARE `Agent` reaches every agent and needs the writer denials below.
         if "Agent" in live:
             spawners.append((path, frontmatter))
+        # A SCOPED grant — `Agent(a, b)` — is an ALLOWLIST, but "writers are excluded by
+        # construction" is FALSE as a blanket claim: it holds only if no listed member IS a writer.
+        # Measured (codex, PR #74) — `tools: Read, Agent(rogue-writer)` beside a writing
+        # `rogue-writer` reported NO problem, because `_live_tools` holds `Agent(...)` rather than
+        # bare `Agent` and the spawner was skipped entirely. The same hole opens when an allowlisted
+        # specialist LATER gains `Bash` or `Write`. So the members are checked by name.
+        scoped_spawners.extend((path, member)
+                               for token in live if token.startswith("Agent(")
+                               for member in _agent_specifier_members(token))
+
+    for path, member in scoped_spawners:
+        bare = member.split(":", 1)[-1]
+        if bare in writers:
+            rel = path.relative_to(root).as_posix()
+            problems.append(
+                f"{rel}: its scoped `Agent(...)` allowlist names `{member}`, which can modify the "
+                f"checkout. An allowlist only constrains the spawn set if no member is a writer — "
+                f"remove it, or make that agent read-only."
+            )
 
     for path, frontmatter in spawners:
         denied = _tool_tokens(frontmatter.get("disallowedTools", ""))

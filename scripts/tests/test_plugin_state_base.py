@@ -167,6 +167,109 @@ class N4SentinelEnvelope(unittest.TestCase):
                 )
 
 
+class N2bNoCompositionUnderAnUnresolvedBase(unittest.TestCase):
+    """D-prime, asserted by COMPOSITION rather than by outcome — the whole family, in one shape.
+
+    `N2NoPersistence` above names all four writers but can only FAIL for one of them. Measured by
+    mutating each guard to `:` (line-count preserving) and running that class:
+
+        marker.sh:261   (marker_write)                14 tests OK  -- UNCOVERED
+        log.sh:197      (log_append)                  14 tests OK  -- UNCOVERED
+        context.sh:500  (context_review_round_clear)  14 tests OK  -- UNCOVERED
+        context.sh:355  (_context_round_sweep)        14 tests OK  -- inert while :419 stands
+        context.sh:419  (context_review_round_bind)   FAILED (1)   -- covered
+
+    Why the existing cells cannot see it: `test_writers_are_no_ops_and_succeed` asserts `rc=0`, which
+    the mutants also return; `test_nothing_is_created_at_root` probes `/.state`, `/logs`, `/reviews`,
+    but the unresolved sentinel is `/dev/null/unresolved-plugin-base`, so nothing lands at `/` either
+    way. Only `bind` is caught, and only because its `printf` runs after the failed write.
+
+    The discriminating signal is not the outcome but the ATTEMPT: with the guard gone, the writer
+    composes a path under the sentinel and calls `mkdir -p /dev/null/unresolved-plugin-base/...`,
+    which fails with ENOTDIR. The round is then safe only by accident of `/dev/null` not being a
+    directory — the accident `stop-quality-marker-gate.sh`'s own comment says the design must not
+    depend on. Shimming `mkdir`/`rm` on PATH and counting invocations sees the attempt itself.
+    """
+
+    #: Every writer that carries a D-prime guard, with the command that reaches it. Derived by
+    #: `grep -rn unleashed_base_ok scripts/ --include='*.sh'`, not from memory.
+    WRITERS = (
+        ("marker.sh:261", "marker.sh", "marker_write lint fail"),
+        ("log.sh:197", "log.sh", 'log_append probe.jsonl \'{"x":1}\''),
+        ("context.sh:419", "context.sh", "context_review_round_bind security-reviewer a1 s1"),
+        ("context.sh:500", "context.sh", "context_review_round_clear a1"),
+    )
+
+    #: The sentinel an unresolved base composes against. Any argument naming it is a composition that
+    #: should never have happened.
+    SENTINEL = "/dev/null/unresolved-plugin-base"
+
+    def setUp(self):
+        self.shim = tempfile.mkdtemp(prefix="dprime-shim.")
+        self.addCleanup(shutil.rmtree, self.shim, ignore_errors=True)
+        self.calls = os.path.join(self.shim, "calls.log")
+        for name in ("mkdir", "rm", "mv"):
+            real = shutil.which(name) or f"/bin/{name}"
+            path = os.path.join(self.shim, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("#!/usr/bin/env bash\n"
+                         f'printf "%s %s\\n" "{name}" "$*" >> "{self.calls}"\n'
+                         f'exec "{real}" "$@"\n')
+            os.chmod(path, 0o755)
+
+    def _composition_attempts(self, lib, call, libdir=None):
+        """Run `call` with an unresolved base and return the shimmed invocations naming the sentinel."""
+        open(self.calls, "w").close()
+        env = {"PATH": self.shim + os.pathsep + os.environ.get("PATH", os.defpath)}
+        run(f'. "$_LIBDIR/{lib}"; {call}', env=env, libdir=libdir)
+        with open(self.calls, encoding="utf-8") as fh:
+            return [line.strip() for line in fh if self.SENTINEL in line]
+
+    def test_no_writer_composes_a_path_under_the_unresolved_sentinel(self):
+        for label, lib, call in self.WRITERS:
+            with self.subTest(writer=label):
+                attempts = self._composition_attempts(lib, call)
+                self.assertEqual([], attempts,
+                                 f"{label} composed a path under the unresolved-base sentinel: "
+                                 f"{attempts}")
+
+    def test_the_shim_SEES_a_composition_when_the_guard_is_removed(self):
+        """The control, and it is what makes the cell above worth anything.
+
+        Without it, a shim that recorded nothing — a broken PATH, a writer that never runs — would
+        report an empty list and read as a pass. Each guard is deleted in a COPY of the library
+        (line-count preserving) and the attempt must then be visible. `context.sh:355` is excluded:
+        it is unreachable while `:419` stands, so its deletion is behaviour-preserving by
+        construction — a rule-6 inert member, pinned by that fact rather than by a behavioural cell.
+        """
+        removable = {
+            "marker.sh:261": ("marker.sh", "marker_write lint fail"),
+            "log.sh:197": ("log.sh", 'log_append probe.jsonl \'{"x":1}\''),
+            "context.sh:419": ("context.sh", "context_review_round_bind security-reviewer a1 s1"),
+            "context.sh:500": ("context.sh", "context_review_round_clear a1"),
+        }
+        guard = "    unleashed_base_ok || return 0"
+        for label, (lib, call) in removable.items():
+            with self.subTest(writer=label):
+                line_no = int(label.split(":")[1])
+                mutant_dir = os.path.join(self.shim, "lib-" + label.replace(".", "_").replace(":", "_"))
+                shutil.copytree(LIB, mutant_dir)
+                target = os.path.join(mutant_dir, lib)
+                with open(target, encoding="utf-8") as fh:
+                    lines = fh.readlines()
+                self.assertTrue(lines[line_no - 1].startswith(guard),
+                                f"{label}: line {line_no} is not the D-prime guard, it is "
+                                f"{lines[line_no - 1]!r} — the family census is stale")
+                lines[line_no - 1] = "    :\n"
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.writelines(lines)
+                attempts = self._composition_attempts(lib, call, libdir=mutant_dir)
+                self.assertNotEqual([], attempts,
+                                    f"CONTROL FAILED — with {label} deleted the shim saw no "
+                                    f"composition under {self.SENTINEL}, so the cell above cannot "
+                                    f"distinguish a working guard from a silent shim")
+
+
 class N5LexicalDrift(unittest.TestCase):
     """The identifier is expanded only at enumerated sites.
 
@@ -190,6 +293,7 @@ class N5LexicalDrift(unittest.TestCase):
         "scripts/tests/test_reviewer_roster.py": "sets it for a fixture",
         "scripts/tests/test_plugin_state_mutants.py": "sets/unsets it for fixtures — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/tests/test_plugin_state_store.py": "sets/unsets it for the `set -eu` scenario sweep — a test harness exercising the resolver, not a primitive re-deriving the base",
+        "scripts/tests/test_writer_redirect_order.py": "sets it to a scratch base so `marker_path` resolves inside the fixture — a test harness exercising the resolver, not a primitive re-deriving the base",
         "scripts/pre-commit-checks.sh": "comments only",
         # PUB-9 E2a's rationale has to name the variable to say what it names — the directory the HOST
         # will use, which on a first session does not exist yet. The publisher receives the VALUE as

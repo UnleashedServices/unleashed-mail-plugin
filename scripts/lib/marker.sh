@@ -272,7 +272,7 @@ marker_write() {
     # ACTUALLY ran (`host-env` from the variable, `pointer` from the store) — plan row 20. Without it
     # a record cannot say which world wrote it, which is the provenance this ticket exists to give.
     printf '{"status":"%s","kind":"%s","ts":"%s","commit":"%s","repo_hash":"%s","base_resolution":"%s"}\n' \
-        "$_mw_status" "$kind" "$ts" "$commit" "$hash" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+        "$_mw_status" "$kind" "$ts" "$commit" "$hash" "${_UNLEASHED_BASE_SOURCE:-unresolved}" 2>/dev/null > "$tmp" || { rm -f "$tmp" 2>/dev/null; return 0; }
     mv "$tmp" "$_mw_path" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
     # On a pass, clear the Stop-gate's last-blocked sentinel so a later regression on
     # the same commit can block again (gemini PR #12) — but ONLY when no marker kind is

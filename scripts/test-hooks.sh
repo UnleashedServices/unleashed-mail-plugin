@@ -331,6 +331,57 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"mv a.swift b.swift"}
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_empty "benign mv -> no decision" "$OUT"
 
+# 7g. THE NO-INTERPRETER FAMILY — three guards, one PATH shim carrying neither python3 nor jq.
+#     A stock Mac without the Command Line Tools has neither, and every cell in this harness runs
+#     with the ambient PATH, so all three arms are unexecuted:
+#       * sensitive-file-guard.sh:79  the python3-absent SKIP of the Bash write-target scan.
+#         Measured with that line deleted: the command substitution below it fails,
+#         guard_bash_write_target returns 2, and the caller's fail-closed branch denies EVERY Bash
+#         call — `echo hello` included — with exit 2. The `_BWS_FORCE_FAIL` cell above asserts the
+#         OPPOSITE contract (lexer ran and failed -> deny), so it cannot cover this.
+#       * hook-io.sh:77   `_hook_grep_get`, the last-resort extractor. Every other cell resolves its
+#         value through the jq or python3 arm, so all four of its branches are dead in test.
+#       * hook-io.sh:161  `json_escape`'s manual escape, which keeps hook stdout well-formed when
+#         neither interpreter exists.
+NOPY="$TMPROOT/nopy3bin"; mkdir -p "$NOPY"
+for _c in bash dirname tr wc grep sed head cat uname env printf rm mkdir; do
+    _p="$(command -v "$_c" 2>/dev/null)"
+    case "$_p" in /*) ln -sf "$_p" "$NOPY/$_c" ;; esac
+done
+# The fixture must actually lack both interpreters, or every assertion below is vacuous.
+if [ -z "$(PATH="$NOPY" command -v python3 2>/dev/null)" ] && [ -z "$(PATH="$NOPY" command -v jq 2>/dev/null)" ]; then ok; else
+    fail "7g: the shim PATH still resolves python3 or jq — the cells below would be vacuous"; fi
+# (i) :79 — a benign Bash command must NOT be denied when python3 is missing.
+NOPY_BASH="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' \
+    | PATH="$NOPY" UNLEASHED_SENSITIVE_GUARD_MODE=ask "$NOPY/bash" "$GUARD" 2>&1; printf 'RC=%s' "$?")"
+assert_contains     "7g: python3 absent -> benign Bash not denied" "$NOPY_BASH" "RC=0"
+assert_not_contains "7g: python3 absent -> no fail-closed deny"    "$NOPY_BASH" "blocking (fail-closed)"
+assert_not_contains "7g: python3 absent -> no interpreter error"   "$NOPY_BASH" "command not found"
+# (ii) hook-io.sh:77 — the Edit path still ASKS with no interpreter at all, which can only happen
+#      through the grep/sed extractor.
+NOPY_EDIT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
+    | PATH="$NOPY" UNLEASHED_SENSITIVE_GUARD_MODE=ask "$NOPY/bash" "$GUARD" 2>/dev/null)"
+assert_contains "7g: python3+jq absent -> Edit path still asks (grep extractor)" \
+    "$NOPY_EDIT" '"permissionDecision":"ask"'
+# (iii) hook-io.sh:161 — `json_escape`'s manual escape, called DIRECTLY as a unit.
+#      Not end-to-end: a raw `"` in `file_path` makes the payload invalid JSON, and an ESCAPED `\"`
+#      cannot be extracted by the grep fallback at all — hook-io.sh's own comment says so
+#      ("\" — acceptable, because a missed write target only fails OPEN"). So there is no
+#      no-interpreter path that carries a quote into a reason, and an end-to-end fixture here asserts
+#      nothing. Measured: the first draft of this cell did exactly that and the line-161 mutant
+#      SURVIVED it. The function is the right unit.
+NOPY_JSON="$(PATH="$NOPY" "$NOPY/bash" -c '. "$1/lib/hook-io.sh"; json_escape "a\"b"' _ "$_DIR" 2>/dev/null)"
+assert_contains "7g: json_escape emits a quoted string with no interpreter" "$NOPY_JSON" '"'
+if is_valid_json "{\"r\":$NOPY_JSON}"; then ok; else
+    fail "7g: json_escape produced UNPARSEABLE output with no interpreter: $NOPY_JSON"; fi
+assert_not_contains "7g: the manual escape dropped the raw quote" "$NOPY_JSON" 'a"b'
+# CONTROL: with python3 PRESENT a forced lexer failure must STILL be a hard deny — so (i) above is
+# asserting the python3-absent skip, not a guard that waves everything through.
+assert_contains "7g control: python3 present -> forced parse failure still denies" \
+    "$(printf '{"tool_name":"Bash","tool_input":{"command":"rm InboxView.swift"}}' \
+       | _BWS_FORCE_FAIL=1 UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" >/dev/null 2>&1; printf 'RC=%s' "$?")" \
+    "RC=2"
+
 # 7f. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
 # other case here overrides explicitly, so nothing exercised the shipped default. Mutation-proved: with
 # this test absent, flipping the default to `:-warn` leaves the whole suite byte-identical + exit 0 —
@@ -438,6 +489,47 @@ assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{
 assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 # a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
 assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (d2) F5b: the transcript_path FALLBACK (stop-quality-marker-gate.sh:58). The cells above cover
+#      session_id present, and both fields ABSENT — never the middle case, a payload carrying
+#      transcript_path but no session_id, which is the one the fallback exists for. Measured with the
+#      fallback deleted: both Stop calls go silent and ZERO sentinels are written, so enforce mode is
+#      silently off for every session whose payload omits session_id, while every assertion above
+#      stays green.
+reset_markers; marker_write lint fail
+_F5BPATH="/tmp/does-not-need-to-exist/transcript-F5B.jsonl"
+_F5BSENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str "$_F5BPATH")"
+rm -f "$_F5BSENT" 2>/dev/null
+assert_contains "F5b: transcript_path-only Stop BLOCKS (session_id absent)" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" \
+    '"decision":"block"'
+# The sentinel is keyed on the TRANSCRIPT PATH — that is what makes the fallback session-STABLE
+# rather than a per-invocation nonce, so the same session dedups on its second Stop.
+if [ -f "$_F5BSENT" ]; then ok; else fail "F5b: no sentinel written at the transcript-keyed path"; fi
+assert_empty "F5b: the same transcript_path dedups on the second Stop" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# MUTANT CONTROL: with the fallback removed, the same payload has NO identity, so the gate fails open
+# — silent, and no sentinel at all. Without this the cell above could not tell the fallback from a
+# gate that blocked unconditionally.
+_F5BMUT="$TMPROOT/sgmut-nofallback"
+mkdir -p "$_F5BMUT" && ln -sfn "$_DIR/lib" "$_F5BMUT/lib"
+# `@` as the delimiter, not `#`: the replacement text contains `#`, which would terminate the s
+# command early and silently produce an UNMUTATED copy. The two assertions below caught exactly that.
+sed 's@^\[ -n "\$SESSION_KEY" \] || SESSION_KEY="\$(hook_str transcript_path)"@: MUTANT_FALLBACK_REMOVED@' \
+    "$STOP" > "$_F5BMUT/stop-quality-marker-gate.sh"
+if [ "$(wc -l < "$_F5BMUT/stop-quality-marker-gate.sh")" = "$(wc -l < "$STOP")" ]; then ok; else
+    fail "F5b control: mutant changed the line count"; fi
+if grep -q 'MUTANT_FALLBACK_REMOVED' "$_F5BMUT/stop-quality-marker-gate.sh"; then ok; else
+    fail "F5b control: the fallback was NOT removed — the control proves nothing"; fi
+reset_markers; marker_write lint fail
+rm -f "$_F5BSENT" 2>/dev/null
+assert_empty "F5b control: without the fallback the same payload fails OPEN" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$_F5BMUT/stop-quality-marker-gate.sh" 2>/dev/null)"
+if [ -f "$_F5BSENT" ]; then fail "F5b control: a sentinel was written without any identity"; else ok; fi
+rm -f "$_F5BSENT" 2>/dev/null
+
 # (e) A2 (audit of #53): a pre-planted symlink at the sentinel path must NOT be written THROUGH (that would
 #     clobber the victim with the commit hash + chmod 600). The gate drops the link and atomically replaces it.
 reset_markers; marker_write lint fail
@@ -447,6 +539,47 @@ ln -sf "$_A2VICTIM" "$_A2SENT"
 printf '{"stop_hook_active":false,"session_id":"A2-ATTACKER"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" >/dev/null 2>&1
 if [ "$(cat "$_A2VICTIM" 2>/dev/null)" = "PRECIOUS_DO_NOT_TOUCH" ]; then ok; else fail "A2: sentinel write clobbered the symlink victim"; fi
 if [ -L "$_A2SENT" ]; then fail "A2: sentinel is still a symlink (not replaced)"; else ok; fi
+
+# (e2) A2b: THE READ PATH. A2 above proves the WRITE path drops a planted symlink — but it cannot
+#      reach the read guard at stop-quality-marker-gate.sh:101, because its victim holds
+#      `PRECIOUS_DO_NOT_TOUCH`, so the next conjunct (`cat == $HEAD_COMMIT`) fails whether or not
+#      `[ ! -L "$SENTINEL" ]` is there. Deleting that clause left every assertion in this harness
+#      green — measured.
+#      The case that discriminates is a symlink whose TARGET CONTENT IS the short HEAD hash: a
+#      same-uid process can point the sentinel at any file already containing it (a `.git` ref
+#      fragment will do) and permanently suppress the enforce-mode Stop block for that session.
+reset_markers; marker_write lint fail
+_A2BHEAD="$(git rev-parse --short HEAD 2>/dev/null)"
+if [ -n "$_A2BHEAD" ]; then ok; else fail "A2b: no HEAD commit — the fixture cannot be built"; fi
+_A2BVICTIM="$(marker_dir)/a2b-head-hash"; printf '%s' "$_A2BHEAD" > "$_A2BVICTIM"
+_A2BSENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str 'A2B-ATTACKER')"
+ln -sf "$_A2BVICTIM" "$_A2BSENT"
+# Premise, asserted rather than assumed: the planted link really does read back as the HEAD hash, so
+# a failure below is the guard's doing and not a broken fixture.
+if [ "$(cat "$_A2BSENT" 2>/dev/null)" = "$_A2BHEAD" ]; then ok; else
+    fail "A2b: the planted symlink does not read back as the HEAD hash — fixture is not the finding"; fi
+assert_contains "A2b: a symlink holding the HEAD hash does not suppress the block" \
+    "$(printf '{"stop_hook_active":false,"session_id":"A2B-ATTACKER"}' \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" \
+    '"decision":"block"'
+# MUTANT CONTROL: with the read-path symlink clause removed, `[ -f ]` follows the link, the content
+# matches, and the gate exits 0 — the block is SUPPRESSED. Without this control the cell above would
+# also pass against a gate that blocked unconditionally.
+_A2BMUT="$TMPROOT/stopgate-nolink.sh"
+mkdir -p "$TMPROOT/sgmut" && ln -sfn "$_DIR/lib" "$TMPROOT/sgmut/lib"
+_A2BMUT="$TMPROOT/sgmut/stop-quality-marker-gate.sh"
+sed 's#\[ -f "\$SENTINEL" \] \&\& \[ ! -L "\$SENTINEL" \]#[ -f "$SENTINEL" ]                            #' \
+    "$STOP" > "$_A2BMUT"
+if [ "$(wc -l < "$_A2BMUT")" = "$(wc -l < "$STOP")" ]; then ok; else
+    fail "A2b control: mutant changed the line count"; fi
+if grep -q '\[ ! -L "\$SENTINEL" \] \\' "$_A2BMUT"; then
+    fail "A2b control: the read-path clause was NOT removed — the control proves nothing"; else ok; fi
+reset_markers; marker_write lint fail
+printf '%s' "$_A2BHEAD" > "$_A2BVICTIM"; ln -sf "$_A2BVICTIM" "$_A2BSENT"
+assert_empty "A2b control: without the symlink clause the block IS suppressed" \
+    "$(printf '{"stop_hook_active":false,"session_id":"A2B-ATTACKER"}' \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$_A2BMUT" 2>/dev/null)"
+rm -f "$_A2BSENT" "$_A2BVICTIM" 2>/dev/null || true
 
 # 18. Warn mode -> no stdout, but a diagnostic line is logged.
 reset_markers
@@ -675,10 +808,98 @@ printf '{"ticket":"COREDEV-2325","branch_slug":"COREDEV-2325","plan":"docs/plann
 OUT="$(printf '{"source":"compact"}' | LC_ALL=C bash "$SESSION_RESTORE" 2>/dev/null)"
 if is_valid_json "$OUT"; then ok; else fail "restore unicode under C locale -> valid JSON"; fi
 
+# 31c. THE RESTORE HINT IS REDACTED (sessionstart-restore.sh:108) — and TRUNCATED (:109).
+#      Neither line had a cell. The nine `redact` cells above all drive stop-failure-log.sh and
+#      permission-denied-log.sh; nothing drove this hook, which is the one that injects text straight
+#      into the model's SessionStart context. Measured with the redaction removed: an operator email
+#      and home directory reach additionalContext verbatim.
+#      A MUTANT COPY is used for the control rather than editing the shipped file. It lives beside a
+#      `lib` symlink because the hook resolves its libraries from its own directory ($_DIR/lib).
+rm -f "$SNAP" 2>/dev/null
+PII_SLUG='jane.doe@corp.example.com at /Users/janedoe/secret'
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$PII_SLUG" "$(date +%s)" > "$SNAP"
+OUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_contains     "restore hint redacts the email"      "$OUT" '[redacted-email]'
+assert_contains     "restore hint redacts the home path"  "$OUT" '/Users/[redacted]'
+assert_not_contains "restore hint leaks no raw email"     "$OUT" 'jane.doe@corp.example.com'
+assert_not_contains "restore hint leaks no raw username"  "$OUT" '/Users/janedoe'
+
+# 31d. MUTANT CONTROL for 31c. Without it, 31c would pass against a hook that emitted nothing at all
+#      — and it is what proves the fixture's PII actually reaches the hint in the first place.
+MUTDIR="$TMPROOT/ss-mutant"
+mkdir -p "$MUTDIR"
+ln -sfn "$_DIR/lib" "$MUTDIR/lib"
+sed 's#^HINT="\$(hook_redact_pii "\$HINT")"#HINT="$HINT"#' "$SESSION_RESTORE" > "$MUTDIR/sessionstart-restore.sh"
+if [ "$(grep -c '^HINT="\$HINT"' "$MUTDIR/sessionstart-restore.sh")" = "1" ]; then ok; else
+    fail "31d mutant was not applied — the control proves nothing"; fi
+if [ "$(wc -l < "$MUTDIR/sessionstart-restore.sh")" = "$(wc -l < "$SESSION_RESTORE")" ]; then ok; else
+    fail "31d mutant changed the line count"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$PII_SLUG" "$(date +%s)" > "$SNAP"
+MUTOUT="$(printf '{"source":"compact"}' | bash "$MUTDIR/sessionstart-restore.sh" 2>/dev/null)"
+assert_contains "control: unredacted hint leaks the email"    "$MUTOUT" 'jane.doe@corp.example.com'
+assert_contains "control: unredacted hint leaks the username" "$MUTOUT" '/Users/janedoe'
+
+# 31e. The 400-char cap (:109). A long slug must not push an unbounded blob into SessionStart context.
+rm -f "$SNAP" 2>/dev/null
+# Brace expansion, not `seq`: this is a bash script, so `{1..900}` needs no subprocess and no
+# external command that a minimal image might lack (gemini, PR #74). Measured: 900 chars either way.
+LONGSLUG="$(printf 'A%.0s' {1..900})"
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$LONGSLUG" "$(date +%s)" > "$SNAP"
+LONGOUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
+if [ "${#LONGOUT}" -lt 700 ]; then ok; else
+    fail "restore hint is not capped: emitted ${#LONGOUT} bytes for a 900-char slug"; fi
+# MUTANT CONTROL: with the cap removed the same slug produces a materially longer emission.
+sed 's#^HINT="\${HINT:0:400}"#HINT="$HINT"#' "$SESSION_RESTORE" > "$MUTDIR/nocap.sh"
+if [ "$(grep -c '^HINT="\$HINT"' "$MUTDIR/nocap.sh")" = "1" ]; then ok; else
+    fail "31e mutant was not applied — the control proves nothing"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$LONGSLUG" "$(date +%s)" > "$SNAP"
+NOCAPOUT="$(printf '{"source":"compact"}' | bash "$MUTDIR/nocap.sh" 2>/dev/null)"
+if [ "${#NOCAPOUT}" -gt "${#LONGOUT}" ]; then ok; else
+    fail "control: uncapped emission (${#NOCAPOUT}) was not longer than capped (${#LONGOUT})"; fi
+
 # 32. Snapshot kill switch.
 rm -f "$SNAP" 2>/dev/null
 ( cd "$_DIR/.." && printf '{}' | UNLEASHED_COMPACT_SNAPSHOT=off bash "$PRECOMPACT" 2>/dev/null )
 if [ -f "$SNAP" ]; then fail "snapshot kill switch -> no write"; else ok; fi
+
+# 32b. RESTORE kill switch (sessionstart-restore.sh:47) — the OTHER switch, and the untested one.
+#      Case 32 above covers `UNLEASHED_COMPACT_SNAPSHOT=off` (do not WRITE a snapshot). Nothing
+#      covered `UNLEASHED_COMPACT_RESTORE=off` (do not CONSUME one), although README.md:491
+#      documents it. Its only appearance in the test tree is a Darwin-skipped mutant row, and there
+#      it proves the STORE NOTICE still fires — the opposite half of this line's contract.
+#      Measured with the line deleted: the switch neither suppresses the restore nor preserves the
+#      snapshot, and the whole harness stays green.
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"kill-switch","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$(date +%s)" > "$SNAP"
+SSOFF="$(printf '{"source":"compact"}' | UNLEASHED_COMPACT_RESTORE=off bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_empty "restore kill switch -> nothing emitted" "$SSOFF"
+# ...and RESTORE-ONCE must not have consumed the snapshot: switching the feature off must not destroy
+# the context it declined to replay.
+if [ -f "$SNAP" ]; then ok; else fail "restore kill switch -> snapshot was consumed anyway"; fi
+# MUTANT CONTROL: without the line the same invocation restores AND deletes the snapshot. `@` is the
+# sed delimiter because the replacement would otherwise collide with a `#` in it (see F5b).
+SSMUT="$TMPROOT/ssmut-nokill"
+mkdir -p "$SSMUT" && ln -sfn "$_DIR/lib" "$SSMUT/lib"
+sed 's@^\[ "${UNLEASHED_COMPACT_RESTORE:-on}" = "off" \] && _ss_exit@: MUTANT_KILLSWITCH_REMOVED@' \
+    "$SESSION_RESTORE" > "$SSMUT/sessionstart-restore.sh"
+if [ "$(wc -l < "$SSMUT/sessionstart-restore.sh")" = "$(wc -l < "$SESSION_RESTORE")" ]; then ok; else
+    fail "32b control: mutant changed the line count"; fi
+if grep -q 'MUTANT_KILLSWITCH_REMOVED' "$SSMUT/sessionstart-restore.sh"; then ok; else
+    fail "32b control: the kill switch was NOT removed — the control proves nothing"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"kill-switch","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$(date +%s)" > "$SNAP"
+SSMUTOUT="$(printf '{"source":"compact"}' | UNLEASHED_COMPACT_RESTORE=off bash "$SSMUT/sessionstart-restore.sh" 2>/dev/null)"
+assert_contains "32b control: without the switch the hook restores anyway" "$SSMUTOUT" '"additionalContext"'
+if [ -f "$SNAP" ]; then fail "32b control: the mutant did not consume the snapshot"; else ok; fi
+rm -f "$SNAP" 2>/dev/null
 
 echo "== Item 6 SubagentStop reviewer capture =="
 SLUG="$(context_branch_slug "$(context_branch)")"

@@ -127,7 +127,7 @@ if [ "$MODE" = "enforce" ] && [ -n "$SENTINEL" ]; then
         rm -f "$SENTINEL" 2>/dev/null || true
     fi
     _STMP="$(mktemp "$(marker_dir)/.stopgate.XXXXXX" 2>/dev/null || true)"
-    if [ -n "$_STMP" ] && printf '%s' "$HEAD_COMMIT" > "$_STMP" 2>/dev/null; then
+    if [ -n "$_STMP" ] && printf '%s' "$HEAD_COMMIT" 2>/dev/null > "$_STMP"; then
         chmod 600 "$_STMP" 2>/dev/null || true      # not world-writable/plantable
         if mv -f "$_STMP" "$SENTINEL" 2>/dev/null; then
             hook_emit_block "$REASON"

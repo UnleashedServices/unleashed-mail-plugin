@@ -439,7 +439,7 @@ context_review_round_bind() {
     _context_round_sweep "$dir" "${now:-0}"
     # COREDEV-2617 §4.2a: `base_resolution` names the resolution that actually ran (plan row 20).
     if printf '{"round":%d,"agent":"%s","slug":"%s","session_id":"%s","time":%s,"base_resolution":"%s"}\n' \
-        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" > "$_rb_path.tmp.$$" 2>/dev/null; then
+        "$round" "$agent" "$slug" "$sid" "${now:-0}" "${_UNLEASHED_BASE_SOURCE:-unresolved}" 2>/dev/null > "$_rb_path.tmp.$$"; then
         mv -f "$_rb_path.tmp.$$" "$_rb_path" 2>/dev/null || rm -f "$_rb_path.tmp.$$" 2>/dev/null
     else
         rm -f "$_rb_path.tmp.$$" 2>/dev/null
