@@ -401,12 +401,12 @@ mode the `check_bashless_agents_run_no_shell` validator exists to catch — it i
 `security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
 their bodies still ran `cat`/`find`/`plutil`.
 
-**What bounds it instead** (each verified, each with a regression test):
+**What bounds it — and what NO LONGER does** (COREDEV-2703/2711 revised this list; each measured):
 - the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**;
-- `swift-reviewer`'s `disallowedTools` denies **every** checkout-writing agent by name, in both the
-  bare and `unleashed-mail:`-namespaced spellings, and that set is **recomputed from disk** by
-  `validate-plugin-assembly.py` rather than hand-maintained, so a newly added writer cannot be missed;
-- `swift-reviewer` denies spawning itself, so there is no recursive amplification;
+- ~~`disallowedTools` denies every checkout-writing agent by name~~ **THIS LAPSED.** It is now
+  `Write, Edit, NotebookEdit`: it denies no agent, and no self-spawn. COREDEV-2703 removed those
+  `Agent(x)` entries because the specifier form inside a deny-list stripped `Agent` outright. The
+  scoped grant replacing them is a DECLARATION CI checks; the runtime ignores it for a sub-agent.
 - `jira-manager` — the one agent it spawns that is not a reviewer — **denies `Bash`** outright;
 - the skill boundary itself grants only `changeset.sh`, never bare `git`.
 

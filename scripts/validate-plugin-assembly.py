@@ -545,19 +545,31 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
 
 
 def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
-    """An agent holding bare `Agent` must deny every checkout-modifying agent BY NAME.
+    """Check a spawner's DECLARED reach against the writer roster computed from disk.
 
-    WHY A COMPUTED CHECK AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
-    A sub-agent `tools:` list takes bare names, so `Agent` there reaches ALL agents — including the
+    NEITHER BRANCH IS A RUNTIME CONTROL (COREDEV-2711). Read the whole docstring before trusting the
+    word "deny" anywhere in it. For a SUB-AGENT the runtime grants `Agent` and DISCARDS any type
+    list: measured on 2.8.1, `swift-reviewer` spawned a writing agent absent from its own scoped
+    grant with no refusal and no prompt. What this function enforces is DECLARATION consistency —
+    real, and narrower than the name suggests.
+
+    TWO BRANCHES, TWO DIFFERENT THINGS.
+    * bare `Agent` -> the writer denials below. Still meaningful as a declaration, but note NO shipped
+      agent takes this branch today; `swift-reviewer` moved to a scoped grant in COREDEV-2703.
+    * scoped `Agent(a, b)` -> every named member is checked against the writer roster.
+
+    WHY A COMPUTED ROSTER AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
+    A sub-agent `tools:` list takes bare names, so bare `Agent` reaches ALL agents — including the
     twelve that hold `Write`/`Edit` or inherit everything. `swift-reviewer` is spawned from `pr-review`
     while it processes untrusted PR content, so a prompt-injected finding could steer it into
-    `ui-engineer` or `db-engineer` and write to the tree with no user gesture. `Agent(type)` is ignored
-    inside a sub-agent definition, so the only lever is `disallowedTools`.
+    `ui-engineer` or `db-engineer` and write to the tree with no user gesture. A hand-kept deny-list
+    drifts the moment someone adds a writer agent — which is precisely how blacklists re-open. So the
+    set is RECOMPUTED here from the agents on disk: generated policy CI keeps honest, not a list
+    anyone has to remember to update.
 
-    That makes it a deny-list, and a deny-list drifts the moment someone adds a writer agent — which is
-    precisely how blacklists re-open. So the set is RECOMPUTED here from the agents on disk and the
-    frontmatter must already contain it. The list in the file is generated policy that CI keeps honest,
-    not a list anyone has to remember to update.
+    DO NOT "FIX" A FINDING HERE BY ADDING `Agent(<name>)` TO `disallowedTools`. That specifier form
+    inside a deny-list removes the `Agent` tool ENTIRELY — it is what silently disabled the whole
+    review panel (COREDEV-2703). To stop an agent spawning, deny bare `Agent`.
 
     WRITER MEANS "CAN MODIFY THE CHECKOUT", NOT "HOLDS `Write`" (PR #63 recheck, P1, second pass).
     The first predicate tested only `Write`/`Edit`, so `jira-manager` — denying both while inheriting
@@ -619,9 +631,13 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         if missing:
             rel = path.relative_to(root).as_posix()
             problems.append(
-                f"{rel}: holds bare `Agent`, so it can spawn every agent — but does not deny these "
-                f"file-writing ones: {', '.join(missing)}. Add `Agent(<name>)` (and the "
-                f"`unleashed-mail:`-namespaced spelling) to `disallowedTools`."
+                f"{rel}: holds bare `Agent`, so its DECLARED reach is every agent — but it does "
+                f"not deny these file-writing ones: {', '.join(missing)}. Fix by replacing bare "
+                f"`Agent` with a scoped `Agent(<read-only types>)` grant in `tools:`, or by denying "
+                f"bare `Agent` outright. Do NOT add `Agent(<name>)` to `disallowedTools`: that "
+                f"specifier form removes the `Agent` tool entirely and silently disables spawning "
+                f"(COREDEV-2703). Note this is a DECLARATION check — the runtime does not enforce "
+                f"a type list for a sub-agent (COREDEV-2711)."
             )
 
 

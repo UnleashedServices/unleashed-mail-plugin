@@ -13,17 +13,17 @@ model: inherit
 tools: Read, Bash, Grep, Glob, Agent(security-reviewer, unleashed-mail:security-reviewer, concurrency-reviewer, unleashed-mail:concurrency-reviewer, ux-perf-reviewer, unleashed-mail:ux-perf-reviewer, accessibility-auditor, unleashed-mail:accessibility-auditor, prompt-review, unleashed-mail:prompt-review, jira-manager, unleashed-mail:jira-manager), mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
 # COREDEV-2703 / COREDEV-2711 — A DECLARATION OF INTENT, NOT AN ENFORCED CONTROL. The runtime grants
 # the Agent tool from this specifier but DISCARDS the type list for a sub-agent: measured on 2.8.1,
-# this agent spawned `unleashed-mail:ui-engineer` — a writer, absent from the list — with no refusal,
-# no error, no prompt; a probe sees its own `Agent` entry BARE, so nothing exists to enforce against.
+# this agent spawned `unleashed-mail:ui-engineer` — a writer, absent from the list — with no refusal
+# and no prompt; a probe sees its own `Agent` entry BARE, so nothing exists to enforce against.
 # BY DESIGN: the sub-agents reference scopes `Agent(type)` enforcement to a MAIN-THREAD agent; for a
 # sub-agent the only levers are omitting `Agent` or denying it, both all-or-nothing. NO FRONTMATTER
 # SHAPE RESTORES PER-TYPE CONTROL — do not hunt for one, and do not read this as a security boundary.
-# STILL BOUGHT: `validate-plugin-assembly.py` checks this declared set against the writer roster, so
-# adding a writing agent here fails CI. That keeps the DECLARATION honest, nothing more.
-# STILL MISSING: PR #63's P1 — a prompt-injected finding steering this reviewer into a writing agent
-# while it reads untrusted PR content. `disallowedTools` stops it writing DIRECTLY, not spawning a
-# writer. COREDEV-2711 owns the mechanism (PreToolUse hook on `Agent`, or main-thread promotion).
-# KEEP THIS FILE AT 688 LINES — plan citations and the §13 anchor pin lines here; pad/trim to hold it.
+# STILL BOUGHT: `validate-plugin-assembly.py` checks this declared set against the writer roster on
+# disk, so adding a writing agent here fails CI. That keeps the DECLARATION honest, nothing more.
+# STILL MISSING, BOTH PATHS: PR #63's P1 (a prompt-injected finding steering this reviewer into a
+# writing agent while it reads untrusted PR content) AND DIRECT mutation — `disallowedTools` removes
+# only the EDITOR tools; line 13's bare `Bash` is arbitrary shell, which this repo's `_WRITE_VECTORS`
+# counts a writer (AGENT_CONTRACTS §9.1, accepted residual). COREDEV-2711 owns both. FILE=688 LINES.
 disallowedTools: Write, Edit, NotebookEdit
 ---
 
