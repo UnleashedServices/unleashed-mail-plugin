@@ -445,6 +445,11 @@ def main(argv: list[str]) -> int:
     if not paths:  # pure demo mode only: bundled fixtures + bundled changeset
         paths = sorted(glob.glob(os.path.join(here, "samples", "*.json")))
 
+    # Loaded up front so the empty-changeset guard below can test the ROWS rather than the argv shape.
+    # `_load` never raises — it quarantines unreadable/unparseable input — so hoisting it cannot change
+    # which error wins; the two changed-path guards still fire in their original order.
+    findings, bad = _load(paths)
+
     changed: set[str] = set()
     if os.path.exists(changed_path):
         with open(changed_path, encoding="utf-8") as fh:
@@ -467,10 +472,13 @@ def main(argv: list[str]) -> int:
     # Ordered BEFORE the absolute/traversal check to match the MCP arm, so an input that is both
     # all-collapsing and absolute produces the same diagnostic on both arms.
     #
-    # Demo mode is unaffected: it is gated on `findings_explicit`, and pure demo mode supplies the
-    # bundled changeset. An empty changeset legitimately has nothing to review and therefore no
-    # findings; a genuinely clean review passes findings with an empty list, not an empty changeset.
-    if findings_explicit and not {p for p in (canonical_path(c) for c in changed) if p}:
+    # Guarded on the LOADED ROWS, not on whether a --findings path was supplied (codex, PR #77). An
+    # empty changeset legitimately has nothing to review and therefore no findings, so a genuinely
+    # clean run — `findings.json` holding `[]` beside an empty `git diff --name-only` — must still
+    # reach APPROVE. Testing path-was-supplied refused exactly that, and diverged from the MCP twin,
+    # which guards on `findings_in`. `bad` counts too: a row that only quarantined is still a row,
+    # and would still mis-scope. Demo mode is unaffected — it supplies the bundled changeset.
+    if (findings or bad) and not {p for p in (canonical_path(c) for c in changed) if p}:
         print("error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
               "refusing to synthesize (every finding would mis-scope to pre-existing and yield a "
               "bogus APPROVE)", file=sys.stderr)
@@ -482,7 +490,6 @@ def main(argv: list[str]) -> int:
         print(f"error: --changed contains absolute/traversal paths ({', '.join(_bad_changed)}); "
               "git diff --name-only never emits these — refusing to synthesize", file=sys.stderr)
         return 2
-    findings, bad = _load(paths)
     review = synthesize(findings, changed, quarantined=bad)
     print(render_markdown(review))
     # exit non-zero on a gating verdict, so this can drop into CI

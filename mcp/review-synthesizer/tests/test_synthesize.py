@@ -173,7 +173,11 @@ class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
             ch = os.path.join(d, "changed.txt")
             with open(ch, "w", encoding="utf-8") as fh:
                 fh.write(changed_text)
-            return S.main([fp, "--changed", ch])
+            # Redirected so the suite's own output stays readable (gemini, PR #77) — the refusal
+            # diagnostics and the rendered report otherwise interleave with the runner's dots and
+            # bury the summary line. CliFixture.run_main already does this; this was the outlier.
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return S.main([fp, "--changed", ch])
 
     def test_zero_byte_changed_file_refuses(self):
         self.assertEqual(self._run(""), 2,
@@ -186,6 +190,39 @@ class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
     def test_dot_only_refuses(self):
         # `.` canonicalises to the empty path, so it is an empty changeset wearing a plausible disguise.
         self.assertEqual(self._run(".\n"), 2, "a `.`-only --changed file must fail closed")
+
+    def _run_findings(self, findings, changed_text):
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": findings}, fh)
+            ch = os.path.join(d, "changed.txt")
+            with open(ch, "w", encoding="utf-8") as fh:
+                fh.write(changed_text)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+            return rc, out.getvalue(), err.getvalue()
+
+    def test_no_findings_and_an_empty_changeset_still_APPROVES(self):
+        # THE NARROWING HALF (codex, PR #77). The first cut of this guard tested whether a findings
+        # PATH was supplied, not whether it held any rows — so a genuinely clean run (`findings.json`
+        # holding `[]` beside an empty `git diff --name-only`, i.e. nothing changed and nothing found)
+        # was REFUSED with exit 2. That is a false refusal, and it also diverged from the MCP twin at
+        # mcp_server.py:185, which guards on the parsed `findings_in` list and accepted the same input.
+        # Refusing an empty changeset is only correct when there is something that WOULD mis-scope.
+        rc, out, err = self._run_findings([], "")
+        self.assertIn("## Verdict (provisional): **APPROVE**", out)
+        self.assertNotIn("refusing to synthesize", err)
+        self.assertEqual(rc, 0, "nothing changed and nothing found is a clean review, not a refusal")
+
+    def test_a_quarantined_row_still_counts_as_a_row(self):
+        # `bad` counts as well as `findings`: a row that only quarantined is still a row that would
+        # mis-scope, and the MCP twin's `findings_in` is likewise the raw list. Guarding on parsed
+        # findings ALONE would reopen the fail-open for any input whose rows all fail schema.
+        rc, _, err = self._run_findings([{"severity": "nonsense"}], "")
+        self.assertIn("refusing to synthesize", err)
+        self.assertEqual(rc, 2)
 
     def test_control_real_path_still_reviews(self):
         # CONTROL — without this the three cells above pass against a synthesizer that refuses
