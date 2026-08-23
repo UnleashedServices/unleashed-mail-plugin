@@ -366,3 +366,76 @@ class TestSynthesizeTool(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _init(pv=None, mid=1):
+    p = {} if pv is None else {"protocolVersion": pv}
+    return {"jsonrpc": "2.0", "id": mid, "method": "initialize", "params": p}
+
+
+class TestS6ProtocolGuards(unittest.TestCase):
+    """S6 (COREDEV-2654): three protocol guards in mcp_server.py that no cell reached. Each is
+    asserted on the OBSERVABLE the client would actually see — reply count, negotiated version,
+    error code — because this server is driven over a pipe and a crash, a spurious reply and a
+    silent drop are three different client-visible outcomes that a bare exit code cannot separate."""
+
+    def test_blank_lines_between_requests_are_skipped_not_parse_errored(self):
+        # :313-315. Without the skip, `json.loads("")` raises and the JSON-RPC parse-error path
+        # emits a reply with `id: null` — a spurious unsolicited message injected into the client's
+        # stream between two legitimate responses. Blank lines are ordinary pipe framing.
+        replies, proc = rpc([_init(mid=1), "", "   ", "\t",
+                             {"jsonrpc": "2.0", "id": 2, "method": "ping"}])
+        self.assertEqual(len(replies), 2, f"exactly two replies expected, got {replies}")
+        self.assertEqual([r["id"] for r in replies], [1, 2])
+        self.assertFalse([r for r in replies if r.get("id") is None],
+                         "a blank line must NOT produce an id-null parse-error reply")
+        self.assertFalse([r for r in replies if "error" in r], "no blank line is an error")
+        self.assertEqual(proc.returncode, 0)
+
+    def test_unhashable_protocol_version_does_not_crash_the_negotiation(self):
+        # :265. SUPPORTED_PROTOCOL_VERSIONS is a frozenset, so `requested in ...` HASHES its left
+        # operand: drop the isinstance guard and a list/dict `protocolVersion` raises TypeError
+        # ("unhashable type") inside initialize. The isinstance check is load-bearing precisely
+        # because the container is a set — the same shape over a tuple would be inert.
+        for bad in ([1, 2], {"a": 1}, 7, None, True):
+            with self.subTest(requested=bad):
+                replies, proc = rpc([_init(pv=bad)])
+                self.assertEqual(len(replies), 1, f"got {replies}")
+                self.assertNotIn("error", replies[0],
+                                 "a wrong-typed protocolVersion must negotiate, not error")
+                self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-11-25",
+                                 "an unusable request must fall back to the version we DO speak")
+                self.assertEqual(proc.returncode, 0, "the server must not die on a bad type")
+
+    def test_supported_version_is_echoed_and_unsupported_falls_back(self):
+        # The narrowing half: a guard that always returned PROTOCOL_VERSION would pass the cell
+        # above while breaking real negotiation with a client on the older supported version.
+        for requested in ("2025-11-25", "2025-06-18"):
+            with self.subTest(requested=requested):
+                replies, _ = rpc([_init(pv=requested)])
+                self.assertEqual(replies[0]["result"]["protocolVersion"], requested,
+                                 "a SUPPORTED version must be echoed back, not overridden")
+        replies, _ = rpc([_init(pv="1999-01-01")])
+        self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-11-25",
+                         "an UNSUPPORTED version must not be echoed — that would fake a match")
+
+    def test_unknown_tool_name_is_rejected_by_name(self):
+        # :283. Assert the code AND that the diagnostic names the offending tool: several guards
+        # in this dispatcher share -32602, so the code alone cannot tell them apart.
+        replies, _ = rpc([_init(),
+                          {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                           "params": {"name": "rm_rf", "arguments": {}}}])
+        err = replies[1]["error"]
+        self.assertEqual(err["code"], -32602)
+        self.assertIn("unknown tool", err["message"])
+        self.assertIn("rm_rf", err["message"], "the diagnostic must name the tool that was asked for")
+
+    def test_the_real_tool_name_is_admitted(self):
+        # Narrowing half of the same guard: `!= "synthesize_review"` must not become "reject all".
+        replies, _ = rpc([_init(),
+                          {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                           "params": {"name": "synthesize_review",
+                                      "arguments": {"findings": [good()],
+                                                    "changed_files": ["A.swift"]}}}])
+        self.assertNotIn("error", replies[1], f"the real tool must be callable: {replies[1]}")
+        self.assertIn("content", replies[1]["result"])
