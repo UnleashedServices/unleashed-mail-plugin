@@ -671,3 +671,68 @@ class TestS2DefaultVerifyGate(unittest.TestCase):
         m = load_mutant(self, self.ANCHOR, "    return False  # MUTANT     ")
         self.assertEqual(m.synthesize([f(severity="blocker", confidence="high")],
                                       {"A.swift"}).verdict.decision, "NEEDS_DISCUSSION")
+
+
+class TestS4ChangedGuardAdmitsAndRejects(CliFixture):
+    """S4: the NARROWING half of the CLI's abs/traversal changed-path guard (:454). One member of a
+    five-member `is_abs_or_traversal` family; the other four were pinned individually, this one was
+    not. Both halves are needed and for different reasons — `_bad_changed = sorted(changed)` (reject
+    EVERYTHING) passed the suite, and so did a POSIX-only narrowing that lets `../`, `~/` and `C:\\`
+    through to a mis-scoped bogus APPROVE."""
+
+    ANCHOR = "    _bad_changed = sorted({c for c in changed if is_abs_or_traversal(c)})"
+
+    def test_a_normal_changeset_is_admitted(self):
+        rc, out, err = self.run_main(S, [self.fj, "--changed", self.ch])
+        self.assertNotIn("absolute/traversal", err)
+        self.assertIn("REQUEST_CHANGES", out)
+        self.assertEqual(rc, 1)
+
+    def test_every_abs_or_traversal_form_is_rejected_by_name(self):
+        # Assert WHICH diagnostic, not merely the code: several guards share exit 2, so an exit-code
+        # assertion cannot tell this rejection from an unrelated one firing first.
+        for entry in ("/abs/Auth.swift", "../MyApp/Auth.swift", "~/MyApp/Auth.swift",
+                      "C:\\MyApp\\Auth.swift", "\\\\server\\share\\Auth.swift", "~user/Auth.swift"):
+            with self.subTest(entry=entry):
+                self._changed(entry)
+                rc, out, err = self.run_main(S, [self.fj, "--changed", self.ch])
+                self.assertIn("--changed contains absolute/traversal paths", err)
+                self.assertIn(entry, err, "the diagnostic must name the offending entry")
+                self.assertEqual(rc, 2)
+                self.assertNotIn("Verdict", out, "a rejected changeset must not print a verdict")
+
+    def test_mutant_control_posix_only_narrowing_fails_open_to_approve(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    _bad_changed = sorted({c for c in changed if c.startswith("/")})     ')
+        for entry in ("../MyApp/Auth.swift", "~/MyApp/Auth.swift", "C:\\MyApp\\Auth.swift"):
+            with self.subTest(entry=entry):
+                self._changed(entry)
+                rc, out, _ = self.run_main(m, [self.fj, "--changed", self.ch])
+                self.assertIn("**APPROVE**", out, "control must exhibit the mis-scoped bogus APPROVE")
+                self.assertEqual(rc, 0)
+
+    def test_mutant_control_reject_everything_bricks_the_cli(self):
+        m = load_mutant(self, self.ANCHOR,
+                        "    _bad_changed = sorted(changed)                                       ")
+        rc, _, err = self.run_main(m, [self.fj, "--changed", self.ch])
+        self.assertIn("MyApp/Auth.swift", err)
+        self.assertEqual(rc, 2, "control must exhibit the opposite failure: every changeset rejected")
+
+
+class TestS4ChangedFlagWithoutValue(CliFixture):
+    """T6-adjacent, landed with S4 because it shares the fixture: `--changed` as the LAST argv token
+    leaves `changed_path` None, and without the explicit None arm `os.path.exists(None)` raises
+    TypeError — a traceback where a diagnostic belongs."""
+
+    def test_trailing_changed_flag_gets_a_diagnostic_not_a_traceback(self):
+        rc, _, err = self.run_main(S, [self.fj, "--changed"])
+        self.assertIn("error: --changed file not found: None", err)
+        self.assertEqual(rc, 2)
+
+    def test_mutant_control_without_the_none_arm_raises_typeerror(self):
+        m = load_mutant(
+            self,
+            "    if changed_explicit and (changed_path is None or not os.path.exists(changed_path)):",
+            "    if changed_explicit and (not os.path.exists(changed_path)):" + " " * 26)
+        with self.assertRaises(TypeError):
+            self.run_main(m, [self.fj, "--changed"])
