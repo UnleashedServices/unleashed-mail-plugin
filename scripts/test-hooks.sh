@@ -438,6 +438,47 @@ assert_empty "F5 anon Stop #1 (no identity -> fail open, no wedge)" "$(printf '{
 assert_empty "F5 anon Stop #2 (still no shared sentinel, still fail open)" "$(printf '{"stop_hook_active":false}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
 # a NON-anonymous session at the same fresh fail still blocks (per-session loop-guard intact)
 assert_contains "F5 identified session still blocks" "$(printf '{"stop_hook_active":false,"session_id":"F5-ANON-CTRL"}' | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" '"decision":"block"'
+# (d2) F5b: the transcript_path FALLBACK (stop-quality-marker-gate.sh:58). The cells above cover
+#      session_id present, and both fields ABSENT — never the middle case, a payload carrying
+#      transcript_path but no session_id, which is the one the fallback exists for. Measured with the
+#      fallback deleted: both Stop calls go silent and ZERO sentinels are written, so enforce mode is
+#      silently off for every session whose payload omits session_id, while every assertion above
+#      stays green.
+reset_markers; marker_write lint fail
+_F5BPATH="/tmp/does-not-need-to-exist/transcript-F5B.jsonl"
+_F5BSENT="$(marker_dir)/stop-last-blocked-$(marker_repo_hash)-$(marker_hash_str "$_F5BPATH")"
+rm -f "$_F5BSENT" 2>/dev/null
+assert_contains "F5b: transcript_path-only Stop BLOCKS (session_id absent)" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)" \
+    '"decision":"block"'
+# The sentinel is keyed on the TRANSCRIPT PATH — that is what makes the fallback session-STABLE
+# rather than a per-invocation nonce, so the same session dedups on its second Stop.
+if [ -f "$_F5BSENT" ]; then ok; else fail "F5b: no sentinel written at the transcript-keyed path"; fi
+assert_empty "F5b: the same transcript_path dedups on the second Stop" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$STOP" 2>/dev/null)"
+# MUTANT CONTROL: with the fallback removed, the same payload has NO identity, so the gate fails open
+# — silent, and no sentinel at all. Without this the cell above could not tell the fallback from a
+# gate that blocked unconditionally.
+_F5BMUT="$TMPROOT/sgmut-nofallback"
+mkdir -p "$_F5BMUT" && ln -sfn "$_DIR/lib" "$_F5BMUT/lib"
+# `@` as the delimiter, not `#`: the replacement text contains `#`, which would terminate the s
+# command early and silently produce an UNMUTATED copy. The two assertions below caught exactly that.
+sed 's@^\[ -n "\$SESSION_KEY" \] || SESSION_KEY="\$(hook_str transcript_path)"@: MUTANT_FALLBACK_REMOVED@' \
+    "$STOP" > "$_F5BMUT/stop-quality-marker-gate.sh"
+if [ "$(wc -l < "$_F5BMUT/stop-quality-marker-gate.sh")" = "$(wc -l < "$STOP")" ]; then ok; else
+    fail "F5b control: mutant changed the line count"; fi
+if grep -q 'MUTANT_FALLBACK_REMOVED' "$_F5BMUT/stop-quality-marker-gate.sh"; then ok; else
+    fail "F5b control: the fallback was NOT removed — the control proves nothing"; fi
+reset_markers; marker_write lint fail
+rm -f "$_F5BSENT" 2>/dev/null
+assert_empty "F5b control: without the fallback the same payload fails OPEN" \
+    "$(printf '{"stop_hook_active":false,"transcript_path":"%s"}' "$_F5BPATH" \
+       | UNLEASHED_STOP_GATE_MODE=enforce bash "$_F5BMUT/stop-quality-marker-gate.sh" 2>/dev/null)"
+if [ -f "$_F5BSENT" ]; then fail "F5b control: a sentinel was written without any identity"; else ok; fi
+rm -f "$_F5BSENT" 2>/dev/null
+
 # (e) A2 (audit of #53): a pre-planted symlink at the sentinel path must NOT be written THROUGH (that would
 #     clobber the victim with the commit hash + chmod 600). The gate drops the link and atomically replaces it.
 reset_markers; marker_write lint fail
