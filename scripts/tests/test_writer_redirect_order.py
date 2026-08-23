@@ -72,8 +72,28 @@ def _shipped_shell() -> "list[Path]":
 #: anchors correctly without re.MULTILINE.
 #:   `\d?>>?`  optional fd digit, so `1>` and `9>` count
 #:   quoted branch keeps `[^"]*` so a target with SPACES survives ("$HOME/Application Support/…")
+#: QUOTE-AWARE IN BOTH KINDS (codex, PR #78). The previous prefix treated every `"` as double-quote
+#: syntax, so single-quoted text desynced its simulated state and a genuinely leaking line slipped
+#: past. Measured on a 23-cell battery of realistic writer shapes: the old prefix gave 7 wrong
+#: answers, 6 of them MISSED REAL LEAKS; this one gives 3.
+#:
+#: NOTE codex's own illustrative line — `printf '%s:"x"' "$v" > "$tmp" 2>/dev/null` — actually
+#: MATCHED the old pattern: its single-quoted run holds an EVEN number of `"`, so the state
+#: re-synced before the redirect. The trigger is an ODD count. That is why the cells below use odd
+#: shapes; codex's example alone would not have discriminated.
+#:
+#: THIS IS NOT COMPLETE, and must not be described as such. `$( … )` inside `"…"` re-enters shell
+#: quoting, which no flat regex can model — `hook-io.sh:161`'s shape still evades it. That class is
+#: ticketed, with a known-gap cell below so it is not rediscovered as a surprise. If a THIRD
+#: quote-state defect lands, replace this with a small hand-rolled scanner over the line: the same
+#: state machine, but as code that can also carry state across `\`-continuations.
+_SQ = r"'[^']*'"                  # single quotes: no escapes inside, ever
+_DQ = r'"(?:\\.|[^"\\])*"'        # double quotes, honouring \" and \\
+_ESC = r"\\."                      # a backslash escape outside quotes
+_PLAIN = r"[^\"'\\]"
 INVERTED = re.compile(
-    r'^(?:[^"]|"[^"]*")*?\d?>>?[ \t]*(?:"[^"]*\$[^"]*"|[^"\s]*\$[^"\s]*)[ \t]+2>/dev/null')
+    rf"^(?:{_SQ}|{_DQ}|{_ESC}|{_PLAIN})*?"
+    r'\d?>>?[ \t]*(?:"[^"]*\$[^"]*"|[^"\s]*\$[^"\s]*)[ \t]+2>/dev/null')
 
 
 @unittest.skipUnless(shutil.which("bash") and shutil.which("git"), "needs bash and git")
@@ -275,6 +295,24 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # prefix buys over a delimiter class.
         self.assertNotRegex('log "moved $a -> $b" 2>/dev/null', INVERTED)
         self.assertNotRegex('printf "a > $b\\n" 2>/dev/null', INVERTED)
+        # SINGLE-QUOTED text before the redirect (codex, PR #78). An ODD number of `"` inside a
+        # single-quoted run desynced the old prefix; these redden against it and pass here.
+        self.assertRegex('printf \'%s:"x\' "$v" > "$tmp" 2>/dev/null', INVERTED)
+        self.assertRegex('awk -F\'"\' \'{print $2}\' "$in" >> $LOG 2>/dev/null', INVERTED)
+        # An escaped `\"` INSIDE a double-quoted run — closed as a side effect, so pin it.
+        self.assertRegex(r'grep -o "\"$f\":\"[^\"]*\"" "$p" > "$tmp" 2>/dev/null', INVERTED)
+        # A literal `>` inside SINGLE quotes is not a redirect either.
+        self.assertNotRegex("log 'moved $a > $b' 2>/dev/null", INVERTED)
+        # THE TRADE, recorded rather than silently made: a redirect inside a DEFERRED single-quoted
+        # body is now invisible, because the body is one single-quoted run to this pattern. No such
+        # site exists today — all three traps in the tree (precompact-snapshot.sh, changeset.sh,
+        # linux-primitive-probe.sh) redirect nothing — and the class is ticketed.
+        self.assertNotRegex("""trap 'printf x > "$T" 2>/dev/null' EXIT""", INVERTED)
+        self.assertNotRegex("""eval 'printf x > "$T" 2>/dev/null'""", INVERTED)
+        # KNOWN GAP, pinned so it is not rediscovered as a surprise: `$( )` inside `"..."` re-enters
+        # shell quoting and no flat pattern can model it. Ticketed with the trade above.
+        self.assertNotRegex(
+            'clean="$(printf \'%s\' "$s" | tr -d \'"\' )" > "$tmp" 2>/dev/null', INVERTED)
         # ...and the correct order still must not match, in either redirect form.
         self.assertNotRegex('printf x 2>/dev/null > "$tmp"', INVERTED)
         self.assertNotRegex('tail -n 5 "$p" 2>/dev/null > "$tmp"', INVERTED)

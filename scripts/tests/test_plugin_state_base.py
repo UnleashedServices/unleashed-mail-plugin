@@ -480,9 +480,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
          '{"hook_event_name":"SubagentStart","agent_type":"security-reviewer",'
          '"agent_id":"a1","session_id":"s1"}',
          ("lib", "context.sh", "context_review_round_bind")),
+        # `last_assistant_message` is LOAD-BEARING, not decoration: without it the hook never
+        # reaches `python3 "$CAPTURE_PY"` at all, and the python3 shim above records nothing
+        # relevant — measured, 0 sentinel lines on the regressed tree. Either half alone is inert.
         ("capture-reviewer-verdict.sh",
          '{"hook_event_name":"SubagentStop","agent_type":"security-reviewer",'
-         '"agent_id":"a1","session_id":"s1"}',
+         '"agent_id":"a1","session_id":"s1",'
+         '"last_assistant_message":"```json\\n{\\"findings\\":[]}\\n```"}',
          ("both", "capture-reviewer-verdict.sh", "context_review_round_clear")),
     )
 
@@ -494,7 +498,15 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         self.calls = os.path.join(self.scratch, "calls.log")
         self.shim = os.path.join(self.scratch, "shim")
         os.makedirs(self.shim)
-        for name in ("mkdir", "rm", "mv"):
+        # `python3` IS IN THE SHIM SET (codex, PR #78). The other three are exec-level, and
+        # `capture.py` does ALL of its filesystem work IN-PROCESS — os.makedirs / os.open /
+        # os.replace / os.remove, no subprocess anywhere — so an exec shim is structurally blind to
+        # it. Measured: moving `capture-reviewer-verdict.sh`'s hook-level skip BELOW the
+        # `python3 "$CAPTURE_PY" --root "$ROOT"` call left BOTH cells green, because the composed
+        # sentinel root reached Python and never reached an exec'd mkdir. Recording python3's argv
+        # makes that composition observable; `_drive` already filters by SENTINEL, so the ~20
+        # unrelated `python3 -c` JSON helpers from hook-io filter themselves out.
+        for name in ("mkdir", "rm", "mv", "python3"):
             real = shutil.which(name) or f"/bin/{name}"
             path = os.path.join(self.shim, name)
             with open(path, "w", encoding="utf-8") as fh:
