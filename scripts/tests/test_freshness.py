@@ -1323,8 +1323,6 @@ class SFreshDescriptorBindingProofs(FreshnessFixture):
                     self.assert_digest_binds_to_validated_descriptor(mutant, label)
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class PlanBindingProofs(FreshnessFixture):
@@ -1483,3 +1481,7 @@ class PlanBindingProofs(FreshnessFixture):
             "binding-rejection", None, verdict="REQUEST_CHANGES"
         )
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

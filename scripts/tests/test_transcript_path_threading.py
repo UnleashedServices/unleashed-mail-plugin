@@ -714,8 +714,6 @@ class TranscriptPathPropagationTests(TranscriptThreadingFixture):
         )
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class NestedScratchWorktreeStillStages(unittest.TestCase):
@@ -855,3 +853,7 @@ class NestedScratchWorktreeStillStages(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         staged = (tree_root / "prompt.md").read_text(encoding="utf-8")
         self.assertIn(f"{tree}/docs/planning/X_PLAN.md", staged)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

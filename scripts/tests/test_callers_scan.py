@@ -1239,8 +1239,6 @@ class EvasiveSelectionProofs(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class DefaultIgnorableIsTheWholeInvisibleClass(unittest.TestCase):
@@ -1291,3 +1289,7 @@ class DefaultIgnorableIsTheWholeInvisibleClass(unittest.TestCase):
         """
         payload = "café́ — ordinary prose".encode("utf-8")
         self.assertEqual(payload, production.strip_invisible(payload))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

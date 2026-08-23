@@ -1074,8 +1074,6 @@ class HeldDescriptorRaceProofs(SyntheticStateTreeMixin, unittest.TestCase):
         self.assertTrue(occupant.exists(), "the bystander itself is never touched")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ApplyReportsWhatItRemoved(unittest.TestCase):
@@ -1122,3 +1120,7 @@ class ApplyReportsWhatItRemoved(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("removed 39 of 39 manifest files", result.stdout)
         self.assertNotIn("same result a WRONG state root produces", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

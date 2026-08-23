@@ -728,8 +728,6 @@ class COREDEV2607_ReviewerIsolation(unittest.TestCase):
                       "the staging helper must refuse a guard-only prompt (read before write)")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class DeepReviewP2Fixes(unittest.TestCase):
@@ -1077,3 +1075,7 @@ class TheTwoStagingHelpersParseTheSameBindingGrammar(unittest.TestCase):
             self.assertNotIn("expected = fields[0]", source, f"{rel} parses only the digest again")
             self.assertIn("fullmatch(record_bytes)", source,
                           f"{rel} no longer validates the complete record")
+
+
+if __name__ == "__main__":
+    unittest.main()

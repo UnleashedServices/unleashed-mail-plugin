@@ -439,8 +439,6 @@ class N6BridgeReResolves(unittest.TestCase):
                              f"{shell}: E0 must leave no store under the scratch HOME")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
@@ -597,3 +595,7 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                                     f"{hook} produced no composition under {self.SENTINEL}, so the "
                                     f"cell above cannot tell a working guard from a hook that "
                                     f"never reached its write path")
+
+
+if __name__ == "__main__":
+    unittest.main()

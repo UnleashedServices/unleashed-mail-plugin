@@ -2443,8 +2443,6 @@ class RowsChunk3(unittest.TestCase):
             os.unlink(mutant)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # ==================================================================================================
@@ -3502,8 +3500,6 @@ class RowsChunk4(unittest.TestCase):
             os.unlink(mutant)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # ==================================================================================================
