@@ -695,7 +695,15 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
         granted = vpa._tool_tokens(
             vpa.parse_frontmatter(shipped.read_text(encoding="utf-8")).get("tools", ""))
         scoped = next(t for t in granted if t.startswith("Agent("))
-        self.assertNotIn("rogue-writer", vpa._agent_specifier_members(scoped),
+        # NORMALISE THE PREFIX, exactly as production does at `check_spawner_denies_every_writer`
+        # (`bare = member.split(":", 1)[-1]`). `_agent_specifier_members` returns members verbatim,
+        # so a bare `assertNotIn("rogue-writer", ...)` does not fire on `unleashed-mail:rogue-writer`
+        # (gemini, PR #76). Measured: that is a real property of THIS LINE, but NOT a bypass — the
+        # cell still fails on the assertion above for either spelling, because the production check
+        # normalises and flags the namespaced writer too. This edit removes a misleading line; it
+        # does not close a hole, and should not be read as having closed one.
+        members = [m.split(":", 1)[-1] for m in vpa._agent_specifier_members(scoped)]
+        self.assertNotIn("rogue-writer", members,
                          "a writing agent was added to the DECLARED spawn list — the declaration no "
                          "longer matches the writer roster. This is a declaration check, not a "
                          "runtime one: the runtime does not enforce the type list for a sub-agent.")
