@@ -511,8 +511,15 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         env.update(PATH=self.shim + os.pathsep + os.environ.get("PATH", os.defpath),
                    HOME=_SANDBOX_HOME, _UNLEASHED_PUBLISH_OK="0",
                    CLAUDE_PLUGIN_ROOT=os.path.dirname(scripts_root))
-        subprocess.run(["bash", os.path.join(scripts_root, hook)],
-                       input=payload, capture_output=True, text=True, env=env)
+        proc = subprocess.run(["bash", os.path.join(scripts_root, hook)],
+                              input=payload, capture_output=True, text=True, env=env)
+        # A hook that CRASHED — syntax error, failed source, missing interpreter, or any downstream
+        # command failing before its final `exit 0` — writes nothing to the shim log, and "wrote
+        # nothing" is precisely what this cell reads as success. Assert it ran (gemini and codex,
+        # PR #78). Both hooks exit 0 on this path, shipped and mutated alike; measured.
+        self.assertEqual(0, proc.returncode,
+                         f"{hook} did not run to completion, so an empty composition list proves "
+                         f"nothing:\n{proc.stderr}")
         with open(self.calls, encoding="utf-8") as fh:
             return [line.strip() for line in fh if self.SENTINEL in line]
 
@@ -578,6 +585,11 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                     with open(libpath, encoding="utf-8") as fh:
                         libtext = fh.read()
                     marker = f"{func}() {{"
+                    # Same assertion the `lib` branch carries. Without it a renamed function makes
+                    # `partition` return ('', '', '') -> the whole body is silently dropped and the
+                    # file becomes a syntax error at source time (gemini, PR #78).
+                    self.assertIn(marker, libtext,
+                                  f"context.sh: {func} not found — the census is stale")
                     head, _, tail = libtext.partition(marker)
                     libmut = head + marker + tail.replace(
                         LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
