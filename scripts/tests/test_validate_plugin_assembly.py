@@ -656,11 +656,17 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
     def test_the_shipped_tree_denies_every_writer(self):
         self.assertEqual([], self._run(Path(_MOD_PATH).resolve().parents[1]))
 
-    def test_a_newly_added_writer_agent_is_caught(self):
-        """The discrimination that matters: this is how a deny-list normally re-opens.
+    def test_a_newly_added_writer_agent_is_UNREACHABLE_under_a_scoped_grant(self):
+        """COREDEV-2703 changed what protects this, so this cell changed with it.
 
-        Asserting only on the current contents would pass forever while the tree grew a thirteenth
-        writer nobody added to the list.
+        It used to assert that a new writer agent was CAUGHT by the deny-list — the way a deny-list
+        re-opens. `swift-reviewer` no longer carries one: its `Agent` grant is now a scoped ALLOWLIST,
+        so a thirteenth writer is unreachable by construction and there is correctly nothing to
+        report. Asserting the old expectation here would demand a deny-list that must not come back —
+        the 26 `Agent(x)` entries are exactly what removed the agent's `Agent` tool.
+
+        The structural guarantee is asserted directly: the new writer must not appear in the
+        allowlist. The check's teeth for BARE-`Agent` agents are preserved by the sibling cell below.
         """
         import shutil
         import tempfile
@@ -668,14 +674,39 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="spawner-drift-"))
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         (root / "agents").mkdir()
-        shutil.copy2(Path(_MOD_PATH).resolve().parents[1] / "agents" / "swift-reviewer.md",
-                     root / "agents" / "swift-reviewer.md")
+        shipped = Path(_MOD_PATH).resolve().parents[1] / "agents" / "swift-reviewer.md"
+        shutil.copy2(shipped, root / "agents" / "swift-reviewer.md")
         (root / "agents" / "rogue-writer.md").write_text(
             "---\nname: rogue-writer\ndescription: x\ntools: Read, Write, Edit, Bash\n---\nbody\n",
             encoding="utf-8",
         )
+        self.assertEqual([], self._run(root),
+                         "a scoped grant needs no writer denials — demanding them is what put the "
+                         "`Agent(x)` entries in the deny-list and removed the `Agent` tool")
+        granted = vpa._tool_tokens(
+            vpa.parse_frontmatter(shipped.read_text(encoding="utf-8")).get("tools", ""))
+        scoped = next(t for t in granted if t.startswith("Agent("))
+        self.assertNotIn("rogue-writer", scoped,
+                         "the new writer is reachable — the allowlist is not doing its job")
+
+    def test_a_BARE_Agent_spawner_still_must_deny_every_writer(self):
+        """The teeth, preserved. The check must still catch an agent that grants bare `Agent` — which
+        reaches every type — and omits a writer denial. Without this the change above would have
+        removed the rule rather than relocated it."""
+        import shutil
+        import tempfile
+
+        root = Path(tempfile.mkdtemp(prefix="spawner-bare-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "agents").mkdir()
+        (root / "agents" / "bare-spawner.md").write_text(
+            "---\nname: bare-spawner\ndescription: x\ntools: Read, Agent\n"
+            "disallowedTools: Write, Edit, NotebookEdit\n---\nbody\n", encoding="utf-8")
+        (root / "agents" / "rogue-writer.md").write_text(
+            "---\nname: rogue-writer\ndescription: x\ntools: Read, Write, Edit, Bash\n---\nbody\n",
+            encoding="utf-8")
         problems = self._run(root)
-        self.assertTrue(problems, "a new writer agent must be caught")
+        self.assertTrue(problems, "a BARE `Agent` spawner that omits a writer denial must be caught")
         self.assertIn("rogue-writer", problems[0])
 
     def test_a_read_only_agent_does_not_have_to_be_denied(self):
@@ -762,6 +793,60 @@ class BashlessAgentsRunNoShell(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual([], self._run(root))
+
+
+class ScopedAgentGrantsParseAsOneToken(unittest.TestCase):
+    """COREDEV-2703. `_tool_tokens` split on EVERY comma, so the documented multi-type grant
+    `Agent(worker, researcher)` became `Agent(worker` + `researcher)` — two tokens matching nothing.
+
+    That mis-parse is why no gate caught the bug: the validator could not represent the form the
+    runtime documents, so a frontmatter that removed `swift-reviewer`'s own `Agent` tool validated
+    clean. Measured on Claude Code 2.1.241 / plugin 2.8.0 — the shipped agent received only `Read`,
+    `Bash` and the synthesizer MCP tool, and reported `AGENT: NO_SUCH_TOOL`.
+    """
+
+    def test_a_multi_type_scoped_grant_is_ONE_token(self):
+        tokens = vpa._tool_tokens("Read, Agent(worker, researcher), Bash")
+        self.assertEqual({"Read", "Agent(worker, researcher)", "Bash"}, tokens,
+                         "commas inside parentheses are TYPE separators, not token separators")
+
+    def test_top_level_commas_still_separate(self):
+        """The control: the paren-awareness must not stop ordinary lists splitting, which is the
+        property the substring-membership fix of PR #63 depends on."""
+        self.assertEqual({"Write", "Edit", "NotebookEdit"},
+                         vpa._tool_tokens("Write, Edit, NotebookEdit"))
+        self.assertEqual({"Write", "Agent(ui-engineer)"},
+                         vpa._tool_tokens("Write, Agent(ui-engineer)"))
+
+    def test_a_scoped_grant_is_NOT_the_bare_Agent_tool(self):
+        """The distinction the spawner check rests on: a scoped grant is an allowlist, so writers are
+        excluded by construction and no deny-list entry is required. A bare `Agent` reaches every
+        agent and still needs them."""
+        self.assertNotIn("Agent", vpa._tool_tokens("Read, Agent(security-reviewer)"))
+        self.assertIn("Agent", vpa._tool_tokens("Read, Agent"))
+
+    def test_the_shipped_swift_reviewer_grants_a_SCOPED_Agent(self):
+        """The regression pin. If this file ever goes back to a bare `Agent` plus `Agent(x)` denials,
+        the panel loses its spawn tool again and every review runs with no specialists."""
+        root = Path(_MOD_PATH).resolve().parents[1]
+        fm = vpa.parse_frontmatter((root / "agents" / "swift-reviewer.md").read_text(encoding="utf-8"))
+        granted = vpa._tool_tokens(fm.get("tools", ""))
+        scoped = [t for t in granted if t.startswith("Agent(")]
+        self.assertEqual(1, len(scoped),
+                         f"swift-reviewer must grant exactly one SCOPED Agent entry, got {sorted(granted)}")
+        self.assertNotIn("Agent", granted,
+                         "a bare `Agent` alongside the scoped grant re-opens every agent type")
+        for reviewer in ("security-reviewer", "concurrency-reviewer", "ux-perf-reviewer",
+                         "accessibility-auditor", "prompt-review"):
+            self.assertIn(reviewer, scoped[0],
+                          f"the panel cannot spawn {reviewer} — it is not in the allowlist")
+            self.assertIn(f"unleashed-mail:{reviewer}", scoped[0],
+                          f"{reviewer} is granted only in its bare spelling; a consumer install "
+                          f"resolves the namespaced one")
+        denied = vpa._tool_tokens(fm.get("disallowedTools", ""))
+        self.assertEqual(set(), {d for d in denied if d.startswith("Agent(")},
+                         "an `Agent(x)` DENY entry is what removed the tool — the allowlist is the "
+                         "only lever now")
 
 
 class WriterPredicateAndSpawnerDetection(unittest.TestCase):

@@ -352,10 +352,28 @@ def _tool_tokens(value: str) -> "set[str]":
 
     MEMBERSHIP USED TO BE TESTED BY SUBSTRING (`"Edit" in tools`), so `NotebookEdit` satisfied an
     `Edit` probe: an agent denying `Write, NotebookEdit` — but not `Edit` — passed the two-token
-    denial check with `Edit` still live (PR #63 recheck). Scoped entries like `Agent(name)` survive as
-    single tokens because the separator is the comma, not whitespace.
+    denial check with `Edit` still live (PR #63 recheck).
+
+    SPLITTING ON EVERY COMMA WAS WRONG for the documented multi-type form. The sub-agents reference
+    spells a scoped grant `Agent(worker, researcher)` — the types are comma-separated INSIDE the
+    parentheses — and a naive split yielded `Agent(worker` and `researcher)`, two tokens that match
+    nothing. That mis-parse is why no gate caught COREDEV-2703: the validator's model of this field
+    could not represent the form the runtime actually documents. Commas inside parentheses are now
+    type separators; only top-level commas separate tokens.
     """
-    return {token.strip() for token in value.split(",") if token.strip()}
+    tokens, current, depth = [], [], 0
+    for ch in value:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            tokens.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    tokens.append("".join(current))
+    return {token.strip() for token in tokens if token.strip()}
 
 
 # Everything that lets an agent MODIFY THE CHECKOUT. `Bash` belongs here because a sub-agent tool list
@@ -554,6 +572,9 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         live = _live_tools(frontmatter)
         if live & _WRITE_VECTORS:
             writers.append(path.stem)
+        # A SCOPED grant — `Agent(a, b)` — is an ALLOWLIST: it can spawn only the named types, so
+        # writers are excluded by construction and no deny-list entry is required (or possible).
+        # Only a BARE `Agent`, which reaches every agent, needs the writer denials below.
         if "Agent" in live:
             spawners.append((path, frontmatter))
 

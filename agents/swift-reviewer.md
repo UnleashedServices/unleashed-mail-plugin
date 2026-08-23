@@ -10,21 +10,21 @@ description: >
   a pull request, when the user says "review", "check my code", "is this ready
   to merge", or after any significant code change is complete.
 model: inherit
-tools: Read, Bash, Grep, Glob, Agent, mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
-# `Agent` is a bare allowlist entry because sub-agent `tools:` takes bare NAMES only — the
-# `Agent(type)` specifier form is ignored inside a sub-agent definition (verified against the
-# Claude Code sub-agents reference). The spawned set is constrained by `disallowedTools` instead.
-# EVERY WRITER AGENT IS DENIED BY NAME. `Agent` above is bare because a sub-agent `tools:` list
-# takes bare names only — so it reached ALL 21 agents, including the file-writing ones. Spawned
-# from `pr-review` while processing untrusted PR content, a prompt-injected finding could have
-# steered this reviewer into `ui-engineer` or `db-engineer` and written to the tree, with no user
-# gesture (PR #63 recheck, P1). The five reviewers this body actually spawns are read-only and
-# stay reachable.
-#
-# A deny-list drifts the moment a new writer agent is added, which is exactly how blacklists
-# re-open. `validate-plugin-assembly.py` therefore recomputes this set from the agents on disk
-# and FAILS if any writer is missing here — the list is generated policy, not a hand-kept one.
-disallowedTools: Write, Edit, NotebookEdit, Agent(ai-engineer), Agent(unleashed-mail:ai-engineer), Agent(ci-engineer), Agent(unleashed-mail:ci-engineer), Agent(code-simplifier), Agent(unleashed-mail:code-simplifier), Agent(db-engineer), Agent(unleashed-mail:db-engineer), Agent(docs-engineer), Agent(unleashed-mail:docs-engineer), Agent(graph-api-debugger), Agent(unleashed-mail:graph-api-debugger), Agent(logic-engineer), Agent(unleashed-mail:logic-engineer), Agent(modern-standards-planner), Agent(unleashed-mail:modern-standards-planner), Agent(release-manager), Agent(unleashed-mail:release-manager), Agent(swift-reviewer), Agent(unleashed-mail:swift-reviewer), Agent(tester), Agent(unleashed-mail:tester), Agent(ui-engineer), Agent(unleashed-mail:ui-engineer), Agent(xcode-build-fixer), Agent(unleashed-mail:xcode-build-fixer)
+tools: Read, Bash, Grep, Glob, Agent(security-reviewer, unleashed-mail:security-reviewer, concurrency-reviewer, unleashed-mail:concurrency-reviewer, ux-perf-reviewer, unleashed-mail:ux-perf-reviewer, accessibility-auditor, unleashed-mail:accessibility-auditor, prompt-review, unleashed-mail:prompt-review, jira-manager, unleashed-mail:jira-manager), mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
+# COREDEV-2703 — the spawn set is an ALLOWLIST here, never a deny-list.
+# The previous shape — bare `Agent` above plus 26 scoped denials below — left this agent with NO
+# Agent tool at all, so the five-specialist panel could not spawn on any current CLI. Measured on
+# 2.1.241 / plugin 2.8.0: the agent reported only Read, Bash and the synthesizer MCP tool, and
+# `AGENT: NO_SUCH_TOOL` when asked to call it. A sibling reviewer whose deny-list uses BARE names
+# only keeps all of its declared tools, so the deny-list is not the trigger — the scoped syntax
+# inside it is, and this was the only agent using that form.
+# An allowlist is also the safer direction: it cannot silently re-open when a new writing agent is
+# added. Both spellings are listed because a consumer install resolves the namespaced name too.
+# THIS EDIT IS LINE-COUNT NEUTRAL ON PURPOSE. Plan citations and the §13 scope anchor pin lines in
+# this file, so changing its length rots them; keeping the count fixed leaves every pin valid.
+# NOT RUNTIME-VERIFIED. Rationale, measurements and the verification step are in COREDEV-2703 —
+# VERIFY BY EXECUTION (spawn this agent, confirm it has Agent) before trusting a change here.
+disallowedTools: Write, Edit, NotebookEdit
 ---
 
 You are the **lead reviewer** for UnleashedMail, a native macOS 15+ email client
