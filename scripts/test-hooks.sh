@@ -331,6 +331,57 @@ OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"mv a.swift b.swift"}
     | UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" 2>/dev/null)"
 assert_empty "benign mv -> no decision" "$OUT"
 
+# 7g. THE NO-INTERPRETER FAMILY — three guards, one PATH shim carrying neither python3 nor jq.
+#     A stock Mac without the Command Line Tools has neither, and every cell in this harness runs
+#     with the ambient PATH, so all three arms are unexecuted:
+#       * sensitive-file-guard.sh:79  the python3-absent SKIP of the Bash write-target scan.
+#         Measured with that line deleted: the command substitution below it fails,
+#         guard_bash_write_target returns 2, and the caller's fail-closed branch denies EVERY Bash
+#         call — `echo hello` included — with exit 2. The `_BWS_FORCE_FAIL` cell above asserts the
+#         OPPOSITE contract (lexer ran and failed -> deny), so it cannot cover this.
+#       * hook-io.sh:77   `_hook_grep_get`, the last-resort extractor. Every other cell resolves its
+#         value through the jq or python3 arm, so all four of its branches are dead in test.
+#       * hook-io.sh:161  `json_escape`'s manual escape, which keeps hook stdout well-formed when
+#         neither interpreter exists.
+NOPY="$TMPROOT/nopy3bin"; mkdir -p "$NOPY"
+for _c in bash dirname tr wc grep sed head cat uname env printf rm mkdir; do
+    _p="$(command -v "$_c" 2>/dev/null)"
+    case "$_p" in /*) ln -sf "$_p" "$NOPY/$_c" ;; esac
+done
+# The fixture must actually lack both interpreters, or every assertion below is vacuous.
+if [ -z "$(PATH="$NOPY" command -v python3 2>/dev/null)" ] && [ -z "$(PATH="$NOPY" command -v jq 2>/dev/null)" ]; then ok; else
+    fail "7g: the shim PATH still resolves python3 or jq — the cells below would be vacuous"; fi
+# (i) :79 — a benign Bash command must NOT be denied when python3 is missing.
+NOPY_BASH="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo hello"}}' \
+    | PATH="$NOPY" UNLEASHED_SENSITIVE_GUARD_MODE=ask "$NOPY/bash" "$GUARD" 2>&1; printf 'RC=%s' "$?")"
+assert_contains     "7g: python3 absent -> benign Bash not denied" "$NOPY_BASH" "RC=0"
+assert_not_contains "7g: python3 absent -> no fail-closed deny"    "$NOPY_BASH" "blocking (fail-closed)"
+assert_not_contains "7g: python3 absent -> no interpreter error"   "$NOPY_BASH" "command not found"
+# (ii) hook-io.sh:77 — the Edit path still ASKS with no interpreter at all, which can only happen
+#      through the grep/sed extractor.
+NOPY_EDIT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$KEYCHAIN" \
+    | PATH="$NOPY" UNLEASHED_SENSITIVE_GUARD_MODE=ask "$NOPY/bash" "$GUARD" 2>/dev/null)"
+assert_contains "7g: python3+jq absent -> Edit path still asks (grep extractor)" \
+    "$NOPY_EDIT" '"permissionDecision":"ask"'
+# (iii) hook-io.sh:161 — `json_escape`'s manual escape, called DIRECTLY as a unit.
+#      Not end-to-end: a raw `"` in `file_path` makes the payload invalid JSON, and an ESCAPED `\"`
+#      cannot be extracted by the grep fallback at all — hook-io.sh's own comment says so
+#      ("\" — acceptable, because a missed write target only fails OPEN"). So there is no
+#      no-interpreter path that carries a quote into a reason, and an end-to-end fixture here asserts
+#      nothing. Measured: the first draft of this cell did exactly that and the line-161 mutant
+#      SURVIVED it. The function is the right unit.
+NOPY_JSON="$(PATH="$NOPY" "$NOPY/bash" -c '. "$1/lib/hook-io.sh"; json_escape "a\"b"' _ "$_DIR" 2>/dev/null)"
+assert_contains "7g: json_escape emits a quoted string with no interpreter" "$NOPY_JSON" '"'
+if is_valid_json "{\"r\":$NOPY_JSON}"; then ok; else
+    fail "7g: json_escape produced UNPARSEABLE output with no interpreter: $NOPY_JSON"; fi
+assert_not_contains "7g: the manual escape dropped the raw quote" "$NOPY_JSON" 'a"b'
+# CONTROL: with python3 PRESENT a forced lexer failure must STILL be a hard deny — so (i) above is
+# asserting the python3-absent skip, not a guard that waves everything through.
+assert_contains "7g control: python3 present -> forced parse failure still denies" \
+    "$(printf '{"tool_name":"Bash","tool_input":{"command":"rm InboxView.swift"}}' \
+       | _BWS_FORCE_FAIL=1 UNLEASHED_SENSITIVE_GUARD_MODE=ask bash "$GUARD" >/dev/null 2>&1; printf 'RC=%s' "$?")" \
+    "RC=2"
+
 # 7f. DEFAULT mode (env var UNSET) -> ask. Pins `${UNLEASHED_SENSITIVE_GUARD_MODE:-ask}`, which every
 # other case here overrides explicitly, so nothing exercised the shipped default. Mutation-proved: with
 # this test absent, flipping the default to `:-warn` leaves the whole suite byte-identical + exit 0 —
@@ -814,6 +865,39 @@ if [ "${#NOCAPOUT}" -gt "${#LONGOUT}" ]; then ok; else
 rm -f "$SNAP" 2>/dev/null
 ( cd "$_DIR/.." && printf '{}' | UNLEASHED_COMPACT_SNAPSHOT=off bash "$PRECOMPACT" 2>/dev/null )
 if [ -f "$SNAP" ]; then fail "snapshot kill switch -> no write"; else ok; fi
+
+# 32b. RESTORE kill switch (sessionstart-restore.sh:47) — the OTHER switch, and the untested one.
+#      Case 32 above covers `UNLEASHED_COMPACT_SNAPSHOT=off` (do not WRITE a snapshot). Nothing
+#      covered `UNLEASHED_COMPACT_RESTORE=off` (do not CONSUME one), although README.md:491
+#      documents it. Its only appearance in the test tree is a Darwin-skipped mutant row, and there
+#      it proves the STORE NOTICE still fires — the opposite half of this line's contract.
+#      Measured with the line deleted: the switch neither suppresses the restore nor preserves the
+#      snapshot, and the whole harness stays green.
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"kill-switch","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$(date +%s)" > "$SNAP"
+SSOFF="$(printf '{"source":"compact"}' | UNLEASHED_COMPACT_RESTORE=off bash "$SESSION_RESTORE" 2>/dev/null)"
+assert_empty "restore kill switch -> nothing emitted" "$SSOFF"
+# ...and RESTORE-ONCE must not have consumed the snapshot: switching the feature off must not destroy
+# the context it declined to replay.
+if [ -f "$SNAP" ]; then ok; else fail "restore kill switch -> snapshot was consumed anyway"; fi
+# MUTANT CONTROL: without the line the same invocation restores AND deletes the snapshot. `@` is the
+# sed delimiter because the replacement would otherwise collide with a `#` in it (see F5b).
+SSMUT="$TMPROOT/ssmut-nokill"
+mkdir -p "$SSMUT" && ln -sfn "$_DIR/lib" "$SSMUT/lib"
+sed 's@^\[ "${UNLEASHED_COMPACT_RESTORE:-on}" = "off" \] && _ss_exit@: MUTANT_KILLSWITCH_REMOVED@' \
+    "$SESSION_RESTORE" > "$SSMUT/sessionstart-restore.sh"
+if [ "$(wc -l < "$SSMUT/sessionstart-restore.sh")" = "$(wc -l < "$SESSION_RESTORE")" ]; then ok; else
+    fail "32b control: mutant changed the line count"; fi
+if grep -q 'MUTANT_KILLSWITCH_REMOVED' "$SSMUT/sessionstart-restore.sh"; then ok; else
+    fail "32b control: the kill switch was NOT removed — the control proves nothing"; fi
+rm -f "$SNAP" 2>/dev/null
+printf '{"ticket":"COREDEV-9999","branch_slug":"kill-switch","plan":"p","round":"1","snapshot_time":%s}\n' \
+    "$(date +%s)" > "$SNAP"
+SSMUTOUT="$(printf '{"source":"compact"}' | UNLEASHED_COMPACT_RESTORE=off bash "$SSMUT/sessionstart-restore.sh" 2>/dev/null)"
+assert_contains "32b control: without the switch the hook restores anyway" "$SSMUTOUT" '"additionalContext"'
+if [ -f "$SNAP" ]; then fail "32b control: the mutant did not consume the snapshot"; else ok; fi
+rm -f "$SNAP" 2>/dev/null
 
 echo "== Item 6 SubagentStop reviewer capture =="
 SLUG="$(context_branch_slug "$(context_branch)")"
