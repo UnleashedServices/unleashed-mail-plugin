@@ -66,7 +66,17 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
                     if not k.startswith("GIT_") and k != "XDG_CONFIG_HOME"}
         self.env.update(HOME=str(self.scratch / "home"),
                         CLAUDE_PLUGIN_DATA=str(self.scratch / "data"),
-                        LC_ALL="C", LANG="C")
+                        LC_ALL="C", LANG="C",
+                        # PUBLICATION OFF. These cells assert that stderr is EMPTY, and sourcing a
+                        # family lib with the variable set publishes into the store — which emits
+                        # `unleashed-mail: plugin-state publication failed: …` whenever the chain does
+                        # not authenticate. On Linux it NEVER authenticates: `plugin-state-auth.sh`
+                        # refuses on every non-Darwin platform by design, so the diagnostic is
+                        # unconditional there and the empty-stderr assertion cannot hold. Reproduced
+                        # locally by forcing that gate to refuse — the failure is byte-identical to
+                        # the one CI produced (codex, PR #74). `test_plugin_state_base.py`'s own
+                        # `run()` helper sets this for the same reason.
+                        _UNLEASHED_PUBLISH_OK="0")
 
     def _marker_write_onto_a_directory(self, library: Path):
         """Drive `marker_write` with a DIRECTORY planted at the exact temp name it will open.

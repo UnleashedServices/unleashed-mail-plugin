@@ -844,7 +844,9 @@ assert_contains "control: unredacted hint leaks the username" "$MUTOUT" '/Users/
 
 # 31e. The 400-char cap (:109). A long slug must not push an unbounded blob into SessionStart context.
 rm -f "$SNAP" 2>/dev/null
-LONGSLUG="$(printf 'A%.0s' $(seq 1 900))"
+# Brace expansion, not `seq`: this is a bash script, so `{1..900}` needs no subprocess and no
+# external command that a minimal image might lack (gemini, PR #74). Measured: 900 chars either way.
+LONGSLUG="$(printf 'A%.0s' {1..900})"
 printf '{"ticket":"COREDEV-9999","branch_slug":"%s","plan":"p","round":"1","snapshot_time":%s}\n' \
     "$LONGSLUG" "$(date +%s)" > "$SNAP"
 LONGOUT="$(printf '{"source":"compact"}' | bash "$SESSION_RESTORE" 2>/dev/null)"
