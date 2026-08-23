@@ -60,10 +60,23 @@ def _shipped_shell() -> "list[Path]":
 #:
 #: The leak is the PATH, not the temp-ness of the path, so the pattern keys on the redirect shape:
 #: any `>`/`>>` into a quoted target that interpolates a variable, with the suppression trailing.
-INVERTED = re.compile(r'>>?\s*"[^"]*\$[^"]*"\s+2>/dev/null')
+#: WIDENED AGAIN (COREDEV-2691, gemini on PR #78): the first widening still required the target to
+#: be DOUBLE-QUOTED, so `> $VAR 2>/dev/null` was invisible. The leak is the redirect ORDER, not the
+#: quoting — measured with a directory planted at the target, an unquoted inverted redirect prints
+#: the full expanded path to stderr exactly as the quoted one does.
+#:
+#: The `>` must sit OUTSIDE any double-quoted string — that, not a "preceded by a delimiter" rule,
+#: is what separates a real redirect from a literal `->` inside a log message. Measured: the
+#: delimiter form drops `printf x>"$tmp" 2>/dev/null`, and this tree already uses that spaceless
+#: idiom (`9>"$_wt_p"`, `2>"$4/err"`). Matched per LINE — the sweep iterates splitlines() — so `^`
+#: anchors correctly without re.MULTILINE.
+#:   `\d?>>?`  optional fd digit, so `1>` and `9>` count
+#:   quoted branch keeps `[^"]*` so a target with SPACES survives ("$HOME/Application Support/…")
+INVERTED = re.compile(
+    r'^(?:[^"]|"[^"]*")*?\d?>>?[ \t]*(?:"[^"]*\$[^"]*"|[^"\s]*\$[^"\s]*)[ \t]+2>/dev/null')
 
 
-@unittest.skipUnless(shutil.which("bash"), "needs bash")
+@unittest.skipUnless(shutil.which("bash") and shutil.which("git"), "needs bash and git")
 class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
     def setUp(self):
         base = os.path.expanduser("~/.claude")
@@ -174,7 +187,31 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         payload = '{"hook_event_name":"Stop","session_id":"s1","transcript_path":"/x/t.jsonl"}'
         env = dict(self.env, CLAUDE_PLUGIN_ROOT=str(root.parent),
                    UNLEASHED_STOP_GATE_MODE="warn")
-        return subprocess.run(["bash", str(driver), str(root), payload],
+        # CWD IS LOAD-BEARING HERE (codex, PR #78). `stop-quality-marker-gate.sh:49` exits when
+        # `git rev-parse --short HEAD` finds no commit — 94 lines BEFORE the redirect under test.
+        # A child inherits the caller's CWD, so running this module from outside a checkout made
+        # the positive cell below pass without exercising anything, while its control failed with
+        # empty stderr. Reproduced exactly as reported; and running a single cell with `-k` or from
+        # an IDE gave a genuine FALSE GREEN, because the control was not there to redden.
+        #
+        # A SCRATCH ANCHOR, not `cwd=REPO`: measured, `cwd=REPO` only narrows the trigger from "any
+        # non-repo CWD" to "REPO has no HEAD commit", and a tree exported without `.git` still
+        # passed hollow ON A LEAKING TREE. The anchor is a repo this fixture owns, so it holds
+        # regardless of how the checkout was obtained. It does NOT weaken the copied-tree isolation:
+        # the hook still resolves its libraries from its own location, which is the copy.
+        # `_marker_write_onto_a_directory` deliberately does NOT get this — measured CWD-independent.
+        anchor = self.scratch / "anchor"
+        if not anchor.exists():
+            anchor.mkdir()
+            # `-c user.email/user.name` because setUp redirects HOME and drops XDG_CONFIG_HOME, so
+            # there is no global git identity to fall back on.
+            subprocess.run(["git", "init", "-q", "."], cwd=str(anchor),
+                           capture_output=True, text=True, env=self.env, check=True)
+            subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a",
+                            "commit", "-q", "--allow-empty", "-m", "seed"],
+                           cwd=str(anchor), capture_output=True, text=True,
+                           env=self.env, check=True)
+        return subprocess.run(["bash", str(driver), str(root), payload], cwd=str(anchor),
                               capture_output=True, text=True, env=env, check=False)
 
     _WARN_LOG_GOOD = '    2>/dev/null >> "$LOGDIR/stop-gate.log" || true'
@@ -222,6 +259,22 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # marker in its name, in a file this suite already policed. Both narrowings had to go.
         self.assertRegex('    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true', INVERTED)
         self.assertRegex('cmd > "$COVERAGE_OUT" 2>/dev/null', INVERTED)
+        # UNQUOTED targets (gemini, PR #78) — the leak is the ORDER, not the quoting.
+        self.assertRegex('printf x > $tmp 2>/dev/null', INVERTED)
+        self.assertRegex('printf x >> $LOGDIR/stop-gate.log 2>/dev/null', INVERTED)
+        self.assertRegex('printf x > ${TMP}.$$ 2>/dev/null', INVERTED)
+        # A redirect GLUED to the preceding word is still a redirect and still leaks. The obvious
+        # "require a delimiter before >" widening drops these, and this tree already uses the
+        # spaceless idiom (`9>"$_wt_p"`, `2>"$4/err"`).
+        self.assertRegex('printf x>"$tmp" 2>/dev/null', INVERTED)
+        self.assertRegex('printf x> $LOG 2>/dev/null', INVERTED)
+        # A QUOTED target CONTAINING SPACES must survive the widening — the obvious `"?`-based
+        # form silently drops it, and this path is ordinary on macOS.
+        self.assertRegex('printf x > "$HOME/Application Support/s.json" 2>/dev/null', INVERTED)
+        # A literal `>` INSIDE a quoted string is not a redirect. This is what the quote-state
+        # prefix buys over a delimiter class.
+        self.assertNotRegex('log "moved $a -> $b" 2>/dev/null', INVERTED)
+        self.assertNotRegex('printf "a > $b\\n" 2>/dev/null', INVERTED)
         # ...and the correct order still must not match, in either redirect form.
         self.assertNotRegex('printf x 2>/dev/null > "$tmp"', INVERTED)
         self.assertNotRegex('tail -n 5 "$p" 2>/dev/null > "$tmp"', INVERTED)
