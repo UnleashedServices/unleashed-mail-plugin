@@ -134,7 +134,7 @@ class GeminiReviewsTheBoundPlan(unittest.TestCase):
         return subprocess.run(
             ["bash", str(script), "COREDEV-9999", round_value,
              ".agy-prompt-COREDEV-9999r1.md", "docs/planning/FEATURE_PLAN.md", "90"],
-            cwd=self.root, env=env or self.env, capture_output=True, text=True, check=False, input="",
+            cwd=self.root, env=env if env is not None else self.env, capture_output=True, text=True, check=False, input="",
         )
 
     def test_the_reviewer_reads_the_uncommitted_bytes_the_binding_names(self):

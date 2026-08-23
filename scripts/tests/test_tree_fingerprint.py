@@ -1295,5 +1295,144 @@ class FsmonitorIsNeverExecutedByTheProbeOrTheReport(unittest.TestCase):
                          "assertion is weaker than what is available")
 
 
+class SourcingIsTheGitSafetyBoundary(unittest.TestCase):
+    """`tree-fingerprint.sh:411-424`. `_tf_sanitize_git_env` runs AT SOURCE TIME and must fail CLOSED.
+
+    Inherited `GIT_DIR`/`GIT_WORK_TREE` silently redirect which repository every harness reads, and
+    `GIT_CONFIG_COUNT` can inject executable config. So the verifier has to work even when the CALLER
+    has frozen the names it would otherwise use: `readonly _tf_left=""` makes the fallback assignment
+    fail and leaves the verifier reading the caller's own empty value — which is exactly how an
+    earlier build concluded "nothing survived" while a readonly `GIT_DIR` was still in the
+    environment (codex, PR #69 round 8). The name-free subshell arm is what closes that, and no test
+    executed it.
+    """
+
+    #: A caller that freezes BOTH the poisoned variable and the verifier's fallback scratch name.
+    FROZEN_VERIFIER = 'readonly _tf_left=""; readonly GIT_DIR; . "$1"; echo SOURCED'
+    #: The subshell verification — the arm that needs no variable name the caller can freeze.
+    SUBSHELL_ARM = '    if ! ( if [ -n "${ZSH_VERSION:-}" ]; then\n'
+    SUBSHELL_ARM_NEUTERED = '    if false && ! ( if [ -n "${ZSH_VERSION:-}" ]; then\n'
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="tree-fp-src.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.env = dict(os.environ, GIT_DIR=os.path.join(self.scratch, "nowhere.git"))
+
+    def _source(self, helper, shell="bash"):
+        return subprocess.run([shell, "-c", self.FROZEN_VERIFIER, "_", helper],
+                              capture_output=True, text=True, check=False, env=self.env)
+
+    def _neutered(self, name):
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.SUBSHELL_ARM),
+                         "mutation anchor is not unique — the control is not the control")
+        path = os.path.join(self.scratch, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(self.SUBSHELL_ARM, self.SUBSHELL_ARM_NEUTERED, 1))
+        return path
+
+    def test_sourcing_refuses_when_the_git_environment_cannot_be_cleared(self):
+        p = self._source(HELPER)
+        self.assertNotIn("SOURCED", p.stdout,
+                         f"the library sourced with a poisoned GIT_DIR still in the environment: "
+                         f"{p.stdout!r} {p.stderr!r}")
+        self.assertIn("REFUSING to run", p.stderr, p.stderr)
+
+    def test_the_NAME_FREE_subshell_arm_is_what_catches_it(self):
+        """The control. With the subshell arm neutered the fallback `_tf_left` check reads the
+        caller's frozen empty value, concludes nothing survived, and the source FAILS OPEN — so this
+        pair proves the refusal comes from the name-free arm and not from the fallback."""
+        p = self._source(self._neutered("tree-fingerprint-no-subshell-verify.sh"))
+        self.assertIn("SOURCED", p.stdout,
+                      f"CONTROL FAILED — the mutant refused too, so the cell above is not "
+                      f"discriminating: {p.stdout!r} {p.stderr!r}")
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed on this runner")
+    def test_the_refusal_holds_under_ZSH_TOO(self):
+        """The arm has a separate `${(k)parameters[(I)GIT_*]}` branch that the bash cells never
+        reach, and the harnesses are invoked under both shells."""
+        p = self._source(HELPER, shell="zsh")
+        self.assertNotIn("SOURCED", p.stdout, f"{p.stdout!r} {p.stderr!r}")
+        self.assertIn("REFUSING to run", p.stderr, p.stderr)
+
+
+# `os.name != "posix"` FIRST, so `os.geteuid` — which does not exist off POSIX — is never reached.
+# Not `getattr(os, "geteuid", lambda: -1)()`: that spelling avoids the AttributeError but makes the
+# class RUN where `chmod 000` does not make a file unreadable, so the premise fails and the cells
+# fail with it. The condition has to skip the platform, not just survive importing on it.
+@unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
+                 "mode-000 is meaningful only on POSIX, and is readable by uid 0 anyway")
+class AnUnreadableRegularFileVoidsTheRound(unittest.TestCase):
+    """`tree-fingerprint.sh:223`. A present-but-unreadable regular file must FAIL the round.
+
+    `_u_hash_if_present` is the one place that can turn "I could not measure this" into a clean
+    record. Recording anything at all for a file whose bytes were never read would let a reviewer
+    hide a change behind a permission bit. The `except OSError: return None` arm is the fail-closed
+    decision; nothing executed it.
+
+    The skip above is the narrow exception to preferring a uid-independent fixture: this guard is
+    ABOUT unreadability, so there is no way to establish the premise without permissions. It cannot
+    fire in this repository's CI — every job is a GitHub-hosted runner (`runs-on:`, no `container:`),
+    which runs as the non-root `runner` user — so the skip only spares a developer working as root.
+    """
+
+    #: The fail-closed arm, and a control that records a placeholder instead of refusing.
+    FAIL_CLOSED = ('            return None                      '
+                   '# present but unreadable -> fail closed')
+    RECORDS_ANYWAY = '            return "F %s %s %d UNREADABLE" % (mode, ident, st.st_size)'
+
+    def setUp(self):
+        base = os.path.expanduser("~/.claude")
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        self.scratch = tempfile.mkdtemp(prefix="tree-fp-unreadable.", dir=base)
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.secret = os.path.join(self.scratch, "unreadable.txt")
+        with open(self.secret, "w", encoding="utf-8") as fh:
+            fh.write("bytes that must not be summarised away\n")
+        os.chmod(self.secret, 0o000)
+        self.addCleanup(os.chmod, self.secret, 0o600)
+        # The premise, asserted rather than assumed: an environment that can still read this file
+        # would make the cells below pass for the wrong reason.
+        with self.assertRaises(OSError):
+            open(self.secret, "rb").close()
+
+    def _hash(self, helper, path):
+        return subprocess.run(["bash", "-c", '. "$1"; _u_hash_if_present "$2"', "_", helper, path],
+                              capture_output=True, text=True, check=False)
+
+    def test_an_unreadable_regular_file_refuses_and_records_NOTHING(self):
+        p = self._hash(HELPER, self.secret)
+        self.assertNotEqual(0, p.returncode, f"the round was not voided: {p.stdout!r}")
+        self.assertEqual("", p.stdout,
+                         f"a record was emitted for a file whose bytes were never read: {p.stdout!r}")
+
+    def test_a_READABLE_file_is_still_recorded(self):
+        """The positive control: the arm must not refuse the ordinary case."""
+        readable = os.path.join(self.scratch, "readable.txt")
+        with open(readable, "w", encoding="utf-8") as fh:
+            fh.write("ordinary\n")
+        p = self._hash(HELPER, readable)
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertRegex(p.stdout, rf"^{re.escape(readable)} F \d{{4}} {IDENT} \d+ [0-9a-f]{{64}}\n$")
+
+    def test_the_fail_closed_arm_REPLACED_records_the_file_anyway(self):
+        """The mutant control: without it these cells could not tell a fail-closed arm from a
+        `_u_hash_if_present` that refused every operand."""
+        with open(HELPER, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(1, text.count(self.FAIL_CLOSED),
+                         "mutation anchor is not unique — the control is not the control")
+        mutant = os.path.join(self.scratch, "tree-fingerprint-records-unreadable.sh")
+        with open(mutant, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(self.FAIL_CLOSED, self.RECORDS_ANYWAY, 1))
+        p = self._hash(mutant, self.secret)
+        self.assertEqual(0, p.returncode, f"CONTROL FAILED: {p.stdout!r} {p.stderr!r}")
+        self.assertIn("UNREADABLE", p.stdout,
+                      f"CONTROL FAILED — the mutant did not record the file: {p.stdout!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

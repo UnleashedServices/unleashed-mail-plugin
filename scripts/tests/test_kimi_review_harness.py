@@ -211,6 +211,22 @@ case "${{KIMI_STUB_MODE:-clean}}" in
                    printf '{{"cwd":"%s"}}\\n' "$PWD" > "$HOME/.kimi-code/sessions/wd_new/$s/state.json"
                    printf '{{"type":"llm.request","thinkingEffort":"max"}}\\n' > "$HOME/.kimi-code/sessions/wd_new/$s/agents/main/wire.jsonl"
                  done ;;
+  # ── modes that attack the POST-RUN probes, which had no cell in either direction ─────────────
+  basis-destroy) # Delete the LIVE repository's loose object for the plan blob. The post-run
+                 # `git cat-file blob "$SHA:$PLAN_REL"` then answers nothing and AFTER_BASIS becomes
+                 # the literal string `MISSING`. This is the reachable shape of BASIS != AFTER_BASIS:
+                 # the two are NOT both read from the same live object, because the second read has a
+                 # `|| echo MISSING` fallback that a reviewer can provoke.
+                 _obj="$(git -C "$KIMI_STUB_CLONE" rev-parse "HEAD:$KIMI_STUB_PLAN" 2>/dev/null)"
+                 [ -n "$_obj" ] && rm -f "$KIMI_STUB_CLONE/.git/objects/${{_obj:0:2}}/${{_obj:2}}"
+                 : ;;
+  selfdestruct-tree) # The reviewer DELETES its own checkout. `disposable_fingerprint` then fails
+                 # at its `os.path.isdir` precondition and returns 1, which is the only way the
+                 # probe reports failure: `os.walk` swallows permission errors by default, so a
+                 # merely UNREADABLE tree yields an empty listing and exit 0 (measured — it is
+                 # caught by the content comparison instead, three lines further down).
+                 cd .. && rm -rf tree ;;
+  livegitkill)   rm -rf "$KIMI_STUB_CLONE/.git" ;;   # the LIVE checkout can no longer be fingerprinted
 esac
 printf '{SESSION}\\nVERDICT: APPROVE\\n'
 """
@@ -334,9 +350,14 @@ class KimiHarnessMutationGates(unittest.TestCase):
         poisoned git environment must not be able to redirect which repository the BASIS is read
         from. Callers that pass neither get the harness's own default, as before.
         """
-        out = out or os.path.join(self.scratch, f"out-{mode}.txt")
-        child_env = dict(env or self.env, KIMI_STUB_MODE=mode,
-                         KIMI_STUB_PLAN=(plan or DEFAULT_PLAN))
+        # `is not None` on ALL THREE, not truthiness. An empty string is a REAL operand here —
+        # `test_a_plan_operand_that_escapes_the_repository_is_refused` passes `plan=""` — and `argv`
+        # below already honours it via `if plan is not None`. With `plan or DEFAULT_PLAN` the child's
+        # `KIMI_STUB_PLAN` said `DEFAULT_PLAN` while argv said `""`, so the stub environment
+        # contradicted the operand under test and could mask a guard failure (gemini, PR #73).
+        out = out if out is not None else os.path.join(self.scratch, f"out-{mode}.txt")
+        child_env = dict(env if env is not None else self.env, KIMI_STUB_MODE=mode,
+                         KIMI_STUB_PLAN=(plan if plan is not None else DEFAULT_PLAN))
         argv = ["bash", harness, prompt, out, commit, str(timeout)]
         if plan is not None:
             argv.append(plan)
@@ -1349,6 +1370,157 @@ class KimiHarnessMutationGates(unittest.TestCase):
         """The `BASIS=<digest>` token from the CLEAN SUMMARY on stdout — never the path diagnostic."""
         m = re.search(r"\bBASIS=([0-9a-f]{12})\b", proc.stdout or "")
         return m.group(1) if m else None
+
+    # ── the plan operand's spelling (harness lines 59-68) ─────────────────────────────────────────
+
+    def test_a_plan_operand_that_escapes_the_repository_is_refused(self):
+        """`isolated-kimi-review.sh:59-68`. The plan operand is MODEL-CHOSEN — `codex-review/SKILL.md`
+        says the stand-in is invoked "always passing <plan>" — and it is what the BASIS digest
+        certifies. An operand that escapes the checkout makes the printed BASIS attest to bytes
+        outside the reviewed commit, the same class the prompt operand's containment already closed.
+
+        Each case asserts the DIAGNOSTIC, never merely `rc != 0`: with the containment removed the
+        run still fails, further on and for an unrelated reason, so an exit-status cell proves
+        nothing about this guard.
+        """
+        for operand, message in (
+            ("/etc/passwd", "plan operand must be repository-relative, not absolute"),
+            ("../../etc/passwd", "plan operand must not traverse upward"),
+            ("docs/planning/../../../etc/passwd", "plan operand must not traverse upward"),
+            ("", "plan operand must not be empty"),
+            ("docs/planning/a\nb.md", "plan operand must not contain control characters"),
+        ):
+            with self.subTest(operand=operand):
+                p, _ = self._run("clean", plan=operand)
+                self.assertEqual(1, p.returncode, p.stdout + p.stderr)
+                self.assertIn(message, p.stderr, p.stderr)
+                self.assertFalse(self._stub_ran(),
+                                 "the reviewer was launched on an uncontained plan operand")
+
+    def test_a_CONTAINED_plan_operand_is_not_refused_by_the_spelling_check(self):
+        """The discrimination control: without it the cell above would also pass against a harness
+        that refused every plan operand it was given."""
+        p, _ = self._run("clean")
+        self.assertNotIn("plan operand must", p.stderr, p.stderr)
+
+    def test_a_plan_that_is_a_SYMLINK_in_the_reviewed_commit_is_refused(self):
+        """`isolated-kimi-review.sh:259`. `git cat-file blob` on a mode-120000 entry returns its
+        TARGET PATH, so without the mode check the BASIS digest certifies the string `/etc/hosts`
+        rather than any plan at all — and the reviewer is launched anyway."""
+        link_rel = "docs/planning/SYMLINK_PLAN.md"
+        os.symlink("/etc/hosts", os.path.join(self.clone, link_rel))
+        prompt = ".review-prompt-sym.md"
+        with open(os.path.join(self.clone, prompt), "w", encoding="utf-8") as fh:
+            fh.write("Plan under review: " + link_rel + "\n")
+            fh.write("Review the symlinked plan.\n" * 40)
+        with open(os.path.join(self.clone, ".gitignore"), "a", encoding="utf-8") as fh:
+            fh.write(prompt + "\n")
+        git = ["git", "-C", self.clone]
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "symlink plan"],
+                       check=True, capture_output=True)
+        mode = subprocess.check_output(
+            git + ["ls-tree", "--format=%(objectmode)", "HEAD", "--", link_rel], text=True).strip()
+        self.assertEqual("120000", mode,
+                         "the fixture is not the finding: the plan is not a committed symlink")
+        p, out = self._run("clean", prompt=prompt, plan=link_rel)
+        self._assert_refused_before_launch(p, out, "plan is a symlink in the reviewed commit")
+        self.assertIsNone(self._basis_digest(p),
+                          "a symlink plan reached the summary — its BASIS certifies the TARGET path")
+
+    # ── the private scratch allocation (harness line 121) ─────────────────────────────────────────
+
+    def test_a_failed_scratch_allocation_is_refused_not_run_with_an_EMPTY_tree(self):
+        """`isolated-kimi-review.sh:121`. A failed `mktemp -d` must abort the round.
+
+        Without the `|| exit 1` the harness proceeds with `TREE=""`: it copies the prompt snapshot to
+        `/prompt.snapshot`, then reports "prompt unreadable" — naming the wrong cause entirely — and
+        the EXIT trap's `rm -rf "$TREE"` is a no-op, so where `/` is writable the snapshot leaks.
+        """
+        env = dict(self.env)
+        env["TMPDIR"] = os.path.join(self.scratch, "no-such-tmpdir")   # deliberately absent
+        p, _ = self._run("clean", env=env)
+        self.assertNotEqual(0, p.returncode, p.stdout + p.stderr)
+        self.assertFalse(self._stub_ran(), "the reviewer was launched without a scratch directory")
+        self.assertNotIn("TREE=clean", p.stdout, "a failed allocation printed the clean summary")
+        # THE DISCRIMINATOR, and the reason the three assertions above are not enough. With `|| exit 1`
+        # weakened to `|| :` the round STILL exits non-zero, STILL never launches the reviewer and
+        # STILL prints no clean summary — so all three pass against the mutant and it survives
+        # (measured). What actually changes is the CAUSE the operator is told: the mutant runs on with
+        # `TREE=""`, tries `cp -- … "/prompt.snapshot"`, and reports `prompt unreadable: <path>` —
+        # blaming a prompt file that is perfectly readable. Naming the wrong cause is the defect.
+        self.assertNotIn("prompt unreadable", p.stderr,
+                         f"the run continued past a failed scratch allocation and misreported the "
+                         f"cause as an unreadable prompt:\n{p.stderr}")
+
+    # ── the post-run probes: a tree that cannot be read is not evidence ───────────────────────────
+
+    def test_a_disposable_checkout_that_cannot_be_RE_READ_after_the_review_voids(self):
+        """`isolated-kimi-review.sh:364`. FAIL CLOSED — a tree that cannot be READ is not evidence.
+
+        `|| true` here once turned a failed probe into an EMPTY string, which compares equal to a
+        clean baseline, so all three mutation checks passed and a reviewer that corrupted its own
+        checkout and wrote whatever it liked was certified (codex, PR #67).
+
+        WHAT THE FIXTURE HAD TO BE, and why it is not the obvious one. Making the checkout merely
+        UNREADABLE (`chmod 000 .`) does NOT reach this arm: `disposable_fingerprint` walks with
+        `os.walk`, which swallows permission errors by default, so it returns an EMPTY listing and
+        exit 0. Measured — the round is still voided, but by the content comparison three lines
+        below, and a cell built on that fixture would pin the wrong guard. Deleting the checkout
+        makes the probe's `os.path.isdir` precondition false, which is the arm under test.
+
+        Deleting is also uid-independent, so this cell needs no root skip: a `chmod`-based fixture
+        would have silently stopped testing anything for a developer running as root.
+        """
+        p, _ = self._run("selfdestruct-tree")
+        self.assertEqual(3, p.returncode, f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("could not be re-read after the review", p.stderr, p.stderr)
+        self.assertNotIn("the reviewer left edits inside the disposable checkout", p.stderr,
+                         "the content-comparison path fired instead — this cell is not pinning line 364")
+        self.assertNotIn("TREE=clean", p.stdout, "a void round printed the clean summary")
+
+    def test_a_reviewer_that_destroys_the_LIVE_git_dir_voids_the_round(self):
+        """`isolated-kimi-review.sh:356`. The LIVE checkout's post-review fingerprint must fail
+        CLOSED, and be distinguishable from the mutation verdict three lines below it."""
+        p, _ = self._run("livegitkill")
+        self.assertEqual(3, p.returncode, f"rc {p.returncode}\n{p.stdout}{p.stderr}")
+        self.assertIn("could not fingerprint the live checkout after the review", p.stderr, p.stderr)
+        self.assertNotIn("the real worktree was mutated", p.stderr,
+                         "the line-369 path fired instead — this cell is not pinning line 356")
+        self.assertNotIn("TREE=clean", p.stdout, "a void round printed the clean summary")
+
+    def test_a_reviewer_that_destroys_the_BASIS_OBJECT_voids_the_round(self):
+        """`isolated-kimi-review.sh:373` — the COREDEV-2607 staged-basis signature.
+
+        The sweep called this branch unreachable, on the grounds that BASIS and AFTER_BASIS are read
+        from the same git object. That holds on the stub axis but not in general: AFTER_BASIS is
+        computed with `2>/dev/null … || echo MISSING`, so it becomes the literal string `MISSING`
+        whenever the live repository stops answering for that blob after the run — which a reviewer
+        with write access to the checkout can arrange. That is what the stub mode does.
+
+        THE BLOB IS MADE LOOSE ON PURPOSE. A local `git clone` HARDLINKS the source object store, so
+        whether this blob is loose or packed is inherited from whatever state the source repo happened
+        to be in — and `git gc --auto` can repack it at any time, after which deleting the loose path
+        is a silent no-op and the round reaches the ordinary exit 4 instead of the asserted void
+        (codex, PR #73). Committing unique bytes writes a brand-new object, which git always writes
+        loose, so the fixture no longer depends on the clone's storage layout. The premise is then
+        ASSERTED rather than assumed.
+        """
+        marker = f"\n<!-- basis-destroy {os.getpid()} -->\n"
+        plan_path = os.path.join(self.clone, DEFAULT_PLAN)
+        with open(plan_path, "a", encoding="utf-8") as fh:
+            fh.write(marker)
+        git = ["git", "-C", self.clone]
+        subprocess.run(git + ["add", "--", DEFAULT_PLAN], check=True, capture_output=True)
+        subprocess.run(git + ["-c", "commit.gpgsign=false", "commit", "-qm", "unique basis"],
+                       check=True, capture_output=True)
+        blob = subprocess.check_output(
+            git + ["rev-parse", f"HEAD:{DEFAULT_PLAN}"], text=True).strip()
+        loose = os.path.join(self.clone, ".git", "objects", blob[:2], blob[2:])
+        self.assertTrue(os.path.isfile(loose),
+                        f"the basis blob {blob[:12]} is not a loose object, so the stub's delete would "
+                        f"be a no-op and this cell would pass for the wrong reason")
+        self._assert_void("basis-destroy", "modified the staged plan")
 
 
 if __name__ == "__main__":
