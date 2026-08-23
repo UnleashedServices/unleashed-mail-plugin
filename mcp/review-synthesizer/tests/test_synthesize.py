@@ -1,6 +1,10 @@
 """Deterministic synthesis: dedup, ownership routing, scope, verdict, render."""
+import contextlib
+import importlib.util
+import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -9,6 +13,71 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import synthesize as S  # noqa: E402
 from schema import parse_finding  # noqa: E402
+
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "synthesize.py")
+_MUTANT_SEQ = [0]
+
+
+def load_mutant(tc, old, new):
+    """Import a COPY of synthesize.py with `old` -> `new`, asserting the mutation APPLIED: the anchor
+    occurs exactly once and the replacement preserves the line count. A mutation that silently fails
+    to apply otherwise reads as a passing control — the single most common way a mutation proof
+    proves nothing. The copy lands in a fresh temp file under a fresh module name, which also
+    sidesteps CPython's .pyc staleness trap (its cache key is (mtime SECONDS, size), so a
+    same-length in-place mutate/run/restore inside one second silently reuses old bytecode)."""
+    with open(SRC, encoding="utf-8") as fh:
+        src = fh.read()
+    tc.assertEqual(src.count(old), 1, f"mutant anchor must occur exactly once: {old!r}")
+    mutated = src.replace(old, new)
+    tc.assertNotEqual(src, mutated, "mutant replacement was a no-op")
+    tc.assertEqual(src.count("\n"), mutated.count("\n"),
+                   "mutant changed the line count — it must be line-for-line")
+    d = tempfile.mkdtemp(prefix="synmutant")
+    tc.addCleanup(shutil.rmtree, d, True)
+    path = os.path.join(d, "synthesize_mutant.py")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(mutated)
+    _MUTANT_SEQ[0] += 1
+    name = f"_synthesize_mutant_{_MUTANT_SEQ[0]}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod               # @dataclass resolves cls.__module__ through sys.modules
+    tc.addCleanup(sys.modules.pop, name, None)
+    spec.loader.exec_module(mod)          # `from schema import ...` resolves via sys.path above
+    return mod
+
+
+class CliFixture(unittest.TestCase):
+    """A real blocker in a real changeset — the CLI's documented CI-gating input."""
+
+    BLOCKER = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                   category="credential", file="MyApp/Auth.swift", line=10, lineEnd=12,
+                   finding="hardcoded API key", evidence="let k = 'sk-live'", fix="move to Keychain")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="syncli")
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.fj = self._findings("findings.json", [self.BLOCKER])
+        self.clean = self._findings("clean.json", [])
+        self.lowconf = self._findings("low.json", [dict(self.BLOCKER, confidence="low")])
+        self.ch = os.path.join(self.d, "changed.txt")
+        self._changed("MyApp/Auth.swift")
+
+    def _findings(self, name, findings):
+        p = os.path.join(self.d, name)
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump({"findings": findings}, fh)
+        return p
+
+    def _changed(self, *entries):
+        with open(self.ch, "w", encoding="utf-8") as fh:
+            fh.write("".join(e + "\n" for e in entries))
+
+    def run_main(self, mod, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = mod.main(argv)
+        return rc, out.getvalue(), err.getvalue()
 
 
 def f(**over):
@@ -526,3 +595,79 @@ class TestCliLoad(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestS2CliGatingExitCode(CliFixture):
+    """S2: `synthesize.py` main()'s gating exit code was unexecuted in BOTH directions. Proven by
+    tripwire: replacing main()'s first success-path line with `raise` left the suite 231/231 OK, so
+    no test reached the success path at all — the CLI is advertised as CI-droppable and nothing
+    exercised it end to end (_load -> synthesize -> render -> gating exit)."""
+
+    ANCHOR = '    return 0 if review.verdict.decision.startswith("APPROVE") else 1'
+
+    def test_cli_exit_code_tracks_the_verdict(self):
+        # Assert the VERDICT TEXT as well as the code. Exit 1 alone cannot discriminate: a gating
+        # REQUEST_CHANGES and a non-gating NEEDS_DISCUSSION both exit 1, and exit 2 is emitted by
+        # five different guards. The text is the only observable that separates them.
+        rc, out, _ = self.run_main(S, [self.fj, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **REQUEST_CHANGES**", out)
+        self.assertIn("hardcoded API key", out, "the finding itself must reach the report")
+        self.assertEqual(rc, 1, "a gating verdict must exit non-zero for CI")
+
+        rc0, out0, _ = self.run_main(S, [self.clean, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **APPROVE**", out0)
+        self.assertEqual(rc0, 0, "a clean review must exit 0")
+
+        # Third invocation, required by the above: a LOW-confidence blocker is NOT confirmed by the
+        # default verify gate, so it lands in Needs Confirmation and does not gate. Same exit code
+        # as REQUEST_CHANGES, different verdict — this is the pair rc cannot tell apart.
+        rc1, out1, _ = self.run_main(S, [self.lowconf, "--changed", self.ch])
+        self.assertIn("## Verdict (provisional): **NEEDS_DISCUSSION**", out1)
+        self.assertEqual(rc1, 1)
+        self.assertNotEqual(out1, out, "NEEDS_DISCUSSION must not render as REQUEST_CHANGES")
+
+    def test_mutant_control_always_zero_would_green_a_ci_job(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    return 0  # MUTANT                                                  ')
+        rc, out, _ = self.run_main(m, [self.fj, "--changed", self.ch])
+        self.assertIn("REQUEST_CHANGES", out)
+        self.assertEqual(rc, 0, "control must exhibit the fail-open: green CI with a blocker on screen")
+
+    def test_mutant_control_always_one_would_red_every_job(self):
+        m = load_mutant(self, self.ANCHOR,
+                        '    return 1  # MUTANT                                                  ')
+        rc, out, _ = self.run_main(m, [self.clean, "--changed", self.ch])
+        self.assertIn("APPROVE", out)
+        self.assertEqual(rc, 1, "control must exhibit the opposite failure: red CI on a clean review")
+
+
+class TestS2DefaultVerifyGate(unittest.TestCase):
+    """S2 cont. — `synthesize.py`'s default verify gate (:199), the predicate that decides whether a
+    blocker is CONFIRMED (gating) or merely NEEDS CONFIRMATION (non-gating). Unpinned in both
+    directions before this."""
+
+    ANCHOR = '    return f.confidence == "high"'
+
+    def test_default_verify_confirms_only_high_confidence(self):
+        self.assertTrue(S.default_verify(f(severity="blocker", confidence="high")))
+        for c in ("medium", "low"):
+            self.assertFalse(S.default_verify(f(severity="blocker", confidence=c)), c)
+
+    def test_verdict_through_the_default_gate(self):
+        hi = S.synthesize([f(severity="blocker", confidence="high")], {"A.swift"})
+        self.assertEqual(hi.verdict.decision, "REQUEST_CHANGES")
+        self.assertEqual((len(hi.verdict.confirmed_blockers), len(hi.verdict.needs_confirmation)), (1, 0))
+        lo = S.synthesize([f(severity="blocker", confidence="low")], {"A.swift"})
+        self.assertEqual(lo.verdict.decision, "NEEDS_DISCUSSION")
+        self.assertEqual((len(lo.verdict.confirmed_blockers), len(lo.verdict.needs_confirmation)), (0, 1))
+        self.assertIn("### Needs Confirmation (non-gating)", S.render_markdown(lo))
+
+    def test_mutant_control_confirm_everything(self):
+        m = load_mutant(self, self.ANCHOR, "    return True  # MUTANT      ")
+        self.assertEqual(m.synthesize([f(severity="blocker", confidence="low")],
+                                      {"A.swift"}).verdict.decision, "REQUEST_CHANGES")
+
+    def test_mutant_control_confirm_nothing(self):
+        m = load_mutant(self, self.ANCHOR, "    return False  # MUTANT     ")
+        self.assertEqual(m.synthesize([f(severity="blocker", confidence="high")],
+                                      {"A.swift"}).verdict.decision, "NEEDS_DISCUSSION")
