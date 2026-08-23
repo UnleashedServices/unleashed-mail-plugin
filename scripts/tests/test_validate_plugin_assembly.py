@@ -689,6 +689,58 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
         self.assertNotIn("rogue-writer", scoped,
                          "the new writer is reachable — the allowlist is not doing its job")
 
+    def _tree(self, agents: "dict[str, str]") -> Path:
+        """A throwaway agents/ tree; `agents` maps name -> frontmatter tail."""
+        import shutil
+        import tempfile
+        base = Path(tempfile.mkdtemp(prefix="scoped-grant-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        (base / "agents").mkdir()
+        for name, tail in agents.items():
+            (base / "agents" / f"{name}.md").write_text(
+                f"---\nname: {name}\ndescription: x\n{tail}---\nbody\n", encoding="utf-8")
+        return base
+
+    def test_a_SCOPED_grant_naming_a_writer_is_caught(self):
+        """codex, PR #74. My first version of the scoped branch SKIPPED the writer check, reasoning
+        that "writers are excluded by construction". False as a blanket claim — it holds only if no
+        listed member IS a writer. Measured before fixing: `tools: Read, Agent(rogue-writer)` beside a
+        writing `rogue-writer` reported NO problem, because `_live_tools` holds `Agent(...)` rather
+        than bare `Agent`, so the spawner was skipped entirely."""
+        problems = self._run(self._tree({
+            "spawner": "tools: Read, Agent(rogue-writer)\n",
+            "rogue-writer": "tools: Read, Write, Edit, Bash\n",
+        }))
+        self.assertTrue(problems, "a scoped allowlist naming a writer must be caught")
+        self.assertIn("rogue-writer", problems[0])
+
+    def test_the_NAMESPACED_spelling_of_a_writer_is_caught_too(self):
+        """A consumer install resolves `unleashed-mail:<name>`, so checking only the bare spelling
+        leaves the other reachable — the both-spellings rule the deny-list already had."""
+        problems = self._run(self._tree({
+            "spawner": "tools: Read, Agent(unleashed-mail:rogue-writer)\n",
+            "rogue-writer": "tools: Read, Write, Edit, Bash\n",
+        }))
+        self.assertTrue(problems, "the namespaced spelling must be caught")
+
+    def test_an_allowlisted_agent_that_LATER_GAINS_Bash_is_caught(self):
+        """The drift case, and why this is a member CHECK rather than a one-time review: an allowlist
+        can be correct the day it is written and wrong a commit later."""
+        problems = self._run(self._tree({
+            "spawner": "tools: Read, Agent(reader)\n",
+            "reader": "tools: Read, Bash\n",
+        }))
+        self.assertTrue(problems, "a listed agent gaining a write vector must be caught")
+        self.assertIn("reader", problems[0])
+
+    def test_a_scoped_grant_of_READ_ONLY_agents_is_clean(self):
+        """The control. Without it the three above would pass against a check that rejected EVERY
+        scoped grant — which would forbid the very shape COREDEV-2703 introduced."""
+        self.assertEqual([], self._run(self._tree({
+            "spawner": "tools: Read, Agent(reader)\n",
+            "reader": "tools: Read, Grep\n",
+        })))
+
     def test_a_BARE_Agent_spawner_still_must_deny_every_writer(self):
         """The teeth, preserved. The check must still catch an agent that grants bare `Agent` — which
         reaches every type — and omits a writer denial. Without this the change above would have
