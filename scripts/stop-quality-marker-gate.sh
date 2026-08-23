@@ -142,5 +142,5 @@ LOGDIR="$(marker_base)/logs"
 mkdir -p "$LOGDIR" 2>/dev/null || exit 0
 printf '%s stop-gate would-block kind=%s age=%s commit=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" "$BLOCKED_KIND" "$BLOCKED_AGE" "$HEAD_COMMIT" \
-    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true
+    2>/dev/null >> "$LOGDIR/stop-gate.log" || true
 exit 0

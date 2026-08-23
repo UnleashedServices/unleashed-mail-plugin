@@ -112,7 +112,7 @@ claude plugin install "unleashed-mail@$MARKET_NAME" >/dev/null 2>&1 \
 
 step "4. assert on PARSED JSON — id, enabled, errors, version, and the sentinel"
 LIST="$WORK/list.json"
-claude plugin list --json > "$LIST" 2>/dev/null || fail "plugin list --json failed"
+claude plugin list --json 2>/dev/null > "$LIST" || fail "plugin list --json failed"
 # Run the assertions as their OWN command and check the status in THIS shell. `X="$(… || fail …)"`
 # does not work: `fail` runs in the command-substitution SUBSHELL, so it prints and exits the
 # subshell while the parent carries on with an empty X — the script then reported a SECOND, bogus

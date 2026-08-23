@@ -441,3 +441,159 @@ class N6BridgeReResolves(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
+    """The HOOK layer of the D-prime envelope (COREDEV-2691).
+
+    `N2bCompositionUnderAnUnresolvedBase` proves the four LIBRARY writers compose nothing under the
+    sentinel. Nothing proved the same of the HOOKS as shipped — and the hooks are what the runtime
+    actually executes. The distinction is not academic: a hook can compose a root ITSELF and hand it
+    onward before any guarded primitive is reached, which is exactly why
+    `capture-reviewer-verdict.sh:48` carries a hook-level skip while its sibling
+    `capture-reviewer-round-start.sh` does not.
+
+    THAT ASYMMETRY WAS FLAGGED AS UNDOCUMENTED AND IS RESOLVED HERE AS CORRECT, not papered over.
+    The verdict hook's own comment states the rule: it "passes the composed root into Python and
+    otherwise continues through lookup, capture and clear, so it needs an explicit skip rather than
+    relying on a primitive no-op". Round-start composes no root, calls no Python, and its next
+    statement is `exit 0` — it delegates to exactly one guarded primitive. Measured with a
+    `mkdir`-counting PATH shim: shipped -> 0 calls; with `context.sh:419`'s guard deleted -> 1 call,
+    `mkdir -p /dev/null/unresolved-plugin-base/.state`. So the library guard is load-bearing FOR
+    THIS HOOK, and this cell is the pin that keeps the omission justified.
+    """
+
+    #: Hook, the payload that carries it to its write path, and the library guard whose deletion
+    #: must make the composition visible. Only hooks that can actually be driven to a write are
+    #: listed — a member that exits early would pass this cell while proving nothing, so each one
+    #: here is paired with a control below.
+    #: The third element names WHICH guard protects THIS hook — and they differ, which is the whole
+    #: point. Round-start is protected by the LIBRARY guard inside `context_review_round_bind`.
+    #: Verdict is protected by its OWN hook-level skip, which fires FIRST and makes the library
+    #: guard unreachable for it — measured: deleting the library guard changes nothing for verdict.
+    #: A single shared control would therefore have been wrong for one member either way.
+    #:
+    #: The named primitive is the one THAT PAYLOAD actually reaches, which is not always the obvious
+    #: one. With no `transcript_path`, verdict takes the `context_review_round_clear` branch, not
+    #: `..._bind` — traced with `bash -x` after a control failure that I first misread as a guard
+    #: working. `clear` uses `rm`, which is why the shim covers `rm` and `mv` as well as `mkdir`.
+    HOOKS = (
+        ("capture-reviewer-round-start.sh",
+         '{"hook_event_name":"SubagentStart","agent_type":"security-reviewer",'
+         '"agent_id":"a1","session_id":"s1"}',
+         ("lib", "context.sh", "context_review_round_bind")),
+        ("capture-reviewer-verdict.sh",
+         '{"hook_event_name":"SubagentStop","agent_type":"security-reviewer",'
+         '"agent_id":"a1","session_id":"s1"}',
+         ("both", "capture-reviewer-verdict.sh", "context_review_round_clear")),
+    )
+
+    SENTINEL = "/dev/null/unresolved-plugin-base"
+
+    def setUp(self):
+        self.scratch = tempfile.mkdtemp(prefix="dprime-hooks.")
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.calls = os.path.join(self.scratch, "calls.log")
+        self.shim = os.path.join(self.scratch, "shim")
+        os.makedirs(self.shim)
+        for name in ("mkdir", "rm", "mv"):
+            real = shutil.which(name) or f"/bin/{name}"
+            path = os.path.join(self.shim, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("#!/usr/bin/env bash\n"
+                         f'printf "%s %s\\n" "{name}" "$*" >> "{self.calls}"\n'
+                         f'exec "{real}" "$@"\n')
+            os.chmod(path, 0o755)
+
+    def _drive(self, hook, payload, scripts_root):
+        """Run the real hook with an unresolved base; return shimmed calls naming the sentinel."""
+        open(self.calls, "w").close()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT")}
+        env.update(PATH=self.shim + os.pathsep + os.environ.get("PATH", os.defpath),
+                   HOME=_SANDBOX_HOME, _UNLEASHED_PUBLISH_OK="0",
+                   CLAUDE_PLUGIN_ROOT=os.path.dirname(scripts_root))
+        subprocess.run(["bash", os.path.join(scripts_root, hook)],
+                       input=payload, capture_output=True, text=True, env=env)
+        with open(self.calls, encoding="utf-8") as fh:
+            return [line.strip() for line in fh if self.SENTINEL in line]
+
+    def _scripts_copy(self, tag):
+        """A mini plugin ROOT — `scripts/` AND `mcp/`, because a hook resolves its siblings from its
+        own location. Copying `scripts/` alone made `capture-reviewer-verdict.sh` exit at
+        `[ -f "$CAPTURE_PY" ]` before reaching any guard, which the control correctly reported as
+        "no composition" — a fixture defect that would have read as a passing guard."""
+        root = os.path.join(self.scratch, "root-" + tag)
+        os.makedirs(root)
+        dest = os.path.join(root, "scripts")
+        shutil.copytree(os.path.join(ROOT, "scripts"), dest, symlinks=True)
+        shutil.copytree(os.path.join(ROOT, "mcp"), os.path.join(root, "mcp"), symlinks=True)
+        return dest
+
+    def test_no_shipped_hook_composes_a_path_under_the_sentinel(self):
+        shipped = os.path.join(ROOT, "scripts")
+        for hook, payload, _ in self.HOOKS:
+            with self.subTest(hook=hook):
+                attempts = self._drive(hook, payload, shipped)
+                self.assertEqual([], attempts,
+                                 f"{hook} composed a path under the unresolved-base sentinel: "
+                                 f"{attempts}")
+
+    def test_the_shim_SEES_a_composition_when_the_library_guard_is_removed(self):
+        """The control — and the measurement that justifies round-start carrying no guard of its own.
+
+        Without it, a hook that exited early (wrong payload shape, a kill switch left on, a missing
+        interpreter) would record nothing and read as a pass. Deleting the guard in a COPY of the
+        library must make the attempt visible for EVERY listed hook.
+        """
+        LIB_GUARD = "    unleashed_base_ok || return 0"
+        HOOK_GUARD = "unleashed_base_ok || exit 0"
+        for hook, payload, (kind, where, func) in self.HOOKS:
+            with self.subTest(hook=hook, guard=f"{kind}:{where}"):
+                root = self._scripts_copy(hook.replace(".", "_"))
+                target = (os.path.join(root, "lib", where) if kind == "lib"
+                          else os.path.join(root, where))
+                with open(target, encoding="utf-8") as fh:
+                    text = fh.read()
+                if kind == "lib":
+                    marker = f"{func}() {{"
+                    self.assertIn(marker, text, f"{where}: {func} not found — the census is stale")
+                    head, _, tail = text.partition(marker)
+                    self.assertIn(LIB_GUARD, tail.split("}\n")[0],
+                                  f"{where}:{func} no longer opens with the D-prime guard")
+                    mutated = head + marker + tail.replace(
+                        LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
+                else:
+                    # BOTH guards, deliberately. Verdict is belt-and-braces: its hook-level skip
+                    # fires first, and behind it the library guard still holds — so removing either
+                    # one alone changes nothing observable, which is precisely the claim its comment
+                    # makes. Measured: hook guard alone deleted -> 0 compositions. Only removing
+                    # both exposes the write, and that is what proves the pair is real rather than
+                    # one of them being decorative.
+                    self.assertEqual(1, text.count(HOOK_GUARD),
+                                     f"{where}: hook-level D-prime skip is not present exactly once "
+                                     f"— the asymmetry this cell documents has changed")
+                    mutated = text.replace(HOOK_GUARD, ":" + " " * (len(HOOK_GUARD) - 1), 1)
+                    with open(target, "w", encoding="utf-8") as fh:
+                        fh.write(mutated)
+                    libpath = os.path.join(root, "lib", "context.sh")
+                    with open(libpath, encoding="utf-8") as fh:
+                        libtext = fh.read()
+                    marker = f"{func}() {{"
+                    head, _, tail = libtext.partition(marker)
+                    libmut = head + marker + tail.replace(
+                        LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
+                    self.assertEqual(libtext.count("\n"), libmut.count("\n"),
+                                     "the library mutation changed the line count")
+                    with open(libpath, "w", encoding="utf-8") as fh:
+                        fh.write(libmut)
+                self.assertEqual(text.count("\n"), mutated.count("\n"),
+                                 "the mutation changed the line count")
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(mutated)
+                attempts = self._drive(hook, payload, root)
+                self.assertNotEqual([], attempts,
+                                    f"CONTROL FAILED — with the {kind} guard in {where} deleted, driving "
+                                    f"{hook} produced no composition under {self.SENTINEL}, so the "
+                                    f"cell above cannot tell a working guard from a hook that "
+                                    f"never reached its write path")

@@ -43,5 +43,17 @@ esac
 AGENT_ID="$(hook_str agent_id)"
 [ -n "$AGENT_ID" ] || exit 0   # no id to bind -> inference covers this capture
 
+# NO HOOK-LEVEL D' GUARD HERE, DELIBERATELY (COREDEV-2617 / COREDEV-2691). Its sibling
+# `capture-reviewer-verdict.sh:48` DOES carry the hook-level base-ok skip, and that asymmetry was
+# flagged as undocumented. It is correct, and the sibling's own comment says why: that hook "passes
+# the composed root into Python and otherwise continues through lookup, capture and clear, so it
+# needs an explicit skip rather than relying on a primitive no-op". THIS hook composes no root,
+# calls no Python, and continues through nothing — the next statement is `exit 0`. It delegates to
+# exactly ONE primitive, `context_review_round_bind`, which carries the guard at context.sh:419.
+# Adding a second guard here would be cargo-cult symmetry, not defence.
+# MEASURED under an unresolved base with a `mkdir`-counting PATH shim: shipped -> 0 calls; with
+# context.sh:419's guard deleted -> 1 call, `mkdir -p /dev/null/unresolved-plugin-base/.state`.
+# So the lib guard is load-bearing FOR THIS HOOK and is what makes the omission safe. Pinned by
+# `test_plugin_state_base.py`'s hook-level cell — if that cell goes, so does this justification.
 context_review_round_bind "$AGENT" "$AGENT_ID" "$(hook_str session_id)" >/dev/null 2>&1 || true
 exit 0

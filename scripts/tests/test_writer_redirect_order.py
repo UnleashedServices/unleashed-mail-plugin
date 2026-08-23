@@ -36,18 +36,31 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Every writer that composes a temp file and suppresses stderr around the write.
-WRITERS = (
-    Path("scripts/lib/marker.sh"),
-    Path("scripts/lib/context.sh"),
-    Path("scripts/lib/log.sh"),
-    Path("scripts/precompact-snapshot.sh"),
-    Path("scripts/stop-quality-marker-gate.sh"),
-)
+#: DERIVED FROM THE TREE, not enumerated (COREDEV-2691). The first version of this sweep listed five
+#: writers by hand and scoped the pattern to temp-file names; both narrowings let a real leak through
+#: — see INVERTED below. A hand-kept list of the files a rule applies to is a blacklist wearing a
+#: different hat: it silently stops covering whatever is added next.
+def _shipped_shell() -> "list[Path]":
+    return sorted(
+        rel
+        for pattern in ("scripts/*.sh", "scripts/lib/*.sh", "scripts/review/*.sh")
+        for rel in (q.relative_to(REPO) for q in REPO.glob(pattern))
+    )
 
-#: A redirect into a temp target followed LATER on the same line by `2>/dev/null` — the inverted
-#: order. The open error escapes to the real stderr before the suppression takes effect.
-INVERTED = re.compile(r'>\s*"\$[^"]*(?:tmp|TMP|STMP)[^"]*"\s+2>/dev/null')
+
+#: A redirect into ANY path-bearing target, followed LATER on the same line by `2>/dev/null` — the
+#: inverted order. The open error escapes to the real stderr before the suppression takes effect.
+#:
+#: WIDENED (COREDEV-2691). The original pattern required the target to contain `tmp`/`TMP`/`STMP`,
+#: which made the sweep blind to `>> "$LOGDIR/stop-gate.log" 2>/dev/null` in the very file it already
+#: policed — `stop-quality-marker-gate.sh`, whose sibling site at :130 this suite was written for.
+#: Measured on the shipped hook with a directory planted at the log path:
+#:
+#:     stop-quality-marker-gate.sh: line 143: /…/<plugin-data>/logs/stop-gate.log: Is a directory
+#:
+#: The leak is the PATH, not the temp-ness of the path, so the pattern keys on the redirect shape:
+#: any `>`/`>>` into a quoted target that interpolates a variable, with the suppression trailing.
+INVERTED = re.compile(r'>>?\s*"[^"]*\$[^"]*"\s+2>/dev/null')
 
 
 @unittest.skipUnless(shutil.which("bash"), "needs bash")
@@ -121,12 +134,75 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         self.assertIn(".tmp.", result.stderr,
                       f"CONTROL FAILED — the leak did not name the temp path:\n{result.stderr!r}")
 
+    def _stop_gate_warn_onto_a_directory(self, mutate=None):
+        """Drive the Stop gate's WARN branch with a DIRECTORY planted at its log FILE path.
+
+        The second behavioural site (COREDEV-2691), deliberately an APPEND to a NON-temp target —
+        the shape this suite's first sweep could not see, in the very file it already policed.
+
+        The whole `scripts/` tree is COPIED into the scratch and the mutation applied to the copy.
+        A hook resolves its libraries from `BASH_SOURCE[0]`, so a mutant written anywhere else
+        cannot source `lib/hook-io.sh` and dies before reaching the redirect — which reads as "no
+        leak" and would make the control pass while proving nothing. Copying is also what keeps the
+        real worktree untouched.
+
+        A seeded FAILING lint marker is what carries execution into the warn branch; without it the
+        hook exits early and the cell is vacuous. The control below is what proves it got there.
+        """
+        root = self.scratch / "scripts"
+        if not root.exists():
+            shutil.copytree(REPO / "scripts", root, symlinks=True)
+        hook = root / "stop-quality-marker-gate.sh"
+        if mutate is not None:
+            text = hook.read_text(encoding="utf-8")
+            good, bad = mutate
+            self.assertEqual(1, text.count(good), "mutation anchor is not unique")
+            mutated = text.replace(good, bad, 1)
+            self.assertEqual(text.count("\n"), mutated.count("\n"),
+                             "the mutation changed the line count")
+            hook.write_text(mutated, encoding="utf-8")
+        driver = self.scratch / "drive-stop-gate.sh"
+        driver.write_text(
+            "#!/usr/bin/env bash\n"
+            '. "$1/lib/marker.sh"\n'
+            'L="$(marker_base)/logs"\n'
+            'mkdir -p "$L"\n'
+            'mkdir -p "$L/stop-gate.log"\n'          # a DIRECTORY where the log FILE goes
+            "marker_write lint fail >/dev/null 2>&1\n"
+            'printf %s "$2" | bash "$1/stop-quality-marker-gate.sh"\n',
+            encoding="utf-8")
+        payload = '{"hook_event_name":"Stop","session_id":"s1","transcript_path":"/x/t.jsonl"}'
+        env = dict(self.env, CLAUDE_PLUGIN_ROOT=str(root.parent),
+                   UNLEASHED_STOP_GATE_MODE="warn")
+        return subprocess.run(["bash", str(driver), str(root), payload],
+                              capture_output=True, text=True, env=env, check=False)
+
+    _WARN_LOG_GOOD = '    2>/dev/null >> "$LOGDIR/stop-gate.log" || true'
+    _WARN_LOG_BAD = '    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true'
+
+    def test_the_stop_gate_warn_log_does_not_leak_its_path_to_stderr(self):
+        result = self._stop_gate_warn_onto_a_directory()
+        self.assertEqual("", result.stderr,
+                         f"the warn-log open failure leaked its path to stderr:\n{result.stderr}")
+
+    def test_the_INVERTED_warn_log_order_leaks_the_path(self):
+        """The control, and the reproduction of the shipped defect. Measured before the fix, from
+        inside a hook: `stop-quality-marker-gate.sh: line 143:
+        /…/<plugin-data>/logs/stop-gate.log: Is a directory`."""
+        result = self._stop_gate_warn_onto_a_directory(
+            mutate=(self._WARN_LOG_GOOD, self._WARN_LOG_BAD))
+        self.assertIn("Is a directory", result.stderr,
+                      f"CONTROL FAILED — the inverted order did not leak, so the fixture never "
+                      f"reached the warn branch and the cell above proves nothing:\n{result.stderr!r}")
+        self.assertIn("stop-gate.log", result.stderr,
+                      f"CONTROL FAILED — the leak did not name the log path:\n{result.stderr!r}")
+
     def test_NO_writer_in_the_family_carries_the_inverted_order(self):
         """The family sweep. Three of these five shipped inverted while the rule sat in a comment in
         the fourth; a rule that lives only in prose is not enforced. This is what a sixth writer
         added tomorrow has to pass."""
         offenders = []
-        for rel in WRITERS:
+        for rel in _shipped_shell():
             path = REPO / rel
             if not path.is_file():
                 continue
@@ -142,8 +218,27 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         self.assertRegex('printf x > "$tmp" 2>/dev/null', INVERTED)
         self.assertRegex('printf x > "$_rb_path.tmp.$$" 2>/dev/null', INVERTED)
         self.assertRegex("if [ -n \"$_STMP\" ] && printf '%s' \"$C\" > \"$_STMP\" 2>/dev/null; then", INVERTED)
+        # THE ONE THE NARROW PATTERN MISSED (COREDEV-2691) — an APPEND, to a target with no temp
+        # marker in its name, in a file this suite already policed. Both narrowings had to go.
+        self.assertRegex('    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true', INVERTED)
+        self.assertRegex('cmd > "$COVERAGE_OUT" 2>/dev/null', INVERTED)
+        # ...and the correct order still must not match, in either redirect form.
         self.assertNotRegex('printf x 2>/dev/null > "$tmp"', INVERTED)
         self.assertNotRegex('tail -n 5 "$p" 2>/dev/null > "$tmp"', INVERTED)
+        self.assertNotRegex('    2>/dev/null >> "$LOGDIR/stop-gate.log" || true', INVERTED)
+        # A bare `2>/dev/null` with no output redirect at all must not match — the `>` inside it is
+        # not an output redirect, and a pattern that thought so would flag most of the tree.
+        self.assertNotRegex('mkdir -p "$LOGDIR" 2>/dev/null || exit 0', INVERTED)
+
+    def test_the_sweep_covers_the_whole_shipped_shell_tree(self):
+        """The derivation's own control. If `_shipped_shell()` ever returns a short or empty list the
+        sweep above passes vacuously — which is precisely how the hand-written five-file list hid a
+        real leak. Assert it reaches a realistic breadth AND names the files that carry the rule."""
+        found = {rel.as_posix() for rel in _shipped_shell()}
+        self.assertGreater(len(found), 15, f"suspiciously few shell files swept: {sorted(found)}")
+        for required in ("scripts/lib/marker.sh", "scripts/lib/context.sh", "scripts/lib/log.sh",
+                         "scripts/precompact-snapshot.sh", "scripts/stop-quality-marker-gate.sh"):
+            self.assertIn(required, found, "the original five must still be swept")
 
 
 if __name__ == "__main__":
