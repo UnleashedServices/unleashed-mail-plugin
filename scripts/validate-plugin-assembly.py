@@ -582,12 +582,18 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # A BARE `Agent` reaches every agent and needs the writer denials below.
         if "Agent" in live:
             spawners.append((path, frontmatter))
-        # A SCOPED grant — `Agent(a, b)` — is an ALLOWLIST, but "writers are excluded by
-        # construction" is FALSE as a blanket claim: it holds only if no listed member IS a writer.
-        # Measured (codex, PR #74) — `tools: Read, Agent(rogue-writer)` beside a writing
-        # `rogue-writer` reported NO problem, because `_live_tools` holds `Agent(...)` rather than
-        # bare `Agent` and the spawner was skipped entirely. The same hole opens when an allowlisted
-        # specialist LATER gains `Bash` or `Write`. So the members are checked by name.
+        # ADVISORY, NOT A RUNTIME RESTRICTION (COREDEV-2711). A scoped grant `Agent(a, b)` reads like
+        # an allowlist, and it is one — for a MAIN-THREAD agent. For a SUB-AGENT the runtime grants
+        # the tool and discards the type list: measured on 2.8.1, `swift-reviewer` spawned a writer
+        # absent from its own list with no refusal and no prompt. So this check does NOT describe
+        # what the runtime will permit; it keeps the DECLARED set honest, which is a real but
+        # narrower thing — it fails CI when a writing agent is added to a declared spawn list.
+        #
+        # "Writers are excluded by construction" was FALSE as a blanket claim even for the
+        # declaration: it holds only if no listed member IS a writer. Measured (codex, PR #74) —
+        # `tools: Read, Agent(rogue-writer)` beside a writing `rogue-writer` reported NO problem,
+        # because `_live_tools` holds `Agent(...)` rather than bare `Agent` and the spawner was
+        # skipped entirely. The same hole opens when an allowlisted specialist LATER gains `Bash`.
         scoped_spawners.extend((path, member)
                                for token in live if token.startswith("Agent(")
                                for member in _agent_specifier_members(token))
@@ -597,9 +603,10 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         if bare in writers:
             rel = path.relative_to(root).as_posix()
             problems.append(
-                f"{rel}: its scoped `Agent(...)` allowlist names `{member}`, which can modify the "
-                f"checkout. An allowlist only constrains the spawn set if no member is a writer — "
-                f"remove it, or make that agent read-only."
+                f"{rel}: its scoped `Agent(...)` list names `{member}`, which can modify the "
+                f"checkout. NOTE this list is a DECLARATION, not a runtime control (COREDEV-2711): "
+                f"the runtime does not enforce the type list for a sub-agent. Keeping the "
+                f"declaration honest is the point — remove it, or make that agent read-only."
             )
 
     for path, frontmatter in spawners:
