@@ -858,3 +858,102 @@ class TestS5ClusterNeverCollapsesBFileDimension(unittest.TestCase):
                          "control: clusterSize doubles — rendered as corroboration weight")
         report = m.render_report(r)
         self.assertNotIn("B.swift:12-18", report, "control: the other file's loc disappears")
+
+
+class TestS1EmptyChangesetCauseClauseIsSharedAndTrue(unittest.TestCase):
+    """The empty-changeset refusal exists on TWO entry points that must stay identical — the CLI and
+    `mcp_server._call_synthesize`. This module has now been bitten THREE times by those twins drifting
+    (S1 itself; the `findings_explicit` vs `findings_in` predicate; and this wording), so the cause
+    clause lives in ONE constant that both import, and this cell pins that.
+
+    It also pins the clause's TRUTH. It used to read "every finding would mis-scope to pre-existing",
+    which is a FALSE UNIVERSAL (codex, PR #77): `in_gating_scope` keeps a finding gating regardless of
+    `changed_files` when its family is in `_ALWAYS_GATING_FAMILIES` or its scope is
+    "structural-pipeline", so those rows would not mis-scope at all."""
+
+    _ROW = dict(severity="blocker", confidence="high", sourceAgent="security-reviewer",
+                category="credential", file="A.swift", line=1, lineEnd=1, finding="k",
+                evidence="e", fix="x")
+
+    def test_both_arms_emit_the_same_cause_clause(self):
+        # Assert the EMITTED message on BOTH arms, not merely that a shared constant exists. An
+        # earlier version asserted `assertIs` on the constant alone — and a mutant that hardcoded a
+        # different literal at the MCP raise site SURVIVED it, because the constant was still shared,
+        # just unused. Importing a constant is a mechanism; emitting it is the outcome.
+        import mcp_server as MS
+        self.assertIs(MS._EMPTY_CHANGESET_CAUSE, S._EMPTY_CHANGESET_CAUSE,
+                      "the twins must share ONE constant, not two equal literals that can drift")
+
+        with self.assertRaises(Exception) as caught:
+            MS._call_synthesize({"findings": [self._ROW], "changed_files": []})
+        self.assertIn(S._EMPTY_CHANGESET_CAUSE, str(caught.exception),
+                      "the MCP arm must EMIT the shared cause clause, not merely import it")
+
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [dict(severity="blocker", confidence="high",
+                                             sourceAgent="security-reviewer", category="credential",
+                                             file="A.swift", line=1, lineEnd=1, finding="k",
+                                             evidence="e", fix="x")]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+            self.assertEqual(rc, 2)
+            cli_err = err.getvalue()
+        self.assertIn(S._EMPTY_CHANGESET_CAUSE, cli_err,
+                      "the CLI must state the shared cause clause verbatim")
+
+    def test_the_cause_clause_does_not_claim_EVERY_finding_mis_scopes(self):
+        # The false universal this replaced. Proven false below by the sibling cell.
+        self.assertNotIn("every finding", S._EMPTY_CHANGESET_CAUSE.lower())
+
+    def test_a_globally_gating_finding_really_would_not_mis_scope(self):
+        # PROOF that the old wording was false, and the reason the new wording is narrowed. Bypass the
+        # guard by calling the library entry point directly with an empty changeset: a structural-
+        # pipeline finding does NOT land in pre_existing — it gates.
+        # BOTH global-gating mechanisms, because `in_gating_scope` has two independent ones and an
+        # earlier version of this cell exercised only `scope`: mutating the `_ALWAYS_GATING_FAMILIES`
+        # branch left it green, so the cell did not cover what its own docstring claimed.
+        globals_ = [
+            ("scope", f(severity="blocker", confidence="high", category="logic",
+                        file="A.swift", scope="structural-pipeline")),
+            ("family:verification", f(severity="blocker", confidence="high", category="verification",
+                                      file="A.swift")),
+            ("family:parity", f(severity="blocker", confidence="high", category="parity",
+                                file="A.swift")),
+            ("family:test-coverage", f(severity="blocker", confidence="high", category="test-coverage",
+                                       file="A.swift")),
+        ]
+        for mechanism, glob_blocker in globals_:
+            with self.subTest(mechanism=mechanism):
+                r = S.synthesize([glob_blocker], set())
+                self.assertEqual(r.pre_existing, [],
+                                 f"a globally-gating finding ({mechanism}) must not mis-scope")
+                self.assertEqual(r.verdict.decision, "REQUEST_CHANGES")
+
+        # ...and the contrast that makes the refusal correct for everything else.
+        dep_blocker = f(severity="blocker", confidence="high", category="credential", file="A.swift")
+        r2 = S.synthesize([dep_blocker], set())
+        self.assertEqual(len(r2.pre_existing), 1, "a changed-file-dependent finding DOES mis-scope")
+        self.assertTrue(r2.verdict.decision.startswith("APPROVE"),
+                        "which is exactly the bogus APPROVE the guard exists to refuse")
+
+    def test_the_refusal_is_per_input_not_per_row(self):
+        # Deliberate, and documented: a globally-gating finding is refused ALONGSIDE the rest rather
+        # than split out. Splitting it would make the CLI answer where the MCP twin refuses — the
+        # exact drift this class exists to prevent. Recorded as behaviour so a future change is a
+        # deliberate one on BOTH arms, not an accident on one.
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "f.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [dict(severity="blocker", confidence="high",
+                                             sourceAgent="security-reviewer", category="logic",
+                                             file="A.swift", line=1, lineEnd=1, finding="k",
+                                             evidence="e", fix="x", scope="structural-pipeline")]}, fh)
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(S.main([fp, "--changed", ch]), 2)

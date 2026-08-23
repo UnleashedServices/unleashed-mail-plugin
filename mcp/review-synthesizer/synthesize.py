@@ -372,6 +372,13 @@ def render_markdown(review: Review) -> str:
 # CLI
 # --------------------------------------------------------------------------- #
 
+# The one cause clause both entry points must state identically. `mcp_server.py` imports it, so the
+# twins cannot drift in wording — the drift this module has now been bitten by three times.
+_EMPTY_CHANGESET_CAUSE = (
+    "a changed-file-dependent finding would mis-scope to pre-existing and yield a bogus APPROVE"
+)
+
+
 def _load(paths: list[str]) -> tuple[list[Finding], list[tuple[dict, str]]]:
     findings, bad = [], []
     for path in paths:
@@ -479,9 +486,13 @@ def main(argv: list[str]) -> int:
     # which guards on `findings_in`. `bad` counts too: a row that only quarantined is still a row,
     # and would still mis-scope. Demo mode is unaffected — it supplies the bundled changeset.
     if (findings or bad) and not {p for p in (canonical_path(c) for c in changed) if p}:
+        # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
+        # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES
+        # or its scope is "structural-pipeline", so those rows would NOT mis-scope. They are refused
+        # alongside the rest deliberately: the refusal is per-INPUT, not per-row, and splitting it
+        # would diverge from the MCP twin. Keep this cause clause byte-identical to mcp_server.py's.
         print("error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
-              "refusing to synthesize (every finding would mis-scope to pre-existing and yield a "
-              "bogus APPROVE)", file=sys.stderr)
+              "refusing to synthesize (" + _EMPTY_CHANGESET_CAUSE + ")", file=sys.stderr)
         return 2
     # A2/F3: refuse an absolute/traversal changed entry (git diff --name-only never emits these) — it can
     # only mis-scope findings to a bogus APPROVE. Fail CLOSED, matching mcp_server.py's changed_files guard.
