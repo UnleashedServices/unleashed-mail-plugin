@@ -20,10 +20,13 @@ implementation, not merely a `git revert` — §3's second corollary):
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.dirname(HERE)
@@ -287,3 +290,78 @@ class COREDEV2609_ValueClassFolds(unittest.TestCase):
                   f"a {self.LONGS} standalone char", "bearer short"):
             with self.subTest(v=v):
                 self.assertEqual(v, C.redact_pii(v))
+
+
+class TestS3EquivalenceGateExitCode(unittest.TestCase):
+    """S3 (COREDEV-2654): `redactor_model.run()`'s exit code is a REAL CI GATE — plugin-ci.yml runs
+    `redactor_model.py --count 40000 --seed 20260729` and `--count 20000 --seed 31337` as two steps
+    and gates on the status. Its fail-OPEN direction was unpinned: turning the unexplained-divergence
+    `return 1` into `return 0` left the whole suite green, so a NEW root cause of shell/Python
+    divergence could land with both CI steps passing.
+
+    The corpus and the shell are patched out deliberately: this cell is about the EXIT CODE and the
+    three-way classification (agree / exempt / unexplained), not about the redactors themselves —
+    those are compared for real by the rest of this file, driven from the canonical fixture. A cell
+    that shelled out 40000 times to assert `return 1` would be pinning the wrong thing slowly."""
+
+    CORPUS = ["alpha beta", "gamma delta"]
+
+    def _run(self, shell_out, explains=None):
+        import redactor_model as M
+        patches = [
+            mock.patch.object(M, "build_corpus", lambda count, seed: list(self.CORPUS)),
+            mock.patch.object(M, "shell_redact_batch", shell_out),
+        ]
+        if explains is not None:
+            patches.append(mock.patch.object(M, "_email_lookahead_explains", explains))
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            st.enter_context(contextlib.redirect_stdout(out))
+            st.enter_context(contextlib.redirect_stderr(err))
+            rc = M.run(count=2, seed=1, verbose=False)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_full_agreement_exits_zero(self):
+        rc, out, err = self._run(lambda vs: [C.redact_pii(v) for v in vs])
+        self.assertIn("EQUIVALENCE HOLDS", out)
+        self.assertIn("UNEXPLAINED         : 0", out)
+        self.assertEqual(rc, 0, "a corpus the two implementations agree on must exit 0")
+        self.assertEqual(err, "", "agreement must not write to stderr")
+
+    def test_unexplained_divergence_exits_one_and_is_named(self):
+        # THE fail-open direction. Without this, `return 1` -> `return 0` is a silent CI no-op.
+        rc, out, err = self._run(lambda vs: ["TOTALLY-DIFFERENT" for _ in vs])
+        self.assertIn("UNEXPLAINED         : 2", out)
+        self.assertIn("a NEW root cause exists", err)
+        self.assertIn("TOTALLY-DIFFERENT", err, "the diagnostic must show the diverging output")
+        self.assertIn("alpha beta", err, "the diagnostic must show the offending input")
+        self.assertEqual(rc, 1, "an unexplained divergence must FAIL the CI gate")
+
+    def test_explained_divergence_is_exempt_and_still_exits_zero(self):
+        # The narrowing half: a divergence the retina-lookahead exemption fully explains must NOT
+        # red the gate, else the permanent exemption would break CI on every run. Asserting only
+        # the failure direction would be satisfied by `return 1` unconditionally.
+        rc, out, err = self._run(lambda vs: ["TOTALLY-DIFFERENT" for _ in vs],
+                                 explains=lambda value, sh, py: True)
+        self.assertIn("exempt (@Nx lookahead): 2", out)
+        self.assertIn("UNEXPLAINED         : 0", out)
+        self.assertIn("EQUIVALENCE HOLDS", out)
+        self.assertEqual(rc, 0, "a fully-explained divergence must still exit 0")
+
+    def test_verbose_prints_every_divergence_not_just_the_first_25(self):
+        # The truncation arm: non-verbose caps the dump at 25 and says how many more. A silent cap
+        # would make a 200-divergence regression look like a 25-divergence one.
+        import redactor_model as M
+        with mock.patch.object(M, "build_corpus", lambda count, seed: [f"v{i}" for i in range(30)]), \
+             mock.patch.object(M, "shell_redact_batch", lambda vs: ["X" for _ in vs]):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                self.assertEqual(M.run(count=30, seed=1, verbose=False), 1)
+            self.assertIn("… and 5 more (--verbose for all)", err.getvalue())
+            out2, err2 = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+                self.assertEqual(M.run(count=30, seed=1, verbose=True), 1)
+            self.assertNotIn("more (--verbose for all)", err2.getvalue())
+            self.assertGreater(err2.getvalue().count("shell "), err.getvalue().count("shell "))
