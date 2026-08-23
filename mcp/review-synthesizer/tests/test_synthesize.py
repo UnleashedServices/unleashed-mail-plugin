@@ -736,3 +736,88 @@ class TestS4ChangedFlagWithoutValue(CliFixture):
             "    if changed_explicit and (not os.path.exists(changed_path)):" + " " * 26)
         with self.assertRaises(TypeError):
             self.run_main(m, [self.fj, "--changed"])
+
+
+class TestS5ClusterNeverCollapsesALineDimension(unittest.TestCase):
+    """S5, LINE dimension (`synthesize.py:61`). A file-level finding is `line == 0` but MAY still
+    carry a non-zero `lineEnd`. Without the guard, `a.line <= b.lineEnd and b.line <= a.lineEnd`
+    reads 0 <= 4 and 3 <= 120 — the file-level finding absorbs the line-range one, whose row and
+    `loc` vanish from the consolidated table while clusterSize doubles. clusterSize is rendered as
+    corroboration weight, so the same mutation simultaneously DROPS a finding and INFLATES the
+    apparent confidence of the one that swallowed it."""
+
+    ANCHOR = "    if a.line == 0 or b.line == 0:"
+
+    def _pair(self):
+        return (f(category="logic", line=0, lineEnd=120, finding="FILE-LEVEL", fix="FIX_FILE"),
+                f(category="error-handling", line=3, lineEnd=4, finding="LINE-RANGE", fix="FIX_LINE"))
+
+    def test_file_level_finding_with_a_line_end_never_absorbs_a_line_range_one(self):
+        a, b = self._pair()
+        self.assertEqual((a.line, a.lineEnd), (0, 120),
+                         "premise: a file-level finding CAN carry a non-zero lineEnd")
+        self.assertFalse(S._overlap(a, b))
+        r = S.synthesize([a, b], {"A.swift"})
+        self.assertEqual(sorted(len(c.findings) for c in r.clusters), [1, 1],
+                         "clusterSize is corroboration weight — it must not be inflated by absorption")
+        report = S.render_report(r)
+        self.assertIn("A.swift (file-level)", report)
+        self.assertIn("A.swift:3-4", report, "the line-range finding keeps its own row and loc")
+
+    def test_both_file_level_still_cluster(self):
+        # The narrowing half: two genuine file-level findings SHOULD still cluster, so the guard
+        # cannot simply be `return False` for anything touching line 0.
+        cs = S.cluster_findings([f(category="logic", line=0, lineEnd=0),
+                                 f(category="error-handling", line=0, lineEnd=0)])
+        self.assertEqual(len(cs), 1)
+
+    def test_mutant_control_without_the_guard_the_file_level_row_absorbs_it(self):
+        m = load_mutant(self, self.ANCHOR, "    if False:  # MUTANT               ")
+        a, b = self._pair()
+        self.assertTrue(m._overlap(a, b))
+        r = m.synthesize([a, b], {"A.swift"})
+        self.assertEqual([len(c.findings) for c in r.clusters], [2])
+        self.assertNotIn("A.swift:3-4", m.render_report(r), "control: the line-range loc disappears")
+
+
+class TestS5ClusterNeverCollapsesBFileDimension(unittest.TestCase):
+    """S5, FILE dimension (`synthesize.py:92`) — found by the critic, absent from the sweep. The same
+    class of defect one axis over: drop the `a.file != b.file` half and two findings in DIFFERENT
+    files cluster whenever their line ranges happen to overlap. Line numbers collide constantly
+    across files, so this is not an exotic input — it is the common case."""
+
+    ANCHOR = "    if a.file != b.file or not _overlap(a, b):"
+
+    def _pair(self):
+        return (f(category="logic", file="A.swift", line=10, lineEnd=20, finding="IN-A", fix="FIX_A"),
+                f(category="logic", file="B.swift", line=12, lineEnd=18, finding="IN-B", fix="FIX_B"))
+
+    def test_findings_in_different_files_never_cluster(self):
+        a, b = self._pair()
+        self.assertTrue(S._overlap(a, b), "premise: the LINE ranges do overlap — only the file differs")
+        self.assertFalse(S._candidate(a, b))
+        r = S.synthesize([a, b], {"A.swift", "B.swift"})
+        self.assertEqual(sorted(len(c.findings) for c in r.clusters), [1, 1])
+        report = S.render_report(r)
+        self.assertIn("A.swift:10-20", report)
+        self.assertIn("B.swift:12-18", report, "the finding in the other file keeps its own row")
+        self.assertIn("IN-A", report)
+        self.assertIn("IN-B", report)
+
+    def test_same_file_overlapping_still_clusters(self):
+        # Narrowing half: the file check must not become `return False` for everything.
+        a, b = self._pair()
+        b_same = f(category="logic", file="A.swift", line=12, lineEnd=18, finding="IN-B", fix="FIX_B")
+        self.assertTrue(S._candidate(a, b_same))
+        self.assertEqual(len(S.cluster_findings([a, b_same])), 1)
+
+    def test_mutant_control_without_the_file_check_a_finding_vanishes(self):
+        m = load_mutant(self, self.ANCHOR,
+                        "    if not _overlap(a, b):  # MUTANT: file check dropped")
+        a, b = self._pair()
+        self.assertTrue(m._candidate(a, b), "control premise: the mutant treats them as one defect")
+        r = m.synthesize([a, b], {"A.swift", "B.swift"})
+        self.assertEqual([len(c.findings) for c in r.clusters], [2],
+                         "control: clusterSize doubles — rendered as corroboration weight")
+        report = m.render_report(r)
+        self.assertNotIn("B.swift:12-18", report, "control: the other file's loc disappears")
