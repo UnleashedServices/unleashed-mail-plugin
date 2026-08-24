@@ -157,9 +157,14 @@ def _module_level(body):
         # was one spelling of a family (codex, PR #78) — the property is "a literal falsy test",
         # not "an If node". A `while`'s `orelse` runs when the loop ends normally, which for a
         # never-entered loop is immediately, so it is walked in both cases.
-        if (isinstance(n, (ast.If, ast.While)) and isinstance(n.test, ast.Constant)
-                and not n.test.value):
-            yield from _module_level(list(getattr(n, "orelse", [])))
+        # ...in BOTH polarities. Handling only a falsy test left `if True: … else: <guard>` —
+        # where the ELSE is the dead half — walking both branches and counting the dead guard
+        # (codex, PR #78). The live half is the body when the constant is truthy and the `orelse`
+        # when it is falsy; for `while True:` the `orelse` is the unreachable one, which the same
+        # expression gives.
+        if isinstance(n, (ast.If, ast.While)) and isinstance(n.test, ast.Constant):
+            live = list(n.body) if n.test.value else list(getattr(n, "orelse", []))
+            yield from _module_level(live)
             continue
         if isinstance(n, (ast.If, ast.Try, getattr(ast, "TryStar", ()))):
             for sub in (list(getattr(n, "body", [])) + list(getattr(n, "orelse", []))
@@ -396,6 +401,10 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # not an `If` node, and special-casing `if` alone was one spelling of a family.
             "dead_while.py": ('class T(unittest.TestCase): pass\nwhile False:\n'
                               '    if __name__ == "__main__":\n        unittest.main()\n'),
+            # ...and the dead half of a constant-TRUE test is the `else`, which the falsy-only
+            # rule walked and counted.
+            "dead_else.py": ('class T(unittest.TestCase): pass\nif True:\n    pass\nelse:\n'
+                             '    if __name__ == "__main__":\n        unittest.main()\n'),
         }
         must_flag.update({
             "in_if.py": ('if __name__ == "__main__":\n    unittest.main()\n'
@@ -493,6 +502,10 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # ...and a runtime-evaluable `while` is not dead either.
             "live_while.py": ('import shutil\nwhile shutil.which("zsh"):\n    break\n'
                               'if __name__ == "__main__":\n    unittest.main()\n'),
+            # ...and the LIVE half of a constant-true test is the body, which must still be walked
+            # or the fix trades one blind spot for another.
+            "live_true_body.py": ('class T(unittest.TestCase): pass\nif True:\n'
+                                  '    if __name__ == "__main__":\n        unittest.main()\n'),
             # A non-test helper defined after the guard is dead, but it is not a dropped TEST and
             # the sweep's message would be wrong about it. Only `test`-named functions count.
             "helper_after.py": ('if __name__ == "__main__":\n    unittest.main()\n'

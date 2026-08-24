@@ -362,9 +362,22 @@ def inverted_redirect(line):
     # command's temporary suppression alive and hid a real leak (codex, PR #78). Fourth time on
     # this PR that redirect state was right in one direction and wrong in the other, which is why
     # every one of these now carries a paired assertion.
-    _exec_persisted = False
-    for _m in re.finditer(r"(?:^|[;&|]\s*)exec\s+((?:2[<>]|&>|>&)[^\s;|&]*)", line):
-        _exec_persisted = _m.group(1).strip(";").strip("\"'").endswith("/dev/null")
+    # ...and it applies FORWARD ONLY. A line-wide prescan let an `exec` at the END of the line
+    # silence a leak written BEFORE it — `printf x > "$p" 2>/dev/null; exec 2>/dev/null` is
+    # measured leaking and returned None (codex, PR #78). Redirections do not act backwards.
+    # Each mark records where an fd-2 `exec` sits and what it left fd 2 pointing at; the boundary
+    # consults only the marks that precede it.
+    _exec_marks = [(_m.start(), _m.group(1).strip(";").strip("\"'").endswith("/dev/null"))
+                   for _m in re.finditer(
+                       r"(?:^|[;&|]\s*)exec\s+((?:2[<>]|&>|>&)[^\s;|&]*)", line)]
+
+    def _persisted(at):
+        state = False
+        for _pos, _on in _exec_marks:
+            if _pos >= at:
+                break
+            state = _on
+        return state
     while i < n:
         c = line[i]
         if c == "\\":
@@ -428,7 +441,7 @@ def inverted_redirect(line):
         elif line.startswith("]]", i) and cond:
             cond -= 1
             i += 2
-        elif (c in ";|" or (c == "&" and line[i + 1:i + 2] != ">")) and not _exec_persisted:
+        elif (c in ";|" or (c == "&" and line[i + 1:i + 2] != ">")) and not _persisted(i):
             stderr_off = False                 # a new command inherits none of the old redirects
             i += 1
         elif c in "<>" and cond:
@@ -823,6 +836,10 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
             inverted_redirect('exec 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
         self.assertIsNone(
             inverted_redirect('exec &>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
+        # ...and only FORWARD. An `exec` at the end of the line cannot silence a leak written
+        # before it; redirections do not act backwards. Measured leaking, returned None.
+        self.assertIsNotNone(inverted_redirect(
+            'printf a 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null; exec 2>/dev/null'))
         # ...and the LAST exec touching fd 2 decides. `exec 2>/dev/null; exec 2>&1; …` RESTORES
         # stderr, so a later command's own suppression must expire normally again - measured
         # leaking through stdout. A line-wide boolean taken from the FIRST exec kept it alive.
