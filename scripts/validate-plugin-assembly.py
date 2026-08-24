@@ -544,6 +544,24 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
             )
 
 
+def _spawn_remedy(frontmatter: dict) -> str:
+    """The remedy text, CONDITIONAL on whether the agent already declares `tools:` (codex, PR #76).
+
+    Advising an INHERIT-ALL agent to add a scoped `Agent(...)` grant silently strips its MCP tools:
+    omitting `tools:` is what inherits install-prefixed MCP servers, and AGENT_CONTRACTS requires
+    that omission for `jira-manager` and `modern-standards-planner` precisely because the runtime
+    prefix is install-specific. Setting `tools:` at all is a strict allowlist, so those tools would
+    vanish — trading one silent capability loss for another, which is the defect this check exists
+    to prevent. Both diagnostics in this function route through here so the pair cannot drift.
+    """
+    if "tools" not in frontmatter:
+        return ("To stop this agent spawning, deny bare `Agent`. Do NOT add a `tools:` list to "
+                "narrow it — this agent inherits install-prefixed MCP tools by omitting `tools:`, "
+                "and setting it is a strict allowlist that would silently drop them.")
+    return ("To stop this agent spawning, deny bare `Agent`. To narrow WHICH types it declares, "
+            "use a scoped `Agent(...)` grant in `tools:` instead.")
+
+
 def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
     """Check a spawner's DECLARED reach against the writer roster computed from disk.
 
@@ -621,16 +639,24 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # `writers`, of `missing`, and of whether bare `Agent` is even granted.
         # `strip` the quotes first: a YAML quoted scalar (`disallowedTools: "Agent(x)"`) otherwise
         # walks straight through the prefix test.
+        # `.strip()` AFTER the quotes: a YAML scalar with incidental inner whitespace
+        # (`" Agent(x)"`) otherwise walks through the prefix test (gemini, PR #76).
         bad_denials = sorted(tok for tok in _tool_tokens(frontmatter.get("disallowedTools", ""))
-                             if tok.strip('"\'').startswith("Agent("))
+                             if tok.strip('"\'').strip().startswith("Agent("))
         if bad_denials:
             rel = path.relative_to(root).as_posix()
+            # THE REMEDY IS CONDITIONAL (codex, PR #76). Telling an INHERIT-ALL agent to add a
+            # scoped `Agent(...)` grant to `tools:` would silently strip its MCP tools: an agent
+            # that omits `tools:` inherits install-prefixed MCP servers, and AGENT_CONTRACTS §10
+            # requires exactly that omission for `jira-manager` and `modern-standards-planner`
+            # because the runtime prefix is install-specific. Setting `tools:` at all is a strict
+            # allowlist, so the MCP tools would vanish — swapping one silent capability loss for
+            # another, which is the defect this whole check exists to prevent.
+            remedy = _spawn_remedy(frontmatter)
             problems.append(
                 f"{rel}: `disallowedTools` carries scoped Agent denial(s) "
                 f"{', '.join(bad_denials)} — that form removes the `Agent` tool ENTIRELY and "
-                f"silently disables spawning (COREDEV-2703). To stop this agent spawning, deny "
-                f"bare `Agent`. To narrow WHICH types it declares, use a scoped `Agent(...)` grant "
-                f"in `tools:` instead."
+                f"silently disables spawning (COREDEV-2703). {remedy}"
             )
 
     for path, member in scoped_spawners:
@@ -655,12 +681,11 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
             rel = path.relative_to(root).as_posix()
             problems.append(
                 f"{rel}: holds bare `Agent`, so its DECLARED reach is every agent — but it does "
-                f"not deny these file-writing ones: {', '.join(missing)}. Fix by replacing bare "
-                f"`Agent` with a scoped `Agent(<read-only types>)` grant in `tools:`, or by denying "
-                f"bare `Agent` outright. Do NOT add `Agent(<name>)` to `disallowedTools`: that "
-                f"specifier form removes the `Agent` tool entirely and silently disables spawning "
-                f"(COREDEV-2703). Note this is a DECLARATION check — the runtime does not enforce "
-                f"a type list for a sub-agent (COREDEV-2711)."
+                f"not deny these file-writing ones: {', '.join(missing)}. {_spawn_remedy(frontmatter)} "
+                f"Do NOT add `Agent(<name>)` to `disallowedTools`: that specifier form removes the "
+                f"`Agent` tool entirely and silently disables spawning (COREDEV-2703). Note this is "
+                f"a DECLARATION check — the runtime does not enforce a type list for a sub-agent "
+                f"(COREDEV-2711)."
             )
 
 
