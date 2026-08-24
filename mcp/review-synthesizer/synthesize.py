@@ -495,8 +495,11 @@ def main(argv: list[str]) -> int:
     # `{"findings": [null]}` produced a traceback instead of the refusal. `_load` quarantines ANY
     # schema-invalid row verbatim, including `null`, numbers and arrays, so the discriminator has to
     # test the SHAPE of a file-level marker rather than assume the row is iterable and hashable.
-    _rows = [b for b in bad
-             if not (isinstance(b[0], dict) and len(b[0]) == 1 and "_file" in b[0])]
+    def _is_file_failure(item) -> bool:
+        """A `_load` FILE-level marker — `{"_file": path}` — as opposed to a quarantined row."""
+        return isinstance(item, dict) and len(item) == 1 and "_file" in item
+
+    _rows = [b for b in bad if not _is_file_failure(b[0])]
     if (findings or _rows) and not any(canonical_path(c) for c in changed):
         # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
         # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES
