@@ -13,7 +13,23 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.2] — 2026-08-24
+
 ### Fixed
+
+- **Seven shipped writers leaked the operator's expanded filesystem path to stderr
+  (`COREDEV-2691`).** A simple command applies every redirection left to right, so
+  `cmd > "$path" 2>/dev/null` opens `$path` **before** stderr is suppressed; a failed open then
+  prints the expanded path to the real stderr. Reordered in `scripts/lib/marker.sh:311` (the hook
+  write path), `scripts/stop-quality-marker-gate.sh`, `scripts/ci-load-check.sh`,
+  `scripts/test-runner.sh`, `scripts/test-hooks.sh`, `scripts/review/isolated-agy-review.sh` and
+  `scripts/review/isolated-codex-review.sh`.
+
+  Four were **input** redirects inside command substitutions (`wc -c < "$OUT" 2>/dev/null`), a
+  shape the existing sweep could not see: it matched output redirects only and skipped quoted
+  regions wholesale, so it could not enforce its own rule on them. `scripts/lib/log.sh:216-218`
+  had stated the rule in prose since PR #63 while these seven violated it — a rule that lives
+  only in a comment is not enforced.
 
 - **COREDEV-2711 — the `Agent(...)` spawn allowlist is a DECLARATION, not a runtime control.** The
   2.8.1 entry below states that the scoped grant keeps PR #63's P1 closed. Measured on 2.8.1 it does
@@ -31,6 +47,41 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 - **COREDEV-2711 — `disallowedTools` does not stop direct checkout writes.** `swift-reviewer` holds
   bare `Bash`, which this repo's own `_WRITE_VECTORS` counts as a write vector and `AGENT_CONTRACTS`
   §9.1 records as an accepted residual. Documentation claiming otherwise is corrected.
+
+### Changed
+
+- **The inverted-redirect sweep derives its scope instead of enumerating it (`COREDEV-2691`).**
+  It was a regex over five hand-listed files, narrowed on two independent axes — the pattern
+  required a temp-ish name in the target, and the file list was hand-kept. A live leak sat at
+  `:145` of the very file whose `:130` the sweep was written for. It is now a hand-rolled,
+  linear, 3.9-compatible shell scanner over every tracked `*.sh` under `scripts/` plus
+  `.githooks/pre-commit`, modelling single/double/ANSI-C quoting, `$( … )` and legacy backtick
+  substitutions (including inside double quotes, and honouring escaped delimiters), `[[ … ]]`
+  comparison context, comments after any control operator, fd duplication, `exec` persistence and
+  same-command stderr state.
+
+  The suppression allowlist is checked by **executing its criterion** against real bash — an
+  operator qualifies only if bash is quiet with it written first and leaks with it written last —
+  rather than by curation. That cell caught, on its first CI run, two operators (`2>&-` and
+  `2</dev/null`) that suppress on Linux but not on macOS bash 3.2 and had been declined here on a
+  macOS-only measurement.
+
+### Added
+
+- **A guard that no hook writes under an unresolved plugin base (`COREDEV-2691`).** The `D′`
+  sentinel layer had no hook-level coverage: the library guards were pinned, the hooks that call
+  them were not. The new cells drive the shipped hooks with a `PATH` shim over `mkdir`, `rm`, `mv`
+  and `python3`, force every derived kill switch on so a cell cannot pass having exercised
+  nothing, and **verify** each exemption — the named primitive must really appear in the hook, and
+  a hook that composes a base root without an exiting guard before it cannot be exempted at all.
+
+- **A guard that no test definition follows a suite's entrypoint (`COREDEV-2691`).** A class,
+  test function or `load_tests` hook written after `unittest.main()` is silently dropped on direct
+  execution while the run still prints `OK`. The check is structural (AST, not lexical): it
+  recurses into module-level control flow but not into function or class bodies, distinguishes an
+  exiting guard from an innocuous one, ignores statically dead branches, models mutually exclusive
+  `if`/`else` branches, and treats `pytest.main()` correctly — it re-imports the file, so it drops
+  nothing.
 
 ## [2.8.1] — 2026-08-23
 
