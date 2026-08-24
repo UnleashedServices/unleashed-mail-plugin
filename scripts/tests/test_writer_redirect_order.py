@@ -352,7 +352,14 @@ def inverted_redirect(line):
             if line[start:i].strip("\"'") == "/dev/null":
                 # THIS redirect is the suppression. It counts as covering the rest of the command
                 # only if it is on fd 2 (`2>`, `2<>`) or takes stdout with it (`&>`, `>&`).
-                fd = re.search(r"(\d*)$", line[:op]).group(1)
+                # A REAL IO-NUMBER TOKEN, not just trailing digits. `printf x $2>/dev/null >
+                # "$HOME/leak" 2>/dev/null` has `$2` as an ARGUMENT and the `>` as an fd-1
+                # redirect, so the later open still leaks — but the digits of `$2` were read as
+                # the fd, `stderr_off` was set, and the leak returned None. A regression from the
+                # stderr-state fix earlier in this same PR (codex, PR #78): an IO number must be
+                # a word of its own, so require a delimiter before it.
+                m = re.search(r"(?:^|[\s;&|()])(\d+)$", line[:op])
+                fd = m.group(1) if m else ""
                 if fd == "2" or (op and line[op - 1] == "&") or line[op + 1:op + 2] == "&":
                     stderr_off = True
                 continue
@@ -725,6 +732,15 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # ...and it must NOT carry across a command boundary — the next command starts clean.
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null; printf x > "$tmp" 2>/dev/null'))
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null | printf x > "$tmp" 2>/dev/null'))
+        # `$2` IS AN EXPANSION, NOT AN IO NUMBER. `printf x $2>/dev/null > "$HOME/leak"
+        # 2>/dev/null` passes `$2` as an argument and redirects fd 1; the later open still leaks.
+        # Reading the `2` of `$2` as the fd marked stderr already-suppressed and returned None —
+        # a regression introduced by the stderr-state fix earlier in this same PR.
+        self.assertIsNotNone(inverted_redirect('printf x $2>/dev/null > "$HOME/leak" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x "$v"2>/dev/null > "$t" 2>/dev/null'))
+        # ...while a genuine IO number, standing as its own word, still counts.
+        self.assertIsNone(inverted_redirect('printf x 2>/dev/null > "$t" 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x; cmd 2>/dev/null > "$t" 2>/dev/null'))
         # A LEGACY substitution inside double quotes is the same construct as `$( … )` there, and
         # measured the same leak: `bash: …/nope/x: No such file or directory`. It was walked past
         # while `"$( … )"` was recursed into — two spellings of one construct, two behaviours.

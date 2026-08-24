@@ -137,6 +137,12 @@ def _module_level(body):
 def _defines_test_class(node) -> bool:
     if isinstance(node, ast.ClassDef):
         return True
+    # A pytest-style module-level `def test_late(): ...` is dropped by direct execution exactly as
+    # a class is, and `_body_can_exit` already recognises `pytest.main()` as a runner — so
+    # accepting that runner while ignoring the definitions it collects was an inconsistency, not a
+    # scope decision (codex, PR #78).
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+        return True
     # `Late = type("Late", (unittest.TestCase,), {})` is an Assign, not a ClassDef.
     # `Late: type = type(...)` is an AnnAssign, not an Assign (codex, local round) — the broad
     # "type()-assigned classes" claim has to cover the annotated spelling too.
@@ -205,9 +211,13 @@ def _test_files() -> "list[Path]":
     staging rule the callers manifest already follows. The git dependency is not new: this suite
     shells out to git in several other modules and CI always runs in a checkout.
     """
+    # DERIVED FROM THE TREE, not from two hard-coded directories. A `test_*.py` added under a
+    # second MCP package — or any new `*/tests/` directory — was invisible here while the breadth
+    # control still passed on the existing count and its three required paths (codex, PR #78).
+    # That is the same enumerate-instead-of-derive narrowing this suite exists to catch, in the
+    # census of the suite itself.
     out = subprocess.run(
-        ["git", "-C", str(REPO), "ls-files", "scripts/tests/test_*.py",
-         "mcp/review-synthesizer/tests/test_*.py"],
+        ["git", "-C", str(REPO), "ls-files", "*/tests/test_*.py", "tests/test_*.py"],
         capture_output=True, text=True, check=True).stdout.split()
     return [REPO / rel for rel in out]
 
@@ -256,6 +266,17 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                          "scripts/tests/test_doc_gates.py",
                          "mcp/review-synthesizer/tests/test_capture.py"):
             self.assertIn(required, found)
+        # THE DERIVATION MUST REACH EVERY `*/tests/` DIRECTORY, not the two it was written
+        # against. A named-directory census stayed green on its count and its three required
+        # paths while a new package's suite went unswept (codex, PR #78) — so assert the census
+        # equals what the tree actually holds, which is the only form that cannot drift.
+        every = {p for p in subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "*test_*.py"],
+            capture_output=True, text=True, check=True).stdout.split()
+            if "/tests/" in p or p.startswith("tests/")}
+        self.assertEqual(every, found,
+                         "the census and the tree disagree: "
+                         f"missing={sorted(every - found)} extra={sorted(found - every)}")
 
     def test_the_rule_matches_the_shape_it_claims_to_reject(self):
         """The rule's own control — and it calls `_offenders`, the SAME predicate the sweep uses.
@@ -302,6 +323,11 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             "in_try.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                           'try:\n    class B(unittest.TestCase): pass\n'
                           'except Exception:\n    pass\n'),
+            # A pytest-style test FUNCTION after the runner is dropped exactly as a class is.
+            "pytest_func.py": ('if __name__ == "__main__":\n    pytest.main()\n'
+                               'def test_late():\n    assert True\n'),
+            "async_func.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                              'async def test_late():\n    assert True\n'),
             # `type()` builds a class without a ClassDef node.
             "type_assign.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                                'L = type("L", (unittest.TestCase,), {})\n'),
@@ -341,6 +367,10 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                    'class Included(unittest.TestCase): pass\n'
                                    'if __name__ == "__main__":\n    unittest.main()\n'),
             "ok.py": 'class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n',
+            # A non-test helper defined after the guard is dead, but it is not a dropped TEST and
+            # the sweep's message would be wrong about it. Only `test`-named functions count.
+            "helper_after.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                                'def _summarize():\n    return 1\n'),
             # INSIDE the guard's own body. The block RUNS, so these are reachable — reporting them
             # would red CI on ordinary code, and it did until `analyse` stopped comparing against
             # the guard's FIRST line (codex, PR #78). Both spellings occur in real suites: setting

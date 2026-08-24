@@ -518,9 +518,15 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
     #: mktemp/mkdir failing on `/dev/null`'s ENOTDIR — and the hook's own comment (PR #63, gap 26)
     #: says the gate "must not depend on" that accident. Recorded rather than silenced, and any
     #: OTHER hook doing the same still fails this cell.
+    #: KEYED BY LINE, not by hook. A hook-wide `continue` accepted a NEW unguarded
+    #: `mkdir -p "$(marker_base)"` added anywhere in the same file (codex, PR #78) — an
+    #: acknowledgement of two specific lines had silently become a blanket pass for the file.
+    #: An exemption that grows with the file is not an exemption.
     COMPOSES_UNDER_SENTINEL = {
-        "stop-quality-marker-gate.sh": "COREDEV-2760 — :129/:141 compose under the sentinel and "
-                                       "rely on the following operation failing (PR #63 gap 26)",
+        ("stop-quality-marker-gate.sh", 129): "COREDEV-2760 — composes under the sentinel and "
+                                              "relies on the following operation failing "
+                                              "(PR #63 gap 26)",
+        ("stop-quality-marker-gate.sh", 141): "COREDEV-2760 — same, second site",
     }
 
     def setUp(self):
@@ -689,7 +695,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # base-ok line as protecting the whole remainder let a later unguarded
             # `mkdir -p "$(marker_base)"` through (codex, PR #78). `|| exit`, `|| return` and the
             # named exit helpers do end it.
-            guard_at = next((i for i, ln in enumerate(lines)
+            # COMMENTS ARE NOT CODE, in either direction (codex, PR #78). Replacing a real guard
+            # with `# unleashed_base_ok || exit 0` left `guard_at` set and the exemption green
+            # while the sentinel could reach the filesystem — and these hooks have no behavioural
+            # cell to catch it. The same strip protects the composer scan from a comment that
+            # merely MENTIONS `marker_base`.
+            code = [("" if ln.lstrip().startswith("#") else ln) for ln in lines]
+            guard_at = next((i for i, ln in enumerate(code)
                              if "unleashed_base_ok" in ln
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
             # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
@@ -703,7 +715,7 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # hazard wearing a different spelling, and it was invisible. No shipped hook does it
             # today; the point is that the next one would not be caught. The names are asserted
             # against the library source below so this list cannot go stale silently.
-            composes = [i for i, ln in enumerate(lines)
+            composes = [i for i, ln in enumerate(code)
                         if any(c in ln for c in _COMPOSERS)
                         or any(v in ln for v in _BASE_PATH_VARS)]
             # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom: `stop-quality-marker-gate.sh`
@@ -718,16 +730,23 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                 # next line is `unleashed_base_ok || SENTINEL=""`, so the value is discarded before
                 # any use and no filesystem operation sees a sentinel-derived path.
                 neutralised = False
-                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", lines[at])
+                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", code[at])
                 if assigned:
                     var = assigned.group(1)
-                    for probe in lines[at + 1:at + 4]:
-                        if "unleashed_base_ok" in probe and re.search(
-                                r"\b" + re.escape(var) + r"\b", probe):
-                            neutralised = True
-                            break
-                if name in self.COMPOSES_UNDER_SENTINEL:
-                    continue                       # acknowledged above, owned by a ticket
+                    # THE CLEAR MUST COME BEFORE ANY USE, not merely within three lines
+                    # (codex, PR #78). `P="$(log_dir)/probe"; mkdir -p "$P"; unleashed_base_ok
+                    # || P=""` was accepted as neutralised even though the sentinel-derived path
+                    # had ALREADY been handed to mkdir — the window said "a guard is nearby",
+                    # which is not the property that makes the idiom safe. Stop at the first line
+                    # that touches the variable at all: if that line is the clearing guard the
+                    # value never escaped; if it is anything else, it did.
+                    for probe in code[at + 1:at + 4]:
+                        if not re.search(r"\b" + re.escape(var) + r"\b", probe):
+                            continue
+                        neutralised = "unleashed_base_ok" in probe
+                        break
+                if self.COMPOSES_UNDER_SENTINEL.get((name, at + 1)):
+                    continue                       # this LINE is acknowledged, owned by a ticket
                 if not neutralised and (guard_at is None or guard_at > at):
                     stale.append(f"{name}: composes a root at line {at + 1} with no hook-level "
                                  f"base-ok skip before it — it cannot be exempted as "
