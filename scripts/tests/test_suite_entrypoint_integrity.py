@@ -32,33 +32,36 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
+#: `git ls-files` lists what SHIPS, which is the right set for this rule (an untracked scratch test
+#: is not shipped). But where git is absent — a source tarball, a minimal container — the right
+#: behaviour is a VISIBLE SKIP, not a `FileNotFoundError` and not a silent change of which files the
+#: rule covers (gemini). I said as much when declining the `Path.glob` swap; this is that fix.
+try:
+    subprocess.run(["git", "-C", str(REPO), "rev-parse", "--is-inside-work-tree"],
+                   capture_output=True, check=True)
+    HAS_GIT = True
+except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+    HAS_GIT = False
+
 
 _EXIT_NAMES = {"exit", "quit"}
 
 
 def _statements(body):
-    """Every node that EXECUTES when this block runs — recursing into control flow but NOT into
-    nested `def`/`class`/`lambda` bodies (agy, local round).
+    """Every node that EXECUTES when this block runs — NOT the bodies of nested `def`/`class`/
+    `lambda` (agy) — as one BFS with no duplicate yields (gemini).
 
-    `ast.walk` ignores scope, so a guard containing `def fail_fast(): sys.exit(1)` alongside a
-    harmless `configure()` looked EXITING, and every class after it was falsely reported dropped —
-    red CI on legitimate code. Defining a function is not calling it.
+    `ast.walk` ignores scope, so a guard containing `def fail_fast(): sys.exit(1)` beside a
+    harmless `configure()` read as EXITING and every later class was falsely reported dropped.
+    Defining a function is not calling it.
     """
-    for n in body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            yield n                       # the definition itself executes; its body does not
+    todo = list(body)
+    while todo:
+        n = todo.pop(0)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
         yield n
-        for field in ("body", "orelse", "finalbody"):
-            yield from _statements(getattr(n, field, []) or [])
-        for h in getattr(n, "handlers", []) or []:
-            yield from _statements(h.body)
-        for sub in ast.iter_child_nodes(n):
-            if isinstance(sub, (ast.Call, ast.Raise, ast.Expr, ast.Await)):
-                yield sub
-                yield from (c for c in ast.walk(sub)
-                            if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                                  ast.ClassDef, ast.Lambda)))
+        todo.extend(ast.iter_child_nodes(n))
 
 
 def _body_can_exit(node) -> bool:
@@ -169,6 +172,7 @@ def _test_files() -> "list[Path]":
     return [REPO / rel for rel in out]
 
 
+@unittest.skipUnless(HAS_GIT, "needs a git checkout — the census lists TRACKED files")
 class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
     def _offenders(self, paths):
         """Shared by the sweep and its own control, so the control tests the REAL predicate.

@@ -308,7 +308,7 @@ marker_field() {
     # regex to avoid spawning jq/python3 on every call (gemini PR #12, perf).
     # Anchor the key to a JSON delimiter ({ or ,) so searching "status" can't match
     # a future field like "custom_status" (gemini PR #12).
-    if read -r line < "$_mf_path" 2>/dev/null && [[ "$line" =~ [{,][[:space:]]*\"$field\":\"([^\"]+)\" ]]; then
+    if read -r line 2>/dev/null < "$_mf_path" && [[ "$line" =~ [{,][[:space:]]*\"$field\":\"([^\"]+)\" ]]; then
         # bash fills BASH_REMATCH; zsh fills `match` — under zsh BASH_REMATCH[1] was silently EMPTY, so
         # every marker field read as absent from a zsh consumer (measured, PR #67 pass 7).
         if [ -n "${ZSH_VERSION:-}" ]; then

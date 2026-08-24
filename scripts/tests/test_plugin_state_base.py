@@ -624,7 +624,21 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         # not call a base-composing helper directly.
         _PRIMITIVES = {"log_append": "log_append", "marker_write": "marker_write",
                        "hook-level skip": "unleashed_base_ok"}
-        _COMPOSERS = ("context_reviews_dir", "context_state_dir")
+        # DERIVED from the libraries, not a hand-written pair (codex). The previous two-name list
+        # recognised `context_reviews_dir`/`context_state_dir` and missed `log_dir`, `log_base`,
+        # `marker_base`, `marker_dir`, `context_base` — so `mkdir -p "$(log_dir)"` before
+        # `log_append` would have composed a sentinel path with the exemption still reported clean.
+        # A hand-written list of what a rule covers is the exact defect this PR is about.
+        _lib_src = ""
+        for _lib in ("log.sh", "marker.sh", "context.sh"):
+            _lp = os.path.join(ROOT, "scripts", "lib", _lib)
+            if os.path.isfile(_lp):
+                with open(_lp, encoding="utf-8", errors="ignore") as fh:
+                    _lib_src += fh.read()
+        _COMPOSERS = tuple(sorted({m for m in re.findall(r"^([a-z_]+)\(\)", _lib_src, re.M)
+                                   if m.endswith(("_base", "_dir"))}))
+        self.assertGreater(len(_COMPOSERS), 4,
+                           f"composer derivation looks truncated: {_COMPOSERS}")
         stale = []
         for name, reason in sorted(self.NOT_DRIVEN.items()):
             src_path = os.path.join(ROOT, "scripts", name)
@@ -649,7 +663,24 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             guard_at = next((i for i, ln in enumerate(lines) if "unleashed_base_ok" in ln), None)
             first_compose = next((i for i, ln in enumerate(lines)
                                   if any(c in ln for c in _COMPOSERS)), None)
-            if first_compose is not None and (guard_at is None or guard_at > first_compose):
+            # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom: `stop-quality-marker-gate.sh`
+            # builds `SENTINEL="$(marker_dir)/…"` at :74 and the very next line is
+            # `unleashed_base_ok || SENTINEL=""` — the value is discarded before any use, so no
+            # filesystem operation ever sees a sentinel-derived path. Requiring the guard to precede
+            # the composition flagged that as a defect. A guard that clears the SAME variable within
+            # a few lines counts as protecting it.
+            neutralised = False
+            if first_compose is not None:
+                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", lines[first_compose])
+                if assigned:
+                    var = assigned.group(1)
+                    for probe in lines[first_compose + 1:first_compose + 4]:
+                        if "unleashed_base_ok" in probe and re.search(
+                                r"\b" + re.escape(var) + r"\b", probe):
+                            neutralised = True
+                            break
+            if (first_compose is not None and not neutralised
+                    and (guard_at is None or guard_at > first_compose)):
                 stale.append(f"{name}: composes a root at line {first_compose + 1} with no "
                              f"hook-level base-ok skip before it — it cannot be exempted as "
                              f"'primitive only'; drive it instead")

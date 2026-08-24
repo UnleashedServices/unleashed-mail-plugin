@@ -200,7 +200,7 @@ if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
     exit 3
 fi
 
-BYTES_OUT="$(wc -c < "$OUT" 2>/dev/null | tr -d ' ')"
+BYTES_OUT="$(wc -c 2>/dev/null < "$OUT" | tr -d ' ')"
 VERDICT="$(grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' "$OUT" 2>/dev/null | tail -1)"
 echo "EXIT=$RC BYTES=${BYTES_OUT:-0} TREE=clean VERDICT=${VERDICT:-<none — FAILED REVIEW>}"
 exit "$RC"

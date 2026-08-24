@@ -152,6 +152,32 @@ def _word(line, i, n):
     return i, var
 
 
+def _suppressed_after(line, i, n):
+    """True if `2>/dev/null` follows, possibly past FURTHER redirections on the same command.
+
+    `printf x > "$tmp" < "$input" 2>/dev/null` still opens `$tmp` first and still leaks (codex,
+    PR #78) — checking only immediately after the target word missed the whole shape. Scanning
+    stops at a command boundary, because a redirect in the NEXT command suppresses nothing here.
+    """
+    while True:
+        if _SUPPRESSION.match(line, i):
+            return True
+        j = i
+        while j < n and line[j] in " \t":
+            j += 1
+        if j >= n or line[j] not in "<>":
+            return False
+        j += 1                                    # consume the operator and whatever follows it
+        while j < n and line[j] in "<>&|":
+            j += 1
+        while j < n and line[j] in " \t":
+            j += 1
+        j, _ = _word(line, j, n)
+        if j <= i:
+            return False
+        i = j
+
+
 def inverted_redirect(line):
     """Column of an output redirect opening an interpolated target BEFORE `2>/dev/null`, else None.
 
@@ -171,19 +197,55 @@ def inverted_redirect(line):
             j = line.find("`", i + 1)
             i = n if j < 0 else j + 1
         elif c == '"':
+            # A `$( … )` INSIDE double quotes RE-ENTERS shell quoting, and a redirect in there is a
+            # real redirect. This was pinned as a known gap until it was measured biting shipped
+            # code: three of the four inverted INPUT redirects fixed in this commit sit inside
+            # `"$( … )"` (`wc -c < "$OUT" 2>/dev/null`), so a sweep that skipped quoted regions
+            # wholesale could not enforce its own rule on them. The substitution body is scanned
+            # recursively; everything else inside the quotes is still literal.
             i += 1
             while i < n and line[i] != '"':
-                i += 2 if line[i] == "\\" else 1
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == "$" and i + 1 < n and line[i + 1] == "(":
+                    depth, j = 0, i + 1
+                    while j < n:
+                        if line[j] == "(":
+                            depth += 1
+                        elif line[j] == ")":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        j += 1
+                    inner = line[i + 2:j]
+                    hit = inverted_redirect(inner)
+                    if hit is not None:
+                        return i + 2 + hit
+                    i = j + 1
+                    continue
+                i += 1
             i += 1
-        elif c == ">":
+        elif c in "<>":
+            # INPUT OPENS TOO (codex, PR #78). `< "$path" 2>/dev/null` opens the path BEFORE the
+            # suppression is installed, so an unreadable or missing file prints the expanded path
+            # exactly as an output open does — measured in bash, and `log.sh:216-218` already
+            # states the rule in prose ("`2>/dev/null` BEFORE the `<` input redirect"). Four
+            # shipped lines carried the inverted form; they are fixed in this same commit.
+            # `<<` heredoc and `<<<` here-string open no named path, so they are skipped.
             op = i
+            if c == "<" and i + 1 < n and line[i + 1] == "<":
+                i += 2
+                if i < n and line[i] == "<":
+                    i += 1
+                continue
             i += 1
-            if i < n and line[i] == ">":
+            if c == ">" and i < n and line[i] == ">":
                 i += 1
             fd_dup = False
-            if i < n and line[i] == "|":     # `>|` OVERRIDES noclobber and still opens the path
+            if c == ">" and i < n and line[i] == "|":   # `>|` overrides noclobber, still opens
                 i += 1
-            elif i < n and line[i] == "&":   # `>&` is fd-dup ONLY when the word is digits or `-`
+            elif i < n and line[i] == "&":             # `>&`/`<&` is fd-dup when the word is a digit
                 i += 1
                 fd_dup = True
             while i < n and line[i] in " \t":
@@ -192,7 +254,7 @@ def inverted_redirect(line):
             i, var = _word(line, i, n)
             if fd_dup and re.fullmatch(r"\d+|-", line[start:i]):
                 continue
-            if i > start and var and _SUPPRESSION.match(line, i):
+            if i > start and var and _suppressed_after(line, i, n):
                 return op
         else:
             i += 1
@@ -436,10 +498,20 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # linux-primitive-probe.sh) redirect nothing — and the class is ticketed.
         self.assertIsNone(inverted_redirect("""trap 'printf x > "$T" 2>/dev/null' EXIT"""))
         self.assertIsNone(inverted_redirect("""eval 'printf x > "$T" 2>/dev/null'"""))
-        # KNOWN GAP, pinned so it is not rediscovered as a surprise: `$( )` inside `"..."` re-enters
-        # shell quoting and no flat pattern can model it. Ticketed with the trade above.
-        self.assertIsNone(
+        # THIS GAP IS CLOSED, and the cell is inverted to prove it. `$( )` inside `"…"` re-enters
+        # shell quoting, and the sweep used to skip quoted regions wholesale. It was pinned as an
+        # accepted trade until it was measured biting SHIPPED code: three of the four inverted
+        # INPUT redirects fixed in this same commit sit inside `"$( … )"`, so the sweep could not
+        # have enforced its own rule on them. Reverting any of the four is now caught.
+        # Note this line also carries a real OUTER redirect, which is what is reported.
+        self.assertIsNotNone(
             inverted_redirect('clean="$(printf \'%s\' "$s" | tr -d \'"\' )" > "$tmp" 2>/dev/null'))
+        self.assertIsNotNone(
+            inverted_redirect('BYTES="$(wc -c < "$OUT" 2>/dev/null | tr -d \' \')"'),
+            "an inverted redirect INSIDE a substitution must be caught")
+        self.assertIsNone(
+            inverted_redirect('BYTES="$(wc -c 2>/dev/null < "$OUT" | tr -d \' \')"'),
+            "the correct order inside a substitution must NOT be flagged")
         # ── SHAPES FOUND BY THE LOCAL REVIEW ROUND (codex / agy / kimi, all three arms) ──
         # A match at COLUMN ZERO. The scanner returns a column, and the caller used truthiness, so
         # 0 was discarded — a live bug in the shipped sweep, not a gap.

@@ -737,7 +737,7 @@ rm -f "$ROT" 2>/dev/null
 mkdir -p "$CLAUDE_PLUGIN_DATA/logs"
 i=0; while [ "$i" -lt 600 ]; do printf '{"ts":"x","type":"unknown"}\n' >> "$ROT"; i=$((i+1)); done
 printf '{"error_type":"server_error"}' | bash "$STOP_FAIL_LOG" 2>/dev/null
-ROTN="$(wc -l < "$ROT" 2>/dev/null | tr -d '[:space:]')"
+ROTN="$(wc -l 2>/dev/null < "$ROT" | tr -d '[:space:]')"
 if [ "$ROTN" = "250" ]; then ok; else fail "rotation -> expected 250 lines, got $ROTN"; fi
 
 # 27. Kill switches emit nothing.
