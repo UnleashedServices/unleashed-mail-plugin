@@ -705,10 +705,19 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         # `_UNLEASHED_BASE_*` name is NOT a path (`_OK` is a flag, `_SOURCE` a label, `_PID` a
         # number), so a pattern would admit noise. Enumeration is only safe with a control, so
         # each name must still exist in the family libs or this cell reds.
-        _BASE_PATH_VARS = ("_UNLEASHED_BASE_RESOLVED", "_UNLEASHED_BASE_INSTANCE")
+        # `_UNLEASHED_BASE_RESOLVED` ONLY. `_UNLEASHED_BASE_INSTANCE` is a readonly numeric
+        # once-per-shell FLAG (`readonly _UNLEASHED_BASE_INSTANCE=1`), not a path — including it
+        # made any hook that merely tests the flag look like it composes a root, which is a false
+        # positive in the direction that reds CI (codex, PR #78). I enumerated the variables from
+        # their shared prefix instead of from what they hold.
+        _BASE_PATH_VARS = ("_UNLEASHED_BASE_RESOLVED",)
         for _v in _BASE_PATH_VARS:
             self.assertIn(_v, _lib_src, f"{_v} no longer exists in the family libs — the "
                                         f"composition-by-variable check is pointing at nothing")
+            # ...and it must actually hold a PATH. A variable assigned a bare integer is a flag;
+            # treating one as a composition surface reds valid hooks.
+            self.assertNotRegex(_lib_src, r"\breadonly " + _v + r"=[0-9]+\b",
+                                f"{_v} is assigned a bare number — it is a flag, not a path")
         stale = []
         for name, reason in sorted(self.NOT_DRIVEN.items()):
             src_path = os.path.join(ROOT, "scripts", name)

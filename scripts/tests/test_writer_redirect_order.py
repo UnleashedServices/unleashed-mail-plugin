@@ -62,12 +62,15 @@ def _shipped_shell() -> "list[Path]":
     # created the git-skip split to protect (codex, PR #78). "Tracked" is a REFINEMENT that only
     # has meaning where git does; without it, every `.sh` on disk is the best available answer to
     # "what ships", and the untracked-scratch exclusion is simply unavailable rather than fatal.
-    if shutil.which("git"):
-        out = subprocess.run(
-            ["git", "-C", str(REPO), "ls-files", "-z", "scripts/*.sh", "scripts/**/*.sh",
-             ".githooks/pre-commit"],
-            capture_output=True, text=True, check=True).stdout.split("\0")
-        return sorted(Path(rel) for rel in out if rel)
+    # ...and where the CHECKOUT is one. A source tarball on a machine that HAS git still has no
+    # `.git`, and `git ls-files` exits 128 there — which `check=True` turns into a crash, not a
+    # fallback (codex, PR #78). Gating on the executable alone tested the wrong precondition.
+    probe = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z", "scripts/*.sh", "scripts/**/*.sh",
+         ".githooks/pre-commit"],
+        capture_output=True, text=True) if shutil.which("git") else None
+    if probe is not None and probe.returncode == 0:
+        return sorted(Path(rel) for rel in probe.stdout.split("\0") if rel)
     found = set(REPO.glob("scripts/**/*.sh"))
     extra = REPO / ".githooks" / "pre-commit"
     if extra.is_file():
