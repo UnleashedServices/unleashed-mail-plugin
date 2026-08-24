@@ -372,6 +372,13 @@ def render_markdown(review: Review) -> str:
 # CLI
 # --------------------------------------------------------------------------- #
 
+# The one cause clause both entry points must state identically. `mcp_server.py` imports it, so the
+# twins cannot drift in wording — the drift this module has now been bitten by three times.
+_EMPTY_CHANGESET_CAUSE = (
+    "a changed-file-dependent finding would mis-scope to pre-existing and yield a bogus APPROVE"
+)
+
+
 def _load(paths: list[str]) -> tuple[list[Finding], list[tuple[dict, str]]]:
     findings, bad = [], []
     for path in paths:
@@ -445,10 +452,63 @@ def main(argv: list[str]) -> int:
     if not paths:  # pure demo mode only: bundled fixtures + bundled changeset
         paths = sorted(glob.glob(os.path.join(here, "samples", "*.json")))
 
+    # Loaded up front so the empty-changeset guard below can test the ROWS rather than the argv shape.
+    # `_load` never raises — it quarantines unreadable/unparseable input — so hoisting it cannot change
+    # which error wins; the two changed-path guards still fire in their original order.
+    findings, bad = _load(paths)
+
     changed: set[str] = set()
     if os.path.exists(changed_path):
         with open(changed_path, encoding="utf-8") as fh:
             changed = {ln.strip() for ln in fh if ln.strip()}
+    # THE EMPTY CHANGESET, refused here exactly as `mcp_server.py:185` refuses it. This arm had NO
+    # equivalent: a MISSING twin, not an untested one. Reproduced on shipped code with one
+    # high-confidence `credential` blocker (a hardcoded API token) and a real findings file:
+    #
+    #     --changed <empty> / <blank lines> / "." / "./" / "..."  ->  rc 0, **APPROVE**
+    #     --changed MyApp/Auth.swift                              ->  rc 1, **REQUEST_CHANGES**
+    #
+    # Every entry canonicalises to "", so nothing is in scope, every finding is demoted to
+    # pre-existing, and the CLI approves — while this module's own docstring advertises it for CI
+    # gating. The MCP arm refused all five with -32602 the whole time.
+    #
+    # CANONICALISED, not list-truthiness. `canonical_path` is the SAME function `synthesize()` scopes
+    # against (line 270), so the two sides cannot disagree; a bare `if not changed` would still let
+    # "." and "./" through, which is precisely the bypass mcp_server.py's comment records.
+    #
+    # Ordered BEFORE the absolute/traversal check to match the MCP arm, so an input that is both
+    # all-collapsing and absolute produces the same diagnostic on both arms.
+    #
+    # Guarded on the LOADED ROWS, not on whether a --findings path was supplied (codex, PR #77). An
+    # empty changeset legitimately has nothing to review and therefore no findings, so a genuinely
+    # clean run — `findings.json` holding `[]` beside an empty `git diff --name-only` — must still
+    # reach APPROVE. Testing path-was-supplied refused exactly that, and diverged from the MCP twin,
+    # which guards on `findings_in`. `bad` counts too: a row that only quarantined is still a row,
+    # and would still mis-scope. Demo mode is unaffected — it supplies the bundled changeset.
+    # ROWS, not file-level load failures (codex, PR #77). `_load` records an unreadable or
+    # malformed FILE as `({"_file": path}, reason)` — no finding row exists. Counting those here
+    # refused the input with the empty-changeset message and returned before `render_markdown`
+    # could show the actual quarantine reason, so a truncated JSON reported only "your changeset is
+    # empty" — a true statement about the wrong problem. A file-level failure now falls through to
+    # the report, which names it. Row-level quarantine still counts: such a row WOULD mis-scope.
+    # TYPE-SAFE (both bots, PR #77). `set(b[0])` raises TypeError on a non-dict quarantined row —
+    # `{"findings": [null]}` produced a traceback instead of the refusal. `_load` quarantines ANY
+    # schema-invalid row verbatim, including `null`, numbers and arrays, so the discriminator has to
+    # test the SHAPE of a file-level marker rather than assume the row is iterable and hashable.
+    def _is_file_failure(item) -> bool:
+        """A `_load` FILE-level marker — `{"_file": path}` — as opposed to a quarantined row."""
+        return isinstance(item, dict) and len(item) == 1 and "_file" in item
+
+    _rows = [b for b in bad if not _is_file_failure(b[0])]
+    if (findings or _rows) and not any(canonical_path(c) for c in changed):
+        # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
+        # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES
+        # or its scope is "structural-pipeline", so those rows would NOT mis-scope. They are refused
+        # alongside the rest deliberately: the refusal is per-INPUT, not per-row, and splitting it
+        # would diverge from the MCP twin. Keep this cause clause byte-identical to mcp_server.py's.
+        print(f"error: --changed is empty (or all-blank/'.'-only) but findings files were passed; "
+              f"refusing to synthesize ({_EMPTY_CHANGESET_CAUSE})", file=sys.stderr)
+        return 2
     # A2/F3: refuse an absolute/traversal changed entry (git diff --name-only never emits these) — it can
     # only mis-scope findings to a bogus APPROVE. Fail CLOSED, matching mcp_server.py's changed_files guard.
     _bad_changed = sorted({c for c in changed if is_abs_or_traversal(c)})
@@ -456,7 +516,6 @@ def main(argv: list[str]) -> int:
         print(f"error: --changed contains absolute/traversal paths ({', '.join(_bad_changed)}); "
               "git diff --name-only never emits these — refusing to synthesize", file=sys.stderr)
         return 2
-    findings, bad = _load(paths)
     review = synthesize(findings, changed, quarantined=bad)
     print(render_markdown(review))
     # exit non-zero on a gating verdict, so this can drop into CI
