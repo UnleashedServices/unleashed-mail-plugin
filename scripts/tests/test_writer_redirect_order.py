@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -124,18 +125,24 @@ _META = frozenset(" \t<>;&|()")
 #: `>|` overrides noclobber, `>>` appends, `&>`/`>&` take stdout with them and `2<>` opens
 #: read-write; all of them still open `/dev/null` on fd 2, so all of them still suppress.
 #:
-#: NOT accepted, each for a MEASURED reason:
-#:   * `2>&-` — closing stderr suppresses nothing. The path escapes in BOTH orders under both
-#:     shells, so there is no ordering to fix and flagging one order would send the next reader to
-#:     swap two things that leak either way.
-#:   * `2>>|` — NOT legal bash. `bash 3.2.57: syntax error near unexpected token '|'`, in both
-#:     orders. An earlier revision of this comment called it "legal shell … measured to leak" and
-#:     a cell asserted it: the measurement behind that claim only checked that stderr was
-#:     NON-EMPTY, and a syntax error makes stderr non-empty. All three review arms caught it
-#:     independently. A leak test must match the PATH, not merely observe output.
+#: PLATFORM-DIVERGENT, and accepted because of it: `2>&-` and `2</dev/null`.
+#: On LINUX both suppress — measured in CI, inverted-leaks=True correct-leaks=False for each — so
+#: the inverted order is a real ordering defect there. On macOS bash 3.2 both leak in BOTH orders.
+#: I declined them twice on that macOS-only measurement, once for `2>&-` early in the campaign and
+#: once for `2<` in review, calling each "not a suppression". That was PLATFORM-BLIND, not wrong
+#: arithmetic: the same command has different behaviour on the two systems this plugin runs on, and
+#: a guard that protects only the machine I happened to measure on is not a guard. The criterion
+#: cell below caught it on its first CI run, which is the whole reason it exists.
+#:
+#: NOT accepted, for a reason that does not vary by platform:
+#:   * `2>>|` — NOT legal bash. `syntax error near unexpected token '|'`, in both orders. An
+#:     earlier revision of this comment called it "legal shell … measured to leak" and a cell
+#:     asserted it: the measurement behind that claim only checked that stderr was NON-EMPTY, and
+#:     a syntax error makes stderr non-empty. All three review arms caught it independently.
+#:     A leak test must match the PATH, not merely observe output.
 _SUPPRESSION = re.compile(
-    r"""[ \t]+(?:2>>|2>\||2<>|2>|&>|>&)[ \t]*"""
-    r"""(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
+    r"""[ \t]+(?:2>&-|(?:2>>|2>\||2<>|2>|2<|&>|>&)[ \t]*"""
+    r"""(?:"/dev/null"|'/dev/null'|/dev/null))(?![\w/])""")
 
 
 def _backtick_end(line, i, n):
@@ -417,6 +424,15 @@ def inverted_redirect(line):
                 i += 1
             start = i
             i, var = _word(line, i, n)
+            if fd_dup and line[start:i] == "-":
+                # CLOSING fd 2 installs the suppression on Linux exactly as redirecting it does,
+                # so the state must record it — otherwise the matcher accepts `2>&-` at the end of
+                # a command while the scanner refuses to believe an earlier `2>&-` covers a later
+                # open, which is the same one-way-state defect in a new place.
+                m = re.search(r"(?:^|[\s;&|()])(\d+)$", line[:op])
+                if (m.group(1) if m else "") == "2":
+                    stderr_off = True
+                continue
             if fd_dup and re.fullmatch(r"\d+|-", line[start:i]):
                 # A DUPLICATION ONTO FD 2 UNDOES AN EARLIER SUPPRESSION.
                 # `printf x 2>/dev/null 2>&1 > "$p" 2>/dev/null` puts the UNsuppressed stdout
@@ -755,10 +771,14 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # This cell asserted the opposite for one round, on a measurement that only checked
         # stderr was non-empty; the syntax error itself made it non-empty.
         self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>>| /dev/null'))
-        # NOT `2>&-`. Closing stderr suppresses nothing: measured, the path escapes in BOTH orders,
-        # so it is an unconditional leak of a different class and calling it an ordering defect
-        # would send the next reader to reorder a line that would still leak afterwards.
-        self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>&-'))
+        # `2>&-` and `2</dev/null` ARE suppressions on Linux — measured in CI, quiet in the
+        # correct order and leaking in this one — so the inverted order is a real defect there.
+        # These two cells asserted the opposite for several rounds on a macOS-only measurement.
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>&-'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2</dev/null'))
+        # ...and installed FIRST, each covers the later open, so neither is reported.
+        self.assertIsNone(inverted_redirect('printf x 2>&- > "$tmp"'))
+        self.assertIsNone(inverted_redirect('printf x 2</dev/null > "$tmp"'))
         # ORDINARY WORDS may sit between the redirect and the suppression (codex, PR #78). Bash
         # applies every redirection of a simple command left-to-right wherever it is written, so
         # this opens `$HOME/blocked` first and leaks — MEASURED, `bash: …/blocked: Is a directory`.
@@ -896,19 +916,34 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
             r = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=self.env)
             return str(self.scratch / "home") in (r.stdout + r.stderr)
 
+        # SUPPRESSES ON LINUX, LEAKS BOTH WAYS ON macOS bash 3.2 — measured on both. The scanner
+        # is platform-independent and must protect the stricter platform, so these are accepted
+        # everywhere. Naming them here is what keeps "accepted although it does not suppress on
+        # THIS machine" from becoming a silent exception.
+        PLATFORM_DIVERGENT = {"2>&-", "2</dev/null"}
+        # `2>>| /dev/null` is in this list so the criterion has a REJECT case and stays two-sided:
+        # it is not legal bash, so it suppresses nowhere and must not be accepted. Without it every
+        # member is expected-accepted and a wrongly-widened `_SUPPRESSION` would sail through.
         for op in ("2>/dev/null", "2>|/dev/null", "2>>/dev/null", "&>/dev/null",
-                   ">&/dev/null", "2<>/dev/null", "2</dev/null", "2>&-"):
+                   ">&/dev/null", "2<>/dev/null", "2</dev/null", "2>&-", "2>>| /dev/null"):
             with self.subTest(operator=op):
                 inverted = leaks('printf x > "$HOME/blocked" ' + op)
                 correct = leaks("printf x " + op + ' > "$HOME/blocked"')
-                suppresses = inverted and not correct
+                suppresses_here = inverted and not correct
                 accepted = inverted_redirect('printf x > "$t" ' + op) is not None
                 self.assertEqual(
-                    suppresses, accepted,
-                    f"{op!r}: bash says inverted-leaks={inverted} correct-leaks={correct} "
-                    f"(a real suppression is True/False), but the scanner accepts={accepted}. "
-                    f"An operator that leaks in BOTH orders is not a suppression and flagging one "
-                    f"order would send the reader to swap two things that leak either way.")
+                    suppresses_here or op in PLATFORM_DIVERGENT, accepted,
+                    f"{op!r} on {sys.platform}: bash says inverted-leaks={inverted} "
+                    f"correct-leaks={correct} (a suppression here is True/False); scanner "
+                    f"accepts={accepted}; platform-divergent={op in PLATFORM_DIVERGENT}. "
+                    f"Accept an operator if it suppresses on ANY supported platform — a guard that "
+                    f"protects only the machine it was measured on is not a guard. Reject it only "
+                    f"if it leaks in both orders EVERYWHERE, or is not legal shell.")
+                # NOTE, deliberately not an assertion: on Linux these two DO suppress, so
+                # `suppresses_here` is True there and False here. "Divergent" is a property of the
+                # SET of platforms, and no single run can see both. An earlier draft failed the
+                # cell when a divergent operator suppressed locally — which would have red every
+                # Linux run, the platform the required check uses.
 
     def test_the_sweep_covers_the_whole_shipped_shell_tree(self):
         """The derivation's own control. If `_shipped_shell()` ever returns a short or empty list the
