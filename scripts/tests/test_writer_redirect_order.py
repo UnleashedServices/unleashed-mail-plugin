@@ -357,7 +357,14 @@ def inverted_redirect(line):
     # nothing about stderr, so treating it as persistence made a LATER command's ordinary
     # suppression outlive its own `;` and hid a real leak (codex, PR #78). A previous round added
     # this flag to fix a false positive and made it too broad in the same stroke.
-    _exec_persisted = bool(re.match(r"\s*exec\s+(?:2[<>]|&>|>&)", line))
+    # ...and the LAST one wins. `exec 2>/dev/null; exec 2>&1; …` RESTORES fd 2, so the
+    # persistence must end there — a line-wide boolean computed from the first `exec` kept a later
+    # command's temporary suppression alive and hid a real leak (codex, PR #78). Fourth time on
+    # this PR that redirect state was right in one direction and wrong in the other, which is why
+    # every one of these now carries a paired assertion.
+    _exec_persisted = False
+    for _m in re.finditer(r"(?:^|[;&|]\s*)exec\s+((?:2[<>]|&>|>&)[^\s;|&]*)", line):
+        _exec_persisted = _m.group(1).strip(";").strip("\"'").endswith("/dev/null")
     while i < n:
         c = line[i]
         if c == "\\":
@@ -816,6 +823,14 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
             inverted_redirect('exec 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
         self.assertIsNone(
             inverted_redirect('exec &>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
+        # ...and the LAST exec touching fd 2 decides. `exec 2>/dev/null; exec 2>&1; …` RESTORES
+        # stderr, so a later command's own suppression must expire normally again - measured
+        # leaking through stdout. A line-wide boolean taken from the FIRST exec kept it alive.
+        self.assertIsNotNone(inverted_redirect(
+            'exec 2>/dev/null; exec 2>&1; printf a 2>/dev/null; '
+            'printf x > "$HOME/leak" 2>/dev/null'))
+        self.assertIsNone(inverted_redirect(
+            'exec 2>&1; exec 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
         # A `#` AFTER `)` STARTS A COMMENT. `(:)# printf x > "$HOME/leak" 2>/dev/null` runs only
         # the subshell - measured quiet - and was reported, so a shipped line in that shape would
         # have failed the sweep. Third narrowing of the same boundary set.

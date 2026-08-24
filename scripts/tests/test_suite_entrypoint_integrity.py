@@ -49,7 +49,14 @@ _EXIT_NAMES = {"exit", "quit"}
 #: `<owner>.main()` ENDS the run only for a real test runner; `<owner>.exit()` only for the
 #: modules that actually terminate the interpreter. Both were `any attribute with that name`
 #: until `helper.main()` false-flagged a valid suite (codex, PR #78).
-_RUNNER_OWNERS = {"unittest", "pytest"}
+#: `unittest` ONLY. `pytest.main([__file__])` RE-IMPORTS the target as a module, so a
+#: `def test_late()` written after the guard is defined during that import and collected
+#: normally — nothing is dropped, and flagging it is a FALSE POSITIVE (codex, PR #78).
+#: `unittest.main()` is different in exactly the way that matters: it collects from the
+#: already-populated `__main__`, so whatever has not been defined yet never runs.
+#: The two runners were treated alike because both are spelled `<mod>.main()`; the spelling is
+#: the only thing they share.
+_RUNNER_OWNERS = {"unittest"}
 _EXIT_OWNERS = {"sys", "os"}
 
 
@@ -78,6 +85,15 @@ def _body_can_exit(node) -> bool:
     A guard that calls `unittest.main()`, `sys.exit(...)`, `exit(...)` or raises `SystemExit`
     does end it, and anything defined afterwards is silently dropped on direct execution.
     """
+    # A GUARD THAT HANDS CONTROL TO PYTEST DROPS NOTHING, however it exits. `raise
+    # SystemExit(pytest.main([__file__]))` does terminate — but pytest RE-IMPORTS the file first,
+    # so every later definition exists and is collected. The exit is real and the drop is not, and
+    # keying on the exit alone reported definitions that run (codex, PR #78).
+    for n in _statements(node.body):
+        f = getattr(n, "func", None)
+        if (isinstance(n, ast.Call) and isinstance(f, ast.Attribute) and f.attr == "main"
+                and isinstance(f.value, ast.Name) and f.value.id == "pytest"):
+            return False
     for n in _statements(node.body):
         if isinstance(n, ast.Raise):
             exc = n.exc
@@ -366,8 +382,6 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                  'class L(unittest.TestCase): pass\n'),
             "os_exit.py": ('if __name__ == "__main__":\n    os._exit(0)\n'
                            'class L(unittest.TestCase): pass\n'),
-            "pytest_main.py": ('if __name__ == "__main__":\n    pytest.main()\n'
-                               'class L(unittest.TestCase): pass\n'),
             # No entrypoint at all is now an OFFENCE, not a skip: a skip is what let the
             # single-quoted spelling through.
             "none.py": "class OnlyThis: pass\n",
@@ -399,11 +413,11 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # is, and not spelled test*.
             "load_tests.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                               'def load_tests(loader, tests, pattern):\n    return tests\n'),
-            # A pytest-style test FUNCTION after the runner is dropped exactly as a class is.
-            "pytest_func.py": ('if __name__ == "__main__":\n    pytest.main()\n'
-                               'def test_late():\n    assert True\n'),
+            # A test FUNCTION after a UNITTEST runner is dropped exactly as a class is.
             "async_func.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                               'async def test_late():\n    assert True\n'),
+            "sync_func.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                             'def test_late():\n    assert True\n'),
             # `type()` builds a class without a ClassDef node.
             "type_assign.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                                'L = type("L", (unittest.TestCase,), {})\n'),
@@ -461,6 +475,15 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                    'class Included(unittest.TestCase): pass\n'
                                    'if __name__ == "__main__":\n    unittest.main()\n'),
             "ok.py": 'class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n',
+            # PYTEST IS NOT UNITTEST. `pytest.main([__file__])` re-imports the file, so definitions
+            # after the guard ARE collected — nothing is dropped and reporting them reds valid
+            # code. These two were in the must-FLAG set for two rounds on the strength of the
+            # shared `.main()` spelling.
+            "pytest_main.py": ('if __name__ == "__main__":\n'
+                               '    raise SystemExit(pytest.main([__file__]))\n'
+                               'class L(unittest.TestCase): pass\n'),
+            "pytest_func.py": ('if __name__ == "__main__":\n    pytest.main([__file__])\n'
+                               'def test_late():\n    assert True\n'),
             # ...but a RUNTIME-evaluable condition is not dead, and this tree uses that shape for
             # capability skips. Only a literal falsy constant counts, or the fix would blind the
             # walk to every conditional block.

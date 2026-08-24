@@ -781,7 +781,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                              # into success, so the `exit` never runs (codex, PR #78). Both set
                              # `guard_at` and silenced every later composer. `!` is out of the
                              # boundary class entirely, and `(` must not be preceded by `$`.
-                             if re.search(r"(?:^|(?<!\$)[;&|(]\s*|\bthen\s+|\bdo\s+)"
+                             # NO `(` AT ALL. Last round excluded `$(` and kept a plain `(` as a
+                             # valid boundary, pinning that as a control — and that was WRONG:
+                             # `( unleashed_base_ok || exit 0 )` exits only the SUBSHELL and the
+                             # hook runs on. Measured with a failing stand-in guard: the line after
+                             # the subshell still executes (codex, PR #78). No shipped hook uses
+                             # the form, so nothing that ships loses a guard.
+                             if re.search(r"(?:^|[;&|]\s*|\bthen\s+|\bdo\s+)"
                                           r"unleashed_base_ok\b", ln)
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
             # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
