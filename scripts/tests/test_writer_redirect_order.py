@@ -237,8 +237,22 @@ def inverted_redirect(line):
     """Column of an output redirect opening an interpolated target BEFORE `2>/dev/null`, else None.
 
     RETURNS A COLUMN, WHICH MAY BE 0 — callers must test `is not None`, never truthiness.
+
+    Two pieces of state are carried across the scan, both added to stop the sweep redding CI on
+    correct shipped code (codex, PR #78):
+
+    `cond`   — depth of `[[ … ]]`, where `<` and `>` are LEXICOGRAPHIC COMPARISONS, not redirects.
+               `[[ z > "$HOME" ]] 2>/dev/null` opens nothing and was measured quiet, yet it was
+               reported at column 5. A shipped conditional in that shape would have failed the
+               family sweep.
+    `stderr_off` — whether a suppression is ALREADY installed earlier in this same simple command.
+               `printf x 2>/dev/null > "$HOME/x" 2>/dev/null` is measured QUIET: the first
+               redirect takes effect before the open, so the later one is belt-and-braces, not an
+               inversion. Deciding from a trailing suppression alone called that safe ordering a
+               defect. Reset at every command boundary, because the next command starts clean.
     """
     i, n = 0, len(line)
+    cond, stderr_off = 0, False
     while i < n:
         c = line[i]
         if c == "\\":
@@ -279,8 +293,34 @@ def inverted_redirect(line):
                         return i + 2 + hit
                     i = end
                     continue
+                if line[i] == "`":
+                    # ...and the LEGACY spelling of the same thing. `$( … )` inside `"…"` was
+                    # recursed into while `` `…` `` inside `"…"` was walked straight past, so
+                    # ``B="`wc -c < "$OUT" 2>/dev/null`"`` returned None while the `$( … )` form
+                    # was caught (codex, PR #78). Two spellings of one construct must not have
+                    # two behaviours — that asymmetry is what this file keeps being bitten by.
+                    close = line.find("`", i + 1)
+                    if close < 0:
+                        i = n
+                        break
+                    hit = inverted_redirect(line[i + 1:close])
+                    if hit is not None:
+                        return i + 1 + hit
+                    i = close + 1
+                    continue
                 i += 1
             i += 1
+        elif line.startswith("[[", i) and (i == 0 or line[i - 1] in " \t;&|(") :
+            cond += 1
+            i += 2
+        elif line.startswith("]]", i) and cond:
+            cond -= 1
+            i += 2
+        elif c in ";|" or (c == "&" and line[i + 1:i + 2] != ">"):
+            stderr_off = False                 # a new command inherits none of the old redirects
+            i += 1
+        elif c in "<>" and cond:
+            i += 1                             # a comparison inside `[[ … ]]`, not a redirect
         elif c in "<>":
             # INPUT OPENS TOO (codex, PR #78). `< "$path" 2>/dev/null` opens the path BEFORE the
             # suppression is installed, so an unreadable or missing file prints the expanded path
@@ -309,7 +349,14 @@ def inverted_redirect(line):
             i, var = _word(line, i, n)
             if fd_dup and re.fullmatch(r"\d+|-", line[start:i]):
                 continue
-            if i > start and var and _suppressed_after(line, i, n):
+            if line[start:i].strip("\"'") == "/dev/null":
+                # THIS redirect is the suppression. It counts as covering the rest of the command
+                # only if it is on fd 2 (`2>`, `2<>`) or takes stdout with it (`&>`, `>&`).
+                fd = re.search(r"(\d*)$", line[:op]).group(1)
+                if fd == "2" or (op and line[op - 1] == "&") or line[op + 1:op + 2] == "&":
+                    stderr_off = True
+                continue
+            if i > start and var and not stderr_off and _suppressed_after(line, i, n):
                 return op
         else:
             i += 1
@@ -659,6 +706,30 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # A bare `2>/dev/null` with no output redirect at all must not match — the `>` inside it is
         # not an output redirect, and a pattern that thought so would flag most of the tree.
         self.assertIsNone(inverted_redirect('mkdir -p "$LOGDIR" 2>/dev/null || exit 0'))
+
+        # ── FALSE POSITIVES THAT WOULD RED CI ON CORRECT SHIPPED CODE (codex, PR #78) ──
+        # Inside `[[ … ]]`, `<` and `>` are lexicographic COMPARISONS. Measured quiet — bash opens
+        # nothing — yet this was reported at column 5, so a shipped conditional in that shape would
+        # have failed the family sweep.
+        self.assertIsNone(inverted_redirect('[[ z > "$HOME" ]] 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('[[ "$a" < "$b/x" ]] 2>/dev/null'))
+        # ...but a single `[ … ]` is an ordinary command where `>` IS a redirect, and a `[[ … ]]`
+        # that closes must stop protecting what follows it.
+        self.assertIsNotNone(inverted_redirect('[ -n "$v" ] && printf x > "$tmp" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('[[ -n "$v" ]] && printf x > "$tmp" 2>/dev/null'))
+        # A suppression ALREADY INSTALLED before the open covers it: measured QUIET. The trailing
+        # repeat is belt-and-braces, not an inversion, and reporting it sends the reader to "fix"
+        # an ordering that is already correct.
+        self.assertIsNone(inverted_redirect('printf x 2>/dev/null > "$tmp" 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x &>/dev/null > "$tmp" 2>/dev/null'))
+        # ...and it must NOT carry across a command boundary — the next command starts clean.
+        self.assertIsNotNone(inverted_redirect('a 2>/dev/null; printf x > "$tmp" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('a 2>/dev/null | printf x > "$tmp" 2>/dev/null'))
+        # A LEGACY substitution inside double quotes is the same construct as `$( … )` there, and
+        # measured the same leak: `bash: …/nope/x: No such file or directory`. It was walked past
+        # while `"$( … )"` was recursed into — two spellings of one construct, two behaviours.
+        self.assertIsNotNone(inverted_redirect('BYTES="`wc -c < "$OUT" 2>/dev/null`"'))
+        self.assertIsNone(inverted_redirect('BYTES="`wc -c 2>/dev/null < "$OUT"`"'))
 
     def test_the_sweep_covers_the_whole_shipped_shell_tree(self):
         """The derivation's own control. If `_shipped_shell()` ever returns a short or empty list the

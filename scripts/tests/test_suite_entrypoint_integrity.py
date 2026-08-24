@@ -45,6 +45,11 @@ except (subprocess.CalledProcessError, FileNotFoundError, OSError):
 
 
 _EXIT_NAMES = {"exit", "quit"}
+#: `<owner>.main()` ENDS the run only for a real test runner; `<owner>.exit()` only for the
+#: modules that actually terminate the interpreter. Both were `any attribute with that name`
+#: until `helper.main()` false-flagged a valid suite (codex, PR #78).
+_RUNNER_OWNERS = {"unittest", "pytest"}
+_EXIT_OWNERS = {"sys", "os"}
 
 
 def _statements(body):
@@ -81,8 +86,21 @@ def _body_can_exit(node) -> bool:
                 return True
         if isinstance(n, ast.Call):
             f = n.func
-            if isinstance(f, ast.Attribute) and f.attr in {"main", "exit", "_exit"}:
-                return True
+            if isinstance(f, ast.Attribute):
+                owner = f.value.id if isinstance(f.value, ast.Name) else None
+                # NOT every attribute named `main` (codex, PR #78). A module whose FIRST guard
+                # calls `helper.main()` — a helper that returns — followed by its test classes and
+                # a later real `unittest.main()` guard had those classes reported as dropped, which
+                # reds CI on a valid file. `helper.main()` ends nothing.
+                #
+                # Narrow deliberately, and note which way the residual error runs: an unrecognised
+                # runner now means we do NOT treat the guard as exiting, so later definitions go
+                # unreported. That is the quieter failure, and it is bounded — every suite in this
+                # tree uses `unittest.main()`. Being broad instead fails LOUD on correct code.
+                if f.attr == "main" and owner in _RUNNER_OWNERS:
+                    return True
+                if f.attr in {"exit", "_exit"} and owner in _EXIT_OWNERS:
+                    return True
             if isinstance(f, ast.Name) and f.id in _EXIT_NAMES:
                 return True
     return False
@@ -266,6 +284,14 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # A guard block that is not unittest.main() is STILL an entrypoint, and a class after it
             # is still dropped. Requiring a `main()` call here would skip this — measured.
             "sysexit.py": 'if __name__ == "__main__":\n    raise SystemExit(0)\n\n\nclass L: pass\n',
+            # The narrowing must not lose the shapes that DO terminate. `sys.exit(main())` is the
+            # one measured earlier to be skipped by a naive "requires `*.main()`" rule.
+            "sys_exit_main.py": ('if __name__ == "__main__":\n    sys.exit(main())\n'
+                                 'class L(unittest.TestCase): pass\n'),
+            "os_exit.py": ('if __name__ == "__main__":\n    os._exit(0)\n'
+                           'class L(unittest.TestCase): pass\n'),
+            "pytest_main.py": ('if __name__ == "__main__":\n    pytest.main()\n'
+                               'class L(unittest.TestCase): pass\n'),
             # No entrypoint at all is now an OFFENCE, not a skip: a skip is what let the
             # single-quoted spelling through.
             "none.py": "class OnlyThis: pass\n",
@@ -323,6 +349,12 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                    '    unittest.main(argv=argv)\n'),
             "in_guard_after.py": ('if __name__ == "__main__":\n    unittest.main(exit=False)\n'
                                   '    report = summarize()\n'),
+            # A first guard calling a HELPER named `main` ends nothing, so the classes after it are
+            # reachable — and the real runner comes later (codex, PR #78). Treating every `.main`
+            # attribute as terminating reported `Real` as dropped and would red CI.
+            "helper_main_first.py": ('if __name__ == "__main__":\n    helper.main()\n'
+                                     'class Real(unittest.TestCase): pass\n'
+                                     'if __name__ == "__main__":\n    unittest.main()\n'),
             # A CLASS NESTED inside a function after the entrypoint is not module-level, and the
             # lexical rule's `startswith("class ")` could not tell the difference.
             "nested.py": ('class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n'
