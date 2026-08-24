@@ -33,32 +33,123 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 
-def _entrypoint_lineno(tree: "ast.Module") -> "int | None":
-    """Line of the module-level `if __name__ == "__main__":`, or None if the file has none.
+_EXIT_NAMES = {"exit", "quit"}
 
-    STRUCTURAL, not lexical (codex, PR #78). The first version matched the literal string
-    `if __name__ == "__main__":`, so `if __name__ == '__main__':`, or a space around `==`, produced
-    no match at all — and a no-match SKIPPED the file, leaving a class appended after its entrypoint
-    silently dropped while this guard reported OK. A guard against a narrowing defect that was
-    itself narrowed; measured on a planted offender, canonical spelling -> FAILED, single-quoted
-    spelling -> OK.
 
-    Deliberately does NOT require a `unittest.main()` call inside the block: measured, that
-    tightening skips `if __name__ == "__main__": sys.exit(main())`, which is a real hazard the
-    lexical rule caught. A freebie that loses coverage is a regression.
+def _statements(body):
+    """Every node that EXECUTES when this block runs — recursing into control flow but NOT into
+    nested `def`/`class`/`lambda` bodies (agy, local round).
+
+    `ast.walk` ignores scope, so a guard containing `def fail_fast(): sys.exit(1)` alongside a
+    harmless `configure()` looked EXITING, and every class after it was falsely reported dropped —
+    red CI on legitimate code. Defining a function is not calling it.
     """
-    for node in tree.body:
-        if not isinstance(node, ast.If):
+    for n in body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield n                       # the definition itself executes; its body does not
             continue
-        t = node.test
-        if not isinstance(t, ast.Compare) or len(t.ops) != 1 or not isinstance(t.ops[0], ast.Eq):
-            continue
-        left, right = t.left, t.comparators[0]
-        for a, b in ((left, right), (right, left)):
-            if (isinstance(a, ast.Name) and a.id == "__name__"
-                    and isinstance(b, ast.Constant) and b.value == "__main__"):
-                return node.lineno
-    return None
+        yield n
+        for field in ("body", "orelse", "finalbody"):
+            yield from _statements(getattr(n, field, []) or [])
+        for h in getattr(n, "handlers", []) or []:
+            yield from _statements(h.body)
+        for sub in ast.iter_child_nodes(n):
+            if isinstance(sub, (ast.Call, ast.Raise, ast.Expr, ast.Await)):
+                yield sub
+                yield from (c for c in ast.walk(sub)
+                            if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                  ast.ClassDef, ast.Lambda)))
+
+
+def _body_can_exit(node) -> bool:
+    """True if this `if __name__ == '__main__':` block can terminate the interpreter.
+
+    A guard that merely calls `configure()` does NOT end module execution, so classes defined
+    after it are perfectly reachable — flagging them is a false positive (codex, local round).
+    A guard that calls `unittest.main()`, `sys.exit(...)`, `exit(...)` or raises `SystemExit`
+    does end it, and anything defined afterwards is silently dropped on direct execution.
+    """
+    for n in _statements(node.body):
+        if isinstance(n, ast.Raise):
+            exc = n.exc
+            if isinstance(exc, ast.Call):
+                exc = exc.func
+            if isinstance(exc, ast.Name) and exc.id == "SystemExit":
+                return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Attribute) and f.attr in {"main", "exit", "_exit"}:
+                return True
+            if isinstance(f, ast.Name) and f.id in _EXIT_NAMES:
+                return True
+    return False
+
+
+def _is_main_guard(node) -> bool:
+    if not isinstance(node, ast.If):
+        return False
+    t = node.test
+    if not isinstance(t, ast.Compare) or len(t.ops) != 1 or not isinstance(t.ops[0], ast.Eq):
+        return False
+    for a, b in ((t.left, t.comparators[0]), (t.comparators[0], t.left)):
+        if (isinstance(a, ast.Name) and a.id == "__name__"
+                and isinstance(b, ast.Constant) and b.value == "__main__"):
+            return True
+    return False
+
+
+def _module_level(body):
+    """Statements that EXECUTE at module level, recursing into control flow but NOT into
+    function or class bodies — a class nested in `if shutil.which("zsh"):` is defined at import,
+    a class nested in `def f():` is not (kimi/agy/codex, local round)."""
+    for n in body:
+        yield n
+        if isinstance(n, (ast.If, ast.Try)):
+            for sub in (list(getattr(n, "body", [])) + list(getattr(n, "orelse", []))
+                        + list(getattr(n, "finalbody", []))
+                        + [s for h in getattr(n, "handlers", []) for s in h.body]):
+                yield from _module_level([sub])
+        elif isinstance(n, (ast.With, ast.For, ast.While)):
+            yield from _module_level(list(n.body) + list(getattr(n, "orelse", [])))
+
+
+def _defines_test_class(node) -> bool:
+    if isinstance(node, ast.ClassDef):
+        return True
+    # `Late = type("Late", (unittest.TestCase,), {})` is an Assign, not a ClassDef.
+    # `Late: type = type(...)` is an AnnAssign, not an Assign (codex, local round) — the broad
+    # "type()-assigned classes" claim has to cover the annotated spelling too.
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Call):
+        f = node.value.func
+        if isinstance(f, ast.Name) and f.id == "type" and len(node.value.args) == 3:
+            return True
+    return False
+
+
+def analyse(src, filename="<s>"):
+    """(has_any_guard, exiting_guard_lineno_or_None, [(lineno, label), ...]).
+
+    TWO SEPARATE QUESTIONS, because conflating them produced a false positive both ways:
+      * has_any_guard closes the FAIL-OPEN — an unrecognized entrypoint used to make the file be
+        skipped silently, which is how the single-quoted spelling slipped through.
+      * exiting_guard is the boundary that actually DROPS later definitions. A guard that only
+        calls `configure()` ends nothing, so definitions after it are reachable and flagging them
+        is wrong (codex, local round).
+    """
+    tree = ast.parse(src, filename=filename)
+    any_guard, guard_line = False, None
+    for n in _module_level(tree.body):
+        if _is_main_guard(n):
+            any_guard = True
+            if _body_can_exit(n):
+                guard_line = n.lineno
+                break
+    if guard_line is None:
+        return any_guard, None, []
+    dropped = [(n.lineno, getattr(n, "name", None) or "type()-assigned class")
+               for n in _module_level(tree.body)
+               if _defines_test_class(n) and n.lineno > guard_line]
+    return any_guard, guard_line, dropped
 
 
 def _test_files() -> "list[Path]":
@@ -91,20 +182,19 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                 rel = path.relative_to(REPO).as_posix()
             except ValueError:
                 rel = path.name
+            text = path.read_text(encoding="utf-8")
             try:
-                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                ast.parse(text, filename=str(path))
             except SyntaxError as exc:                       # a bare traceback names nothing useful
                 raise AssertionError(f"{rel}: cannot parse: {exc}") from exc
-            line = _entrypoint_lineno(tree)
-            if line is None:
+            any_guard, line, dropped = analyse(text, rel)
+            if not any_guard:
                 out.append(f"{rel}: NO recognized `if __name__ == \"__main__\":` entrypoint — a "
                            f"class appended later would be dropped and this guard would not see it")
                 continue
-            after = [f"{n.lineno}: class {n.name}" for n in tree.body
-                     if isinstance(n, ast.ClassDef) and n.lineno > line]
-            if after:
-                out.append(f"{rel}: {len(after)} class(es) after the entrypoint at :{line} — "
-                           + "; ".join(after))
+            if dropped:
+                out.append(f"{rel}: {len(dropped)} definition(s) after the EXITING entrypoint at "
+                           f":{line} — " + "; ".join(f"{ln}: {name}" for ln, name in dropped))
         return out
 
     def test_every_suite_declares_its_classes_before_the_entrypoint(self):
@@ -154,12 +244,44 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # single-quoted spelling through.
             "none.py": "class OnlyThis: pass\n",
         }
+        must_flag.update({
+            "in_if.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                         'if True:\n    class B(unittest.TestCase): pass\n'),
+            "in_try.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                          'try:\n    class B(unittest.TestCase): pass\n'
+                          'except Exception:\n    pass\n'),
+            # `type()` builds a class without a ClassDef node.
+            "type_assign.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                               'L = type("L", (unittest.TestCase,), {})\n'),
+        })
         for name, body in must_flag.items():
             with self.subTest(spelling=name):
                 self.assertNotEqual([], self._offenders([write(name, body)]),
                                     f"{name} must be flagged")
 
+        # ── SHAPES FOUND BY THE LOCAL REVIEW ROUND (codex / agy / kimi, all three arms) ──
+        # A class NESTED in a module-level `if`/`try` after the entrypoint is still defined at
+        # import and still DROPPED on direct execution — and this repo already uses that shape for
+        # capability skips (`if shutil.which("zsh"):`). The old walk read only `tree.body`.
+
         must_not_flag = {
+            # A working entrypoint WRAPPED in `try:` is found by recursing — the old top-level-only
+            # walk reported "NO recognized entrypoint" and, with missing-entrypoint now an offence,
+            # would have RED a file where nothing is dropped.
+            "wrapped.py": ('class E(unittest.TestCase): pass\ntry:\n'
+                           '    if __name__ == "__main__":\n        unittest.main()\n'
+                           'except SystemExit:\n    pass\n'),
+            # A nested `def` containing `sys.exit` is a DEFINITION, not a call — the guard runs
+            # `configure()` and returns, so the class after it is reachable. `ast.walk` ignores
+            # scope and flagged this, redding CI on legitimate code (agy, local round).
+            "nested_def.py": ('if __name__ == "__main__":\n    def fail_fast():\n'
+                              '        sys.exit(1)\n    configure()\n'
+                              'class Valid(unittest.TestCase): pass\n'),
+            # An INNOCUOUS first guard ends nothing, so classes after it are reachable. Treating the
+            # first guard as the boundary regardless of whether it exits false-flags this.
+            "innocuous_first.py": ('if __name__ == "__main__":\n    configure()\n'
+                                   'class Included(unittest.TestCase): pass\n'
+                                   'if __name__ == "__main__":\n    unittest.main()\n'),
             "ok.py": 'class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n',
             # A CLASS NESTED inside a function after the entrypoint is not module-level, and the
             # lexical rule's `startswith("class ")` could not tell the difference.

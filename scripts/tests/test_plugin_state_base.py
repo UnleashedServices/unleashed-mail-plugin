@@ -492,6 +492,26 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
 
     SENTINEL = "/dev/null/unresolved-plugin-base"
 
+    #: Hooks that source a state-writing lib but are NOT driven above, each with its reason. An
+    #: EXEMPTION LIST, not silence: `HOOKS` is hand-written, and a hand-written census is exactly
+    #: the blacklist this suite's sibling condemns in its own docstring (kimi, local round). The
+    #: derivation cell below fails when a state-writing hook appears in NEITHER table, so a new one
+    #: cannot be added invisibly.
+    NOT_DRIVEN = {
+        "build-failure-log.sh": "log_append only; the lib guard at log.sh:197 is pinned by N2b",
+        "permission-denied-log.sh": "log_append only; same lib guard",
+        "stop-failure-log.sh": "log_append only; same lib guard",
+        "swift-build-verify.sh": "log_append only; same lib guard",
+        "swift-lint-check.sh": "marker_write only; the lib guard at marker.sh:261 is pinned by N2b",
+        # NOT marker_write — this hook READS (`marker_status`) and composes its warn-log path from
+        # `marker_base`, guarded at :75. The reason said `marker_write`, which it never calls; the
+        # verification below caught that, which is the point of verifying reasons rather than
+        # trusting them.
+        "stop-quality-marker-gate.sh": "hook-level skip at :75; reads via marker_status",
+        "precompact-snapshot.sh": "hook-level skip; driving it needs a compaction payload",
+        "sessionstart-restore.sh": "hook-level skip; driving it needs a snapshot fixture",
+    }
+
     def setUp(self):
         self.scratch = tempfile.mkdtemp(prefix="dprime-hooks.")
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
@@ -515,6 +535,21 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                          f'exec "{real}" "$@"\n')
             os.chmod(path, 0o755)
 
+    @staticmethod
+    def _kill_switches():
+        """Every `UNLEASHED_*:-on` switch in the shipped hooks, DERIVED not listed."""
+        # RECURSIVE (agy, local round). A flat `listdir` reads `scripts/` only and silently skips
+        # `scripts/lib/` and `scripts/review/` — the libraries that do the state writing. The
+        # comment above says "DERIVED, not listed"; a non-recursing derivation is a list with extra
+        # steps, which is the whole defect this PR is about, sitting inside its own fix.
+        blob = []
+        for dirpath, _dirs, names in os.walk(os.path.join(ROOT, "scripts")):
+            for name in sorted(names):
+                if name.endswith(".sh"):
+                    with open(os.path.join(dirpath, name), encoding="utf-8", errors="ignore") as fh:
+                        blob.append(fh.read())
+        return sorted(set(re.findall(r"(UNLEASHED_[A-Z_]+):-on", "".join(blob))))
+
     def _drive(self, hook, payload, scripts_root):
         """Run the real hook with an unresolved base; return shimmed calls naming the sentinel."""
         open(self.calls, "w").close()
@@ -523,6 +558,12 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         env.update(PATH=self.shim + os.pathsep + os.environ.get("PATH", os.defpath),
                    HOME=_SANDBOX_HOME, _UNLEASHED_PUBLISH_OK="0",
                    CLAUDE_PLUGIN_ROOT=os.path.dirname(scripts_root))
+        # EVERY kill switch forced ON. Inherited from the caller's environment, any one of them
+        # exits the hook before its write path and the cell passes having exercised nothing —
+        # measured: `UNLEASHED_CAPTURE_REVIEWERS=off python3 …N2c…` reports OK (codex, local round).
+        # DERIVED from the scripts, not listed, so a switch added later cannot silently reopen it.
+        for switch in self._kill_switches():
+            env[switch] = "on"
         proc = subprocess.run(["bash", os.path.join(scripts_root, hook)],
                               input=payload, capture_output=True, text=True, env=env)
         # A hook that CRASHED — syntax error, failed source, missing interpreter, or any downstream
@@ -546,6 +587,74 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         shutil.copytree(os.path.join(ROOT, "scripts"), dest, symlinks=True)
         shutil.copytree(os.path.join(ROOT, "mcp"), os.path.join(root, "mcp"), symlinks=True)
         return dest
+
+    def test_the_census_covers_every_state_writing_hook(self):
+        """The derivation control. `HOOKS = ()` makes both loops below pass vacuously (codex), and a
+        hook added tomorrow would be covered by neither — the hand-written-list defect this whole PR
+        is about, sitting inside its own fix.
+
+        Every hook that sources a state-writing library must be either DRIVEN above or EXEMPTED with
+        a stated reason. Derived from `hooks.json` and the sources on disk, never enumerated.
+        """
+        self.assertTrue(self.HOOKS, "the driven set is empty — both cells below would pass vacuously")
+        with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as fh:
+            manifest = fh.read()
+        # `/` PERMITTED in the captured name (agy, local round): the previous class excluded it, so
+        # a hook registered under `scripts/review/` was dropped from the census silently — a census
+        # that can quietly empty is the failure this cell exists to prevent.
+        referenced = set(re.findall(r"scripts/([A-Za-z0-9_./-]+\.sh)", manifest))
+        state_writers = set()
+        for name in sorted(referenced):
+            src = os.path.join(ROOT, "scripts", name)
+            if os.path.isfile(src):
+                with open(src, encoding="utf-8", errors="ignore") as fh:
+                    if re.search(r"lib/(marker|context|log)\.sh", fh.read()):
+                        state_writers.add(name)
+        self.assertGreater(len(state_writers), 5, f"census looks truncated: {sorted(state_writers)}")
+        driven = {h for h, _, _ in self.HOOKS}
+        uncovered = sorted(state_writers - driven - set(self.NOT_DRIVEN))
+        self.assertEqual([], uncovered,
+                         "these hooks source a state-writing lib but are neither driven by this cell "
+                         "nor exempted with a reason in NOT_DRIVEN: " + ", ".join(uncovered))
+
+        # EVERY EXEMPTION IS VERIFIED, not trusted (codex, local round). An exemption says "this
+        # hook only reaches a primitive N2b already pins"; if the hook later composes a root ITSELF
+        # the reason goes stale silently and the hook is subtracted from the census regardless.
+        # So: the primitive each reason NAMES must actually appear in that hook, and the hook must
+        # not call a base-composing helper directly.
+        _PRIMITIVES = {"log_append": "log_append", "marker_write": "marker_write",
+                       "hook-level skip": "unleashed_base_ok"}
+        _COMPOSERS = ("context_reviews_dir", "context_state_dir")
+        stale = []
+        for name, reason in sorted(self.NOT_DRIVEN.items()):
+            src_path = os.path.join(ROOT, "scripts", name)
+            if not os.path.isfile(src_path):
+                stale.append(f"{name}: exempted but no longer exists")
+                continue
+            with open(src_path, encoding="utf-8", errors="ignore") as fh:
+                src = fh.read()
+            token = next((tok for key, tok in _PRIMITIVES.items() if key in reason), None)
+            if token is None:
+                stale.append(f"{name}: reason names no known primitive: {reason!r}")
+            # WORD-BOUNDED, not a substring: `log_appendX` contains `log_append`, so a bare `in`
+            # test survived renaming the primitive — the naive-substring defect, inside the check
+            # written to catch stale claims. Caught by mutating the hook and seeing nothing redden.
+            elif not re.search(r"\b" + re.escape(token) + r"\b", src):
+                stale.append(f"{name}: reason claims {token!r} but the hook does not call it")
+            # ORDER MATTERS. Composing a root is fine IF a hook-level base-ok skip precedes it —
+            # that is precisely `precompact-snapshot.sh`'s shape (guard :53, composition :54). It is
+            # NOT fine when the composition comes first, which is the `capture-reviewer-verdict.sh`
+            # case that needed its own guard. A blunt "composes a root" rule flagged the safe one.
+            lines = src.splitlines()
+            guard_at = next((i for i, ln in enumerate(lines) if "unleashed_base_ok" in ln), None)
+            first_compose = next((i for i, ln in enumerate(lines)
+                                  if any(c in ln for c in _COMPOSERS)), None)
+            if first_compose is not None and (guard_at is None or guard_at > first_compose):
+                stale.append(f"{name}: composes a root at line {first_compose + 1} with no "
+                             f"hook-level base-ok skip before it — it cannot be exempted as "
+                             f"'primitive only'; drive it instead")
+        self.assertEqual([], stale,
+                         "NOT_DRIVEN exemptions have gone stale:\n  " + "\n  ".join(stale))
 
     def test_no_shipped_hook_composes_a_path_under_the_sentinel(self):
         shipped = os.path.join(ROOT, "scripts")

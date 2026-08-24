@@ -41,11 +41,17 @@ REPO = Path(__file__).resolve().parents[2]
 #: — see `inverted_redirect` below. A hand-kept list of the files a rule applies to is a
 #: blacklist wearing a different hat: it silently stops covering whatever is added next.
 def _shipped_shell() -> "list[Path]":
-    return sorted(
-        rel
-        for pattern in ("scripts/*.sh", "scripts/lib/*.sh", "scripts/review/*.sh")
-        for rel in (q.relative_to(REPO) for q in REPO.glob(pattern))
-    )
+    #: RECURSIVE, and extension-agnostic where the tree needs it. Three directory patterns is the
+    #: same allowlist mistake one level up — `scripts/<new-dir>/*.sh` would be invisible. And
+    #: `.githooks/pre-commit` is SHIPPED executable bash with no `.sh` suffix, outside `scripts/`
+    #: entirely (kimi, local round); the breadth control below could never notice its absence.
+    #: This derivation was recursive once before and a bulk `git checkout` reverted it silently
+    #: while the fix was reported as landed — hence the explicit assertion in the control.
+    found = set(REPO.glob("scripts/**/*.sh"))
+    extra = REPO / ".githooks" / "pre-commit"
+    if extra.is_file():
+        found.add(extra)
+    return sorted(q.relative_to(REPO) for q in found)
 
 
 #: A redirect into ANY path-bearing target, followed LATER on the same line by `2>/dev/null` — the
@@ -80,25 +86,89 @@ def _shipped_shell() -> "list[Path]":
 #: it. That class stays ticketed, with its known-gap cell below so it is not rediscovered as a
 #: surprise.
 _META = frozenset(" \t<>;&|()")
-_SUPPRESSION = re.compile(r"[ \t]+2>/dev/null(?![\w/])")
+#: `2>` then OPTIONAL whitespace then `/dev/null`, optionally quoted. All four spellings are legal
+#: shell and all four leak (kimi, local round): `2>/dev/null`, `2> /dev/null`, `2>"/dev/null"`,
+#: `2>'/dev/null'`.
+_SUPPRESSION = re.compile(r"""[ \t]+2>[ \t]*(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
+
+
+def _word(line, i, n):
+    """Consume ONE shell word from i; return (end, interpolates)."""
+    start, var = i, False
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            i += 2
+        elif c == "'":
+            j = line.find("'", i + 1)
+            i = n if j < 0 else j + 1
+        elif c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                var = var or line[i] == "$"
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+        elif c == "`":
+            # Legacy `` `cmd` `` substitution is an interpolated target too (codex, local round).
+            var = True
+            j = line.find("`", i + 1)
+            i = n if j < 0 else j + 1
+        elif c == "$" and i + 1 < n and line[i + 1] == "(":
+            # `$(cmd)` as part of the target: consume the balanced parens rather than stopping at
+            # `(` (all three local arms). The tree's own idiom is `p="$(marker_path lint)"`.
+            # QUOTE-AWARE paren counting (agy, local round). Blind counting ends the substitution
+            # at a quoted `)` — `$(echo ")")` closed at the wrong paren, the word split, and the
+            # leak was missed entirely.
+            var, depth, i = True, 0, i + 1
+            while i < n:
+                ch = line[i]
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == "'":
+                    j = line.find("'", i + 1)
+                    i = n if j < 0 else j + 1
+                    continue
+                if ch == '"':
+                    i += 1
+                    while i < n and line[i] != '"':
+                        i += 2 if line[i] == "\\" else 1
+                    i += 1
+                    continue
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        elif c in _META:
+            break
+        else:
+            # `~` at the START of a word expands to the operator's HOME — the exact PII this guards.
+            var = var or c == "$" or (c == "~" and i == start)
+            i += 1
+    return i, var
 
 
 def inverted_redirect(line):
-    """Column of an output redirect that opens an interpolated target BEFORE `2>/dev/null`.
+    """Column of an output redirect opening an interpolated target BEFORE `2>/dev/null`, else None.
 
-    One forward pass, tracking single-quote / double-quote / backslash state, so a `>` inside
-    quoting is never mistaken for a redirect. On finding a redirect operator outside quotes it
-    consumes the following WORD — however many adjacent quoted and unquoted segments — and reports
-    it only if the word interpolates (a `$` outside SINGLE quotes, where `$` is literal) and
-    `2>/dev/null` follows immediately. Returns the 0-based column, or None.
+    RETURNS A COLUMN, WHICH MAY BE 0 — callers must test `is not None`, never truthiness.
     """
     i, n = 0, len(line)
     while i < n:
         c = line[i]
         if c == "\\":
             i += 2
-        elif c == "'":                              # single quotes: no escapes inside, ever
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+            return None                     # a shell COMMENT starts here; nothing after it executes
+        elif c == "'":
             j = line.find("'", i + 1)
+            i = n if j < 0 else j + 1
+        elif c == "`":                      # legacy substitution: skip it, a `>` inside is not ours
+            j = line.find("`", i + 1)
             i = n if j < 0 else j + 1
         elif c == '"':
             i += 1
@@ -106,30 +176,22 @@ def inverted_redirect(line):
                 i += 2 if line[i] == "\\" else 1
             i += 1
         elif c == ">":
-            op = i                                  # a preceding fd digit (`1>`, `9>`) is plain text
+            op = i
             i += 1
-            if i < n and line[i] == ">":            # `>>` appends and leaks identically
+            if i < n and line[i] == ">":
                 i += 1
-            if i < n and line[i] in "&|":           # `>&2` / `>|f` do not open a named path
-                continue
+            fd_dup = False
+            if i < n and line[i] == "|":     # `>|` OVERRIDES noclobber and still opens the path
+                i += 1
+            elif i < n and line[i] == "&":   # `>&` is fd-dup ONLY when the word is digits or `-`
+                i += 1
+                fd_dup = True
             while i < n and line[i] in " \t":
                 i += 1
-            start, var = i, False
-            while i < n and line[i] not in _META:   # ONE word, any number of adjacent segments
-                if line[i] == "\\":
-                    i += 2
-                elif line[i] == "'":
-                    j = line.find("'", i + 1)
-                    i = n if j < 0 else j + 1
-                elif line[i] == '"':
-                    i += 1
-                    while i < n and line[i] != '"':
-                        var = var or line[i] == "$"
-                        i += 2 if line[i] == "\\" else 1
-                    i += 1
-                else:
-                    var = var or line[i] == "$"
-                    i += 1
+            start = i
+            i, var = _word(line, i, n)
+            if fd_dup and re.fullmatch(r"\d+|-", line[start:i]):
+                continue
             if i > start and var and _SUPPRESSION.match(line, i):
                 return op
         else:
@@ -305,7 +367,10 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
             if not path.is_file():
                 continue
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if inverted_redirect(line):
+                # `is not None`, NOT truthiness — a redirect at COLUMN 0 returns 0,
+                # which `if` discards. `> "$HOME/leak" 2>/dev/null` at the start of a
+                # line was silently skipped by the shipped sweep (codex, local round).
+                if inverted_redirect(line) is not None:
                     offenders.append(f"{rel}:{number}: {line.strip()}")
         self.assertEqual([], offenders,
                          "these writers redirect into a temp file BEFORE suppressing stderr, so an "
@@ -375,6 +440,42 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # shell quoting and no flat pattern can model it. Ticketed with the trade above.
         self.assertIsNone(
             inverted_redirect('clean="$(printf \'%s\' "$s" | tr -d \'"\' )" > "$tmp" 2>/dev/null'))
+        # ── SHAPES FOUND BY THE LOCAL REVIEW ROUND (codex / agy / kimi, all three arms) ──
+        # A match at COLUMN ZERO. The scanner returns a column, and the caller used truthiness, so
+        # 0 was discarded — a live bug in the shipped sweep, not a gap.
+        self.assertEqual(0, inverted_redirect('> "$HOME/leak" 2>/dev/null'),
+                         "a redirect at column 0 must report column 0, not None")
+        # TILDE expands to the operator's HOME — the exact PII this suite guards.
+        self.assertIsNotNone(inverted_redirect('printf x > ~/leak 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > ~root/leak 2>/dev/null'))
+        # `>|` overrides noclobber and STILL opens the named path.
+        self.assertIsNotNone(inverted_redirect('printf x >| "$TMP" 2>/dev/null'))
+        # `>&` is fd-duplication ONLY when its word is digits or `-`; with a path it opens one.
+        self.assertIsNotNone(inverted_redirect('printf x >& "$HOME/leak" 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x >&2 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x >&- 2>/dev/null'))
+        # The SUPPRESSION has four legal spellings and all four leak.
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2> /dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>"/dev/null"'))
+        self.assertIsNotNone(inverted_redirect("printf x > \"$tmp\" 2>'/dev/null'"))
+        # `$(cmd)` as the target: `(` is a metacharacter, so the word parse used to stop dead.
+        # The tree's own idiom is `p="$(marker_path lint)"`.
+        self.assertIsNotNone(inverted_redirect('printf x > $(marker_path lint) 2>/dev/null'))
+        # A shell COMMENT executes nothing — and this repo writes long comments in shipped shell,
+        # including ones QUOTING the wrong order. Flagging those would red CI on documentation.
+        self.assertIsNone(inverted_redirect('# printf x > "$tmp" 2>/dev/null'))
+        self.assertIsNone(
+            inverted_redirect('    # WRONG ORDER: printf x > "$tmp" 2>/dev/null leaks'))
+        # A `#` mid-word is NOT a comment introducer in shell.
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp"#frag 2>/dev/null'))
+        # A QUOTED paren inside `$( … )` must not end the substitution early (agy, local round).
+        # Blind depth counting closed at the wrong `)`, split the word, and missed the leak.
+        self.assertIsNotNone(inverted_redirect('echo x > $(echo ")") 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect("echo x > $(echo ')') 2>/dev/null"))
+        # KNOWN GAP, pinned: a here-doc BODY is data, but the sweep is line-local and cannot know
+        # it is inside one. Ticketed with the `$( )`-inside-`"…"` class.
+        self.assertIsNotNone(inverted_redirect('usage: tool > "$OUT" 2>/dev/null'))
+
         # ...and the correct order still must not match, in either redirect form.
         self.assertIsNone(inverted_redirect('printf x 2>/dev/null > "$tmp"'))
         self.assertIsNone(inverted_redirect('tail -n 5 "$p" 2>/dev/null > "$tmp"'))
@@ -389,6 +490,11 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         real leak. Assert it reaches a realistic breadth AND names the files that carry the rule."""
         found = {rel.as_posix() for rel in _shipped_shell()}
         self.assertGreater(len(found), 15, f"suspiciously few shell files swept: {sorted(found)}")
+        self.assertIn(".githooks/pre-commit", found,
+                      "shipped executable bash without a `.sh` suffix must still be swept")
+        self.assertTrue(any("/" in r.split("scripts/", 1)[-1].rstrip(".sh") for r in found
+                            if r.startswith("scripts/") and r.count("/") > 1),
+                        "the derivation must RECURSE — a flat glob silently drops nested dirs")
         for required in ("scripts/lib/marker.sh", "scripts/lib/context.sh", "scripts/lib/log.sh",
                          "scripts/precompact-snapshot.sh", "scripts/stop-quality-marker-gate.sh"):
             self.assertIn(required, found, "the original five must still be swept")
