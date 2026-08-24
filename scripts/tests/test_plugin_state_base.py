@@ -512,6 +512,17 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
         "sessionstart-restore.sh": "hook-level skip; driving it needs a snapshot fixture",
     }
 
+    #: Hooks KNOWN to compose under the sentinel with no exiting guard, each tied to the ticket that
+    #: owns it. This is an acknowledgement, not an excuse: the stricter check below found
+    #: `stop-quality-marker-gate.sh` composing at :129 and :141, protected only by the SUBSEQUENT
+    #: mktemp/mkdir failing on `/dev/null`'s ENOTDIR — and the hook's own comment (PR #63, gap 26)
+    #: says the gate "must not depend on" that accident. Recorded rather than silenced, and any
+    #: OTHER hook doing the same still fails this cell.
+    COMPOSES_UNDER_SENTINEL = {
+        "stop-quality-marker-gate.sh": "COREDEV-2760 — :129/:141 compose under the sentinel and "
+                                       "rely on the following operation failing (PR #63 gap 26)",
+    }
+
     def setUp(self):
         self.scratch = tempfile.mkdtemp(prefix="dprime-hooks.")
         self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
@@ -659,31 +670,48 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # that is precisely `precompact-snapshot.sh`'s shape (guard :53, composition :54). It is
             # NOT fine when the composition comes first, which is the `capture-reviewer-verdict.sh`
             # case that needed its own guard. A blunt "composes a root" rule flagged the safe one.
+            # EVERY composer, not just the first (codex, PR #78). `stop-quality-marker-gate.sh`
+            # opens with a neutralised `marker_dir` compose, so checking only the FIRST match left
+            # `first_compose` pointing at the safe one — a later unguarded `mkdir -p "$(marker_base)"`
+            # would compose a sentinel path with the exemption still reported clean, and since the
+            # hook is in NOT_DRIVEN no behavioural cell would catch it either.
             lines = src.splitlines()
-            guard_at = next((i for i, ln in enumerate(lines) if "unleashed_base_ok" in ln), None)
-            first_compose = next((i for i, ln in enumerate(lines)
-                                  if any(c in ln for c in _COMPOSERS)), None)
+            # An EXITING guard only. `unleashed_base_ok || SENTINEL=""` does NOT end the hook — it
+            # clears one variable — so it protects that variable and nothing after it. Treating any
+            # base-ok line as protecting the whole remainder let a later unguarded
+            # `mkdir -p "$(marker_base)"` through (codex, PR #78). `|| exit`, `|| return` and the
+            # named exit helpers do end it.
+            guard_at = next((i for i, ln in enumerate(lines)
+                             if "unleashed_base_ok" in ln
+                             and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
+            composes = [i for i, ln in enumerate(lines) if any(c in ln for c in _COMPOSERS)]
             # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom: `stop-quality-marker-gate.sh`
             # builds `SENTINEL="$(marker_dir)/…"` at :74 and the very next line is
             # `unleashed_base_ok || SENTINEL=""` — the value is discarded before any use, so no
             # filesystem operation ever sees a sentinel-derived path. Requiring the guard to precede
             # the composition flagged that as a defect. A guard that clears the SAME variable within
             # a few lines counts as protecting it.
-            neutralised = False
-            if first_compose is not None:
-                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", lines[first_compose])
+            for at in composes:
+                # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom:
+                # `stop-quality-marker-gate.sh` builds `SENTINEL="$(marker_dir)/…"` and the very
+                # next line is `unleashed_base_ok || SENTINEL=""`, so the value is discarded before
+                # any use and no filesystem operation sees a sentinel-derived path.
+                neutralised = False
+                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", lines[at])
                 if assigned:
                     var = assigned.group(1)
-                    for probe in lines[first_compose + 1:first_compose + 4]:
+                    for probe in lines[at + 1:at + 4]:
                         if "unleashed_base_ok" in probe and re.search(
                                 r"\b" + re.escape(var) + r"\b", probe):
                             neutralised = True
                             break
-            if (first_compose is not None and not neutralised
-                    and (guard_at is None or guard_at > first_compose)):
-                stale.append(f"{name}: composes a root at line {first_compose + 1} with no "
-                             f"hook-level base-ok skip before it — it cannot be exempted as "
-                             f"'primitive only'; drive it instead")
+                if name in self.COMPOSES_UNDER_SENTINEL:
+                    continue                       # acknowledged above, owned by a ticket
+                if not neutralised and (guard_at is None or guard_at > at):
+                    stale.append(f"{name}: composes a root at line {at + 1} with no hook-level "
+                                 f"base-ok skip before it — it cannot be exempted as "
+                                 f"'primitive only'; drive it instead")
+                    break
         self.assertEqual([], stale,
                          "NOT_DRIVEN exemptions have gone stale:\n  " + "\n  ".join(stale))
 

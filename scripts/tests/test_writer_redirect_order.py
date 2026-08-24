@@ -92,6 +92,40 @@ _META = frozenset(" \t<>;&|()")
 _SUPPRESSION = re.compile(r"""[ \t]+2>[ \t]*(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
 
 
+def _subst_end(line, i, n):
+    """Index just past the `)` closing the `$(` that starts at `i`, QUOTE-AWARE.
+
+    Blind depth counting ends the substitution at a quoted paren — `$(echo ")")` and
+    `$(echo ')')` both closed early, truncating what got scanned (gemini and codex, PR #78).
+    There were TWO such loops, one here and one in the double-quote branch of the scanner; the
+    second was left blind when the first was fixed, so they are now the same code.
+    """
+    depth, j = 0, i
+    while j < n:
+        ch = line[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "'":
+            k = line.find("'", j + 1)
+            j = n if k < 0 else k + 1
+            continue
+        if ch == '"':
+            j += 1
+            while j < n and line[j] != '"':
+                j += 2 if line[j] == "\\" else 1
+            j += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return n
+
+
 def _word(line, i, n):
     """Consume ONE shell word from i; return (end, interpolates)."""
     start, var = i, False
@@ -119,30 +153,8 @@ def _word(line, i, n):
             # QUOTE-AWARE paren counting (agy, local round). Blind counting ends the substitution
             # at a quoted `)` — `$(echo ")")` closed at the wrong paren, the word split, and the
             # leak was missed entirely.
-            var, depth, i = True, 0, i + 1
-            while i < n:
-                ch = line[i]
-                if ch == "\\":
-                    i += 2
-                    continue
-                if ch == "'":
-                    j = line.find("'", i + 1)
-                    i = n if j < 0 else j + 1
-                    continue
-                if ch == '"':
-                    i += 1
-                    while i < n and line[i] != '"':
-                        i += 2 if line[i] == "\\" else 1
-                    i += 1
-                    continue
-                if ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0:
-                        i += 1
-                        break
-                i += 1
+            var = True
+            i = _subst_end(line, i + 1, n)
         elif c in _META:
             break
         else:
@@ -193,9 +205,18 @@ def inverted_redirect(line):
         elif c == "'":
             j = line.find("'", i + 1)
             i = n if j < 0 else j + 1
-        elif c == "`":                      # legacy substitution: skip it, a `>` inside is not ours
+        elif c == "`":
+            # RECURSE into legacy `` `cmd` `` too (codex, PR #78). Skipping it meant
+            # ``B=`wc -c < "$OUT" 2>/dev/null` `` — a real leak, measured — returned None, while the
+            # identical `$( … )` form was caught. Same substitution, same rule.
             j = line.find("`", i + 1)
-            i = n if j < 0 else j + 1
+            if j < 0:
+                i = n
+            else:
+                hit = inverted_redirect(line[i + 1:j])
+                if hit is not None:
+                    return i + 1 + hit
+                i = j + 1
         elif c == '"':
             # A `$( … )` INSIDE double quotes RE-ENTERS shell quoting, and a redirect in there is a
             # real redirect. This was pinned as a known gap until it was measured biting shipped
@@ -209,20 +230,11 @@ def inverted_redirect(line):
                     i += 2
                     continue
                 if line[i] == "$" and i + 1 < n and line[i + 1] == "(":
-                    depth, j = 0, i + 1
-                    while j < n:
-                        if line[j] == "(":
-                            depth += 1
-                        elif line[j] == ")":
-                            depth -= 1
-                            if depth == 0:
-                                break
-                        j += 1
-                    inner = line[i + 2:j]
-                    hit = inverted_redirect(inner)
+                    end = _subst_end(line, i + 1, n)
+                    hit = inverted_redirect(line[i + 2:end - 1])
                     if hit is not None:
                         return i + 2 + hit
-                    i = j + 1
+                    i = end
                     continue
                 i += 1
             i += 1
