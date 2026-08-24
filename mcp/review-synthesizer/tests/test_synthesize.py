@@ -224,6 +224,36 @@ class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
         self.assertIn("refusing to synthesize", err)
         self.assertEqual(rc, 2)
 
+    def test_a_file_level_load_failure_reaches_the_quarantine_report(self):
+        """A file that will not PARSE has no finding rows, so nothing can mis-scope — and its real
+        error must not be replaced by the empty-changeset message (codex, PR #77).
+
+        Measured before the fix: a truncated JSON with an empty `--changed` printed only "your
+        changeset is empty", a true statement about the wrong problem, and returned before
+        `render_markdown` could name the parse failure.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "trunc.json")
+            with open(fp, "w", encoding="utf-8") as fh:
+                fh.write('{"findings": [{"severity"')      # deliberately unparseable
+            ch = os.path.join(d, "changed.txt")
+            open(ch, "w").close()
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = S.main([fp, "--changed", ch])
+        self.assertNotIn("refusing to synthesize", err.getvalue(),
+                         "a file-level parse failure must not be reported as an empty changeset")
+        self.assertIn("could not read/parse", out.getvalue(),
+                      "the actual quarantine reason must reach the report")
+        self.assertEqual(rc, 1)
+
+    def test_a_quarantined_ROW_still_refuses(self):
+        """The narrowing half: a row that quarantines is still a ROW, and it would still mis-scope,
+        so the refusal must stand. Distinguishing file-level failures must not weaken this."""
+        rc, _, err = self._run_findings([{"severity": "nonsense"}], "")
+        self.assertIn("refusing to synthesize", err)
+        self.assertEqual(rc, 2)
+
     def test_control_real_path_still_reviews(self):
         # CONTROL — without this the three cells above pass against a synthesizer that refuses
         # EVERYTHING, proving nothing. The same fixture and the same blocker must reach a real verdict

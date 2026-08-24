@@ -485,7 +485,14 @@ def main(argv: list[str]) -> int:
     # reach APPROVE. Testing path-was-supplied refused exactly that, and diverged from the MCP twin,
     # which guards on `findings_in`. `bad` counts too: a row that only quarantined is still a row,
     # and would still mis-scope. Demo mode is unaffected — it supplies the bundled changeset.
-    if (findings or bad) and not any(canonical_path(c) for c in changed):
+    # ROWS, not file-level load failures (codex, PR #77). `_load` records an unreadable or
+    # malformed FILE as `({"_file": path}, reason)` — no finding row exists. Counting those here
+    # refused the input with the empty-changeset message and returned before `render_markdown`
+    # could show the actual quarantine reason, so a truncated JSON reported only "your changeset is
+    # empty" — a true statement about the wrong problem. A file-level failure now falls through to
+    # the report, which names it. Row-level quarantine still counts: such a row WOULD mis-scope.
+    _rows = [b for b in bad if set(b[0]) != {"_file"}]
+    if (findings or _rows) and not any(canonical_path(c) for c in changed):
         # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
         # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES
         # or its scope is "structural-pipeline", so those rows would NOT mis-scope. They are refused
