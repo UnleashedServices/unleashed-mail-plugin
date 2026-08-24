@@ -463,7 +463,7 @@ def _strip_comment(line: str) -> str:
                 quote = ""
         elif c in "'\"":
             quote = c
-        elif c == "#" and (not out or line[i - 1] in " \t"):
+        elif c == "#" and (not out or line[i - 1] in " \t;&|()"):
             break
         out.append(c)
         i += 1
@@ -770,8 +770,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                     guard_src.append("")
                 else:
                     guard_src.append(_ln)
+            # AS THE COMMAND, not as an argument. `printf '%s' unleashed_base_ok || exit 0` set
+            # `guard_at` although `printf` succeeds and the `exit` never runs (codex, PR #78), so
+            # a later composer counted as protected by a guard that cannot fire. Require the name
+            # to open a command: start of line, or right after a `;` `&&` `||` `(` `{` `!`.
             guard_at = next((i for i, ln in enumerate(guard_src)
-                             if "unleashed_base_ok" in ln
+                             if re.search(r"(?:^|[;&|({!]\s*|\bthen\s+|\bdo\s+)"
+                                          r"unleashed_base_ok\b", ln)
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
             # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
             # narrowing — the signature defect of this whole campaign (codex, PR #78). A hook can
@@ -816,13 +821,27 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                         # `unleashed_base_ok || echo "$P"` was accepted as neutralisation while
                         # exposing the sentinel and leaving `$P` live for the `mkdir` after it
                         # (codex, PR #78). Match the clearing ASSIGNMENT.
+                        # ...on the FAILING branch. `unleashed_base_ok && P=""` clears the value
+                        # only when the base RESOLVES — under an unresolved base the guard fails,
+                        # `&&` skips the clear, and `mkdir` receives the sentinel path. The line
+                        # contained the guard name and the assignment, so it counted (codex,
+                        # PR #78). Require `||`, which is the branch that actually runs.
                         neutralised = bool(
-                            "unleashed_base_ok" in probe
+                            re.search(r"unleashed_base_ok\s*\|\|", probe)
                             and re.search(r"\b" + re.escape(var) + r"=(\"\"|''|\s|$)", probe))
                         break
                 if self.COMPOSES_UNDER_SENTINEL.get((name, at + 1)):
                     continue                       # this LINE is acknowledged, owned by a ticket
-                if not neutralised and (guard_at is None or guard_at > at):
+                # SAME LINE, STILL ORDERED. `mkdir -p "$(log_dir)"; unleashed_base_ok || exit 0`
+                # gives both the same index, so `guard_at > at` was false and the composition
+                # counted as protected — while bash runs the mkdir first (codex, PR #78). When the
+                # indices tie, compare columns.
+                _after = guard_at is None or guard_at > at
+                if guard_at == at:
+                    _after = (code[at].find("unleashed_base_ok")
+                              > max(code[at].find(_c) for _c in _COMPOSERS + _BASE_PATH_VARS
+                                    if _c in code[at]))
+                if not neutralised and _after:
                     stale.append(f"{name}: composes a root at line {at + 1} with no hook-level "
                                  f"base-ok skip before it — it cannot be exempted as "
                                  f"'primitive only'; drive it instead")

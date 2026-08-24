@@ -232,7 +232,21 @@ def _word(line, i, n):
             # still perform parameter expansion, so `> $"$HOME/blocked"` opens the EXPANDED home
             # path and leaks it — measured. The previous revision treated both spellings as literal
             # and so turned a fix for one into a false negative for the other (codex, PR #78).
-            close = line.find("'", i + 2)
+            # ESCAPE-AWARE, unlike the plain `'…'` branch above — and that difference is the
+            # point: inside `'…'` a backslash is literal and nothing can escape the closing quote,
+            # while `$'…'` processes `\'`. `> $'foo\''"$HOME/x" 2>/dev/null` is valid bash and
+            # leaks; scanning to the next RAW quote stopped at the escaped one and swallowed the
+            # real interpolation that followed (codex, PR #78). Fourth site of "find the closing
+            # delimiter without honouring escapes" in this file — the other three were backticks.
+            close, _j = -1, i + 2
+            while _j < n:
+                if line[_j] == "\\":
+                    _j += 2
+                    continue
+                if line[_j] == "'":
+                    close = _j
+                    break
+                _j += 1
             i = n if close < 0 else close + 1
         elif c == "$" and i + 1 < n and line[i + 1] == '"':
             i += 1                                 # fall into the double-quote scan below, which
@@ -323,11 +337,16 @@ def inverted_redirect(line):
     """
     i, n = 0, len(line)
     cond, stderr_off = 0, False
+    # A REDIRECTION-ONLY `exec` IS PERMANENT. `exec 2>/dev/null; printf x > "$p" 2>/dev/null` has
+    # the second open already quiet, because that `exec` redirected the SHELL's stderr rather than
+    # one command's — so clearing the state at the `;` reported a safe line (codex, PR #78). Once
+    # seen, the state survives every boundary on the line.
+    _exec_persisted = bool(re.match(r"\s*exec\s+[0-9]*[<>&]", line))
     while i < n:
         c = line[i]
         if c == "\\":
             i += 2
-        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|()"):
             return None                     # a shell COMMENT starts here; nothing after it executes
         elif c == "'":
             j = line.find("'", i + 1)
@@ -386,7 +405,7 @@ def inverted_redirect(line):
         elif line.startswith("]]", i) and cond:
             cond -= 1
             i += 2
-        elif c in ";|" or (c == "&" and line[i + 1:i + 2] != ">"):
+        elif (c in ";|" or (c == "&" and line[i + 1:i + 2] != ">")) and not _exec_persisted:
             stderr_off = False                 # a new command inherits none of the old redirects
             i += 1
         elif c in "<>" and cond:
@@ -771,6 +790,21 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # This cell asserted the opposite for one round, on a measurement that only checked
         # stderr was non-empty; the syntax error itself made it non-empty.
         self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>>| /dev/null'))
+        # A `#` AFTER `)` STARTS A COMMENT. `(:)# printf x > "$HOME/leak" 2>/dev/null` runs only
+        # the subshell - measured quiet - and was reported, so a shipped line in that shape would
+        # have failed the sweep. Third narrowing of the same boundary set.
+        self.assertIsNone(inverted_redirect('(:)# printf x > "$HOME/leak" 2>/dev/null'))
+        # A REDIRECTION-ONLY `exec` IS PERMANENT, so the state must survive the boundary after it.
+        # Measured quiet; clearing at the `;` reported a safe line.
+        self.assertIsNone(
+            inverted_redirect('exec 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
+        # ...but an ORDINARY command before a `;` must still reset it, or the fix is a blanket pass.
+        self.assertIsNotNone(
+            inverted_redirect('printf x 2>/dev/null; printf y > "$HOME/leak" 2>/dev/null'))
+        # ANSI-C quoting PROCESSES ESCAPES, unlike plain `'...'`. Scanning to the next raw quote
+        # stopped at the escaped one and swallowed the real interpolation after it. Measured leaking.
+        self.assertIsNotNone(inverted_redirect(
+            "printf x > $'foo\\''\"$HOME/leak\" 2>/dev/null"))
         # `2>&-` and `2</dev/null` ARE suppressions on Linux — measured in CI, quiet in the
         # correct order and leaking in this one — so the inverted order is a real defect there.
         # These two cells asserted the opposite for several rounds on a macOS-only measurement.

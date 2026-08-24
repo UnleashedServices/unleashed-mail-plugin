@@ -131,6 +131,15 @@ def _module_level(body):
         # which is an OFFENCE now, redding the required validate job (which runs 3.12); and a class
         # after the guard inside one went unreported while the byte-near-identical plain `except`
         # fixture is already pinned. `getattr` keeps the 3.9 leg from raising.
+        # A STATICALLY DEAD BRANCH EXECUTES NOTHING. `if False:` wrapping the entrypoint made
+        # `analyse` report a working exiting guard, so a file that runs ZERO tests on direct
+        # execution was approved while discovery ran its classes — the exact divergence this suite
+        # exists to catch (codex, PR #78). Only a literal falsy CONSTANT is treated as dead;
+        # anything evaluable at runtime is still walked, so a capability check like
+        # `if shutil.which("zsh"):` keeps its current behaviour.
+        if isinstance(n, ast.If) and isinstance(n.test, ast.Constant) and not n.test.value:
+            yield from _module_level(list(getattr(n, "orelse", [])))
+            continue
         if isinstance(n, (ast.If, ast.Try, getattr(ast, "TryStar", ()))):
             for sub in (list(getattr(n, "body", [])) + list(getattr(n, "orelse", []))
                         + list(getattr(n, "finalbody", []))
@@ -357,6 +366,13 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # No entrypoint at all is now an OFFENCE, not a skip: a skip is what let the
             # single-quoted spelling through.
             "none.py": "class OnlyThis: pass\n",
+            # A guard inside a STATICALLY DEAD branch is not an entrypoint: direct execution skips
+            # it and runs zero tests while discovery runs the class. Reporting a working entrypoint
+            # there approved the exact divergence this suite exists to catch.
+            "dead_branch.py": ('class T(unittest.TestCase): pass\nif False:\n'
+                               '    if __name__ == "__main__":\n        unittest.main()\n'),
+            "dead_zero.py": ('class T(unittest.TestCase): pass\nif 0:\n'
+                             '    if __name__ == "__main__":\n        unittest.main()\n'),
         }
         must_flag.update({
             "in_if.py": ('if __name__ == "__main__":\n    unittest.main()\n'
@@ -436,6 +452,12 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                    'class Included(unittest.TestCase): pass\n'
                                    'if __name__ == "__main__":\n    unittest.main()\n'),
             "ok.py": 'class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n',
+            # ...but a RUNTIME-evaluable condition is not dead, and this tree uses that shape for
+            # capability skips. Only a literal falsy constant counts, or the fix would blind the
+            # walk to every conditional block.
+            "live_cond.py": ('import shutil\nif shutil.which("zsh"):\n'
+                             '    class Z(unittest.TestCase): pass\n'
+                             'if __name__ == "__main__":\n    unittest.main()\n'),
             # A non-test helper defined after the guard is dead, but it is not a dropped TEST and
             # the sweep's message would be wrong about it. Only `test`-named functions count.
             "helper_after.py": ('if __name__ == "__main__":\n    unittest.main()\n'
