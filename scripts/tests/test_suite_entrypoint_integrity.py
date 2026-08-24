@@ -137,7 +137,12 @@ def _module_level(body):
         # exists to catch (codex, PR #78). Only a literal falsy CONSTANT is treated as dead;
         # anything evaluable at runtime is still walked, so a capability check like
         # `if shutil.which("zsh"):` keeps its current behaviour.
-        if isinstance(n, ast.If) and isinstance(n.test, ast.Constant) and not n.test.value:
+        # ...and `while False:` is dead by exactly the same argument. Special-casing `if` alone
+        # was one spelling of a family (codex, PR #78) — the property is "a literal falsy test",
+        # not "an If node". A `while`'s `orelse` runs when the loop ends normally, which for a
+        # never-entered loop is immediately, so it is walked in both cases.
+        if (isinstance(n, (ast.If, ast.While)) and isinstance(n.test, ast.Constant)
+                and not n.test.value):
             yield from _module_level(list(getattr(n, "orelse", [])))
             continue
         if isinstance(n, (ast.If, ast.Try, getattr(ast, "TryStar", ()))):
@@ -373,6 +378,10 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                '    if __name__ == "__main__":\n        unittest.main()\n'),
             "dead_zero.py": ('class T(unittest.TestCase): pass\nif 0:\n'
                              '    if __name__ == "__main__":\n        unittest.main()\n'),
+            # `while False:` is dead by the same argument — the property is a literal falsy TEST,
+            # not an `If` node, and special-casing `if` alone was one spelling of a family.
+            "dead_while.py": ('class T(unittest.TestCase): pass\nwhile False:\n'
+                              '    if __name__ == "__main__":\n        unittest.main()\n'),
         }
         must_flag.update({
             "in_if.py": ('if __name__ == "__main__":\n    unittest.main()\n'
@@ -458,6 +467,9 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             "live_cond.py": ('import shutil\nif shutil.which("zsh"):\n'
                              '    class Z(unittest.TestCase): pass\n'
                              'if __name__ == "__main__":\n    unittest.main()\n'),
+            # ...and a runtime-evaluable `while` is not dead either.
+            "live_while.py": ('import shutil\nwhile shutil.which("zsh"):\n    break\n'
+                              'if __name__ == "__main__":\n    unittest.main()\n'),
             # A non-test helper defined after the guard is dead, but it is not a dropped TEST and
             # the sweep's message would be wrong about it. Only `test`-named functions count.
             "helper_after.py": ('if __name__ == "__main__":\n    unittest.main()\n'

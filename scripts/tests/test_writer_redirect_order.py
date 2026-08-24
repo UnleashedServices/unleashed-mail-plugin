@@ -56,11 +56,23 @@ def _shipped_shell() -> "list[Path]":
     #
     # NUL-delimited, because a tracked path may contain a space. The breadth control below asserts
     # this set EQUALS an independent git query, which is the only form that cannot silently narrow.
-    out = subprocess.run(
-        ["git", "-C", str(REPO), "ls-files", "-z", "scripts/*.sh", "scripts/**/*.sh",
-         ".githooks/pre-commit"],
-        capture_output=True, text=True, check=True).stdout.split("\0")
-    return sorted(Path(rel) for rel in out if rel)
+    # ...WHERE GIT EXISTS. Switching this census from a glob to `git ls-files` broke the
+    # bash-equipped, git-less environment the class two hundred lines below deliberately supports
+    # — `FileNotFoundError`, two errors, in the exact configuration a previous round of this PR
+    # created the git-skip split to protect (codex, PR #78). "Tracked" is a REFINEMENT that only
+    # has meaning where git does; without it, every `.sh` on disk is the best available answer to
+    # "what ships", and the untracked-scratch exclusion is simply unavailable rather than fatal.
+    if shutil.which("git"):
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z", "scripts/*.sh", "scripts/**/*.sh",
+             ".githooks/pre-commit"],
+            capture_output=True, text=True, check=True).stdout.split("\0")
+        return sorted(Path(rel) for rel in out if rel)
+    found = set(REPO.glob("scripts/**/*.sh"))
+    extra = REPO / ".githooks" / "pre-commit"
+    if extra.is_file():
+        found.add(extra)
+    return sorted(q.relative_to(REPO) for q in found)
 
 
 #: A redirect into ANY path-bearing target, followed LATER on the same line by `2>/dev/null` — the
@@ -341,7 +353,11 @@ def inverted_redirect(line):
     # the second open already quiet, because that `exec` redirected the SHELL's stderr rather than
     # one command's — so clearing the state at the `;` reported a safe line (codex, PR #78). Once
     # seen, the state survives every boundary on the line.
-    _exec_persisted = bool(re.match(r"\s*exec\s+[0-9]*[<>&]", line))
+    # ...AND ONLY WHEN IT TOUCHES FD 2. `exec 1>/dev/null` redirects stdout permanently and says
+    # nothing about stderr, so treating it as persistence made a LATER command's ordinary
+    # suppression outlive its own `;` and hid a real leak (codex, PR #78). A previous round added
+    # this flag to fix a false positive and made it too broad in the same stroke.
+    _exec_persisted = bool(re.match(r"\s*exec\s+(?:2[<>]|&>|>&)", line))
     while i < n:
         c = line[i]
         if c == "\\":
@@ -790,6 +806,16 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # This cell asserted the opposite for one round, on a measurement that only checked
         # stderr was non-empty; the syntax error itself made it non-empty.
         self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>>| /dev/null'))
+        # EXEC PERSISTENCE IS ABOUT FD 2 ONLY. `exec 1>/dev/null` says nothing about stderr, so
+        # a LATER command's ordinary suppression must still expire at its own `;` — measured
+        # leaking. The previous round added the persistence flag to kill a false positive and made
+        # it too broad in the same stroke.
+        self.assertIsNotNone(inverted_redirect(
+            'exec 1>/dev/null; printf x 2>/dev/null; printf y > "$HOME/leak" 2>/dev/null'))
+        self.assertIsNone(
+            inverted_redirect('exec 2>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
+        self.assertIsNone(
+            inverted_redirect('exec &>/dev/null; printf x > "$HOME/leak" 2>/dev/null'))
         # A `#` AFTER `)` STARTS A COMMENT. `(:)# printf x > "$HOME/leak" 2>/dev/null` runs only
         # the subshell - measured quiet - and was reported, so a shipped line in that shape would
         # have failed the sweep. Third narrowing of the same boundary set.

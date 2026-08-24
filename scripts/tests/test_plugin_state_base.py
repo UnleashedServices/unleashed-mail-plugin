@@ -775,7 +775,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # a later composer counted as protected by a guard that cannot fire. Require the name
             # to open a command: start of line, or right after a `;` `&&` `||` `(` `{` `!`.
             guard_at = next((i for i, ln in enumerate(guard_src)
-                             if re.search(r"(?:^|[;&|({!]\s*|\bthen\s+|\bdo\s+)"
+                             # NOT after `$(`, and NOT negated. `probe="$(unleashed_base_ok
+                             # || exit 0)"` exits the SUBSHELL and the hook continues; and
+                             # `! unleashed_base_ok || exit 0` inverts an unresolved-base failure
+                             # into success, so the `exit` never runs (codex, PR #78). Both set
+                             # `guard_at` and silenced every later composer. `!` is out of the
+                             # boundary class entirely, and `(` must not be preceded by `$`.
+                             if re.search(r"(?:^|(?<!\$)[;&|(]\s*|\bthen\s+|\bdo\s+)"
                                           r"unleashed_base_ok\b", ln)
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
             # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
