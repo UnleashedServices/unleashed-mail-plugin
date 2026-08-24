@@ -584,10 +584,14 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
     @staticmethod
     def _kill_switches():
         """Every `UNLEASHED_*:-on` switch in the shipped hooks, DERIVED not listed."""
-        # RECURSIVE (agy, local round). A flat `listdir` reads `scripts/` only and silently skips
-        # `scripts/lib/` and `scripts/review/` — the libraries that do the state writing. The
-        # comment above says "DERIVED, not listed"; a non-recursing derivation is a list with extra
-        # steps, which is the whole defect this PR is about, sitting inside its own fix.
+            # RECURSIVE, as defence in depth — and the claim that used to sit
+            # here overstated the measurement. It said a flat `listdir` skips
+            # `scripts/lib/` and `scripts/review/`, "the libraries that do the
+            # state writing". Measured: those directories contain ZERO kill
+            # switches, and `os.walk` returns byte-identical output to a flat
+            # `listdir` today (9 names either way). Recursing is still right —
+            # a switch added under a subdirectory tomorrow must be forced on —
+            # but it closes a FUTURE hole, not a present one.
         blob = []
         for dirpath, _dirs, names in os.walk(os.path.join(ROOT, "scripts")):
             for name in sorted(names):
@@ -654,7 +658,12 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             src = os.path.join(ROOT, "scripts", name)
             if os.path.isfile(src):
                 with open(src, encoding="utf-8", errors="ignore") as fh:
-                    if re.search(r"lib/(marker|context|log)\.sh", fh.read()):
+                    # NO `lib/` PREFIX REQUIRED. A hook that sources its library through a
+                    # variable — `. "$LIBDIR/marker.sh"` — matched nothing and dropped out of the
+                    # census entirely, taking its exemption requirement with it. Widening is the
+                    # CONSERVATIVE direction here: a file that matches must be driven or exempted,
+                    # so the failure mode is a loud "declare this hook", never a wrong acceptance.
+                    if re.search(r"\b(marker|context|log)\.sh", fh.read()):
                         state_writers.add(name)
         self.assertGreater(len(state_writers), 5, f"census looks truncated: {sorted(state_writers)}")
         driven = {h for h, _, _ in self.HOOKS}
@@ -681,8 +690,15 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             if os.path.isfile(_lp):
                 with open(_lp, encoding="utf-8", errors="ignore") as fh:
                     _lib_src += fh.read()
+        # `_path` TOO. The suffix tuple was written from the composers in front of me and
+        # inherited their incidental naming: `context_snapshot_path` composes a root exactly as
+        # `context_state_dir` does, and it is called by TWO exempted hooks — precompact-snapshot.sh
+        # :64 and sessionstart-restore.sh :61 — neither of which has a behavioural cell behind it,
+        # so this order check was the only police and it could not see the call. Both do have an
+        # exiting guard first (:53 and :60), so widening flags nothing today; the point is that the
+        # next one would have been invisible.
         _COMPOSERS = tuple(sorted({m for m in re.findall(r"^([a-z_]+)\(\)", _lib_src, re.M)
-                                   if m.endswith(("_base", "_dir"))}))
+                                   if m.endswith(("_base", "_dir", "_path"))}))
         self.assertGreater(len(_COMPOSERS), 4,
                            f"composer derivation looks truncated: {_COMPOSERS}")
         # The variable half of the composition surface. Enumerated, not derived — every
@@ -700,7 +716,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                 stale.append(f"{name}: exempted but no longer exists")
                 continue
             with open(src_path, encoding="utf-8", errors="ignore") as fh:
-                src = fh.read()
+                raw = fh.read()
+            # COMMENTS ARE NOT CODE — the third call site of that rule. `_strip_comment` was
+            # applied to the guard scan and the composer scan below, and this token check kept
+            # reading raw source, so a comment merely NAMING the primitive satisfied the very
+            # check whose comment says exemptions are "verified, not trusted". One construct,
+            # three call sites, two fixed: the sidecar family, again.
+            src = "\n".join(_strip_comment(ln) for ln in raw.splitlines())
             token = next((tok for key, tok in _PRIMITIVES.items() if key in reason), None)
             if token is None:
                 stale.append(f"{name}: reason names no known primitive: {reason!r}")
@@ -730,7 +752,25 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # cell to catch it. The same strip protects the composer scan from a comment that
             # merely MENTIONS `marker_base`.
             code = [_strip_comment(ln) for ln in lines]
-            guard_at = next((i for i, ln in enumerate(code)
+            # A GUARD INSIDE A FUNCTION BODY NEVER RUNS AT HOOK SCOPE.
+            # `check() { unleashed_base_ok || exit 0; }` followed by an unguarded composer set
+            # `guard_at` to the DEFINITION line, so the composer counted as protected by a guard
+            # that is never invoked (codex, PR #78). Function bodies are blanked for the GUARD
+            # scan ONLY — a composition inside a function may well execute, so those lines stay
+            # visible to the composer scan. Each asymmetry points the safe way: fewer guards
+            # recognised means more compositions reported, which fails loud.
+            # Measured before adopting: no shipped hook keeps its exiting guard inside a function,
+            # so this rejects nothing that ships.
+            guard_src, _depth = [], 0
+            for _ln in code:
+                _opens = _depth == 0 and re.match(
+                    r"\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\))?\s*\{", _ln)
+                if _depth or _opens:
+                    _depth = max(_depth + _ln.count("{") - _ln.count("}"), 0)
+                    guard_src.append("")
+                else:
+                    guard_src.append(_ln)
+            guard_at = next((i for i, ln in enumerate(guard_src)
                              if "unleashed_base_ok" in ln
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
             # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
@@ -824,12 +864,23 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                     mutated = head + marker + tail.replace(
                         LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
                 else:
-                    # BOTH guards, deliberately. Verdict is belt-and-braces: its hook-level skip
-                    # fires first, and behind it the library guard still holds — so removing either
-                    # one alone changes nothing observable, which is precisely the claim its comment
-                    # makes. Measured: hook guard alone deleted -> 0 compositions. Only removing
-                    # both exposes the write, and that is what proves the pair is real rather than
-                    # one of them being decorative.
+                    # BOTH guards, deliberately — but NOT because either is redundant. The
+                    # comment here used to say "hook guard alone deleted -> 0 compositions. Only
+                    # removing both exposes the write." That is INVERTED. Re-measured on the
+                    # current tree with the class's own `_drive`, four ways:
+                    #
+                    #     shipped 0 | lib guard only 0 | HOOK GUARD ONLY 1 | both 2
+                    #
+                    # The pair is ASYMMETRIC and the hook-level skip is load-bearing:
+                    # `capture-reviewer-verdict.sh:48` is `unleashed_base_ok || exit 0` and `:49`
+                    # is `ROOT="$(context_reviews_dir)"`, and `context_reviews_dir` carries no
+                    # guard of its own — the library guard the old claim leaned on lives in
+                    # `context_review_round_clear`, which runs AFTER the python3 call.
+                    #
+                    # The old number was true before this PR and stopped being true inside it: the
+                    # class docstring above explains why (python3 joined the shim set, so a
+                    # composed root reaching Python became observable). Two comments in one file
+                    # then disagreed about the same mutation for several rounds.
                     self.assertEqual(1, text.count(HOOK_GUARD),
                                      f"{where}: hook-level D-prime skip is not present exactly once "
                                      f"— the asymmetry this cell documents has changed")

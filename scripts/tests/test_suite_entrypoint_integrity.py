@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import ast
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -125,7 +126,12 @@ def _module_level(body):
     a class nested in `def f():` is not (kimi/agy/codex, local round)."""
     for n in body:
         yield n
-        if isinstance(n, (ast.If, ast.Try)):
+        # `ast.TryStar` (`except*`, 3.11+) is NOT a subclass of `ast.Try` — verified. Missing it
+        # cut both ways: a guard inside `except*` made the file report "NO recognized entrypoint",
+        # which is an OFFENCE now, redding the required validate job (which runs 3.12); and a class
+        # after the guard inside one went unreported while the byte-near-identical plain `except`
+        # fixture is already pinned. `getattr` keeps the 3.9 leg from raising.
+        if isinstance(n, (ast.If, ast.Try, getattr(ast, "TryStar", ()))):
             for sub in (list(getattr(n, "body", [])) + list(getattr(n, "orelse", []))
                         + list(getattr(n, "finalbody", []))
                         + [s for h in getattr(n, "handlers", []) for s in h.body]):
@@ -141,7 +147,12 @@ def _defines_test_class(node) -> bool:
     # a class is, and `_body_can_exit` already recognises `pytest.main()` as a runner — so
     # accepting that runner while ignoring the definitions it collects was an inconsistency, not a
     # scope decision (codex, PR #78).
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+    # ...and `load_tests`, the standard unittest discovery hook. Direct execution runs the runner
+    # before the hook exists while discovery imports the module and then calls it, so a late
+    # `load_tests` is exactly the direct/discovery divergence this suite is about — it simply is
+    # not spelled `test*` (codex, PR #78).
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            node.name.startswith("test") or node.name == "load_tests"):
         return True
     # `Late = type("Late", (unittest.TestCase,), {})` is an Assign, not a ClassDef.
     # `Late: type = type(...)` is an AnnAssign, not an Assign (codex, local round) — the broad
@@ -359,6 +370,10 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                '    if __name__ == "__main__":\n        unittest.main()\n'
                                '    class Late(unittest.TestCase): pass\n'
                                'else:\n    pass\n'),
+            # `load_tests` is the standard unittest discovery hook - dropped exactly as a class
+            # is, and not spelled test*.
+            "load_tests.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                              'def load_tests(loader, tests, pattern):\n    return tests\n'),
             # A pytest-style test FUNCTION after the runner is dropped exactly as a class is.
             "pytest_func.py": ('if __name__ == "__main__":\n    pytest.main()\n'
                                'def test_late():\n    assert True\n'),
@@ -374,10 +389,28 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             "factory_annotated.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                                      'Late: type = mod.make_test_case("Late")\n'),
         })
+        # `except*` PARSES ONLY ON 3.11+. The fixture is a STRING parsed at runtime, so the module
+        # itself imports anywhere; but on macOS stock 3.9 `ast.parse` would raise and red this cell
+        # on a valid tree. CI's validate job runs 3.12, where both spellings parse and both are
+        # exercised. Gate the fixture, not the fix: `getattr(ast, "TryStar", ())` in the walk is
+        # already 3.9-safe.
+        if sys.version_info >= (3, 11):
+            must_flag["in_trystar.py"] = ('if __name__ == "__main__":\n    unittest.main()\n'
+                                          'try:\n    class B(unittest.TestCase): pass\n'
+                                          'except* Exception:\n    pass\n')
+            must_not_flag_star = ('class E(unittest.TestCase): pass\ntry:\n'
+                                  '    if __name__ == "__main__":\n        unittest.main()\n'
+                                  'except* SystemExit:\n    pass\n')
         for name, body in must_flag.items():
             with self.subTest(spelling=name):
                 self.assertNotEqual([], self._offenders([write(name, body)]),
                                     f"{name} must be flagged")
+        if sys.version_info >= (3, 11):
+            with self.subTest(spelling="wrapped_star.py"):
+                self.assertEqual([], self._offenders([write("wrapped_star.py",
+                                                            must_not_flag_star)]),
+                                 "a guard inside `except*` must be RECOGNIZED, not reported as a "
+                                 "missing entrypoint")
 
         # ── SHAPES FOUND BY THE LOCAL REVIEW ROUND (codex / agy / kimi, all three arms) ──
         # A class NESTED in a module-level `if`/`try` after the entrypoint is still defined at

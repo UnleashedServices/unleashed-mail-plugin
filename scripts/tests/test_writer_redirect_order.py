@@ -47,11 +47,19 @@ def _shipped_shell() -> "list[Path]":
     #: entirely (kimi, local round); the breadth control below could never notice its absence.
     #: This derivation was recursive once before and a bulk `git checkout` reverted it silently
     #: while the fix was reported as landed — hence the explicit assertion in the control.
-    found = set(REPO.glob("scripts/**/*.sh"))
-    extra = REPO / ".githooks" / "pre-commit"
-    if extra.is_file():
-        found.add(extra)
-    return sorted(q.relative_to(REPO) for q in found)
+    # TRACKED, not globbed — the same policy the entrypoint census in the sibling module already
+    # states, and the two were using OPPOSITE policies in one PR. The rule is about files that
+    # SHIP: a developer's untracked scratch `scripts/review/probe.sh` does not ship, and globbing
+    # let one red the required check locally. Measured: dropping an inverted redirect into an
+    # untracked file was swept before this change and is invisible after it (codex, PR #78).
+    #
+    # NUL-delimited, because a tracked path may contain a space. The breadth control below asserts
+    # this set EQUALS an independent git query, which is the only form that cannot silently narrow.
+    out = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z", "scripts/*.sh", "scripts/**/*.sh",
+         ".githooks/pre-commit"],
+        capture_output=True, text=True, check=True).stdout.split("\0")
+    return sorted(Path(rel) for rel in out if rel)
 
 
 #: A redirect into ANY path-bearing target, followed LATER on the same line by `2>/dev/null` — the
@@ -81,10 +89,28 @@ def _shipped_shell() -> "list[Path]":
 #: alternation happened to consume, and the walk can be extended to carry state across
 #: `\`-continuations, which no per-line pattern can do. (No shipped redirect spans one today.)
 #:
-#: STILL NOT COMPLETE, and must not be described as such: `$( … )` inside `"…"` re-enters shell
-#: quoting, which this flat scanner does not model either — `hook-io.sh:161`'s shape still evades
-#: it. That class stays ticketed, with its known-gap cell below so it is not rediscovered as a
-#: surprise.
+#: THE PER-LINE LIMIT CUTS BOTH WAYS, and this note recorded only one of them. `cond` and
+#: `stderr_off` reset at every PHYSICAL line while redirect detection does not, so besides the
+#: false negatives already ticketed there are FALSE POSITIVES: a `\`-continuation loses an
+#: already-installed suppression, and a multi-line `[[ … ]]` loses its comparison context — both
+#: measured QUIET in bash and both flagged. The same root cause reaches the SIBLING module:
+#: `test_plugin_state_base.py`'s composer scan cannot see a composer name split across a
+#: continuation. All three members are on COREDEV-2760 together, because line joining changes
+#: reported columns and `COMPOSES_UNDER_SENTINEL` is keyed on line numbers.
+#:
+#: STILL NOT COMPLETE, and must not be described as such — but the gaps are NOT the ones this
+#: prologue used to name. It claimed `$( … )` inside `"…"` still evaded the scanner and cited
+#: `hook-io.sh:161`; that class was closed (the double-quote branch recurses into `$( … )` and
+#: into the legacy backtick spelling), the cell below asserts the closure in capitals, and
+#: `hook-io.sh:161` carries no redirect at all so it was never an exemplar. It also promised a
+#: "known-gap cell below" that does not exist. Three false statements in four lines, in the
+#: prologue a reader meets first.
+#:
+#: WHAT IS ACTUALLY OPEN, all measured and all on COREDEV-2760: an unquoted `${X:-a|b}` ends the
+#: scan at a character bash does not treat as a boundary; `<(…)` stops it dead; a `\`-continuation
+#: and a here-doc body are invisible because the scan is per-line; `VAR=$(cmd > p) 2>…` needs the
+#: `)` of `$(` told apart from a subshell's; `>/dev/null 2>&1` is not recognised as installing the
+#: suppression because fd-1 state is not tracked; and `stderr_off` escapes a subshell.
 _META = frozenset(" \t<>;&|()")
 #: An operator that sends stderr to `/dev/null`, then OPTIONAL whitespace, then the target,
 #: optionally quoted. Every spelling accepted here was measured leaking the expanded path when the
@@ -190,14 +216,20 @@ def _word(line, i, n):
             var = True
             j = _backtick_end(line, i, n)
             i = n if j < 0 else j + 1
-        elif c == "$" and i + 1 < n and line[i + 1] in "'\"":
-            # ANSI-C (`$'…'`) and locale (`$"…"`) quoting. The `$` is part of the QUOTE, not an
-            # expansion: `> $'$HOME/blocked'` opens a file literally named `$HOME/blocked`, and a
-            # failed open prints that, not the operator's home — so flagging it reported PII that
-            # cannot be there and would red CI on valid shell (codex, PR #78). The plain
-            # single-quoted equivalent was already treated as literal; this spelling was not.
-            close = line.find(line[i + 1], i + 2)
+        elif c == "$" and i + 1 < n and line[i + 1] == "'":
+            # ANSI-C quoting ONLY. `> $'$HOME/blocked'` opens a file literally named
+            # `$HOME/blocked`; a failed open prints that text, not the operator's home — measured —
+            # so flagging it reported PII that cannot be there.
+            #
+            # `$"…"` IS NOT THE SAME and must not be folded in. Locale-translated double quotes
+            # still perform parameter expansion, so `> $"$HOME/blocked"` opens the EXPANDED home
+            # path and leaks it — measured. The previous revision treated both spellings as literal
+            # and so turned a fix for one into a false negative for the other (codex, PR #78).
+            close = line.find("'", i + 2)
             i = n if close < 0 else close + 1
+        elif c == "$" and i + 1 < n and line[i + 1] == '"':
+            i += 1                                 # fall into the double-quote scan below, which
+            continue                               # tracks `$` and sets `var` correctly
         elif c == "$" and i + 1 < n and line[i + 1] == "(":
             # `$(cmd)` as part of the target: consume the balanced parens rather than stopping at
             # `(` (all three local arms). The tree's own idiom is `p="$(marker_path lint)"`.
@@ -662,9 +694,16 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # A literal `>` inside SINGLE quotes is not a redirect either.
         self.assertIsNone(inverted_redirect("log 'moved $a > $b' 2>/dev/null"))
         # THE TRADE, recorded rather than silently made: a redirect inside a DEFERRED single-quoted
-        # body is now invisible, because the body is one single-quoted run to this pattern. No such
-        # site exists today — all three traps in the tree (precompact-snapshot.sh, changeset.sh,
-        # linux-primitive-probe.sh) redirect nothing — and the class is ticketed.
+        # body is invisible, because the body is one single-quoted run to this pattern.
+        #
+        # The justification is stated BY SHAPE, because the hand-listed version was wrong twice
+        # over: it said "all three traps in the tree … redirect nothing" when the tree holds TWELVE
+        # executable trap sites, and one of the three it named — `precompact-snapshot.sh:67`,
+        # `trap 'rm -f "$TMP" 2>/dev/null' EXIT` — does carry a redirect. The conclusion survives
+        # on the shape: no deferred single-quoted body in this tree OPENS A PATH before suppressing
+        # stderr (that trap's redirect is a bare suppression with no open), and the `trap <function>`
+        # sites defer to function bodies that live on their own, swept, lines. An enumeration is
+        # not a class — the file says so elsewhere, and then did this.
         self.assertIsNone(inverted_redirect("""trap 'printf x > "$T" 2>/dev/null' EXIT"""))
         self.assertIsNone(inverted_redirect("""eval 'printf x > "$T" 2>/dev/null'"""))
         # THIS GAP IS CLOSED, and the cell is inverted to prove it. `$( )` inside `"…"` re-enters
@@ -726,9 +765,17 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         self.assertIsNotNone(inverted_redirect('printf x > "$HOME/leak" ignored 2>/dev/null'))
         self.assertIsNotNone(inverted_redirect('printf x > "$tmp" --flag=v -q 2>/dev/null'))
         self.assertIsNotNone(inverted_redirect('printf x > "$tmp" < "$in" word 2>/dev/null'))
-        # ...but the scan must STOP at a real command boundary. These do leak, and worse — nothing
-        # suppresses them at all — but they are not INVERTED order, and reporting them as such
-        # would tell the next reader to swap two things that are already in the only order there is.
+        # ...but the scan must STOP at a real command boundary. For the `;`, `&&`, `|` and `&`
+        # members these DO leak, and worse — nothing suppresses them at all — but they are not
+        # INVERTED order, and reporting them as such would tell the next reader to swap two things
+        # already in the only order there is.
+        #
+        # THE SUBSHELL MEMBER IS HERE FOR THE OPPOSITE REASON, and the comment used to cover it
+        # with the sentence above, which is false about it: `( printf x > "$tmp" ) 2>/dev/null` is
+        # measured QUIET. A redirection written on a compound command is installed before the group
+        # body runs, so the trailing suppression DOES cover the open. `)` belongs in `_CMD_END`
+        # because the redirect covers the group, not because nothing suppresses it. Right
+        # assertion, inverted reason — which is how a later round talks itself into "fixing" it.
         self.assertIsNone(inverted_redirect('printf x > "$tmp"; echo hi 2>/dev/null'))
         self.assertIsNone(inverted_redirect('printf x > "$tmp" && echo hi 2>/dev/null'))
         self.assertIsNone(inverted_redirect('printf x > "$tmp" | cat 2>/dev/null'))
@@ -791,7 +838,11 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # `$` as interpolation reported PII that cannot be there. The plain single-quoted
         # equivalent on the line below was already accepted, so this was an inconsistency.
         self.assertIsNone(inverted_redirect("printf x > $'$HOME/leak' 2>/dev/null"))
-        self.assertIsNone(inverted_redirect('printf x > $"$HOME/leak" 2>/dev/null'))
+        # ...but `$"…"` IS NOT THE SAME CONSTRUCT, and this cell asserted that it was for one
+        # round. Locale-translated double quotes still perform parameter expansion, so the open
+        # uses the EXPANDED home path and leaks it - measured. Folding the two spellings together
+        # turned a fix for one into a false negative for the other.
+        self.assertIsNotNone(inverted_redirect('printf x > $"$HOME/leak" 2>/dev/null'))
         # ...while a REAL expansion in the same position still flags.
         self.assertIsNotNone(inverted_redirect('printf x > $HOME/leak 2>/dev/null'))
         # THE THIRD BACKTICK SITE: a substitution used as the TARGET kept a raw `find`, so an
@@ -825,6 +876,39 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # while `"$( … )"` was recursed into — two spellings of one construct, two behaviours.
         self.assertIsNotNone(inverted_redirect('BYTES="`wc -c < "$OUT" 2>/dev/null`"'))
         self.assertIsNone(inverted_redirect('BYTES="`wc -c 2>/dev/null < "$OUT"`"'))
+
+    def test_every_accepted_suppression_is_one_and_every_rejected_one_is_not(self):
+        """The allowlist checked against its CRITERION, not member by member.
+
+        An operator belongs in `_SUPPRESSION` if and only if it makes the open error disappear
+        when written FIRST and lets it through when written LAST. Curating the list one finding
+        at a time is how `2>>|` got in on a bad measurement and how `2<` was proposed on a false
+        premise: both leak in BOTH orders, so neither is a suppression and neither has an ordering
+        to fix. This cell runs the criterion over every spelling the file has an opinion about, so
+        a wrong entry cannot survive review again.
+        """
+        target = self.scratch / "home" / "blocked"
+        target.mkdir(exist_ok=True)
+
+        def leaks(line):
+            script = self.scratch / "supp.sh"
+            script.write_text("#!/bin/bash\n" + line + "\n", encoding="utf-8")
+            r = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=self.env)
+            return str(self.scratch / "home") in (r.stdout + r.stderr)
+
+        for op in ("2>/dev/null", "2>|/dev/null", "2>>/dev/null", "&>/dev/null",
+                   ">&/dev/null", "2<>/dev/null", "2</dev/null", "2>&-"):
+            with self.subTest(operator=op):
+                inverted = leaks('printf x > "$HOME/blocked" ' + op)
+                correct = leaks("printf x " + op + ' > "$HOME/blocked"')
+                suppresses = inverted and not correct
+                accepted = inverted_redirect('printf x > "$t" ' + op) is not None
+                self.assertEqual(
+                    suppresses, accepted,
+                    f"{op!r}: bash says inverted-leaks={inverted} correct-leaks={correct} "
+                    f"(a real suppression is True/False), but the scanner accepts={accepted}. "
+                    f"An operator that leaks in BOTH orders is not a suppression and flagging one "
+                    f"order would send the reader to swap two things that leak either way.")
 
     def test_the_sweep_covers_the_whole_shipped_shell_tree(self):
         """The derivation's own control. If `_shipped_shell()` ever returns a short or empty list the
