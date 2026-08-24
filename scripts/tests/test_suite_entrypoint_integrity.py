@@ -170,6 +170,30 @@ def _defines_test_class(node) -> bool:
     return False
 
 
+def _exclusive_of(tree, guard):
+    """Line spans of branches that CANNOT execute in the same run as `guard`'s branch.
+
+    A platform-gated module puts a Windows class and runner in an `if`'s body and the Unix pair
+    in its `orelse`. `_module_level` flattens both, so the first branch's runner appeared to
+    precede the OTHER branch's class and a valid suite was reported as dropping it (codex,
+    PR #78). Only `If` is modelled: a `try` handler is not mutually exclusive with its body in
+    the way that matters here, since the body runs first either way.
+    """
+    parent = {}
+    for p in ast.walk(tree):
+        for child in ast.iter_child_nodes(p):
+            parent[child] = p
+    spans, node = [], guard
+    while node in parent:
+        p = parent[node]
+        if isinstance(p, ast.If):
+            other = p.orelse if any(node is st for st in p.body) else (
+                p.body if any(node is st for st in p.orelse) else [])
+            spans += [(st.lineno, getattr(st, "end_lineno", st.lineno)) for st in other]
+        node = p
+    return spans
+
+
 def analyse(src, filename="<s>"):
     """(has_any_guard, exiting_guard_lineno_or_None, [(lineno, label), ...]).
 
@@ -181,15 +205,17 @@ def analyse(src, filename="<s>"):
         is wrong (codex, local round).
     """
     tree = ast.parse(src, filename=filename)
-    any_guard, guard_line, guard_end = False, None, None
+    any_guard, guard_line, guard_end, guard_node = False, None, None, None
     for n in _module_level(tree.body):
         if _is_main_guard(n):
             any_guard = True
             if _body_can_exit(n):
-                guard_line, guard_end = n.lineno, getattr(n, "end_lineno", n.lineno)
+                guard_line, guard_end, guard_node = (
+                    n.lineno, getattr(n, "end_lineno", n.lineno), n)
                 break
     if guard_line is None:
         return any_guard, None, []
+    excluded = _exclusive_of(tree, guard_node)
     # PAST THE GUARD'S OWN BODY, not merely past its first line. The guard block runs, so what
     # is INSIDE it is reachable — `if __name__ == "__main__": argv = prepare_argv();
     # unittest.main(argv=argv)` had `argv` reported as dropped, which would red CI on ordinary
@@ -197,7 +223,8 @@ def analyse(src, filename="<s>"):
     # predicate exposed it rather than causing it.
     dropped = [(n.lineno, getattr(n, "name", None) or "call-assigned definition")
                for n in _module_level(tree.body)
-               if _defines_test_class(n) and n.lineno > guard_end]
+               if _defines_test_class(n) and n.lineno > guard_end
+               and not any(lo <= n.lineno <= hi for lo, hi in excluded)]
     return any_guard, guard_line, dropped
 
 
@@ -323,6 +350,12 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             "in_try.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                           'try:\n    class B(unittest.TestCase): pass\n'
                           'except Exception:\n    pass\n'),
+            # ...but a class in the SAME branch, after that branch's runner, is still dropped —
+            # the branch fix must not become a blanket pass for anything inside an `if`.
+            "same_branch.py": ('import sys\nif sys.platform == "win32":\n'
+                               '    if __name__ == "__main__":\n        unittest.main()\n'
+                               '    class Late(unittest.TestCase): pass\n'
+                               'else:\n    pass\n'),
             # A pytest-style test FUNCTION after the runner is dropped exactly as a class is.
             "pytest_func.py": ('if __name__ == "__main__":\n    pytest.main()\n'
                                'def test_late():\n    assert True\n'),
@@ -389,6 +422,16 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # lexical rule's `startswith("class ")` could not tell the difference.
             "nested.py": ('class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n'
                           '\n\ndef f():\n    class Inner: pass\n    return Inner\n'),
+            # MUTUALLY EXCLUSIVE BRANCHES. A platform-gated module defines one class + runner per
+            # branch; on either platform the direct and discovery behaviour agree, so nothing is
+            # dropped. Flattening the branches made the first runner appear to precede the other
+            # branch's class and reported a valid suite as broken (codex, PR #78).
+            "platform_split.py": ('import sys\nif sys.platform == "win32":\n'
+                                  '    class WinT(unittest.TestCase): pass\n'
+                                  '    if __name__ == "__main__":\n        unittest.main()\n'
+                                  'else:\n'
+                                  '    class NixT(unittest.TestCase): pass\n'
+                                  '    if __name__ == "__main__":\n        unittest.main()\n'),
         }
         for name, body in must_not_flag.items():
             with self.subTest(spelling=name):

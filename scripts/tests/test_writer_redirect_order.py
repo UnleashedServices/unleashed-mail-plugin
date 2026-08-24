@@ -112,6 +112,24 @@ _SUPPRESSION = re.compile(
     r"""(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
 
 
+def _backtick_end(line, i, n):
+    """Index of the backtick CLOSING the one at `i`, skipping escaped ones, or -1.
+
+    ``B=`printf '\\`'; wc -c < "$p" 2>/dev/null` `` is valid bash and leaks, but a raw
+    `line.find` stopped at the escaped literal and skipped the executable remainder, so the
+    scanner returned None (codex, PR #78). Same hole inside double quotes.
+    """
+    j = i + 1
+    while j < n:
+        if line[j] == "\\":
+            j += 2
+            continue
+        if line[j] == "`":
+            return j
+        j += 1
+    return -1
+
+
 def _subst_end(line, i, n):
     """Index just past the `)` closing the `$(` that starts at `i`, QUOTE-AWARE.
 
@@ -266,7 +284,7 @@ def inverted_redirect(line):
             # RECURSE into legacy `` `cmd` `` too (codex, PR #78). Skipping it meant
             # ``B=`wc -c < "$OUT" 2>/dev/null` `` — a real leak, measured — returned None, while the
             # identical `$( … )` form was caught. Same substitution, same rule.
-            j = line.find("`", i + 1)
+            j = _backtick_end(line, i, n)
             if j < 0:
                 i = n
             else:
@@ -299,7 +317,7 @@ def inverted_redirect(line):
                     # ``B="`wc -c < "$OUT" 2>/dev/null`"`` returned None while the `$( … )` form
                     # was caught (codex, PR #78). Two spellings of one construct must not have
                     # two behaviours — that asymmetry is what this file keeps being bitten by.
-                    close = line.find("`", i + 1)
+                    close = _backtick_end(line, i, n)
                     if close < 0:
                         i = n
                         break
@@ -348,6 +366,15 @@ def inverted_redirect(line):
             start = i
             i, var = _word(line, i, n)
             if fd_dup and re.fullmatch(r"\d+|-", line[start:i]):
+                # A DUPLICATION ONTO FD 2 UNDOES AN EARLIER SUPPRESSION.
+                # `printf x 2>/dev/null 2>&1 > "$p" 2>/dev/null` puts the UNsuppressed stdout
+                # back on fd 2 before the open, so the failed open is exposed again — yet
+                # `stderr_off` stayed set from the first redirect and the leak returned None
+                # (codex, PR #78). Treating every duplication as irrelevant is what made the
+                # state one-way, and one-way state is a false-negative engine.
+                m = re.search(r"(?:^|[\s;&|()])(\d+)$", line[:op])
+                if (m.group(1) if m else "") == "2":
+                    stderr_off = False
                 continue
             if line[start:i].strip("\"'") == "/dev/null":
                 # THIS redirect is the suppression. It counts as covering the rest of the command
@@ -732,6 +759,19 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # ...and it must NOT carry across a command boundary — the next command starts clean.
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null; printf x > "$tmp" 2>/dev/null'))
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null | printf x > "$tmp" 2>/dev/null'))
+        # A DUPLICATION ONTO FD 2 UNDOES AN EARLIER SUPPRESSION. Measured: the open error comes
+        # back out, because `2>&1` puts the UNsuppressed stdout on fd 2 before the open. State
+        # that only ever turns on is a false-negative engine.
+        self.assertIsNotNone(
+            inverted_redirect('printf x 2>/dev/null 2>&1 > "$HOME/leak" 2>/dev/null'))
+        # ...while a duplication that leaves fd 2 alone must NOT reopen the state.
+        self.assertIsNone(
+            inverted_redirect('printf x 2>/dev/null 1>&2 > "$HOME/leak" 2>/dev/null'))
+        # An ESCAPED backtick is data, not the closing delimiter. Measured valid bash, and it
+        # leaks: `bash: …/nope/x: No such file or directory`. Scanning to the next RAW backtick
+        # stopped at the literal and skipped the executable remainder.
+        self.assertIsNotNone(inverted_redirect(
+            "B=`printf '\\`'; wc -c < \"$O\" 2>/dev/null`"))
         # `$2` IS AN EXPANSION, NOT AN IO NUMBER. `printf x $2>/dev/null > "$HOME/leak"
         # 2>/dev/null` passes `$2` as an argument and redirects fd 1; the later open still leaks.
         # Reading the `2` of `$2` as the fd marked stderr already-suppressed and returned None —

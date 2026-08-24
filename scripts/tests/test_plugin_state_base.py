@@ -743,7 +743,13 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                     for probe in code[at + 1:at + 4]:
                         if not re.search(r"\b" + re.escape(var) + r"\b", probe):
                             continue
-                        neutralised = "unleashed_base_ok" in probe
+                        # ...and it must CLEAR the variable, not merely mention it.
+                        # `unleashed_base_ok || echo "$P"` was accepted as neutralisation while
+                        # exposing the sentinel and leaving `$P` live for the `mkdir` after it
+                        # (codex, PR #78). Match the clearing ASSIGNMENT.
+                        neutralised = bool(
+                            "unleashed_base_ok" in probe
+                            and re.search(r"\b" + re.escape(var) + r"=(\"\"|''|\s|$)", probe))
                         break
                 if self.COMPOSES_UNDER_SENTINEL.get((name, at + 1)):
                     continue                       # this LINE is acknowledged, owned by a ticket
