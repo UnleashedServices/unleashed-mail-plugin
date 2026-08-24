@@ -182,9 +182,22 @@ def _word(line, i, n):
             i += 1
         elif c == "`":
             # Legacy `` `cmd` `` substitution is an interpolated target too (codex, local round).
+            # THE THIRD SITE. `_backtick_end` was written for the two sites in the scanner loop and
+            # this one kept its raw `find`, so an escaped literal backtick inside a substitution
+            # used AS THE TARGET ended the word early and the leak returned None (codex, PR #78).
+            # Third time in this PR that one construct had several spellings and I fixed some of
+            # them: the fix is to route every site through one helper, not to patch the next one.
             var = True
-            j = line.find("`", i + 1)
+            j = _backtick_end(line, i, n)
             i = n if j < 0 else j + 1
+        elif c == "$" and i + 1 < n and line[i + 1] in "'\"":
+            # ANSI-C (`$'…'`) and locale (`$"…"`) quoting. The `$` is part of the QUOTE, not an
+            # expansion: `> $'$HOME/blocked'` opens a file literally named `$HOME/blocked`, and a
+            # failed open prints that, not the operator's home — so flagging it reported PII that
+            # cannot be there and would red CI on valid shell (codex, PR #78). The plain
+            # single-quoted equivalent was already treated as literal; this spelling was not.
+            close = line.find(line[i + 1], i + 2)
+            i = n if close < 0 else close + 1
         elif c == "$" and i + 1 < n and line[i + 1] == "(":
             # `$(cmd)` as part of the target: consume the balanced parens rather than stopping at
             # `(` (all three local arms). The tree's own idiom is `p="$(marker_path lint)"`.
@@ -353,6 +366,13 @@ def inverted_redirect(line):
                     i += 1
                 continue
             i += 1
+            # `<>` OPENS READ-WRITE AND IS ONE OPERATOR. Leaving the `>` half to be re-processed
+            # made `printf x 2<>/dev/null > "$p" 2>/dev/null` parse as two redirects, so
+            # `stderr_off` was never set for the `2<>` and the later SAFE open was reported as
+            # inverted (codex, PR #78) — a false positive created by adding `2<>` to the
+            # suppression set two commits ago without teaching the parser the same spelling.
+            if c == "<" and i < n and line[i] == ">":
+                i += 1
             if c == ">" and i < n and line[i] == ">":
                 i += 1
             fd_dup = False
@@ -759,6 +779,25 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         # ...and it must NOT carry across a command boundary — the next command starts clean.
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null; printf x > "$tmp" 2>/dev/null'))
         self.assertIsNotNone(inverted_redirect('a 2>/dev/null | printf x > "$tmp" 2>/dev/null'))
+        # `<>` IS ONE OPERATOR. Leaving its `>` half to be re-parsed as a second redirect meant
+        # `2<>/dev/null` never registered as a suppression, and the later SAFE open was reported.
+        # Measured quiet in bash. A false positive created by adding `2<>` to the suppression set
+        # without teaching the parser the same spelling.
+        self.assertIsNone(inverted_redirect('printf x 2<>/dev/null > "$HOME/leak" 2>/dev/null'))
+        # ...and `2<>` must still COUNT as a suppression when it comes after the open.
+        self.assertIsNotNone(inverted_redirect('printf x > "$HOME/leak" 2<>/dev/null'))
+        # ANSI-C QUOTING IS LITERAL. `$'$HOME/x'` names a file literally called `$HOME/x`; a
+        # failed open prints that text, NOT the operator's home — measured. Treating the leading
+        # `$` as interpolation reported PII that cannot be there. The plain single-quoted
+        # equivalent on the line below was already accepted, so this was an inconsistency.
+        self.assertIsNone(inverted_redirect("printf x > $'$HOME/leak' 2>/dev/null"))
+        self.assertIsNone(inverted_redirect('printf x > $"$HOME/leak" 2>/dev/null'))
+        # ...while a REAL expansion in the same position still flags.
+        self.assertIsNotNone(inverted_redirect('printf x > $HOME/leak 2>/dev/null'))
+        # THE THIRD BACKTICK SITE: a substitution used as the TARGET kept a raw `find`, so an
+        # escaped literal backtick ended the word early. Measured leaking.
+        self.assertIsNotNone(inverted_redirect(
+            "printf x > `printf '\\`' >/dev/null; printf \"$HOME/leak\"` 2>/dev/null"))
         # A DUPLICATION ONTO FD 2 UNDOES AN EARLIER SUPPRESSION. Measured: the open error comes
         # back out, because `2>&1` puts the UNsuppressed stdout on fd 2 before the open. State
         # that only ever turns on is a false-negative engine.

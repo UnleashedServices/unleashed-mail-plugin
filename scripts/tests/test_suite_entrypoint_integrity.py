@@ -243,10 +243,13 @@ def _test_files() -> "list[Path]":
     # control still passed on the existing count and its three required paths (codex, PR #78).
     # That is the same enumerate-instead-of-derive narrowing this suite exists to catch, in the
     # census of the suite itself.
+    # NUL-DELIMITED. `.split()` on newline-delimited output breaks any tracked path containing a
+    # space into fragments, and `_offenders` then fails reading paths that do not exist — the gate
+    # crashes instead of checking the suite (codex, PR #78).
     out = subprocess.run(
-        ["git", "-C", str(REPO), "ls-files", "*/tests/test_*.py", "tests/test_*.py"],
-        capture_output=True, text=True, check=True).stdout.split()
-    return [REPO / rel for rel in out]
+        ["git", "-C", str(REPO), "ls-files", "-z", "*/tests/test_*.py", "tests/test_*.py"],
+        capture_output=True, text=True, check=True).stdout.split("\0")
+    return [REPO / rel for rel in out if rel]
 
 
 @unittest.skipUnless(HAS_GIT, "needs a git checkout — the census lists TRACKED files")
@@ -298,9 +301,9 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
         # paths while a new package's suite went unswept (codex, PR #78) — so assert the census
         # equals what the tree actually holds, which is the only form that cannot drift.
         every = {p for p in subprocess.run(
-            ["git", "-C", str(REPO), "ls-files", "*test_*.py"],
-            capture_output=True, text=True, check=True).stdout.split()
-            if "/tests/" in p or p.startswith("tests/")}
+            ["git", "-C", str(REPO), "ls-files", "-z", "*test_*.py"],
+            capture_output=True, text=True, check=True).stdout.split("\0")
+            if p and ("/tests/" in p or p.startswith("tests/"))}
         self.assertEqual(every, found,
                          "the census and the tree disagree: "
                          f"missing={sorted(every - found)} extra={sorted(found - every)}")

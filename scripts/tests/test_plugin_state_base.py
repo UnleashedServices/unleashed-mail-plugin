@@ -441,6 +441,35 @@ class N6BridgeReResolves(unittest.TestCase):
 
 
 
+def _strip_comment(line: str) -> str:
+    """The executable part of a shell line — everything before an UNQUOTED `#` at a word start.
+
+    Blanking comment-ONLY lines was not enough: `: # unleashed_base_ok || exit 0` still looked
+    like a guard, so an exempt hook could have its real guard replaced by an inline comment and
+    the census stayed green while the sentinel reached a later composer (codex, PR #78). These
+    hooks are not behaviourally driven, so nothing else would have caught it.
+
+    Quote state matters — `printf '# not a comment'` must survive intact.
+    """
+    out, i, n, quote = [], 0, len(line), ""
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (not out or line[i - 1] in " \t"):
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
     """The HOOK layer of the D-prime envelope (COREDEV-2691).
 
@@ -700,7 +729,7 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             # while the sentinel could reach the filesystem — and these hooks have no behavioural
             # cell to catch it. The same strip protects the composer scan from a comment that
             # merely MENTIONS `marker_base`.
-            code = [("" if ln.lstrip().startswith("#") else ln) for ln in lines]
+            code = [_strip_comment(ln) for ln in lines]
             guard_at = next((i for i, ln in enumerate(code)
                              if "unleashed_base_ok" in ln
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
