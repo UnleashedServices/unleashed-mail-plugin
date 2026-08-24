@@ -491,7 +491,12 @@ def main(argv: list[str]) -> int:
     # could show the actual quarantine reason, so a truncated JSON reported only "your changeset is
     # empty" — a true statement about the wrong problem. A file-level failure now falls through to
     # the report, which names it. Row-level quarantine still counts: such a row WOULD mis-scope.
-    _rows = [b for b in bad if set(b[0]) != {"_file"}]
+    # TYPE-SAFE (both bots, PR #77). `set(b[0])` raises TypeError on a non-dict quarantined row —
+    # `{"findings": [null]}` produced a traceback instead of the refusal. `_load` quarantines ANY
+    # schema-invalid row verbatim, including `null`, numbers and arrays, so the discriminator has to
+    # test the SHAPE of a file-level marker rather than assume the row is iterable and hashable.
+    _rows = [b for b in bad
+             if not (isinstance(b[0], dict) and len(b[0]) == 1 and "_file" in b[0])]
     if (findings or _rows) and not any(canonical_path(c) for c in changed):
         # NOT "every finding" — that was a FALSE UNIVERSAL (codex, PR #77). `in_gating_scope` keeps a
         # finding gating regardless of `changed_files` when its family is in _ALWAYS_GATING_FAMILIES

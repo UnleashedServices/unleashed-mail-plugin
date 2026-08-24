@@ -247,6 +247,21 @@ class TestS1EmptyChangesetFailsClosed(unittest.TestCase):
                       "the actual quarantine reason must reach the report")
         self.assertEqual(rc, 1)
 
+    def test_a_non_object_row_is_quarantined_not_a_traceback(self):
+        """`_load` quarantines ANY schema-invalid row verbatim — including `null`, numbers, booleans
+        and arrays. The file-level discriminator must not assume the row is a dict.
+
+        Measured before the fix (both bots, PR #77): `{"findings": [null]}` with an empty
+        `--changed` produced `TypeError: 'NoneType' object is not iterable` — a traceback where the
+        whole design is to quarantine malformed input and keep going.
+        """
+        for row in (None, 1, True, [{"a": 1}], "str", {"severity": "nonsense"}):
+            with self.subTest(row=row):
+                rc, _, err = self._run_findings([row], "")
+                self.assertIn("refusing to synthesize", err,
+                              f"a quarantined row ({row!r}) is still a ROW and would mis-scope")
+                self.assertEqual(rc, 2)
+
     def test_a_quarantined_ROW_still_refuses(self):
         """The narrowing half: a row that quarantines is still a ROW, and it would still mis-scope,
         so the refusal must stand. Distinguishing file-level failures must not weaken this."""
