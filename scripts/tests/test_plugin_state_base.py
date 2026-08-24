@@ -590,9 +590,9 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                     self.assertEqual(1, text.count(HOOK_GUARD),
                                      f"{where}: hook-level D-prime skip is not present exactly once "
                                      f"— the asymmetry this cell documents has changed")
+                    # Written ONCE, at the end of the branch with every other mutation (gemini,
+                    # PR #78). The early write here was redundant: `target` is written again below.
                     mutated = text.replace(HOOK_GUARD, ":" + " " * (len(HOOK_GUARD) - 1), 1)
-                    with open(target, "w", encoding="utf-8") as fh:
-                        fh.write(mutated)
                     libpath = os.path.join(root, "lib", "context.sh")
                     with open(libpath, encoding="utf-8") as fh:
                         libtext = fh.read()

@@ -38,8 +38,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 #: DERIVED FROM THE TREE, not enumerated (COREDEV-2691). The first version of this sweep listed five
 #: writers by hand and scoped the pattern to temp-file names; both narrowings let a real leak through
-#: — see INVERTED below. A hand-kept list of the files a rule applies to is a blacklist wearing a
-#: different hat: it silently stops covering whatever is added next.
+#: — see `inverted_redirect` below. A hand-kept list of the files a rule applies to is a
+#: blacklist wearing a different hat: it silently stops covering whatever is added next.
 def _shipped_shell() -> "list[Path]":
     return sorted(
         rel
@@ -51,49 +51,90 @@ def _shipped_shell() -> "list[Path]":
 #: A redirect into ANY path-bearing target, followed LATER on the same line by `2>/dev/null` — the
 #: inverted order. The open error escapes to the real stderr before the suppression takes effect.
 #:
-#: WIDENED (COREDEV-2691). The original pattern required the target to contain `tmp`/`TMP`/`STMP`,
-#: which made the sweep blind to `>> "$LOGDIR/stop-gate.log" 2>/dev/null` in the very file it already
-#: policed — `stop-quality-marker-gate.sh`, whose sibling site at :130 this suite was written for.
-#: Measured on the shipped hook with a directory planted at the log path:
+#: A HAND-ROLLED SCANNER, not a regex (COREDEV-2691). This predicate was a regex through four
+#: quote/target-shape defects, each fixed by widening it: it required a temp-ish NAME (blind to
+#: `>> "$LOGDIR/stop-gate.log"` in a file it already policed); then DOUBLE QUOTES (blind to
+#: `> $VAR`); then it desynced on an ODD number of `"` inside a single-quoted run; then it required
+#: the target to be ONE wholly-quoted or wholly-bare word, so codex's `> "$LOGDIR"/stop-gate.log`
+#: — a target CONCATENATED from a quoted and an unquoted segment, the idiom this tree already uses
+#: at eleven sites — slipped past. Measured, with a directory planted at that path:
 #:
-#:     stop-quality-marker-gate.sh: line 143: /…/<plugin-data>/logs/stop-gate.log: Is a directory
+#:     w.sh: line 3: /…/logs/stop-gate.log: Is a directory
 #:
-#: The leak is the PATH, not the temp-ness of the path, so the pattern keys on the redirect shape:
-#: any `>`/`>>` into a quoted target that interpolates a variable, with the suppression trailing.
-#: WIDENED AGAIN (COREDEV-2691, gemini on PR #78): the first widening still required the target to
-#: be DOUBLE-QUOTED, so `> $VAR 2>/dev/null` was invisible. The leak is the redirect ORDER, not the
-#: quoting — measured with a directory planted at the target, an unquoted inverted redirect prints
-#: the full expanded path to stderr exactly as the quoted one does.
+#: while the correct order prints nothing; a sixth writer in that style left the sweep GREEN.
 #:
-#: The `>` must sit OUTSIDE any double-quoted string — that, not a "preceded by a delimiter" rule,
-#: is what separates a real redirect from a literal `->` inside a log message. Measured: the
-#: delimiter form drops `printf x>"$tmp" 2>/dev/null`, and this tree already uses that spaceless
-#: idiom (`9>"$_wt_p"`, `2>"$4/err"`). Matched per LINE — the sweep iterates splitlines() — so `^`
-#: anchors correctly without re.MULTILINE.
-#:   `\d?>>?`  optional fd digit, so `1>` and `9>` count
-#:   quoted branch keeps `[^"]*` so a target with SPACES survives ("$HOME/Application Support/…")
-#: QUOTE-AWARE IN BOTH KINDS (codex, PR #78). The previous prefix treated every `"` as double-quote
-#: syntax, so single-quoted text desynced its simulated state and a genuinely leaking line slipped
-#: past. Measured on a 23-cell battery of realistic writer shapes: the old prefix gave 7 wrong
-#: answers, 6 of them MISSED REAL LEAKS; this one gives 3.
+#: The fourth REGEX widening was built and rejected, not skipped. Accepting a multi-segment word
+#: needs a nested quantifier (`(?:dq|sq|bare+)*`), which backtracks catastrophically: on
+#: `swift-lint-check.sh:7` — an ordinary 96-char COMMENT containing `->` — it doubled per character,
+#: 0.2 ms at 40 chars to 12.5 s at 56, and four real tree lines blew past a 2 s cap. Atomic groups
+#: (`(?>…)`, `*+`) fix the blowup but need Python 3.11+: `re.compile` raises
+#: `re.error: unknown extension ?>` on macOS stock 3.9.6, the interpreter this repo keeps the
+#: `py39-smoke` CI job for. The scanner is linear, uses no `re` extensions, and runs on 3.9.6.
 #:
-#: NOTE codex's own illustrative line — `printf '%s:"x"' "$v" > "$tmp" 2>/dev/null` — actually
-#: MATCHED the old pattern: its single-quoted run holds an EVEN number of `"`, so the state
-#: re-synced before the redirect. The trigger is an ODD count. That is why the cells below use odd
-#: shapes; codex's example alone would not have discriminated.
+#: The quoting rules are now three explicit branches rather than state implied by whichever
+#: alternation happened to consume, and the walk can be extended to carry state across
+#: `\`-continuations, which no per-line pattern can do. (No shipped redirect spans one today.)
 #:
-#: THIS IS NOT COMPLETE, and must not be described as such. `$( … )` inside `"…"` re-enters shell
-#: quoting, which no flat regex can model — `hook-io.sh:161`'s shape still evades it. That class is
-#: ticketed, with a known-gap cell below so it is not rediscovered as a surprise. If a THIRD
-#: quote-state defect lands, replace this with a small hand-rolled scanner over the line: the same
-#: state machine, but as code that can also carry state across `\`-continuations.
-_SQ = r"'[^']*'"                  # single quotes: no escapes inside, ever
-_DQ = r'"(?:\\.|[^"\\])*"'        # double quotes, honouring \" and \\
-_ESC = r"\\."                      # a backslash escape outside quotes
-_PLAIN = r"[^\"'\\]"
-INVERTED = re.compile(
-    rf"^(?:{_SQ}|{_DQ}|{_ESC}|{_PLAIN})*?"
-    r'\d?>>?[ \t]*(?:"[^"]*\$[^"]*"|[^"\s]*\$[^"\s]*)[ \t]+2>/dev/null')
+#: STILL NOT COMPLETE, and must not be described as such: `$( … )` inside `"…"` re-enters shell
+#: quoting, which this flat scanner does not model either — `hook-io.sh:161`'s shape still evades
+#: it. That class stays ticketed, with its known-gap cell below so it is not rediscovered as a
+#: surprise.
+_META = frozenset(" \t<>;&|()")
+_SUPPRESSION = re.compile(r"[ \t]+2>/dev/null(?![\w/])")
+
+
+def inverted_redirect(line):
+    """Column of an output redirect that opens an interpolated target BEFORE `2>/dev/null`.
+
+    One forward pass, tracking single-quote / double-quote / backslash state, so a `>` inside
+    quoting is never mistaken for a redirect. On finding a redirect operator outside quotes it
+    consumes the following WORD — however many adjacent quoted and unquoted segments — and reports
+    it only if the word interpolates (a `$` outside SINGLE quotes, where `$` is literal) and
+    `2>/dev/null` follows immediately. Returns the 0-based column, or None.
+    """
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            i += 2
+        elif c == "'":                              # single quotes: no escapes inside, ever
+            j = line.find("'", i + 1)
+            i = n if j < 0 else j + 1
+        elif c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+        elif c == ">":
+            op = i                                  # a preceding fd digit (`1>`, `9>`) is plain text
+            i += 1
+            if i < n and line[i] == ">":            # `>>` appends and leaks identically
+                i += 1
+            if i < n and line[i] in "&|":           # `>&2` / `>|f` do not open a named path
+                continue
+            while i < n and line[i] in " \t":
+                i += 1
+            start, var = i, False
+            while i < n and line[i] not in _META:   # ONE word, any number of adjacent segments
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == "'":
+                    j = line.find("'", i + 1)
+                    i = n if j < 0 else j + 1
+                elif line[i] == '"':
+                    i += 1
+                    while i < n and line[i] != '"':
+                        var = var or line[i] == "$"
+                        i += 2 if line[i] == "\\" else 1
+                    i += 1
+                else:
+                    var = var or line[i] == "$"
+                    i += 1
+            if i > start and var and _SUPPRESSION.match(line, i):
+                return op
+        else:
+            i += 1
+    return None
 
 
 @unittest.skipUnless(shutil.which("bash") and shutil.which("git"), "needs bash and git")
@@ -264,7 +305,7 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
             if not path.is_file():
                 continue
             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if INVERTED.search(line):
+                if inverted_redirect(line):
                     offenders.append(f"{rel}:{number}: {line.strip()}")
         self.assertEqual([], offenders,
                          "these writers redirect into a temp file BEFORE suppressing stderr, so an "
@@ -272,54 +313,75 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
 
     def test_the_sweep_would_catch_an_inverted_writer(self):
         """The sweep's own control: it must actually match the shape it claims to reject."""
-        self.assertRegex('printf x > "$tmp" 2>/dev/null', INVERTED)
-        self.assertRegex('printf x > "$_rb_path.tmp.$$" 2>/dev/null', INVERTED)
-        self.assertRegex("if [ -n \"$_STMP\" ] && printf '%s' \"$C\" > \"$_STMP\" 2>/dev/null; then", INVERTED)
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$_rb_path.tmp.$$" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect(
+            "if [ -n \"$_STMP\" ] && printf '%s' \"$C\" > \"$_STMP\" 2>/dev/null; then"))
         # THE ONE THE NARROW PATTERN MISSED (COREDEV-2691) — an APPEND, to a target with no temp
         # marker in its name, in a file this suite already policed. Both narrowings had to go.
-        self.assertRegex('    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true', INVERTED)
-        self.assertRegex('cmd > "$COVERAGE_OUT" 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect('    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true'))
+        self.assertIsNotNone(inverted_redirect('cmd > "$COVERAGE_OUT" 2>/dev/null'))
         # UNQUOTED targets (gemini, PR #78) — the leak is the ORDER, not the quoting.
-        self.assertRegex('printf x > $tmp 2>/dev/null', INVERTED)
-        self.assertRegex('printf x >> $LOGDIR/stop-gate.log 2>/dev/null', INVERTED)
-        self.assertRegex('printf x > ${TMP}.$$ 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect('printf x > $tmp 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x >> $LOGDIR/stop-gate.log 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > ${TMP}.$$ 2>/dev/null'))
         # A redirect GLUED to the preceding word is still a redirect and still leaks. The obvious
         # "require a delimiter before >" widening drops these, and this tree already uses the
         # spaceless idiom (`9>"$_wt_p"`, `2>"$4/err"`).
-        self.assertRegex('printf x>"$tmp" 2>/dev/null', INVERTED)
-        self.assertRegex('printf x> $LOG 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect('printf x>"$tmp" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x> $LOG 2>/dev/null'))
+        # CONCATENATED targets (codex, PR #78) — a word built from a quoted segment glued to an
+        # unquoted one. Bash expands the whole word and names the resulting path when the open
+        # fails, exactly as for a single-segment target; measured with a directory planted at it.
+        # `"$VAR"/literal` is the tree's own idiom (eleven sites), so this is the shape a writer
+        # added tomorrow is most likely to use.
+        self.assertIsNotNone(inverted_redirect('printf x > "$LOGDIR"/stop-gate.log 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > /var/log/"$NAME" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$DIR""$NAME" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > $DIR"/x.log" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$DIR"\'/y.log\' 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('    >> "$LOGDIR"/stop-gate.log 2>/dev/null || true'))
+        self.assertIsNotNone(inverted_redirect('printf x > "${LOGDIR}"/a.log 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x>"$LOGDIR"/a.log 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$DIR"/"sub dir"/f.json 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('cmd 1> "$DIR"/o.log 2>/dev/null'))
+        # ...and the CORRECT order with a concatenated target must still not match.
+        self.assertIsNone(inverted_redirect('printf x 2>/dev/null > "$LOGDIR"/a.log'))
+        # A target that interpolates NOTHING leaks no operator path — `$` is what makes it PII.
+        self.assertIsNone(inverted_redirect("printf x > '/tmp/lit' 2>/dev/null"))
+        self.assertIsNone(inverted_redirect('cmd >&2 2>/dev/null'))
         # A QUOTED target CONTAINING SPACES must survive the widening — the obvious `"?`-based
         # form silently drops it, and this path is ordinary on macOS.
-        self.assertRegex('printf x > "$HOME/Application Support/s.json" 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect('printf x > "$HOME/Application Support/s.json" 2>/dev/null'))
         # A literal `>` INSIDE a quoted string is not a redirect. This is what the quote-state
         # prefix buys over a delimiter class.
-        self.assertNotRegex('log "moved $a -> $b" 2>/dev/null', INVERTED)
-        self.assertNotRegex('printf "a > $b\\n" 2>/dev/null', INVERTED)
+        self.assertIsNone(inverted_redirect('log "moved $a -> $b" 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf "a > $b\\n" 2>/dev/null'))
         # SINGLE-QUOTED text before the redirect (codex, PR #78). An ODD number of `"` inside a
         # single-quoted run desynced the old prefix; these redden against it and pass here.
-        self.assertRegex('printf \'%s:"x\' "$v" > "$tmp" 2>/dev/null', INVERTED)
-        self.assertRegex('awk -F\'"\' \'{print $2}\' "$in" >> $LOG 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect('printf \'%s:"x\' "$v" > "$tmp" 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('awk -F\'"\' \'{print $2}\' "$in" >> $LOG 2>/dev/null'))
         # An escaped `\"` INSIDE a double-quoted run — closed as a side effect, so pin it.
-        self.assertRegex(r'grep -o "\"$f\":\"[^\"]*\"" "$p" > "$tmp" 2>/dev/null', INVERTED)
+        self.assertIsNotNone(inverted_redirect(r'grep -o "\"$f\":\"[^\"]*\"" "$p" > "$tmp" 2>/dev/null'))
         # A literal `>` inside SINGLE quotes is not a redirect either.
-        self.assertNotRegex("log 'moved $a > $b' 2>/dev/null", INVERTED)
+        self.assertIsNone(inverted_redirect("log 'moved $a > $b' 2>/dev/null"))
         # THE TRADE, recorded rather than silently made: a redirect inside a DEFERRED single-quoted
         # body is now invisible, because the body is one single-quoted run to this pattern. No such
         # site exists today — all three traps in the tree (precompact-snapshot.sh, changeset.sh,
         # linux-primitive-probe.sh) redirect nothing — and the class is ticketed.
-        self.assertNotRegex("""trap 'printf x > "$T" 2>/dev/null' EXIT""", INVERTED)
-        self.assertNotRegex("""eval 'printf x > "$T" 2>/dev/null'""", INVERTED)
+        self.assertIsNone(inverted_redirect("""trap 'printf x > "$T" 2>/dev/null' EXIT"""))
+        self.assertIsNone(inverted_redirect("""eval 'printf x > "$T" 2>/dev/null'"""))
         # KNOWN GAP, pinned so it is not rediscovered as a surprise: `$( )` inside `"..."` re-enters
         # shell quoting and no flat pattern can model it. Ticketed with the trade above.
-        self.assertNotRegex(
-            'clean="$(printf \'%s\' "$s" | tr -d \'"\' )" > "$tmp" 2>/dev/null', INVERTED)
+        self.assertIsNone(
+            inverted_redirect('clean="$(printf \'%s\' "$s" | tr -d \'"\' )" > "$tmp" 2>/dev/null'))
         # ...and the correct order still must not match, in either redirect form.
-        self.assertNotRegex('printf x 2>/dev/null > "$tmp"', INVERTED)
-        self.assertNotRegex('tail -n 5 "$p" 2>/dev/null > "$tmp"', INVERTED)
-        self.assertNotRegex('    2>/dev/null >> "$LOGDIR/stop-gate.log" || true', INVERTED)
+        self.assertIsNone(inverted_redirect('printf x 2>/dev/null > "$tmp"'))
+        self.assertIsNone(inverted_redirect('tail -n 5 "$p" 2>/dev/null > "$tmp"'))
+        self.assertIsNone(inverted_redirect('    2>/dev/null >> "$LOGDIR/stop-gate.log" || true'))
         # A bare `2>/dev/null` with no output redirect at all must not match — the `>` inside it is
         # not an output redirect, and a pattern that thought so would flag most of the tree.
-        self.assertNotRegex('mkdir -p "$LOGDIR" 2>/dev/null || exit 0', INVERTED)
+        self.assertIsNone(inverted_redirect('mkdir -p "$LOGDIR" 2>/dev/null || exit 0'))
 
     def test_the_sweep_covers_the_whole_shipped_shell_tree(self):
         """The derivation's own control. If `_shipped_shell()` ever returns a short or empty list the
