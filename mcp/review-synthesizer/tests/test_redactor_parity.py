@@ -203,8 +203,6 @@ class EmailLookahead(unittest.TestCase):
         self.assertEqual("[redacted-email]", C.redact_pii("user@2xmail.com"))
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class EquivalenceModel(unittest.TestCase):
@@ -365,3 +363,7 @@ class TestS3EquivalenceGateExitCode(unittest.TestCase):
                 self.assertEqual(M.run(count=30, seed=1, verbose=True), 1)
             self.assertNotIn("more (--verbose for all)", err2.getvalue())
             self.assertGreater(err2.getvalue().count("shell "), err.getvalue().count("shell "))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

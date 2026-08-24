@@ -114,8 +114,6 @@ class TestNoDeadStrictToolForm(unittest.TestCase):
         self.assertFalse(hasattr(schema, "REPORT_FINDING_TOOL"))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestS7CanonicalPathDotsOnlyCollapse(unittest.TestCase):
@@ -130,6 +128,10 @@ class TestS7CanonicalPathDotsOnlyCollapse(unittest.TestCase):
     every finding scopes to pre-existing, and the verdict is a bogus APPROVE. Pinning it here pins
     the premise those guards rest on rather than re-deriving it at each call site."""
 
+    #: `...` and `..` are in this list because `canonical_path` COLLAPSES them, not because they are
+    #: placeholders — `...` is a legal POSIX filename that git emits verbatim (codex, PR #77). The
+    #: list describes SHIPPED BEHAVIOUR; removing an entry without changing `schema.py` would just
+    #: make the suite red. See the note at schema.py's collapse for why it was left alone.
     DOTS_ONLY = [".", "/", "./", "./.", ".//", "...", "..", "  .  ", "././", "//", ".\\", "\\"]
 
     def test_every_dots_only_spelling_collapses_to_empty(self):
@@ -193,3 +195,7 @@ class TestS7SynthesizeConsumerInheritsTheCollapse(unittest.TestCase):
         self.assertEqual(len(r.clusters), 1, "a noncanonical but REAL entry must still match")
         self.assertEqual(r.pre_existing, [])
         self.assertEqual(r.verdict.decision, "REQUEST_CHANGES")
+
+
+if __name__ == "__main__":
+    unittest.main()

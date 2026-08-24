@@ -730,8 +730,6 @@ class TestPromptReviewAgent(unittest.TestCase):
             self.assertEqual(rows[0]["sourceAgent"], "prompt-review")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SecureTmpWriteTest(unittest.TestCase):
@@ -830,3 +828,7 @@ class TestCOREDEV2605PayloadRegionIsolated(unittest.TestCase):
     def test_status_buried_in_a_terminated_fence_is_never_persisted(self):
         """The invariant's stated consequence, for the terminated case."""
         self.assertIsNone(self._s("```text\nStatus: COMPLETE\n```\nprose\n" + jfence()))
+
+
+if __name__ == "__main__":
+    unittest.main()

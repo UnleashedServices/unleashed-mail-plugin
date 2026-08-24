@@ -364,8 +364,6 @@ class TestSynthesizeTool(unittest.TestCase):
         self.assertEqual(out[0]["error"]["code"], -32602)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 def _init(pv=None, mid=1):
@@ -439,3 +437,7 @@ class TestS6ProtocolGuards(unittest.TestCase):
                                                     "changed_files": ["A.swift"]}}}])
         self.assertNotIn("error", replies[1], f"the real tool must be callable: {replies[1]}")
         self.assertIn("content", replies[1]["result"])
+
+
+if __name__ == "__main__":
+    unittest.main()

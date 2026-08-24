@@ -152,9 +152,18 @@ def canonical_path(p: str) -> str:
     while p.startswith("./"):
         p = p[2:]
     # Collapse a path that is ONLY dots/slashes to "" — a current-dir placeholder (".", "/", "./.",
-    # ".//", "...") is never a real diff line, so it must not survive as a truthy scope key. Without
-    # this, `changed_files: ["."]` scopes every finding to pre-existing -> a bogus provisional APPROVE
-    # (the same fail-open the empty-changeset guard blocks for [""]/["./"]). (PR #38 review.)
+    # ".//") must not survive as a truthy scope key. Without this, `changed_files: ["."]` scopes
+    # every finding to pre-existing -> a bogus provisional APPROVE (the same fail-open the
+    # empty-changeset guard blocks for [""]/["./"]). (PR #38 review.)
+    #
+    # THE PREDICATE IS DELIBERATELY WIDER THAN "placeholder" (codex, PR #77). `strip("./")` also
+    # collapses `...`, and `...` is a LEGAL POSIX filename that `git diff --name-only` emits
+    # verbatim — so a repo containing a file literally named `...` would have that path erased and
+    # its findings scoped out. That is a FALSE REFUSAL, i.e. fail-CLOSED, never a bogus APPROVE.
+    # Narrowing it was measured and REJECTED: the demonstration that narrowing is safe was rigged
+    # (it used a finding whose `file` was also `...`, which can only show the favourable outcome),
+    # and the guard downstream depends on this being falsy for placeholders. Left as-is
+    # deliberately; the wart is the claim above, now corrected, not the behaviour.
     if p.strip("./") == "":
         return ""
     # Collapse redundant INTERIOR segments — `Sources//Auth.swift` and `Sources/./Auth.swift` both mean

@@ -630,8 +630,6 @@ class TestCliLoad(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestS2CliGatingExitCode(CliFixture):
@@ -957,3 +955,7 @@ class TestS1EmptyChangesetCauseClauseIsSharedAndTrue(unittest.TestCase):
             open(ch, "w").close()
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(S.main([fp, "--changed", ch]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
