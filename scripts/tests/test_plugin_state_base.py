@@ -650,6 +650,14 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
                                    if m.endswith(("_base", "_dir"))}))
         self.assertGreater(len(_COMPOSERS), 4,
                            f"composer derivation looks truncated: {_COMPOSERS}")
+        # The variable half of the composition surface. Enumerated, not derived — every
+        # `_UNLEASHED_BASE_*` name is NOT a path (`_OK` is a flag, `_SOURCE` a label, `_PID` a
+        # number), so a pattern would admit noise. Enumeration is only safe with a control, so
+        # each name must still exist in the family libs or this cell reds.
+        _BASE_PATH_VARS = ("_UNLEASHED_BASE_RESOLVED", "_UNLEASHED_BASE_INSTANCE")
+        for _v in _BASE_PATH_VARS:
+            self.assertIn(_v, _lib_src, f"{_v} no longer exists in the family libs — the "
+                                        f"composition-by-variable check is pointing at nothing")
         stale = []
         for name, reason in sorted(self.NOT_DRIVEN.items()):
             src_path = os.path.join(ROOT, "scripts", name)
@@ -684,7 +692,20 @@ class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
             guard_at = next((i for i, ln in enumerate(lines)
                              if "unleashed_base_ok" in ln
                              and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
-            composes = [i for i, ln in enumerate(lines) if any(c in ln for c in _COMPOSERS)]
+            # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
+            # narrowing — the signature defect of this whole campaign (codex, PR #78). A hook can
+            # build a sentinel-derived path straight from the resolved-base VARIABLE, calling no
+            # composer at all:
+            #
+            #     mkdir -p "${_UNLEASHED_BASE_RESOLVED}/.state/probe" 2>/dev/null || true
+            #
+            # Under an unresolved base that variable HOLDS the sentinel, so this is the same
+            # hazard wearing a different spelling, and it was invisible. No shipped hook does it
+            # today; the point is that the next one would not be caught. The names are asserted
+            # against the library source below so this list cannot go stale silently.
+            composes = [i for i, ln in enumerate(lines)
+                        if any(c in ln for c in _COMPOSERS)
+                        or any(v in ln for v in _BASE_PATH_VARS)]
             # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom: `stop-quality-marker-gate.sh`
             # builds `SENTINEL="$(marker_dir)/…"` at :74 and the very next line is
             # `unleashed_base_ok || SENTINEL=""` — the value is discarded before any use, so no

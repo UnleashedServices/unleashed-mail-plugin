@@ -86,10 +86,30 @@ def _shipped_shell() -> "list[Path]":
 #: it. That class stays ticketed, with its known-gap cell below so it is not rediscovered as a
 #: surprise.
 _META = frozenset(" \t<>;&|()")
-#: `2>` then OPTIONAL whitespace then `/dev/null`, optionally quoted. All four spellings are legal
-#: shell and all four leak (kimi, local round): `2>/dev/null`, `2> /dev/null`, `2>"/dev/null"`,
-#: `2>'/dev/null'`.
-_SUPPRESSION = re.compile(r"""[ \t]+2>[ \t]*(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
+#: An operator that sends stderr to `/dev/null`, then OPTIONAL whitespace, then the target,
+#: optionally quoted. Every spelling accepted here was measured leaking the expanded path when the
+#: output open comes first, AND measured quiet in the correct order — both halves matter, because
+#: an operator that leaks in BOTH orders is not an ordering defect at all:
+#:
+#:     2>/dev/null   2> /dev/null   2>"/dev/null"   2>'/dev/null'   (kimi, local round)
+#:     2>|/dev/null  2>>/dev/null                                   (codex, PR #78)
+#:     &>/dev/null   >&/dev/null    2<>/dev/null                    (agy + codex, PR #78)
+#:
+#: `>|` overrides noclobber, `>>` appends, `&>`/`>&` take stdout with them and `2<>` opens
+#: read-write; all of them still open `/dev/null` on fd 2, so all of them still suppress.
+#:
+#: NOT accepted, each for a MEASURED reason:
+#:   * `2>&-` — closing stderr suppresses nothing. The path escapes in BOTH orders under both
+#:     shells, so there is no ordering to fix and flagging one order would send the next reader to
+#:     swap two things that leak either way.
+#:   * `2>>|` — NOT legal bash. `bash 3.2.57: syntax error near unexpected token '|'`, in both
+#:     orders. An earlier revision of this comment called it "legal shell … measured to leak" and
+#:     a cell asserted it: the measurement behind that claim only checked that stderr was
+#:     NON-EMPTY, and a syntax error makes stderr non-empty. All three review arms caught it
+#:     independently. A leak test must match the PATH, not merely observe output.
+_SUPPRESSION = re.compile(
+    r"""[ \t]+(?:2>>|2>\||2<>|2>|&>|>&)[ \t]*"""
+    r"""(?:"/dev/null"|'/dev/null'|/dev/null)(?![\w/])""")
 
 
 def _subst_end(line, i, n):
@@ -164,12 +184,34 @@ def _word(line, i, n):
     return i, var
 
 
-def _suppressed_after(line, i, n):
-    """True if `2>/dev/null` follows, possibly past FURTHER redirections on the same command.
+#: What ENDS a simple command, and therefore ends the reach of its redirections. `#` starts a
+#: comment at a word boundary, which ends the command just as surely.
+_CMD_END = frozenset(";&|)#")
 
-    `printf x > "$tmp" < "$input" 2>/dev/null` still opens `$tmp` first and still leaks (codex,
-    PR #78) — checking only immediately after the target word missed the whole shape. Scanning
-    stops at a command boundary, because a redirect in the NEXT command suppresses nothing here.
+
+def _suppressed_after(line, i, n):
+    """True if a stderr suppression follows on the SAME simple command, past intervening words.
+
+    Bash lets redirections and ordinary words interleave freely in a simple command, and applies
+    every redirection left-to-right regardless of the order they are written in:
+
+        printf x > "$tmp" < "$input" 2>/dev/null      further REDIRECT between   (codex, PR #78)
+        printf x > "$tmp" ignored    2>/dev/null      ordinary WORD between      (codex, PR #78)
+
+    Both open `$tmp` before stderr is suppressed and both were MEASURED to leak the expanded path.
+    Requiring the suppression immediately after the target missed the first; requiring every
+    intervening token to be a redirect missed the second. So: consume tokens of EITHER kind and
+    stop at a command boundary — a redirect in the NEXT command suppresses nothing here, and
+    `cmd > "$tmp"; echo hi 2>/dev/null` is an unconditional leak of a different shape, not this one.
+
+    "A COMMAND BOUNDARY" HERE MEANS A LEXICAL ONE, which is weaker than it sounds and is stated
+    plainly rather than implied: `_CMD_END` is tested against raw characters, so a `;` or `|`
+    INSIDE an unquoted `${X:-a|b}` ends the scan even though bash does not end the command there,
+    and the leak is missed. Likewise `<(…)` stops the scan dead. Both were measured leaking
+    (agy + codex, PR #78); NEITHER shape occurs anywhere in the shipped tree, and closing them
+    needs brace-balancing and process-substitution parsing that this deliberately flat scanner
+    does not do. Ticketed on COREDEV-2760 with the here-doc and line-continuation classes, which
+    are line-local for the same reason.
     """
     while True:
         if _SUPPRESSION.match(line, i):
@@ -177,14 +219,15 @@ def _suppressed_after(line, i, n):
         j = i
         while j < n and line[j] in " \t":
             j += 1
-        if j >= n or line[j] not in "<>":
+        if j >= n or line[j] in _CMD_END:
             return False
-        j += 1                                    # consume the operator and whatever follows it
-        while j < n and line[j] in "<>&|":
+        if line[j] in "<>":                       # a further redirection: operator, then target
             j += 1
-        while j < n and line[j] in " \t":
-            j += 1
-        j, _ = _word(line, j, n)
+            while j < n and line[j] in "<>&|":
+                j += 1
+            while j < n and line[j] in " \t":
+                j += 1
+        j, _ = _word(line, j, n)                  # the target, or the ordinary word
         if j <= i:
             return False
         i = j
@@ -273,7 +316,18 @@ def inverted_redirect(line):
     return None
 
 
-@unittest.skipUnless(shutil.which("bash") and shutil.which("git"), "needs bash and git")
+#: BASH only. `git` is REQUIRED by exactly two cells — the stop-gate pair, which builds a real
+#: repo fixture — and gating the CLASS on it silently removed the marker cells and the whole
+#: family sweep in any bash-equipped image without git (codex, PR #78); a new git-dependent
+#: fixture must not narrow what was already covered.
+#:
+#: "Required" is the precise word, and an earlier revision here wrongly said the other five are
+#: "pure filesystem work" (codex + kimi, PR #78). Three of them are; the two marker cells DO
+#: reach `git` through `marker.sh:209` and `:267`, which tolerate its absence — measured with a
+#: PATH holding every executable EXCEPT git: `marker_repo_hash` fell back to its pure-bash djb2
+#: hash and the commit probe returned `unknown`, and all five cells passed. So the split is safe
+#: for the reason stated, but not for the reason first written down.
+@unittest.skipUnless(shutil.which("bash"), "needs bash")
 class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
     def setUp(self):
         base = os.path.expanduser("~/.claude")
@@ -414,11 +468,13 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
     _WARN_LOG_GOOD = '    2>/dev/null >> "$LOGDIR/stop-gate.log" || true'
     _WARN_LOG_BAD = '    >> "$LOGDIR/stop-gate.log" 2>/dev/null || true'
 
+    @unittest.skipUnless(shutil.which("git"), "builds a real repo fixture")
     def test_the_stop_gate_warn_log_does_not_leak_its_path_to_stderr(self):
         result = self._stop_gate_warn_onto_a_directory()
         self.assertEqual("", result.stderr,
                          f"the warn-log open failure leaked its path to stderr:\n{result.stderr}")
 
+    @unittest.skipUnless(shutil.which("git"), "builds a real repo fixture")
     def test_the_INVERTED_warn_log_order_leaks_the_path(self):
         """The control, and the reproduction of the shipped defect. Measured before the fix, from
         inside a hook: `stop-quality-marker-gate.sh: line 143:
@@ -538,10 +594,46 @@ class TheWritersSuppressStderrBeforeOpening(unittest.TestCase):
         self.assertIsNotNone(inverted_redirect('printf x >& "$HOME/leak" 2>/dev/null'))
         self.assertIsNone(inverted_redirect('printf x >&2 2>/dev/null'))
         self.assertIsNone(inverted_redirect('printf x >&- 2>/dev/null'))
-        # The SUPPRESSION has four legal spellings and all four leak.
+        # The SUPPRESSION's legal spellings. Every one of these was MEASURED to leak the expanded
+        # path when the output open comes first; none is exotic.
         self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2> /dev/null'))
         self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>"/dev/null"'))
         self.assertIsNotNone(inverted_redirect("printf x > \"$tmp\" 2>'/dev/null'"))
+        # `2>|` (noclobber override) and `2>>` (append) still open /dev/null for stderr, so they
+        # still suppress — and the scanner already treats `>|` as path-opening one level up, so
+        # recognizing it there and not here was an inconsistency, not a judgement (codex, PR #78).
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>|/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>| /dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2>>/dev/null'))
+        # `&>` and `>&` carry stdout along but still put /dev/null on fd 2, and `2<>` opens it
+        # read-write. All three measured leaking with the open first and quiet in the correct
+        # order (agy + codex, PR #78). `&>` is the idiomatic spelling and appears in this tree.
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" &>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" >&/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" 2<>/dev/null'))
+        # `2>>|` is NOT legal bash — `syntax error near unexpected token '|'`, in both orders.
+        # This cell asserted the opposite for one round, on a measurement that only checked
+        # stderr was non-empty; the syntax error itself made it non-empty.
+        self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>>| /dev/null'))
+        # NOT `2>&-`. Closing stderr suppresses nothing: measured, the path escapes in BOTH orders,
+        # so it is an unconditional leak of a different class and calling it an ordering defect
+        # would send the next reader to reorder a line that would still leak afterwards.
+        self.assertIsNone(inverted_redirect('printf x > "$tmp" 2>&-'))
+        # ORDINARY WORDS may sit between the redirect and the suppression (codex, PR #78). Bash
+        # applies every redirection of a simple command left-to-right wherever it is written, so
+        # this opens `$HOME/blocked` first and leaks — MEASURED, `bash: …/blocked: Is a directory`.
+        self.assertIsNotNone(inverted_redirect('printf x > "$HOME/leak" ignored 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" --flag=v -q 2>/dev/null'))
+        self.assertIsNotNone(inverted_redirect('printf x > "$tmp" < "$in" word 2>/dev/null'))
+        # ...but the scan must STOP at a real command boundary. These do leak, and worse — nothing
+        # suppresses them at all — but they are not INVERTED order, and reporting them as such
+        # would tell the next reader to swap two things that are already in the only order there is.
+        self.assertIsNone(inverted_redirect('printf x > "$tmp"; echo hi 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x > "$tmp" && echo hi 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x > "$tmp" | cat 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x > "$tmp" & echo hi 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('( printf x > "$tmp" ) 2>/dev/null'))
+        self.assertIsNone(inverted_redirect('printf x > "$tmp"  # 2>/dev/null in a comment'))
         # `$(cmd)` as the target: `(` is a metacharacter, so the word parse used to stop dead.
         # The tree's own idiom is `p="$(marker_path lint)"`.
         self.assertIsNotNone(inverted_redirect('printf x > $(marker_path lint) 2>/dev/null'))

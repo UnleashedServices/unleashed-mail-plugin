@@ -122,10 +122,27 @@ def _defines_test_class(node) -> bool:
     # `Late = type("Late", (unittest.TestCase,), {})` is an Assign, not a ClassDef.
     # `Late: type = type(...)` is an AnnAssign, not an Assign (codex, local round) — the broad
     # "type()-assigned classes" claim has to cover the annotated spelling too.
+    #
+    # ANY call, not just the `type` builtin. `Late = make_test_case()` is a factory-generated case
+    # (codex, PR #78) and no static rule can tell what a call returns — recognizing only `type(...)`
+    # let the identical hazard through under a different spelling, which is the blacklist shape this
+    # whole suite is about.
+    #
+    # This is a deliberate OVER-APPROXIMATION of the hazard, not a proof. It reports any
+    # call-assigned name past the entrypoint, including one that builds no test case at all — such
+    # a name is dead on direct execution and worth naming, but the report says "definition" about
+    # something that may not be one. The trade is paid for by measurement, not by argument: no
+    # shipped test file has ANY statement after its entrypoint, so nothing in the tree is admitted
+    # today, and the sweep is green. An earlier draft of this comment called the widening "SOUND"
+    # and "never a false alarm" — it is neither, and it false-flagged in-guard assignments until
+    # `analyse` was fixed to skip the guard's own body.
+    #
+    # STILL ESCAPING, ticketed on COREDEV-2760 rather than chased with more spellings:
+    # `Late = SomeBase` (an alias binds no new class), `Late = type(...) if c else Other`, and
+    # `for n, c in make_cases(): globals()[n] = c`. `globals()["Late"] = make_test_case()` IS
+    # caught, because its right-hand side is directly a call.
     if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Call):
-        f = node.value.func
-        if isinstance(f, ast.Name) and f.id == "type" and len(node.value.args) == 3:
-            return True
+        return True
     return False
 
 
@@ -140,18 +157,23 @@ def analyse(src, filename="<s>"):
         is wrong (codex, local round).
     """
     tree = ast.parse(src, filename=filename)
-    any_guard, guard_line = False, None
+    any_guard, guard_line, guard_end = False, None, None
     for n in _module_level(tree.body):
         if _is_main_guard(n):
             any_guard = True
             if _body_can_exit(n):
-                guard_line = n.lineno
+                guard_line, guard_end = n.lineno, getattr(n, "end_lineno", n.lineno)
                 break
     if guard_line is None:
         return any_guard, None, []
-    dropped = [(n.lineno, getattr(n, "name", None) or "type()-assigned class")
+    # PAST THE GUARD'S OWN BODY, not merely past its first line. The guard block runs, so what
+    # is INSIDE it is reachable — `if __name__ == "__main__": argv = prepare_argv();
+    # unittest.main(argv=argv)` had `argv` reported as dropped, which would red CI on ordinary
+    # code (codex, PR #78). The narrow `type(...)` predicate hid this scope bug; widening the
+    # predicate exposed it rather than causing it.
+    dropped = [(n.lineno, getattr(n, "name", None) or "call-assigned definition")
                for n in _module_level(tree.body)
-               if _defines_test_class(n) and n.lineno > guard_line]
+               if _defines_test_class(n) and n.lineno > guard_end]
     return any_guard, guard_line, dropped
 
 
@@ -257,6 +279,12 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
             # `type()` builds a class without a ClassDef node.
             "type_assign.py": ('if __name__ == "__main__":\n    unittest.main()\n'
                                'L = type("L", (unittest.TestCase,), {})\n'),
+            # A FACTORY call returns one just the same, and nothing static can tell that it does
+            # (codex, PR #78). Recognizing only the `type` builtin left this identical hazard open.
+            "factory.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                           'Late = make_test_case()\n'),
+            "factory_annotated.py": ('if __name__ == "__main__":\n    unittest.main()\n'
+                                     'Late: type = mod.make_test_case("Late")\n'),
         })
         for name, body in must_flag.items():
             with self.subTest(spelling=name):
@@ -287,6 +315,14 @@ class NoTestClassIsDefinedAfterUnittestMain(unittest.TestCase):
                                    'class Included(unittest.TestCase): pass\n'
                                    'if __name__ == "__main__":\n    unittest.main()\n'),
             "ok.py": 'class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n',
+            # INSIDE the guard's own body. The block RUNS, so these are reachable — reporting them
+            # would red CI on ordinary code, and it did until `analyse` stopped comparing against
+            # the guard's FIRST line (codex, PR #78). Both spellings occur in real suites: setting
+            # up argv before the runner, and doing work after `unittest.main(exit=False)`.
+            "in_guard_before.py": ('if __name__ == "__main__":\n    argv = prepare_argv()\n'
+                                   '    unittest.main(argv=argv)\n'),
+            "in_guard_after.py": ('if __name__ == "__main__":\n    unittest.main(exit=False)\n'
+                                  '    report = summarize()\n'),
             # A CLASS NESTED inside a function after the entrypoint is not module-level, and the
             # lexical rule's `startswith("class ")` could not tell the difference.
             "nested.py": ('class E: pass\n\n\nif __name__ == "__main__":\n    unittest.main()\n'
