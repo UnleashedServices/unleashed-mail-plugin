@@ -119,8 +119,8 @@ name and argument contract match `agents/swift-reviewer.md` Step-5 and README by
   on the two writer agents; model aliases valid (sonnet ×7, opus ×3, inherit ×11); every asset has a
   non-empty `description:`; no name collisions; all `skills:` preloads and all
   `${CLAUDE_PLUGIN_ROOT}/scripts/...` references resolve; hook matchers name the five real reviewer
-  agents with the optional namespace prefix; swift-reviewer's writer deny-list is complete in bare and
-  namespaced spellings; all 9 README-documented `UNLEASHED_*` kill switches are read by the named scripts.
+  agents with the optional namespace prefix; ~~swift-reviewer's writer deny-list is complete~~ **[SUPERSEDED
+  2026-08-23 COREDEV-2703/2711: deny-list removed; the scoped grant is not runtime-enforced]**; all 9 kill switches read.
 - Read-only reviewer body↔frontmatter coherence holds for all five reviewers + two personas.
 - CI: SHA-pinned actions; pinned + checksum-verified actionlint/gitleaks/Claude CLI; zsh presence
   asserted so the dual-shell tests cannot silently skip; event-dependent whitespace base; py3.9 smoke

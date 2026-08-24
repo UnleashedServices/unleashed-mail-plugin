@@ -544,20 +544,50 @@ def check_bashless_agents_run_no_shell(root: Path, problems: list[str]) -> None:
             )
 
 
-def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
-    """An agent holding bare `Agent` must deny every checkout-modifying agent BY NAME.
+def _spawn_remedy(frontmatter: dict) -> str:
+    """The remedy text, CONDITIONAL on whether the agent already declares `tools:` (codex, PR #76).
 
-    WHY A COMPUTED CHECK AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
-    A sub-agent `tools:` list takes bare names, so `Agent` there reaches ALL agents — including the
+    Advising an INHERIT-ALL agent to add a scoped `Agent(...)` grant silently strips its MCP tools:
+    omitting `tools:` is what inherits install-prefixed MCP servers, and AGENT_CONTRACTS requires
+    that omission for `jira-manager` and `modern-standards-planner` precisely because the runtime
+    prefix is install-specific. Setting `tools:` at all is a strict allowlist, so those tools would
+    vanish — trading one silent capability loss for another, which is the defect this check exists
+    to prevent. Both diagnostics in this function route through here so the pair cannot drift.
+    """
+    if "tools" not in frontmatter:
+        return ("To stop this agent spawning, deny bare `Agent`. Do NOT add a `tools:` list to "
+                "narrow it — this agent inherits install-prefixed MCP tools by omitting `tools:`, "
+                "and setting it is a strict allowlist that would silently drop them.")
+    return ("To stop this agent spawning, deny bare `Agent`. To narrow WHICH types it declares, "
+            "use a scoped `Agent(...)` grant in `tools:` instead.")
+
+
+def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
+    """Check a spawner's DECLARED reach against the writer roster computed from disk.
+
+    NEITHER BRANCH IS A RUNTIME CONTROL (COREDEV-2711). Read the whole docstring before trusting the
+    word "deny" anywhere in it. For a SUB-AGENT the runtime grants `Agent` and DISCARDS any type
+    list: measured on 2.8.1, `swift-reviewer` spawned a writing agent absent from its own scoped
+    grant with no refusal and no prompt. What this function enforces is DECLARATION consistency —
+    real, and narrower than the name suggests.
+
+    TWO BRANCHES, TWO DIFFERENT THINGS.
+    * bare `Agent` -> the writer denials below. Still meaningful as a declaration, but note NO shipped
+      agent takes this branch today; `swift-reviewer` moved to a scoped grant in COREDEV-2703.
+    * scoped `Agent(a, b)` -> every named member is checked against the writer roster.
+
+    WHY A COMPUTED ROSTER AND NOT A HAND-KEPT LIST (PR #63 recheck, P1).
+    A sub-agent `tools:` list takes bare names, so bare `Agent` reaches ALL agents — including the
     twelve that hold `Write`/`Edit` or inherit everything. `swift-reviewer` is spawned from `pr-review`
     while it processes untrusted PR content, so a prompt-injected finding could steer it into
-    `ui-engineer` or `db-engineer` and write to the tree with no user gesture. `Agent(type)` is ignored
-    inside a sub-agent definition, so the only lever is `disallowedTools`.
+    `ui-engineer` or `db-engineer` and write to the tree with no user gesture. A hand-kept deny-list
+    drifts the moment someone adds a writer agent — which is precisely how blacklists re-open. So the
+    set is RECOMPUTED here from the agents on disk: generated policy CI keeps honest, not a list
+    anyone has to remember to update.
 
-    That makes it a deny-list, and a deny-list drifts the moment someone adds a writer agent — which is
-    precisely how blacklists re-open. So the set is RECOMPUTED here from the agents on disk and the
-    frontmatter must already contain it. The list in the file is generated policy that CI keeps honest,
-    not a list anyone has to remember to update.
+    DO NOT "FIX" A FINDING HERE BY ADDING `Agent(<name>)` TO `disallowedTools`. That specifier form
+    inside a deny-list removes the `Agent` tool ENTIRELY — it is what silently disabled the whole
+    review panel (COREDEV-2703). To stop an agent spawning, deny bare `Agent`.
 
     WRITER MEANS "CAN MODIFY THE CHECKOUT", NOT "HOLDS `Write`" (PR #63 recheck, P1, second pass).
     The first predicate tested only `Write`/`Edit`, so `jira-manager` — denying both while inheriting
@@ -582,24 +612,62 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         # A BARE `Agent` reaches every agent and needs the writer denials below.
         if "Agent" in live:
             spawners.append((path, frontmatter))
-        # A SCOPED grant — `Agent(a, b)` — is an ALLOWLIST, but "writers are excluded by
-        # construction" is FALSE as a blanket claim: it holds only if no listed member IS a writer.
-        # Measured (codex, PR #74) — `tools: Read, Agent(rogue-writer)` beside a writing
-        # `rogue-writer` reported NO problem, because `_live_tools` holds `Agent(...)` rather than
-        # bare `Agent` and the spawner was skipped entirely. The same hole opens when an allowlisted
-        # specialist LATER gains `Bash` or `Write`. So the members are checked by name.
+        # ADVISORY, NOT A RUNTIME RESTRICTION (COREDEV-2711). A scoped grant `Agent(a, b)` reads like
+        # an allowlist, and it is one — for a MAIN-THREAD agent. For a SUB-AGENT the runtime grants
+        # the tool and discards the type list: measured on 2.8.1, `swift-reviewer` spawned a writer
+        # absent from its own list with no refusal and no prompt. So this check does NOT describe
+        # what the runtime will permit; it keeps the DECLARED set honest, which is a real but
+        # narrower thing — it fails CI when a writing agent is added to a declared spawn list.
+        #
+        # "Writers are excluded by construction" was FALSE as a blanket claim even for the
+        # declaration: it holds only if no listed member IS a writer. Measured (codex, PR #74) —
+        # `tools: Read, Agent(rogue-writer)` beside a writing `rogue-writer` reported NO problem,
+        # because `_live_tools` holds `Agent(...)` rather than bare `Agent` and the spawner was
+        # skipped entirely. The same hole opens when an allowlisted specialist LATER gains `Bash`.
         scoped_spawners.extend((path, member)
                                for token in live if token.startswith("Agent(")
                                for member in _agent_specifier_members(token))
+
+        # AN `Agent(x)` ENTRY IN `disallowedTools` IS REJECTED UNCONDITIONALLY (codex, PR #76).
+        # That specifier form inside a DENY list strips the `Agent` tool entirely — it is what
+        # silently disabled the whole review panel (COREDEV-2703). The writer-denial branch below
+        # cannot catch it: that branch is guarded on `if missing:`, so an agent carrying BOTH
+        # spellings for EVERY writer has `missing == []` and produces no diagnostic at all.
+        # Measured at the CLI: such a tree passed `--strict` with EXIT=0 and a green tick, while
+        # the one-writer-short version of the same tree failed — i.e. the MORE complete the outage
+        # configuration, the quieter the validator. Checked for every agent, independent of
+        # `writers`, of `missing`, and of whether bare `Agent` is even granted.
+        # `strip` the quotes first: a YAML quoted scalar (`disallowedTools: "Agent(x)"`) otherwise
+        # walks straight through the prefix test.
+        # `.strip()` AFTER the quotes: a YAML scalar with incidental inner whitespace
+        # (`" Agent(x)"`) otherwise walks through the prefix test (gemini, PR #76).
+        bad_denials = sorted(tok for tok in _tool_tokens(frontmatter.get("disallowedTools", ""))
+                             if tok.strip('"\'').strip().startswith("Agent("))
+        if bad_denials:
+            rel = path.relative_to(root).as_posix()
+            # THE REMEDY IS CONDITIONAL (codex, PR #76). Telling an INHERIT-ALL agent to add a
+            # scoped `Agent(...)` grant to `tools:` would silently strip its MCP tools: an agent
+            # that omits `tools:` inherits install-prefixed MCP servers, and AGENT_CONTRACTS §10
+            # requires exactly that omission for `jira-manager` and `modern-standards-planner`
+            # because the runtime prefix is install-specific. Setting `tools:` at all is a strict
+            # allowlist, so the MCP tools would vanish — swapping one silent capability loss for
+            # another, which is the defect this whole check exists to prevent.
+            remedy = _spawn_remedy(frontmatter)
+            problems.append(
+                f"{rel}: `disallowedTools` carries scoped Agent denial(s) "
+                f"{', '.join(bad_denials)} — that form removes the `Agent` tool ENTIRELY and "
+                f"silently disables spawning (COREDEV-2703). {remedy}"
+            )
 
     for path, member in scoped_spawners:
         bare = member.split(":", 1)[-1]
         if bare in writers:
             rel = path.relative_to(root).as_posix()
             problems.append(
-                f"{rel}: its scoped `Agent(...)` allowlist names `{member}`, which can modify the "
-                f"checkout. An allowlist only constrains the spawn set if no member is a writer — "
-                f"remove it, or make that agent read-only."
+                f"{rel}: its scoped `Agent(...)` list names `{member}`, which can modify the "
+                f"checkout. NOTE this list is a DECLARATION, not a runtime control (COREDEV-2711): "
+                f"the runtime does not enforce the type list for a sub-agent. Keeping the "
+                f"declaration honest is the point — remove it, or make that agent read-only."
             )
 
     for path, frontmatter in spawners:
@@ -612,9 +680,12 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
         if missing:
             rel = path.relative_to(root).as_posix()
             problems.append(
-                f"{rel}: holds bare `Agent`, so it can spawn every agent — but does not deny these "
-                f"file-writing ones: {', '.join(missing)}. Add `Agent(<name>)` (and the "
-                f"`unleashed-mail:`-namespaced spelling) to `disallowedTools`."
+                f"{rel}: holds bare `Agent`, so its DECLARED reach is every agent — but it does "
+                f"not deny these file-writing ones: {', '.join(missing)}. {_spawn_remedy(frontmatter)} "
+                f"Do NOT add `Agent(<name>)` to `disallowedTools`: that specifier form removes the "
+                f"`Agent` tool entirely and silently disables spawning (COREDEV-2703). Note this is "
+                f"a DECLARATION check — the runtime does not enforce a type list for a sub-agent "
+                f"(COREDEV-2711)."
             )
 
 

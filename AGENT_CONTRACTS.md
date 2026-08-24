@@ -372,7 +372,7 @@ Each agent type has minimum tool requirements:
 
 | Agent kind | Required tools |
 |------------|---------------|
-| Reviewers (read-only) | Read, Grep, Glob — **no `Bash` on any of the five spawned reviewers** (PR #63 P1: they are reachable from model-invocable `pr-review` while processing untrusted PR content; §9.1 records the bound). Their bodies are written shell-free, and `check_bashless_agents_run_no_shell` in `validate-plugin-assembly.py` fails CI if a Bash-less agent's body still invokes shell. (An earlier revision of this row granted reviewers Bash with `prompt-review` as the exception — that described the pre-PR-#63 fleet and was exactly backwards against the shipped frontmatter; obeying it would have re-granted shell to four reviewers. Found by the 2026-08-17 audit, AF-1.) |
+| Reviewers (read-only) | Read, Grep, Glob — **no `Bash` on any of the five spawned reviewers** (PR #63 P1: they are reachable from model-invocable `pr-review` while processing untrusted PR content; §9.1 records the residual). Their bodies are written shell-free, and `check_bashless_agents_run_no_shell` in `validate-plugin-assembly.py` fails CI if a Bash-less agent's body still invokes shell. (An earlier revision of this row granted reviewers Bash with `prompt-review` as the exception — that described the pre-PR-#63 fleet and was exactly backwards against the shipped frontmatter; obeying it would have re-granted shell to four reviewers. Found by the 2026-08-17 audit, AF-1.) |
 | Implementation | Read, Write, Edit, Bash, Grep, Glob |
 | Orchestrator (swift-reviewer) | Read, Bash, Grep, Glob, Agent (subagent dispatch), plus the bundled synthesizer MCP tool (`mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review`) — stated in full because a `+`-row inherits whichever row sits above it, and this row must not silently absorb an edit to that row |
 | Diagnostic | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch (look up vendor docs mid-debug) |
@@ -401,14 +401,20 @@ mode the `check_bashless_agents_run_no_shell` validator exists to catch — it i
 `security-reviewer`, `concurrency-reviewer` and `ux-perf-reviewer` when their `Bash` was removed while
 their bodies still ran `cat`/`find`/`plutil`.
 
-**What bounds it instead** (each verified, each with a regression test):
-- the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**;
-- `swift-reviewer`'s `disallowedTools` denies **every** checkout-writing agent by name, in both the
-  bare and `unleashed-mail:`-namespaced spellings, and that set is **recomputed from disk** by
-  `validate-plugin-assembly.py` rather than hand-maintained, so a newly added writer cannot be missed;
-- `swift-reviewer` denies spawning itself, so there is no recursive amplification;
-- `jira-manager` — the one agent it spawns that is not a reviewer — **denies `Bash`** outright;
-- the skill boundary itself grants only `changeset.sh`, never bare `git`.
+**WHAT DOES NOT BOUND THE SPAWN SET** (COREDEV-2703/2711; measured, and this list used to claim the
+opposite). ~~`disallowedTools` denies every checkout-writing agent by name~~ **LAPSED**: it is now
+`Write, Edit, NotebookEdit` — it denies no agent, and no self-spawn. COREDEV-2703 removed those
+`Agent(x)` entries because that specifier form inside a deny-list strips `Agent` outright; **never
+put one back.** The scoped grant replacing them is a DECLARATION that CI checks against the writer
+roster; the runtime DISCARDS the type list for a sub-agent. So no declared list bounds which agent
+this one reaches — assume every agent in `agents/`, the file-writing ones included.
+
+**What the surviving items actually are** — the roster this workflow INTENDS, not a bound on it:
+- the five spawned reviewers are `Read, Grep, Glob` — **no `Bash` on any of them**; that constrains
+  those five, not which agents `swift-reviewer` can reach instead;
+- `jira-manager` — the one non-reviewer on its DECLARED list — **denies `Bash`** outright;
+- the skill boundary grants only `changeset.sh`, never bare `git`. This one IS a real bound, but on
+  the MAIN THREAD's pre-approved surface (COREDEV-2642) — not on this sub-agent's spawn set.
 
 **The alternative, if this residual is ever judged unacceptable:** set
 `disable-model-invocation: true` on `skills/pr-review/SKILL.md`. That closes the path completely and

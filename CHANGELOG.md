@@ -13,6 +13,25 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **COREDEV-2711 — the `Agent(...)` spawn allowlist is a DECLARATION, not a runtime control.** The
+  2.8.1 entry below states that the scoped grant keeps PR #63's P1 closed. Measured on 2.8.1 it does
+  not: `swift-reviewer` spawned `unleashed-mail:ui-engineer` — a writing agent, absent from its own
+  specifier — with no refusal, no error and no prompt, because the runtime grants the `Agent` tool
+  from the specifier and then DISCARDS the type list for a sub-agent. This is by design; enforcement
+  of `Agent(type)` is scoped to a main-thread agent, and no frontmatter shape restores per-type
+  control for a sub-agent. What 2.8.1 actually bought is a CI check that fails when a writing agent
+  is added to a declared spawn list — the declaration stays honest, the runtime is unconstrained.
+  PR #63's P1 is **reopened**; COREDEV-2711 owns the mechanism. Corrected alongside it: the same
+  claim in `README.md`, `AGENT_CONTRACTS.md` §9.1's "what bounds it" list (two of whose bullets named
+  a deny-list COREDEV-2703 had already deleted), the spawner check's docstring and its remedy text
+  (which instructed maintainers to add `Agent(<name>)` to `disallowedTools` — the exact change that
+  disabled the review panel), and five assertion messages in the validator's test suite.
+- **COREDEV-2711 — `disallowedTools` does not stop direct checkout writes.** `swift-reviewer` holds
+  bare `Bash`, which this repo's own `_WRITE_VECTORS` counts as a write vector and `AGENT_CONTRACTS`
+  §9.1 records as an accepted residual. Documentation claiming otherwise is corrected.
+
 ## [2.8.1] — 2026-08-23
 
 ### Fixed
@@ -41,7 +60,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
     deny-list re-opens the moment a new writing agent is added. `validate-plugin-assembly.py` now
     checks a scoped `Agent(...)` grant against the writer roster on disk and fails if the grant
     admits one, so the PR #63 P1 (a prompt-injected finding steering the reviewer into a file-writing
-    agent while it reads untrusted PR content) stays closed.
+    agent while it reads untrusted PR content) stays closed. **[CORRECTED — it does not; see Unreleased / COREDEV-2711.]**
   - **What is measured and what is not.** The probes covered a *single-type* specifier; the shipped
     grant names twelve types inside one set of parentheses, and that form has not yet been observed on
     a real install — a plugin cannot be reinstalled from within the session that would test it, and

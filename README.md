@@ -18,10 +18,10 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
   `Agent(<type>)` specifier syntax used inside `disallowedTools`; a sibling reviewer whose deny-list
   uses bare names keeps every tool it declares. The spawn set is now an **allowlist** —
   `Agent(<the five reviewers + jira-manager>)` in `tools:` — with `disallowedTools` reduced to
-  `Write, Edit, NotebookEdit`. The writer-agent restriction (PR #63 P1: a prompt-injected finding
-  must not be able to steer the reviewer into a file-writing agent while it reads untrusted PR
-  content) is preserved, and `validate-plugin-assembly.py` now checks a scoped `Agent(...)` grant
-  against the writer roster on disk, so the grant cannot drift open when a new writing agent lands.
+  `Write, Edit, NotebookEdit`. PR #63's P1 (a prompt-injected finding steering the reviewer into a
+  file-writing agent while it reads untrusted PR content) is **not closed** by this — measured on
+  2.8.1, the runtime discards the type list for a sub-agent. What the scoped grant buys is a CI
+  check: `validate-plugin-assembly.py` fails if a writer is added, keeping the declaration honest.
 
 ### v2.8.0
 

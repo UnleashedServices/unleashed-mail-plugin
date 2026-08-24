@@ -636,16 +636,19 @@ class ModelReachableGrantPolicy(unittest.TestCase):
 
 
 class SpawnerDeniesEveryWriter(unittest.TestCase):
-    """A bare `Agent` grant reaches every agent, so the writers must be denied by name — and STAY denied.
+    """DECLARATION consistency for both spawn forms — NOT runtime reachability (COREDEV-2711).
 
-    `swift-reviewer` is spawned from `pr-review` while it processes untrusted PR content. Its `tools:`
-    lists bare `Agent` because a sub-agent tool list takes bare names — `Agent(type)` is ignored there —
-    so it could reach all twelve file-writing agents, and a prompt-injected finding could have steered it
-    into `ui-engineer` or `db-engineer` with no user gesture (PR #63 recheck, P1).
+    Read the class name as historical. These cells test that an agent's DECLARED reach does not
+    include a checkout-writing agent, recomputed from the agents on disk so the set cannot silently
+    fall behind. That is the property under test, not the current contents — and not what the runtime
+    permits: measured on 2.8.1, a sub-agent spawned a writer absent from its own scoped grant with no
+    refusal, because the runtime discards the type list for a sub-agent.
 
-    The only lever is `disallowedTools`, which makes it a deny-list. The check below recomputes the
-    writer set from the agents on disk, so the list cannot silently fall behind — that is the property
-    under test, not the current contents.
+    Two forms are covered. A BARE `Agent` grant declares reach over every agent, so writers must be
+    denied by name — no shipped agent takes that branch today. A SCOPED `Agent(a, b)` grant declares
+    reach over exactly its members, each of which is checked against the writer roster;
+    `swift-reviewer` moved to that form in COREDEV-2703, because `Agent(x)` entries inside
+    `disallowedTools` removed its `Agent` tool outright and silently disabled the whole panel.
     """
 
     def _run(self, root):
@@ -656,17 +659,21 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
     def test_the_shipped_tree_denies_every_writer(self):
         self.assertEqual([], self._run(Path(_MOD_PATH).resolve().parents[1]))
 
-    def test_a_newly_added_writer_agent_is_UNREACHABLE_under_a_scoped_grant(self):
-        """COREDEV-2703 changed what protects this, so this cell changed with it.
+    def test_a_newly_added_writer_agent_is_ABSENT_FROM_THE_DECLARED_spawn_list(self):
+        """DECLARATION consistency only — NOT runtime reachability (COREDEV-2711, codex on PR #77).
 
-        It used to assert that a new writer agent was CAUGHT by the deny-list — the way a deny-list
-        re-opens. `swift-reviewer` no longer carries one: its `Agent` grant is now a scoped ALLOWLIST,
-        so a thirteenth writer is unreachable by construction and there is correctly nothing to
-        report. Asserting the old expectation here would demand a deny-list that must not come back —
-        the 26 `Agent(x)` entries are exactly what removed the agent's `Agent` tool.
+        An earlier version of this cell was named `..._is_UNREACHABLE_...` and its docstring called
+        the scoped grant a "structural guarantee". That is false: measured on 2.8.1, `swift-reviewer`
+        spawned a writing agent absent from its own `Agent(...)` list with no refusal, because the
+        runtime discards the type list for a SUB-agent. The cell passed while certifying exactly the
+        false security property `agents/swift-reviewer.md` was corrected to stop claiming.
 
-        The structural guarantee is asserted directly: the new writer must not appear in the
-        allowlist. The check's teeth for BARE-`Agent` agents are preserved by the sibling cell below.
+        The assertion itself was always sound and is unchanged — a new writer must not appear in the
+        declared spawn list. What it buys is narrower than the old name implied: it keeps the
+        DECLARATION honest, so a writing agent cannot be added to a spawn list without failing CI.
+        It does not constrain what the runtime will permit. COREDEV-2711 owns that mechanism.
+
+        The check's teeth for BARE-`Agent` agents are preserved by the sibling cell below.
         """
         import shutil
         import tempfile
@@ -683,11 +690,23 @@ class SpawnerDeniesEveryWriter(unittest.TestCase):
         self.assertEqual([], self._run(root),
                          "a scoped grant needs no writer denials — demanding them is what put the "
                          "`Agent(x)` entries in the deny-list and removed the `Agent` tool")
+        # Not `assertNotIn` on the raw string: `rogue-writer` is a SUBSTRING of a hypothetical
+        # `not-rogue-writer`, and a naive substring check has passed vacuously here before.
         granted = vpa._tool_tokens(
             vpa.parse_frontmatter(shipped.read_text(encoding="utf-8")).get("tools", ""))
         scoped = next(t for t in granted if t.startswith("Agent("))
-        self.assertNotIn("rogue-writer", scoped,
-                         "the new writer is reachable — the allowlist is not doing its job")
+        # NORMALISE THE PREFIX, exactly as production does at `check_spawner_denies_every_writer`
+        # (`bare = member.split(":", 1)[-1]`). `_agent_specifier_members` returns members verbatim,
+        # so a bare `assertNotIn("rogue-writer", ...)` does not fire on `unleashed-mail:rogue-writer`
+        # (gemini, PR #76). Measured: that is a real property of THIS LINE, but NOT a bypass — the
+        # cell still fails on the assertion above for either spelling, because the production check
+        # normalises and flags the namespaced writer too. This edit removes a misleading line; it
+        # does not close a hole, and should not be read as having closed one.
+        members = [m.split(":", 1)[-1] for m in vpa._agent_specifier_members(scoped)]
+        self.assertNotIn("rogue-writer", members,
+                         "a writing agent was added to the DECLARED spawn list — the declaration no "
+                         "longer matches the writer roster. This is a declaration check, not a "
+                         "runtime one: the runtime does not enforce the type list for a sub-agent.")
 
     def _tree(self, agents: "dict[str, str]") -> Path:
         """A throwaway agents/ tree; `agents` maps name -> frontmatter tail."""
@@ -871,9 +890,11 @@ class ScopedAgentGrantsParseAsOneToken(unittest.TestCase):
                          vpa._tool_tokens("Write, Agent(ui-engineer)"))
 
     def test_a_scoped_grant_is_NOT_the_bare_Agent_tool(self):
-        """The distinction the spawner check rests on: a scoped grant is an allowlist, so writers are
-        excluded by construction and no deny-list entry is required. A bare `Agent` reaches every
-        agent and still needs them."""
+        """A PARSING distinction, which is all the assertions below test: `Agent(x)` is a distinct
+        token from bare `Agent`, so `_tool_tokens` must not report `Agent` for a scoped grant. It is
+        NOT an exclusion guarantee — not at runtime (the type list is discarded for a sub-agent,
+        COREDEV-2711) and not even in the declaration, where a listed member that IS a writer is
+        caught only by the separate writer-roster check."""
         self.assertNotIn("Agent", vpa._tool_tokens("Read, Agent(security-reviewer)"))
         self.assertIn("Agent", vpa._tool_tokens("Read, Agent"))
 
@@ -887,18 +908,23 @@ class ScopedAgentGrantsParseAsOneToken(unittest.TestCase):
         self.assertEqual(1, len(scoped),
                          f"swift-reviewer must grant exactly one SCOPED Agent entry, got {sorted(granted)}")
         self.assertNotIn("Agent", granted,
-                         "a bare `Agent` alongside the scoped grant re-opens every agent type")
+                         "a bare `Agent` alongside the scoped grant makes the declaration "
+                         "self-contradictory and drops it into the writer-denial branch — the "
+                         "scoped list must be the only `Agent` entry")
         for reviewer in ("security-reviewer", "concurrency-reviewer", "ux-perf-reviewer",
                          "accessibility-auditor", "prompt-review"):
             self.assertIn(reviewer, scoped[0],
-                          f"the panel cannot spawn {reviewer} — it is not in the allowlist")
+                          f"the declared spawn list omits {reviewer} — it must name every "
+                          f"specialist the body spawns (a DECLARATION check; the runtime does not "
+                          f"enforce the type list for a sub-agent)")
             self.assertIn(f"unleashed-mail:{reviewer}", scoped[0],
                           f"{reviewer} is granted only in its bare spelling; a consumer install "
                           f"resolves the namespaced one")
         denied = vpa._tool_tokens(fm.get("disallowedTools", ""))
         self.assertEqual(set(), {d for d in denied if d.startswith("Agent(")},
-                         "an `Agent(x)` DENY entry is what removed the tool — the allowlist is the "
-                         "only lever now")
+                         "an `Agent(x)` DENY entry is what removed the tool (COREDEV-2703) — the "
+                         "scoped grant is the only form that keeps `Agent`, though it constrains "
+                         "nothing at runtime")
 
 
 class WriterPredicateAndSpawnerDetection(unittest.TestCase):

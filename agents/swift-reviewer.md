@@ -11,19 +11,19 @@ description: >
   to merge", or after any significant code change is complete.
 model: inherit
 tools: Read, Bash, Grep, Glob, Agent(security-reviewer, unleashed-mail:security-reviewer, concurrency-reviewer, unleashed-mail:concurrency-reviewer, ux-perf-reviewer, unleashed-mail:ux-perf-reviewer, accessibility-auditor, unleashed-mail:accessibility-auditor, prompt-review, unleashed-mail:prompt-review, jira-manager, unleashed-mail:jira-manager), mcp__plugin_unleashed-mail_review-synthesizer__synthesize_review
-# COREDEV-2703 — the spawn set is an ALLOWLIST here, never a deny-list.
-# The previous shape — bare `Agent` above plus 26 scoped denials below — left this agent with NO
-# Agent tool at all, so the five-specialist panel could not spawn on any current CLI. Measured on
-# 2.1.241 / plugin 2.8.0: the agent reported only Read, Bash and the synthesizer MCP tool, and
-# `AGENT: NO_SUCH_TOOL` when asked to call it. A sibling reviewer whose deny-list uses BARE names
-# only keeps all of its declared tools, so the deny-list is not the trigger — the scoped syntax
-# inside it is, and this was the only agent using that form.
-# An allowlist is also the safer direction: it cannot silently re-open when a new writing agent is
-# added. Both spellings are listed because a consumer install resolves the namespaced name too.
-# THIS EDIT IS LINE-COUNT NEUTRAL ON PURPOSE. Plan citations and the §13 scope anchor pin lines in
-# this file, so changing its length rots them; keeping the count fixed leaves every pin valid.
-# NOT RUNTIME-VERIFIED. Rationale, measurements and the verification step are in COREDEV-2703 —
-# VERIFY BY EXECUTION (spawn this agent, confirm it has Agent) before trusting a change here.
+# COREDEV-2703 / COREDEV-2711 — A DECLARATION OF INTENT, NOT AN ENFORCED CONTROL. The runtime grants
+# the Agent tool from this specifier but DISCARDS the type list for a sub-agent: measured on 2.8.1,
+# this agent spawned `unleashed-mail:ui-engineer` — a writer, absent from the list — with no refusal
+# and no prompt; a probe sees its own `Agent` entry BARE, so nothing exists to enforce against.
+# BY DESIGN: the sub-agents reference scopes `Agent(type)` enforcement to a MAIN-THREAD agent; for a
+# sub-agent the only levers are omitting `Agent` or denying it, both all-or-nothing. NO FRONTMATTER
+# SHAPE RESTORES PER-TYPE CONTROL — do not hunt for one, and do not read this as a security boundary.
+# STILL BOUGHT: `validate-plugin-assembly.py` checks this declared set against the writer roster on
+# disk, so adding a writing agent here fails CI. That keeps the DECLARATION honest, nothing more.
+# STILL MISSING, BOTH PATHS: PR #63's P1 (a prompt-injected finding steering this reviewer into a
+# writing agent while it reads untrusted PR content) AND DIRECT mutation — `disallowedTools` removes
+# only the EDITOR tools; line 13's bare `Bash` is arbitrary shell, which this repo's `_WRITE_VECTORS`
+# counts a writer (AGENT_CONTRACTS §9.1, accepted residual). COREDEV-2711 owns both. FILE=688 LINES.
 disallowedTools: Write, Edit, NotebookEdit
 ---
 
