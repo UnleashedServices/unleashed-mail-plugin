@@ -610,6 +610,29 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
                                for token in live if token.startswith("Agent(")
                                for member in _agent_specifier_members(token))
 
+        # AN `Agent(x)` ENTRY IN `disallowedTools` IS REJECTED UNCONDITIONALLY (codex, PR #76).
+        # That specifier form inside a DENY list strips the `Agent` tool entirely — it is what
+        # silently disabled the whole review panel (COREDEV-2703). The writer-denial branch below
+        # cannot catch it: that branch is guarded on `if missing:`, so an agent carrying BOTH
+        # spellings for EVERY writer has `missing == []` and produces no diagnostic at all.
+        # Measured at the CLI: such a tree passed `--strict` with EXIT=0 and a green tick, while
+        # the one-writer-short version of the same tree failed — i.e. the MORE complete the outage
+        # configuration, the quieter the validator. Checked for every agent, independent of
+        # `writers`, of `missing`, and of whether bare `Agent` is even granted.
+        # `strip` the quotes first: a YAML quoted scalar (`disallowedTools: "Agent(x)"`) otherwise
+        # walks straight through the prefix test.
+        bad_denials = sorted(tok for tok in _tool_tokens(frontmatter.get("disallowedTools", ""))
+                             if tok.strip('"\'').startswith("Agent("))
+        if bad_denials:
+            rel = path.relative_to(root).as_posix()
+            problems.append(
+                f"{rel}: `disallowedTools` carries scoped Agent denial(s) "
+                f"{', '.join(bad_denials)} — that form removes the `Agent` tool ENTIRELY and "
+                f"silently disables spawning (COREDEV-2703). To stop this agent spawning, deny "
+                f"bare `Agent`. To narrow WHICH types it declares, use a scoped `Agent(...)` grant "
+                f"in `tools:` instead."
+            )
+
     for path, member in scoped_spawners:
         bare = member.split(":", 1)[-1]
         if bare in writers:
