@@ -1,9 +1,10 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 3 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 4 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
-> **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`. r2: both `REQUEST_CHANGES`.
-> Revision 3 answers r2. Every claim below was re-measured in this worktree; where a reviewer and I
+> **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
+> r2: both `REQUEST_CHANGES`. r3 (frozen at `05cc76e`): both `REQUEST_CHANGES`, with codex naming a
+> precise approval delta. Revision 4 answers it. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -61,9 +62,53 @@ Evidence is produced by, for **both** the shipped and the mutant path, in **both
 4. a **detector control** that deliberately moves the cell's early return later and must produce a
    non-empty trace — otherwise the harness cannot fail and proves nothing.
 
-The plan commits to the criterion and the matrix. It does **not** assert a count: revision 1's "16
-rows" was carried from the ticket and is unaudited (codex r2 #3). Row 85 (NFC/NFD) additionally
-needs re-verification on a real runner before it moves.
+### The candidate set, MEASURED
+
+Revision 3 declined to name rows, and both r3 arms called that an un-auditable deferral. It is now
+measured. Method: mutate the platform gate to refuse (`Darwin` → `LinuxSm`, line-count preserving)
+on a real Darwin box, run each suite verbose, and record which cells still pass. A cell that passes
+while the chain refuses is a **candidate**; a cell that fails depends on a chain that authenticates
+and stays gated.
+
+**`test_plugin_state_store.py` — 16 candidates**
+
+```
+test_control_accepting_any_non_space_line_as_the_stat_line_fails_open
+test_every_ace_shape                     test_every_answer_shape
+test_control_a_blacklist_of_mutating_rights_fails_open
+test_control_a_positional_verb_parser_fails_open_on_an_inherited_ace
+test_the_eight_fixtures_the_rule_distinguishes
+test_del_byte_is_emitted_unchanged       test_injective_over_the_adversarial_corpus
+test_keys_are_byte_identical_across_both_shells
+test_lc_all_is_restored_in_both_entry_states
+test_output_alphabet_is_0x20_to_0x7f_and_never_upper_case
+test_a_failed_name_max_probe_refuses_the_publish
+test_budget_boundary_is_exact            test_getconf_failure_refuses_rather_than_meaning_unlimited
+test_e2_an_unpublishable_value_writes_nothing_at_all
+test_a_group_writable_ancestor_refuses
+```
+
+**`test_plugin_state_mutants.py` — 16 candidates**: the E2 unpublishable-value cell (PUB-9), the
+`HOME`-empty resolution cell, ENC-2 (fork-free key derivation), row 85 (NFC/NFD), row 93
+(byte-identical keys), row 188b, and rows 156, 157, 158, 166, 167, 170, 173, 174, 175, 176.
+
+This **independently confirms the ticket's "16 rows"** — eleven pure shell-semantics rows plus 85,
+93 and the encoder/publish cells — which revision 3 correctly refused to assert without evidence.
+
+### Two traps this measurement does NOT clear
+
+1. **Vacuous passes.** Under LINUX-SIM *everything* refuses, so a cell asserting a refusal can pass
+   for the wrong reason. `test_a_group_writable_ancestor_refuses` is the obvious suspect: it asserts
+   a refusal, and a blanket refusal satisfies it. Passing under LINUX-SIM makes a cell a **candidate,
+   not a decision** — each still needs the §2 detector control proving it fails when its own guard is
+   removed.
+2. **Per-method granularity is not per-row.** The mutants suite reports zero methods `ok` when read
+   naively because a single failing `subTest` fails the whole method; the sixteen above are whole
+   methods that pass. Any future claim about an individual *row* inside a multi-row method needs
+   per-row evidence, which this measurement does not provide.
+
+Row 85 (NFC/NFD) additionally needs re-verification on a real runner before it moves — it asserts a
+normalization-insensitive-volume property that a Linux filesystem may not share.
 
 ## 3. The seam — third spelling, and why the first two failed
 
@@ -92,14 +137,22 @@ is reachable, not theoretical. Measured: `/a␤/b` returns ALLOW in both shells.
 
 ```sh
 _unleashed_auth_chain() {
-    [ "$#" -eq 1 ] || return 1                        # wrong arity is a defect, not a pass
-    printf '%s\0' "$1" >> "$_SEAM_CALLS" || return 1  # a recording that FAILED is not a pass
+    { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1     # arity AND non-empty; see below
+    printf '%s\0' "$1" >> "$_SEAM_CALLS" || return 1   # a recording that FAILED is not a pass
     case "$1" in
         "$_SEAM_A1"|"$_SEAM_A2"|"$_SEAM_A3") return 0 ;;   # exact, QUOTED alternatives
         *) return 1 ;;
     esac
 }
 ```
+
+**The `-n` guard is not decoration (agy r3 #1, codex r3 #3 — found independently).** An unset
+`_SEAM_A2`/`_SEAM_A3` expands to the empty string, so `_unleashed_auth_chain ""` matches an unset
+slot and returns 0. That is exactly the mutant shape the seam exists to catch — a caller passing an
+uninitialised path variable. Measured in both shells: without `-n`, empty ALLOWs; with it, empty
+refuses while a declared path still authenticates. **This is the fourth defect found in the seam
+spelling across four revisions**; each earlier one was also "verified" before the next round broke
+it, which is why the spelling now carries its measurement inline.
 
 * **Quoted** alternatives, so a glob or newline in `$1` is compared literally.
 * **NUL-framed** log, so one call with an embedded newline is distinguishable from two calls —
@@ -154,7 +207,23 @@ the hostile one is refused.
 
 Rows 4 and 5 were missed by revisions 1 and 2 (agy r2 #3). They sit behind the chain, so the seam
 covers them for seamed cells — but any cell reaching them *without* the seam is Darwin-only, and the
-§2 matrix must record that.
+§2 matrix must record that. kimi additionally established that `dsmemberutil` is **unreachable under
+the seam at all**, because `_u_principal` is only called by the stubbed chain — so row 5 constrains
+only un-seamed cells.
+
+**These five are the NON-PORTABLE forks (codex r3 #4).** Other absolute-path forks are reachable and
+are *portable*, so they block nothing — but they belong in the matrix's "direct forks" column so a
+reader can tell "checked, fine" from "not checked":
+
+| site | fork | portable? |
+|---|---|---|
+| `plugin-state-auth.sh:205` | `/usr/bin/id -u` (`_u_euid`) | yes — POSIX flag |
+| `plugin-state-auth.sh:196` | `/usr/bin/id -un` (`_u_principal`) | yes — POSIX flag |
+| `plugin-state-auth.sh:182` | `/usr/bin/uname -s` (`_u_platform`) | yes — POSIX flag |
+| `plugin-state-store.sh:177` | `/usr/bin/getconf NAME_MAX` | yes — POSIX |
+
+agy r3 #3 listed these as inventory gaps; they are gaps in the *column*, not blockers. Verified: each
+uses POSIX flags, unlike `stat -f` (BSD format vs GNU file-system) and `ls -e` (BSD-only).
 
 **Row 3 is a production defect, now COREDEV-2761.** Under GNU coreutils `-f` means *file-system*
 information, so the probe fails, both variables are empty, and the publisher refuses with "the
@@ -181,6 +250,11 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
 
 * Publisher **normalisation-success** cells on Linux, and the retained mutants that reach the same
   fork — blocked by COREDEV-2761.
+* **The folded-root refusal arm, and row 184 with it (codex r3 #2).** Revision 3 kept the refusal in
+  scope while excluding the mutant that must redden it — an internal inconsistency, since every cell
+  requires a reddening mutant. Row 184 deletes the folded-value guard and then reaches the same
+  incompatible identity probe before producing its poison-entry oracle, so on GNU `stat` shipped and
+  mutant both stop at `failed` and the cell cannot discriminate. Both stay Darwin-gated.
 * Row 181's one-directory/one-entry invariant, which stays Darwin-gated; PR CI still cannot catch
   deletion of the lexical fold. Named here so the gap is visible rather than implied.
 * The portable path-identity accessor itself — that is COREDEV-2761's fix.
@@ -213,5 +287,10 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
   call, and on any undeclared path.
 * **I verified the seam against inputs I chose.** Twice. The suite's own input classes — embedded
   newlines, globs, spaces — are the set to verify against, and they are now the ones used.
+* **zsh-only cells abandon the arm macOS actually runs (kimi).** Restricting a cell to zsh to dodge
+  `_u_stat`'s bash fork leaves ENT-2b's bash arm — the `/dev/fd/9` inode binding and bounded
+  `read -u 9` at `plugin-state-reader.sh:107-111` — covered only by the push-to-main macOS leg. The
+  hooks in production run bash. Every zsh-only cell must say so at the cell, and the matrix records
+  it, so this is a stated trade rather than an accident.
 * **Scope shrank under review.** Revision 1 promised Linux coverage that §5 shows is unreachable.
   Cutting it and filing COREDEV-2761 is the honest outcome; promising it would have been worse.
