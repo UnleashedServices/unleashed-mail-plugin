@@ -85,6 +85,32 @@ jobs:
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
 
+      - name: Assert the ungated plugin-state classes RAN here (COREDEV-2691 §7.4)
+        id: seam_ungated
+        # These two are the ONLY plugin-state classes this required gate executes. Every
+        # chain-walking class in that file is @skipUnless(DARWIN) -- `_unleashed_auth_chain` refuses
+        # on all non-Darwin platforms -- so before COREDEV-2691 the required check verified no
+        # plugin-state entry guard at all, on the one leg that gates merges.
+        #
+        # The count is DERIVED from the loader, never hardcoded: a hardcoded number rots the moment
+        # a cell is added, and rots SILENTLY downward. What this actually guards against is a skip,
+        # which reads identically to a pass in the job summary.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import unittest
+          names = ["scripts.tests.test_plugin_state_store.SeamContract",
+                   "scripts.tests.test_plugin_state_store.ForkClassification"]
+          suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+          expected = suite.countTestCases()
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          print(f"expected={expected} ran={result.testsRun} skipped={len(result.skipped)}")
+          assert expected > 0, "the loader found no cells -- a rename silently emptied this gate"
+          assert result.testsRun == expected, f"only {result.testsRun}/{expected} cells ran"
+          assert not result.skipped, f"cells SKIPPED on this platform: {result.skipped}"
+          assert result.wasSuccessful(), "the ungated plugin-state classes are RED here"
+          PY
+
       - name: Validate version sync (strict)
         id: version_sync
         run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
