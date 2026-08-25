@@ -1,6 +1,6 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 7 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 8 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
@@ -9,7 +9,11 @@
 > kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` on ONE remaining one-line defect. Revision 6
 > is that line. r6 (frozen `cdf8b59`): agy `APPROVE_WITH_NOTES`; codex confirmed the seam correct
 > after 22 further attacks per shell and found NO ninth defect, leaving one internal
-> contradiction between §2 and §7.2. Revision 7 removes it. Every claim below was re-measured in this worktree; where a reviewer and I
+> contradiction between §2 and §7.2, which revision 7 removed. r7 (frozen `67096c5`): codex
+> `APPROVE`, agy `APPROVE_WITH_NOTES` — but the REPRODUCTION round on byte-identical input
+> flipped codex to `REQUEST_CHANGES` on a fourth requirement-with-different-force defect that
+> both approving runs had certified clean. Revision 8 fixes it. One approving round is not a
+> gate pass, and this plan is now the third instance on this campaign proving that. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -66,9 +70,18 @@ satisfy the two literally (codex r6). The declared set is the contract in both p
 1. replacing `_unleashed_auth_chain` and `_u_stat` with NUL-recording sentinels;
 2. capturing `execve` with `strace -f` on Ubuntu — **function replacement cannot intercept an
    absolute-path fork** such as `/usr/bin/stat`, so a shell-level sentinel alone is not evidence;
-3. requiring all traces to be empty for a "moves" disposition;
-4. a **detector control** that deliberately moves the cell's early return later and must produce a
-   non-empty trace — otherwise the harness cannot fail and proves nothing.
+3. requiring, for a "moves" disposition, that the sentinel traces **match the row's expected ordered
+   calls** and that the `execve` trace contains **no §5 NON-PORTABLE fork** for that declared shell;
+4. a **detector control** that must violate one of those expectations — otherwise the harness cannot
+   fail and proves nothing.
+
+**Why not "all traces empty" (codex, reproduction round).** Revision 7 said exactly that, and it
+contradicted §5, which lists portable forks as reachable and blocking nothing. The consequence was
+not cosmetic: `_u_euid` is an **ENT-1 clause** (`plugin-state-reader.sh:33`) and it forks
+`/usr/bin/id -u` (`plugin-state-auth.sh:206`), so an empty-trace rule made **every ENT-1 cell
+un-movable — the plan's headline deliverable, forbidden by the plan's own evidence rule.** Two
+approving arms had already certified this section clean; a reproduction run on byte-identical input
+found it. The rule is now about *which* forks appear, not whether any do.
 
 ### The candidate set, MEASURED
 
