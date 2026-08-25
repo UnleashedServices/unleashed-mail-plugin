@@ -1,11 +1,13 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 5 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 6 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
 > agy `APPROVE_WITH_NOTES`, codex and kimi `REQUEST_CHANGES` — but both named the SAME two items and
-> gave a smallest-change-to-approve list. Revision 5 is that list. Every claim below was re-measured in this worktree; where a reviewer and I
+> gave a smallest-change-to-approve list, which revision 5 applied. r5 (frozen `a9b8771`): agy and
+> kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` on ONE remaining one-line defect. Revision 6
+> is that line. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -144,6 +146,7 @@ is reachable, not theoretical. Measured: `/a␤/b` returns ALLOW in both shells.
 ```sh
 _unleashed_auth_chain() {
     { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1     # arity AND non-empty
+    [ -n "${_SEAM_CALLS:-}" ] || return 1              # an UNSET log aborts under set -u
     printf '%s\0' "$1" >> "$_SEAM_CALLS" || return 1   # a recording that FAILED is not a pass
     [ "$1" = "${_SEAM_A1:-}" ] && return 0             # STRING equality, not pattern matching
     [ "$1" = "${_SEAM_A2:-}" ] && return 0
@@ -168,9 +171,18 @@ Two independent problems, one from each arm, both measured here:
 can reach it, and `:-` makes an unset slot an empty string rather than an error. Measured in both
 shells: wrong case refuses, exact matches, unset slots are inert under `set -u`.
 
-**Six defects in five revisions of a nine-line function.** Every one was found by executing it
-against inputs the *suite* uses rather than inputs I chose. That is the transferable lesson, and it
-is why this section carries its measurements inline.
+**An eighth defect, and the same shape as the sixth (codex r5).** The `-n "$1"` and `${_SEAM_An:-}`
+guards fixed unset *allowlist slots* under `set -u` — and left the log variable itself unguarded, so
+an unset `_SEAM_CALLS` still aborted the shell instead of refusing. Measured under `set -eu`: bash
+`unbound variable`, zsh `parameter not set`, both killing the process before the cell could observe
+anything; with `[ -n "${_SEAM_CALLS:-}" ] || return 1` both return `call_rc=1` and survive.
+
+Fixing one instance of a class and leaving its sibling is the defect this campaign has hit more than
+any other. It happened here, inside the fix for that very class.
+
+**Eight defects across six revisions of a ten-line function.** Every one was found by EXECUTING it
+against inputs the *suite* uses rather than inputs I chose — none by reading. That is the
+transferable lesson, and it is why this section carries its measurements inline.
 
 **The `-n` guard is not decoration (agy r3 #1, codex r3 #3 — found independently).** An unset
 `_SEAM_A2`/`_SEAM_A3` expands to the empty string, so `_unleashed_auth_chain ""` matches an unset
