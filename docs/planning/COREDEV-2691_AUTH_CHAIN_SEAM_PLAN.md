@@ -1,6 +1,6 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 8 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 9 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
@@ -13,7 +13,10 @@
 > `APPROVE`, agy `APPROVE_WITH_NOTES` — but the REPRODUCTION round on byte-identical input
 > flipped codex to `REQUEST_CHANGES` on a fourth requirement-with-different-force defect that
 > both approving runs had certified clean. Revision 8 fixes it. One approving round is not a
-> gate pass, and this plan is now the third instance on this campaign proving that. Every claim below was re-measured in this worktree; where a reviewer and I
+> gate pass, and this plan is now the third instance on this campaign proving that. r8 (frozen
+> `1eccbe5`): agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` on a FIFTH instance of the same
+> class — §2's own observation mechanism erased the fork §5 and §7 require it to detect.
+> Revision 9 splits it into two passes. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -67,11 +70,21 @@ declares** — not unconditionally in both. §7.2 lets a cell be zsh-only where 
 and revision 6 still demanded evidence in both shells here, so an implementation could not
 satisfy the two literally (codex r6). The declared set is the contract in both places:
 
-1. replacing `_unleashed_auth_chain` and `_u_stat` with NUL-recording sentinels;
-2. capturing `execve` with `strace -f` on Ubuntu — **function replacement cannot intercept an
-   absolute-path fork** such as `/usr/bin/stat`, so a shell-level sentinel alone is not evidence;
-3. requiring, for a "moves" disposition, that the sentinel traces **match the row's expected ordered
-   calls** and that the `execve` trace contains **no §5 NON-PORTABLE fork** for that declared shell;
+**TWO SEPARATE PASSES, because one pass cannot do both jobs (codex, r8).** Revision 8 said to
+replace `_unleashed_auth_chain` *and* `_u_stat` with sentinels and then read the `execve` trace —
+but replacing `_u_stat` **erases the very fork the trace is supposed to detect**. Measured: bash's
+shipped `_u_stat` forks `/usr/bin/stat -f`; with a sentinel in its place the fork is gone from the
+trace, so the harness would have declared a bash ENT-1 cell movable when it is not. The observation
+mechanism destroyed its own evidence.
+
+1. **A sentinel pass** may replace both functions, and establishes the ordered call transcripts.
+2. **A separate `strace -f` pass on Ubuntu keeps the build-under-test's REAL `_u_stat`** — only
+   `_unleashed_auth_chain` stays seamed, or `_u_stat` is wrapped so it still delegates to the
+   original. Function replacement cannot intercept an absolute-path fork, so this pass is the only
+   thing that can see one.
+3. A cell moves only when that independent real-`_u_stat` trace contains **no §5 NON-PORTABLE fork**
+   for that declared shell, and the sentinel pass's transcripts **match the row's expected ordered
+   calls**;
 4. a **detector control** that must violate one of those expectations — otherwise the harness cannot
    fail and proves nothing.
 
