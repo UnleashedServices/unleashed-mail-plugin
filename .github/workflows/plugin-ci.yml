@@ -87,28 +87,54 @@ jobs:
 
       - name: Assert the ungated plugin-state classes RAN here (COREDEV-2691 §7.4)
         id: seam_ungated
-        # These two are the ONLY plugin-state classes this required gate executes. Every
-        # chain-walking class in that file is @skipUnless(DARWIN) -- `_unleashed_auth_chain` refuses
-        # on all non-Darwin platforms -- so before COREDEV-2691 the required check verified no
-        # plugin-state entry guard at all, on the one leg that gates merges.
+        # These three are the plugin-state classes that exercise the ENTRY GUARD on this leg --
+        # SeamedStoreCreation is the one that drives a PRODUCTION caller through it. Every chain-walking class in that file is @skipUnless(DARWIN) --
+        # `_unleashed_auth_chain` refuses on all non-Darwin platforms -- so before COREDEV-2691 the
+        # required check exercised no entry guard at all. (Other ungated classes in the file, e.g.
+        # EncoderInvariantP and NameLengthBudget, do run here; they cover the encoder and the name
+        # budget, not the guard. Revision 1's comment called these two the ONLY ungated classes,
+        # which was simply false.)
         #
-        # The count is DERIVED from the loader, never hardcoded: a hardcoded number rots the moment
-        # a cell is added, and rots SILENTLY downward. What this actually guards against is a skip,
-        # which reads identically to a pass in the job summary.
+        # Counts are DERIVED from the loader and checked PER CLASS: an aggregate check passes when
+        # one whole class contributes zero cells and the other makes up the number. What this
+        # actually guards against is a SKIP, which reads identically to a pass in the job summary --
+        # including the skip that a missing zsh would produce.
+        #
+        # No bare `assert`: python3 -O / PYTHONOPTIMIZE strips those and the step would exit 0 over
+        # a red suite.
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import unittest
-          names = ["scripts.tests.test_plugin_state_store.SeamContract",
-                   "scripts.tests.test_plugin_state_store.ForkClassification"]
-          suite = unittest.defaultTestLoader.loadTestsFromNames(names)
-          expected = suite.countTestCases()
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          print(f"expected={expected} ran={result.testsRun} skipped={len(result.skipped)}")
-          assert expected > 0, "the loader found no cells -- a rename silently emptied this gate"
-          assert result.testsRun == expected, f"only {result.testsRun}/{expected} cells ran"
-          assert not result.skipped, f"cells SKIPPED on this platform: {result.skipped}"
-          assert result.wasSuccessful(), "the ungated plugin-state classes are RED here"
+          import sys, unittest
+
+          NAMES = ["scripts.tests.test_plugin_state_store.SeamContract",
+                   "scripts.tests.test_plugin_state_store.ForkClassification",
+                   "scripts.tests.test_plugin_state_store.SeamedStoreCreation"]
+          problems = []
+          for name in NAMES:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              expected = suite.countTestCases()
+              flat = list(unittest.TestSuite(suite))
+              bogus = [t for t in flat if type(t).__name__ == "_FailedTest"]
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              print(f"{name}: expected={expected} ran={result.testsRun} "
+                    f"skipped={len(result.skipped)} errors={len(result.errors)}")
+              if bogus:
+                  problems.append(f"{name}: loader produced {len(bogus)} placeholder(s) -- renamed?")
+              if expected == 0:
+                  problems.append(f"{name}: loader found NO cells -- a rename emptied this gate")
+              if result.testsRun != expected:
+                  problems.append(f"{name}: only {result.testsRun}/{expected} cells ran")
+              if result.skipped:
+                  problems.append(f"{name}: cells SKIPPED on this platform: {result.skipped}")
+              if not result.wasSuccessful():
+                  problems.append(f"{name}: RED here")
+          if problems:
+              print("SEAM GATE FAILED:")
+              for p in problems:
+                  print("  - " + p)
+              sys.exit(1)
+          print(f"seam gate: all {len(NAMES)} classes ran fully, nothing skipped")
           PY
 
       - name: Validate version sync (strict)
@@ -254,6 +280,7 @@ jobs:
             echo "| pty-capture smoke (--timeout) | ${{ steps.pty_smoke.outcome || 'did not run' }} |"
             echo "| unittest discover (synthesizer suite) | ${{ steps.mcp_tests.outcome || 'did not run' }} |"
             echo "| unittest discover (scripts suite) | ${{ steps.scripts_tests.outcome || 'did not run' }} |"
+            echo "| ungated plugin-state entry guard (COREDEV-2691) | ${{ steps.seam_ungated.outcome || 'did not run' }} |"
             echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
             echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"

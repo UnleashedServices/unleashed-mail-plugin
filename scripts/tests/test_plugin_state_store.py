@@ -30,7 +30,20 @@ AUTH = os.path.join(LIB, "plugin-state-auth.sh")
 STORE = os.path.join(LIB, "plugin-state-store.sh")
 READER = os.path.join(LIB, "plugin-state-reader.sh")
 PUB = os.path.join(LIB, "plugin-state-publisher.sh")
-SHELLS = ("/bin/bash", "/bin/zsh")
+def _resolve_shell(name):
+    """Absolute path to `name`, preferring /bin but accepting the distro's location.
+
+    Hardcoding /bin/zsh meant CI's `command -v zsh` presence check could pass -- it finds
+    /usr/bin/zsh -- while every zsh arm silently SKIPPED on any non-usrmerge Linux. On macOS both
+    candidates exist and this returns exactly what the literal did.
+    """
+    for candidate in ("/bin/" + name, "/usr/bin/" + name):
+        if os.path.exists(candidate):
+            return candidate
+    return shutil.which(name) or "/bin/" + name
+
+
+SHELLS = (_resolve_shell("bash"), _resolve_shell("zsh"))
 DARWIN = os.uname().sysname == "Darwin"
 
 
@@ -1029,18 +1042,26 @@ class SeamedChain:
         return (rcs[0] if rcs else None), records, alive
 
     def for_declared_shells(self, declared, fn):
-        """Run `fn(shell)` for each DECLARED shell and assert the declared set actually ran.
+        """Run `fn(shell)` for each DECLARED shell, skipping the CELL if an interpreter is missing.
 
-        §7.2. A missing interpreter raises SkipTest out of run_shell and aborts the whole cell, so a
-        lost arm is never mistaken for a pass; CI separately asserts `command -v zsh` before the
-        suite runs, so the skip cannot quietly erase the zsh arm there.
+        §7.2. Revision 1 ended this with `assertEqual(list(declared), ran, "a declared shell arm did
+        not run")` and both docstrings claimed that made a lost arm fail. It could NEVER fire:
+        unittest SWALLOWS a SkipTest raised inside `subTest`, and `ran.append` sat outside the
+        with-block, so `ran` always equalled `declared`. Measured: point the zsh arm at a
+        nonexistent path and all 11 cells report OK with 14 skips. The assertion is gone rather than
+        reworded -- a check that cannot fail reads exactly like a check that passes.
+
+        What actually guards the arms is external and stated here so it is not re-invented: the
+        missing interpreter is detected BEFORE any assertion, so the cell skips visibly rather than
+        passing on one arm, and CI's `seam_ungated` step asserts `not result.skipped`, which turns
+        any such skip into a red required check.
         """
-        ran = []
+        missing = [sh for sh in declared if shutil.which(sh) is None]
+        if missing:
+            raise unittest.SkipTest(f"declared shell(s) absent: {missing} (CI fails on this skip)")
         for shell in declared:
             with self.subTest(shell=shell):
                 fn(shell)
-            ran.append(shell)
-        self.assertEqual(list(declared), ran, "a declared shell arm did not run")
 
 
 class SeamContract(SeamedChain, unittest.TestCase):
@@ -1078,6 +1099,11 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(1, rc, f"{label} arguments authenticated")
                 self.assertEqual([], records, f"{label} arguments were recorded despite refusal")
 
+            # The TWO-argument case is the discriminating one: with arity neutered, `$1` is still
+            # the allowlisted path and the seam authenticates. The zero-argument case cannot
+            # discriminate, because a neutered arity check leaves `$1` unbound and `set -u` aborts
+            # -- refusal for a different reason (codex r1). It is asserted above against the correct
+            # seam only, for survival, and is deliberately not paired with the mutant.
             rc, _, _ = self.seam_call(shell, [self.GOOD, self.GOOD], broken="arity")
             self.assertEqual(0, rc, "the arity mutant did not flip this control")
         self.for_declared_shells(SHELLS, check)
@@ -1157,6 +1183,49 @@ class SeamContract(SeamedChain, unittest.TestCase):
             self.assertEqual(0, rc, "the fail-closed mutant did not flip this control")
         self.for_declared_shells(SHELLS, check)
 
+    def test_each_allowlist_slot_authenticates_its_own_path(self):
+        """§7.6 one-control-per-predicate, for the three allowlist slots.
+
+        Revision 1 DECLARED allow_1/allow_2/allow_3 and no cell ever executed one, so seam line [6]
+        -- the `_SEAM_A3` comparison -- had no behavioural control at all, while the commit message
+        claimed a mutant per predicate. Found by AST trace (codex r1) and by the sweep; confirmed by
+        counting `broken="allow_N"` occurrences in this file: zero.
+        """
+        allow = ("/slot/one", "/slot/two", "/slot/three")
+
+        def check(shell):
+            with self.subTest(slot=1):
+                rc, records, alive = self.seam_call(shell, [allow[0]], allow=allow)
+                self.assertEqual((0, True), (rc, alive), "slot 1 did not authenticate its own path")
+                self.assertEqual([allow[0].encode()], records)
+                rc, _, _ = self.seam_call(shell, [allow[0]], allow=allow, broken="allow_1")
+                self.assertEqual(1, rc, "the allow_1 mutant did not flip this control")
+            with self.subTest(slot=2):
+                rc, _, alive = self.seam_call(shell, [allow[1]], allow=allow)
+                self.assertEqual((0, True), (rc, alive), "slot 2 did not authenticate its own path")
+                rc, _, _ = self.seam_call(shell, [allow[1]], allow=allow, broken="allow_2")
+                self.assertEqual(1, rc, "the allow_2 mutant did not flip this control")
+            with self.subTest(slot=3):
+                rc, _, alive = self.seam_call(shell, [allow[2]], allow=allow)
+                self.assertEqual((0, True), (rc, alive), "slot 3 did not authenticate its own path")
+                rc, _, _ = self.seam_call(shell, [allow[2]], allow=allow, broken="allow_3")
+                self.assertEqual(1, rc, "the allow_3 mutant did not flip this control")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_every_declared_mutant_is_executed_by_some_cell(self):
+        """The meta-control. §7.6 asks for one control per predicate, and revision 1 satisfied that
+        on paper while three declared mutants were never run -- the gap this cell exists to make
+        impossible to reintroduce. Each name appears once in SEAM_MUTANTS, so a second occurrence is
+        what proves a cell actually passes it as `broken=`.
+        """
+        with open(__file__, encoding="utf-8") as fh:
+            src = fh.read()
+        unexecuted = sorted(m for m in SEAM_MUTANTS if src.count(f'"{m}"') < 2)
+        self.assertEqual([], unexecuted, "declared mutants that no cell executes")
+        covered = {SEAM_MUTANTS[m][0] for m in SEAM_MUTANTS if src.count(f'"{m}"') >= 2}
+        self.assertEqual(set(range(len(SEAM_LINES))), covered,
+                         "a seam predicate has no executed mutant")
+
     def test_nul_framing_distinguishes_one_call_from_two(self):
         """§7.6 framing. `/a\\n/b` as ONE argument must not read back as the two calls `/a`, `/b` —
         a newline-delimited log cannot express that difference, and this suite treats embedded
@@ -1182,9 +1251,15 @@ class SeamContract(SeamedChain, unittest.TestCase):
         def check(shell):
             for argv in classes:
                 with self.subTest(argv=argv):
-                    self.assertEqual(self.seam_calls(shell, [argv]),
-                                     self.seam_calls(shell, [argv], compound=True),
-                                     "the split spelling diverges from §3's compound")
+                    split = self.seam_calls(shell, [argv])
+                    comp = self.seam_calls(shell, [argv], compound=True)
+                    # Both runs dying identically would make the comparison below compare
+                    # ([], [], False) with itself and pass having proved nothing (agy r1, and the
+                    # sweep independently). Establish that each run actually EXECUTED first.
+                    for label, (rcs, _, alive) in (("split", split), ("compound", comp)):
+                        self.assertTrue(alive, f"the {label} run died before reporting")
+                        self.assertEqual(1, len(rcs), f"the {label} run produced no rc")
+                    self.assertEqual(split, comp, "the split spelling diverges from §3's compound")
         self.for_declared_shells(SHELLS, check)
 
     def test_every_mutant_preserves_the_seam_line_count(self):
@@ -1197,159 +1272,397 @@ class SeamContract(SeamedChain, unittest.TestCase):
         self.assertEqual(baseline, len(seam_source(compound=True).splitlines()))
 
 
-#: Every fork the shipped libraries make, as (exe, distinguishing argv element).
-#: NON-PORTABLE keeps a cell Darwin-gated; PORTABLE blocks nothing and a cell whose only fork is one
-#: of these is still admitted. GNU `stat -f` means FILE SYSTEM, not format, so every BSD `stat -f`
-#: site is non-portable; `ls -e` is BSD-only; `dsmemberutil` is a Darwin binary.
-NONPORTABLE_FORKS = {
-    ("/usr/bin/stat", "%p %z %u %i"),        # plugin-state-auth.sh      — _u_stat
-    ("/usr/bin/stat", "%p %z %u %i %N"),     # plugin-state-auth.sh      — the chain prefetch
-    ("/usr/bin/stat", "%d %i"),              # plugin-state-publisher.sh — the identity probe
-    ("/bin/ls", "-lde"),                     # plugin-state-auth.sh      — ACL enumeration, 2 shapes
-    ("/usr/bin/dsmemberutil", "getuuid"),    # plugin-state-auth.sh      — the euid's UUID
-}
-PORTABLE_FORKS = {
-    ("/usr/bin/id", "-u"),
-    ("/usr/bin/id", "-un"),
-    ("/usr/bin/uname", "-s"),
-    ("/usr/bin/getconf", "NAME_MAX"),
+#: Every absolute-path executable the four shipped libraries fork, and how portability is decided.
+#: DERIVED, then declared: the census below re-derives this from the sources and fails if the two
+#: disagree, in EITHER direction. Revision 1 of this file declared six executables and omitted
+#: /bin/mkdir, /bin/rm and /bin/mv -- five real fork sites -- while its comment claimed to list
+#: "every fork the shipped libraries make" (codex, r1).
+#:
+#: "portable"    POSIX everywhere; blocks nothing, and a cell whose only forks are these is admitted.
+#: "nonportable" keeps a cell Darwin-gated regardless of argv.
+#: "argv"        portability depends on the arguments; classify_fork must recognise the shape, and
+#:               an UNRECOGNISED shape is a census FAILURE, never a silent pass.
+FORK_EXES = {
+    "/usr/bin/stat":        "argv",         # BSD `-f FORMAT`; GNU `-f` means FILE SYSTEM
+    "/bin/ls":              "argv",         # `-e` (ACL) is BSD-only; other flag sets are portable
+    "/usr/bin/dsmemberutil": "nonportable",  # a Darwin-only binary, whatever the subcommand
+    "/usr/bin/id":          "portable",
+    "/usr/bin/uname":       "portable",
+    "/usr/bin/getconf":     "portable",
+    "/bin/mkdir":           "portable",
+    "/bin/rm":              "portable",
+    "/bin/mv":              "portable",
 }
 
-#: How a fork is recognised in an argv. Ordered longest-format-first is NOT enough — `%p %z %u %i`
-#: is a strict PREFIX of `%p %z %u %i %N`, so substring matching would classify the prefetch as the
-#: plain stat and one control would appear to cover two mappings. Elements are compared EXACTLY.
-_FORK_RULES = (
-    ("/usr/bin/stat", "-f", True),           # the element AFTER -f is the distinguishing one
-    ("/bin/ls", "-lde", False),
-    ("/usr/bin/dsmemberutil", "getuuid", False),
-    ("/usr/bin/id", "-u", False),
-    ("/usr/bin/id", "-un", False),
-    ("/usr/bin/uname", "-s", False),
-    ("/usr/bin/getconf", "NAME_MAX", False),
-)
+#: Absolute-path prefixes a fork could plausibly acquire. `/opt/homebrew` and `/usr/local` are here
+#: so that relocating a fork to a Homebrew binary is DISCOVERED rather than skipped by the scan.
+_EXE_RE = re.compile(r"(?<![\w./-])(/(?:usr/local/|opt/homebrew/|usr/)?s?bin/[A-Za-z0-9_.-]+)")
+
+#: Commands whose portability this file reasons about. Used only by the "no bare or variable
+#: invocation" invariant -- `$STAT -f ...` and a bare `stat -f ...` both escape any scan keyed on
+#: absolute paths, so the invariant is what makes the absolute-path scan sufficient.
+_SENSITIVE = ("stat", "ls", "id", "uname", "getconf", "dsmemberutil", "mkdir", "rm", "mv")
+
+
+def _ls_flags(rest):
+    """Merge every short-option letter before `--`. `-lde`, `-led` and `-l -d -e` are one flag set."""
+    flags = set()
+    for a in rest:
+        if a == "--":
+            break
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            flags.update(a[1:])
+    return flags
+
+
+def _command_args(text):
+    """Tokenise the argv that FOLLOWS an executable, stopping where the command does.
+
+    A fork here is usually wrapped: `_x="$(/usr/bin/stat -f '%p' -- "$1" 2>/dev/null)" || return 1`.
+    Handing the whole remainder to `shlex.split` raises "No closing quotation" on the enclosing
+    substitution's own quote -- which is precisely what a first attempt at this census did on FIVE
+    real sites. Walk to the first UNQUOTED terminator instead, then tokenise what is left.
+
+    Raises ValueError if what remains is still unbalanced; the caller treats that as unclassified,
+    never as absent.
+    """
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        elif ch in ");|&<>":
+            break
+        else:
+            out.append(ch)
+        i += 1
+    args = shlex.split("".join(out), comments=False, posix=True)
+    # `2>/dev/null` leaves a bare fd number behind once the redirect is cut off.
+    while args and args[-1].isdigit():
+        args.pop()
+    return args
 
 
 def classify_fork(argv):
-    """Map a complete runtime argv to its (exe, token) pair, or None if it forks nothing known."""
+    """('portable'|'nonportable', reason) for a complete runtime argv, or None if UNRECOGNISED.
+
+    None is NOT a synonym for portable. Revision 1 returned None for anything it did not know and
+    `admits` then let it through, so a Darwin-only `dsmemberutil checkmembership` was admitted at
+    runtime while all seven classifier cells passed. Callers must treat None as "a human has not
+    classified this yet" and refuse.
+    """
     if not argv:
         return None
     exe, rest = argv[0], list(argv[1:])
-    for rule_exe, token, takes_value in _FORK_RULES:
-        if exe != rule_exe or token not in rest:
-            continue
-        if takes_value:
-            i = rest.index(token) + 1
-            return (exe, rest[i]) if i < len(rest) else None
-        return (exe, token)
+    kind = FORK_EXES.get(exe)
+    if kind is None:
+        return None
+    if kind != "argv":
+        return (kind, f"{exe} is {kind} regardless of argv")
+    if exe == "/usr/bin/stat":
+        if "-f" in rest:
+            i = rest.index("-f") + 1
+            fmt = rest[i] if i < len(rest) else "<missing>"
+            return ("nonportable", f"stat -f {fmt!r}: BSD format string; GNU -f means file system")
+        return None                      # an unrecognised stat shape must be classified by hand
+    if exe == "/bin/ls":
+        flags = _ls_flags(rest)
+        if not flags:
+            return None
+        if "e" in flags:
+            return ("nonportable", f"ls -{''.join(sorted(flags))}: -e (ACL) is BSD-only")
+        return ("portable", f"ls -{''.join(sorted(flags))}: no -e")
     return None
 
 
 def admits(argv_list):
-    """§7.7's opposite direction: may a cell whose forks are exactly `argv_list` leave the gate?"""
-    return not any(classify_fork(a) in NONPORTABLE_FORKS for a in argv_list)
+    """May a cell whose forks are exactly `argv_list` leave the Darwin gate? FAIL-CLOSED.
+
+    An unrecognised argv answers False, not True. That is the whole correction from revision 1.
+    """
+    return all(
+        (classify_fork(a) or (None, ""))[0] == "portable" for a in argv_list
+    )
+
+
+def _logical_lines(path):
+    """Yield (first_line_number, code) with backslash continuations JOINED and comments stripped.
+
+    Revision 1 read physical lines and skipped only FULL-LINE comments, so a backslash-continued
+    fork was invisible (the exe and its `-f` sat on different lines) while `: # /usr/bin/stat -f`
+    counted as a real one. Comment stripping tracks quoting, because `'#'` inside a format string
+    is not a comment -- `stat -f '%p %z'` has none, but a future format could.
+    """
+    buf, start = "", None
+    with open(path, encoding="utf-8") as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            if start is None:
+                start = n
+            if line.endswith("\\"):
+                buf += line[:-1] + " "
+                continue
+            buf += line
+            code, quote = [], None
+            for ch in buf:
+                if quote:
+                    code.append(ch)
+                    if ch == quote:
+                        quote = None
+                elif ch in "'\"":
+                    quote = ch
+                    code.append(ch)
+                elif ch == "#" and (not code or code[-1].isspace()):
+                    break
+                else:
+                    code.append(ch)
+            yield start, "".join(code)
+            buf, start = "", None
+    if buf:                 # a file ending mid-continuation still owes its last logical line;
+        yield start, buf    # dropping it silently loses a fork site (measured, r1 remediation)
 
 
 class ForkClassification(unittest.TestCase):
-    """COREDEV-2691 §7.7 — ONE control per fork mapping, in BOTH directions. UNGATED.
+    """COREDEV-2691 §7.7 -- ONE control per fork mapping, in BOTH directions, plus a FAIL-CLOSED
+    census that re-derives the table from the shipped sources. UNGATED.
 
     §5's table is load-bearing: whether a cell may move off the Darwin gate depends on the
     classifier's answer for each entry, and a control built on ONE argv validates ONE mapping. The
     portable direction matters just as much and is easier to lose: misclassifying a portable fork as
     blocking is SILENT, because the cell simply stays gated and every other control still passes.
-    That failure mode is how this plan's headline deliverable was nearly forbidden by its own
-    evidence rule at revision 7.
     """
 
     #: Complete runtime argv, transcribed from the shipped call sites. BOTH `/bin/ls` shapes appear:
-    #: `-lde --` and `-lde -d --` are different argv, and a fixture built on one does not exercise
-    #: the other.
+    #: `-lde --` and `-lde -d --` are different argv.
     NONPORTABLE_ARGV = (
-        ("plugin-state-auth.sh _u_stat",
-         ("/usr/bin/stat", "-f", "%p %z %u %i", "--", "/some/component")),
-        ("plugin-state-auth.sh chain prefetch",
-         ("/usr/bin/stat", "-f", "%p %z %u %i %N", "--", "/a", "/b")),
-        ("plugin-state-publisher.sh identity probe",
-         ("/usr/bin/stat", "-f", "%d %i", "--", "/some/value")),
-        ("plugin-state-auth.sh _u_acl_enumerate",
-         ("/bin/ls", "-lde", "--", "/some/component")),
-        ("plugin-state-auth.sh chain prefetch ACL",
-         ("/bin/ls", "-lde", "-d", "--", "/a", "/b")),
-        ("plugin-state-auth.sh _u_principal_uuid",
-         ("/usr/bin/dsmemberutil", "getuuid", "-U", "someone")),
+        ("auth _u_stat", ("/usr/bin/stat", "-f", "%p %z %u %i", "--", "/some/component")),
+        ("auth chain prefetch", ("/usr/bin/stat", "-f", "%p %z %u %i %N", "--", "/a", "/b")),
+        ("publisher identity probe", ("/usr/bin/stat", "-f", "%d %i", "--", "/some/value")),
+        ("auth _u_acl_enumerate", ("/bin/ls", "-lde", "--", "/some/component")),
+        ("auth prefetch ACL", ("/bin/ls", "-lde", "-d", "--", "/a", "/b")),
+        ("auth _u_principal_uuid", ("/usr/bin/dsmemberutil", "getuuid", "-U", "someone")),
     )
     PORTABLE_ARGV = (
-        ("plugin-state-auth.sh _u_euid", ("/usr/bin/id", "-u")),
-        ("plugin-state-auth.sh _u_principal", ("/usr/bin/id", "-un")),
-        ("plugin-state-auth.sh _u_platform", ("/usr/bin/uname", "-s")),
-        ("plugin-state-store.sh name budget", ("/usr/bin/getconf", "NAME_MAX", "/some/path")),
+        ("auth _u_euid", ("/usr/bin/id", "-u")),
+        ("auth _u_principal", ("/usr/bin/id", "-un")),
+        ("auth _u_platform", ("/usr/bin/uname", "-s")),
+        ("store name budget", ("/usr/bin/getconf", "NAME_MAX", "/some/path")),
+        ("store mkdir", ("/bin/mkdir", "-p", "--", "/some/dir")),
+        ("publisher rm", ("/bin/rm", "-f", "--", "/some/tmp")),
+        ("publisher mv", ("/bin/mv", "-f", "--", "/a", "/b")),
     )
 
     def test_each_nonportable_argv_keeps_its_cell_gated(self):
-        """Five mappings, five singleton fixtures. Each presents ONLY its own argv, so a cell that
-        stayed gated for the wrong reason cannot borrow another fixture's evidence."""
         for label, argv in self.NONPORTABLE_ARGV:
             with self.subTest(site=label):
-                self.assertIn(classify_fork(argv), NONPORTABLE_FORKS,
-                              f"{label} was not classified non-portable")
+                got = classify_fork(argv)
+                self.assertIsNotNone(got, f"{label} is unclassified")
+                self.assertEqual("nonportable", got[0], f"{label}: {got}")
                 self.assertFalse(admits([argv]), f"{label} would leave the Darwin gate")
 
     def test_each_portable_argv_admits_its_cell(self):
         """The opposite direction. Without these, a portable fork misread as blocking is invisible."""
         for label, argv in self.PORTABLE_ARGV:
             with self.subTest(site=label):
-                self.assertIn(classify_fork(argv), PORTABLE_FORKS,
-                              f"{label} was not classified portable")
+                got = classify_fork(argv)
+                self.assertIsNotNone(got, f"{label} is unclassified")
+                self.assertEqual("portable", got[0], f"{label}: {got}")
                 self.assertTrue(admits([argv]), f"{label} was treated as blocking")
 
+    def test_respelled_bsd_ls_flags_are_still_non_portable(self):
+        """`-lde`, `-led` and `-l -d -e` are the SAME flags. Revision 1 compared `-lde` as one exact
+        element, so two respellings of a set the table DECLARES non-portable classified as unknown
+        and were admitted -- the classifier's own table defeated by whitespace."""
+        for rest in (("-lde", "--"), ("-led", "--"), ("-l", "-d", "-e", "--"), ("-e", "-l", "-d")):
+            with self.subTest(flags=rest):
+                got = classify_fork(("/bin/ls",) + rest + ("/x",))
+                self.assertIsNotNone(got, f"ls {rest} unclassified")
+                self.assertEqual("nonportable", got[0], f"ls {rest}: {got}")
+        portable = classify_fork(("/bin/ls", "-ld", "--", "/x"))
+        self.assertEqual("portable", portable[0], "ls without -e should not block")
+
+    def test_an_unrecognised_argv_is_refused_not_admitted(self):
+        """FAIL-CLOSED, the correction that defines this revision. Revision 1's `admits` returned
+        True for anything `classify_fork` did not know, so a Darwin-only subcommand of a declared
+        binary sailed through. Both cases below were admitted before."""
+        for argv in (("/usr/bin/dsmemberutil", "checkmembership", "-U", "n", "-G", "g"),
+                     ("/usr/bin/stat", "--printf", "%s", "/x"),
+                     ("/usr/bin/perl", "-e", "1")):
+            with self.subTest(argv=argv):
+                self.assertFalse(admits([argv]), f"{argv} was admitted")
+        self.assertIsNone(classify_fork(("/usr/bin/perl", "-e", "1")))
+
     def test_the_three_stat_formats_are_told_apart(self):
-        """`%p %z %u %i` is a strict PREFIX of `%p %z %u %i %N`. A substring-matching classifier maps
-        both to one entry and a single control then appears to cover two mappings — the naive-
-        substring defect this campaign has already shipped once."""
-        got = [classify_fork(argv) for label, argv in self.NONPORTABLE_ARGV
-               if argv[0] == "/usr/bin/stat"]
+        """`%p %z %u %i` is a strict PREFIX of `%p %z %u %i %N`; substring matching maps both to one
+        entry and a single control then appears to cover two mappings."""
+        got = [classify_fork(a)[1] for _, a in self.NONPORTABLE_ARGV if a[0] == "/usr/bin/stat"]
         self.assertEqual(3, len(set(got)), f"the stat formats collapsed: {got}")
 
-    def test_id_u_and_id_un_are_told_apart(self):
-        self.assertNotEqual(classify_fork(("/usr/bin/id", "-u")),
-                            classify_fork(("/usr/bin/id", "-un")))
-
     def test_admits_is_not_vacuously_true(self):
-        """`admits` returning True unconditionally would pass every portable control above."""
-        self.assertFalse(admits([("/usr/bin/id", "-u"), ("/bin/ls", "-lde", "--", "/x")]),
-                         "a list containing a non-portable fork was admitted")
+        self.assertFalse(admits([("/usr/bin/id", "-u"), ("/bin/ls", "-lde", "--", "/x")]))
+        self.assertTrue(admits([("/usr/bin/id", "-u")]))
         self.assertTrue(admits([]))
 
-    def test_an_unknown_fork_is_not_silently_admitted(self):
-        """Fail-closed for the classifier itself: an unrecognised argv classifies as None, which is
-        not in NONPORTABLE_FORKS, so `admits` would let it through. The declared-fork census below
-        is what closes that hole — this cell records the limitation explicitly rather than leaving a
-        reader to assume the classifier is total."""
-        self.assertIsNone(classify_fork(("/usr/bin/perl", "-e", "1")))
-        self.assertTrue(admits([("/usr/bin/perl", "-e", "1")]),
-                        "classify_fork is partial by design; the census is the completeness guard")
+    def test_no_fork_is_written_bare_or_through_a_variable(self):
+        """The absolute-path census is only sufficient because this invariant holds. `$STAT -f ...`
+        or a bare `stat -f ...` would escape any scan keyed on absolute paths, so rather than try to
+        parse them, forbid them -- measured: the four libraries contain zero today."""
+        bare = re.compile(r"(?<![\w/$.\"'-])(" + "|".join(_SENSITIVE) + r")\s+-")
+        offenders = []
+        for path in (AUTH, STORE, READER, PUB):
+            for n, code in _logical_lines(path):
+                for m in bare.finditer(code):
+                    if not _EXE_RE.search(code[:m.start()] + m.group(0)):
+                        offenders.append(f"{os.path.basename(path)}:{n}: {m.group(0)!r}")
+        self.assertEqual([], offenders, "a fork is written without an absolute path")
 
     def test_the_declared_tables_match_the_shipped_sources(self):
-        """DERIVED, not recalled. Grep every non-comment line of the shipped libraries for absolute
-        forks and assert the discovered set equals the declared one, so a NEW fork site turns this
-        red instead of silently escaping classification. A presence check ("is `stat -f` still
-        there?") would not catch an addition, which is the direction that actually breaks §5."""
-        pattern = re.compile(
-            r"(?P<exe>/usr/bin/stat|/bin/ls|/usr/bin/dsmemberutil|/usr/bin/id|/usr/bin/uname"
-            r"|/usr/bin/getconf)\s+(?P<args>[^|;)]*)"
-        )
-        found = set()
+        """DERIVED and FAIL-CLOSED, in both directions.
+
+        Revision 1 did `if got: found.add(got)` -- an argv it could not parse contributed NOTHING,
+        so the census inherited the partiality it was documented to close, and a new Darwin-only
+        fork stayed green. Here every absolute-path executable found must be DECLARED, and every
+        `argv`-kind site must CLASSIFY; anything else fails with its file:line.
+        """
+        undeclared, unclassified, seen = [], [], set()
         for path in (AUTH, STORE, READER, PUB):
-            with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    if line.lstrip().startswith("#"):
-                        continue        # the libraries document their own forks in prose
-                    for m in pattern.finditer(line):
-                        argv = shlex.split(m.group("args"), comments=False, posix=True)
-                        got = classify_fork([m.group("exe")] + argv)
-                        if got:
-                            found.add(got)
-        self.assertEqual(NONPORTABLE_FORKS | PORTABLE_FORKS, found,
-                         "the shipped fork set and §5's declared table have diverged")
+            base = os.path.basename(path)
+            for n, code in _logical_lines(path):
+                for m in _EXE_RE.finditer(code):
+                    exe = m.group(1)
+                    seen.add(exe)
+                    if exe not in FORK_EXES:
+                        undeclared.append(f"{base}:{n}: {exe}")
+                        continue
+                    if FORK_EXES[exe] != "argv":
+                        continue
+                    try:
+                        rest = _command_args(code[m.end():])
+                    except ValueError as exc:
+                        unclassified.append(f"{base}:{n}: {exe} unparseable ({exc})")
+                        continue
+                    if classify_fork([exe] + rest) is None:
+                        unclassified.append(f"{base}:{n}: {exe} {' '.join(rest[:4])}")
+        self.assertEqual([], undeclared, "a fork site's executable is not in FORK_EXES")
+        self.assertEqual([], unclassified, "a fork site's argv could not be classified")
+        self.assertEqual(set(FORK_EXES), seen,
+                         "FORK_EXES declares an executable the sources no longer fork, or vice versa")
+
+
+#: The platform gate, mutated so the SHIPPED chain refuses on a Darwin box exactly as it does on
+#: Linux. Line-count preserving, so §7.1's rule holds for it.
+LINUX_SIM = ('[ "$_U_PLATFORM" = Darwin ] || return 1',
+             '[ "$_U_PLATFORM" = LinuxSm ] || return 1')
+
+
+class SeamedStoreCreation(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 §1 -- the seam DRIVING A PRODUCTION CALLER. UNGATED.
+
+    SeamContract and ForkClassification test the seam and the classifier. Neither invokes a shipped
+    caller, so on their own they leave the required ubuntu gate exercising no production entry guard
+    -- the very gap this ticket exists to close (codex, r1, blocking). This class closes it.
+
+    `_unleashed_create_store` (plugin-state-store.sh:219) consults the guard FOUR times for a fresh
+    store: the nearest existing ancestor (i), then each component it creates, then the store again
+    (iii). The store therefore appears TWICE, which is why the assertion is an ordered transcript
+    with multiplicity and not a set -- comparing `{claude, mid, store}` is unchanged when either
+    store call is deleted, so a set comparison cannot prove what this cell exists to prove.
+
+    Every run here is under LINUX-SIM, so the cell asks the same question on every platform: the
+    shipped chain refuses, and only a seam can carry the caller through.
+    """
+
+    def _create_store(self, shell, seamed, race=False):
+        """Run `_unleashed_create_store` on a fresh HOME. Returns (rc, transcript, modes).
+
+        `race=True` seams `_unleashed_nearest_existing` so that `mid` APPEARS between the walk and
+        the loop, which is the only way to reach plugin-state-store.sh:239.
+        """
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+
+        home = scratch_home("seamstore-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        claude = os.path.join(home, ".claude")
+        os.makedirs(claude, mode=0o700)
+        mid = os.path.join(claude, "unleashed-mail")
+        store = os.path.join(mid, "bases")
+        log = os.path.join(home, "calls")
+        with open(log, "wb"):
+            pass
+
+        body = (
+            "_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n_SEAM_A3=%s\n"
+            % tuple(shlex.quote(x) for x in (log, claude, mid, store))
+            + (seam_source() if seamed else "")
+            + ("_unleashed_nearest_existing() { /bin/mkdir -m 700 %s 2>/dev/null; "
+               "_UNLEASHED_NEAREST=%s; }\n" % (shlex.quote(mid), shlex.quote(claude))
+               if race else "")
+            + "_unleashed_create_store %s\n" % shlex.quote(store)
+            + 'printf "SEAM_RC=%s\\n" "$?"\n'
+        )
+        out = run_shell(shell, body, env={"HOME": home},
+                        sources=(auth, STORE, READER, PUB))[1]
+        rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
+        with open(log, "rb") as fh:
+            raw = fh.read()
+        transcript = [r.decode() for r in raw.split(b"\0")[:-1]]
+        names = {claude: "claude", mid: "mid", store: "store"}
+        modes = {n: (oct(os.stat(p).st_mode & 0o777) if os.path.isdir(p) else "ABSENT")
+                 for p, n in names.items()}
+        return (rcs[0] if rcs else None), [names.get(t, t) for t in transcript], modes
+
+    def test_create_store_consults_the_guard_for_every_component_in_order(self):
+        """The ordered transcript, with multiplicity. This is the cell that fails if a maintainer
+        deletes a production guard call -- mutation-verified against all four call sites."""
+        def check(shell):
+            rc, transcript, modes = self._create_store(shell, seamed=True)
+            self.assertEqual(0, rc, "the seamed production caller did not succeed")
+            self.assertEqual(["claude", "mid", "store", "store"], transcript,
+                             "the guard was not consulted for every component, in order")
+            self.assertEqual({"claude": "0o700", "mid": "0o700", "store": "0o700"}, modes,
+                             "a component was created with the wrong mode")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_a_component_that_appeared_after_the_walk_is_authenticated(self):
+        """The fourth production guard call, plugin-state-store.sh:239.
+
+        That branch fires only when a component is ABSENT during the nearest-ancestor walk and
+        PRESENT by the time the loop reaches it -- an interfering same-uid process planting
+        `.claude/unleashed-mail` in between. codex reproduced exactly that on PR #67 as a symlink
+        the refusal path then created through, which is why the branch exists. A plain fixture can
+        never reach it, so the three other cells here leave it uncovered.
+
+        `_unleashed_nearest_existing` is seamed the same way the chain is -- redefined in the body
+        after sourcing -- to report a SHALLOWER nearest while creating the component behind it. That
+        is the race, made deterministic.
+        """
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, race=True)
+            self.assertEqual(0, rc, "the seamed production caller did not succeed")
+            self.assertEqual(["claude", "mid", "store", "store"], transcript,
+                             "the component that appeared after the walk was not authenticated")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_without_the_seam_the_same_call_refuses_and_creates_nothing(self):
+        """Predicate zero, done properly. The version in SeamContract asserts only that the body
+        function answers -- it passes even with `sources=()`, so it proves the body works, not that
+        it OVERRIDES a shipped function (codex, r1). This runs the SAME production caller over the
+        SAME fixture with the seam withheld: the shipped chain refuses, nothing is created, and the
+        guard is never consulted. The difference between this cell and the one above is the seam.
+        """
+        def check(shell):
+            rc, transcript, modes = self._create_store(shell, seamed=False)
+            self.assertEqual(1, rc, "the shipped chain authenticated under LINUX-SIM")
+            self.assertEqual([], transcript, "the shipped chain recorded through the seam's log")
+            self.assertEqual("ABSENT", modes["mid"], "a refused create still made a component")
+            self.assertEqual("ABSENT", modes["store"], "a refused create still made the store")
+        self.for_declared_shells(SHELLS, check)
 
 if __name__ == "__main__":
     unittest.main()
