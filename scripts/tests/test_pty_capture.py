@@ -845,8 +845,6 @@ class AllocationAndLaunchPreconditions(unittest.TestCase):
         self.assertTrue(ran)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class RunawayOutputIsBounded(unittest.TestCase):
@@ -1039,3 +1037,7 @@ class ReviewerNamesFitTheLaunchRecord(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(os.path.exists(marker), "the preflight refused a record the allocator wrote")
+
+
+if __name__ == "__main__":
+    unittest.main()

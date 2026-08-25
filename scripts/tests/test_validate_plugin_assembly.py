@@ -398,8 +398,6 @@ class COREDEV2583_EffortPolicyWiring(unittest.TestCase):
                            "asset_efforts — otherwise a missing SKILL pin passes silently")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 # The count `validate-version-sync.sh` enforces against `plugin.json` and the README. Pinned here so
@@ -1027,8 +1025,6 @@ class WriterPredicateAndSpawnerDetection(unittest.TestCase):
         self.assertEqual([], problems, "grep alone is native to Grep and stays exempt")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class EveryYamlListSpellingReachesTheSameVerdict(unittest.TestCase):
@@ -1211,3 +1207,7 @@ class GrepPipelinesAreNotNativeGrep(unittest.TestCase):
         problems: list[str] = []
         vpa.check_bashless_agents_run_no_shell(Path(_ROOT), problems)
         self.assertEqual([], problems)
+
+
+if __name__ == "__main__":
+    unittest.main()

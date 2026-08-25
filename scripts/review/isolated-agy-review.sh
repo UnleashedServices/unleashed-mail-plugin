@@ -302,7 +302,7 @@ if [ "$TREE_BASELINE" != "$TREE_AFTER" ]; then
     exit 3
 fi
 
-BYTES_OUT="$(wc -c < "$OUT" 2>/dev/null | tr -d ' ')"
+BYTES_OUT="$(wc -c 2>/dev/null < "$OUT" | tr -d ' ')"
 # Anchored, never a loose `grep VERDICT:` — that matches the prompt's own echoed template in a
 # timed-out transcript and reads as a real verdict.
 VERDICT="$(grep -aE '^VERDICT: (APPROVE|APPROVE_WITH_NOTES|REQUEST_CHANGES)[[:space:]]*$' "$OUT" 2>/dev/null | tail -1)"

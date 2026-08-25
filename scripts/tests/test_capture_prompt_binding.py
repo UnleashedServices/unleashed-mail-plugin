@@ -624,8 +624,6 @@ class SpacedRepositoryPathReferences(unittest.TestCase):
                             "the reverted extraction bound a spaced reference — the fix is decorative")
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class AnAliasSpellingOfTheRepositoryIsRefused(unittest.TestCase):
@@ -778,3 +776,7 @@ class PlanReferencesRequireABoundaryAfterTheSuffix(unittest.TestCase):
             with self.subTest(body=body):
                 result = self.bind(body, f"ok{index}.txt")
                 self.assertEqual(0, result.returncode, result.stderr)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

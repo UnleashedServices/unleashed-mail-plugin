@@ -439,5 +439,521 @@ class N6BridgeReResolves(unittest.TestCase):
                              f"{shell}: E0 must leave no store under the scratch HOME")
 
 
+
+
+def _strip_comment(line: str) -> str:
+    """The executable part of a shell line — everything before an UNQUOTED `#` at a word start.
+
+    Blanking comment-ONLY lines was not enough: `: # unleashed_base_ok || exit 0` still looked
+    like a guard, so an exempt hook could have its real guard replaced by an inline comment and
+    the census stayed green while the sentinel reached a later composer (codex, PR #78). These
+    hooks are not behaviourally driven, so nothing else would have caught it.
+
+    Quote state matters — `printf '# not a comment'` must survive intact.
+    """
+    out, i, n, quote = [], 0, len(line), ""
+    while i < n:
+        c = line[i]
+        if c == "\\" and i + 1 < n:
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (not out or line[i - 1] in " \t;&|()"):
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+class N2cHooksWriteNothingUnderAnUnresolvedBase(unittest.TestCase):
+    """The HOOK layer of the D-prime envelope (COREDEV-2691).
+
+    `N2bCompositionUnderAnUnresolvedBase` proves the four LIBRARY writers compose nothing under the
+    sentinel. Nothing proved the same of the HOOKS as shipped — and the hooks are what the runtime
+    actually executes. The distinction is not academic: a hook can compose a root ITSELF and hand it
+    onward before any guarded primitive is reached, which is exactly why
+    `capture-reviewer-verdict.sh:48` carries a hook-level skip while its sibling
+    `capture-reviewer-round-start.sh` does not.
+
+    THAT ASYMMETRY WAS FLAGGED AS UNDOCUMENTED AND IS RESOLVED HERE AS CORRECT, not papered over.
+    The verdict hook's own comment states the rule: it "passes the composed root into Python and
+    otherwise continues through lookup, capture and clear, so it needs an explicit skip rather than
+    relying on a primitive no-op". Round-start composes no root, calls no Python, and its next
+    statement is `exit 0` — it delegates to exactly one guarded primitive. Measured with a
+    `mkdir`-counting PATH shim: shipped -> 0 calls; with `context.sh:419`'s guard deleted -> 1 call,
+    `mkdir -p /dev/null/unresolved-plugin-base/.state`. So the library guard is load-bearing FOR
+    THIS HOOK, and this cell is the pin that keeps the omission justified.
+    """
+
+    #: Hook, the payload that carries it to its write path, and the library guard whose deletion
+    #: must make the composition visible. Only hooks that can actually be driven to a write are
+    #: listed — a member that exits early would pass this cell while proving nothing, so each one
+    #: here is paired with a control below.
+    #: The third element names WHICH guard protects THIS hook — and they differ, which is the whole
+    #: point. Round-start is protected by the LIBRARY guard inside `context_review_round_bind`.
+    #: Verdict is protected by its OWN hook-level skip, which fires FIRST and makes the library
+    #: guard unreachable for it — measured: deleting the library guard changes nothing for verdict.
+    #: A single shared control would therefore have been wrong for one member either way.
+    #:
+    #: The named primitive is the one THAT PAYLOAD actually reaches, which is not always the obvious
+    #: one. With no `transcript_path`, verdict takes the `context_review_round_clear` branch, not
+    #: `..._bind` — traced with `bash -x` after a control failure that I first misread as a guard
+    #: working. `clear` uses `rm`, which is why the shim covers `rm` and `mv` as well as `mkdir`.
+    HOOKS = (
+        ("capture-reviewer-round-start.sh",
+         '{"hook_event_name":"SubagentStart","agent_type":"security-reviewer",'
+         '"agent_id":"a1","session_id":"s1"}',
+         ("lib", "context.sh", "context_review_round_bind")),
+        # `last_assistant_message` is LOAD-BEARING, not decoration: without it the hook never
+        # reaches `python3 "$CAPTURE_PY"` at all, and the python3 shim above records nothing
+        # relevant — measured, 0 sentinel lines on the regressed tree. Either half alone is inert.
+        ("capture-reviewer-verdict.sh",
+         '{"hook_event_name":"SubagentStop","agent_type":"security-reviewer",'
+         '"agent_id":"a1","session_id":"s1",'
+         '"last_assistant_message":"```json\\n{\\"findings\\":[]}\\n```"}',
+         ("both", "capture-reviewer-verdict.sh", "context_review_round_clear")),
+    )
+
+    SENTINEL = "/dev/null/unresolved-plugin-base"
+
+    #: Hooks that source a state-writing lib but are NOT driven above, each with its reason. An
+    #: EXEMPTION LIST, not silence: `HOOKS` is hand-written, and a hand-written census is exactly
+    #: the blacklist this suite's sibling condemns in its own docstring (kimi, local round). The
+    #: derivation cell below fails when a state-writing hook appears in NEITHER table, so a new one
+    #: cannot be added invisibly.
+    NOT_DRIVEN = {
+        "build-failure-log.sh": "log_append only; the lib guard at log.sh:197 is pinned by N2b",
+        "permission-denied-log.sh": "log_append only; same lib guard",
+        "stop-failure-log.sh": "log_append only; same lib guard",
+        "swift-build-verify.sh": "log_append only; same lib guard",
+        "swift-lint-check.sh": "marker_write only; the lib guard at marker.sh:261 is pinned by N2b",
+        # NOT marker_write — this hook READS (`marker_status`) and composes its warn-log path from
+        # `marker_base`, guarded at :75. The reason said `marker_write`, which it never calls; the
+        # verification below caught that, which is the point of verifying reasons rather than
+        # trusting them.
+        "stop-quality-marker-gate.sh": "hook-level skip at :75; reads via marker_status",
+        "precompact-snapshot.sh": "hook-level skip; driving it needs a compaction payload",
+        "sessionstart-restore.sh": "hook-level skip; driving it needs a snapshot fixture",
+    }
+
+    #: Hooks KNOWN to compose under the sentinel with no exiting guard, each tied to the ticket that
+    #: owns it. This is an acknowledgement, not an excuse: the stricter check below found
+    #: `stop-quality-marker-gate.sh` composing at :129 and :141, protected only by the SUBSEQUENT
+    #: mktemp/mkdir failing on `/dev/null`'s ENOTDIR — and the hook's own comment (PR #63, gap 26)
+    #: says the gate "must not depend on" that accident. Recorded rather than silenced, and any
+    #: OTHER hook doing the same still fails this cell.
+    #: KEYED BY LINE, not by hook. A hook-wide `continue` accepted a NEW unguarded
+    #: `mkdir -p "$(marker_base)"` added anywhere in the same file (codex, PR #78) — an
+    #: acknowledgement of two specific lines had silently become a blanket pass for the file.
+    #: An exemption that grows with the file is not an exemption.
+    COMPOSES_UNDER_SENTINEL = {
+        ("stop-quality-marker-gate.sh", 129): "COREDEV-2760 — composes under the sentinel and "
+                                              "relies on the following operation failing "
+                                              "(PR #63 gap 26)",
+        ("stop-quality-marker-gate.sh", 141): "COREDEV-2760 — same, second site",
+    }
+
+    def setUp(self):
+        self.scratch = tempfile.mkdtemp(prefix="dprime-hooks.")
+        self.addCleanup(shutil.rmtree, self.scratch, ignore_errors=True)
+        self.calls = os.path.join(self.scratch, "calls.log")
+        self.shim = os.path.join(self.scratch, "shim")
+        os.makedirs(self.shim)
+        # `python3` IS IN THE SHIM SET (codex, PR #78). The other three are exec-level, and
+        # `capture.py` does ALL of its filesystem work IN-PROCESS — os.makedirs / os.open /
+        # os.replace / os.remove, no subprocess anywhere — so an exec shim is structurally blind to
+        # it. Measured: moving `capture-reviewer-verdict.sh`'s hook-level skip BELOW the
+        # `python3 "$CAPTURE_PY" --root "$ROOT"` call left BOTH cells green, because the composed
+        # sentinel root reached Python and never reached an exec'd mkdir. Recording python3's argv
+        # makes that composition observable; `_drive` already filters by SENTINEL, so the ~20
+        # unrelated `python3 -c` JSON helpers from hook-io filter themselves out.
+        for name in ("mkdir", "rm", "mv", "python3"):
+            real = shutil.which(name) or f"/bin/{name}"
+            path = os.path.join(self.shim, name)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("#!/usr/bin/env bash\n"
+                         f'printf "%s %s\\n" "{name}" "$*" >> "{self.calls}"\n'
+                         f'exec "{real}" "$@"\n')
+            os.chmod(path, 0o755)
+
+    @staticmethod
+    def _kill_switches():
+        """Every `UNLEASHED_*:-on` switch in the shipped hooks, DERIVED not listed."""
+            # RECURSIVE, as defence in depth — and the claim that used to sit
+            # here overstated the measurement. It said a flat `listdir` skips
+            # `scripts/lib/` and `scripts/review/`, "the libraries that do the
+            # state writing". Measured: those directories contain ZERO kill
+            # switches, and `os.walk` returns byte-identical output to a flat
+            # `listdir` today (9 names either way). Recursing is still right —
+            # a switch added under a subdirectory tomorrow must be forced on —
+            # but it closes a FUTURE hole, not a present one.
+        blob = []
+        for dirpath, _dirs, names in os.walk(os.path.join(ROOT, "scripts")):
+            for name in sorted(names):
+                if name.endswith(".sh"):
+                    with open(os.path.join(dirpath, name), encoding="utf-8", errors="ignore") as fh:
+                        blob.append(fh.read())
+        return sorted(set(re.findall(r"(UNLEASHED_[A-Z_]+):-on", "".join(blob))))
+
+    def _drive(self, hook, payload, scripts_root):
+        """Run the real hook with an unresolved base; return shimmed calls naming the sentinel."""
+        open(self.calls, "w").close()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT")}
+        env.update(PATH=self.shim + os.pathsep + os.environ.get("PATH", os.defpath),
+                   HOME=_SANDBOX_HOME, _UNLEASHED_PUBLISH_OK="0",
+                   CLAUDE_PLUGIN_ROOT=os.path.dirname(scripts_root))
+        # EVERY kill switch forced ON. Inherited from the caller's environment, any one of them
+        # exits the hook before its write path and the cell passes having exercised nothing —
+        # measured: `UNLEASHED_CAPTURE_REVIEWERS=off python3 …N2c…` reports OK (codex, local round).
+        # DERIVED from the scripts, not listed, so a switch added later cannot silently reopen it.
+        for switch in self._kill_switches():
+            env[switch] = "on"
+        proc = subprocess.run(["bash", os.path.join(scripts_root, hook)],
+                              input=payload, capture_output=True, text=True, env=env)
+        # A hook that CRASHED — syntax error, failed source, missing interpreter, or any downstream
+        # command failing before its final `exit 0` — writes nothing to the shim log, and "wrote
+        # nothing" is precisely what this cell reads as success. Assert it ran (gemini and codex,
+        # PR #78). Both hooks exit 0 on this path, shipped and mutated alike; measured.
+        self.assertEqual(0, proc.returncode,
+                         f"{hook} did not run to completion, so an empty composition list proves "
+                         f"nothing:\n{proc.stderr}")
+        with open(self.calls, encoding="utf-8") as fh:
+            return [line.strip() for line in fh if self.SENTINEL in line]
+
+    def _scripts_copy(self, tag):
+        """A mini plugin ROOT — `scripts/` AND `mcp/`, because a hook resolves its siblings from its
+        own location. Copying `scripts/` alone made `capture-reviewer-verdict.sh` exit at
+        `[ -f "$CAPTURE_PY" ]` before reaching any guard, which the control correctly reported as
+        "no composition" — a fixture defect that would have read as a passing guard."""
+        root = os.path.join(self.scratch, "root-" + tag)
+        os.makedirs(root)
+        dest = os.path.join(root, "scripts")
+        shutil.copytree(os.path.join(ROOT, "scripts"), dest, symlinks=True)
+        shutil.copytree(os.path.join(ROOT, "mcp"), os.path.join(root, "mcp"), symlinks=True)
+        return dest
+
+    def test_the_census_covers_every_state_writing_hook(self):
+        """The derivation control. `HOOKS = ()` makes both loops below pass vacuously (codex), and a
+        hook added tomorrow would be covered by neither — the hand-written-list defect this whole PR
+        is about, sitting inside its own fix.
+
+        Every hook that sources a state-writing library must be either DRIVEN above or EXEMPTED with
+        a stated reason. Derived from `hooks.json` and the sources on disk, never enumerated.
+        """
+        self.assertTrue(self.HOOKS, "the driven set is empty — both cells below would pass vacuously")
+        with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as fh:
+            manifest = fh.read()
+        # `/` PERMITTED in the captured name (agy, local round): the previous class excluded it, so
+        # a hook registered under `scripts/review/` was dropped from the census silently — a census
+        # that can quietly empty is the failure this cell exists to prevent.
+        referenced = set(re.findall(r"scripts/([A-Za-z0-9_./-]+\.sh)", manifest))
+        state_writers = set()
+        for name in sorted(referenced):
+            src = os.path.join(ROOT, "scripts", name)
+            if os.path.isfile(src):
+                with open(src, encoding="utf-8", errors="ignore") as fh:
+                    # NO `lib/` PREFIX REQUIRED. A hook that sources its library through a
+                    # variable — `. "$LIBDIR/marker.sh"` — matched nothing and dropped out of the
+                    # census entirely, taking its exemption requirement with it. Widening is the
+                    # CONSERVATIVE direction here: a file that matches must be driven or exempted,
+                    # so the failure mode is a loud "declare this hook", never a wrong acceptance.
+                    if re.search(r"\b(marker|context|log)\.sh", fh.read()):
+                        state_writers.add(name)
+        self.assertGreater(len(state_writers), 5, f"census looks truncated: {sorted(state_writers)}")
+        driven = {h for h, _, _ in self.HOOKS}
+        uncovered = sorted(state_writers - driven - set(self.NOT_DRIVEN))
+        self.assertEqual([], uncovered,
+                         "these hooks source a state-writing lib but are neither driven by this cell "
+                         "nor exempted with a reason in NOT_DRIVEN: " + ", ".join(uncovered))
+
+        # EVERY EXEMPTION IS VERIFIED, not trusted (codex, local round). An exemption says "this
+        # hook only reaches a primitive N2b already pins"; if the hook later composes a root ITSELF
+        # the reason goes stale silently and the hook is subtracted from the census regardless.
+        # So: the primitive each reason NAMES must actually appear in that hook, and the hook must
+        # not call a base-composing helper directly.
+        _PRIMITIVES = {"log_append": "log_append", "marker_write": "marker_write",
+                       "hook-level skip": "unleashed_base_ok"}
+        # DERIVED from the libraries, not a hand-written pair (codex). The previous two-name list
+        # recognised `context_reviews_dir`/`context_state_dir` and missed `log_dir`, `log_base`,
+        # `marker_base`, `marker_dir`, `context_base` — so `mkdir -p "$(log_dir)"` before
+        # `log_append` would have composed a sentinel path with the exemption still reported clean.
+        # A hand-written list of what a rule covers is the exact defect this PR is about.
+        _lib_src = ""
+        for _lib in ("log.sh", "marker.sh", "context.sh"):
+            _lp = os.path.join(ROOT, "scripts", "lib", _lib)
+            if os.path.isfile(_lp):
+                with open(_lp, encoding="utf-8", errors="ignore") as fh:
+                    _lib_src += fh.read()
+        # `_path` TOO. The suffix tuple was written from the composers in front of me and
+        # inherited their incidental naming: `context_snapshot_path` composes a root exactly as
+        # `context_state_dir` does, and it is called by TWO exempted hooks — precompact-snapshot.sh
+        # :64 and sessionstart-restore.sh :61 — neither of which has a behavioural cell behind it,
+        # so this order check was the only police and it could not see the call. Both do have an
+        # exiting guard first (:53 and :60), so widening flags nothing today; the point is that the
+        # next one would have been invisible.
+        _COMPOSERS = tuple(sorted({m for m in re.findall(r"^([a-z_]+)\(\)", _lib_src, re.M)
+                                   if m.endswith(("_base", "_dir", "_path"))}))
+        self.assertGreater(len(_COMPOSERS), 4,
+                           f"composer derivation looks truncated: {_COMPOSERS}")
+        # The variable half of the composition surface. Enumerated, not derived — every
+        # `_UNLEASHED_BASE_*` name is NOT a path (`_OK` is a flag, `_SOURCE` a label, `_PID` a
+        # number), so a pattern would admit noise. Enumeration is only safe with a control, so
+        # each name must still exist in the family libs or this cell reds.
+        # `_UNLEASHED_BASE_RESOLVED` ONLY. `_UNLEASHED_BASE_INSTANCE` is a readonly numeric
+        # once-per-shell FLAG (`readonly _UNLEASHED_BASE_INSTANCE=1`), not a path — including it
+        # made any hook that merely tests the flag look like it composes a root, which is a false
+        # positive in the direction that reds CI (codex, PR #78). I enumerated the variables from
+        # their shared prefix instead of from what they hold.
+        _BASE_PATH_VARS = ("_UNLEASHED_BASE_RESOLVED",)
+        for _v in _BASE_PATH_VARS:
+            self.assertIn(_v, _lib_src, f"{_v} no longer exists in the family libs — the "
+                                        f"composition-by-variable check is pointing at nothing")
+            # ...and it must actually hold a PATH. A variable assigned a bare integer is a flag;
+            # treating one as a composition surface reds valid hooks.
+            self.assertNotRegex(_lib_src, r"\breadonly " + _v + r"=[0-9]+\b",
+                                f"{_v} is assigned a bare number — it is a flag, not a path")
+        stale = []
+        for name, reason in sorted(self.NOT_DRIVEN.items()):
+            src_path = os.path.join(ROOT, "scripts", name)
+            if not os.path.isfile(src_path):
+                stale.append(f"{name}: exempted but no longer exists")
+                continue
+            with open(src_path, encoding="utf-8", errors="ignore") as fh:
+                raw = fh.read()
+            # COMMENTS ARE NOT CODE — the third call site of that rule. `_strip_comment` was
+            # applied to the guard scan and the composer scan below, and this token check kept
+            # reading raw source, so a comment merely NAMING the primitive satisfied the very
+            # check whose comment says exemptions are "verified, not trusted". One construct,
+            # three call sites, two fixed: the sidecar family, again.
+            src = "\n".join(_strip_comment(ln) for ln in raw.splitlines())
+            token = next((tok for key, tok in _PRIMITIVES.items() if key in reason), None)
+            if token is None:
+                stale.append(f"{name}: reason names no known primitive: {reason!r}")
+            # WORD-BOUNDED, not a substring: `log_appendX` contains `log_append`, so a bare `in`
+            # test survived renaming the primitive — the naive-substring defect, inside the check
+            # written to catch stale claims. Caught by mutating the hook and seeing nothing redden.
+            elif not re.search(r"\b" + re.escape(token) + r"\b", src):
+                stale.append(f"{name}: reason claims {token!r} but the hook does not call it")
+            # ORDER MATTERS. Composing a root is fine IF a hook-level base-ok skip precedes it —
+            # that is precisely `precompact-snapshot.sh`'s shape (guard :53, composition :54). It is
+            # NOT fine when the composition comes first, which is the `capture-reviewer-verdict.sh`
+            # case that needed its own guard. A blunt "composes a root" rule flagged the safe one.
+            # EVERY composer, not just the first (codex, PR #78). `stop-quality-marker-gate.sh`
+            # opens with a neutralised `marker_dir` compose, so checking only the FIRST match left
+            # `first_compose` pointing at the safe one — a later unguarded `mkdir -p "$(marker_base)"`
+            # would compose a sentinel path with the exemption still reported clean, and since the
+            # hook is in NOT_DRIVEN no behavioural cell would catch it either.
+            lines = src.splitlines()
+            # An EXITING guard only. `unleashed_base_ok || SENTINEL=""` does NOT end the hook — it
+            # clears one variable — so it protects that variable and nothing after it. Treating any
+            # base-ok line as protecting the whole remainder let a later unguarded
+            # `mkdir -p "$(marker_base)"` through (codex, PR #78). `|| exit`, `|| return` and the
+            # named exit helpers do end it.
+            # COMMENTS ARE NOT CODE, in either direction (codex, PR #78). Replacing a real guard
+            # with `# unleashed_base_ok || exit 0` left `guard_at` set and the exemption green
+            # while the sentinel could reach the filesystem — and these hooks have no behavioural
+            # cell to catch it. The same strip protects the composer scan from a comment that
+            # merely MENTIONS `marker_base`.
+            code = [_strip_comment(ln) for ln in lines]
+            # A GUARD INSIDE A FUNCTION BODY NEVER RUNS AT HOOK SCOPE.
+            # `check() { unleashed_base_ok || exit 0; }` followed by an unguarded composer set
+            # `guard_at` to the DEFINITION line, so the composer counted as protected by a guard
+            # that is never invoked (codex, PR #78). Function bodies are blanked for the GUARD
+            # scan ONLY — a composition inside a function may well execute, so those lines stay
+            # visible to the composer scan. Each asymmetry points the safe way: fewer guards
+            # recognised means more compositions reported, which fails loud.
+            # Measured before adopting: no shipped hook keeps its exiting guard inside a function,
+            # so this rejects nothing that ships.
+            guard_src, _depth = [], 0
+            for _ln in code:
+                _opens = _depth == 0 and re.match(
+                    r"\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\))?\s*\{", _ln)
+                if _depth or _opens:
+                    _depth = max(_depth + _ln.count("{") - _ln.count("}"), 0)
+                    guard_src.append("")
+                else:
+                    guard_src.append(_ln)
+            # AS THE COMMAND, not as an argument. `printf '%s' unleashed_base_ok || exit 0` set
+            # `guard_at` although `printf` succeeds and the `exit` never runs (codex, PR #78), so
+            # a later composer counted as protected by a guard that cannot fire. Require the name
+            # to open a command: start of line, or right after a `;` `&&` `||` `(` `{` `!`.
+            guard_at = next((i for i, ln in enumerate(guard_src)
+                             # NOT after `$(`, and NOT negated. `probe="$(unleashed_base_ok
+                             # || exit 0)"` exits the SUBSHELL and the hook continues; and
+                             # `! unleashed_base_ok || exit 0` inverts an unresolved-base failure
+                             # into success, so the `exit` never runs (codex, PR #78). Both set
+                             # `guard_at` and silenced every later composer. `!` is out of the
+                             # boundary class entirely, and `(` must not be preceded by `$`.
+                             # NO `(` AT ALL. Last round excluded `$(` and kept a plain `(` as a
+                             # valid boundary, pinning that as a control — and that was WRONG:
+                             # `( unleashed_base_ok || exit 0 )` exits only the SUBSHELL and the
+                             # hook runs on. Measured with a failing stand-in guard: the line after
+                             # the subshell still executes (codex, PR #78). No shipped hook uses
+                             # the form, so nothing that ships loses a guard.
+                             if re.search(r"(?:^|[;&|]\s*|\bthen\s+|\bdo\s+)"
+                                          r"unleashed_base_ok\b", ln)
+                             and re.search(r"\|\|\s*(exit|return|_[a-z_]*exit)\b", ln)), None)
+            # TWO WAYS TO COMPOSE, and keying only on the composer FUNCTIONS was a one-axis
+            # narrowing — the signature defect of this whole campaign (codex, PR #78). A hook can
+            # build a sentinel-derived path straight from the resolved-base VARIABLE, calling no
+            # composer at all:
+            #
+            #     mkdir -p "${_UNLEASHED_BASE_RESOLVED}/.state/probe" 2>/dev/null || true
+            #
+            # Under an unresolved base that variable HOLDS the sentinel, so this is the same
+            # hazard wearing a different spelling, and it was invisible. No shipped hook does it
+            # today; the point is that the next one would not be caught. The names are asserted
+            # against the library source below so this list cannot go stale silently.
+            composes = [i for i, ln in enumerate(code)
+                        if any(c in ln for c in _COMPOSERS)
+                        or any(v in ln for v in _BASE_PATH_VARS)]
+            # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom: `stop-quality-marker-gate.sh`
+            # builds `SENTINEL="$(marker_dir)/…"` at :74 and the very next line is
+            # `unleashed_base_ok || SENTINEL=""` — the value is discarded before any use, so no
+            # filesystem operation ever sees a sentinel-derived path. Requiring the guard to precede
+            # the composition flagged that as a defect. A guard that clears the SAME variable within
+            # a few lines counts as protecting it.
+            for at in composes:
+                # COMPOSE-THEN-NEUTRALISE is safe and is a shipped idiom:
+                # `stop-quality-marker-gate.sh` builds `SENTINEL="$(marker_dir)/…"` and the very
+                # next line is `unleashed_base_ok || SENTINEL=""`, so the value is discarded before
+                # any use and no filesystem operation sees a sentinel-derived path.
+                neutralised = False
+                assigned = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=", code[at])
+                if assigned:
+                    var = assigned.group(1)
+                    # THE CLEAR MUST COME BEFORE ANY USE, not merely within three lines
+                    # (codex, PR #78). `P="$(log_dir)/probe"; mkdir -p "$P"; unleashed_base_ok
+                    # || P=""` was accepted as neutralised even though the sentinel-derived path
+                    # had ALREADY been handed to mkdir — the window said "a guard is nearby",
+                    # which is not the property that makes the idiom safe. Stop at the first line
+                    # that touches the variable at all: if that line is the clearing guard the
+                    # value never escaped; if it is anything else, it did.
+                    for probe in code[at + 1:at + 4]:
+                        if not re.search(r"\b" + re.escape(var) + r"\b", probe):
+                            continue
+                        # ...and it must CLEAR the variable, not merely mention it.
+                        # `unleashed_base_ok || echo "$P"` was accepted as neutralisation while
+                        # exposing the sentinel and leaving `$P` live for the `mkdir` after it
+                        # (codex, PR #78). Match the clearing ASSIGNMENT.
+                        # ...on the FAILING branch. `unleashed_base_ok && P=""` clears the value
+                        # only when the base RESOLVES — under an unresolved base the guard fails,
+                        # `&&` skips the clear, and `mkdir` receives the sentinel path. The line
+                        # contained the guard name and the assignment, so it counted (codex,
+                        # PR #78). Require `||`, which is the branch that actually runs.
+                        neutralised = bool(
+                            re.search(r"unleashed_base_ok\s*\|\|", probe)
+                            and re.search(r"\b" + re.escape(var) + r"=(\"\"|''|\s|$)", probe))
+                        break
+                if self.COMPOSES_UNDER_SENTINEL.get((name, at + 1)):
+                    continue                       # this LINE is acknowledged, owned by a ticket
+                # SAME LINE, STILL ORDERED. `mkdir -p "$(log_dir)"; unleashed_base_ok || exit 0`
+                # gives both the same index, so `guard_at > at` was false and the composition
+                # counted as protected — while bash runs the mkdir first (codex, PR #78). When the
+                # indices tie, compare columns.
+                _after = guard_at is None or guard_at > at
+                if guard_at == at:
+                    _after = (code[at].find("unleashed_base_ok")
+                              > max(code[at].find(_c) for _c in _COMPOSERS + _BASE_PATH_VARS
+                                    if _c in code[at]))
+                if not neutralised and _after:
+                    stale.append(f"{name}: composes a root at line {at + 1} with no hook-level "
+                                 f"base-ok skip before it — it cannot be exempted as "
+                                 f"'primitive only'; drive it instead")
+                    break
+        self.assertEqual([], stale,
+                         "NOT_DRIVEN exemptions have gone stale:\n  " + "\n  ".join(stale))
+
+    def test_no_shipped_hook_composes_a_path_under_the_sentinel(self):
+        shipped = os.path.join(ROOT, "scripts")
+        for hook, payload, _ in self.HOOKS:
+            with self.subTest(hook=hook):
+                attempts = self._drive(hook, payload, shipped)
+                self.assertEqual([], attempts,
+                                 f"{hook} composed a path under the unresolved-base sentinel: "
+                                 f"{attempts}")
+
+    def test_the_shim_SEES_a_composition_when_the_library_guard_is_removed(self):
+        """The control — and the measurement that justifies round-start carrying no guard of its own.
+
+        Without it, a hook that exited early (wrong payload shape, a kill switch left on, a missing
+        interpreter) would record nothing and read as a pass. Deleting the guard in a COPY of the
+        library must make the attempt visible for EVERY listed hook.
+        """
+        LIB_GUARD = "    unleashed_base_ok || return 0"
+        HOOK_GUARD = "unleashed_base_ok || exit 0"
+        for hook, payload, (kind, where, func) in self.HOOKS:
+            with self.subTest(hook=hook, guard=f"{kind}:{where}"):
+                root = self._scripts_copy(hook.replace(".", "_"))
+                target = (os.path.join(root, "lib", where) if kind == "lib"
+                          else os.path.join(root, where))
+                with open(target, encoding="utf-8") as fh:
+                    text = fh.read()
+                if kind == "lib":
+                    marker = f"{func}() {{"
+                    self.assertIn(marker, text, f"{where}: {func} not found — the census is stale")
+                    head, _, tail = text.partition(marker)
+                    self.assertIn(LIB_GUARD, tail.split("}\n")[0],
+                                  f"{where}:{func} no longer opens with the D-prime guard")
+                    mutated = head + marker + tail.replace(
+                        LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
+                else:
+                    # BOTH guards, deliberately — but NOT because either is redundant. The
+                    # comment here used to say "hook guard alone deleted -> 0 compositions. Only
+                    # removing both exposes the write." That is INVERTED. Re-measured on the
+                    # current tree with the class's own `_drive`, four ways:
+                    #
+                    #     shipped 0 | lib guard only 0 | HOOK GUARD ONLY 1 | both 2
+                    #
+                    # The pair is ASYMMETRIC and the hook-level skip is load-bearing:
+                    # `capture-reviewer-verdict.sh:48` is `unleashed_base_ok || exit 0` and `:49`
+                    # is `ROOT="$(context_reviews_dir)"`, and `context_reviews_dir` carries no
+                    # guard of its own — the library guard the old claim leaned on lives in
+                    # `context_review_round_clear`, which runs AFTER the python3 call.
+                    #
+                    # The old number was true before this PR and stopped being true inside it: the
+                    # class docstring above explains why (python3 joined the shim set, so a
+                    # composed root reaching Python became observable). Two comments in one file
+                    # then disagreed about the same mutation for several rounds.
+                    self.assertEqual(1, text.count(HOOK_GUARD),
+                                     f"{where}: hook-level D-prime skip is not present exactly once "
+                                     f"— the asymmetry this cell documents has changed")
+                    # Written ONCE, at the end of the branch with every other mutation (gemini,
+                    # PR #78). The early write here was redundant: `target` is written again below.
+                    mutated = text.replace(HOOK_GUARD, ":" + " " * (len(HOOK_GUARD) - 1), 1)
+                    libpath = os.path.join(root, "lib", "context.sh")
+                    with open(libpath, encoding="utf-8") as fh:
+                        libtext = fh.read()
+                    marker = f"{func}() {{"
+                    # Same assertion the `lib` branch carries. Without it a renamed function makes
+                    # `partition` return ('', '', '') -> the whole body is silently dropped and the
+                    # file becomes a syntax error at source time (gemini, PR #78).
+                    self.assertIn(marker, libtext,
+                                  f"context.sh: {func} not found — the census is stale")
+                    head, _, tail = libtext.partition(marker)
+                    libmut = head + marker + tail.replace(
+                        LIB_GUARD, "    :" + " " * (len(LIB_GUARD) - 5), 1)
+                    self.assertEqual(libtext.count("\n"), libmut.count("\n"),
+                                     "the library mutation changed the line count")
+                    with open(libpath, "w", encoding="utf-8") as fh:
+                        fh.write(libmut)
+                self.assertEqual(text.count("\n"), mutated.count("\n"),
+                                 "the mutation changed the line count")
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write(mutated)
+                attempts = self._drive(hook, payload, root)
+                self.assertNotEqual([], attempts,
+                                    f"CONTROL FAILED — with the {kind} guard in {where} deleted, driving "
+                                    f"{hook} produced no composition under {self.SENTINEL}, so the "
+                                    f"cell above cannot tell a working guard from a hook that "
+                                    f"never reached its write path")
+
+
 if __name__ == "__main__":
     unittest.main()

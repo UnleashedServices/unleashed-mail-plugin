@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.1
+# UnleashedMail — Claude Code Plugin v2.8.2
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,35 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.2
+
+- **Seven shipped writers leaked the operator's filesystem path to stderr (`COREDEV-2691`).**
+  `cmd > "$path" 2>/dev/null` applies its redirections left to right, so the target is opened
+  **before** stderr is suppressed — and when the open fails, bash prints the fully expanded path
+  to the real stderr. On a hook that runs in someone else's checkout that path is their home
+  directory. Fixed in `lib/marker.sh` (the hook write path), `stop-quality-marker-gate.sh`,
+  `ci-load-check.sh`, `test-runner.sh`, `test-hooks.sh` and both isolated review harnesses, by
+  moving the suppression ahead of the open.
+
+  Four of the seven were **input** redirects — `wc -c < "$OUT" 2>/dev/null` inside a command
+  substitution — which the previous release's sweep could not see at all: it matched output
+  redirects only, and skipped quoted regions wholesale. `log.sh` had stated the rule in prose
+  since PR #63 while these seven violated it.
+
+- **The sweep that enforces that rule now derives its own scope.** It was a regex over a
+  hand-written five-file list keyed on temp-ish names; it is a shell-aware scanner over every
+  tracked `*.sh` in the tree plus `.githooks/pre-commit`. It understands quoting, command and
+  legacy substitutions, `[[ … ]]` comparisons, comments, here-strings, ANSI-C quoting, fd
+  duplication and nine `/dev/null` suppression spellings — with that allowlist checked by
+  **executing its criterion** against real bash rather than by curation, which is what caught two
+  operators that suppress on Linux but not on macOS bash 3.2. Its remaining blind spots are
+  measured and ticketed (`COREDEV-2760`) rather than described as complete.
+
+- **Two new guard layers.** One pins that no hook writes anything under an unresolved plugin base
+  (the `D′` sentinel), driving the shipped hooks and verifying every exemption instead of trusting
+  it. The other pins that no test class, test function or `load_tests` hook is defined after a
+  suite's entrypoint, where direct execution silently drops it and still prints `OK`.
 
 ### v2.8.1
 

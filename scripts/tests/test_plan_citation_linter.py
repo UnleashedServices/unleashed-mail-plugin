@@ -122,8 +122,6 @@ class OneNegationExemptsOneReference(unittest.TestCase):
         self.assertNotIn(self.REPORTED_99, out2, out2)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 def _load_linter(path=None):
     """The validator is a script, not a module — load it by path so the predicate can be exercised
@@ -351,3 +349,7 @@ class ATopLevelSectionIsACitableShape(unittest.TestCase):
                 self.assertNotIn(msg, out2,
                                  f"the strict lookup lost a heading with a trailing `. ` — the mutation "
                                  f"is not isolated to the line-ending form:\n{out2}")
+
+
+if __name__ == "__main__":
+    unittest.main()
