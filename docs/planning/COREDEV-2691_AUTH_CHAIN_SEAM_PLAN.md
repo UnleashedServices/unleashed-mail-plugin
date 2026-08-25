@@ -1,10 +1,11 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 4 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 5 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
-> r2: both `REQUEST_CHANGES`. r3 (frozen at `05cc76e`): both `REQUEST_CHANGES`, with codex naming a
-> precise approval delta. Revision 4 answers it. Every claim below was re-measured in this worktree; where a reviewer and I
+> r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
+> agy `APPROVE_WITH_NOTES`, codex and kimi `REQUEST_CHANGES` — but both named the SAME two items and
+> gave a smallest-change-to-approve list. Revision 5 is that list. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -97,11 +98,16 @@ This **independently confirms the ticket's "16 rows"** — eleven pure shell-sem
 
 ### Two traps this measurement does NOT clear
 
-1. **Vacuous passes.** Under LINUX-SIM *everything* refuses, so a cell asserting a refusal can pass
-   for the wrong reason. `test_a_group_writable_ancestor_refuses` is the obvious suspect: it asserts
-   a refusal, and a blanket refusal satisfies it. Passing under LINUX-SIM makes a cell a **candidate,
-   not a decision** — each still needs the §2 detector control proving it fails when its own guard is
-   removed.
+1. **Vacuous passes, and there are at least two.** Under LINUX-SIM *everything* refuses, so a cell
+   asserting a refusal can pass for the wrong reason. Both were confirmed by running them with a
+   HEALTHY fixture in the mutated tree, where they should have passed *and did not need to*:
+   * `test_a_group_writable_ancestor_refuses` — home at `0700`, i.e. no group-writable ancestor at
+     all, still yields `refused` in both shells (agy and kimi, independently).
+   * `test_a_failed_name_max_probe_refuses_the_publish` — with a **working** probe, still `failed`
+     and nothing created, in both shells (kimi). Revision 4 named only the first suspect; the trap
+     is broader than one cell.
+   Passing under LINUX-SIM makes a cell a **candidate, not a decision** — each needs the §2 detector
+   control proving it fails when its own guard is removed.
 2. **Per-method granularity is not per-row.** The mutants suite reports zero methods `ok` when read
    naively because a single failing `subTest` fails the whole method; the sixteen above are whole
    methods that pass. Any future claim about an individual *row* inside a multi-row method needs
@@ -137,14 +143,34 @@ is reachable, not theoretical. Measured: `/a␤/b` returns ALLOW in both shells.
 
 ```sh
 _unleashed_auth_chain() {
-    { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1     # arity AND non-empty; see below
+    { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1     # arity AND non-empty
     printf '%s\0' "$1" >> "$_SEAM_CALLS" || return 1   # a recording that FAILED is not a pass
-    case "$1" in
-        "$_SEAM_A1"|"$_SEAM_A2"|"$_SEAM_A3") return 0 ;;   # exact, QUOTED alternatives
-        *) return 1 ;;
-    esac
+    [ "$1" = "${_SEAM_A1:-}" ] && return 0             # STRING equality, not pattern matching
+    [ "$1" = "${_SEAM_A2:-}" ] && return 0
+    [ "$1" = "${_SEAM_A3:-}" ] && return 0
+    return 1
 }
 ```
+
+**`case` had to go — the fifth defect, and the sixth.** Revision 4 used quoted `case` alternatives.
+Two independent problems, one from each arm, both measured here:
+
+* **`nocasematch` (codex r4 #1).** `case` does *pattern matching*, and bash's inherited
+  `shopt -s nocasematch` makes it case-INSENSITIVE: an allowlist of `/Case/Sensitive` then allows
+  `/case/sensitive`. Measured ALLOW in bash with the option set, refuse in zsh. This is not
+  hypothetical for this repo — the encoder already saves, clears and restores `nocasematch`
+  precisely because it is treated as adversarial inherited state.
+* **`set -u` (kimi r4 #2).** An unset `_SEAM_A2` does **not** quietly expand to empty under `set -u`;
+  it aborts the shell (`unbound variable`, rc=127). Fail-closed in effect but a loud abort rather
+  than a refusal — and this suite has `set -eu` sourcing conventions.
+
+`[ "$1" = "${_SEAM_An:-}" ]` fixes both at once: `[ = ]` is string equality, so no globbing option
+can reach it, and `:-` makes an unset slot an empty string rather than an error. Measured in both
+shells: wrong case refuses, exact matches, unset slots are inert under `set -u`.
+
+**Six defects in five revisions of a nine-line function.** Every one was found by executing it
+against inputs the *suite* uses rather than inputs I chose. That is the transferable lesson, and it
+is why this section carries its measurements inline.
 
 **The `-n` guard is not decoration (agy r3 #1, codex r3 #3 — found independently).** An unset
 `_SEAM_A2`/`_SEAM_A3` expands to the empty string, so `_unleashed_auth_chain ""` matches an unset
@@ -242,7 +268,7 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
 
 * A `SeamedChain` mixin: the §3 seam, ordered-transcript assertions, and the §4 fixture builder.
 * An **ungated** class covering, under the seam: reader ENT-1 clauses; publisher E2 **refusal** arms
-  (relative path, trailing slash, embedded newline, value normalising to `/`); encoder locale guards.
+  (relative path and embedded newline ONLY — see the exclusions below); encoder locale guards.
 * Each cell paired with the mutant that must redden it, with its shells stated.
 * Cells passing the §2 criterion moved out of Darwin-gated classes, each with its matrix row.
 
@@ -255,6 +281,18 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
   requires a reddening mutant. Row 184 deletes the folded-value guard and then reaches the same
   incompatible identity probe before producing its poison-entry oracle, so on GNU `stat` shipped and
   mutant both stop at `failed` and the cell cannot discriminate. Both stay Darwin-gated.
+
+  **Revision 4 added this exclusion and then left the arm in the in-scope list** — the same defect
+  codex raised against revision 3, surviving verbatim into the next revision because I wrote the
+  exclusion without deleting the inclusion. Both arms caught it again. "Value normalising to `/`" IS
+  the folded-root arm (`plugin-state-publisher.sh:187` is the only such refusal, and row 184's mutant
+  deletes exactly the block containing it), so it is now removed from §6's in-scope list rather than
+  contradicted two bullets later.
+* **Trailing-slash refusal**, for the same reason (kimi r4 #1). No mutant row deletes the
+  spelling-level guard, and a guard-deletion mutant for `/a/` folds to `/a`, differs from the
+  spelling, and therefore reaches the COREDEV-2761 fork — shipped and mutant both end `failed` with
+  nothing written, which does not discriminate on Linux. It may return to scope only when paired
+  with a row-109-shaped mutant (derive-then-refuse), which discriminates without reaching the fold.
 * Row 181's one-directory/one-entry invariant, which stays Darwin-gated; PR CI still cannot catch
   deletion of the lexical fold. Named here so the gap is visible rather than implied.
 * The portable path-identity accessor itself — that is COREDEV-2761's fix.
