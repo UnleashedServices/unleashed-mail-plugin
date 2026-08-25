@@ -1,13 +1,15 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 6 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 7 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
 > agy `APPROVE_WITH_NOTES`, codex and kimi `REQUEST_CHANGES` — but both named the SAME two items and
 > gave a smallest-change-to-approve list, which revision 5 applied. r5 (frozen `a9b8771`): agy and
 > kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` on ONE remaining one-line defect. Revision 6
-> is that line. Every claim below was re-measured in this worktree; where a reviewer and I
+> is that line. r6 (frozen `cdf8b59`): agy `APPROVE_WITH_NOTES`; codex confirmed the seam correct
+> after 22 further attacks per shell and found NO ninth defect, leaving one internal
+> contradiction between §2 and §7.2. Revision 7 removes it. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -56,7 +58,10 @@ ungated class only with a recorded matrix row:
 | direct forks | absolute-path forks observed |
 | disposition | move / keep gated, with the reason |
 
-Evidence is produced by, for **both** the shipped and the mutant path, in **both** shells:
+Evidence is produced for **both** the shipped and the mutant path, in **each shell that row
+declares** — not unconditionally in both. §7.2 lets a cell be zsh-only where §5's forks force it,
+and revision 6 still demanded evidence in both shells here, so an implementation could not
+satisfy the two literally (codex r6). The declared set is the contract in both places:
 
 1. replacing `_unleashed_auth_chain` and `_u_stat` with NUL-recording sentinels;
 2. capturing `execve` with `strace -f` on Ubuntu — **function replacement cannot intercept an
