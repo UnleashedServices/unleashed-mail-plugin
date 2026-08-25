@@ -1,6 +1,6 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 10 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 11 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
@@ -18,7 +18,10 @@
 > class — §2's own observation mechanism erased the fork §5 and §7 require it to detect.
 > Revision 9 split it into two passes. r9 (frozen `75268c6`): agy `APPROVE_WITH_NOTES`, codex
 > `REQUEST_CHANGES` on a SIXTH instance — two mandatory predicates, one control. Revision 10
-> fixes that instance AND states the general rule that closes the class. Every claim below was re-measured in this worktree; where a reviewer and I
+> fixed that instance AND stated the general rule. r10 (frozen `3fe7e60`): BOTH arms
+> `REQUEST_CHANGES` — the rule's own enumeration procedure produced a finite list of ten
+> predicates with no isolating control. Revision 11 adds them all. The procedure worked: one
+> round produced the whole set instead of one instance per round. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -368,7 +371,12 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
 ## 7. Verification
 
 1. Every new cell has a paired mutant that reddens it — line-count preserving, restored with
-   `shutil.copy2` so the **mode** survives, confirmed with `git diff --summary`.
+   `shutil.copy2` so the **mode** survives. **Two different checks, because one does not imply the
+   other (codex, r10):** `git diff --summary` reports mode and extended headers, *not* line counts,
+   so it confirms the restore-with-mode property and says nothing about line-count preservation.
+   The mutant harness asserts the line count explicitly, before applying the mutation, and
+   `git diff --summary` confirms no mode drift after restoring. Revision 10 named one command as
+   evidence for both — the same predicate-without-its-own-control shape §2.4 forbids.
 2. **Executed-shell assertions, reconciled with zsh-only cells (agy r2 #6).** Revision 2 contradicted
    itself: §5 makes some cells zsh-only while §7 demanded "no arm skipped". The rule is: each cell
    **declares** its shell set, and CI asserts the *declared* set ran — not that every cell ran in both.
@@ -378,7 +386,34 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
 5. Every moved cell ships its §2 matrix row, including the `strace` evidence and **both** detector
    controls — the sentinel-transcript control and the trace-classifier control. One control for two
    mandatory predicates is the fail-open shape §2.4 now forbids.
-6. The full local gate (`~/.claude/handoffs/gate.sh`) with the exit code propagated —
+6. **A `SeamedChain` unit suite with ONE control per §3 seam predicate.** Both arms enumerated the
+   seam's load-bearing predicates and found arity uncontrolled — the empty-argument control isolates
+   non-emptiness, not arity. Each of these fails if its predicate alone is broken:
+   * two non-empty arguments, and zero arguments, must refuse *(arity)*;
+   * one empty argument must refuse *(non-emptiness)*;
+   * `_SEAM_CALLS` unset under `set -u` must refuse **and the shell must survive**;
+   * `_SEAM_CALLS` set but unwritable must refuse *(recording failure is not a pass)*;
+   * under `shopt -s nocasematch`, a wrong-case spelling of an allowed path must refuse;
+   * an unset allowlist slot under `set -u` must be inert, not fatal;
+   * an undeclared path must refuse *(fail-closed default)*;
+   * one argument containing an embedded newline must stay distinguishable from two calls
+     *(NUL framing)*.
+
+7. **ONE control per fork classification, in both directions.** §5's table is load-bearing — movement
+   depends on the classifier's answer for each entry — and one bash-ENT-1 control validates only one
+   mapping (codex, r10):
+   * **Non-portable, each needs its own control** presenting that exact argv and requiring the cell
+     to stay gated: `stat -f '%p %z %u %i'` (auth), `stat -f '%p %z %u %i %N'` (prefetch),
+     `stat -f '%d %i'` (publisher), `/bin/ls -lde`, `/usr/bin/dsmemberutil`. A control built on one
+     argv does not isolate the others.
+   * **Portable, each needs a control in the OPPOSITE direction** — that a cell whose only fork is
+     this one is still admitted: `/usr/bin/id -u`, `/usr/bin/id -un`, `/usr/bin/uname -s`,
+     `/usr/bin/getconf NAME_MAX`. Without it, misclassifying a portable fork as blocking is
+     invisible, because the cell simply stays gated and every other control still passes. That
+     failure mode is silent under-coverage, which is how this plan's headline deliverable was nearly
+     forbidden by its own evidence rule at revision 7.
+
+8. The full local gate (`~/.claude/handoffs/gate.sh`) with the exit code propagated —
    `bash gate.sh > log 2>&1; rc=$?`, never through `tee`, which returned tee's status over a RED gate
    during the v2.8.2 cut.
 
