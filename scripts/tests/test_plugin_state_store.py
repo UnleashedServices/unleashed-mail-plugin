@@ -16,6 +16,7 @@ subscripting there, `$((0777))` is 511 in bash and 777 in zsh, and `printf '%d' 
 bash only.
 """
 
+import ast
 import os
 import re
 import shlex
@@ -1041,7 +1042,7 @@ class SeamedChain:
         rcs, records, alive = self.seam_calls(shell, [argv], **kw)
         return (rcs[0] if rcs else None), records, alive
 
-    def for_declared_shells(self, declared, fn):
+    def for_declared_shells(self, declared, fn, narrowed_reason=None):
         """Run `fn(shell)` for each DECLARED shell, skipping the CELL if an interpreter is missing.
 
         §7.2. Revision 1 ended this with `assertEqual(list(declared), ran, "a declared shell arm did
@@ -1056,6 +1057,11 @@ class SeamedChain:
         passing on one arm, and CI's `seam_ungated` step asserts `not result.skipped`, which turns
         any such skip into a red required check.
         """
+        # Dropping an arm by DECLARING fewer shells produces no skip, so the skip-based guard above
+        # does not see it (codex r2): changing a cell from SHELLS to SHELLS[:1] silently removes zsh
+        # and CI stays green. Narrowing must therefore be explicit and carry its reason.
+        if set(declared) != set(SHELLS) and not narrowed_reason:
+            self.fail(f"cell declares {list(declared)} rather than both shells, without a reason")
         missing = [sh for sh in declared if shutil.which(sh) is None]
         if missing:
             raise unittest.SkipTest(f"declared shell(s) absent: {missing} (CI fails on this skip)")
@@ -1220,9 +1226,22 @@ class SeamContract(SeamedChain, unittest.TestCase):
         """
         with open(__file__, encoding="utf-8") as fh:
             src = fh.read()
-        unexecuted = sorted(m for m in SEAM_MUTANTS if src.count(f'"{m}"') < 2)
+        # AST, not `src.count(...)`. A lexical threshold counts any second occurrence, so deleting a
+        # control and leaving `# ... "allow_1"` in a comment satisfied it -- reproduced by codex and
+        # agy at r2, on the very cell written to make this gap impossible. Only a real keyword
+        # argument in a real call counts here.
+        passed = {
+            kw.value.value
+            for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Call)
+            for kw in node.keywords
+            if kw.arg == "broken"
+            and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str)
+        }
+        unexecuted = sorted(set(SEAM_MUTANTS) - passed)
         self.assertEqual([], unexecuted, "declared mutants that no cell executes")
-        covered = {SEAM_MUTANTS[m][0] for m in SEAM_MUTANTS if src.count(f'"{m}"') >= 2}
+        covered = {SEAM_MUTANTS[m][0] for m in passed if m in SEAM_MUTANTS}
         self.assertEqual(set(range(len(SEAM_LINES))), covered,
                          "a seam predicate has no executed mutant")
 
@@ -1329,6 +1348,12 @@ def _command_args(text):
     out, quote, i = [], None, 0
     while i < len(text):
         ch = text[i]
+        # A command substitution in the ARGUMENT region defeats terminator scanning: its inner `)`
+        # or `|` ends the scan early and the truncated argv can classify PORTABLE while the runtime
+        # argv is not. Measured (codex + agy, r2): `/bin/ls -l $(which foo) -e -- /x` truncated to
+        # ['-l','$(which','foo'] and reported portable, hiding a BSD `-e`. Refuse to guess.
+        if text[i:i + 2] == "$(" or ch == "`":
+            raise ValueError("command substitution in the argument region; classify by hand")
         if quote:
             out.append(ch)
             if ch == quote:
@@ -1560,6 +1585,31 @@ LINUX_SIM = ('[ "$_U_PLATFORM" = Darwin ] || return 1',
              '[ "$_U_PLATFORM" = LinuxSm ] || return 1')
 
 
+def counting_seam_source(refuse_at):
+    """A seam that ALLOWS every call except the Nth, which it REFUSES.
+
+    The allowlist seam proves the guard was CONSULTED. It cannot prove the caller HONOURS a refusal:
+    weakening `|| return 1` to `|| :` at a call site leaves a success-path transcript and rc=0
+    completely unchanged (codex r2, reproduced). Refusing by POSITION is what discriminates, and it
+    reaches call sites an allowlist cannot separate -- store.sh:256 and :259 both authenticate the
+    same store path, so no static allowlist can refuse one and not the other.
+    """
+    return (
+        "_SEAM_N=0\n"
+        "_unleashed_auth_chain() {\n"
+        '    [ "$#" -eq 1 ] || return 1\n'
+        '    [ -n "$1" ] || return 1\n'
+        '    [ -n "${_SEAM_CALLS:-}" ] || return 1\n'
+        # NB: built by CONCATENATION, not %-formatting -- the shell's own `printf '%s\\0'` is a
+        # format string too, and `% refuse_at` consumed it (TypeError, caught on first run).
+        "    printf '%s\\0' \"$1\" >> \"$_SEAM_CALLS\" || return 1\n"
+        "    _SEAM_N=$((_SEAM_N + 1))\n"
+        '    [ "$_SEAM_N" = "' + str(refuse_at) + '" ] && return 1\n'
+        "    return 0\n"
+        "}\n"
+    )
+
+
 class SeamedStoreCreation(SeamedChain, unittest.TestCase):
     """COREDEV-2691 §1 -- the seam DRIVING A PRODUCTION CALLER. UNGATED.
 
@@ -1577,7 +1627,7 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
     shipped chain refuses, and only a seam can carry the caller through.
     """
 
-    def _create_store(self, shell, seamed, race=False):
+    def _create_store(self, shell, seamed, race=False, refuse_at=None):
         """Run `_unleashed_create_store` on a fresh HOME. Returns (rc, transcript, modes).
 
         `race=True` seams `_unleashed_nearest_existing` so that `mid` APPEARS between the walk and
@@ -1599,7 +1649,8 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         body = (
             "_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n_SEAM_A3=%s\n"
             % tuple(shlex.quote(x) for x in (log, claude, mid, store))
-            + (seam_source() if seamed else "")
+            + (counting_seam_source(refuse_at) if refuse_at is not None
+               else seam_source() if seamed else "")
             + ("_unleashed_nearest_existing() { /bin/mkdir -m 700 %s 2>/dev/null; "
                "_UNLEASHED_NEAREST=%s; }\n" % (shlex.quote(mid), shlex.quote(claude))
                if race else "")
@@ -1616,6 +1667,16 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         modes = {n: (oct(os.stat(p).st_mode & 0o777) if os.path.isdir(p) else "ABSENT")
                  for p, n in names.items()}
         return (rcs[0] if rcs else None), [names.get(t, t) for t in transcript], modes
+
+    #: (label, race, refuse_at) -> the transcript the walk must stop at, MEASURED. Each row refuses
+    #: one call POSITION, and the position maps to one production call site.
+    REFUSAL_ROWS = (
+        ("store.sh:225 nearest ancestor", False, 1, ["claude"]),
+        ("store.sh:256 per-created component", False, 2, ["claude", "mid"]),
+        ("store.sh:256 the store itself", False, 3, ["claude", "mid", "store"]),
+        ("store.sh:259 the store again", False, 4, ["claude", "mid", "store", "store"]),
+        ("store.sh:239 appeared-since-walk", True, 2, ["claude", "mid"]),
+    )
 
     def test_create_store_consults_the_guard_for_every_component_in_order(self):
         """The ordered transcript, with multiplicity. This is the cell that fails if a maintainer
@@ -1647,6 +1708,38 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             self.assertEqual(0, rc, "the seamed production caller did not succeed")
             self.assertEqual(["claude", "mid", "store", "store"], transcript,
                              "the component that appeared after the walk was not authenticated")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_a_refused_component_stops_the_create_at_that_call_site(self):
+        """ENFORCEMENT, not invocation -- the distinction codex drew at r2.
+
+        The three cells above assert the guard is CONSULTED. None of them fails when a call site's
+        `|| return 1` is weakened to `|| :`, because on the success path nothing changes: same
+        transcript, same rc=0. The security-relevant behaviour is what happens when the guard says
+        NO -- an interfering process planted a symlink at `mid` and authentication refuses. These
+        rows refuse one call position each and require the walk to STOP there and report failure.
+        """
+        def check(shell):
+            for label, race, refuse_at, expected in self.REFUSAL_ROWS:
+                with self.subTest(site=label):
+                    rc, transcript, modes = self._create_store(
+                        shell, seamed=True, race=race, refuse_at=refuse_at)
+                    self.assertEqual(1, rc, f"{label}: a refused chain still returned success")
+                    self.assertEqual(expected, transcript,
+                                     f"{label}: the walk did not stop at the refusal")
+                    if refuse_at < 3:
+                        self.assertEqual("ABSENT", modes["store"],
+                                         f"{label}: the store was created past a refusal")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_refusal_rows_pass_when_nothing_is_refused(self):
+        """The positive control for the cell above: with `refuse_at` past the end of the walk, the
+        SAME counting seam authenticates everything and the create succeeds. Without this, a
+        counting seam that refused unconditionally would satisfy every refusal row."""
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, refuse_at=99)
+            self.assertEqual(0, rc, "the counting seam refuses even when it should not")
+            self.assertEqual(["claude", "mid", "store", "store"], transcript)
         self.for_declared_shells(SHELLS, check)
 
     def test_without_the_seam_the_same_call_refuses_and_creates_nothing(self):
