@@ -1,6 +1,6 @@
 # COREDEV-2691 §1 — the auth-chain seam
 
-**Status:** Planning, revision 9 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
+**Status:** Planning, revision 10 · **Ticket:** COREDEV-2691 (High) · **Branch:** `feat/COREDEV-2691-auth-seam`
 
 > **Gate history.** r1: codex `REQUEST_CHANGES`, agy `APPROVE_WITH_NOTES`, kimi `APPROVE_WITH_NOTES`.
 > r2: both `REQUEST_CHANGES`. r3 (frozen `05cc76e`): both `REQUEST_CHANGES`. r4 (frozen `02a13b8`):
@@ -16,7 +16,9 @@
 > gate pass, and this plan is now the third instance on this campaign proving that. r8 (frozen
 > `1eccbe5`): agy `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` on a FIFTH instance of the same
 > class — §2's own observation mechanism erased the fork §5 and §7 require it to detect.
-> Revision 9 splits it into two passes. Every claim below was re-measured in this worktree; where a reviewer and I
+> Revision 9 split it into two passes. r9 (frozen `75268c6`): agy `APPROVE_WITH_NOTES`, codex
+> `REQUEST_CHANGES` on a SIXTH instance — two mandatory predicates, one control. Revision 10
+> fixes that instance AND states the general rule that closes the class. Every claim below was re-measured in this worktree; where a reviewer and I
 > disagreed, the measurement is shown.
 >
 > **Process note:** I edited §3 *while* r2 was reading, so codex's r2 verdict names the final hash and
@@ -85,8 +87,28 @@ mechanism destroyed its own evidence.
 3. A cell moves only when that independent real-`_u_stat` trace contains **no §5 NON-PORTABLE fork**
    for that declared shell, and the sentinel pass's transcripts **match the row's expected ordered
    calls**;
-4. a **detector control** that must violate one of those expectations — otherwise the harness cannot
-   fail and proves nothing.
+4. **ONE DETECTOR CONTROL PER MANDATORY PREDICATE — two here, not one.** Item 3 makes two
+   independent things load-bearing, so a single control leaves one of them unvalidated:
+   * a **sentinel-pass control** whose deliberately wrong ordered transcript must be rejected;
+   * a **trace control** whose known bash ENT-1 `/usr/bin/stat -f` event must be classified
+     non-portable and kept gated.
+
+   Revision 9 required a control that violated "one of" the two. Measured consequence (codex, r9):
+   an implementation with a working transcript control and a trace classifier that always reports
+   "no non-portable fork" passes every stated control while moving a bash ENT-1 cell that forks
+   `/usr/bin/stat -f`. Fail-open, through the gate meant to prevent exactly that.
+
+**THE GENERAL RULE, because this is the sixth instance of one class.** Revisions 3, 5, 6, 7, 8 and 9
+each shipped a requirement stated in two places with different force, and each was found one at a
+time. The rule that closes the class rather than the instance:
+
+> **Every predicate this plan makes load-bearing must have its own control that fails when that
+> predicate alone is broken.** A control covering "one of" several predicates validates none of them
+> individually. When a rule is added anywhere in this plan, the same edit adds its control, or the
+> rule is not added.
+
+Applying it is also how the remaining instances should be found: enumerate the load-bearing
+predicates and check each has a control naming it, rather than re-reading prose for contradictions.
 
 **Why not "all traces empty" (codex, reproduction round).** Revision 7 said exactly that, and it
 contradicted §5, which lists portable forks as reachable and blocking nothing. The consequence was
@@ -353,7 +375,9 @@ excluded too, and named in the §2 matrix as blocked-by-COREDEV-2761 rather than
    A cell silently losing an arm still fails, which is what the assertion is for.
 3. Green **unchanged on Darwin**; this adds coverage and alters no existing outcome.
 4. CI's `validate` job (ubuntu) shows the new class **running**, with the executed count asserted.
-5. Every moved cell ships its §2 matrix row, including the `strace` evidence and the detector control.
+5. Every moved cell ships its §2 matrix row, including the `strace` evidence and **both** detector
+   controls — the sentinel-transcript control and the trace-classifier control. One control for two
+   mandatory predicates is the fail-open shape §2.4 now forbids.
 6. The full local gate (`~/.claude/handoffs/gate.sh`) with the exit code propagated —
    `bash gate.sh > log 2>&1; rc=$?`, never through `tee`, which returned tee's status over a RED gate
    during the v2.8.2 cut.
