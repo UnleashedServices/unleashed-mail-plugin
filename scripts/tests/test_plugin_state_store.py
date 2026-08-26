@@ -1967,8 +1967,9 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             % tuple(shlex.quote(x) for x in (log, claude, mid, store))
             + (counting_seam_source(refuse_at) if refuse_at is not None
                else seam_source() if seamed else "")
-            + ("_unleashed_nearest_existing() { /bin/mkdir -m 700 %s 2>/dev/null; "
-               "_UNLEASHED_NEAREST=%s; }\n" % (shlex.quote(mid), shlex.quote(claude))
+            + ("_unleashed_nearest_existing() { /bin/mkdir -m 700 -p %s 2>/dev/null; "
+               "_UNLEASHED_NEAREST=%s; }\n"
+               % (shlex.quote(store if race == "both" else mid), shlex.quote(claude))
                if race else "")
             + ((self.LOST_RACE_MKDIR % shlex.quote(mid)).replace("\\n", "\n")
                if lose_race else "")
@@ -2090,6 +2091,25 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             self.assertEqual(0, rc, "the seamed production caller did not succeed")
             self.assertEqual(["mid", "store", "store"], transcript,
                              "the guard was not called with the NEAREST EXISTING ancestor")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_each_component_that_appeared_is_authenticated_as_itself(self):
+        """store.sh:239 must authenticate `$_cs_d` -- the component the loop is ON.
+
+        The other race fixture makes only `mid` appear, so on the single pass through that branch
+        `_cs_d` IS `_cs_mid` and the two are indistinguishable. Substituting `$_cs_mid` therefore
+        survived every cell. Derived by an operand sweep over all nine guard sites rather than found
+        one at a time (~/.claude/handoffs/operand-sweep.py, after codex's r11 pair).
+
+        With BOTH components appearing, the branch fires twice with different values and the THIRD
+        transcript entry is the discriminator: the mutant authenticates `mid` a second time instead
+        of the store, and would create the store beneath a component it never checked.
+        """
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, race="both")
+            self.assertEqual(0, rc, "the seamed production caller did not succeed")
+            self.assertEqual(["claude", "mid", "store", "store"], transcript,
+                             "an appeared component was not authenticated as ITSELF")
         self.for_declared_shells(SHELLS, check)
 
     def test_a_component_that_lost_the_mkdir_race_is_still_authenticated(self):

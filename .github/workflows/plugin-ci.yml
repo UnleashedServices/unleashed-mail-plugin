@@ -115,7 +115,7 @@ jobs:
           # added; lowering one has to be a deliberate edit here.
           MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 16,
                       "scripts.tests.test_plugin_state_store.ForkClassification": 10,
-                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 8,
+                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 9,
                       "scripts.tests.test_plugin_state_store.SeamedReader": 6,
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 5}
           NAMES = list(MINIMUMS)
