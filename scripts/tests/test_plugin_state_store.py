@@ -92,18 +92,26 @@ def scratch_home(prefix):
     os.chmod(home, 0o700)
     return home
 
-def with_mutation(old, new, path=AUTH):
-    """A copy of `path` with one exact substitution — the positive control's mechanism.
+def with_mutation(old, new, path=AUTH, count=1):
+    """A copy of `path` with `count` exact substitutions — the positive control's mechanism.
 
-    Asserts the pattern was found, because a control built from a pattern that does not match is a
-    control that silently cannot fail. That mistake has been made in this campaign more than once.
+    Asserts the pattern occurs EXACTLY `count` times, because a control built from a pattern that
+    does not match is a control that silently cannot fail. That mistake has been made in this
+    campaign more than once.
+
+    `count` is DECLARED, never inferred, and the assertion is equality rather than "at least". Some
+    guards are spelled once per shell arm — ENT-2c's re-test is at reader.sh:101 and :113 — and
+    mutating only one leaves the other arm refusing, which reads as a pass on that shell. Passing
+    `count=2` states that expectation, so a site appearing or disappearing fails here rather than
+    quietly halving the mutant.
     """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
-    assert text.count(old) == 1, f"mutation pattern not unique in {path}: {old!r}"
+    found = text.count(old)
+    assert found == count, f"mutation pattern occurs {found}x in {path}, expected {count}: {old!r}"
     fd, tmp = tempfile.mkstemp(suffix=".sh")
     with os.fdopen(fd, "w") as fh:
-        fh.write(text.replace(old, new, 1))
+        fh.write(text.replace(old, new, count))
     return tmp
 
 
@@ -2873,7 +2881,7 @@ class SeamedReader(SeamedChain, unittest.TestCase):
             raw = fh.read()
         return (rcs[0] if rcs else None), [r.decode() for r in raw.split(b"\0")[:-1]]
 
-    def _auth_entry(self, shell, allow_parent, allow_target, race=False):
+    def _auth_entry(self, shell, allow_parent, allow_target, race=False, reader=None):
         """Build a LEGITIMATE store entry and run `_unleashed_auth_entry` over it.
 
         The fixture satisfies every ENT-1..3 precondition, each of which refused a draft of this
@@ -2895,7 +2903,7 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         os.makedirs(store, mode=0o700)
         value = os.path.join(home, "data")
         os.makedirs(value, mode=0o700)
-        srcs = (auth, STORE, READER, PUB)
+        srcs = (auth, STORE, reader or READER, PUB)
         key = run_shell(shell, "_unleashed_key %s\nprintf '%%s' \"$_UNLEASHED_KEY\"\n"
                         % shlex.quote(value), sources=srcs)[1]
         entry = os.path.join(store, "base." + key)
@@ -2976,8 +2984,47 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         running both arms is what covers both, and deleting either makes that shell accept the race.
         """
         def check(shell):
-            rc, _ = self._auth_entry(shell, allow_parent=True, allow_target=True, race=True)
+            rc, transcript = self._auth_entry(shell, allow_parent=True, allow_target=True, race=True)
             self.assertEqual(1, rc, "an entry replaced by a symlink after the read was accepted")
+            # WHERE the refusal came from, not merely that there was one. ENT-2c sits before either
+            # chain call, so a correct refusal records NOTHING; a refusal that reached reader:207
+            # would show `parent` and would be a different property passing under this cell's name.
+            self.assertEqual([], transcript,
+                             f"the refusal did not come from ENT-2c -- it reached the chain: "
+                             f"{transcript}")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_ent_2c_race_control_the_same_fixture_is_ACCEPTED_without_the_re_test(self):
+        """The paired mutant, and without it the cell above proves nothing about its own fixture.
+
+        codex (r20) showed the shape: the cell asserted only `rc == 1`, and a one-token fixture edit
+        from `allow_parent=True` to `False` supplies that same 1 from the PARENT chain guard — so a
+        fully deleted ENT-2c re-test stays hidden. Class of edit: SHADOWING REFUSAL, where a
+        non-target guard in the fixture supplies the expected failure after the target guard stops
+        working.
+
+        Asserting an empty transcript does not close it on its own, and that was worth measuring
+        rather than assuming: with the re-test PRESENT the transcript is empty under BOTH fixture
+        settings, because ENT-2c refuses before either chain call either way. What discriminates is
+        running the SAME fixture against a tree with both re-tests deleted and requiring it to
+        ACCEPT. If the fixture ever stops reaching ENT-2c, this cell fails.
+
+        BOTH sites, because each shell has its own: bash reader.sh:113, zsh reader.sh:101. Deleting
+        one leaves the other shell refusing, and a single-site mutant would look like a pass on one
+        arm.
+        """
+        first = with_mutation('        _u_entry_path_still_bare "$_ae_p" || return 1',
+                              '        : entry_path_still_bare "$_ae_p" || return 1',
+                              path=READER, count=2)
+        self.addCleanup(os.unlink, first)
+
+        def check(shell):
+            rc, transcript = self._auth_entry(shell, allow_parent=True, allow_target=True,
+                                              race=True, reader=first)
+            self.assertEqual(0, rc,
+                             f"deleting BOTH ENT-2c re-tests did not accept the race -- this "
+                             f"fixture never reaches ENT-2c, so the cell above is vacuous: "
+                             f"rc={rc} transcript={transcript}")
         self.for_declared_shells(SHELLS, check)
 
     def test_entry_authenticates_the_parent_then_the_target(self):
