@@ -486,22 +486,39 @@ jobs:
     # (Ubuntu), and one root cause — `tr` aborting on invalid UTF-8 outside `LC_ALL=C`, which
     # TRUNCATES the message — literally inverts by platform: green on GNU, red on BSD. A
     # single-platform run is half a result, and the half that passes is the half that hides it.
-    # macOS RUNS ON PUSH TO `main` ONLY — not on pull requests, and not on `alpha`.
+    # macOS RUNS ON PULL REQUESTS AND ON PUSH TO `main`/`alpha` (COREDEV-2767).
     #
-    # WHY IT IS RESTRICTED. A macOS runner bills at 10x the Linux rate, and this leg measured 10m30s
-    # against 2m35s for the ubuntu one, so it was ~105 Linux-equivalent minutes on EVERY push. The
-    # matrix is computed rather than filtered with a step-level `if:`, because an `if:` still
-    # provisions the runner and starts the meter.
+    # THE REASON IT WAS RESTRICTED WAS VOID. The comment here read: "a macOS runner bills at 10x the
+    # Linux rate … ~105 Linux-equivalent minutes on EVERY push". The 10x multiplier applies to
+    # PRIVATE repositories. This one is public, so standard GitHub-hosted runners are free.
+    # Measured, not recalled — run 32819402531, a push to main that included this leg:
+    #     gh api repos/.../actions/runs/32819402531/timing
+    #     → "MACOS":{"total_ms":0,"jobs":1}   "UBUNTU":{"total_ms":0,"jobs":6}
+    # Zero billable milliseconds, both platforms.
     #
-    # WHAT THAT COSTS, stated plainly: this is now a POST-MERGE CANARY, not a gate. The comment below
-    # is still true — the `tr`-on-invalid-UTF-8 root cause inverts by platform, green on GNU and red on
-    # BSD — so a BSD-only defect now LANDS on main and is caught after the fact rather than blocked
-    # before it. `redactor-equivalence (macos-latest)` was removed from the required checks at the same
-    # time, because a context that PR commits no longer produce would make every PR unmergeable.
+    # WHAT IT ACTUALLY COSTS is wall clock: 16m45s on that run against `validate`'s 8m26s, and it
+    # finishes ~8 minutes after every other job, so a PR looks stuck while it runs. That is a real
+    # price and it is the one to argue about; it is not the price that was recorded here.
+    #
+    # WHAT THE RESTRICTION COST, and why it is being undone: this is the ONLY job that runs
+    # `unittest discover -s scripts/tests` on Darwin (see the step below), so every
+    # @skipUnless(DARWIN) class ran after a merge and never on the pull request that introduced it —
+    # 165 cells skipped on the ubuntu leg, and `test_plugin_state_mutants.py` is 137/137 gated, so
+    # its whole obligation table gated nothing. COREDEV-2691 built ~3,000 lines of test seam to
+    # recover part of what this one expression gave away.
+    #
+    # The matrix is still COMPUTED rather than filtered with a step-level `if:` — an `if:` still
+    # provisions the runner — and `alpha` is included because releases are cut from it and it has
+    # never run this leg at all.
+    #
+    # `redactor-equivalence (macos-latest)` is deliberately still NOT a required check. Requiring it
+    # is a separate, ordered step: this change must land and be observed green on real pull requests
+    # FIRST, because a required context that commits do not yet produce makes every PR unmergeable,
+    # and ruleset `Control` (16082567) has `bypass_actors: []` — no escape hatch but editing it back.
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON((github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha'))) && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
     # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
