@@ -1373,8 +1373,8 @@ class SeamContract(SeamedChain, unittest.TestCase):
         # DERIVED, not curated. A hardcoded tuple stays green when a NEW seamed class is added with
         # no floor beside it -- which is the rot mode a floor list actually has, and the one this
         # cell could not see until r19 added a seventh class. Every `SeamedChain` subclass in this
-        # module is a seam class by construction; ForkClassification is named explicitly because it
-        # is the one floored class that is not one -- it tests the fork classifier, not the seam.
+        # module is built on the same harness; ForkClassification is named explicitly because it is
+        # the one floored class that is not -- it is a pure source census with no shell fixture.
         seamed = sorted((c for c in list(globals().values())
                          if isinstance(c, type) and issubclass(c, SeamedChain)
                          and issubclass(c, unittest.TestCase)),
@@ -3656,6 +3656,154 @@ class UnauthenticatedEffectCensus(SeamedChain, unittest.TestCase):
                     self.assertNotEqual(dirty_b, dirty_a,
                                         f"{label}: the census did not see the write")
         self.for_declared_shells(SHELLS, check)
+
+
+
+class AmbientStateContract(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 -- the state the guards run IN, not the code they are written in. UNGATED.
+
+    Twelve mutation classes are closed and every one of them EDITS CODE. None changes the ambient
+    the code inherits, and these libraries are SOURCED into shells the plugin does not control, so
+    the ambient is adversarial input: a caller's `shopt`, `setopt`, `umask` and locale all reach
+    them. Both r19 arms raised this independently, and a sweep of eleven save/restore/force
+    deletions found NINE that leave every ungated cell green.
+
+    Three are closed here, chosen by consequence and measured before being written:
+
+      * `shopt -s nocasematch` makes bash's `case` case-INSENSITIVE, so the encoder's byte table
+        folds `/A` onto `/a`. MEASURED with the clear deleted: `_unleashed_key /A` and
+        `_unleashed_key /a` both returned `_s_ca` -- one entry NAME for two distinct bases. Not
+        hygiene: a key collision.
+      * `umask 077` on the transient. MEASURED with it deleted: the state file lands `0666` in both
+        shells. The mode readback catches it on Darwin and refuses; on the required Linux leg
+        `_u_stat` refuses first, so the readback never runs and only the FILE ITSELF is evidence.
+      * `set -C` on the transient's exclusive create. MEASURED with it deleted: a symlink planted at
+        the transient's name is FOLLOWED and the victim outside the store is overwritten with the
+        published value in both shells. The shipped code returns 2 and leaves the victim alone.
+
+    The remaining six -- the reader's `LC_ALL` force and restore, its `noglob` and `failglob`
+    handling, the published base's umask, and the encoder's nocasematch RESTORE -- are recorded on
+    COREDEV-2766 with this sweep, because each needs a fixture that reaches its entry point and none
+    of them is a bypass. `~/.claude/handoffs/ambient-sweep.py` reproduces all eleven.
+    """
+
+    #: `/A` and `/a` differ only in case, which is exactly what a case-insensitive `case` folds.
+    CASE_PAIR = ("/A", "/a")
+
+    def _transient(self, shell, value, umask=None, plant=None, pub=None):
+        """Call `_unleashed_write_transient` directly. It consults no chain, so it needs no seam.
+
+        Returns (rc, mode-or-ABSENT, victim-contents-or-None). The MODE is read from Python rather
+        than from the library's own readback: on Linux `_u_stat` forks the Darwin-only `stat -f` and
+        refuses, so the readback never runs and the shipped rc is 1 on a perfectly good file. The
+        file on disk is the observable that means the same thing on both platforms.
+        """
+        home = scratch_home("ambient-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        target = os.path.join(home, "t")
+        victim = None
+        if plant is not None:
+            victim = os.path.join(home, "victim")
+            with open(victim, "w") as fh:
+                fh.write(plant)
+            os.symlink(victim, target)
+        body = (("umask %s\n" % umask if umask is not None else "")
+                + "_unleashed_write_transient %s %s\n" % (shlex.quote(target), shlex.quote(value))
+                + 'printf "RC=%s\\n" "$?"\n')
+        out = run_shell(shell, body, env={"HOME": home},
+                        sources=(AUTH, STORE, READER, pub or PUB))[1]
+        rcs = [int(l[len("RC="):]) for l in out.splitlines() if l.startswith("RC=")]
+        mode = (oct(os.lstat(target).st_mode & 0o7777)
+                if os.path.lexists(target) else "ABSENT")
+        after = None
+        if victim:
+            with open(victim) as fh:
+                after = fh.read()
+        return (rcs[0] if rcs else None), mode, after
+
+    def test_the_transient_is_created_at_0600_whatever_the_callers_umask(self):
+        """PUB-9 E6. A state file at 0666 is readable and writable by every user on the machine."""
+        def check(shell):
+            _, mode, _ = self._transient(shell, "hello", umask="000")
+            self.assertEqual(oct(0o600), mode, f"{shell}: the transient did not land at 0600")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_transient_umask_control_reddens_when_the_umask_is_dropped(self):
+        """The positive control. Without it this cell passes on a machine whose ambient umask is
+        already 077, which is every developer machine and every CI runner -- the assertion would be
+        satisfied by the ambient rather than by the library."""
+        mutant = with_mutation("    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0",
+                               "    ( umask 000; set -C; trap '' XFSZ; _wt_opened=0", path=PUB)
+        self.addCleanup(os.unlink, mutant)
+
+        def check(shell):
+            _, mode, _ = self._transient(shell, "hello", umask="000", pub=mutant)
+            self.assertEqual(oct(0o666), mode,
+                             f"{shell}: dropping `umask 077` changed nothing -- the control is inert")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_exclusive_create_does_not_follow_a_planted_symlink(self):
+        """`set -C` is what makes `9>` an exclusive create rather than a write-through.
+
+        The fixture plants a symlink at the transient's name pointing OUTSIDE the store, which is
+        same-uid interference winning the race. The shipped code must refuse (2 -- the name exists,
+        a lost race) and leave the victim byte-identical.
+        """
+        def check(shell):
+            rc, _, victim = self._transient(shell, "POISON", plant="VICTIM")
+            self.assertEqual(2, rc, f"{shell}: a planted symlink was not reported as a lost race")
+            self.assertEqual("VICTIM", victim, f"{shell}: the write followed the symlink")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_symlink_control_reddens_when_noclobber_is_dropped(self):
+        """The positive control, and it is the finding: with `set -C` removed the published value is
+        written THROUGH the link to a file outside the store, in both shells."""
+        mutant = with_mutation("    ( umask 077; set -C; trap '' XFSZ; _wt_opened=0",
+                               "    ( umask 077; set +C; trap '' XFSZ; _wt_opened=0", path=PUB)
+        self.addCleanup(os.unlink, mutant)
+
+        def check(shell):
+            _, _, victim = self._transient(shell, "POISON", plant="VICTIM", pub=mutant)
+            self.assertEqual("POISON\n", victim,
+                             f"{shell}: dropping `set -C` clobbered nothing -- the control is inert")
+        self.for_declared_shells(SHELLS, check)
+
+    def _key(self, shell, path, prelude="", store=None):
+        body = prelude + "_unleashed_key %s\nprintf '%%s' \"$_UNLEASHED_KEY\"\n" % shlex.quote(path)
+        return run_shell(shell, body, sources=(AUTH, store or STORE, READER, PUB))[1]
+
+    def test_the_encoder_is_immune_to_a_hostile_nocasematch(self):
+        """ENC-1's byte table is a `case`, and bash's `nocasematch` makes `case` case-insensitive.
+
+        bash only, stated: `shopt` does not exist in zsh, and the shipped clear is guarded by
+        `[ -z "${ZSH_VERSION:-}" ]` for that reason -- zsh's `case` is case-sensitive regardless.
+        """
+        bash = SHELLS[0]
+
+        def check(shell):
+            upper, lower = (self._key(shell, p, "shopt -s nocasematch\n") for p in self.CASE_PAIR)
+            self.assertNotEqual(upper, lower,
+                                f"{shell}: `/A` and `/a` collided under a hostile nocasematch")
+            self.assertEqual(self._key(shell, self.CASE_PAIR[0]), upper,
+                             f"{shell}: a hostile nocasematch changed the key")
+        self.for_declared_shells((bash,), check,
+                                 narrowed_reason="`shopt` is bash-only; zsh `case` is always exact")
+
+    def test_the_nocasematch_control_reddens_when_the_clear_is_deleted(self):
+        """The positive control, and the finding: the two keys become the SAME string."""
+        bash = SHELLS[0]
+        mutant = with_mutation(
+            "        _uk_nocase=1; shopt -u nocasematch 2>/dev/null || :",
+            "        _uk_nocase=1; : nocasematch 2>/dev/null || :       ", path=STORE)
+        self.addCleanup(os.unlink, mutant)
+
+        def check(shell):
+            keys = [self._key(shell, p, "shopt -s nocasematch\n", store=mutant)
+                    for p in self.CASE_PAIR]
+            self.assertEqual(keys[0], keys[1],
+                             f"{shell}: deleting the clear did not collide the keys -- inert control")
+        self.for_declared_shells((bash,), check,
+                                 narrowed_reason="`shopt` is bash-only; zsh `case` is always exact")
 
 
 if __name__ == "__main__":
