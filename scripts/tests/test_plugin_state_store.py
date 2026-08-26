@@ -1270,6 +1270,29 @@ class SeamContract(SeamedChain, unittest.TestCase):
         self.assertEqual([], offenders,
                          "shell-driving cells that bypass for_declared_shells without a declared reason")
 
+    def test_the_ci_floors_match_the_cells_that_exist(self):
+        """The CI gate floors a per-class cell count so DELETION cannot pass. A floor that lags the
+        real count protects nothing above it: r6 added two lost-race cells and left the floor at 5,
+        so either could be deleted and the gate stayed green (codex, r7 -- my own defect, introduced
+        in the commit that added them). This cell fails when the workflow and the suite disagree, so
+        the floor cannot silently rot again.
+        """
+        workflow = os.path.join(os.path.dirname(ROOT), ".github", "workflows", "plugin-ci.yml")
+        if not os.path.exists(workflow):
+            self.skipTest("workflow not present in this checkout")
+        with open(workflow, encoding="utf-8") as fh:
+            text = fh.read()
+        for cls in (SeamContract, ForkClassification, SeamedStoreCreation,
+                    SeamedReader, SeamedPublisher):
+            actual = len(unittest.defaultTestLoader.getTestCaseNames(cls))
+            declared = re.search(
+                r'"scripts\.tests\.test_plugin_state_store\.%s":\s*(\d+)' % cls.__name__, text)
+            with self.subTest(cls=cls.__name__):
+                self.assertIsNotNone(declared, f"{cls.__name__} has no floor in the CI gate")
+                self.assertEqual(actual, int(declared.group(1)),
+                                 f"{cls.__name__}: {actual} cells but the CI floor says "
+                                 f"{declared.group(1)} -- raise it in plugin-ci.yml")
+
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
 
@@ -2032,6 +2055,176 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             self.assertEqual([], transcript, "the shipped chain recorded through the seam's log")
             self.assertEqual("ABSENT", modes["mid"], "a refused create still made a component")
             self.assertEqual("ABSENT", modes["store"], "a refused create still made the store")
+        self.for_declared_shells(SHELLS, check)
+
+class SeamedReader(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 -- the READER's chain guard, driven through the seam. UNGATED.
+
+    `SeamedStoreCreation` covers `_unleashed_create_store`. It is one of THREE production callers
+    behind the chain, and codex (r7) showed the other two are unguarded on the required leg:
+    weakening `plugin-state-reader.sh:282` from `|| return 1` to `|| :` left all 31 cells green,
+    because none of them calls `_unleashed_store_ok`. The concrete failure is an euid-owned 0700
+    store beneath a group-writable, symlinked or foreign-owned ancestor: it must resolve `stale`,
+    and the mutant admits it instead.
+
+    THIS CELL DOUBLE-SEAMS, and says so. `_unleashed_store_ok` calls `_u_stat`, which forks the
+    Darwin-only `stat -f`, so on Linux it refuses BEFORE reaching the chain call under test. `_u_stat`
+    and `_u_euid` are therefore stubbed alongside the chain. That means these cells prove the chain
+    is consulted and its refusal honoured -- NOT that `_u_stat`'s mode/owner clauses are right. Those
+    clauses are covered by the Darwin-gated classes above, and §5 of the plan is why they stay there.
+    """
+
+    #: `_u_stat`/`_u_euid` stubbed with values that SATISFY the clauses preceding the chain call, so
+    #: a refusal is attributable to the chain and to nothing else.
+    STAT_STUB = (
+        "_u_stat() { _U_MODE=0700; _U_UID=%d; _U_SIZE=0; return 0; }\n"
+        "_u_euid() { _U_EUID=%d; return 0; }\n"
+    )
+
+    def _store_ok(self, shell, allow, broken=None):
+        """Run `_unleashed_store_ok` over a real 0700 store. Returns (rc, transcript)."""
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("seamrdr-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        store = os.path.join(home, "bases")
+        os.makedirs(store, mode=0o700)
+        log = os.path.join(home, "calls")
+        with open(log, "wb"):
+            pass
+        uid = os.geteuid()
+        body = (
+            "_SEAM_CALLS=%s\n_SEAM_A1=%s\n" % (shlex.quote(log),
+                                               shlex.quote(store if allow else "/nothing"))
+            + seam_source(broken)
+            + self.STAT_STUB % (uid, uid)
+            + "_unleashed_store_ok %s\n" % shlex.quote(store)
+            + 'printf "SEAM_RC=%s\\n" "$?"\n'
+        )
+        out = run_shell(shell, body, env={"HOME": home},
+                        sources=(auth, STORE, READER, PUB))[1]
+        rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
+        with open(log, "rb") as fh:
+            raw = fh.read()
+        return (rcs[0] if rcs else None), [r.decode() for r in raw.split(b"\0")[:-1]]
+
+    def test_store_ok_consults_the_guard_for_the_store(self):
+        """reader:282 -- the guard IS called, with the store path, exactly once."""
+        def check(shell):
+            rc, transcript = self._store_ok(shell, allow=True)
+            self.assertEqual(0, rc, "an authenticating store was refused")
+            self.assertEqual(1, len(transcript), f"expected one chain call, got {transcript}")
+            self.assertTrue(transcript[0].endswith("/bases"),
+                            f"the guard was called for {transcript[0]!r}, not the store")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_store_ok_honours_a_refusal(self):
+        """reader:282 -- ENFORCEMENT. This is the cell that reddens when `|| return 1` becomes
+        `|| :`, which is the mutation codex reproduced against a suite that could not see it."""
+        def check(shell):
+            rc, transcript = self._store_ok(shell, allow=False)
+            self.assertEqual(1, rc, "a store whose chain REFUSED was accepted")
+            self.assertEqual(1, len(transcript), "the guard was not consulted before refusing")
+        self.for_declared_shells(SHELLS, check)
+
+class SeamedPublisher(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 -- the PUBLISHER's two chain guards, driven through the seam. UNGATED.
+
+    The third and last production caller behind the chain. `plugin-state-publisher.sh:230` refuses
+    to create a base beneath an ancestor that does not authenticate; `:252` authenticates the
+    published base before any key is derived or anything is written. Neither is reached by
+    `_unleashed_create_store` or `_unleashed_store_ok`, so before this class both were unguarded on
+    the required leg (codex, r7).
+
+    DOUBLE-SEAMED, for the reason given on SeamedReader: `_u_stat` forks the Darwin-only `stat -f`.
+    These cells prove the guard is consulted and its refusal honoured, not that the stat clauses are
+    right.
+
+    ASSERTED ON THE GUARD, NOT ON A COMPLETE PUBLISH. A full publish needs a writable transient
+    under the store, which this fixture deliberately does not build -- the run ends at "the
+    plugin-state transient could not be written at 0600". What each cell asserts is the transcript
+    up to and including its guard, plus the refusal DIAGNOSTIC, which is the observable the guard
+    itself produces.
+    """
+
+    STAT_STUB = SeamedReader.STAT_STUB
+
+    def _publish(self, shell, allow, value_exists):
+        """Run `_unleashed_publish`. Returns (transcript, last failure diagnostic)."""
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("seampub-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        store = os.path.join(home, "bases")
+        os.makedirs(store, mode=0o700)
+        parent = os.path.join(home, "exists")
+        os.makedirs(parent, mode=0o700)
+        value = os.path.join(parent, "base") if not value_exists else os.path.join(home, "data")
+        if value_exists:
+            os.makedirs(value, mode=0o700)
+        uid = os.geteuid()
+        log = os.path.join(home, "calls")
+        with open(log, "wb"):
+            pass
+        allowed = (value, parent, store) if allow else ("/nothing", "/nothing", "/nothing")
+        body = (
+            "_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n_SEAM_A3=%s\n"
+            % tuple(shlex.quote(x) for x in (log,) + allowed)
+            + seam_source()
+            + self.STAT_STUB % (uid, uid)
+            + "_unleashed_publish %s %s\n" % (shlex.quote(store), shlex.quote(value))
+        )
+        err = run_shell(shell, body, env={"HOME": home},
+                        sources=(auth, STORE, READER, PUB))[2]
+        with open(log, "rb") as fh:
+            raw = fh.read()
+        transcript = [r.decode().replace(home, "~") for r in raw.split(b"\0")[:-1]]
+        failures = [l.split("failed: ")[-1] for l in err.splitlines() if "failed: " in l]
+        return transcript, (failures[-1] if failures else "")
+
+    def test_publish_refuses_a_base_whose_own_chain_refuses(self):
+        """publisher:252 -- the published base is authenticated BEFORE a key is derived or anything
+        is written. A refusal must stop there, with nothing composed under the store."""
+        def check(shell):
+            transcript, diagnostic = self._publish(shell, allow=False, value_exists=True)
+            self.assertEqual(1, len(transcript),
+                             f"the walk continued past a refused base: {transcript}")
+            self.assertIn("chain does not authenticate", diagnostic)
+        self.for_declared_shells(SHELLS, check)
+
+    def test_publish_consults_the_guard_before_composing_a_store_path(self):
+        """publisher:252, positive direction: with the base authenticating, the guard is consulted
+        FIRST and the flow proceeds to the store. Without this the refusal cell above could pass
+        because the guard refused everything."""
+        def check(shell):
+            transcript, _ = self._publish(shell, allow=True, value_exists=True)
+            self.assertGreater(len(transcript), 1,
+                               "an authenticating base did not proceed past the guard")
+            self.assertTrue(transcript[0].endswith("/data"),
+                            f"the base was not the first thing authenticated: {transcript}")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_publish_refuses_to_create_beneath_an_unauthenticated_ancestor(self):
+        """publisher:230 -- a base that does NOT exist is created only if its nearest existing
+        ancestor authenticates. This is the arm that stops a base being made under a hostile
+        directory; it is unreachable from the two cells above, which use an existing base."""
+        def check(shell):
+            transcript, diagnostic = self._publish(shell, allow=False, value_exists=False)
+            self.assertEqual(1, len(transcript),
+                             f"the walk continued past a refused ancestor: {transcript}")
+            self.assertIn("nearest existing ancestor does not authenticate", diagnostic)
+        self.for_declared_shells(SHELLS, check)
+
+    def test_publish_creates_beneath_an_authenticated_ancestor(self):
+        """publisher:230, positive direction: the ancestor authenticates, so the base is created and
+        then authenticated in its own right -- the transcript shows both, in that order."""
+        def check(shell):
+            transcript, _ = self._publish(shell, allow=True, value_exists=False)
+            self.assertGreater(len(transcript), 2, f"the create arm did not proceed: {transcript}")
+            self.assertTrue(transcript[0].endswith("/exists"),
+                            f"the ancestor was not authenticated first: {transcript}")
+            self.assertTrue(transcript[1].endswith("/exists/base"),
+                            f"the created base was not authenticated next: {transcript}")
         self.for_declared_shells(SHELLS, check)
 
 if __name__ == "__main__":

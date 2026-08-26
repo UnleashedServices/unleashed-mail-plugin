@@ -87,8 +87,10 @@ jobs:
 
       - name: Assert the ungated plugin-state classes RAN here (COREDEV-2691 §7.4)
         id: seam_ungated
-        # These three are the plugin-state classes that exercise the ENTRY GUARD on this leg --
-        # SeamedStoreCreation is the one that drives a PRODUCTION caller through it. Every chain-walking class in that file is @skipUnless(DARWIN) --
+        # These five are the plugin-state classes that exercise the ENTRY GUARD on this leg. Three
+        # of them drive PRODUCTION callers through it -- and there are exactly three such callers:
+        # `_unleashed_create_store`, `_unleashed_store_ok`, and `_unleashed_publish`. Covering only
+        # the first left reader:282 and publisher:230/:252 unguarded here (codex, r7). Every chain-walking class in that file is @skipUnless(DARWIN) --
         # `_unleashed_auth_chain` refuses on all non-Darwin platforms -- so before COREDEV-2691 the
         # required check exercised no entry guard at all. (Other ungated classes in the file, e.g.
         # EncoderInvariantP and NameLengthBudget, do run here; they cover the encoder and the name
@@ -111,9 +113,11 @@ jobs:
           # cannot see DELETION: remove ten cells and `expected` simply drops to match `ran`, and
           # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
           # added; lowering one has to be a deliberate edit here.
-          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 14,
+          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 15,
                       "scripts.tests.test_plugin_state_store.ForkClassification": 10,
-                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 5}
+                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 7,
+                      "scripts.tests.test_plugin_state_store.SeamedReader": 2,
+                      "scripts.tests.test_plugin_state_store.SeamedPublisher": 4}
           NAMES = list(MINIMUMS)
           problems = []
           for name in NAMES:
