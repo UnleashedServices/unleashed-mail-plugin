@@ -1515,40 +1515,333 @@ FORK_SITE_COUNTS = {
     "/usr/bin/uname": 1, "/usr/bin/getconf": 2, "/bin/mkdir": 2, "/bin/rm": 2, "/bin/mv": 1,
 }
 
-#: A command word in command position, with whatever prefix precedes the basename. Used to require
-#: that every invocation of a sensitive command is written as a LITERAL declared absolute path:
-#: `${VAR:-/bin}/ls`, `"/bin/"ls` and a bare `ls` all reach the same binary while escaping a scan
-#: keyed on literal absolute paths.
-_CMD_WORD_RE = re.compile(
-    r"(?<![\w.-])((?:[^\s;|&()]*/)?)"
-    r"(stat|ls|id|uname|getconf|dsmemberutil|mkdir|rm|mv)(?=\s)"
+#: Shell keywords, POSIX special builtins and the bash/zsh builtins these libraries use. A command
+#: word that is one of these is not a fork; anything that is NOT one of these, NOT a function defined
+#: in the same four files, and NOT a literal declared absolute path is a census FAILURE.
+#:
+#: THIS IS AN ALLOWLIST BECAUSE THE BLACKLIST RE-OPENED TWICE IN ONE ROUND. Its predecessor matched
+#: nine hardcoded basenames followed by whitespace, so `stat>/dev/null` escaped for want of a space
+#: and every command outside those nine escaped by not being named (codex, r19); and it decided
+#: command position from the preceding WORD, so `LC_ALL=C stat -f ...` was ruled not-a-command
+#: because an assignment preceded it (agy, r19). A list of ways to be wrong is only ever as complete
+#: as the last review; a list of ways to be right fails closed on everything else.
+_SHELL_WORDS = frozenset("""
+: . [ [[ ]] alias bg break builtin case cd continue declare do done echo elif else emulate
+esac eval exit export false fc fg fi for getopts hash if in jobs kill let local printf pwd
+read readonly return select set setopt shift shopt source sysopen sysread syswrite test then
+time times trap true type typeset ulimit umask unalias unset unsetopt until wait while
+zmodload zparseopts zstat
+""".split())
+
+#: Words after which the NEXT word is still the command: `command /bin/mkdir ...` forks mkdir, and
+#: `if /bin/mkdir ...; then` forks it too. Yielding these would report a builtin as a fork; skipping
+#: them WITHOUT keeping command position would hide the real command word behind them.
+_CMD_KEEP = frozenset({"command", "builtin", "exec", "env", "nohup", "time", "!", "then", "do",
+                       "else", "elif", "if", "while", "until"})
+
+_CMD_SEP = ";|&"
+#: `NAME=value` / `NAME[k]=value` / `NAME+=value` -- a prefix assignment KEEPS command position.
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
+#: `{fd}<file` and `9>file` are redirections, not commands. Both were read as command words.
+_FDNAME_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}(?=[<>])")
+_FDNUM_RE = re.compile(r"[0-9]+(?=[<>])")
+
+
+def _skip_arith(t, i):
+    """`t[i:i+3]` is `$((`. Return the index after the matching `))`.
+
+    Counting starts at the FIRST `(`, not past both: the first spelling stepped over `$((` before
+    counting, so depth never rose, the closing parens drove it negative, and the scanner ran to the
+    end of the file. Every command word after `_uk_n=$(( _uk_n & 255 ))` -- more than half of
+    plugin-state-store.sh -- was silently unscanned, and the census still reported zero offenders.
+    """
+    d = 0
+    i += 1                                   # step over the `$`; the first `(` is the depth opener
+    while i < len(t):
+        if t[i] == "(":
+            d += 1
+        elif t[i] == ")":
+            d -= 1
+            if d == 0:
+                return i + 1
+        i += 1
+    return i
+
+
+def _match_close(t, i):
+    """`i` points at the `(` of a `$(`. Return the index AFTER its matching `)`, quote-aware."""
+    d, q = 0, None
+    while i < len(t):
+        c = t[i]
+        if q:
+            if c == "\\" and q == '"' and i + 1 < len(t):
+                i += 2
+                continue
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            continue
+        if c == "(":
+            d += 1
+        elif c == ")":
+            d -= 1
+            if d == 0:
+                return i + 1
+        i += 1
+    return i
+
+
+def _skip_redirect(t, i):
+    """Step over a redirection operator and its target; neither is a command word."""
+    i += 1
+    while i < len(t) and t[i] in "<>&-":
+        i += 1
+    while i < len(t) and t[i] in " \t":
+        i += 1
+    q = None
+    while i < len(t):
+        c = t[i]
+        if q:
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            continue
+        if c in " \t\n" or c in _CMD_SEP or c in "()":
+            break
+        i += 1
+    return i
+
+
+def _skip_case_pattern(t, i):
+    """Step over a `case` arm's pattern list up to the `)` that ends it.
+
+    `''|*[!0-9]*)` is not a command, and reading it as one reported twenty-odd offenders in the
+    encoder's own byte table. `(` inside a pattern is balanced, and quotes are honoured.
+    """
+    q, d = None, 0
+    while i < len(t):
+        c = t[i]
+        if q:
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            continue
+        if c == "(":
+            d += 1
+            i += 1
+            continue
+        if c == ")":
+            if d == 0:
+                return i + 1
+            d -= 1
+            i += 1
+            continue
+        i += 1
+    return i
+
+
+def _command_words(text):
+    """Yield (offset, word) for every word in COMMAND position in a run of shell source.
+
+    A command substitution is SCANNED, not skipped, and scanned wherever it appears -- including
+    inside double quotes, which is where most of this codebase's forks live:
+    `_x="$(/usr/bin/stat -f '%p' -- "$1")"`. The first version read that whole thing as one word, so
+    ten of the seventeen real fork sites were never examined at all while the census reported clean.
+    """
+    i, n, quote, cmd = 0, len(text), None, True
+    pending_case, case_pat = False, False
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+            i += 1
+            continue
+        if quote == '"':
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if text[i:i + 3] == "$((":
+                i = _skip_arith(text, i)
+                continue
+            if text[i:i + 2] == "$(":
+                j = _match_close(text, i + 1)
+                yield from _command_words(text[i + 2:j - 1])
+                i = j
+                continue
+            if c == '"':
+                quote = None
+            i += 1
+            continue
+        if c in " \t":
+            i += 1
+            continue
+        if c == "\n":
+            cmd = True                       # a newline ends the command, NOT a case arm: an arm's
+            i += 1                           # pattern sits on the line after its `;;`
+            continue
+        if case_pat:
+            if re.match(r"\s*esac\b", text[i:]):
+                case_pat = False             # `;;` then `esac`: there is no further pattern, and
+                continue                     # scanning for one ran off the end of the file
+            i = _skip_case_pattern(text, i)
+            cmd, case_pat = True, False
+            continue
+        if text[i:i + 3] == "$((":
+            i = _skip_arith(text, i)
+            continue
+        if text[i:i + 2] == "$(":
+            j = _match_close(text, i + 1)
+            yield from _command_words(text[i + 2:j - 1])
+            i, cmd = j, False
+            continue
+        if c == "`":
+            j = text.find("`", i + 1)
+            j = n if j < 0 else j
+            yield from _command_words(text[i + 1:j])
+            i, cmd = j + 1, False
+            continue
+        if text[i:i + 2] == ";;":
+            case_pat, cmd = True, False
+            i += 2
+            continue
+        if c in _CMD_SEP:
+            cmd = True
+            i += 1
+            continue
+        m = _FDNAME_RE.match(text, i) or _FDNUM_RE.match(text, i)
+        if m:                                # tested BEFORE `{`: `exec {fd}<file` reached the
+            i = _skip_redirect(text, m.end())  # brace arm first and yielded `fd}` as a command
+            continue
+        if c in "<>":
+            i = _skip_redirect(text, i)
+            continue
+        if c in "(){}":
+            cmd = True
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            i += 1
+            continue
+        start, q, braces = i, None, 0
+        while i < n:
+            ch = text[i]
+            if ch == "\\" and q != "'" and i + 1 < n:
+                i += 2
+                continue
+            if q:
+                if q == '"' and text[i:i + 3] == "$((":
+                    i = _skip_arith(text, i)
+                    continue
+                if q == '"' and text[i:i + 2] == "$(":
+                    j = _match_close(text, i + 1)
+                    yield from _command_words(text[i + 2:j - 1])
+                    i = j
+                    continue
+                if ch == q:
+                    q = None
+                i += 1
+                continue
+            if ch in "'\"":
+                q = ch
+                i += 1
+                continue
+            if text[i:i + 3] == "$((":
+                i = _skip_arith(text, i)
+                continue
+            if text[i:i + 2] == "$(":
+                j = _match_close(text, i + 1)
+                yield from _command_words(text[i + 2:j - 1])
+                i = j
+                continue
+            if text[i:i + 2] == "${":
+                braces += 1
+                i += 2
+                continue
+            if braces:
+                if ch == "}":
+                    braces -= 1
+                i += 1
+                continue
+            if ch in " \t\n" or ch in _CMD_SEP or ch in "()<>`":
+                break
+            i += 1
+        word = text[start:i]
+        if not word:
+            i += 1
+            continue
+        if cmd:
+            if _ASSIGN_RE.match(word):
+                continue                     # a prefix assignment; the command is still ahead
+            if word == "case":
+                pending_case, cmd = True, False
+                continue
+            if word in ("for", "select"):
+                cmd = False                  # the loop variable and its word list are not commands
+                continue
+            if word in _CMD_KEEP:
+                continue
+            yield start, word
+            cmd = False
+        elif word == "in" and pending_case:
+            pending_case, case_pat = False, True
+
+
+def _defined_functions(paths):
+    """Every function these libraries define. A call to one of them is not a fork."""
+    out = set()
+    for p in paths:
+        for _, code in _logical_lines(p):
+            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_:.-]*)\s*\(\)", code)
+            if m:
+                out.add(m.group(1))
+    return out
+
+
+#: (source, why) pairs the scanner MUST flag: every spelling a reviewer has used to reach a binary
+#: while escaping a scan keyed on literal absolute paths, plus the two that re-opened it at r19.
+_CMD_ESCAPES = (
+    ("stat>/dev/null", "no whitespace after the basename (codex, r19)"),
+    ('readlink -f -- "$1"', "a bare command outside the nine the blacklist named (codex, r19)"),
+    ("LC_ALL=C stat -f '%p' /x", "an env-assignment prefix before the command (agy, r19)"),
+    ('${UNLEASHED_BIN:-/bin}/ls -ld -- "$1"', "assembled by parameter expansion (codex, r5)"),
+    ('"/bin/"ls -lde -- "$1"', "split across quotes (codex, r4)"),
+    ('ls -lde -- "$1"', "a bare ls (codex, r1)"),
+    ('_x="$(stat -f \'%p\' -- "$1")"', "inside a substitution inside double quotes"),
+    ("if stat -f x; then :; fi", "after a keyword"),
+    ("command stat -f x", "behind `command`"),
 )
 
-#: Shell words after which the NEXT word is a command: the parser is in command position again.
-_CMD_LEAD = {"if", "then", "else", "elif", "while", "until", "do", "!", "time", "elif"}
+#: (source, why) pairs the scanner MUST NOT flag. Without these the invariant could be satisfied by
+#: a scanner that flags everything, which is the false-positive direction -- and this census gates
+#: the required `validate` job, so a false RED there is worse than a false green here.
+_CMD_ACCEPTED = (
+    ('/bin/mkdir -m 700 "$_cs_d"', "the legitimate literal absolute path"),
+    ('printf "%s" "$x"', "a shell builtin"),
+    ("zmodload zsh/stat", "a builtin whose ARGUMENT looks like a sensitive basename"),
+    ('_x="$(/usr/bin/stat -f \'%p\' -- "$1")"', "a declared fork inside a quoted substitution"),
+    ("case $x in stat) : ;; esac", "a case PATTERN that happens to spell a command"),
+)
 
+#: `_EXE_RE` sites that are NOT command words, per executable. `/usr/bin/getconf` is NAMED in a
+#: publisher diagnostic string -- "the NAME_MAX probe (/usr/bin/getconf) failed" -- and the
+#: absolute-path census counts it because it scans text. Declaring the difference is what keeps
+#: "the scanner missed a real fork" distinguishable from "the two censuses measure different things".
+FORK_MENTIONS = {"/usr/bin/getconf": 1}
 
-def _in_command_position(code, start):
-    """Is the word at `start` the COMMAND of a simple command, rather than one of its arguments?
-
-    `zmodload zsh/stat` matches a naive command-word scan and is not a fork; requiring command
-    position is what tells the two apart -- codex's own wording was "non-literal command word in
-    COMMAND position".
-    """
-    before = code[:start].rstrip()
-    if not before:
-        return True
-    if before[-1] in ";|&({`":
-        return True
-    if before.endswith("$("):
-        return True
-    return before.rsplit(None, 1)[-1] in _CMD_LEAD if before.rsplit(None, 1) else True
-
-
-#: Commands whose portability this file reasons about. Used only by the "no bare or variable
-#: invocation" invariant -- `$STAT -f ...` and a bare `stat -f ...` both escape any scan keyed on
-#: absolute paths, so the invariant is what makes the absolute-path scan sufficient.
-_SENSITIVE = ("stat", "ls", "id", "uname", "getconf", "dsmemberutil", "mkdir", "rm", "mv")
 
 
 def _ls_flags(rest):
@@ -1856,27 +2149,69 @@ class ForkClassification(unittest.TestCase):
     def test_every_command_word_is_a_literal_declared_absolute_path(self):
         """The absolute-path census is only sufficient because this invariant holds.
 
-        Three spellings reach the same binary while escaping a scan keyed on literal absolute paths,
-        and each was found by a reviewer rather than by me: a bare `ls`, `"/bin/"ls` split across
-        quotes (r4), and `${UNLEASHED_BIN:-/bin}/ls` assembled by parameter expansion (r5). The last
-        one is the reason this cell exists in this form -- it was invisible to all three earlier
-        scanners, and `-ld` instead of `-lde` omits ACL entries, so a Darwin component carrying
-        `group:staff allow write,delete` authenticates.
-
-        Rather than enumerate the ways a command word can be obscured, require the opposite: the
-        text immediately preceding the basename must be EXACTLY a declared executable's directory.
+        Every command word in the four shipped libraries must be a shell builtin or keyword, a
+        function these same files define, or a LITERAL declared absolute path. Anything else fails,
+        by name and line, with no list of forbidden spellings to keep current.
         """
+        funcs = _defined_functions((AUTH, STORE, READER, PUB))
         offenders = []
         for path in (AUTH, STORE, READER, PUB):
             base = os.path.basename(path)
-            for n, code in _logical_lines(path):
-                for m in _CMD_WORD_RE.finditer(code):
-                    if not _in_command_position(code, m.start()):
-                        continue        # e.g. `zmodload zsh/stat` -- an argument, not a fork
-                    word = m.group(1) + m.group(2)
-                    if word not in FORK_EXES:
-                        offenders.append(f"{base}:{n}: {word!r} is not a literal declared path")
-        self.assertEqual([], offenders, "a fork's command word is not a literal absolute path")
+            lines = list(_logical_lines(path))
+            joined = "\n".join(code for _, code in lines)
+            # Offsets map back to real line numbers, so a report names the site rather than the file.
+            spans, off = [], 0
+            for num, code in lines:
+                spans.append((off, num))
+                off += len(code) + 1
+            for start, word in _command_words(joined):
+                if word in _SHELL_WORDS or word in funcs or word in FORK_EXES:
+                    continue
+                num = max((n for o, n in spans if o <= start), default=lines[0][0])
+                offenders.append(f"{base}:{num}: {word!r} is not a builtin, a defined function, "
+                                 "or a literal declared absolute path")
+        self.assertEqual([], offenders, "a command word is neither known nor a literal absolute path")
+
+    def test_the_command_word_scanner_flags_every_known_escape_and_no_legitimate_form(self):
+        """The control, in BOTH directions, because only one of them was ever checked.
+
+        The escapes are the real ones reviewers found, r1 through r19. The accepted forms are the
+        other direction: a scanner that flags everything satisfies the invariant above and turns the
+        required `validate` job red on correct code, which is the worse failure here.
+        """
+        funcs = _defined_functions((AUTH, STORE, READER, PUB))
+
+        def unknown(src):
+            return [w for _, w in _command_words(src)
+                    if w not in _SHELL_WORDS and w not in funcs and w not in FORK_EXES]
+
+        for src, why in _CMD_ESCAPES:
+            with self.subTest(escape=why):
+                self.assertTrue(unknown(src), f"{src!r} escaped the scanner: {why}")
+        for src, why in _CMD_ACCEPTED:
+            with self.subTest(accepted=why):
+                self.assertEqual([], unknown(src), f"{src!r} was flagged but is legitimate: {why}")
+
+    def test_the_command_word_scanner_reaches_every_shipped_fork(self):
+        """Zero offenders means nothing if the scanner never reached the forks.
+
+        It did not, for most of one afternoon: an arithmetic-expansion bug stopped the walk halfway
+        through plugin-state-store.sh and a quoted substitution swallowed ten more sites, and the
+        invariant above reported clean throughout. This compares the command-word census against the
+        text-level `_EXE_RE` census per executable; the only permitted difference is a declared
+        MENTION in a diagnostic string.
+        """
+        seen = collections.Counter()
+        for path in (AUTH, STORE, READER, PUB):
+            joined = "\n".join(code for _, code in _logical_lines(path))
+            for _, word in _command_words(joined):
+                if word in FORK_EXES:
+                    seen[word] += 1
+        expected = {exe: FORK_SITE_COUNTS[exe] - FORK_MENTIONS.get(exe, 0)
+                    for exe in FORK_SITE_COUNTS}
+        self.assertEqual(expected, dict(seen),
+                         "the command-word scanner and the absolute-path census disagree on how "
+                         "many times an executable is INVOKED")
 
     def test_the_store_is_created_with_the_exact_mkdir_spelling(self):
         """A SOURCE-level control, and labelled as one because that is what it is.
