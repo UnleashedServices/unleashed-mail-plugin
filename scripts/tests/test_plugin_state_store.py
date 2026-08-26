@@ -1795,6 +1795,26 @@ def _command_words(text):
             if word in ("for", "select"):
                 cmd = False                  # the loop variable and its word list are not commands
                 continue
+            if word == "eval":
+                # `eval`'S ARGUMENT IS CODE. Treating `eval` as an ordinary builtin let
+                # `eval 'stat>/dev/null'` through the allowlist untouched (codex, r20) -- reopening
+                # the bare-command escape r19 had just closed, using a construct the shipped
+                # libraries already contain twice. A STATIC single-quoted argument is scanned as the
+                # code it is; anything else cannot be scanned at all and is REPORTED, because an
+                # `eval` assembled at runtime defeats every census in this file by construction.
+                yield start, word
+                j = i
+                while j < n and text[j] in " \t":
+                    j += 1
+                if j < n and text[j] == "'":
+                    k = text.find("'", j + 1)
+                    if k > j:
+                        yield from _command_words(text[j + 1:k])
+                        i, cmd = k + 1, False
+                        continue
+                yield j, "eval<argument is not a static literal>"
+                cmd = False
+                continue
             if word in _CMD_KEEP:
                 continue
             yield start, word
@@ -1826,6 +1846,9 @@ _CMD_ESCAPES = (
     ('_x="$(stat -f \'%p\' -- "$1")"', "inside a substitution inside double quotes"),
     ("if stat -f x; then :; fi", "after a keyword"),
     ("command stat -f x", "behind `command`"),
+    ("eval 'stat>/dev/null'", "inside a STATIC eval -- the r19 allowlist's own escape (codex, r20)"),
+    ('eval "$cmd"', "a RUNTIME-assembled eval, which no census can scan (codex, r20)"),
+    ("eval 'ls -lde -- \"$1\"'", "a bare sensitive command inside a static eval"),
 )
 
 #: (source, why) pairs the scanner MUST NOT flag. Without these the invariant could be satisfied by
@@ -1837,6 +1860,11 @@ _CMD_ACCEPTED = (
     ("zmodload zsh/stat", "a builtin whose ARGUMENT looks like a sensitive basename"),
     ('_x="$(/usr/bin/stat -f \'%p\' -- "$1")"', "a declared fork inside a quoted substitution"),
     ("case $x in stat) : ;; esac", "a case PATTERN that happens to spell a command"),
+    # The shipped spelling, both sites: plugin-state-store.sh:68 and -reader.sh:148. A static
+    # single-quoted `eval` is scannable, and scanning it finds only `case`/`esac` -- so the rule
+    # above must not flag it, or the census goes red on correct code.
+    ("eval 'case \"${(t)LC_ALL}\" in *readonly*) _uk_lc_ro=1 ;; esac'",
+     "the shipped static eval -- scannable, and clean"),
 )
 
 #: `_EXE_RE` sites that are NOT command words, per executable. `/usr/bin/getconf` is NAMED in a
