@@ -18,15 +18,19 @@ bash only.
 
 import ast
 import io
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: The repo root -- the sibling probe below runs from here so `scripts.tests...` imports.
+ROOT_PARENT = os.path.dirname(ROOT)
 LIB = os.path.join(ROOT, "lib")
 AUTH = os.path.join(LIB, "plugin-state-auth.sh")
 STORE = os.path.join(LIB, "plugin-state-store.sh")
@@ -1268,16 +1272,35 @@ class SeamContract(SeamedChain, unittest.TestCase):
         proxies for a dynamic property. This one runs the sibling cells and reads what they actually
         passed, so an unexecuted control cannot look like an executed one.
         """
-        siblings = [n for n in unittest.defaultTestLoader.getTestCaseNames(SeamContract)
-                    if n != "test_every_declared_mutant_is_executed_by_some_cell"]
-        _MUTANTS_EXERCISED.clear()
-        result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(
-            unittest.TestSuite(SeamContract(n) for n in siblings))
-        self.assertTrue(result.wasSuccessful(),
+        # A SUBPROCESS, not a nested TextTestRunner. Running the siblings in-process inherited
+        # this process's own state: under `python3 -m unittest -k <thisname>` the filter reached the
+        # nested run, every sibling was filtered out, `_MUTANTS_EXERCISED` stayed empty and the cell
+        # reported all eleven mutants unexecuted -- a FALSE RED on a correct tree (agy, r4). The
+        # module-level set was also shared across repeated runs. A fresh interpreter has neither
+        # problem.
+        probe = (
+            "import json, unittest, sys;"
+            "sys.path.insert(0, %r);"
+            "import scripts.tests.test_plugin_state_store as m;"
+            "names=[n for n in unittest.defaultTestLoader.getTestCaseNames(m.SeamContract)"
+            " if n != 'test_every_declared_mutant_is_executed_by_some_cell'];"
+            "r=unittest.TextTestRunner(stream=open(__import__('os').devnull,'w'),verbosity=0)"
+            ".run(unittest.TestSuite(m.SeamContract(n) for n in names));"
+            "print(json.dumps({'ok': r.wasSuccessful(), 'ran': r.testsRun,"
+            " 'seen': sorted(m._MUTANTS_EXERCISED)}))"
+        ) % ROOT_PARENT
+        out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                             cwd=ROOT_PARENT,
+                             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(0, out.returncode, f"the sibling probe did not run: {out.stderr[-600:]}")
+        report = json.loads(out.stdout.strip().splitlines()[-1])
+        self.assertTrue(report["ok"],
                         "sibling cells failed, so mutant coverage cannot be read from this run")
-        unexecuted = sorted(set(SEAM_MUTANTS) - _MUTANTS_EXERCISED)
+        self.assertGreater(report["ran"], 0, "the sibling probe executed no cells")
+        exercised = set(report["seen"])
+        unexecuted = sorted(set(SEAM_MUTANTS) - exercised)
         self.assertEqual([], unexecuted, "declared mutants that no cell EXECUTES")
-        covered = {SEAM_MUTANTS[m][0] for m in _MUTANTS_EXERCISED if m in SEAM_MUTANTS}
+        covered = {SEAM_MUTANTS[m][0] for m in exercised if m in SEAM_MUTANTS}
         self.assertEqual(set(range(len(SEAM_LINES))), covered,
                          "a seam predicate has no executed mutant")
 
@@ -1365,7 +1388,13 @@ def _ls_flags(rest):
     for a in rest:
         if a == "--":
             break
-        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+        if a.startswith("--"):
+            # A GNU long option (`--color`, `--time-style=...`) is not portable and is not a flag
+            # bundle either. Revision 3 skipped it silently and classified the fork portable
+            # (codex + agy, r4). None propagates to classify_fork, which the census treats as
+            # unclassified -- a human decides.
+            return None
+        if a.startswith("-") and len(a) > 1:
             flags.update(a[1:])
     return flags
 
@@ -1407,6 +1436,14 @@ def _command_args(text):
             continue
         if ch == "`" or text[i:i + 2] == "$(":
             raise ValueError("command substitution in the argument region; classify by hand")
+        if quote == '"':
+            # Quote state is resolved FIRST: a `}` inside `${x:-"}"}` closed the brace depth while
+            # still inside quotes, and a later `;` then truncated the argv (agy, r4).
+            out.append(ch)
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
         if text[i:i + 2] == "${":
             braces += 1
             out.append(ch)
@@ -1418,18 +1455,28 @@ def _command_args(text):
             out.append(ch)
             i += 1
             continue
-        if quote == '"':
-            out.append(ch)
-            if ch == '"':
-                quote = None
-            i += 1
-            continue
         if ch in "'\"":
             quote = ch
             out.append(ch)
             i += 1
             continue
-        if not braces and ch in ");|&<>":
+        if not braces and ch in "<>":
+            # A REDIRECTION, not a terminator: `/bin/ls -l 2>/dev/null -e -- /x` continues with
+            # real argv after it, and treating `>` as the end classified that as portable while the
+            # runtime argv held `-e` (codex, r4). Skip the operator and its target, then carry on.
+            # `<(` is process substitution -- a substitution, so refuse rather than guess.
+            if text[i:i + 2] in ("<(", ">("):
+                raise ValueError("process substitution in the argument region; classify by hand")
+            i += 1
+            while i < len(text) and text[i] in "<>&":
+                i += 1
+            while i < len(text) and text[i].isspace():
+                i += 1
+            while i < len(text) and not text[i].isspace() and text[i] not in ");|&":
+                i += 1
+            out.append(" ")
+            continue
+        if not braces and ch in ");|&":
             break
         out.append(ch)
         i += 1
@@ -1464,7 +1511,7 @@ def classify_fork(argv):
         return None                      # an unrecognised stat shape must be classified by hand
     if exe == "/bin/ls":
         flags = _ls_flags(rest)
-        if not flags:
+        if not flags:          # None (a long option) or empty: unrecognised either way
             return None
         if "e" in flags:
             return ("nonportable", f"ls -{''.join(sorted(flags))}: -e (ACL) is BSD-only")
@@ -1613,6 +1660,29 @@ class ForkClassification(unittest.TestCase):
                         offenders.append(f"{os.path.basename(path)}:{n}: {m.group(0)!r}")
         self.assertEqual([], offenders, "a fork is written without an absolute path")
 
+    def test_the_store_is_created_with_the_exact_mkdir_spelling(self):
+        """A SOURCE-level control, and labelled as one because that is what it is.
+
+        agy (r4) showed that adding `-p` to the production mkdir leaves all 27 cells green. I could
+        not build a behavioural control for it: `_unleashed_create_store` walks top, mid, store in
+        order, so a component's parent always exists by the time its mkdir runs, and `-p` is
+        therefore BEHAVIOURALLY EQUIVALENT in every fixture reachable here -- measured, not assumed.
+        The hazard is latent rather than live: `-p` would create missing intermediates WITHOUT the
+        per-component authentication if the loop order ever changed, and it also turns the
+        lost-the-race `elif [ -d ]` branch into dead code.
+
+        So this pins the spelling instead of pretending to test the behaviour. `-m 700` itself IS
+        behaviourally controlled -- dropping it and changing it to `1700` both redden
+        SeamedStoreCreation now.
+        """
+        with open(STORE, encoding="utf-8") as fh:
+            body = [ln for ln in fh if "/bin/mkdir" in ln and not ln.lstrip().startswith("#")]
+        self.assertEqual(1, len(body), f"expected exactly one mkdir call site, got {body}")
+        call = body[0].strip()
+        self.assertIn("/bin/mkdir -m 700 ", call, "the store mkdir lost its exact -m 700 spelling")
+        self.assertNotIn(" -p", call,
+                         "`mkdir -p` would create intermediates without authenticating them")
+
     def test_the_declared_tables_match_the_shipped_sources(self):
         """DERIVED and FAIL-CLOSED, in both directions.
 
@@ -1621,10 +1691,18 @@ class ForkClassification(unittest.TestCase):
         fork stayed green. Here every absolute-path executable found must be DECLARED, and every
         `argv`-kind site must CLASSIFY; anything else fails with its file:line.
         """
-        undeclared, unclassified, seen = [], [], set()
+        undeclared, unclassified, split_exe, seen = [], [], [], set()
         for path in (AUTH, STORE, READER, PUB):
             base = os.path.basename(path)
             for n, code in _logical_lines(path):
+                # `"/bin/"ls -lde` runs the real binary while `_EXE_RE` matches nothing, so the
+                # site escapes both this census and the bare/variable invariant (codex, r4). An
+                # executable that only appears once the quotes are removed is a split spelling.
+                dequoted = code.replace('"', "").replace("'", "")
+                extra = {m.group(1) for m in _EXE_RE.finditer(dequoted)} - {
+                    m.group(1) for m in _EXE_RE.finditer(code)}
+                for e in sorted(extra):
+                    split_exe.append(f"{base}:{n}: {e} written across quotes")
                 for m in _EXE_RE.finditer(code):
                     exe = m.group(1)
                     seen.add(exe)
@@ -1640,6 +1718,7 @@ class ForkClassification(unittest.TestCase):
                         continue
                     if classify_fork([exe] + rest) is None:
                         unclassified.append(f"{base}:{n}: {exe} {' '.join(rest[:4])}")
+        self.assertEqual([], split_exe, "a fork's executable is split across quotes")
         self.assertEqual([], undeclared, "a fork site's executable is not in FORK_EXES")
         self.assertEqual([], unclassified, "a fork site's argv could not be classified")
         self.assertEqual(set(FORK_EXES), seen,
@@ -1731,7 +1810,11 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             raw = fh.read()
         transcript = [r.decode() for r in raw.split(b"\0")[:-1]]
         names = {claude: "claude", mid: "mid", store: "store"}
-        modes = {n: (oct(os.stat(p).st_mode & 0o777) if os.path.isdir(p) else "ABSENT")
+        # 0o7777, NOT 0o777. Masking to twelve bits erased setuid/setgid/sticky, so mutating the
+        # production `mkdir -m 700` to `-m 1700` left rc, transcript, existence AND the reported
+        # modes all unchanged while producing a store `_unleashed_store_ok` refuses forever
+        # (codex, r4 -- reproduced). The reader requires EXACTLY 0700.
+        modes = {n: (oct(os.stat(p).st_mode & 0o7777) if os.path.isdir(p) else "ABSENT")
                  for p, n in names.items()}
         return (rcs[0] if rcs else None), [names.get(t, t) for t in transcript], modes
 
