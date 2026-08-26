@@ -2870,6 +2870,67 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
         self.assertNotEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"}, records,
                             "keying every record alike was not observable -- the cell is inert")
 
+    def _read_store(self, shell, reader=READER):
+        """Drive the SHIPPED `_unleashed_read_store` with a CALLER-POISONED cache.
+
+        The chain is seamed to ALLOW so that the only variable is whether the poison is honoured;
+        without that, the chain's own refusal masks the difference and the cell cannot discriminate
+        (measured before this cell was written).
+        """
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("readstore-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        store = os.path.join(home, "bases")
+        os.makedirs(store, mode=0o777)                      # HOSTILE: world-writable
+        body = ('_unleashed_auth_chain() { return 0; }\n'
+                '_u_pf_sep\n'
+                '_U_STAT_CACHE="${_u_pf_nl}${_u_pf_rs}%s${_u_pf_nl}0700 4096 %d 999${_u_pf_nl}"\n'
+                % (store, os.geteuid())
+                + "_unleashed_read_store %s\n" % shlex.quote(store)
+                + 'printf "STATE=%s\\n" "${_UNLEASHED_POINTER_STATE:-resolved}"\n')
+        out = run_shell(shell, body, env={"HOME": home}, sources=(auth, STORE, reader, PUB))[1]
+        line = [l for l in out.splitlines() if l.startswith("STATE=")]
+        return line[-1][len("STATE="):] if line else ""
+
+    def test_read_store_discards_a_caller_poisoned_cache_before_using_it(self):
+        """`_unleashed_read_store` must call `_u_probes_reset` FIRST.
+
+        Found by a reachability census rather than by review: `_unleashed_read_store`,
+        `_unleashed_store_absent` and `_unleashed_unresolved` were the reader's only functions NO
+        ungated cell could reach (~/.claude/handoffs/reach-census.py). The entry point is where the
+        ordering property lives -- a caller arrives holding a forged `_U_STAT_CACHE` claiming the
+        store is 0700 and euid-owned, and the reset is what discards it before anything consults it.
+
+        Removing the reset makes a WORLD-WRITABLE store report `none` -- benign, rule 4, "there is no
+        store" -- instead of `stale`, so every caller proceeds as though nothing were there. That is
+        a worse outcome than a refusal, not merely a different one.
+        """
+        def check(shell):
+            self.assertEqual("stale", self._read_store(shell),
+                             "a hostile store was not reported stale")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_removing_the_reset_from_read_store_is_observable(self):
+        """The positive control for the ordering above."""
+        mutant = with_mutation(
+            '    _rs_store="$1"\n    _u_probes_reset                                  '
+            '# no inherited probe state is honoured',
+            '    _rs_store="$1"\n    :                                                '
+            '# no inherited probe state is honoured', path=READER)
+        self.addCleanup(os.unlink, mutant)
+        self.assertNotEqual("stale", self._read_store(SHELLS[0], reader=mutant),
+                            "dropping _u_probes_reset was not observable -- the cell is inert")
+
+    def test_the_euid_probe_answers_the_real_effective_uid(self):
+        """`_u_euid_probe` forks `/usr/bin/id -u`, which is POSIX and runs here. It was unreached
+        only because every other cell stubs `_u_euid` above it (reachability census)."""
+        def check(shell):
+            out = run_shell(shell, '_u_euid_probe\n', sources=(AUTH, STORE, READER, PUB))[1]
+            self.assertEqual(str(os.geteuid()), out.strip(),
+                             "the euid probe did not report this process's effective uid")
+        self.for_declared_shells(SHELLS, check)
+
     def test_the_miss_paths_redden_when_flipped_to_success(self):
         """The positive control: BOTH miss paths, mutated to `return 0`, must break the contract."""
         for old, new, label in (
