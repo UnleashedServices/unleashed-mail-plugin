@@ -1742,16 +1742,21 @@ class ForkClassification(unittest.TestCase):
         ("publisher identity probe", ("/usr/bin/stat", "-f", "%d %i", "--", "/some/value")),
         ("auth _u_acl_enumerate", ("/bin/ls", "-lde", "--", "/some/component")),
         ("auth prefetch ACL", ("/bin/ls", "-lde", "-d", "--", "/a", "/b")),
-        ("auth _u_principal_uuid", ("/usr/bin/dsmemberutil", "getuuid", "-U", "someone")),
+        ("auth _u_principal_uuid", ("/usr/bin/dsmemberutil", "getuuid", "-U", "<user>")),
     )
     PORTABLE_ARGV = (
         ("auth _u_euid", ("/usr/bin/id", "-u")),
         ("auth _u_principal", ("/usr/bin/id", "-un")),
         ("auth _u_platform", ("/usr/bin/uname", "-s")),
         ("store name budget", ("/usr/bin/getconf", "NAME_MAX", "/some/path")),
-        ("store mkdir", ("/bin/mkdir", "-p", "--", "/some/dir")),
-        ("publisher rm", ("/bin/rm", "-f", "--", "/some/tmp")),
-        ("publisher mv", ("/bin/mv", "-f", "--", "/a", "/b")),
+        ("publisher mkdir", ("/bin/mkdir", "-p", "--", "/some/dir")),
+        # NO `--`: the shipped calls are `/bin/rm -f "$_UNLEASHED_TRANSIENT"` and
+        # `/bin/mv -f "$_UNLEASHED_TRANSIENT" "$_pb_entry"`. The `--` here was INVENTED, and the
+        # exact-argv cell caught it on its first clean run -- two entries in this table described
+        # calls that do not exist as written. (Not exploitable: the operand is a composed absolute
+        # path, so it cannot be read as an option. But the table was fiction.)
+        ("publisher rm", ("/bin/rm", "-f", "<transient>")),
+        ("publisher mv", ("/bin/mv", "-f", "<transient>", "<entry>")),
     )
 
     def test_each_nonportable_argv_keeps_its_cell_gated(self):
@@ -1898,6 +1903,55 @@ class ForkClassification(unittest.TestCase):
         self.assertNotIn("-p", _command_args(' -m 700 "$_cs_d" 2>/dev/null; then'))
         self.assertIn("-p", _command_args(' -m 700 -""p "$_cs_d" 2>/dev/null; then'),
                       "`-\"\"p` must resolve to the `-p` a token comparison can reject")
+
+    def test_the_shipped_fork_argv_matches_the_declared_argv_exactly(self):
+        """Every declared fork's argv must appear VERBATIM in the shipped source.
+
+        The census classifies any `stat -f` as non-portable and counts the site, so it is blind to
+        the FORMAT STRING changing. Substituting `%u` (owner uid) for `%g` (group id) is one
+        character, leaves branches, return codes, fork count and call order identical, and makes a
+        foreign-owned component authenticate whenever its GID equals the effective uid (codex, r18).
+
+        This compares the declared argv against the source as an EXACT token sequence, so any field
+        that moves, is dropped, or is swapped for a different specifier reddens -- whatever it does
+        to control flow, which is nothing.
+        """
+        # CODE ONLY. The raw text contains prose like "`/bin/ls -lde -d` over every component of
+        # the chain", so searching it found the argv in a COMMENT and a dropped `-e` at the real
+        # call site still passed. That is the third time in this work that a lexical search counted
+        # a mention as the thing itself -- the reachability census counted a label and a
+        # redefinition the same way. `_logical_lines` strips comments and joins continuations.
+        sources = "\n".join(code for path in (AUTH, PUB, STORE)
+                            for _, code in _logical_lines(path))
+        missing = []
+        for label, argv in self.NONPORTABLE_ARGV + self.PORTABLE_ARGV:
+            # Rebuild the invocation as the source spells it: quoted format strings, `--` retained.
+            # Keep the LITERAL prefix only: the exe, its flags, and any format string. Trailing
+            # elements are placeholders standing in for runtime values -- the source spells them
+            # `"$1"` or `"$_cs_d"` -- so comparing them verbatim is meaningless. `dsmemberutil
+            # getuuid -U someone` is the clearest case: `someone` is invented, `getuuid -U` is not.
+            # Placeholders are MARKED `<like-this>`, never inferred. A first attempt stopped at the
+            # first non-flag word, which cannot tell the literal subcommand `getuuid` from the
+            # invented operand `someone` -- both are alphabetic. Angle brackets never appear in a
+            # real argv, so the marker is unambiguous and the table states which parts are real.
+            # `--` is KEPT, and the scan stops after it. Without it the two `/bin/ls` sites share
+            # the prefix `/bin/ls -lde`, so dropping the `e` at ONE site left the other matching and
+            # the check passed -- an argv appearing SOMEWHERE is not the same as it appearing at
+            # every site that declares it. With the terminator, `-lde --` and `-lde -d --` are
+            # distinct strings and each site stands alone.
+            literal = [argv[0]]
+            for a in argv[1:]:
+                if a.startswith("<") or a.startswith("/"):
+                    break
+                literal.append("'%s'" % a if " " in a else a)
+                if a == "--":
+                    break
+            head = " ".join(literal)
+            if head not in sources:
+                missing.append(f"{label}: {head!r} not found verbatim in the shipped sources")
+        self.assertEqual([], missing,
+                         "a declared fork's argv does not appear verbatim -- the shipped call was "
+                         "changed without updating the table, or vice versa")
 
     def test_the_declared_tables_match_the_shipped_sources(self):
         """DERIVED and FAIL-CLOSED, in both directions.
@@ -2914,8 +2968,18 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
     #: component, the ALL-OR-NOTHING rule discarded the whole ACL cache, and `_U_ACL_CACHE` was
     #: EMPTY while the cell still passed -- the stat half worked and nothing asserted the other
     #: (codex, r17: measured `STAT_BYTES=81 ACL_BYTES=0`).
+    #: The stat seam VERIFIES THE FORMAT IT WAS ASKED FOR. The first spelling ignored the argv and
+    #: always emitted UID-shaped data, so changing the shipped format from `%u` (owner uid) to `%g`
+    #: (group id) -- one character -- left every observable identical while a foreign-owned
+    #: component authenticated whenever its GID equalled the effective UID (codex, r18: shipped
+    #: RC=1 UID=1501, mutant RC=0 UID=501). A fixture that does not read the format cannot detect
+    #: the format changing.
     PRODUCER_SEAM = (
         "/usr/bin/stat() {\n"
+        "  case \" $* \" in\n"
+        "    *\" -f %p\\ %z\\ %u\\ %i\\ %N \"*|*\"%p %z %u %i %N\"*) : ;;\n"
+        "    *) printf 'SEAM-REJECT: unexpected stat format: %s\\n' \"$*\" >&2; return 9 ;;\n"
+        "  esac\n"
         "  printf '%s\\n' '40755 4096 0 111 /' '41777 4096 0 222 /hostile'"
         " '40700 4096 501 333 /hostile/leaf'\n"
         "  return 0\n}\n"
@@ -2937,8 +3001,9 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
                 + "_u_chain_prefetch /hostile/leaf\n"
                 + 'printf "ACLBYTES=%s\\n" "${#_U_ACL_CACHE}"\n'
                 + 'for p in / /hostile /hostile/leaf; do\n'
-                + '  _U_MODE=; _U_UID=; _U_INO=\n'
-                + '  if _u_stat_cache_get "$p"; then printf "%s=%s\\n" "$p" "$_U_MODE";'
+                + '  _U_MODE=; _U_SIZE=; _U_UID=; _U_INO=\n'
+                + '  if _u_stat_cache_get "$p"; then'
+                  ' printf "%s=%s/%s/%s/%s\\n" "$p" "$_U_MODE" "$_U_SIZE" "$_U_UID" "$_U_INO";'
                   ' else printf "%s=MISS\\n" "$p"; fi\n'
                 + '  blk="$(_u_acl_cache_get "$p")"\n'
                 + '  ace=no; case "$blk" in *allow*) ace=yes ;; esac\n'
@@ -2962,9 +3027,13 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
         """
         def check(shell):
             r = self._prefetch_records(shell)
-            self.assertEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"},
+            # ALL FOUR FIELDS. Asserting only the mode left the UID unchecked, which is the field
+            # a `%u` -> `%g` format substitution corrupts (codex, r18).
+            self.assertEqual({"/": "0755/4096/0/111",
+                              "/hostile": "1777/4096/0/222",
+                              "/hostile/leaf": "0700/4096/501/333"},
                              {k: v for k, v in r.items() if k.startswith("/")},
-                             "a stat record is not keyed to the component it describes")
+                             "a cached stat field is wrong or the record is mis-keyed")
             # THE ACL CACHE TOO, and that the ACE lands on the component that owns it. Asserting
             # only the stat half is what let a completely empty `_U_ACL_CACHE` pass.
             self.assertNotEqual("0", r.get("ACLBYTES"),
