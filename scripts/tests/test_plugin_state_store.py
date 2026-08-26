@@ -18,6 +18,7 @@ bash only.
 
 import ast
 import collections
+import hashlib
 import io
 import json
 import os
@@ -1369,8 +1370,17 @@ class SeamContract(SeamedChain, unittest.TestCase):
         self.assertEqual(sorted(set(keys)), sorted(keys),
                          f"MINIMUMS declares a duplicate key; Python would use the LAST: {keys}")
         declared = ast.literal_eval(node)
-        for cls in (SeamContract, ForkClassification, SeamedStoreCreation,
-                    SeamedReader, SeamedPublisher, PrefetchCacheContract):
+        # DERIVED, not curated. A hardcoded tuple stays green when a NEW seamed class is added with
+        # no floor beside it -- which is the rot mode a floor list actually has, and the one this
+        # cell could not see until r19 added a seventh class. Every `SeamedChain` subclass in this
+        # module is a seam class by construction; ForkClassification is named explicitly because it
+        # is the one floored class that is not one -- it tests the fork classifier, not the seam.
+        seamed = sorted((c for c in list(globals().values())
+                         if isinstance(c, type) and issubclass(c, SeamedChain)
+                         and issubclass(c, unittest.TestCase)),
+                        key=lambda c: c.__name__)
+        self.assertGreater(len(seamed), 1, "no SeamedChain classes found -- this cell is inert")
+        for cls in [ForkClassification] + seamed:
             name = "scripts.tests.test_plugin_state_store." + cls.__name__
             actual = len(unittest.defaultTestLoader.getTestCaseNames(cls))
             with self.subTest(cls=cls.__name__):
@@ -1378,8 +1388,9 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(actual, declared[name],
                                  f"{cls.__name__}: {actual} cells but the CI floor says "
                                  f"{declared[name]} -- update plugin-ci.yml")
-        self.assertEqual(6, len(declared),
-                         f"the CI gate floors {len(declared)} classes, expected 6: {sorted(declared)}")
+        self.assertEqual(len(seamed) + 1, len(declared),
+                         f"the CI gate floors {len(declared)} classes, expected "
+                         f"{len(seamed) + 1}: {sorted(declared)}")
 
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
@@ -3131,6 +3142,186 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
                 else:
                     rc = self._cache_get(SHELLS[0], "/gamma", auth=mutant, prime="/beta")[0]
                 self.assertEqual(0, rc, f"the {label} mutant did not flip -- this control is inert")
+
+
+class UnauthenticatedEffectCensus(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 -- the CONVERSE of every other seamed class in this file. UNGATED.
+
+    Eleven mutation classes are closed and every one of them BREAKS A GUARD THAT EXISTS: a call is
+    deleted, a refusal is not honoured, an operand is wrong, a parsed field is the wrong one. Each is
+    caught by a cell ANCHORED ON THAT SITE. Nothing asserted the converse -- that a production entry
+    point produces NO effect at all while the chain refuses -- and the anchoring is exactly why: a
+    write ADDED with no chain call beside it has no site for a cell to anchor on.
+
+    MEASURED BEFORE THIS CLASS WAS WRITTEN, on `_unleashed_create_store`:
+
+        -    _cs_top="${_cs_mid%/*}"            # ${HOME}/.claude
+        +    _cs_top="${_cs_mid%/*}"; : > "$_cs_top/.um-staging" 2>/dev/null || :
+
+    That creates a file inside the user's `~/.claude` BEFORE the first authentication, and all 65
+    cells passed. rc, the ordered transcript and the three-component mode map are all unchanged --
+    the transcript can only record calls that happen, and the mode map covers the three components
+    the cells were written for.
+
+    TWO NEARBY SPELLINGS DO REDDEN, and the difference is the whole point. `mkdir -p` reddens because
+    `-p` creates an ancestor the fixtures happen to check; a literal `/bin/mkdir` reddens because
+    ForkClassification counts mkdir SITES. Neither is a property of the guard. A redirect is neither
+    a fork nor an ancestor, and it walked straight through both.
+
+    THE ORACLE IS THE WHOLE TREE -- kind, mode, size, symlink target and content hash for every path
+    under HOME -- because every narrower oracle in this file has been defeated by an effect it was
+    not looking at, and a narrower one here would be defeated by the next spelling rather than the
+    last one.
+
+    THE CALL LOG LIVES OUTSIDE THE SNAPSHOTTED TREE. The seam appends to it on every call, so a log
+    under HOME would make the tree differ on every run and these cells would fail for the one reason
+    that is not a defect.
+    """
+
+    #: One entry point per production caller behind the chain. The reader and publisher arms are
+    #: DOUBLE-SEAMED for the reason SeamedReader states: `_u_stat` forks the Darwin-only `stat -f`,
+    #: so on Linux they refuse before reaching the call under test.
+    ENTRIES = ("create_store", "store_ok", "publish")
+
+    #: (label, which library, old, new, entry point). Each is a write a maintainer could add BY
+    #: ACCIDENT -- a staging marker, a breadcrumb -- with no chain call beside it. Both are
+    #: line-count preserving, so §7.1's rule holds for them.
+    UNGUARDED_WRITES = (
+        ("store: a staging marker beside the store's parent", STORE,
+         '    _cs_top="${_cs_mid%/*}"            # ${HOME}/.claude',
+         '    _cs_top="${_cs_mid%/*}"; : > "$_cs_top/.um-staging" 2>/dev/null || :',
+         "create_store"),
+        ("publisher: a breadcrumb inside the store", PUB,
+         '        _pb_anc="$_pb_folded"',
+         '        _pb_anc="$_pb_folded"; : > "$_pb_store/.pub-attempt" 2>/dev/null || :',
+         "publish"),
+    )
+
+    @staticmethod
+    def _snapshot(root):
+        """Every path under `root` as rel -> (kind, mode, ...). Not just names, not just mtimes.
+
+        A rewrite with identical length leaves size alone, so regular files carry a content hash; a
+        directory swapped for a symlink leaves both alone, so links carry their target and are never
+        followed (`os.walk` does not descend them, and `islink` is tested BEFORE `isdir`, which does
+        follow). Mode is twelve bits, not nine: masking to 0o777 erased a setgid store once already.
+        """
+        out = {}
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in list(dirnames) + list(filenames):
+                p = os.path.join(dirpath, name)
+                rel = os.path.relpath(p, root)
+                mode = oct(os.lstat(p).st_mode & 0o7777)
+                if os.path.islink(p):
+                    out[rel] = ("link", mode, os.readlink(p))
+                elif os.path.isdir(p):
+                    out[rel] = ("dir", mode)
+                else:
+                    with open(p, "rb") as fh:
+                        blob = fh.read()
+                    out[rel] = ("file", mode, len(blob), hashlib.sha256(blob).hexdigest())
+        return out
+
+    def _build(self, entry, home, log):
+        """Build one entry point's fixture under `home` and return the body that drives it.
+
+        The allowlist slots are all set to a path no fixture can produce, so the seam REFUSES every
+        call while still recording it -- which is what lets these cells tell "refused" apart from
+        "never reached the chain at all".
+        """
+        uid = os.geteuid()
+        decl = ("_SEAM_CALLS=%s\n_SEAM_A1=/nothing\n_SEAM_A2=/nothing\n_SEAM_A3=/nothing\n"
+                % shlex.quote(log)) + seam_source()
+        if entry == "create_store":
+            os.makedirs(os.path.join(home, ".claude"), mode=0o700)
+            store = os.path.join(home, ".claude", "unleashed-mail", "bases")
+            return decl + "_unleashed_create_store %s\n" % shlex.quote(store)
+        store = os.path.join(home, "bases")
+        os.makedirs(store, mode=0o700)
+        table = {shlex.quote(store): ("0700", 0, os.stat(store).st_ino)}
+        if entry == "store_ok":
+            return (decl + SeamedReader.stat_stub(table, uid)
+                    + "_unleashed_store_ok %s\n" % shlex.quote(store))
+        parent = os.path.join(home, "exists")
+        os.makedirs(parent, mode=0o700)
+        table[shlex.quote(parent)] = ("0700", 0, os.stat(parent).st_ino)
+        value = os.path.join(parent, "base")          # ABSENT: this is the arm that creates things
+        return (decl + SeamedReader.stat_stub(table, uid)
+                + "_unleashed_publish %s %s\n" % (shlex.quote(store), shlex.quote(value)))
+
+    def _census(self, shell, entry, libs=None):
+        """Run one entry point under a refusing chain. Returns (transcript, before, after)."""
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("seamcensus-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        logdir = scratch_home("seamcensuslog-")
+        self.addCleanup(shutil.rmtree, logdir, ignore_errors=True)
+        log = os.path.join(logdir, "calls")
+        with open(log, "wb"):
+            pass
+        body = self._build(entry, home, log)
+        store_lib, pub_lib = libs if libs else (STORE, PUB)
+        # SNAPSHOT AFTER THE FIXTURE IS BUILT: `_build` creates the directories the entry point
+        # needs, and folding them into the diff would make every cell fail on its own fixture.
+        before = self._snapshot(home)
+        run_shell(shell, body, env={"HOME": home},
+                  sources=(auth, store_lib, READER, pub_lib))
+        after = self._snapshot(home)
+        with open(log, "rb") as fh:
+            # NORMALISED against the fixture root. Two runs get two scratch homes, so a raw
+            # transcript differs between the shipped and mutant runs for a reason that has nothing
+            # to do with either -- and the pairing cell below compares the two transcripts.
+            transcript = [r.decode().replace(home, "~") for r in fh.read().split(b"\0")[:-1]]
+        return transcript, before, after
+
+    def _assert_untouched(self, shell, entry):
+        transcript, before, after = self._census(shell, entry)
+        self.assertTrue(transcript,
+                        f"{entry} never consulted the chain -- this cell proves nothing")
+        added = {k: v for k, v in after.items() if k not in before}
+        changed = {k: (before[k], v) for k, v in after.items()
+                   if k in before and before[k] != v}
+        removed = [k for k in before if k not in after]
+        self.assertEqual(({}, {}, []), (added, changed, removed),
+                         f"{shell} {entry}: the refusal path touched the tree")
+
+    def test_create_store_leaves_the_tree_untouched_while_the_chain_refuses(self):
+        """`_unleashed_create_store` must reach the chain, refuse, and write nothing anywhere."""
+        self.for_declared_shells(SHELLS, lambda sh: self._assert_untouched(sh, "create_store"))
+
+    def test_store_ok_leaves_the_tree_untouched_while_the_chain_refuses(self):
+        """`_unleashed_store_ok` is a read path -- it must not write on the refusal path either."""
+        self.for_declared_shells(SHELLS, lambda sh: self._assert_untouched(sh, "store_ok"))
+
+    def test_publish_leaves_the_tree_untouched_while_the_chain_refuses(self):
+        """`_unleashed_publish` with an ABSENT base: the arm that creates, refused before it does."""
+        self.for_declared_shells(SHELLS, lambda sh: self._assert_untouched(sh, "publish"))
+
+    def test_an_unguarded_write_is_invisible_to_the_transcript_and_visible_to_the_census(self):
+        """The pairing that makes this class worth its runtime, in BOTH directions at once.
+
+        For each mutant: the transcript is byte-identical to the shipped run -- so every cell in this
+        file whose oracle is the transcript, the return code or a named component is blind to it --
+        and the tree census differs. If `_snapshot` ever degenerates to a constant, the second half
+        fails, so the mechanism controls itself rather than being asserted sound.
+        """
+        def check(shell):
+            for label, path, old, new, entry in self.UNGUARDED_WRITES:
+                with self.subTest(mutant=label):
+                    mutant = with_mutation(old, new, path=path)
+                    self.addCleanup(os.unlink, mutant)
+                    libs = ((mutant, PUB) if path == STORE else (STORE, mutant))
+                    clean_t, clean_b, clean_a = self._census(shell, entry)
+                    dirty_t, dirty_b, dirty_a = self._census(shell, entry, libs=libs)
+                    self.assertEqual(clean_t, dirty_t,
+                                     f"{label}: the transcript DID move -- pick a subtler mutant, "
+                                     "this one is already covered")
+                    self.assertEqual(clean_b, clean_a, f"{label}: the shipped run is not clean")
+                    self.assertNotEqual(dirty_b, dirty_a,
+                                        f"{label}: the census did not see the write")
+        self.for_declared_shells(SHELLS, check)
+
 
 if __name__ == "__main__":
     unittest.main()
