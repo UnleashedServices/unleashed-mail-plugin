@@ -3922,7 +3922,14 @@ class PortablePathIdentity(unittest.TestCase):
         '  case "$1" in\n'
         '    -f) printf \'stat: cannot read file system information\\n\' >&2; return 1 ;;\n'
         '    -c) shift; _f="$1"; shift; [ "$1" = "--" ] && shift\n'
-        '        case "$_f" in "%d %i") command /usr/bin/stat -f \'%d %i\' -- "$@" ;; *) return 1 ;; esac ;;\n'
+        # THE SIMULATION MUST RUN ON THE HOST IT IS RUN ON. The first spelling delegated the `-c`
+        # arm to `command /usr/bin/stat -f`, which is right on macOS and WRONG on a real Linux
+        # runner -- there `-f` is the file-system query this whole ticket is about, so the cell
+        # would have gone red on the required ubuntu leg while passing locally. Try the host's own
+        # `-c` first and fall back to `-f`: GNU answers the first, BSD the second.
+        '        case "$_f" in "%d %i") command /usr/bin/stat -c \'%d %i\' -- "$@" 2>/dev/null \\\n'
+        '                                 || command /usr/bin/stat -f \'%d %i\' -- "$@" ;;\n'
+        '                       *) return 1 ;; esac ;;\n'
         '    *)  command /usr/bin/stat "$@" ;;\n'
         '  esac\n'
         '}\n'
