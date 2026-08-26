@@ -1939,7 +1939,7 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
     )
 
     def _create_store(self, shell, seamed, race=False, refuse_at=None, lose_race=False,
-                      mid_exists=False):
+                      mid_exists=False, top_exists=True):
         """Run `_unleashed_create_store` on a fresh HOME. Returns (rc, transcript, modes).
 
         `race=True` seams `_unleashed_nearest_existing` so that `mid` APPEARS between the walk and
@@ -1951,7 +1951,8 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         home = scratch_home("seamstore-")
         self.addCleanup(shutil.rmtree, home, ignore_errors=True)
         claude = os.path.join(home, ".claude")
-        os.makedirs(claude, mode=0o700)
+        if top_exists:
+            os.makedirs(claude, mode=0o700)
         mid = os.path.join(claude, "unleashed-mail")
         if mid_exists:
             # Makes `_UNLEASHED_NEAREST` == mid, so it DIFFERS from `_cs_top`. Every other fixture
@@ -1982,13 +1983,17 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         with open(log, "rb") as fh:
             raw = fh.read()
         transcript = [r.decode() for r in raw.split(b"\0")[:-1]]
-        names = {claude: "claude", mid: "mid", store: "store"}
+        # Two maps, deliberately: `names` labels the TRANSCRIPT, which includes `home` when the
+        # fixture leaves `.claude` absent; the mode assertions below cover only the three components
+        # they were written for. Folding `home` into both broke that assertion.
+        names = {home: "home", claude: "claude", mid: "mid", store: "store"}
+        mode_paths = ((claude, "claude"), (mid, "mid"), (store, "store"))
         # 0o7777, NOT 0o777. Masking to twelve bits erased setuid/setgid/sticky, so mutating the
         # production `mkdir -m 700` to `-m 1700` left rc, transcript, existence AND the reported
         # modes all unchanged while producing a store `_unleashed_store_ok` refuses forever
         # (codex, r4 -- reproduced). The reader requires EXACTLY 0700.
         modes = {n: (oct(os.stat(p).st_mode & 0o7777) if os.path.isdir(p) else "ABSENT")
-                 for p, n in names.items()}
+                 for p, n in mode_paths}
         return (rcs[0] if rcs else None), [names.get(t, t) for t in transcript], modes
 
     #: (label, race, refuse_at) -> the transcript the walk must stop at, MEASURED. Each row refuses
@@ -2091,6 +2096,26 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             self.assertEqual(0, rc, "the seamed production caller did not succeed")
             self.assertEqual(["mid", "store", "store"], transcript,
                              "the guard was not called with the NEAREST EXISTING ancestor")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_every_component_the_loop_creates_is_authenticated(self):
+        """store.sh:227 -- the loop must walk `$_cs_top` as well as mid and store.
+
+        Every other fixture pre-creates `~/.claude`, so the top iteration authenticates a component
+        that already existed and dropping `$_cs_top` from the loop bound changes nothing observable.
+        On a clean install -- or a top-appeared race -- the mutant creates `mid` THROUGH a component
+        it never validated (codex, r12 -- reproduced against the production function).
+
+        Leaving top absent makes the loop responsible for creating and authenticating it, and the
+        transcript grows from four entries to five. The permissive counting seam is used because the
+        walk needs four distinct allowlist entries and the seam carries three.
+        """
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, refuse_at=99,
+                                                   top_exists=False)
+            self.assertEqual(0, rc, "a clean install did not complete")
+            self.assertEqual(["home", "claude", "mid", "store", "store"], transcript,
+                             "a component the loop CREATED was not authenticated")
         self.for_declared_shells(SHELLS, check)
 
     def test_each_component_that_appeared_is_authenticated_as_itself(self):
@@ -2442,7 +2467,13 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
             raw = fh.read()
         transcript = [r.decode().replace(home, "~") for r in raw.split(b"\0")[:-1]]
         failures = [l.split("failed: ")[-1] for l in err.splitlines() if "failed: " in l]
-        return transcript, (failures[-1] if failures else "")
+        # WAS THE VALUE CREATED? Without this the refusal cells assert only rc, transcript and
+        # diagnostic -- and MOVING the ancestor guard below the `mkdir -p` on publisher.sh:233
+        # leaves all three unchanged while creating beneath a refused ancestor (codex, r12). The
+        # same filesystem column was added to SeamedStoreCreation's refusal rows at r7 and never
+        # propagated here, which is fixing one member of a class and calling it closed.
+        created = os.path.isdir(value)
+        return transcript, (failures[-1] if failures else ""), created
 
     def test_publish_authenticates_the_nearest_existing_ancestor_not_the_immediate_parent(self):
         """publisher.sh:230 must authenticate `$_pb_anc` -- the NEAREST EXISTING ancestor.
@@ -2455,7 +2486,7 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         availability rather than a bypass, but it is a real shipped regression.
         """
         def check(shell):
-            transcript, _ = self._publish(shell, allow=True, value_exists=False, depth=2)
+            transcript, _, created = self._publish(shell, allow=True, value_exists=False, depth=2)
             self.assertGreater(len(transcript), 1, f"the create arm did not proceed: {transcript}")
             self.assertTrue(transcript[0].endswith("/exists"),
                             f"the guard was not called with the nearest EXISTING ancestor: "
@@ -2468,7 +2499,7 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         """publisher:252 -- the published base is authenticated BEFORE a key is derived or anything
         is written. A refusal must stop there, with nothing composed under the store."""
         def check(shell):
-            transcript, diagnostic = self._publish(shell, allow=False, value_exists=True)
+            transcript, diagnostic, created = self._publish(shell, allow=False, value_exists=True)
             self.assertEqual(1, len(transcript),
                              f"the walk continued past a refused base: {transcript}")
             self.assertIn("chain does not authenticate", diagnostic)
@@ -2479,7 +2510,7 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         FIRST and the flow proceeds to the store. Without this the refusal cell above could pass
         because the guard refused everything."""
         def check(shell):
-            transcript, _ = self._publish(shell, allow=True, value_exists=True)
+            transcript, _, created = self._publish(shell, allow=True, value_exists=True)
             self.assertGreater(len(transcript), 1,
                                "an authenticating base did not proceed past the guard")
             self.assertTrue(transcript[0].endswith("/data"),
@@ -2491,17 +2522,20 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         ancestor authenticates. This is the arm that stops a base being made under a hostile
         directory; it is unreachable from the two cells above, which use an existing base."""
         def check(shell):
-            transcript, diagnostic = self._publish(shell, allow=False, value_exists=False)
+            transcript, diagnostic, created = self._publish(shell, allow=False, value_exists=False)
             self.assertEqual(1, len(transcript),
                              f"the walk continued past a refused ancestor: {transcript}")
             self.assertIn("nearest existing ancestor does not authenticate", diagnostic)
+            self.assertFalse(created,
+                             "the base was created beneath an ancestor that REFUSED -- the guard "
+                             "ran after the mkdir instead of before it")
         self.for_declared_shells(SHELLS, check)
 
     def test_publish_creates_beneath_an_authenticated_ancestor(self):
         """publisher:230, positive direction: the ancestor authenticates, so the base is created and
         then authenticated in its own right -- the transcript shows both, in that order."""
         def check(shell):
-            transcript, _ = self._publish(shell, allow=True, value_exists=False)
+            transcript, _, created = self._publish(shell, allow=True, value_exists=False)
             self.assertGreater(len(transcript), 2, f"the create arm did not proceed: {transcript}")
             self.assertTrue(transcript[0].endswith("/exists"),
                             f"the ancestor was not authenticated first: {transcript}")
