@@ -969,7 +969,7 @@ SEAM_MUTANTS = {
 COMPOUND_FIRST_LINE = '    { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1'
 
 
-#: Mutant names actually PASSED to `seam_source` during this process. The meta-control reads this
+#: Mutant names actually EXECUTED in a shell during this process. The meta-control reads this
 #: rather than the source text: a lexical count was satisfied by a comment, and an AST walk was
 #: satisfied by an unreachable `if False:` call while missing a real dict-mediated one (codex, r2
 #: and r3). Execution is the only signal that means what the control claims.
@@ -988,7 +988,6 @@ def seam_source(broken=None, compound=False):
     if broken is not None:
         idx, replacement = SEAM_MUTANTS[broken]
         lines[idx] = replacement
-        _MUTANTS_EXERCISED.add(broken)
     return "_unleashed_auth_chain() {\n" + "\n".join(lines) + "\n}\n"
 
 
@@ -1039,6 +1038,14 @@ class SeamedChain:
             + 'printf "SEAM_ALIVE\\n"\n'
         )
         out = run_shell(shell, body)[1]
+        if broken is not None:
+            # Recorded HERE, where the mutant is actually EXECUTED, not in `seam_source` where it is
+            # merely BUILT. `test_every_mutant_preserves_the_seam_line_count` calls seam_source for
+            # every declared mutant to compare line counts, which populated the set as a SIDE EFFECT
+            # and blinded the meta-control: deleting a whole behavioural cell left it GREEN (agy,
+            # r6 -- reproduced). A control that cannot fail is the defect this campaign has chased
+            # more than any other, and it had reappeared inside the cell built to prevent it.
+            _MUTANTS_EXERCISED.add(broken)
         alive = "SEAM_ALIVE" in out
         rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
 
@@ -1840,7 +1847,17 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
     shipped chain refuses, and only a seam can carry the caller through.
     """
 
-    def _create_store(self, shell, seamed, race=False, refuse_at=None):
+    #: `/bin/mkdir` seamed to LOSE THE RACE for `mid`: the directory appears, but mkdir reports
+    #: failure -- exactly what happens when a concurrent publisher wins. A slash-named shell
+    #: function DOES take precedence over an absolute-path command in both bash and zsh (measured),
+    #: which is what makes this arm reachable at all.
+    LOST_RACE_MKDIR = (
+        '/bin/mkdir() { _last=""; for _a in "$@"; do _last="$_a"; done;\n'
+        '  if [ "$_last" = %s ]; then command /bin/mkdir -m 700 "$_last"; return 1; fi\n'
+        '  command /bin/mkdir "$@"; }\n'
+    )
+
+    def _create_store(self, shell, seamed, race=False, refuse_at=None, lose_race=False):
         """Run `_unleashed_create_store` on a fresh HOME. Returns (rc, transcript, modes).
 
         `race=True` seams `_unleashed_nearest_existing` so that `mid` APPEARS between the walk and
@@ -1867,6 +1884,8 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             + ("_unleashed_nearest_existing() { /bin/mkdir -m 700 %s 2>/dev/null; "
                "_UNLEASHED_NEAREST=%s; }\n" % (shlex.quote(mid), shlex.quote(claude))
                if race else "")
+            + ((self.LOST_RACE_MKDIR % shlex.quote(mid)).replace("\\n", "\n")
+               if lose_race else "")
             + "_unleashed_create_store %s\n" % shlex.quote(store)
             + 'printf "SEAM_RC=%s\\n" "$?"\n'
         )
@@ -1965,6 +1984,39 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             rc, transcript, _ = self._create_store(shell, seamed=True, refuse_at=99)
             self.assertEqual(0, rc, "the counting seam refuses even when it should not")
             self.assertEqual(["claude", "mid", "store", "store"], transcript)
+        self.for_declared_shells(SHELLS, check)
+
+    def test_a_component_that_lost_the_mkdir_race_is_still_authenticated(self):
+        """store.sh:252 -- the LOST-RACE arm, and the fifth production behaviour these cells reach.
+
+        `_unleashed_create_store` handles `mkdir` failing because a concurrent publisher already
+        created the component: it falls through to `elif [ -d ]`, does NOT treat that as an error,
+        and authenticates the component that appeared. codex (r6) found that changing that branch's
+        `:` to `continue` -- an idiomatic "another publisher won; continue" refactor, needing no
+        scanner evasion -- SKIPS that authentication and then creates the next component through
+        whatever now sits there, including a planted symlink. Measured: rc=0 with a directory
+        created outside the store, in both shells.
+
+        Neither existing fixture reaches this arm: ordinary creation makes `mkdir` succeed, and the
+        `race=True` fixture creates `mid` BEFORE the loop. This one makes `mkdir` fail while the
+        directory appears, which is the race itself.
+        """
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, lose_race=True)
+            self.assertEqual(0, rc, "the lost-race path did not complete")
+            self.assertEqual(["claude", "mid", "store", "store"], transcript,
+                             "the component that won the race was not authenticated")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_a_refused_component_that_won_the_race_stops_the_create(self):
+        """Enforcement for the same arm: when the component that appeared FAILS authentication --
+        the planted-symlink case -- the create must refuse and must not build beneath it."""
+        def check(shell):
+            rc, transcript, modes = self._create_store(
+                shell, seamed=True, lose_race=True, refuse_at=2)
+            self.assertEqual(1, rc, "a refused race winner still returned success")
+            self.assertEqual(["claude", "mid"], transcript, "the walk did not stop at the refusal")
+            self.assertEqual("ABSENT", modes["store"], "the store was built beneath a refused component")
         self.for_declared_shells(SHELLS, check)
 
     def test_without_the_seam_the_same_call_refuses_and_creates_nothing(self):
