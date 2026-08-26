@@ -26,6 +26,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 import tempfile
 import unittest
 
@@ -1256,10 +1257,15 @@ class SeamContract(SeamedChain, unittest.TestCase):
         """
         with open(__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
-        drivers = {"seam_call", "seam_calls", "_create_store"}
+        # Every driver and every seamed class. The first spelling listed only SeamContract and
+        # SeamedStoreCreation, so replacing a READER or PUBLISHER cell's `for_declared_shells(...)`
+        # with `check(SHELLS[0])` kept the count at 43, kept this cell green, and silently dropped
+        # that production guard's zsh arm (codex, r10).
+        drivers = {"seam_call", "seam_calls", "_create_store", "_auth_entry", "_store_ok", "_publish"}
         offenders = []
         for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
-                    and n.name in ("SeamContract", "SeamedStoreCreation")):
+                    and n.name in ("SeamContract", "SeamedStoreCreation",
+                                   "SeamedReader", "SeamedPublisher")):
             for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)
                        and n.name.startswith("test_")):
                 called = {n.func.attr for n in ast.walk(fn)
@@ -1287,35 +1293,52 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 # IDENTITY, not name. An executable shim named `zsh` that launches bash passes
                 # basename, uniqueness, absolute-path and `which` checks alike (codex, r9). Ask the
                 # interpreter what it is.
-                probe = ('printf "%s\\n" "${BASH_VERSION:+bash}${ZSH_VERSION:+zsh}"')
-                got = subprocess.run([sh, "-c", probe], capture_output=True, text=True).stdout.strip()
+                # Both variables are CLEARED first: a correct bash launched from a zsh session
+                # inherits ZSH_VERSION and answers "bashzsh" -- a false RED on a correct shell
+                # (codex, r10). `env -u` removes them from the child's environment; each shell then
+                # sets only its own.
+                probe = 'printf "%s\\n" "${BASH_VERSION:+bash}${ZSH_VERSION:+zsh}"'
+                got = subprocess.run(
+                    ["/usr/bin/env", "-u", "BASH_VERSION", "-u", "ZSH_VERSION", sh, "-c", probe],
+                    capture_output=True, text=True).stdout.strip()
                 self.assertEqual(os.path.basename(sh), got,
                                  f"{sh} identifies itself as {got!r}, not {os.path.basename(sh)!r}")
 
     def test_the_ci_floors_match_the_cells_that_exist(self):
         """The CI gate floors a per-class cell count so DELETION cannot pass, and a floor that lags
-        the real count protects nothing above it: r6 added two cells and left the floor at 5, so
-        either could be deleted and the gate stayed green. This cell has caught that rot three
-        times since.
+        the real count protects nothing above it. This cell has caught that rot three times.
 
-        It parses the MINIMUMS assignment and REJECTS DUPLICATE KEYS. The first spelling searched
-        the whole workflow text and took the FIRST regex match, while Python builds the dict from
-        the LAST duplicate key -- so one accidental duplicate made the self-check read 16 while the
-        gate enforced 15, and both passed with a cell deleted (codex, r9). Reading a different value
-        than the code executes is the whole failure mode this cell exists to prevent.
+        It PARSES THE GATE'S OWN PYTHON with `ast` and evaluates the mapping the gate will actually
+        build. Two earlier spellings read something different from what the gate executes, which is
+        precisely the failure they existed to prevent:
+          * a regex over the whole workflow took the FIRST match while Python takes the LAST
+            duplicate key -- one duplicate made the check read 16 while the gate enforced 15;
+          * the regex also matched inside COMMENTS, so prefixing one entry with `#` left the check
+            green while the runtime gate silently dropped to four classes and stopped enforcing that
+            class's floor and no-skip condition entirely (codex, r9 and r10).
+        `ast` sees neither comments nor first-match ordering, and duplicate keys are detected on the
+        parsed node rather than on text.
         """
         workflow = os.path.join(os.path.dirname(ROOT), ".github", "workflows", "plugin-ci.yml")
         if not os.path.exists(workflow):
             self.skipTest("workflow not present in this checkout")
         with open(workflow, encoding="utf-8") as fh:
             text = fh.read()
-        block = re.search(r"MINIMUMS = \{(.*?)\}", text, re.S)
-        self.assertIsNotNone(block, "the CI gate no longer declares a MINIMUMS mapping")
-        pairs = re.findall(r'"(scripts\.tests\.[A-Za-z_.]+)":\s*(\d+)', block.group(1))
-        keys = [k for k, _ in pairs]
+        # The gate's Python lives in a heredoc inside the step's `run:`; take it verbatim.
+        body = re.search(r"python3 - <<'PY'\n(.*?)\n\s*PY\n", text, re.S)
+        self.assertIsNotNone(body, "the seam gate no longer embeds a Python heredoc")
+        source = textwrap.dedent(body.group(1))
+        assigns = [n for n in ast.walk(ast.parse(source))
+                   if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == "MINIMUMS" for t in n.targets)]
+        self.assertEqual(1, len(assigns),
+                         f"expected exactly one MINIMUMS assignment, found {len(assigns)}")
+        node = assigns[0].value
+        self.assertIsInstance(node, ast.Dict, "MINIMUMS is not a dict literal")
+        keys = [k.value for k in node.keys]
         self.assertEqual(sorted(set(keys)), sorted(keys),
                          f"MINIMUMS declares a duplicate key; Python would use the LAST: {keys}")
-        declared = {k: int(v) for k, v in pairs}
+        declared = ast.literal_eval(node)
         for cls in (SeamContract, ForkClassification, SeamedStoreCreation,
                     SeamedReader, SeamedPublisher):
             name = "scripts.tests.test_plugin_state_store." + cls.__name__
@@ -1325,7 +1348,8 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(actual, declared[name],
                                  f"{cls.__name__}: {actual} cells but the CI floor says "
                                  f"{declared[name]} -- update plugin-ci.yml")
-        self.assertEqual(len(declared), 5, f"the CI gate floors {len(declared)} classes, expected 5")
+        self.assertEqual(5, len(declared),
+                         f"the CI gate floors {len(declared)} classes, expected 5: {sorted(declared)}")
 
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
@@ -2229,6 +2253,13 @@ class SeamedReader(SeamedChain, unittest.TestCase):
                             "the race did not install a symlink; rc proves nothing here")
             self.assertTrue(os.path.exists(entry + ".real"),
                             "the race did not move the validated entry aside")
+            # A DANGLING or wrong-target link satisfies both assertions above while the open (or the
+            # descriptor inode check) refuses BEFORE ENT-2c -- so the re-test could be deleted and
+            # the cell would still pass (codex, r10). The link must reach the object ENT-1 validated.
+            self.assertTrue(os.path.samefile(entry, entry + ".real"),
+                            "the race's symlink does not resolve to the moved-aside original")
+            self.assertEqual(st.st_ino, os.stat(entry).st_ino,
+                             "the race's symlink resolves to a DIFFERENT inode than ENT-1 validated")
         with open(log, "rb") as fh:
             raw = fh.read()
         names = {store: "parent", value: "target"}
@@ -2244,8 +2275,10 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         store entry is a link ENT-1 forbids. Deleting the re-test changes NOTHING on a healthy
         fixture, so the three cells above cannot see it -- measured green before this cell existed.
 
-        The swap is interposed at `_u_euid`, which BOTH arms call after the descriptor is open and
-        before the re-test. It is deliberately not interposed at `_u_stat`: zsh stats the descriptor
+        The swap is interposed at `_u_euid`. Its FIRST call is reader.sh:33 -- BEFORE either open,
+        not after it as an earlier version of this docstring claimed; the commit message was
+        corrected and this comment was not, which is half-closing the same defect (codex, r10). The
+        timing is nonetheless the right one: it reproduces the ENT-1-to-open swap PR #67 found. It is deliberately not interposed at `_u_stat`: zsh stats the descriptor
         with `zstat` directly, so a `_u_stat` swapper never fires there, and a first attempt at this
         made the zsh arm look like a shipped defect when it was the probe that was wrong.
 
