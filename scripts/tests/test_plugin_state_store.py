@@ -2731,6 +2731,17 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
             stripped = line.strip()
             if stripped.startswith("unset "):
                 names.extend(stripped[len("unset "):].split())
+        # CENSUS the whole library for poisonable state, then union. Deriving the universe from
+        # `_u_probes_reset` alone was still self-referential for anything NEW: adding a
+        # `_U_NEW_PROBED` consumer elsewhere left the derived set unchanged, so the docstring's
+        # claim that new state is caught was false (codex, r15). Every `_U_*_PROBED`, `_U_*_CACHE`
+        # and `_U_PRINCIPAL*`/`_U_PLATFORM*`/`_U_EUID*` name assigned anywhere in the auth library
+        # is poisonable, so the expectation comes from THERE, not from the reset itself.
+        with open(AUTH, encoding="utf-8") as fh:
+            whole = fh.read()
+        for found in re.findall(r"\b(_U_[A-Z0-9_]*(?:_PROBED|_CACHE))\b", whole):
+            if found not in names:
+                names.append(found)
         # UNION with the security-critical pair, which must NOT be derived from the function under
         # test. Deriving the whole list from `_u_probes_reset` itself made the cell self-referential:
         # replacing `unset _U_STAT_CACHE _U_ACL_CACHE` with `:` removed those names from the
@@ -2750,8 +2761,9 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
         single `unset` from that list is a one-line fail-open, and no seamed cell reaches this
         function at all -- the seam replaces the chain above it (codex and agy, r14, independently).
 
-        The variable list is DERIVED from the shipped source, so adding a variable without clearing
-        it is caught rather than silently uncovered.
+        The expected set is CENSUSED from the whole auth library -- every `_U_*_PROBED` and
+        `_U_*_CACHE` name it assigns -- not read out of `_u_probes_reset`. Deriving it from the reset
+        alone meant new state added elsewhere was never poisoned and so never checked.
         """
         names = self._probe_vars()
         self.assertGreaterEqual(len(names), 10,
@@ -2804,6 +2816,59 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
             self.assertIn("miss=1", out, "an ACL cache MISS answered zero")
             self.assertIn("empty=1", out, "an empty ACL cache answered zero")
         self.for_declared_shells(SHELLS, check)
+
+    #: Darwin-shaped output for the producer's two forks, with THREE components at DIFFERENT modes
+    #: so a mis-keyed record is visible: `/` is 0755 and `/hostile` is 1777.
+    PRODUCER_SEAM = (
+        "/usr/bin/stat() {\n"
+        "  printf '%s\\n' '40755 4096 0 111 /' '41777 4096 0 222 /hostile'"
+        " '40700 4096 501 333 /hostile/leaf'\n"
+        "  return 0\n}\n"
+        "/bin/ls() {\n"
+        "  printf '%s\\n' '/:' 'total 0' '' '/hostile:' 'total 0' '' '/hostile/leaf:' 'total 0'\n"
+        "  return 0\n}\n"
+    )
+
+    def _prefetch_records(self, shell, auth=AUTH):
+        """Run the SHIPPED `_u_chain_prefetch` and read each component's record back."""
+        body = (self.PRODUCER_SEAM
+                + "_u_chain_prefetch / /hostile /hostile/leaf\n"
+                + 'for p in / /hostile /hostile/leaf; do\n'
+                + '  _U_MODE=; _U_UID=; _U_INO=\n'
+                + '  if _u_stat_cache_get "$p"; then printf "%s=%s\\n" "$p" "$_U_MODE";'
+                  ' else printf "%s=MISS\\n" "$p"; fi\n'
+                + 'done\n')
+        out = run_shell(shell, body, sources=(auth, STORE, READER, PUB))[1]
+        return dict(l.split("=", 1) for l in out.strip().splitlines() if "=" in l)
+
+    def test_each_prefetch_record_is_keyed_to_its_own_component(self):
+        """`_u_chain_prefetch` must key each record by the path THAT LINE describes.
+
+        Ninth mutation class (codex, r15). Keying every record by one component -- `$1` instead of
+        the parsed `$_u_cp_f` -- makes the terminal's lookup consume the FIRST component's payload,
+        so a hostile 1777 directory inherits `/`'s safe 0755 and authenticates. Every earlier cell
+        exercised the cache GETTERS with hand-built records and never the PRODUCER.
+
+        A NATIVE LINUX CELL IS POSSIBLE, contrary to the review note that suggested otherwise: the
+        producer forks `/usr/bin/stat -f` and `/bin/ls -lde`, and a slash-named shell function takes
+        precedence over an absolute-path command in BOTH shells (measured earlier for `/bin/mkdir`).
+        Seaming the two forks with Darwin-shaped output runs the real parsing and keying logic here.
+        """
+        def check(shell):
+            records = self._prefetch_records(shell)
+            self.assertEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"}, records,
+                             "a prefetch record is not keyed to the component it describes")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_prefetch_key_is_reddened_by_keying_every_record_alike(self):
+        """The positive control: keying every record by the first operand must break the mapping."""
+        mutant = with_mutation(
+            '_u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$_u_cp_f$_u_pf_nl',
+            '_u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$1$_u_pf_nl', path=AUTH)
+        self.addCleanup(os.unlink, mutant)
+        records = self._prefetch_records(SHELLS[0], auth=mutant)
+        self.assertNotEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"}, records,
+                            "keying every record alike was not observable -- the cell is inert")
 
     def test_the_miss_paths_redden_when_flipped_to_success(self):
         """The positive control: BOTH miss paths, mutated to `return 0`, must break the contract."""
