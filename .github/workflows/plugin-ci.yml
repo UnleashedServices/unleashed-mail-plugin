@@ -549,12 +549,45 @@ jobs:
       # shell or path-classification defect can be green on ubuntu and red here. Before this the macOS
       # leg ran only the redactor suite, so nothing platform-specific in the scripts suite or the hook
       # harness was ever exercised on the platform it targets (PR #63 review, gap 15).
-      - name: Run the scripts test suite (macOS platform coverage)
-        if: matrix.os == 'macos-latest'
+
+  # ── The Darwin half of the suite, in a job of its own (COREDEV-2767) ───────────────────────────
+  # THIS USED TO BE TWO STEPS INSIDE `redactor-equivalence`, AND THAT IS WHY IT FAILED. That job caps
+  # at `timeout-minutes: 20` — right for redactor parity, which takes about two minutes — and the
+  # scripts suite shares the budget. Measured: the suite step ran 706s (11m46s) on run 33004523074
+  # and was CANCELLED mid-run on 33008633852 for exceeding the job's 20 minutes. Same commit range,
+  # same tests, ~4 minutes of macOS runner variance. A required check that flakes on capacity is the
+  # defect COREDEV-2765 was about, reintroduced at the job level.
+  #
+  # Separating them gives each the budget it needs, keeps the redactor legs fast on BOTH platforms,
+  # and gives the Darwin coverage a context name that says what it is — which matters, because this
+  # is the context that should eventually be REQUIRED, not `redactor-equivalence (macos-latest)`.
+  #
+  # No `if:` guard is needed: `on:` already restricts this workflow to pull requests and pushes to
+  # main/alpha, so the job runs exactly when it should. A job-level `if:` would skip without
+  # provisioning anyway — unlike the STEP-level `if:` the redactor matrix comment warns about.
+  #
+  # 35 minutes, against a measured 12-16: macOS runners are free on this public repo (measured,
+  # `MACOS.total_ms = 0`), so a generous cap costs nothing and a tight one costs a false red.
+  darwin-suite:
+    name: darwin-suite
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report the interpreters under test
+        run: |
+          sw_vers || true
+          /bin/bash --version | head -1
+          /bin/zsh --version
+
+      # THE WHOLE SUITE, not a subset: on Darwin the @skipUnless(DARWIN) classes are exactly what
+      # this job exists to run, and they are 165 cells the required ubuntu leg skips.
+      - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v
 
-      - name: Run the hook stdin-contract harness (macOS platform coverage)
-        if: matrix.os == 'macos-latest'
+      - name: Run the hook stdin-contract harness
         run: bash scripts/test-hooks.sh
 
   secret-scan:
