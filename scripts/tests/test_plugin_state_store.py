@@ -1934,7 +1934,25 @@ def _command_args(text):
                 i += 1
             while i < len(text) and text[i].isspace():
                 i += 1
-            while i < len(text) and not text[i].isspace() and text[i] not in ");|&":
+            # THE TARGET IS A WORD, AND A WORD CAN BE QUOTED. Walking to the first space or `;`
+            # broke inside `2>"/tmp/my log; err"` and truncated every argument after it, so
+            # `/bin/ls -ld 2>"/tmp/my log; err" -e -- /x` parsed to ['-ld'] and classified PORTABLE
+            # while the runtime argv carried `-e` (agy, r19). Same shape as the r4 defect this
+            # redirection arm was added to fix, one level down.
+            rq = None
+            while i < len(text):
+                rc = text[i]
+                if rq:
+                    if rc == rq:
+                        rq = None
+                    i += 1
+                    continue
+                if rc in "'\"":
+                    rq = rc
+                    i += 1
+                    continue
+                if rc.isspace() or rc in ");|&":
+                    break
                 i += 1
             out.append(" ")
             continue
@@ -2249,6 +2267,21 @@ class ForkClassification(unittest.TestCase):
         self.assertNotIn("-p", _command_args(' -m 700 "$_cs_d" 2>/dev/null; then'))
         self.assertIn("-p", _command_args(' -m 700 -""p "$_cs_d" 2>/dev/null; then'),
                       "`-\"\"p` must resolve to the `-p` a token comparison can reject")
+
+    def test_a_quoted_redirection_target_does_not_truncate_the_argv(self):
+        """`_command_args` must not lose argv after a redirection target containing a space.
+
+        The control is the pair: the quoted form and the unquoted form must both keep `-e`, because
+        the classifier reads `-e` to decide BSD-only, and losing it reports a non-portable fork as
+        portable -- the fail-open direction (agy, r19).
+        """
+        for target, why in (('2>"/tmp/my log; err"', "spaces and a `;` inside double quotes"),
+                            ("2>'/tmp/my log; err'", "the same inside single quotes"),
+                            ("2>/dev/null", "the ordinary unquoted form")):
+            with self.subTest(target=why):
+                argv = _command_args(' -ld %s -e -- /x' % target)
+                self.assertIn("-e", argv, f"argv was truncated at the redirection target: {argv}")
+                self.assertIn("/x", argv, f"argv was truncated at the redirection target: {argv}")
 
     def test_the_shipped_fork_argv_matches_the_declared_argv_exactly(self):
         """Every declared fork's argv must appear VERBATIM in the shipped source.
@@ -3391,14 +3424,36 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
         self.for_declared_shells(SHELLS, check)
 
     def test_the_prefetch_key_is_reddened_by_keying_every_record_alike(self):
-        """The positive control: keying every record by the first operand must break the mapping."""
+        """The positive control: keying every record by the first operand must break the mapping.
+
+        IT COULD NOT FAIL. It compared the records against a hardcoded MODE-ONLY dictionary, and r18
+        widened each record to `mode/size/uid/inode` and added the ACL half -- so the two stopped
+        being equal for the HEALTHY tree as well, and `assertNotEqual` was satisfied by the record
+        shape rather than by the mutation (codex, r19). A control whose baseline is a literal goes
+        stale the moment the thing it describes changes; this one measures the shipped producer on
+        the same fixture in the same run, and additionally states HOW the mutant must differ --
+        three distinct stat records must collapse onto fewer.
+        """
         mutant = with_mutation(
             '_u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$_u_cp_f$_u_pf_nl',
             '_u_cp_out="$_u_cp_out$_u_pf_nl$_u_pf_rs$1$_u_pf_nl', path=AUTH)
         self.addCleanup(os.unlink, mutant)
+        healthy = self._prefetch_records(SHELLS[0])
         records = self._prefetch_records(SHELLS[0], auth=mutant)
-        self.assertNotEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"}, records,
+        self.assertNotEqual(healthy, records,
                             "keying every record alike was not observable -- the cell is inert")
+        # AND HOW. Keying every record by the first operand does not remove records -- the probe
+        # still asks for three components -- it makes two of the three UNFINDABLE. Measured:
+        # `/hostile` and `/hostile/leaf` both come back MISS while `/` still resolves. Stating the
+        # mechanism is what keeps this from being another "something changed" assertion.
+        stat_healthy = {k: v for k, v in healthy.items() if k.startswith("/")}
+        stat_mutant = {k: v for k, v in records.items() if k.startswith("/")}
+        self.assertEqual(3, len(stat_healthy),
+                         "the fixture no longer produces three stat records; the claim below is void")
+        self.assertNotIn("MISS", stat_healthy.values(),
+                         "the SHIPPED producer already misses a component -- fix that first")
+        self.assertGreaterEqual(sum(1 for v in stat_mutant.values() if v == "MISS"), 2,
+                                f"keying alike left more than one component findable: {stat_mutant}")
 
     def _read_store(self, shell, reader=READER):
         """Drive the SHIPPED `_unleashed_read_store` with a CALLER-POISONED cache.

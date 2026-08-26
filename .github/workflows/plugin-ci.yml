@@ -114,7 +114,7 @@ jobs:
           # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
           # added; lowering one has to be a deliberate edit here.
           MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 16,
-                      "scripts.tests.test_plugin_state_store.ForkClassification": 14,
+                      "scripts.tests.test_plugin_state_store.ForkClassification": 15,
                       "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 12,
                       "scripts.tests.test_plugin_state_store.SeamedReader": 6,
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 5,
