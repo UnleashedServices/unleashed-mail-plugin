@@ -1380,7 +1380,10 @@ class SeamContract(SeamedChain, unittest.TestCase):
                          and issubclass(c, unittest.TestCase)),
                         key=lambda c: c.__name__)
         self.assertGreater(len(seamed), 1, "no SeamedChain classes found -- this cell is inert")
-        for cls in [ForkClassification] + seamed:
+        # ForkClassification and PortablePathIdentity are the floored classes that are NOT built on
+        # the seam harness -- one is a pure source census, the other simulates a platform rather than
+        # a chain. Everything else is derived, so a new seamed class cannot arrive without a floor.
+        for cls in [ForkClassification, PortablePathIdentity] + seamed:
             name = "scripts.tests.test_plugin_state_store." + cls.__name__
             actual = len(unittest.defaultTestLoader.getTestCaseNames(cls))
             with self.subTest(cls=cls.__name__):
@@ -1388,9 +1391,9 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(actual, declared[name],
                                  f"{cls.__name__}: {actual} cells but the CI floor says "
                                  f"{declared[name]} -- update plugin-ci.yml")
-        self.assertEqual(len(seamed) + 1, len(declared),
+        self.assertEqual(len(seamed) + 2, len(declared),
                          f"the CI gate floors {len(declared)} classes, expected "
-                         f"{len(seamed) + 1}: {sorted(declared)}")
+                         f"{len(seamed) + 2}: {sorted(declared)}")
 
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
@@ -1984,10 +1987,18 @@ def classify_fork(argv):
     if kind != "argv":
         return (kind, f"{exe} is {kind} regardless of argv")
     if exe == "/usr/bin/stat":
-        if "-f" in rest:
-            i = rest.index("-f") + 1
-            fmt = rest[i] if i < len(rest) else "<missing>"
-            return ("nonportable", f"stat -f {fmt!r}: BSD format string; GNU -f means file system")
+        # BOTH SPELLINGS ARE NON-PORTABLE, and that is not a contradiction of `_u_path_id` being
+        # portable. This classifier answers about a SITE. `-f` is a BSD format string and means
+        # FILE-SYSTEM information to GNU; `-c` is a GNU format string and BSD `stat` has no `-c` at
+        # all (measured here: `stat: illegal option -- c`). `_u_path_id` is portable because it
+        # holds one of each behind `_u_platform`, so every individual fork it makes is correctly
+        # reported non-portable while the function as a whole runs everywhere (COREDEV-2761).
+        for flag, other in (("-f", "GNU -f means file system"),
+                            ("-c", "BSD stat has no -c")):
+            if flag in rest:
+                i = rest.index(flag) + 1
+                fmt = rest[i] if i < len(rest) else "<missing>"
+                return ("nonportable", f"stat {flag} {fmt!r}: platform-specific format; {other}")
         return None                      # an unrecognised stat shape must be classified by hand
     if exe == "/bin/ls":
         flags = _ls_flags(rest)
@@ -2061,7 +2072,11 @@ class ForkClassification(unittest.TestCase):
     NONPORTABLE_ARGV = (
         ("auth _u_stat", ("/usr/bin/stat", "-f", "%p %z %u %i", "--", "/some/component")),
         ("auth chain prefetch", ("/usr/bin/stat", "-f", "%p %z %u %i %N", "--", "/a", "/b")),
-        ("publisher identity probe", ("/usr/bin/stat", "-f", "%d %i", "--", "/some/value")),
+        # `_u_path_id`'s two arms, one per platform. Both are declared because the exact-argv cell
+        # compares each against the shipped source, and a dropped arm is exactly how COREDEV-2761
+        # happened in the first place.
+        ("auth _u_path_id (Darwin)", ("/usr/bin/stat", "-f", "%d %i", "--", "/some/value")),
+        ("auth _u_path_id (Linux)", ("/usr/bin/stat", "-c", "%d %i", "--", "/some/value")),
         ("auth _u_acl_enumerate", ("/bin/ls", "-lde", "--", "/some/component")),
         ("auth prefetch ACL", ("/bin/ls", "-lde", "-d", "--", "/a", "/b")),
         ("auth _u_principal_uuid", ("/usr/bin/dsmemberutil", "getuuid", "-U", "<user>")),
@@ -2121,11 +2136,19 @@ class ForkClassification(unittest.TestCase):
                 self.assertFalse(admits([argv]), f"{argv} was admitted")
         self.assertIsNone(classify_fork(("/usr/bin/perl", "-e", "1")))
 
-    def test_the_three_stat_formats_are_told_apart(self):
+    def test_every_declared_stat_format_is_told_apart(self):
         """`%p %z %u %i` is a strict PREFIX of `%p %z %u %i %N`; substring matching maps both to one
-        entry and a single control then appears to cover two mappings."""
-        got = [classify_fork(a)[1] for _, a in self.NONPORTABLE_ARGV if a[0] == "/usr/bin/stat"]
-        self.assertEqual(3, len(set(got)), f"the stat formats collapsed: {got}")
+        entry and a single control then appears to cover two mappings.
+
+        THE COUNT IS DERIVED, not pinned. This cell was named `..._three_stat_formats...` and
+        asserted a literal 3; COREDEV-2761 added a fourth (the GNU `-c` arm) and the cell failed for
+        the one reason that is not a defect. r19 fixed the identical rot in the CI-floor cell a day
+        earlier. A count that describes an inventory must be read FROM that inventory.
+        """
+        stat_argv = [a for _, a in self.NONPORTABLE_ARGV if a[0] == "/usr/bin/stat"]
+        self.assertGreater(len(stat_argv), 1, "no stat argv declared -- this cell would be inert")
+        got = [classify_fork(a)[1] for a in stat_argv]
+        self.assertEqual(len(stat_argv), len(set(got)), f"the stat formats collapsed: {got}")
 
     def test_admits_is_not_vacuously_true(self):
         self.assertFalse(admits([("/usr/bin/id", "-u"), ("/bin/ls", "-lde", "--", "/x")]))
@@ -3859,6 +3882,110 @@ class AmbientStateContract(SeamedChain, unittest.TestCase):
                              f"{shell}: deleting the clear did not collide the keys -- inert control")
         self.for_declared_shells((bash,), check,
                                  narrowed_reason="`shopt` is bash-only; zsh `case` is always exact")
+
+
+
+class PortablePathIdentity(unittest.TestCase):
+    """COREDEV-2761 -- `_u_path_id` on BOTH platforms. UNGATED, and it needs no seam.
+
+    `stat -f` is a BSD FORMAT STRING and GNU FILE-SYSTEM information. The publisher forked
+    `stat -f '%d %i'` directly to prove a folded spelling names the same directory, so on Linux both
+    probes returned empty, the `-z` guards fired, and EVERY base containing `.`, `..` or `//` was
+    refused -- with a diagnostic saying the two spellings named different directories when in truth
+    the probe had not run.
+
+    THIS IS TESTABLE WITHOUT THE CHAIN SEAM, which is why it is a class of its own. The identity
+    probe sits at plugin-state-publisher.sh:245, BEFORE the chain call at :252, so the defect is
+    reached on any platform. The observable is WHICH diagnostic comes out.
+
+    LINUX IS SIMULATED, and completely: `uname -s` reports Linux so `_u_platform` takes the GNU arm,
+    `stat -f` fails as GNU's does, and `stat -c '%d %i'` answers by delegating to the real BSD stat.
+    A slash-named shell function overrides an absolute-path command in both shells (measured
+    elsewhere in this file for `/bin/mkdir`). Simulating only the platform, or only the stat, would
+    let the cell pass for the wrong reason.
+    """
+
+    #: The publish CANNOT SUCCEED on Linux and this class does not pretend otherwise:
+    #: `_unleashed_auth_chain` refuses on every non-Darwin platform by design (COREDEV-2617 §4.2a),
+    #: so the honest observable is that the run reaches the CHAIN's refusal instead of dying at the
+    #: identity probe. That is exactly the difference the fix makes, and it is what these cells
+    #: assert. The ticket's "publishes successfully on Linux" acceptance needs the chain's Linux
+    #: arms, which are a separate, unbuilt piece of work.
+    IDENTITY_FAILURE = "identity could not be probed"
+    FALSE_DIAGNOSTIC = "name different directories"
+    CHAIN_REFUSAL = "chain does not authenticate"
+
+    LINUX_SIM = (
+        '/usr/bin/uname() { case "$1" in -s) printf \'Linux\\n\' ;; '
+        '*) command /usr/bin/uname "$@" ;; esac; }\n'
+        '/usr/bin/stat() {\n'
+        '  case "$1" in\n'
+        '    -f) printf \'stat: cannot read file system information\\n\' >&2; return 1 ;;\n'
+        '    -c) shift; _f="$1"; shift; [ "$1" = "--" ] && shift\n'
+        '        case "$_f" in "%d %i") command /usr/bin/stat -f \'%d %i\' -- "$@" ;; *) return 1 ;; esac ;;\n'
+        '    *)  command /usr/bin/stat "$@" ;;\n'
+        '  esac\n'
+        '}\n'
+    )
+
+    def _publish_folded(self, shell, auth=AUTH, linux=True):
+        """Publish a base spelled with `..`, so the identity probe is REQUIRED. Returns the last
+        diagnostic line, or "" when the publish produced none."""
+        home = scratch_home("pathid-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        store = os.path.join(home, "store")
+        base = os.path.join(home, "base", "sub")
+        os.makedirs(store, mode=0o700)
+        os.makedirs(base, mode=0o700)
+        os.chmod(os.path.join(home, "base"), 0o700)
+        folded = os.path.join(home, "base", "sub", "..", "sub")
+        body = ((self.LINUX_SIM if linux else "")
+                + "_unleashed_publish %s %s\n" % (shlex.quote(store), shlex.quote(folded)))
+        err = run_shell(shell, body, env={"HOME": home}, sources=(auth, STORE, READER, PUB))[2]
+        lines = [l for l in err.splitlines() if "failed: " in l]
+        return lines[-1] if lines else ""
+
+    def test_a_folded_base_gets_past_the_identity_probe_on_linux(self):
+        """The fix. The run must reach the CHAIN's refusal, not die at the probe."""
+        for shell in SHELLS:
+            if shutil.which(shell) is None:
+                self.skipTest(f"{shell} absent")
+            with self.subTest(shell=shell):
+                got = self._publish_folded(shell)
+                self.assertIn(self.CHAIN_REFUSAL, got,
+                              f"{shell}: the folded base did not reach the chain: {got!r}")
+                self.assertNotIn(self.FALSE_DIAGNOSTIC, got,
+                                 f"{shell}: the false diagnostic is back: {got!r}")
+
+    def test_the_control_reverting_the_linux_arm_to_dash_f_restores_the_defect(self):
+        """The paired mutant, and it IS the shipped defect: with the GNU arm spelled `-f` the probe
+        fails on Linux and the publisher blames the directories instead of the probe."""
+        # A SHORT, UNIQUE anchor: the long line carries both quote kinds and a `$(`, and spelling
+        # it inside this file's own quoting is how the first attempt died.
+        mutant = with_mutation("stat -c '%d %i'", "stat -f '%d %i'", path=AUTH)
+        self.addCleanup(os.unlink, mutant)
+        for shell in SHELLS:
+            if shutil.which(shell) is None:
+                self.skipTest(f"{shell} absent")
+            with self.subTest(shell=shell):
+                got = self._publish_folded(shell, auth=mutant)
+                self.assertIn(self.IDENTITY_FAILURE, got,
+                              f"{shell}: reverting the arm did not break the probe -- inert control: "
+                              f"{got!r}")
+
+    def test_the_darwin_arm_still_resolves_a_folded_base(self):
+        """The other direction: the Darwin arm must keep working, or the fix traded one platform for
+        the other. Runs unsimulated, so it exercises the real `stat -f` wherever it is run; on Linux
+        the real `uname` sends it down the GNU arm instead, and either way the probe must SUCCEED."""
+        for shell in SHELLS:
+            if shutil.which(shell) is None:
+                self.skipTest(f"{shell} absent")
+            with self.subTest(shell=shell):
+                got = self._publish_folded(shell, linux=False)
+                self.assertNotIn(self.IDENTITY_FAILURE, got,
+                                 f"{shell}: the native identity probe failed: {got!r}")
+                self.assertNotIn(self.FALSE_DIAGNOSTIC, got,
+                                 f"{shell}: the native probe reported different directories: {got!r}")
 
 
 if __name__ == "__main__":

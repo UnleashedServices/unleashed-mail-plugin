@@ -120,7 +120,8 @@ jobs:
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 5,
                       "scripts.tests.test_plugin_state_store.PrefetchCacheContract": 14,
                       "scripts.tests.test_plugin_state_store.UnauthenticatedEffectCensus": 4,
-                      "scripts.tests.test_plugin_state_store.AmbientStateContract": 6}
+                      "scripts.tests.test_plugin_state_store.AmbientStateContract": 6,
+                      "scripts.tests.test_plugin_state_store.PortablePathIdentity": 3}
           NAMES = list(MINIMUMS)
           problems = []
           for name in NAMES:
