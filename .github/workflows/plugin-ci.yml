@@ -107,9 +107,14 @@ jobs:
           python3 - <<'PY'
           import sys, unittest
 
-          NAMES = ["scripts.tests.test_plugin_state_store.SeamContract",
-                   "scripts.tests.test_plugin_state_store.ForkClassification",
-                   "scripts.tests.test_plugin_state_store.SeamedStoreCreation"]
+          # name -> the MINIMUM cell count that class must contribute. A derived-only expectation
+          # cannot see DELETION: remove ten cells and `expected` simply drops to match `ran`, and
+          # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
+          # added; lowering one has to be a deliberate edit here.
+          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 14,
+                      "scripts.tests.test_plugin_state_store.ForkClassification": 10,
+                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 5}
+          NAMES = list(MINIMUMS)
           problems = []
           for name in NAMES:
               suite = unittest.defaultTestLoader.loadTestsFromName(name)
@@ -123,6 +128,8 @@ jobs:
                   problems.append(f"{name}: loader produced {len(bogus)} placeholder(s) -- renamed?")
               if expected == 0:
                   problems.append(f"{name}: loader found NO cells -- a rename emptied this gate")
+              if expected < MINIMUMS[name]:
+                  problems.append(f"{name}: {expected} cells, floor is {MINIMUMS[name]} -- cells were deleted")
               if result.testsRun != expected:
                   problems.append(f"{name}: only {result.testsRun}/{expected} cells ran")
               if result.skipped:

@@ -17,6 +17,7 @@ bash only.
 """
 
 import ast
+import collections
 import io
 import json
 import os
@@ -1376,6 +1377,45 @@ FORK_EXES = {
 #: so that relocating a fork to a Homebrew binary is DISCOVERED rather than skipped by the scan.
 _EXE_RE = re.compile(r"(?<![\w./-])(/(?:usr/local/|opt/homebrew/|usr/)?s?bin/[A-Za-z0-9_.-]+)")
 
+#: Expected number of call sites per executable. A SET loses multiplicity: replacing one of the two
+#: `/bin/ls` sites with `${UNLEASHED_BIN:-/bin}/ls -ld` left the set complete because the other
+#: literal site remained, and `-ld` omits ACL entries -- a component carrying a foreign mutating ACE
+#: then authenticates (codex, r5). Counts make any change to the inventory explicit.
+FORK_SITE_COUNTS = {
+    "/usr/bin/stat": 4, "/bin/ls": 2, "/usr/bin/dsmemberutil": 1, "/usr/bin/id": 2,
+    "/usr/bin/uname": 1, "/usr/bin/getconf": 2, "/bin/mkdir": 2, "/bin/rm": 2, "/bin/mv": 1,
+}
+
+#: A command word in command position, with whatever prefix precedes the basename. Used to require
+#: that every invocation of a sensitive command is written as a LITERAL declared absolute path:
+#: `${VAR:-/bin}/ls`, `"/bin/"ls` and a bare `ls` all reach the same binary while escaping a scan
+#: keyed on literal absolute paths.
+_CMD_WORD_RE = re.compile(
+    r"(?<![\w.-])((?:[^\s;|&()]*/)?)"
+    r"(stat|ls|id|uname|getconf|dsmemberutil|mkdir|rm|mv)(?=\s)"
+)
+
+#: Shell words after which the NEXT word is a command: the parser is in command position again.
+_CMD_LEAD = {"if", "then", "else", "elif", "while", "until", "do", "!", "time", "elif"}
+
+
+def _in_command_position(code, start):
+    """Is the word at `start` the COMMAND of a simple command, rather than one of its arguments?
+
+    `zmodload zsh/stat` matches a naive command-word scan and is not a fork; requiring command
+    position is what tells the two apart -- codex's own wording was "non-literal command word in
+    COMMAND position".
+    """
+    before = code[:start].rstrip()
+    if not before:
+        return True
+    if before[-1] in ";|&({`":
+        return True
+    if before.endswith("$("):
+        return True
+    return before.rsplit(None, 1)[-1] in _CMD_LEAD if before.rsplit(None, 1) else True
+
+
 #: Commands whose portability this file reasons about. Used only by the "no bare or variable
 #: invocation" invariant -- `$STAT -f ...` and a bare `stat -f ...` both escape any scan keyed on
 #: absolute paths, so the invariant is what makes the absolute-path scan sufficient.
@@ -1647,41 +1687,67 @@ class ForkClassification(unittest.TestCase):
         self.assertTrue(admits([("/usr/bin/id", "-u")]))
         self.assertTrue(admits([]))
 
-    def test_no_fork_is_written_bare_or_through_a_variable(self):
-        """The absolute-path census is only sufficient because this invariant holds. `$STAT -f ...`
-        or a bare `stat -f ...` would escape any scan keyed on absolute paths, so rather than try to
-        parse them, forbid them -- measured: the four libraries contain zero today."""
-        bare = re.compile(r"(?<![\w/$.\"'-])(" + "|".join(_SENSITIVE) + r")\s+-")
+    def test_every_command_word_is_a_literal_declared_absolute_path(self):
+        """The absolute-path census is only sufficient because this invariant holds.
+
+        Three spellings reach the same binary while escaping a scan keyed on literal absolute paths,
+        and each was found by a reviewer rather than by me: a bare `ls`, `"/bin/"ls` split across
+        quotes (r4), and `${UNLEASHED_BIN:-/bin}/ls` assembled by parameter expansion (r5). The last
+        one is the reason this cell exists in this form -- it was invisible to all three earlier
+        scanners, and `-ld` instead of `-lde` omits ACL entries, so a Darwin component carrying
+        `group:staff allow write,delete` authenticates.
+
+        Rather than enumerate the ways a command word can be obscured, require the opposite: the
+        text immediately preceding the basename must be EXACTLY a declared executable's directory.
+        """
         offenders = []
         for path in (AUTH, STORE, READER, PUB):
+            base = os.path.basename(path)
             for n, code in _logical_lines(path):
-                for m in bare.finditer(code):
-                    if not _EXE_RE.search(code[:m.start()] + m.group(0)):
-                        offenders.append(f"{os.path.basename(path)}:{n}: {m.group(0)!r}")
-        self.assertEqual([], offenders, "a fork is written without an absolute path")
+                for m in _CMD_WORD_RE.finditer(code):
+                    if not _in_command_position(code, m.start()):
+                        continue        # e.g. `zmodload zsh/stat` -- an argument, not a fork
+                    word = m.group(1) + m.group(2)
+                    if word not in FORK_EXES:
+                        offenders.append(f"{base}:{n}: {word!r} is not a literal declared path")
+        self.assertEqual([], offenders, "a fork's command word is not a literal absolute path")
 
     def test_the_store_is_created_with_the_exact_mkdir_spelling(self):
         """A SOURCE-level control, and labelled as one because that is what it is.
 
-        agy (r4) showed that adding `-p` to the production mkdir leaves all 27 cells green. I could
-        not build a behavioural control for it: `_unleashed_create_store` walks top, mid, store in
-        order, so a component's parent always exists by the time its mkdir runs, and `-p` is
-        therefore BEHAVIOURALLY EQUIVALENT in every fixture reachable here -- measured, not assumed.
-        The hazard is latent rather than live: `-p` would create missing intermediates WITHOUT the
-        per-component authentication if the loop order ever changed, and it also turns the
-        lost-the-race `elif [ -d ]` branch into dead code.
+        agy (r4) showed that adding `-p` to the production mkdir leaves every behavioural cell green.
+        I could not build a behavioural control for it, and measured why rather than assuming:
+        `_unleashed_create_store` walks top, mid, store IN ORDER, so a component's parent always
+        exists by the time its mkdir runs, and `-p` is therefore behaviourally equivalent in every
+        fixture reachable here. The hazard is latent -- `-p` would create missing intermediates
+        WITHOUT the per-component authentication if the loop order ever changed, and it makes the
+        lost-the-race `elif [ -d ]` branch dead code.
 
-        So this pins the spelling instead of pretending to test the behaviour. `-m 700` itself IS
-        behaviourally controlled -- dropping it and changing it to `1700` both redden
-        SeamedStoreCreation now.
+        The first spelling of this control was a substring check, and codex (r5) defeated it with
+        `-""p`, which both shells concatenate into `-p` at runtime -- evading the very check added to
+        prohibit it. It compares TOKENS now, after `_command_args` has resolved quoting, and reads
+        LOGICAL lines so a backslash continuation cannot hide the call either (agy, r5).
+
+        `-m 700` itself is behaviourally controlled: dropping it and changing it to `1700` both
+        redden SeamedStoreCreation.
         """
-        with open(STORE, encoding="utf-8") as fh:
-            body = [ln for ln in fh if "/bin/mkdir" in ln and not ln.lstrip().startswith("#")]
-        self.assertEqual(1, len(body), f"expected exactly one mkdir call site, got {body}")
-        call = body[0].strip()
-        self.assertIn("/bin/mkdir -m 700 ", call, "the store mkdir lost its exact -m 700 spelling")
-        self.assertNotIn(" -p", call,
-                         "`mkdir -p` would create intermediates without authenticating them")
+        sites = []
+        for n, code in _logical_lines(STORE):
+            for m in _EXE_RE.finditer(code):
+                if m.group(1) == "/bin/mkdir":
+                    sites.append((n, _command_args(code[m.end():])))
+        self.assertEqual(1, len(sites), f"expected exactly one mkdir call site, got {sites}")
+        _, argv = sites[0]
+        self.assertEqual(["-m", "700", "$_cs_d"], argv,
+                         "the store mkdir is not exactly `-m 700 \"$_cs_d\"`")
+
+    def test_the_mkdir_spelling_control_rejects_a_concatenated_flag(self):
+        """The positive control for the cell above. `-""p` is the shape that defeated the substring
+        spelling; both shells concatenate it to `-p`, so a token comparison must reject it while a
+        substring search for `" -p"` does not see it at all."""
+        self.assertNotIn("-p", _command_args(' -m 700 "$_cs_d" 2>/dev/null; then'))
+        self.assertIn("-p", _command_args(' -m 700 -""p "$_cs_d" 2>/dev/null; then'),
+                      "`-\"\"p` must resolve to the `-p` a token comparison can reject")
 
     def test_the_declared_tables_match_the_shipped_sources(self):
         """DERIVED and FAIL-CLOSED, in both directions.
@@ -1691,7 +1757,8 @@ class ForkClassification(unittest.TestCase):
         fork stayed green. Here every absolute-path executable found must be DECLARED, and every
         `argv`-kind site must CLASSIFY; anything else fails with its file:line.
         """
-        undeclared, unclassified, split_exe, seen = [], [], [], set()
+        undeclared, unclassified, split_exe = [], [], []
+        seen = collections.Counter()
         for path in (AUTH, STORE, READER, PUB):
             base = os.path.basename(path)
             for n, code in _logical_lines(path):
@@ -1705,7 +1772,7 @@ class ForkClassification(unittest.TestCase):
                     split_exe.append(f"{base}:{n}: {e} written across quotes")
                 for m in _EXE_RE.finditer(code):
                     exe = m.group(1)
-                    seen.add(exe)
+                    seen[exe] += 1
                     if exe not in FORK_EXES:
                         undeclared.append(f"{base}:{n}: {exe}")
                         continue
@@ -1721,8 +1788,8 @@ class ForkClassification(unittest.TestCase):
         self.assertEqual([], split_exe, "a fork's executable is split across quotes")
         self.assertEqual([], undeclared, "a fork site's executable is not in FORK_EXES")
         self.assertEqual([], unclassified, "a fork site's argv could not be classified")
-        self.assertEqual(set(FORK_EXES), seen,
-                         "FORK_EXES declares an executable the sources no longer fork, or vice versa")
+        self.assertEqual(FORK_SITE_COUNTS, dict(seen),
+                         "the shipped fork SITES and the declared counts have diverged")
 
 
 #: The platform gate, mutated so the SHIPPED chain refuses on a Darwin box exactly as it does on
