@@ -7134,17 +7134,10 @@ class RowsPass17(unittest.TestCase):
         return repair, states
 
     def test_row_182_one_rescan_before_a_repair_state_is_reported(self):
-        """Row 182 (codex, PR #67 pass 17 — reproduced): two ORDINARY hooks publishing the SAME base into a fresh store race each other — the second `mv` replaces the entry between the post-scan's stat and its open, ENT-2b's inode binding correctly rejects the object that was opened, and the publisher reported a repair state although the surviving entry is valid and both processes agree on its content. A `DEBUG` trap makes the interleaving deterministic by performing exactly that replacement (an identical-content copy at a new inode) inside one authentication: (i) swapped during the post-SCAN, the specification rescans and reports `created` while the mutation (the rescan removed) reports `stale`; (ii) swapped during the OWN-ENTRY check, the specification reports `created` and the mutation `failed`. EXACTLY ONE retry, counted through a delegating wrapper: one scan on a healthy publish in both builds, two on the repair path, never three. Two controls hold in both builds, so the retry converts the transient case only: a genuinely corrupt sibling entry still reports `stale` (and the specification still scans exactly twice), and two publishers of DIFFERENT bases still report `conflict`. Both shells. And the population measurement, 8 trials of 8 concurrent publishers per shell released together off a start barrier: the mutation reports 11-38 repair states of 64 and the specification 0-3 — the fix is a large reduction and NOT an elimination, so this cell asserts a BOUND (<= 6 of 64), which is what E7b's own comment now states after this row measured it."""
+        """Row 182 (codex, PR #67 pass 17 — reproduced): two ORDINARY hooks publishing the SAME base into a fresh store race each other — the second `mv` replaces the entry between the post-scan's stat and its open, ENT-2b's inode binding correctly rejects the object that was opened, and the publisher reported a repair state although the surviving entry is valid and both processes agree on its content. A `DEBUG` trap makes the interleaving deterministic by performing exactly that replacement (an identical-content copy at a new inode) inside one authentication: (i) swapped during the post-SCAN, the specification rescans and reports `created` while the mutation (the rescan removed) reports `stale`; (ii) swapped during the OWN-ENTRY check, the specification reports `created` and the mutation `failed`. EXACTLY ONE retry, counted through a delegating wrapper: one scan on a healthy publish in both builds, two on the repair path, never three. Two controls hold in both builds, so the retry converts the transient case only: a genuinely corrupt sibling entry still reports `stale` (and the specification still scans exactly twice), and two publishers of DIFFERENT bases still report `conflict`. Both shells. THE POPULATION MEASUREMENT IS NO LONGER PART OF THIS CELL: it moved to `test_row_182_population_the_rescan_converts_most_of_the_race`, opt-in behind `UNLEASHED_POPULATION_SAMPLING=1`, because it is a stochastic benchmark and it made this cell non-deterministic (COREDEV-2765). Everything above is deterministic and unconditional."""
         # Measured, both shells: (i) shipped `created|1|2`, mutant `stale|1|1`; (ii) shipped
         # `created|1|2`, mutant `failed|1|1`; healthy `created|0|1` in both; corrupt sibling
         # `stale|0|2` shipped and `stale|0|1` mutant; two bases `conflict|0|1` in both.
-        # Concurrency, 8x8 per arm, in two regimes. WITHOUT a start barrier (processes spawned and
-        # left to start when they may): shipped bash 0,0,0,2 and zsh 1,1,2,3 across four runs; mutant
-        # bash 5,21,23,27 and zsh 19,24,29 — the 5 is why the barrier exists, a control that quietly
-        # stopped failing. WITH the barrier every process spins until one gate file appears: mutant
-        # bash 12,17,23,25 and zsh 25,31,34,35,38; shipped 0-2. The shipped arm is BOUNDED, not zero:
-        # a publisher that loses the race a SECOND time inside the rescan still reports the repair
-        # state, which is what "exactly one retry, never a loop" costs and what this cell records.
         other = os.path.join(self.home, "other-base")
         os.makedirs(other)
         os.chmod(other, 0o700)
@@ -7218,6 +7211,39 @@ class RowsPass17(unittest.TestCase):
                     rc, out, err = self._run_182(shell, body, srcs)
                     self.assertEqual("conflict|0|1", out,
                                      f"{tag}: two bases must still conflict, without a rescan: {out!r} {err!r}")
+        finally:
+            os.unlink(mutant)
+
+    #: Opt-in, and the reason is measured. COREDEV-2765: five ISOLATED runs of the combined cell on
+    #: one unchanged tree gave four SKIPs and one PASS at 52.7-67.8s each, and under full-suite load
+    #: the ticket recorded two consecutive FAILs on that same tree. Both outcomes come from the one
+    #: stochastic sample below, and in a log neither is distinguishable from a real regression.
+    #:
+    #: THE DISCRIMINATION IS NOT MEASURED HERE. `test_row_182_one_rescan_before_a_repair_state_is_
+    #: reported` proves it deterministically with a DEBUG trap, unconditionally, in both shells, and
+    #: that cell runs first. What this one adds is the QUANTITATIVE claim — that the retry converts
+    #: most of the population rather than only the interleaving the trap constructs. That is worth
+    #: measuring and is not worth a non-deterministic verdict on every pull request.
+    #:
+    #: Concurrency, 8x8 per arm, in two regimes. WITHOUT a start barrier (processes spawned and left
+    #: to start when they may): shipped bash 0,0,0,2 and zsh 1,1,2,3 across four runs; mutant bash
+    #: 5,21,23,27 and zsh 19,24,29 — the 5 is why the barrier exists, a control that quietly stopped
+    #: failing. WITH the barrier every process spins until one gate file appears: mutant bash
+    #: 12,17,23,25 and zsh 25,31,34,35,38; shipped 0-2. The shipped arm is BOUNDED, not zero: a
+    #: publisher that loses the race a SECOND time inside the rescan still reports the repair state,
+    #: which is what "exactly one retry, never a loop" costs and what this cell records.
+    POPULATION_SAMPLING = os.environ.get("UNLEASHED_POPULATION_SAMPLING") == "1"
+
+    @unittest.skipUnless(POPULATION_SAMPLING,
+                         "stochastic population benchmark; opt in with "
+                         "UNLEASHED_POPULATION_SAMPLING=1 (COREDEV-2765)")
+    def test_row_182_population_the_rescan_converts_most_of_the_race(self):
+        """PUB-9 E7b, corroboration: over 64 concurrent publishers the rescan must bound the repair
+        rate at <= 6 and beat the build without it. A BENCHMARK — the correctness claim is proved
+        deterministically by the DEBUG-trap cell above, which is unconditional."""
+        mutant = with_mutation(self.ROW_182_SHIPPED, self.ROW_182_OLD, path=PUB)
+        try:
+            for shell in SHELLS:
                 # ── the population measurement: 8 trials of 8 concurrent publishers ───────────
                 # THE POPULATION CELL RESAMPLES, because what it measures is a RACE and a race is not
                 # on demand: measured, the mutant's rate over 64 publishers ranges 11-38 on a busy
