@@ -1261,18 +1261,48 @@ class SeamContract(SeamedChain, unittest.TestCase):
         # SeamedStoreCreation, so replacing a READER or PUBLISHER cell's `for_declared_shells(...)`
         # with `check(SHELLS[0])` kept the count at 43, kept this cell green, and silently dropped
         # that production guard's zsh arm (codex, r10).
-        drivers = {"seam_call", "seam_calls", "_create_store", "_auth_entry", "_store_ok", "_publish"}
-        offenders = []
-        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
-                    and n.name in ("SeamContract", "SeamedStoreCreation",
-                                   "SeamedReader", "SeamedPublisher")):
-            for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)
-                       and n.name.startswith("test_")):
+        # BOTH LISTS ARE DERIVED. A hardcoded class list has now been left stale THREE times --
+        # SeamedReader and SeamedPublisher at r10, PrefetchCacheContract at r17 -- each time letting
+        # a cell in the new class drop its zsh arm unnoticed. Fixing the list is fixing the
+        # instance; the list itself is the wrong mechanism. Any ungated class counts, and any method
+        # that runs a shell is a driver.
+        ungated = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
+                   and any(isinstance(b, ast.Name) and b.id == "SeamedChain" for b in n.bases)]
+        drivers = {"seam_call", "seam_calls", "run_shell"}
+        for cls in ungated:
+            for fn in (m for m in cls.body if isinstance(m, ast.FunctionDef)
+                       and not m.name.startswith("test_")):
                 called = {n.func.attr for n in ast.walk(fn)
                           if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
-                if called & drivers and "for_declared_shells" not in called:
-                    if fn.name not in self.SINGLE_SHELL_CELLS:
-                        offenders.append(f"{cls.name}.{fn.name}")
+                called |= {n.func.id for n in ast.walk(fn)
+                           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+                if called & drivers:
+                    drivers.add(fn.name)     # a helper that drives the shell IS a driver
+        self.assertGreaterEqual(len(ungated), 4,
+                                f"only {len(ungated)} ungated classes found -- the derivation broke")
+        offenders = []
+        for cls in ungated:
+            for fn in (member for member in cls.body if isinstance(member, ast.FunctionDef)
+                       and member.name.startswith("test_")):
+                # BOTH call shapes. `self.seam_call(...)` is an Attribute and `with_mutation(...)`
+                # is a bare Name; collecting only the former made every positive control look like
+                # an offender, because the marker that identifies them is a bare name.
+                called = {n.func.attr for n in ast.walk(fn)
+                          if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+                called |= {n.func.id for n in ast.walk(fn)
+                           if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+                if not (called & drivers) or "for_declared_shells" in called:
+                    continue
+                if fn.name in self.SINGLE_SHELL_CELLS:
+                    continue                 # declared, with its reason, in the table above
+                if "with_mutation" in called:
+                    # A POSITIVE CONTROL, recognised as a category rather than listed by name. These
+                    # mutate a shipped file and assert the mutation is OBSERVABLE; the property is
+                    # "the mutant flips", which is shell-independent, and running both arms doubles
+                    # the cost for no added signal. Listing them individually would be the same
+                    # recall-not-derive mistake as the hardcoded class list this cell just lost.
+                    continue
+                offenders.append(f"{cls.name}.{fn.name}")
         self.assertEqual([], offenders,
                          "shell-driving cells that bypass for_declared_shells without a declared reason")
 
@@ -2802,6 +2832,65 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
                 self.assertIn("POISON", out,
                               f"dropping `unset {name}` was not observable -- the control is inert")
 
+    #: A `/bin/ls -lde` block as the ACL parser expects it: the stat line, optionally followed by
+    #: ACE lines. The hostile one carries a foreign MUTATING right.
+    ACL_STAT_LINE = "drwx------  2 nick  staff  64 Jan  1 00:00 /alpha"
+    ACL_HOSTILE_ACE = " 0: group:staff allow write,delete"
+
+    def _acl_payload(self, shell, hostile, auth=AUTH):
+        """Put a block in the ACL cache, read it back, and run it through `_u_acl_ok`.
+
+        Returns (getter_rc, payload_bytes, acl_ok_rc).
+        """
+        blk = ('"%s${_u_pf_nl}%s"' % (self.ACL_STAT_LINE, self.ACL_HOSTILE_ACE) if hostile
+               else '"%s"' % self.ACL_STAT_LINE)
+        body = ('_u_pf_sep\n_blk=%s\n' % blk
+                + '_U_ACL_CACHE="${_u_pf_nl}${_u_pf_rs}/alpha${_u_pf_nl}${_blk}${_u_pf_nl}"\n'
+                + '_u_principal 2>/dev/null || :\n'
+                + 'payload="$(_u_acl_cache_get /alpha)"; grc=$?\n'
+                + '_u_acl_ok /alpha; ork=$?\n'
+                + 'printf "R=%s %s %s\\n" "$grc" "${#payload}" "$ork"\n')
+        out = run_shell(shell, body, sources=(auth, STORE, READER, PUB))[1]
+        line = [l for l in out.splitlines() if l.startswith("R=")]
+        if not line:
+            return None, 0, None
+        parts = line[-1][2:].split()
+        return int(parts[0]), int(parts[1]), int(parts[2])
+
+    def test_the_acl_cache_returns_the_WHOLE_block_not_just_its_status(self):
+        """`_u_acl_cache_get` must return the whole cached block, ACE lines included.
+
+        TENTH mutation class (codex, r17): a STATUS-ONLY oracle. The previous cell asserted only
+        hit/miss/empty return codes, so truncating the payload to its first line -- dropping every
+        cached ACE while still reporting a successful hit -- left it green. A foreign
+        `group:staff allow write,delete` then changes from REFUSAL to ACCEPTANCE.
+
+        Measured: the safe block is 49 bytes and `_u_acl_ok` accepts (0); the hostile block is 84
+        bytes and `_u_acl_ok` REFUSES (2). Both halves are asserted, because the byte count alone
+        would not show that the refusal actually depends on the ACE surviving.
+        """
+        def check(shell):
+            grc, safe_bytes, safe_ok = self._acl_payload(shell, hostile=False)
+            self.assertEqual(0, grc, "a cached safe block was not found")
+            self.assertEqual(0, safe_ok, "a block with NO foreign ACE was refused")
+            grc, hostile_bytes, hostile_ok = self._acl_payload(shell, hostile=True)
+            self.assertEqual(0, grc, "a cached hostile block was not found")
+            self.assertGreater(hostile_bytes, safe_bytes,
+                               "the ACE line did not survive the cache round-trip")
+            self.assertNotEqual(0, hostile_ok,
+                                "a foreign MUTATING ACE was accepted from the cache")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_truncating_the_acl_payload_is_observable(self):
+        """The positive control: dropping everything after the stat line must flip the hostile
+        block from refused to accepted, which is exactly what the status-only oracle could not see."""
+        mutant = with_mutation('    printf \'%s\' "$_u_ag_out"',
+                               '    printf \'%s\' "${_u_ag_out%%"$_u_pf_nl"*}"', path=AUTH)
+        self.addCleanup(os.unlink, mutant)
+        _, _, hostile_ok = self._acl_payload(SHELLS[0], hostile=True, auth=mutant)
+        self.assertEqual(0, hostile_ok,
+                         "truncating the payload was not observable -- this control is inert")
+
     def test_the_acl_cache_miss_returns_nonzero(self):
         """`_u_acl_cache_get` carries the same miss polarity as the stat cache, and is equally
         unreached by any seamed cell (agy, r14). Pure shell, so it runs here."""
@@ -2819,24 +2908,41 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
 
     #: Darwin-shaped output for the producer's two forks, with THREE components at DIFFERENT modes
     #: so a mis-keyed record is visible: `/` is 0755 and `/hostile` is 1777.
+    #: Darwin-shaped output for BOTH producer forks. The `ls` half is the `-d` shape the parser
+    #: actually consumes -- one stat line per component ENDING with its path, ACE lines indented.
+    #: The first spelling emitted the non-`-d` form (`/:`, `total 0`), so no line matched a
+    #: component, the ALL-OR-NOTHING rule discarded the whole ACL cache, and `_U_ACL_CACHE` was
+    #: EMPTY while the cell still passed -- the stat half worked and nothing asserted the other
+    #: (codex, r17: measured `STAT_BYTES=81 ACL_BYTES=0`).
     PRODUCER_SEAM = (
         "/usr/bin/stat() {\n"
         "  printf '%s\\n' '40755 4096 0 111 /' '41777 4096 0 222 /hostile'"
         " '40700 4096 501 333 /hostile/leaf'\n"
         "  return 0\n}\n"
         "/bin/ls() {\n"
-        "  printf '%s\\n' '/:' 'total 0' '' '/hostile:' 'total 0' '' '/hostile/leaf:' 'total 0'\n"
+        "  printf '%s\\n' 'drwxr-xr-x  2 root wheel 64 Jan  1 00:00 /'"
+        " 'drwxrwxrwt  2 root wheel 64 Jan  1 00:00 /hostile'"
+        " ' 0: group:staff allow write,delete'"
+        " 'drwx------  2 nick staff 64 Jan  1 00:00 /hostile/leaf'\n"
         "  return 0\n}\n"
     )
 
     def _prefetch_records(self, shell, auth=AUTH):
         """Run the SHIPPED `_u_chain_prefetch` and read each component's record back."""
+        # ONE path. `_u_chain_prefetch` takes `$1` and DERIVES the components itself; passing three
+        # operands left `$#` at 1 while the ACL parser found three blocks, so its all-or-nothing
+        # rule discarded that cache -- correctly. The stat cache has no such rule, which is why the
+        # miscall stayed invisible: half the fixture worked and nothing checked the other half.
         body = (self.PRODUCER_SEAM
-                + "_u_chain_prefetch / /hostile /hostile/leaf\n"
+                + "_u_chain_prefetch /hostile/leaf\n"
+                + 'printf "ACLBYTES=%s\\n" "${#_U_ACL_CACHE}"\n'
                 + 'for p in / /hostile /hostile/leaf; do\n'
                 + '  _U_MODE=; _U_UID=; _U_INO=\n'
                 + '  if _u_stat_cache_get "$p"; then printf "%s=%s\\n" "$p" "$_U_MODE";'
                   ' else printf "%s=MISS\\n" "$p"; fi\n'
+                + '  blk="$(_u_acl_cache_get "$p")"\n'
+                + '  ace=no; case "$blk" in *allow*) ace=yes ;; esac\n'
+                + '  printf "ACE%s=%s\\n" "$p" "$ace"\n'
                 + 'done\n')
         out = run_shell(shell, body, sources=(auth, STORE, READER, PUB))[1]
         return dict(l.split("=", 1) for l in out.strip().splitlines() if "=" in l)
@@ -2855,9 +2961,18 @@ class PrefetchCacheContract(SeamedChain, unittest.TestCase):
         Seaming the two forks with Darwin-shaped output runs the real parsing and keying logic here.
         """
         def check(shell):
-            records = self._prefetch_records(shell)
-            self.assertEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"}, records,
-                             "a prefetch record is not keyed to the component it describes")
+            r = self._prefetch_records(shell)
+            self.assertEqual({"/": "0755", "/hostile": "1777", "/hostile/leaf": "0700"},
+                             {k: v for k, v in r.items() if k.startswith("/")},
+                             "a stat record is not keyed to the component it describes")
+            # THE ACL CACHE TOO, and that the ACE lands on the component that owns it. Asserting
+            # only the stat half is what let a completely empty `_U_ACL_CACHE` pass.
+            self.assertNotEqual("0", r.get("ACLBYTES"),
+                                "the ACL producer populated nothing -- the fixture does not match "
+                                "the `ls -d` block shape the parser consumes")
+            self.assertEqual({"ACE/": "no", "ACE/hostile": "yes", "ACE/hostile/leaf": "no"},
+                             {k: v for k, v in r.items() if k.startswith("ACE")},
+                             "the hostile ACE is not on the component whose block carried it")
         self.for_declared_shells(SHELLS, check)
 
     def test_the_prefetch_key_is_reddened_by_keying_every_record_alike(self):

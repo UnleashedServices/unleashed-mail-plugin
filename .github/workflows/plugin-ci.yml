@@ -118,7 +118,7 @@ jobs:
                       "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 12,
                       "scripts.tests.test_plugin_state_store.SeamedReader": 6,
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 5,
-                      "scripts.tests.test_plugin_state_store.PrefetchCacheContract": 12}
+                      "scripts.tests.test_plugin_state_store.PrefetchCacheContract": 14}
           NAMES = list(MINIMUMS)
           problems = []
           for name in NAMES:
