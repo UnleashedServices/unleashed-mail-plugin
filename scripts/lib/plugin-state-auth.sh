@@ -169,6 +169,33 @@ _u_stat() {
     return 0
 }
 
+# ── PATH IDENTITY — device and inode, on BOTH platforms (COREDEV-2761) ───────────────────────────
+# `stat -f` means two different things. On BSD it is a FORMAT STRING; on GNU coreutils it is
+# FILE-SYSTEM information, so `/usr/bin/stat -f '%d %i' -- /path` on Linux exits 1 with "cannot read
+# file system information for '%d %i'". The publisher's identity comparison forked exactly that,
+# both probes came back empty, and every base whose spelling contains `.`, `..` or `//` was refused
+# with a diagnostic naming the wrong cause — reproduced by shadowing `/usr/bin/stat` so that `-f`
+# fails, which yields the shipped false message verbatim.
+#
+# `zstat` CANNOT SERVE HERE and that is why this forks at all: it exposes an inode but no device id,
+# and an inode is unique only WITHIN a filesystem, so comparing inodes alone accepts an ordinary
+# cross-device collision as "the same directory" (codex, PR #67 pass 19). Widening `_u_stat` instead
+# would change the prefetch cache's record format for every caller.
+#
+# FAIL-CLOSED on an unrecognised platform: no identity, no comparison, and the caller says so
+# accurately rather than claiming the two spellings differ.
+_u_path_id() {                                      # $1: a path -> _U_PATH_ID="<dev> <ino>", or rc 1
+    _U_PATH_ID=""
+    _u_platform || return 1
+    case "$_U_PLATFORM" in
+        Darwin) _U_PATH_ID="$(/usr/bin/stat -f '%d %i' -- "$1" 2>/dev/null)" || return 1 ;;
+        Linux)  _U_PATH_ID="$(/usr/bin/stat -c '%d %i' -- "$1" 2>/dev/null)" || return 1 ;;
+        *)      return 1 ;;
+    esac
+    [ -n "$_U_PATH_ID" ] || return 1
+    return 0
+}
+
 # ── ACL-5 — the platform, probed at most ONCE per resolution and shared ───────────────────────────
 # The RECOGNISED names are exactly `Darwin` and `Linux`. A probe that FAILS refuses (it may be failing
 # because the machine is hostile); a probe that SUCCEEDS and prints any other name is a platform with

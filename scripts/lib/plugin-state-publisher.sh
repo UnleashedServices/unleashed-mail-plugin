@@ -236,15 +236,24 @@ _unleashed_publish() {
         _unleashed_pub_failed "the plugin-data base is not an existing directory"; return 0
     fi
     if [ "$_pb_folded" != "$_pb_value" ]; then
-        # DEVICE AND INODE. An inode number is unique only WITHIN a filesystem, and the two spellings can
-        # land on different mounts precisely when a `..` was popped from under a symlink — so comparing
-        # `_U_INO` alone accepts an ordinary cross-device collision as "the same directory" and restores
-        # the split this check exists to prevent (codex, PR #67 pass 19). `_u_stat` exposes no device id,
-        # and widening it would change the prefetch cache's record format for every caller, so the
-        # comparison takes its own `%d %i` — two forks, and only when folding actually changed the string.
-        _pb_id_raw="$(/usr/bin/stat -f '%d %i' -- "$_pb_value" 2>/dev/null)" || _pb_id_raw=""
-        _pb_id_fold="$(/usr/bin/stat -f '%d %i' -- "$_pb_folded" 2>/dev/null)" || _pb_id_fold=""
-        if [ -z "$_pb_id_raw" ] || [ -z "$_pb_id_fold" ] || [ "$_pb_id_raw" != "$_pb_id_fold" ]; then
+        # DEVICE AND INODE, through `_u_path_id` so the probe is PORTABLE. An inode number is unique
+        # only WITHIN a filesystem, and the two spellings can land on different mounts precisely when
+        # a `..` was popped from under a symlink — so comparing `_U_INO` alone accepts an ordinary
+        # cross-device collision as "the same directory" and restores the split this check exists to
+        # prevent (codex, PR #67 pass 19).
+        #
+        # THE TWO FAILURES ARE NOW DISTINCT DIAGNOSTICS, and that is half the fix. This site forked
+        # `stat -f` directly, which on GNU means FILE-SYSTEM information and fails; both probes came
+        # back empty, the `-z` guards fired, and the publisher told the user the two spellings named
+        # different directories when in truth the probe had not run (COREDEV-2761). A message that
+        # sends someone to inspect their filesystem for a missing platform arm is worse than the
+        # refusal it accompanies.
+        if _u_path_id "$_pb_value"; then _pb_id_raw="$_U_PATH_ID"; else _pb_id_raw=""; fi
+        if _u_path_id "$_pb_folded"; then _pb_id_fold="$_U_PATH_ID"; else _pb_id_fold=""; fi
+        if [ -z "$_pb_id_raw" ] || [ -z "$_pb_id_fold" ]; then
+            _unleashed_pub_failed "the plugin-data base's identity could not be probed on this platform"; return 0
+        fi
+        if [ "$_pb_id_raw" != "$_pb_id_fold" ]; then
             _unleashed_pub_failed "the plugin-data base's spelling and its normalised form name different directories"; return 0
         fi
     fi

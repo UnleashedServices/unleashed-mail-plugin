@@ -85,6 +85,85 @@ jobs:
         id: scripts_tests
         run: python3 -m unittest discover -s scripts/tests -v
 
+      - name: Assert the ungated plugin-state classes RAN here (COREDEV-2691 §7.4)
+        id: seam_ungated
+        # WHAT THESE CLASSES PROVE, precisely, because the difference is easy to overstate and was
+        # overstated here. On this leg `_unleashed_auth_chain` is REPLACED by a recording,
+        # fail-closed stub, and in the reader and publisher cells `_u_stat` and `_u_euid` -- the
+        # sole producers of every mode, size, inode and ownership value those cells compare -- are
+        # stubbed too. So what is verified here is that each production caller CALLS the guard, with
+        # the operand it is specified to pass, in the specified order and multiplicity; that a
+        # refusal short-circuits the caller; and that the refusal path writes nothing anywhere.
+        #
+        # THE GUARD'S OWN DECISION CLAUSES DO NOT RUN HERE. Component symlink refusal, ancestor mode
+        # and ownership, principal handling and ACL evaluation are all inside the replaced function.
+        # Measured: thirteen line-count-preserving fail-open mutations of those clauses -- including
+        # relaxing the reader's twelve-bit mode compare, which this ticket names as its own
+        # motivation -- are GREEN across every cell listed below. They are covered only by
+        # @skipUnless(DARWIN) classes on the non-required macOS leg, which is COREDEV-2767.
+        #
+        # Before COREDEV-2691 neither half was covered on this leg: there are three production
+        # callers (`_unleashed_create_store`, `_unleashed_store_ok`, `_unleashed_publish`) and
+        # covering only the first left reader:282 and publisher:230/:252 unguarded (codex, r7).
+        # (Other ungated classes in the file -- EncoderInvariantP, NameLengthBudget -- do run here;
+        # they cover the encoder and the name budget, not the guard. Revision 1's comment called
+        # those two the ONLY ungated classes, which was simply false.)
+        #
+        # Counts are DERIVED from the loader and checked PER CLASS: an aggregate check passes when
+        # one whole class contributes zero cells and the other makes up the number. What this
+        # actually guards against is a SKIP, which reads identically to a pass in the job summary --
+        # including the skip that a missing zsh would produce.
+        #
+        # No bare `assert`: python3 -O / PYTHONOPTIMIZE strips those and the step would exit 0 over
+        # a red suite.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys, unittest
+
+          # name -> the MINIMUM cell count that class must contribute. A derived-only expectation
+          # cannot see DELETION: remove ten cells and `expected` simply drops to match `ran`, and
+          # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
+          # added; lowering one has to be a deliberate edit here.
+          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 16,
+                      "scripts.tests.test_plugin_state_store.ForkClassification": 15,
+                      "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 12,
+                      "scripts.tests.test_plugin_state_store.SeamedReader": 7,
+                      "scripts.tests.test_plugin_state_store.SeamedPublisher": 5,
+                      "scripts.tests.test_plugin_state_store.PrefetchCacheContract": 14,
+                      "scripts.tests.test_plugin_state_store.UnauthenticatedEffectCensus": 4,
+                      "scripts.tests.test_plugin_state_store.AmbientStateContract": 6,
+                      "scripts.tests.test_plugin_state_store.PortablePathIdentity": 3}
+          NAMES = list(MINIMUMS)
+          problems = []
+          for name in NAMES:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              expected = suite.countTestCases()
+              flat = list(unittest.TestSuite(suite))
+              bogus = [t for t in flat if type(t).__name__ == "_FailedTest"]
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              print(f"{name}: expected={expected} ran={result.testsRun} "
+                    f"skipped={len(result.skipped)} errors={len(result.errors)}")
+              if bogus:
+                  problems.append(f"{name}: loader produced {len(bogus)} placeholder(s) -- renamed?")
+              if expected == 0:
+                  problems.append(f"{name}: loader found NO cells -- a rename emptied this gate")
+              if expected < MINIMUMS[name]:
+                  problems.append(f"{name}: {expected} cells, floor is {MINIMUMS[name]} -- cells were deleted")
+              if result.testsRun != expected:
+                  problems.append(f"{name}: only {result.testsRun}/{expected} cells ran")
+              if result.skipped:
+                  problems.append(f"{name}: cells SKIPPED on this platform: {result.skipped}")
+              if not result.wasSuccessful():
+                  problems.append(f"{name}: RED here")
+          if problems:
+              print("SEAM GATE FAILED:")
+              for p in problems:
+                  print("  - " + p)
+              sys.exit(1)
+          print(f"seam gate: all {len(NAMES)} classes ran fully, nothing skipped")
+          PY
+
       - name: Validate version sync (strict)
         id: version_sync
         run: VERSION_SYNC_ENFORCE=strict bash scripts/validate-version-sync.sh
@@ -228,6 +307,7 @@ jobs:
             echo "| pty-capture smoke (--timeout) | ${{ steps.pty_smoke.outcome || 'did not run' }} |"
             echo "| unittest discover (synthesizer suite) | ${{ steps.mcp_tests.outcome || 'did not run' }} |"
             echo "| unittest discover (scripts suite) | ${{ steps.scripts_tests.outcome || 'did not run' }} |"
+            echo "| ungated plugin-state entry guard (COREDEV-2691) | ${{ steps.seam_ungated.outcome || 'did not run' }} |"
             echo "| version-sync (strict) | ${{ steps.version_sync.outcome || 'did not run' }} |"
             echo "| plugin-assembly (strict) | ${{ steps.plugin_assembly.outcome || 'did not run' }} |"
             echo "| claude plugin validate (marketplace + deep) | ${{ steps.claude_validate.outcome || 'did not run' }} |"
@@ -406,22 +486,39 @@ jobs:
     # (Ubuntu), and one root cause — `tr` aborting on invalid UTF-8 outside `LC_ALL=C`, which
     # TRUNCATES the message — literally inverts by platform: green on GNU, red on BSD. A
     # single-platform run is half a result, and the half that passes is the half that hides it.
-    # macOS RUNS ON PUSH TO `main` ONLY — not on pull requests, and not on `alpha`.
+    # macOS RUNS ON PULL REQUESTS AND ON PUSH TO `main`/`alpha` (COREDEV-2767).
     #
-    # WHY IT IS RESTRICTED. A macOS runner bills at 10x the Linux rate, and this leg measured 10m30s
-    # against 2m35s for the ubuntu one, so it was ~105 Linux-equivalent minutes on EVERY push. The
-    # matrix is computed rather than filtered with a step-level `if:`, because an `if:` still
-    # provisions the runner and starts the meter.
+    # THE REASON IT WAS RESTRICTED WAS VOID. The comment here read: "a macOS runner bills at 10x the
+    # Linux rate … ~105 Linux-equivalent minutes on EVERY push". The 10x multiplier applies to
+    # PRIVATE repositories. This one is public, so standard GitHub-hosted runners are free.
+    # Measured, not recalled — run 32819402531, a push to main that included this leg:
+    #     gh api repos/.../actions/runs/32819402531/timing
+    #     → "MACOS":{"total_ms":0,"jobs":1}   "UBUNTU":{"total_ms":0,"jobs":6}
+    # Zero billable milliseconds, both platforms.
     #
-    # WHAT THAT COSTS, stated plainly: this is now a POST-MERGE CANARY, not a gate. The comment below
-    # is still true — the `tr`-on-invalid-UTF-8 root cause inverts by platform, green on GNU and red on
-    # BSD — so a BSD-only defect now LANDS on main and is caught after the fact rather than blocked
-    # before it. `redactor-equivalence (macos-latest)` was removed from the required checks at the same
-    # time, because a context that PR commits no longer produce would make every PR unmergeable.
+    # WHAT IT ACTUALLY COSTS is wall clock: 16m45s on that run against `validate`'s 8m26s, and it
+    # finishes ~8 minutes after every other job, so a PR looks stuck while it runs. That is a real
+    # price and it is the one to argue about; it is not the price that was recorded here.
+    #
+    # WHAT THE RESTRICTION COST, and why it is being undone: this is the ONLY job that runs
+    # `unittest discover -s scripts/tests` on Darwin (see the step below), so every
+    # @skipUnless(DARWIN) class ran after a merge and never on the pull request that introduced it —
+    # 165 cells skipped on the ubuntu leg, and `test_plugin_state_mutants.py` is 137/137 gated, so
+    # its whole obligation table gated nothing. COREDEV-2691 built ~3,000 lines of test seam to
+    # recover part of what this one expression gave away.
+    #
+    # The matrix is still COMPUTED rather than filtered with a step-level `if:` — an `if:` still
+    # provisions the runner — and `alpha` is included because releases are cut from it and it has
+    # never run this leg at all.
+    #
+    # `redactor-equivalence (macos-latest)` is deliberately still NOT a required check. Requiring it
+    # is a separate, ordered step: this change must land and be observed green on real pull requests
+    # FIRST, because a required context that commits do not yet produce makes every PR unmergeable,
+    # and ruleset `Control` (16082567) has `bypass_actors: []` — no escape hatch but editing it back.
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'push' && github.ref == 'refs/heads/main' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON((github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha'))) && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Raised from 10. This PR added the scripts suite + hook harness to the macOS leg, and the
     # measured run is 7m49s — 78% of a 10-minute cap, on the most variable runner GitHub offers.
@@ -452,12 +549,45 @@ jobs:
       # shell or path-classification defect can be green on ubuntu and red here. Before this the macOS
       # leg ran only the redactor suite, so nothing platform-specific in the scripts suite or the hook
       # harness was ever exercised on the platform it targets (PR #63 review, gap 15).
-      - name: Run the scripts test suite (macOS platform coverage)
-        if: matrix.os == 'macos-latest'
+
+  # ── The Darwin half of the suite, in a job of its own (COREDEV-2767) ───────────────────────────
+  # THIS USED TO BE TWO STEPS INSIDE `redactor-equivalence`, AND THAT IS WHY IT FAILED. That job caps
+  # at `timeout-minutes: 20` — right for redactor parity, which takes about two minutes — and the
+  # scripts suite shares the budget. Measured: the suite step ran 706s (11m46s) on run 33004523074
+  # and was CANCELLED mid-run on 33008633852 for exceeding the job's 20 minutes. Same commit range,
+  # same tests, ~4 minutes of macOS runner variance. A required check that flakes on capacity is the
+  # defect COREDEV-2765 was about, reintroduced at the job level.
+  #
+  # Separating them gives each the budget it needs, keeps the redactor legs fast on BOTH platforms,
+  # and gives the Darwin coverage a context name that says what it is — which matters, because this
+  # is the context that should eventually be REQUIRED, not `redactor-equivalence (macos-latest)`.
+  #
+  # No `if:` guard is needed: `on:` already restricts this workflow to pull requests and pushes to
+  # main/alpha, so the job runs exactly when it should. A job-level `if:` would skip without
+  # provisioning anyway — unlike the STEP-level `if:` the redactor matrix comment warns about.
+  #
+  # 35 minutes, against a measured 12-16: macOS runners are free on this public repo (measured,
+  # `MACOS.total_ms = 0`), so a generous cap costs nothing and a tight one costs a false red.
+  darwin-suite:
+    name: darwin-suite
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Report the interpreters under test
+        run: |
+          sw_vers || true
+          /bin/bash --version | head -1
+          /bin/zsh --version
+
+      # THE WHOLE SUITE, not a subset: on Darwin the @skipUnless(DARWIN) classes are exactly what
+      # this job exists to run, and they are 165 cells the required ubuntu leg skips.
+      - name: Run the scripts test suite (Darwin — the classes ubuntu skips)
         run: python3 -m unittest discover -s scripts/tests -v
 
-      - name: Run the hook stdin-contract harness (macOS platform coverage)
-        if: matrix.os == 'macos-latest'
+      - name: Run the hook stdin-contract harness
         run: bash scripts/test-hooks.sh
 
   secret-scan:
