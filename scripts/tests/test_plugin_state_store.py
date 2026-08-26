@@ -17,6 +17,7 @@ bash only.
 """
 
 import ast
+import io
 import os
 import re
 import shlex
@@ -963,6 +964,13 @@ SEAM_MUTANTS = {
 COMPOUND_FIRST_LINE = '    { [ "$#" -eq 1 ] && [ -n "$1" ]; } || return 1'
 
 
+#: Mutant names actually PASSED to `seam_source` during this process. The meta-control reads this
+#: rather than the source text: a lexical count was satisfied by a comment, and an AST walk was
+#: satisfied by an unreachable `if False:` call while missing a real dict-mediated one (codex, r2
+#: and r3). Execution is the only signal that means what the control claims.
+_MUTANTS_EXERCISED = set()
+
+
 def seam_source(broken=None, compound=False):
     """The seam's shell source, optionally with ONE predicate broken.
 
@@ -975,6 +983,7 @@ def seam_source(broken=None, compound=False):
     if broken is not None:
         idx, replacement = SEAM_MUTANTS[broken]
         lines[idx] = replacement
+        _MUTANTS_EXERCISED.add(broken)
     return "_unleashed_auth_chain() {\n" + "\n".join(lines) + "\n}\n"
 
 
@@ -1218,30 +1227,57 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(1, rc, "the allow_3 mutant did not flip this control")
         self.for_declared_shells(SHELLS, check)
 
-    def test_every_declared_mutant_is_executed_by_some_cell(self):
-        """The meta-control. §7.6 asks for one control per predicate, and revision 1 satisfied that
-        on paper while three declared mutants were never run -- the gap this cell exists to make
-        impossible to reintroduce. Each name appears once in SEAM_MUTANTS, so a second occurrence is
-        what proves a cell actually passes it as `broken=`.
+    #: Cells that legitimately drive the shell WITHOUT `for_declared_shells`, each with its reason.
+    #: The `narrowed_reason` gate only sees cells that call the helper; a cell can bypass it entirely
+    #: by calling `seam_call` directly, which is exactly what the nocasematch cell does (codex, r3).
+    #: This table plus the check below is what makes a single-shell cell a DECLARED choice.
+    SINGLE_SHELL_CELLS = {
+        "test_a_wrong_case_spelling_refuses_under_nocasematch":
+            "`nocasematch` is a bash option; zsh has no equivalent inherited state to assert on",
+    }
+
+    def test_no_shell_driving_cell_silently_skips_the_declared_shell_helper(self):
+        """Every cell that drives the shell must go through `for_declared_shells` -- which enforces
+        both arms -- or appear in SINGLE_SHELL_CELLS with a reason. Without this, dropping the zsh
+        arm needs no `narrowed_reason` at all: just call `seam_call` directly and the guard never
+        runs (codex, r3).
         """
         with open(__file__, encoding="utf-8") as fh:
-            src = fh.read()
-        # AST, not `src.count(...)`. A lexical threshold counts any second occurrence, so deleting a
-        # control and leaving `# ... "allow_1"` in a comment satisfied it -- reproduced by codex and
-        # agy at r2, on the very cell written to make this gap impossible. Only a real keyword
-        # argument in a real call counts here.
-        passed = {
-            kw.value.value
-            for node in ast.walk(ast.parse(src))
-            if isinstance(node, ast.Call)
-            for kw in node.keywords
-            if kw.arg == "broken"
-            and isinstance(kw.value, ast.Constant)
-            and isinstance(kw.value.value, str)
-        }
-        unexecuted = sorted(set(SEAM_MUTANTS) - passed)
-        self.assertEqual([], unexecuted, "declared mutants that no cell executes")
-        covered = {SEAM_MUTANTS[m][0] for m in passed if m in SEAM_MUTANTS}
+            tree = ast.parse(fh.read())
+        drivers = {"seam_call", "seam_calls", "_create_store"}
+        offenders = []
+        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
+                    and n.name in ("SeamContract", "SeamedStoreCreation")):
+            for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)
+                       and n.name.startswith("test_")):
+                called = {n.func.attr for n in ast.walk(fn)
+                          if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+                if called & drivers and "for_declared_shells" not in called:
+                    if fn.name not in self.SINGLE_SHELL_CELLS:
+                        offenders.append(f"{cls.name}.{fn.name}")
+        self.assertEqual([], offenders,
+                         "shell-driving cells that bypass for_declared_shells without a declared reason")
+
+    def test_every_declared_mutant_is_executed_by_some_cell(self):
+        """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
+
+        Two earlier spellings of this cell were themselves defeated, which is the reason for the
+        third: a lexical `src.count(...)` was satisfied by an inert comment naming the mutant, and
+        an AST walk for `broken=` keywords was satisfied by an unreachable `if False:` call while
+        MISSING a genuine `broken={"slot": "allow_1"}["slot"]` (codex, r2 and r3). Both are static
+        proxies for a dynamic property. This one runs the sibling cells and reads what they actually
+        passed, so an unexecuted control cannot look like an executed one.
+        """
+        siblings = [n for n in unittest.defaultTestLoader.getTestCaseNames(SeamContract)
+                    if n != "test_every_declared_mutant_is_executed_by_some_cell"]
+        _MUTANTS_EXERCISED.clear()
+        result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(
+            unittest.TestSuite(SeamContract(n) for n in siblings))
+        self.assertTrue(result.wasSuccessful(),
+                        "sibling cells failed, so mutant coverage cannot be read from this run")
+        unexecuted = sorted(set(SEAM_MUTANTS) - _MUTANTS_EXERCISED)
+        self.assertEqual([], unexecuted, "declared mutants that no cell EXECUTES")
+        covered = {SEAM_MUTANTS[m][0] for m in _MUTANTS_EXERCISED if m in SEAM_MUTANTS}
         self.assertEqual(set(range(len(SEAM_LINES))), covered,
                          "a seam predicate has no executed mutant")
 
@@ -1335,36 +1371,67 @@ def _ls_flags(rest):
 
 
 def _command_args(text):
-    """Tokenise the argv that FOLLOWS an executable, stopping where the command does.
+    r"""Tokenise the argv that FOLLOWS an executable, stopping where the command does.
 
     A fork here is usually wrapped: `_x="$(/usr/bin/stat -f '%p' -- "$1" 2>/dev/null)" || return 1`.
     Handing the whole remainder to `shlex.split` raises "No closing quotation" on the enclosing
-    substitution's own quote -- which is precisely what a first attempt at this census did on FIVE
-    real sites. Walk to the first UNQUOTED terminator instead, then tokenise what is left.
+    substitution's own quote -- which is what a first attempt at this census did on FIVE real sites.
+    Walk to the first terminator that is genuinely at top level, then tokenise what is left.
 
-    Raises ValueError if what remains is still unbalanced; the caller treats that as unclassified,
-    never as absent.
+    Three things must be tracked, and each was learned by being caught missing it:
+      * QUOTES, or the enclosing wrapper's quote ends the scan (r1).
+      * COMMAND SUBSTITUTION, or an inner `)` / `|` truncates the argv and a runtime `ls ... -e`
+        classifies as portable (codex + agy, r2). A substitution is refused outright rather than
+        parsed -- but only a REAL one: `'$('` inside single quotes and an escaped `\$(` are
+        literals, and rejecting those was a false RED (codex, r3).
+      * `${...}` NESTING, or a `)` inside a parameter default truncates exactly the same way --
+        `${x:-a)b}` parsed to `['-l', '${x:-a']` and reported portable while the runtime argv held
+        `-e` (codex, r3). That hole was relocated by the r2 fix, not closed.
+
+    Raises ValueError when the remainder cannot be classified with confidence; the caller treats
+    that as unclassified, never as absent.
     """
-    out, quote, i = [], None, 0
+    out, quote, braces, i = [], None, 0, 0
     while i < len(text):
         ch = text[i]
-        # A command substitution in the ARGUMENT region defeats terminator scanning: its inner `)`
-        # or `|` ends the scan early and the truncated argv can classify PORTABLE while the runtime
-        # argv is not. Measured (codex + agy, r2): `/bin/ls -l $(which foo) -e -- /x` truncated to
-        # ['-l','$(which','foo'] and reported portable, hiding a BSD `-e`. Refuse to guess.
-        if text[i:i + 2] == "$(" or ch == "`":
-            raise ValueError("command substitution in the argument region; classify by hand")
-        if quote:
+        if ch == "\\" and quote != "'" and i + 1 < len(text):
             out.append(ch)
-            if ch == quote:
+            out.append(text[i + 1])          # an escaped `$` is not a substitution
+            i += 2
+            continue
+        if quote == "'":                     # single quotes: everything is literal
+            out.append(ch)
+            if ch == "'":
                 quote = None
-        elif ch in "'\"":
+            i += 1
+            continue
+        if ch == "`" or text[i:i + 2] == "$(":
+            raise ValueError("command substitution in the argument region; classify by hand")
+        if text[i:i + 2] == "${":
+            braces += 1
+            out.append(ch)
+            out.append(text[i + 1])
+            i += 2
+            continue
+        if braces and ch == "}":
+            braces -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"":
             quote = ch
             out.append(ch)
-        elif ch in ");|&<>":
+            i += 1
+            continue
+        if not braces and ch in ");|&<>":
             break
-        else:
-            out.append(ch)
+        out.append(ch)
         i += 1
     args = shlex.split("".join(out), comments=False, posix=True)
     # `2>/dev/null` leaves a bare fd number behind once the redirect is cut off.
@@ -1670,12 +1737,20 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
 
     #: (label, race, refuse_at) -> the transcript the walk must stop at, MEASURED. Each row refuses
     #: one call POSITION, and the position maps to one production call site.
+    #: (label, race, refuse_at, expected transcript, components that may EXIST afterwards).
+    #: The filesystem column is not decoration: without it the rows check only rc and the ordered
+    #: transcript, and a mutation that creates `mid` BEFORE the first authentication leaves both
+    #: unchanged (codex, r3). Row 1 expects NOTHING created, so any pre-authentication mkdir reddens
+    #: it. Every value here was measured, in both shells, before being written down.
     REFUSAL_ROWS = (
-        ("store.sh:225 nearest ancestor", False, 1, ["claude"]),
-        ("store.sh:256 per-created component", False, 2, ["claude", "mid"]),
-        ("store.sh:256 the store itself", False, 3, ["claude", "mid", "store"]),
-        ("store.sh:259 the store again", False, 4, ["claude", "mid", "store", "store"]),
-        ("store.sh:239 appeared-since-walk", True, 2, ["claude", "mid"]),
+        ("store.sh:225 nearest ancestor", False, 1, ["claude"], set()),
+        ("store.sh:256 per-created component", False, 2, ["claude", "mid"], {"mid"}),
+        ("store.sh:256 the store itself", False, 3, ["claude", "mid", "store"], {"mid", "store"}),
+        ("store.sh:259 the store again", False, 4,
+         ["claude", "mid", "store", "store"], {"mid", "store"}),
+        # The race fixture creates `mid` itself, deliberately -- that IS the race being modelled --
+        # so `mid` is expected here and the pre-authentication check lives on the rows above.
+        ("store.sh:239 appeared-since-walk", True, 2, ["claude", "mid"], {"mid"}),
     )
 
     def test_create_store_consults_the_guard_for_every_component_in_order(self):
@@ -1720,16 +1795,16 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         rows refuse one call position each and require the walk to STOP there and report failure.
         """
         def check(shell):
-            for label, race, refuse_at, expected in self.REFUSAL_ROWS:
+            for label, race, refuse_at, expected, may_exist in self.REFUSAL_ROWS:
                 with self.subTest(site=label):
                     rc, transcript, modes = self._create_store(
                         shell, seamed=True, race=race, refuse_at=refuse_at)
                     self.assertEqual(1, rc, f"{label}: a refused chain still returned success")
                     self.assertEqual(expected, transcript,
                                      f"{label}: the walk did not stop at the refusal")
-                    if refuse_at < 3:
-                        self.assertEqual("ABSENT", modes["store"],
-                                         f"{label}: the store was created past a refusal")
+                    created = {n for n in ("mid", "store") if modes[n] != "ABSENT"}
+                    self.assertEqual(may_exist, created,
+                                     f"{label}: components created past (or before) the refusal")
         self.for_declared_shells(SHELLS, check)
 
     def test_the_refusal_rows_pass_when_nothing_is_refused(self):
