@@ -1938,7 +1938,8 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         '  command /bin/mkdir "$@"; }\n'
     )
 
-    def _create_store(self, shell, seamed, race=False, refuse_at=None, lose_race=False):
+    def _create_store(self, shell, seamed, race=False, refuse_at=None, lose_race=False,
+                      mid_exists=False):
         """Run `_unleashed_create_store` on a fresh HOME. Returns (rc, transcript, modes).
 
         `race=True` seams `_unleashed_nearest_existing` so that `mid` APPEARS between the walk and
@@ -1952,6 +1953,10 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
         claude = os.path.join(home, ".claude")
         os.makedirs(claude, mode=0o700)
         mid = os.path.join(claude, "unleashed-mail")
+        if mid_exists:
+            # Makes `_UNLEASHED_NEAREST` == mid, so it DIFFERS from `_cs_top`. Every other fixture
+            # here leaves those two equal, which is what let store:225 be rewritten undetected.
+            os.makedirs(mid, mode=0o700)
         store = os.path.join(mid, "bases")
         log = os.path.join(home, "calls")
         with open(log, "wb"):
@@ -2065,6 +2070,26 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             rc, transcript, _ = self._create_store(shell, seamed=True, refuse_at=99)
             self.assertEqual(0, rc, "the counting seam refuses even when it should not")
             self.assertEqual(["claude", "mid", "store", "store"], transcript)
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_nearest_existing_ancestor_is_what_gets_authenticated(self):
+        """store.sh:225 must authenticate `$_UNLEASHED_NEAREST`, not some other in-scope variable.
+
+        Every other fixture in this class starts with only `~/.claude` present, so the nearest
+        existing ancestor IS `_cs_top` and the two variables are INDISTINGUISHABLE. Replacing
+        `$_UNLEASHED_NEAREST` with the adjacent `$_cs_top` therefore left all 43 cells green while
+        regressing a real guard: when `_cs_mid` exists but does not authenticate, production
+        authenticates only `_cs_top`, the `case` then treats `_cs_mid` as already walked, and the
+        store is created beneath an unauthenticated component (codex, r11 -- reproduced).
+
+        Pre-creating `mid` separates them: nearest becomes mid, and the transcript's FIRST entry is
+        the discriminator.
+        """
+        def check(shell):
+            rc, transcript, _ = self._create_store(shell, seamed=True, mid_exists=True)
+            self.assertEqual(0, rc, "the seamed production caller did not succeed")
+            self.assertEqual(["mid", "store", "store"], transcript,
+                             "the guard was not called with the NEAREST EXISTING ancestor")
         self.for_declared_shells(SHELLS, check)
 
     def test_a_component_that_lost_the_mkdir_race_is_still_authenticated(self):
@@ -2359,7 +2384,7 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
 
     stat_stub = staticmethod(SeamedReader.stat_stub)
 
-    def _publish(self, shell, allow, value_exists):
+    def _publish(self, shell, allow, value_exists, depth=1):
         """Run `_unleashed_publish`. Returns (transcript, last failure diagnostic)."""
         auth = with_mutation(*LINUX_SIM, path=AUTH)
         self.addCleanup(os.unlink, auth)
@@ -2369,14 +2394,18 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         os.makedirs(store, mode=0o700)
         parent = os.path.join(home, "exists")
         os.makedirs(parent, mode=0o700)
-        value = os.path.join(parent, "base") if not value_exists else os.path.join(home, "data")
+        # depth=2 leaves TWO components missing, so the nearest existing ancestor is `parent` while
+        # the value's IMMEDIATE parent is `parent/a` -- which does not exist. At depth 1 they are the
+        # same directory, and that equality is what let publisher:230 be rewritten undetected.
+        value = (os.path.join(home, "data") if value_exists
+                 else os.path.join(parent, *(["a", "b"] if depth == 2 else ["base"])))
         if value_exists:
             os.makedirs(value, mode=0o700)
         uid = os.geteuid()
         log = os.path.join(home, "calls")
         with open(log, "wb"):
             pass
-        allowed = (value, parent, store) if allow else ("/nothing", "/nothing", "/nothing")
+        allowed = (parent, value, store) if allow else ("/nothing", "/nothing", "/nothing")
         body = (
             "_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n_SEAM_A3=%s\n"
             % tuple(shlex.quote(x) for x in (log,) + allowed)
@@ -2394,6 +2423,26 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
         transcript = [r.decode().replace(home, "~") for r in raw.split(b"\0")[:-1]]
         failures = [l.split("failed: ")[-1] for l in err.splitlines() if "failed: " in l]
         return transcript, (failures[-1] if failures else "")
+
+    def test_publish_authenticates_the_nearest_existing_ancestor_not_the_immediate_parent(self):
+        """publisher.sh:230 must authenticate `$_pb_anc` -- the NEAREST EXISTING ancestor.
+
+        The other publisher fixtures leave exactly one component missing, so the immediate parent
+        and the nearest existing ancestor are the same directory. Replacing `$_pb_anc` with
+        `"${_pb_folded%/*}"` therefore left all 43 cells green, while breaking the ordinary
+        fresh-install case: with two components missing the immediate parent does not exist, the
+        guard refuses, and publication always fails (codex, r11 -- reproduced). That is fail-closed
+        availability rather than a bypass, but it is a real shipped regression.
+        """
+        def check(shell):
+            transcript, _ = self._publish(shell, allow=True, value_exists=False, depth=2)
+            self.assertGreater(len(transcript), 1, f"the create arm did not proceed: {transcript}")
+            self.assertTrue(transcript[0].endswith("/exists"),
+                            f"the guard was not called with the nearest EXISTING ancestor: "
+                            f"{transcript[0]}")
+            self.assertTrue(transcript[1].endswith("/exists/a/b"),
+                            f"the created base was not authenticated next: {transcript}")
+        self.for_declared_shells(SHELLS, check)
 
     def test_publish_refuses_a_base_whose_own_chain_refuses(self):
         """publisher:252 -- the published base is authenticated BEFORE a key is derived or anything
