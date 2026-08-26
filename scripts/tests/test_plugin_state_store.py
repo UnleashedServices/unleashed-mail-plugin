@@ -1270,6 +1270,21 @@ class SeamContract(SeamedChain, unittest.TestCase):
         self.assertEqual([], offenders,
                          "shell-driving cells that bypass for_declared_shells without a declared reason")
 
+    def test_the_declared_shell_set_is_one_bash_and_one_zsh(self):
+        """`for_declared_shells` compares each cell's declaration to the module-level SHELLS, so it
+        is blind to SHELLS itself being wrong: a copy/paste making it `(bash, bash)` runs every
+        dual-shell cell TWICE under bash, produces no skip, preserves every CI floor, and satisfies
+        the helper (codex, r8 -- reproduced). An oracle that checks a value against itself checks
+        nothing. This asserts the property independently.
+        """
+        self.assertEqual(2, len(SHELLS), f"SHELLS is not a pair: {SHELLS}")
+        self.assertEqual(2, len(set(SHELLS)), f"SHELLS names the same interpreter twice: {SHELLS}")
+        names = sorted(os.path.basename(sh) for sh in SHELLS)
+        self.assertEqual(["bash", "zsh"], names, f"SHELLS is not one bash and one zsh: {SHELLS}")
+        for sh in SHELLS:
+            with self.subTest(shell=sh):
+                self.assertTrue(os.path.isabs(sh), f"{sh} is not an absolute path")
+
     def test_the_ci_floors_match_the_cells_that_exist(self):
         """The CI gate floors a per-class cell count so DELETION cannot pass. A floor that lags the
         real count protects nothing above it: r6 added two lost-race cells and left the floor at 5,
@@ -2074,12 +2089,28 @@ class SeamedReader(SeamedChain, unittest.TestCase):
     clauses are covered by the Darwin-gated classes above, and §5 of the plan is why they stay there.
     """
 
-    #: `_u_stat`/`_u_euid` stubbed with values that SATISFY the clauses preceding the chain call, so
-    #: a refusal is attributable to the chain and to nothing else.
-    STAT_STUB = (
-        "_u_stat() { _U_MODE=0700; _U_UID=%d; _U_SIZE=0; return 0; }\n"
-        "_u_euid() { _U_EUID=%d; return 0; }\n"
-    )
+    @staticmethod
+    def stat_stub(table, uid):
+        """A PATH-STRICT `_u_stat`: it answers for the listed paths and REFUSES every other.
+
+        The first spelling answered for ANY path with one set of values, which masked a shipped
+        mutation: if an ENT-2c call changed from `"$_ae_p"` to its parent, the live `_u_stat` sees a
+        different inode and refuses, while the stub handed back the entry's inode and every cell
+        stayed green (codex, r8 -- measured, real(entry,parent)=0,1 against stub 0,0). A stub that
+        answers for paths the code should never ask about cannot detect the code asking about them.
+
+        `table` maps an exact path (or the literal "/dev/fd" prefix) to (mode, size, inode).
+        """
+        arms = "".join(
+            '  %s) _U_MODE=%s; _U_SIZE=%s; _U_INO=%s ;;\n' % (pattern, mode, size, ino)
+            for pattern, (mode, size, ino) in table.items()
+        )
+        return (
+            '_u_stat() { case "$1" in\n' + arms
+            + '  *) return 1 ;;\n'          # an unexpected path is a REFUSAL, never a default answer
+            + 'esac\n_U_UID=%d\nreturn 0; }\n' % uid
+            + '_u_euid() { _U_EUID=%d; return 0; }\n' % uid
+        )
 
     def _store_ok(self, shell, allow, broken=None):
         """Run `_unleashed_store_ok` over a real 0700 store. Returns (rc, transcript)."""
@@ -2093,11 +2124,12 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         with open(log, "wb"):
             pass
         uid = os.geteuid()
+        st = os.stat(store)
         body = (
             "_SEAM_CALLS=%s\n_SEAM_A1=%s\n" % (shlex.quote(log),
                                                shlex.quote(store if allow else "/nothing"))
             + seam_source(broken)
-            + self.STAT_STUB % (uid, uid)
+            + self.stat_stub({shlex.quote(store): ("0700", 0, st.st_ino)}, uid)
             + "_unleashed_store_ok %s\n" % shlex.quote(store)
             + 'printf "SEAM_RC=%s\\n" "$?"\n'
         )
@@ -2108,7 +2140,7 @@ class SeamedReader(SeamedChain, unittest.TestCase):
             raw = fh.read()
         return (rcs[0] if rcs else None), [r.decode() for r in raw.split(b"\0")[:-1]]
 
-    def _auth_entry(self, shell, allow_parent, allow_target):
+    def _auth_entry(self, shell, allow_parent, allow_target, race=False):
         """Build a LEGITIMATE store entry and run `_unleashed_auth_entry` over it.
 
         The fixture satisfies every ENT-1..3 precondition, each of which refused a draft of this
@@ -2143,15 +2175,19 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         with open(log, "wb"):
             pass
         allowed = [store if allow_parent else "/nothing", value if allow_target else "/nothing"]
+        # PATH-STRICT, and the `/dev/fd` mode is what the shipped code actually SEES there --
+        # measured 0444, not the 0600 the first spelling asserted (codex, r8 note c).
         stub = (
             'if [ -n "${ZSH_VERSION:-}" ]; then zmodload -i zsh/stat zsh/system 2>/dev/null || :; fi\n'
-            '_u_stat() { case "$1" in\n'
-            '  /dev/fd/*|%s) _U_MODE=0600; _U_SIZE=%d ;;\n'
-            '  *) _U_MODE=0700; _U_SIZE=0 ;;\n'
-            'esac\n_U_UID=%d; _U_INO=%d\nreturn 0; }\n'
-            '_u_euid() { _U_EUID=%d; return 0; }\n'
-            % (shlex.quote(entry), st.st_size, uid, st.st_ino, uid)
+            + self.stat_stub({shlex.quote(entry): ("0600", st.st_size, st.st_ino),
+                              "/dev/fd/*": ("0600", st.st_size, st.st_ino)}, uid)
         )
+        if race:
+            q = shlex.quote(entry)
+            stub += ('_u_euid() { if [ -z "${_SWAPPED:-}" ] && [ -e %s ]; then _SWAPPED=1; '
+                     'command mv -- %s %s.real 2>/dev/null; '
+                     'command ln -s %s.real %s 2>/dev/null; fi; _U_EUID=%d; return 0; }\n'
+                     % (q, q, q, q, q, uid))
         body = ("_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n"
                 % (shlex.quote(log), shlex.quote(allowed[0]), shlex.quote(allowed[1]))
                 + seam_source() + stub
@@ -2164,6 +2200,28 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         names = {store: "parent", value: "target"}
         return (rcs[0] if rcs else None), [names.get(r.decode(), r.decode())
                                            for r in raw.split(b"\0")[:-1]]
+
+    def test_an_entry_replaced_by_a_symlink_after_the_read_is_refused(self):
+        """ENT-2c -- the pathname is re-tested AFTER the read, and this is the race it exists for.
+
+        codex found (PR #67 pass 15) that a same-uid process can rename the validated entry aside
+        and drop a SYMLINK at its name between ENT-1 and the open: the descriptor still has exactly
+        the inode ENT-1 validated, so type, owner, size and content all pass, while the surviving
+        store entry is a link ENT-1 forbids. Deleting the re-test changes NOTHING on a healthy
+        fixture, so the three cells above cannot see it -- measured green before this cell existed.
+
+        The swap is interposed at `_u_euid`, which BOTH arms call after the descriptor is open and
+        before the re-test. It is deliberately not interposed at `_u_stat`: zsh stats the descriptor
+        with `zstat` directly, so a `_u_stat` swapper never fires there, and a first attempt at this
+        made the zsh arm look like a shipped defect when it was the probe that was wrong.
+
+        Each shell exercises its OWN re-test site -- bash reader.sh:113, zsh reader.sh:101 -- so
+        running both arms is what covers both, and deleting either makes that shell accept the race.
+        """
+        def check(shell):
+            rc, _ = self._auth_entry(shell, allow_parent=True, allow_target=True, race=True)
+            self.assertEqual(1, rc, "an entry replaced by a symlink after the read was accepted")
+        self.for_declared_shells(SHELLS, check)
 
     def test_entry_authenticates_the_parent_then_the_target(self):
         """reader:207 and :208 -- PCH-1 walks the entry's own chain and the target chain, one each,
@@ -2232,7 +2290,7 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
     itself produces.
     """
 
-    STAT_STUB = SeamedReader.STAT_STUB
+    stat_stub = staticmethod(SeamedReader.stat_stub)
 
     def _publish(self, shell, allow, value_exists):
         """Run `_unleashed_publish`. Returns (transcript, last failure diagnostic)."""
@@ -2256,7 +2314,10 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
             "_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n_SEAM_A3=%s\n"
             % tuple(shlex.quote(x) for x in (log,) + allowed)
             + seam_source()
-            + self.STAT_STUB % (uid, uid)
+            + self.stat_stub({shlex.quote(store): ("0700", 0, os.stat(store).st_ino),
+                              shlex.quote(parent): ("0700", 0, os.stat(parent).st_ino)}
+                             | ({shlex.quote(value): ("0700", 0, os.stat(value).st_ino)}
+                                if os.path.isdir(value) else {}), uid)
             + "_unleashed_publish %s %s\n" % (shlex.quote(store), shlex.quote(value))
         )
         err = run_shell(shell, body, env={"HOME": home},

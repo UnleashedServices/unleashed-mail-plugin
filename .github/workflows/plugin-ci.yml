@@ -113,10 +113,10 @@ jobs:
           # cannot see DELETION: remove ten cells and `expected` simply drops to match `ran`, and
           # the gate stays green having verified almost nothing (agy). Raise a floor when cells are
           # added; lowering one has to be a deliberate edit here.
-          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 15,
+          MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 16,
                       "scripts.tests.test_plugin_state_store.ForkClassification": 10,
                       "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 7,
-                      "scripts.tests.test_plugin_state_store.SeamedReader": 5,
+                      "scripts.tests.test_plugin_state_store.SeamedReader": 6,
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 4}
           NAMES = list(MINIMUMS)
           problems = []
