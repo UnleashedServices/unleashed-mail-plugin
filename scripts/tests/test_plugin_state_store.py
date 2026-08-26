@@ -1284,29 +1284,48 @@ class SeamContract(SeamedChain, unittest.TestCase):
         for sh in SHELLS:
             with self.subTest(shell=sh):
                 self.assertTrue(os.path.isabs(sh), f"{sh} is not an absolute path")
+                # IDENTITY, not name. An executable shim named `zsh` that launches bash passes
+                # basename, uniqueness, absolute-path and `which` checks alike (codex, r9). Ask the
+                # interpreter what it is.
+                probe = ('printf "%s\\n" "${BASH_VERSION:+bash}${ZSH_VERSION:+zsh}"')
+                got = subprocess.run([sh, "-c", probe], capture_output=True, text=True).stdout.strip()
+                self.assertEqual(os.path.basename(sh), got,
+                                 f"{sh} identifies itself as {got!r}, not {os.path.basename(sh)!r}")
 
     def test_the_ci_floors_match_the_cells_that_exist(self):
-        """The CI gate floors a per-class cell count so DELETION cannot pass. A floor that lags the
-        real count protects nothing above it: r6 added two lost-race cells and left the floor at 5,
-        so either could be deleted and the gate stayed green (codex, r7 -- my own defect, introduced
-        in the commit that added them). This cell fails when the workflow and the suite disagree, so
-        the floor cannot silently rot again.
+        """The CI gate floors a per-class cell count so DELETION cannot pass, and a floor that lags
+        the real count protects nothing above it: r6 added two cells and left the floor at 5, so
+        either could be deleted and the gate stayed green. This cell has caught that rot three
+        times since.
+
+        It parses the MINIMUMS assignment and REJECTS DUPLICATE KEYS. The first spelling searched
+        the whole workflow text and took the FIRST regex match, while Python builds the dict from
+        the LAST duplicate key -- so one accidental duplicate made the self-check read 16 while the
+        gate enforced 15, and both passed with a cell deleted (codex, r9). Reading a different value
+        than the code executes is the whole failure mode this cell exists to prevent.
         """
         workflow = os.path.join(os.path.dirname(ROOT), ".github", "workflows", "plugin-ci.yml")
         if not os.path.exists(workflow):
             self.skipTest("workflow not present in this checkout")
         with open(workflow, encoding="utf-8") as fh:
             text = fh.read()
+        block = re.search(r"MINIMUMS = \{(.*?)\}", text, re.S)
+        self.assertIsNotNone(block, "the CI gate no longer declares a MINIMUMS mapping")
+        pairs = re.findall(r'"(scripts\.tests\.[A-Za-z_.]+)":\s*(\d+)', block.group(1))
+        keys = [k for k, _ in pairs]
+        self.assertEqual(sorted(set(keys)), sorted(keys),
+                         f"MINIMUMS declares a duplicate key; Python would use the LAST: {keys}")
+        declared = {k: int(v) for k, v in pairs}
         for cls in (SeamContract, ForkClassification, SeamedStoreCreation,
                     SeamedReader, SeamedPublisher):
+            name = "scripts.tests.test_plugin_state_store." + cls.__name__
             actual = len(unittest.defaultTestLoader.getTestCaseNames(cls))
-            declared = re.search(
-                r'"scripts\.tests\.test_plugin_state_store\.%s":\s*(\d+)' % cls.__name__, text)
             with self.subTest(cls=cls.__name__):
-                self.assertIsNotNone(declared, f"{cls.__name__} has no floor in the CI gate")
-                self.assertEqual(actual, int(declared.group(1)),
+                self.assertIn(name, declared, f"{cls.__name__} has no floor in the CI gate")
+                self.assertEqual(actual, declared[name],
                                  f"{cls.__name__}: {actual} cells but the CI floor says "
-                                 f"{declared.group(1)} -- raise it in plugin-ci.yml")
+                                 f"{declared[name]} -- update plugin-ci.yml")
+        self.assertEqual(len(declared), 5, f"the CI gate floors {len(declared)} classes, expected 5")
 
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
@@ -2175,12 +2194,17 @@ class SeamedReader(SeamedChain, unittest.TestCase):
         with open(log, "wb"):
             pass
         allowed = [store if allow_parent else "/nothing", value if allow_target else "/nothing"]
-        # PATH-STRICT, and the `/dev/fd` mode is what the shipped code actually SEES there --
-        # measured 0444, not the 0600 the first spelling asserted (codex, r8 note c).
+        # PATH-STRICT, including the DESCRIPTOR. `/dev/fd/*` accepted any descriptor -- closed,
+        # wrong, or nonsense -- and answered 0600 while the comment beside it claimed the measured
+        # 0444 (codex, r9: my own claim-vs-code defect, inside the fix for a claim-vs-code defect).
+        # A maintainer changing reader.sh:107's literal `/dev/fd/9` to `/dev/fd/8` makes the live
+        # bash arm refuse every entry, while the glob fabricated the expected inode for fd 8 and all
+        # four entry cells stayed green. reader.sh:107 uses the LITERAL 9, so 9 is what is listed;
+        # the mode is 0444 as measured, and the bash arm reads inode/uid/size from it, never mode.
         stub = (
             'if [ -n "${ZSH_VERSION:-}" ]; then zmodload -i zsh/stat zsh/system 2>/dev/null || :; fi\n'
             + self.stat_stub({shlex.quote(entry): ("0600", st.st_size, st.st_ino),
-                              "/dev/fd/*": ("0600", st.st_size, st.st_ino)}, uid)
+                              "/dev/fd/9": ("0444", st.st_size, st.st_ino)}, uid)
         )
         if race:
             q = shlex.quote(entry)
@@ -2195,6 +2219,16 @@ class SeamedReader(SeamedChain, unittest.TestCase):
                 + 'printf "SEAM_RC=%s\\n" "$?"\n')
         out = run_shell(shell, body, env={"HOME": home, "LC_ALL": "C"}, sources=srcs)[1]
         rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
+        if race:
+            # The setup must be PROVEN, out of band. `mv` and `ln` failures were ignored: if `mv`
+            # succeeded and `ln -s` did not, the open saw an absent pathname and returned 1 BEFORE
+            # ENT-2c -- so the cell passed with the re-test deleted, for a reason that has nothing
+            # to do with the property under test (codex, r9). An expected rc cannot validate the
+            # fixture that produced it.
+            self.assertTrue(os.path.islink(entry),
+                            "the race did not install a symlink; rc proves nothing here")
+            self.assertTrue(os.path.exists(entry + ".real"),
+                            "the race did not move the validated entry aside")
         with open(log, "rb") as fh:
             raw = fh.read()
         names = {store: "parent", value: "target"}
