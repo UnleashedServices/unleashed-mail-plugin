@@ -116,7 +116,7 @@ jobs:
           MINIMUMS = {"scripts.tests.test_plugin_state_store.SeamContract": 15,
                       "scripts.tests.test_plugin_state_store.ForkClassification": 10,
                       "scripts.tests.test_plugin_state_store.SeamedStoreCreation": 7,
-                      "scripts.tests.test_plugin_state_store.SeamedReader": 2,
+                      "scripts.tests.test_plugin_state_store.SeamedReader": 5,
                       "scripts.tests.test_plugin_state_store.SeamedPublisher": 4}
           NAMES = list(MINIMUMS)
           problems = []

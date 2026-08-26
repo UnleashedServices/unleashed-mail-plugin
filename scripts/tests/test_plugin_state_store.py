@@ -2108,6 +2108,91 @@ class SeamedReader(SeamedChain, unittest.TestCase):
             raw = fh.read()
         return (rcs[0] if rcs else None), [r.decode() for r in raw.split(b"\0")[:-1]]
 
+    def _auth_entry(self, shell, allow_parent, allow_target):
+        """Build a LEGITIMATE store entry and run `_unleashed_auth_entry` over it.
+
+        The fixture satisfies every ENT-1..3 precondition, each of which refused a draft of this
+        probe before it was right: the name is `base.<key>` with the key derived by the SHIPPED
+        encoder from the value; the value is an existing directory; the mode is exactly 0600; the
+        content is the value plus one trailing newline; and `_u_stat` reports the file's REAL size
+        and inode, because zsh's ENT-2b arm stats the DESCRIPTOR with `zstat` and compares inodes.
+
+        `zmodload zsh/stat zsh/system` is done here because the real `_u_stat` is what normally
+        loads them -- stubbing it removed the load, `zstat` failed, and the whole ENT-2b `&&` chain
+        short-circuited to a refusal that looked like a guard decision. The stub was hiding a
+        dependency, which is the sort of thing a stub does quietly.
+        """
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("seament-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        store = os.path.join(home, "bases")
+        os.makedirs(store, mode=0o700)
+        value = os.path.join(home, "data")
+        os.makedirs(value, mode=0o700)
+        srcs = (auth, STORE, READER, PUB)
+        key = run_shell(shell, "_unleashed_key %s\nprintf '%%s' \"$_UNLEASHED_KEY\"\n"
+                        % shlex.quote(value), sources=srcs)[1]
+        entry = os.path.join(store, "base." + key)
+        with open(entry, "w", encoding="utf-8") as fh:
+            fh.write(value + "\n")
+        os.chmod(entry, 0o600)
+        st = os.stat(entry)
+        uid = os.geteuid()
+        log = os.path.join(home, "calls")
+        with open(log, "wb"):
+            pass
+        allowed = [store if allow_parent else "/nothing", value if allow_target else "/nothing"]
+        stub = (
+            'if [ -n "${ZSH_VERSION:-}" ]; then zmodload -i zsh/stat zsh/system 2>/dev/null || :; fi\n'
+            '_u_stat() { case "$1" in\n'
+            '  /dev/fd/*|%s) _U_MODE=0600; _U_SIZE=%d ;;\n'
+            '  *) _U_MODE=0700; _U_SIZE=0 ;;\n'
+            'esac\n_U_UID=%d; _U_INO=%d\nreturn 0; }\n'
+            '_u_euid() { _U_EUID=%d; return 0; }\n'
+            % (shlex.quote(entry), st.st_size, uid, st.st_ino, uid)
+        )
+        body = ("_SEAM_CALLS=%s\n_SEAM_A1=%s\n_SEAM_A2=%s\n"
+                % (shlex.quote(log), shlex.quote(allowed[0]), shlex.quote(allowed[1]))
+                + seam_source() + stub
+                + "_unleashed_auth_entry %s\n" % shlex.quote(entry)
+                + 'printf "SEAM_RC=%s\\n" "$?"\n')
+        out = run_shell(shell, body, env={"HOME": home, "LC_ALL": "C"}, sources=srcs)[1]
+        rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
+        with open(log, "rb") as fh:
+            raw = fh.read()
+        names = {store: "parent", value: "target"}
+        return (rcs[0] if rcs else None), [names.get(r.decode(), r.decode())
+                                           for r in raw.split(b"\0")[:-1]]
+
+    def test_entry_authenticates_the_parent_then_the_target(self):
+        """reader:207 and :208 -- PCH-1 walks the entry's own chain and the target chain, one each,
+        in that order. A legitimate entry authenticates both."""
+        def check(shell):
+            rc, transcript = self._auth_entry(shell, allow_parent=True, allow_target=True)
+            self.assertEqual(0, rc, "a legitimate entry was refused")
+            self.assertEqual(["parent", "target"], transcript,
+                             "the entry's own chain and the target chain were not both walked")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_entry_refuses_when_the_parent_chain_refuses(self):
+        """reader:207 in isolation: the walk stops at the parent, and the target is never reached."""
+        def check(shell):
+            rc, transcript = self._auth_entry(shell, allow_parent=False, allow_target=True)
+            self.assertEqual(1, rc, "an entry under a refusing parent was accepted")
+            self.assertEqual(["parent"], transcript, "the walk continued past a refused parent")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_entry_refuses_when_the_target_chain_refuses(self):
+        """reader:208 in isolation: the parent authenticates, so the refusal is attributable to the
+        TARGET guard alone -- which the parent-refusal cell above cannot show."""
+        def check(shell):
+            rc, transcript = self._auth_entry(shell, allow_parent=True, allow_target=False)
+            self.assertEqual(1, rc, "an entry naming a refusing target was accepted")
+            self.assertEqual(["parent", "target"], transcript,
+                             "the target guard was not consulted")
+        self.for_declared_shells(SHELLS, check)
+
     def test_store_ok_consults_the_guard_for_the_store(self):
         """reader:282 -- the guard IS called, with the store path, exactly once."""
         def check(shell):
