@@ -1340,7 +1340,7 @@ class SeamContract(SeamedChain, unittest.TestCase):
                          f"MINIMUMS declares a duplicate key; Python would use the LAST: {keys}")
         declared = ast.literal_eval(node)
         for cls in (SeamContract, ForkClassification, SeamedStoreCreation,
-                    SeamedReader, SeamedPublisher):
+                    SeamedReader, SeamedPublisher, PrefetchCacheContract):
             name = "scripts.tests.test_plugin_state_store." + cls.__name__
             actual = len(unittest.defaultTestLoader.getTestCaseNames(cls))
             with self.subTest(cls=cls.__name__):
@@ -1348,8 +1348,8 @@ class SeamContract(SeamedChain, unittest.TestCase):
                 self.assertEqual(actual, declared[name],
                                  f"{cls.__name__}: {actual} cells but the CI floor says "
                                  f"{declared[name]} -- update plugin-ci.yml")
-        self.assertEqual(5, len(declared),
-                         f"the CI gate floors {len(declared)} classes, expected 5: {sorted(declared)}")
+        self.assertEqual(6, len(declared),
+                         f"the CI gate floors {len(declared)} classes, expected 6: {sorted(declared)}")
 
     def test_every_declared_mutant_is_executed_by_some_cell(self):
         """The meta-control, EXECUTION-based. §7.6 asks for one control per predicate.
@@ -2648,6 +2648,179 @@ class SeamedPublisher(SeamedChain, unittest.TestCase):
             self.assertTrue(transcript[1].endswith("/exists/base"),
                             f"the created base was not authenticated next: {transcript}")
         self.for_declared_shells(SHELLS, check)
+
+class PrefetchCacheContract(SeamedChain, unittest.TestCase):
+    """COREDEV-2691 -- the guard's INTERNALS, below the seam. UNGATED.
+
+    Every other ungated class redefines `_unleashed_auth_chain`, which makes everything the real
+    chain does internally unreachable. codex (r14) found the eighth mutation class there: at
+    `plugin-state-auth.sh`, flipping `_u_stat_cache_get`'s MISS path from `return 1` to `return 0`
+    makes `_u_stat` accept a cache miss without refreshing anything, so the guard evaluates the
+    current component using the PRECEDING component's attributes. Measured fail-open: a real 1777
+    `/private/tmp` was refused (rc=1, mode=1777) and accepted under the mutant (rc=0, mode=0755).
+
+    THIS IS TESTABLE ON LINUX because `_u_stat_cache_get` is pure shell -- the Darwin-only `stat -f`
+    fork happens only on the MISS path, after this function has already answered. The seam is not
+    needed and is not used here; the shipped function is called directly.
+    """
+
+    #: `<nl><rs><path><nl><mode> <size> <uid> <ino><nl>`, the prefetch's own record format.
+    CACHE = ('_u_pf_sep\n'
+             '_U_STAT_CACHE="${_u_pf_nl}${_u_pf_rs}/alpha${_u_pf_nl}0755 4096 0 111'
+             '${_u_pf_nl}${_u_pf_rs}/beta${_u_pf_nl}1777 8192 501 222${_u_pf_nl}"\n')
+
+    def _cache_get(self, shell, path, auth=AUTH, cache=True, prime=None):
+        """Call the SHIPPED `_u_stat_cache_get` and report (rc, mode, uid, ino).
+
+        `prime` runs an earlier lookup IN THE SAME SHELL. It has to be the same process: the stale
+        `_U_*` values that make the miss contract matter live in shell variables, and a first
+        version of this ran the prime in a separate `run_shell` where they could not survive.
+        """
+        body = (self.CACHE if cache else '_u_pf_sep\n_U_STAT_CACHE=\n')
+        body += '_U_MODE=; _U_UID=; _U_INO=\n'
+        if prime is not None:
+            body += '_u_stat_cache_get %s || :\n' % shlex.quote(prime)
+        body += ('_u_stat_cache_get %s\n'
+                 'printf "RC=%%s %%s %%s %%s\\n" "$?" "${_U_MODE:-}" "${_U_UID:-}" "${_U_INO:-}"\n'
+                 % shlex.quote(path))
+        out = run_shell(shell, body, sources=(auth, STORE, READER, PUB))[1]
+        line = [l for l in out.splitlines() if l.startswith("RC=")]
+        if not line:
+            return None, "", "", ""
+        parts = line[-1].split()
+        rc = int(parts[0][len("RC="):])
+        return (rc, *(parts[1:] + ["", "", ""])[:3])
+
+    def test_a_cache_hit_answers_from_the_record(self):
+        def check(shell):
+            self.assertEqual((0, "0755", "0", "111"), self._cache_get(shell, "/alpha"))
+            self.assertEqual((0, "1777", "501", "222"), self._cache_get(shell, "/beta"))
+        self.for_declared_shells(SHELLS, check)
+
+    def test_a_cache_miss_returns_nonzero_and_the_stale_values_survive(self):
+        """A MISS must answer NON-ZERO -- and the reason is that it leaves the previous entry's
+        values in place. Measured: after missing `/gamma`, `_U_MODE` still reads `/beta`'s 1777.
+        The return code is therefore the ENTIRE contract; a caller that trusted the variables would
+        evaluate one component using another's attributes. This cell asserts both halves, because
+        asserting only `rc == 1` would not record WHY it matters.
+        """
+        def check(shell):
+            rc, mode, uid, ino = self._cache_get(shell, "/gamma", prime="/beta")
+            self.assertEqual(1, rc, "a cache MISS answered zero -- stale values would be used")
+            self.assertEqual(("1777", "501", "222"), (mode, uid, ino),
+                             "the miss path is expected to LEAVE the previous record in place; if "
+                             "that ever changes, the rc contract is no longer the only protection "
+                             "and this cell should be revisited")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_an_empty_cache_is_a_miss(self):
+        def check(shell):
+            self.assertEqual(1, self._cache_get(shell, "/alpha", cache=False)[0],
+                             "an empty cache answered zero")
+        self.for_declared_shells(SHELLS, check)
+
+    #: Everything `_u_probes_reset` must clear. DERIVED from the shipped `unset` lines by the cell
+    #: below, not recalled -- a list written from memory drifts the moment a variable is added.
+    def _probe_vars(self):
+        with open(AUTH, encoding="utf-8") as fh:
+            body = fh.read()
+        start = body.index("_u_probes_reset() {")
+        end = body.index("\n}", start)
+        names = []
+        for line in body[start:end].splitlines():
+            stripped = line.strip()
+            if stripped.startswith("unset "):
+                names.extend(stripped[len("unset "):].split())
+        # UNION with the security-critical pair, which must NOT be derived from the function under
+        # test. Deriving the whole list from `_u_probes_reset` itself made the cell self-referential:
+        # replacing `unset _U_STAT_CACHE _U_ACL_CACHE` with `:` removed those names from the
+        # derivation, so the cell stopped poisoning them and passed. An oracle that reads its
+        # expectation out of the thing it is checking cannot see that thing disappear.
+        for critical in ("_U_STAT_CACHE", "_U_ACL_CACHE"):
+            if critical not in names:
+                names.append(critical)
+        return names
+
+    def test_probes_reset_clears_every_variable_a_caller_could_poison(self):
+        """`_u_probes_reset` is what stops a CALLER arriving with a forged answer.
+
+        `_U_STAT_CACHE` and `_U_ACL_CACHE` are ordinary variables in a sourced library, so a caller
+        can pre-set a record claiming a component is 0700 and euid-owned, or an ACL answer with no
+        foreign ACE in it. The same goes for the principal/platform/euid probe results. Dropping any
+        single `unset` from that list is a one-line fail-open, and no seamed cell reaches this
+        function at all -- the seam replaces the chain above it (codex and agy, r14, independently).
+
+        The variable list is DERIVED from the shipped source, so adding a variable without clearing
+        it is caught rather than silently uncovered.
+        """
+        names = self._probe_vars()
+        self.assertGreaterEqual(len(names), 10,
+                                f"only {len(names)} variables parsed from _u_probes_reset -- the "
+                                f"derivation broke and this cell would prove nothing")
+        for critical in ("_U_STAT_CACHE", "_U_ACL_CACHE"):
+            self.assertIn(critical, names, f"{critical} must always be in the poisoned set")
+
+        def check(shell):
+            poison = "".join('%s=POISON\n' % v for v in names)
+            report = "".join('printf "%%s=%%s\\n" %s "${%s:-<unset>}"\n' % (shlex.quote(v), v)
+                             for v in names)
+            out = run_shell(shell, poison + "_u_probes_reset\n" + report,
+                            sources=(AUTH, STORE, READER, PUB))[1]
+            survived = [l for l in out.splitlines() if l.endswith("=POISON")]
+            self.assertEqual([], survived,
+                             "a caller-poisoned value survived _u_probes_reset")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_probes_reset_is_reddened_by_dropping_any_single_unset(self):
+        """The positive control, per variable: each name dropped from the reset must be detected."""
+        names = self._probe_vars()
+        with open(AUTH, encoding="utf-8") as fh:
+            body = fh.read()
+        for name in names:
+            with self.subTest(dropped=name):
+                line = [l for l in body.splitlines()
+                        if l.strip().startswith("unset ") and name in l.split()][0]
+                kept = " ".join(w for w in line.strip().split() if w != name)
+                mutant = with_mutation(line, line.replace(line.strip(), kept), path=AUTH)
+                self.addCleanup(os.unlink, mutant)
+                out = run_shell(SHELLS[0],
+                                "%s=POISON\n_u_probes_reset\nprintf '%%s\\n' \"${%s:-<unset>}\"\n"
+                                % (name, name),
+                                sources=(mutant, STORE, READER, PUB))[1]
+                self.assertIn("POISON", out,
+                              f"dropping `unset {name}` was not observable -- the control is inert")
+
+    def test_the_acl_cache_miss_returns_nonzero(self):
+        """`_u_acl_cache_get` carries the same miss polarity as the stat cache, and is equally
+        unreached by any seamed cell (agy, r14). Pure shell, so it runs here."""
+        def check(shell):
+            body = ('_u_pf_sep\n'
+                    '_U_ACL_CACHE="${_u_pf_nl}${_u_pf_rs}/alpha${_u_pf_nl}ACLDATA${_u_pf_nl}"\n'
+                    '_u_acl_cache_get /alpha; printf "hit=%s\\n" "$?"\n'
+                    '_u_acl_cache_get /gamma; printf "miss=%s\\n" "$?"\n'
+                    '_U_ACL_CACHE=\n_u_acl_cache_get /alpha; printf "empty=%s\\n" "$?"\n')
+            out = run_shell(shell, body, sources=(AUTH, STORE, READER, PUB))[1]
+            self.assertIn("hit=0", out, "a cached ACL record was not found")
+            self.assertIn("miss=1", out, "an ACL cache MISS answered zero")
+            self.assertIn("empty=1", out, "an empty ACL cache answered zero")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_miss_paths_redden_when_flipped_to_success(self):
+        """The positive control: BOTH miss paths, mutated to `return 0`, must break the contract."""
+        for old, new, label in (
+            ('    [ -n "${_U_STAT_CACHE:-}" ] || return 1',
+             '    [ -n "${_U_STAT_CACHE:-}" ] || return 0', "empty-cache"),
+            ('    [ "$_u_sg_v" = "$_U_STAT_CACHE" ] && return 1',
+             '    [ "$_u_sg_v" = "$_U_STAT_CACHE" ] && return 0', "prefix-strip"),
+        ):
+            mutant = with_mutation(old, new, path=AUTH)
+            self.addCleanup(os.unlink, mutant)
+            with self.subTest(miss=label):
+                if label == "empty-cache":
+                    rc = self._cache_get(SHELLS[0], "/alpha", auth=mutant, cache=False)[0]
+                else:
+                    rc = self._cache_get(SHELLS[0], "/gamma", auth=mutant, prime="/beta")[0]
+                self.assertEqual(0, rc, f"the {label} mutant did not flip -- this control is inert")
 
 if __name__ == "__main__":
     unittest.main()
