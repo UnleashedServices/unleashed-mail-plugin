@@ -1775,6 +1775,38 @@ class ForkClassification(unittest.TestCase):
         self.assertTrue(admits([("/usr/bin/id", "-u")]))
         self.assertTrue(admits([]))
 
+    def test_every_guard_operand_is_quoted(self):
+        """Every `_unleashed_auth_chain` operand in the shipped libraries must be QUOTED.
+
+        Sixth mutation class (codex, r13): dropping the quotes from a guard operand loses argument
+        ATOMICITY. Under bash the value word-splits, the shipped authenticator -- which does not
+        enforce arity -- receives the FIRST word only, authenticates that safe prefix, and the caller
+        then accepts the original unverified chain. Measured fail-open: `_unleashed_store_ok`
+        returned 1 correctly and 0 under the mutant.
+
+        Covered STATICALLY, and deliberately so. A behavioural cell would need a path containing a
+        space or a hostile IFS, and would discriminate in BASH ONLY: zsh does not word-split
+        unquoted parameter expansions, so the same mutation is an equivalent mutant there (measured
+        -- bash rc 0 vs 1, zsh rc 0 vs 0). A source-level invariant covers all NINE sites in both
+        shells at once, which a per-site behavioural fixture cannot.
+        """
+        unquoted = []
+        for path in (AUTH, STORE, READER, PUB):
+            base = os.path.basename(path)
+            for n, code in _logical_lines(path):
+                for m in re.finditer(r"_unleashed_auth_chain\s+(\S+)", code):
+                    # Trailing shell punctuation is not part of the operand: the publisher's two
+                    # sites are `if ! _unleashed_auth_chain "$_pb_anc"; then`, and keeping the `;`
+                    # made a correctly-quoted operand look unquoted.
+                    operand = m.group(1).rstrip(";&|)")
+                    if operand.startswith("()"):          # the definition, not a call
+                        continue
+                    if not (operand.startswith('"') and operand.endswith('"')):
+                        unquoted.append(f"{base}:{n}: {operand}")
+        self.assertEqual([], unquoted,
+                         "a guard operand is unquoted -- it can word-split and authenticate only "
+                         "its first word")
+
     def test_every_command_word_is_a_literal_declared_absolute_path(self):
         """The absolute-path census is only sufficient because this invariant holds.
 
@@ -2096,6 +2128,80 @@ class SeamedStoreCreation(SeamedChain, unittest.TestCase):
             self.assertEqual(0, rc, "the seamed production caller did not succeed")
             self.assertEqual(["mid", "store", "store"], transcript,
                              "the guard was not called with the NEAREST EXISTING ancestor")
+        self.for_declared_shells(SHELLS, check)
+
+    def _walk_transcript(self, shell, kind):
+        """Drive `_unleashed_create_store` with a PERMISSIVE recording seam over a fixture shaped to
+        separate two predicates that ordinary fixtures leave equal. Returns (rc, labelled transcript).
+        """
+        auth = with_mutation(*LINUX_SIM, path=AUTH)
+        self.addCleanup(os.unlink, auth)
+        home = scratch_home("walk-")
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        extra = ""
+        if kind == "sibling":
+            claude = os.path.join(home, ".claude")
+            os.makedirs(claude, mode=0o700)
+            sibling = os.path.join(home, ".claude-attacker")
+            os.makedirs(sibling, mode=0o700)
+            mid = os.path.join(claude, "unleashed-mail")
+            store = os.path.join(mid, "bases")
+            extra = ("_unleashed_nearest_existing() { _UNLEASHED_NEAREST=%s; }\n"
+                     % shlex.quote(sibling))
+            names = {sibling: "sibling", claude: "claude", mid: "mid", store: "store"}
+        else:                                    # a NON-DIRECTORY ancestor
+            afile = os.path.join(home, "afile")
+            with open(afile, "w", encoding="utf-8") as fh:
+                fh.write("x")
+            mid = os.path.join(afile, "x")
+            store = os.path.join(mid, "bases")
+            names = {home: "home", afile: "afile", mid: "mid", store: "store"}
+        log = os.path.join(home, "calls")
+        with open(log, "wb"):
+            pass
+        body = ("_SEAM_CALLS=%s\n" % shlex.quote(log)
+                + counting_seam_source(0)        # 0 never matches _SEAM_N, so every call is allowed
+                + extra
+                + "_unleashed_create_store %s\n" % shlex.quote(store)
+                + 'printf "SEAM_RC=%s\\n" "$?"\n')
+        out = run_shell(shell, body, env={"HOME": home}, sources=(auth, STORE, READER, PUB))[1]
+        rcs = [int(l[len("SEAM_RC="):]) for l in out.splitlines() if l.startswith("SEAM_RC=")]
+        with open(log, "rb") as fh:
+            raw = fh.read()
+        return (rcs[0] if rcs else None), [names.get(r.decode(), r.decode())
+                                           for r in raw.split(b"\0")[:-1]]
+
+    def test_a_sibling_sharing_the_prefix_is_not_treated_as_already_walked(self):
+        """store.sh:238's `case` must match the component or its DESCENDANTS, not its prefix.
+
+        `"$_cs_d"|"$_cs_d"/*` widened to `"$_cs_d"*` matches a SIBLING -- `.claude-attacker` matches
+        `.claude*` -- so a newly appeared `.claude` is treated as already walked and its guard is
+        skipped entirely. All 48 cells stayed green, because every fixture makes the nearest
+        ancestor a descendant of the component and never a sibling (agy, r13 -- reproduced).
+
+        Narrowing the same pattern (dropping the `/*` arm) IS caught by the existing cells; only
+        widening was invisible, which is the direction that fails OPEN.
+        """
+        def check(shell):
+            rc, transcript = self._walk_transcript(shell, "sibling")
+            self.assertEqual(0, rc, "the walk did not complete")
+            self.assertEqual(["sibling", "claude", "mid", "store", "store"], transcript,
+                             "a component was treated as already walked because a SIBLING shared "
+                             "its prefix")
+        self.for_declared_shells(SHELLS, check)
+
+    def test_the_ancestor_walk_stops_only_at_a_directory(self):
+        """`_unleashed_nearest_existing` must walk to the nearest existing DIRECTORY.
+
+        `[ ! -d "$_ne_d" ]` weakened to `[ ! -e "$_ne_d" ]` stops the walk at a regular file or a
+        dangling symlink, so the guard is called with a path that is not a directory at all. Every
+        fixture has directories all the way up, so all 48 cells stayed green (agy, r13).
+        """
+        def check(shell):
+            rc, transcript = self._walk_transcript(shell, "file")
+            self.assertEqual(["home"], transcript,
+                             "the ancestor walk stopped at a NON-DIRECTORY")
+            self.assertEqual(1, rc, "a store under a non-directory ancestor was created")
         self.for_declared_shells(SHELLS, check)
 
     def test_every_component_the_loop_creates_is_authenticated(self):
