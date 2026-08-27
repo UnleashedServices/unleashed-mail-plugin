@@ -1,178 +1,197 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 1 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 2 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done — restored `swift-reviewer`'s ability to spawn at all)
 
-> COREDEV-2711 §1 (the honesty fix) is done: `agents/swift-reviewer.md` and
-> `scripts/validate-plugin-assembly.py:565` now state plainly that the scoped `Agent(...)` grant is a
-> declaration of intent, not an enforced control. This plan is §2 — picking a mechanism and building
-> it. The ticket recommends a PreToolUse hook and forbids hunting for a frontmatter shape; §3 records
-> the measurement that makes the hook viable, which the ticket did not have.
+> **r1 (frozen `2f6c5e5`): codex and agy both `REQUEST_CHANGES`; kimi `APPROVE_WITH_NOTES` on a round
+> the harness VOIDED for a false positive (it ran a Python script and left `__pycache__`, which the
+> COREDEV-2607 check reads as a reviewer editing the tree — filed on COREDEV-2650).**
+> Three findings were concordant and all three were verified against the tree before acting:
+> §2's central example was factually wrong, Rule 2 contradicted §5.2, and §3 never measured the one
+> event the design depends on. Revision 2 also corrects two things in the **opposite** direction —
+> §1 claimed a protection that does not exist, and §6 recorded an open gap that is already closed.
 
 ---
 
 ## 1. The problem, stated as a consequence
 
-`swift-reviewer` reads untrusted content — PR diffs, issue text, third-party code. Its
-`disallowedTools: Write, Edit, NotebookEdit` stops it writing **directly**. Nothing stops it
-**spawning something that writes**.
+`swift-reviewer` reads untrusted content — PR diffs, issue text, third-party code. `Agent(type, …)`
+in a **sub-agent's** `tools:` grants the Agent tool but the runtime **discards the type list**;
+enforcement is scoped to main-thread agents by design. Measured three times across two sessions with
+no permission prompt: `swift-reviewer` spawned `ui-engineer`, a writer absent from its own declared
+list. So the posture equals an unrestricted bare `Agent` grant, and the PR #63 P1 this was meant to
+provide is not in force.
 
-Measured on 2.8.1 and recorded on the ticket, three times across two sessions with no permission
-prompt in any case: `swift-reviewer` spawned `unleashed-mail:ui-engineer` — a writer, absent from
-its own declared `Agent(...)` list — and a bare probe agent spawned a type outside its allowlist.
-The runtime grants the `Agent` tool from the specifier and **discards the type list for a sub-agent**;
-the sub-agents reference scopes that enforcement to a *main-thread* agent.
+**What this does NOT protect, corrected from revision 1 (codex, r1).** Revision 1 implied
+`disallowedTools: Write, Edit, NotebookEdit` stops `swift-reviewer` writing directly. **It does not.**
+`agents/swift-reviewer.md:13` grants bare `Bash`, and `AGENT_CONTRACTS.md` §9.1 records
+"`swift-reviewer`'s shell is reachable from model-invoked `pr-review`" as a **documented accepted
+decision**, raised four times and settled on 2026-08-07. A prompt-injected reviewer can already
+mutate the checkout through the shell.
 
-So the posture today equals an unrestricted bare `Agent` grant. The PR #63 P1 this was meant to
-provide — stopping a prompt-injected finding from steering the reviewer into a writing agent — **is
-not in force**.
+This guard therefore closes **one lateral-movement path** — spawning a second agent that writes — and
+is **defense in depth, not a boundary**. Saying otherwise is the same overstatement COREDEV-2711 §1
+existed to correct in the frontmatter, and it must not reappear in the plan that replaces it.
 
 ## 2. What must NOT be done, and why
 
 **Do not look for a frontmatter shape.** The ticket is explicit and the docs agree: for a sub-agent
-the only levers are omitting `Agent` or denying it, both all-or-nothing. `agents/swift-reviewer.md:13`
-already carries the corrected comment. Any revision of this plan that proposes a `tools:` or
-`disallowedTools:` spelling has misread §1.
+the only levers are omitting `Agent` or denying it, both all-or-nothing.
 
-**Do not "deny writer agents".** This is the obvious rule and it is wrong. Derived from the shipped
-tree, **13 of 21 agents can write** — via `Write`/`Edit` in `tools:`, via `memory:` (which
-auto-enables Read/Write/Edit), or by omitting `tools:` entirely and inheriting everything. One of
-them is **`jira-manager`**, which omits `tools:` — and `jira-manager` is *inside* `swift-reviewer`'s
-declared allowlist, because logging the review is its job. A writer-blocking rule breaks the
-flagship workflow on its first run.
+**Do not "deny writer agents".** Revision 1 argued this from an example that was **wrong**: it claimed
+`jira-manager` is a writer inside `swift-reviewer`'s allowlist. `agents/jira-manager.md:19` is
+`disallowedTools: Write, Edit, NotebookEdit, Bash, Agent, mcp__github` — it is not a writer, and it
+cannot spawn either. Revision 1's derivation counted `tools:` and `memory:` and **never subtracted
+`disallowedTools`**. Both arms caught it independently. Recomputed with the validator's own
+`_live_tools` (granted minus denied): **12 of 21 agents can write** via `Write`/`Edit`/`NotebookEdit`,
+and **none of `swift-reviewer`'s six declared callees is among them**.
 
-That is not a detail to patch around. It is the signal that **"writer" is the wrong predicate**.
+So the honest position: a writer-blacklist would **not** break the flagship workflow today, and
+revision 1's stated reason for rejecting it was false. It is still the wrong predicate, for reasons
+that survive:
 
-## 3. The measurement that makes a hook viable
+* **It rots.** "Writer" is a derived property of another agent's frontmatter. Add `Write` to a
+  declared callee and the rule silently changes meaning; the declaration does not.
+* **It answers the wrong question.** The frontmatter already states who may spawn whom. The defect is
+  that nothing enforces it — not that we lack a policy.
+* **Counting is contested.** By `Write`/`Edit` the roster is 12; counting `swift-reviewer` itself,
+  which writes through bare `Bash` (§1), it is 13. A predicate whose population depends on where you
+  draw "writes" is a poor gate.
 
-The ticket recommends a PreToolUse hook but does not establish that a hook can tell **who** is
-spawning. Without that, a guard either blocks the operator's own direct spawns or enforces nothing.
+## 3. What was measured
 
-The sub-agents reference documents `agent_id`/`agent_type` as base hook fields "when firing in
-subagents", but the CLI hooks page shows them only for `SubagentStart`. So it was measured, with a
-temporary project-scoped recording hook and a positive control. Evidence retained at
-`~/.claude/handoffs/COREDEV-2711-hook-payload-evidence.json`:
+Three payload facts, all captured with a temporary project-scoped recording hook and a positive
+control, then torn down. Artifact: `~/.claude/handoffs/COREDEV-2711-hook-payload-evidence.json`.
 
-| call | `agent_type` (the CALLER) | `tool_input.subagent_type` (the CALLEE) |
+| event | `agent_type` (CALLER) | `tool_input.subagent_type` (CALLEE) |
 |---|---|---|
-| Bash from inside a sub-agent | `'general-purpose'`, `agent_id 'a608928f342802ae0'` | — |
+| Bash from a sub-agent | `'general-purpose'` (+ `agent_id`) | — |
 | Bash from the main thread | absent | — |
-| `Agent` call from the main thread | absent | `'general-purpose'` |
+| `Agent` from the main thread | absent | `'general-purpose'` |
+| **`Agent` from a SUB-AGENT** | **`'general-purpose'`, `agent_id` set** | **`'Explore'`** |
+| `Read` from a plugin sub-agent | **`'security-reviewer'` — BARE** | — |
 
-**A PreToolUse hook on `Agent` can therefore read both ends of the spawn.** `agent_type` absent means
-the main thread, which must never be blocked.
+**Row 4 is new in revision 2 and both arms required it.** Revision 1 measured a sub-agent's *Bash*
+call and a main-thread *Agent* call, and inferred the combination. That inference is now a
+measurement: the exact event the guard reads carries **caller and callee together**.
 
-> A first reading of this data said `agent_type` was absent everywhere. That was a substring match
-> over `tool_input` picking up the probe's own commands; only an exact match on the sub-agent's
-> command isolated the real record. The corrected reading is the one tabulated above, and the
-> verification in §7 re-derives it rather than citing this table.
+**Row 5 is new and it constrains the design (codex, r1).** A plugin agent's own identity is reported
+**bare**. There is no namespaced runtime form: `subagent_type: 'unleashed-mail:security-reviewer'`
+fails with *"Agent type not found"*, and the valid list is flat — plugin agents and project agents
+from `.claude/agents/` share one unprefixed namespace. Two consequences:
+
+* the **caller** (`agent_type`) is always bare, so it cannot prove provenance;
+* the **callee** is whatever the caller asked for — namespaced or bare, valid or not, because
+  PreToolUse fires **before** the type is validated. Both spellings must be normalised.
 
 ## 4. The mechanism — enforce what the frontmatter already declares
 
-A PreToolUse hook on `Agent` that enforces **the caller's own declared `Agent(...)` membership**.
-Not a writer blacklist; not a hardcoded roster. The frontmatter already says what each agent may
-spawn — the runtime simply refuses to enforce it, and this restores that.
+    caller = agent_type            (absent -> MAIN THREAD)
+    callee = tool_input.subagent_type
+    both prefix-normalised: strip a leading "<anything>:" before comparing
 
-    caller = agent_type, prefix-stripped        (absent -> MAIN THREAD)
-    callee = tool_input.subagent_type, prefix-stripped
+    1. caller absent                        -> ALLOW   (never block the operator)
+    2. caller names no agent this plugin
+       defines                              -> ALLOW   (see §5.2 — provenance, not indifference)
+    3. caller is a plugin agent whose
+       effective tools contain NO Agent      -> DENY    (see below)
+    4. caller declares a BARE Agent grant    -> ALLOW   (declares reach over everything)
+    5. caller declares Agent(a, b, …)        -> ALLOW iff callee is a member, else DENY
 
-    1. caller absent                       -> ALLOW    (never block the operator)
-    2. caller is not a plugin agent        -> ALLOW    (not ours to police; record it)
-    3. caller declares no Agent grant      -> ALLOW    (nothing was declared to enforce)
-    4. caller declares a BARE Agent grant  -> ALLOW    (declares reach over everything)
-    5. caller declares Agent(a, b, …)      -> ALLOW iff callee is a member, else DENY
+**Rule 3 is inverted from revision 1, and agy is right about why.** Revision 1 said "declares no
+Agent grant -> ALLOW (nothing was declared to enforce)". That makes **zero declared authority more
+permissive than scoped authority** — an agent granted no spawn capability at all would be unrestricted
+if it ever reached the hook. Denying costs nothing: an agent with no `Agent` in its effective tools
+should never be issuing an `Agent` call, so the rule is unreachable in a healthy tree and correct in
+an unhealthy one.
 
-Rule 5 is the whole control. `jira-manager` passes because `swift-reviewer` **declares** it;
-`ui-engineer` is denied because it does not. The rule needs no knowledge of who writes, so it cannot
-rot when an agent's tools change — and the existing advisory check at
-`scripts/validate-plugin-assembly.py:565` already keeps a *writer* out of any declared list, so the
-two compose: the validator keeps the declaration honest, the hook makes it real.
+**Effective tools, not declared `tools:`** — granted minus `disallowedTools`, the same computation
+`_live_tools` performs. Revision 1's failure to subtract denials is exactly what produced its wrong
+writer roster (§2), and the same mistake here would let a `disallowedTools: Agent` agent pass rule 4.
 
-Both spellings of every name must be accepted — `security-reviewer` and
-`unleashed-mail:security-reviewer` — because the declared list contains both and `agent_type` may
-arrive either way. `SubagentStart`'s existing matcher in `hooks/hooks.json` already handles that
-with `(unleashed-mail:)?`, which is the precedent to follow.
-
-## 5. The two decisions this plan is asking reviewers to rule on
+## 5. The decisions this plan is asking reviewers to rule on
 
 ### 5.1 `deny`, against a shipped precedent of never denying
 
-`scripts/sensitive-file-guard.sh:9-10` states the convention: it "NEVER emits
-permissionDecision:\"allow\" … and never \"deny\" — the user is always in the loop." This guard would
-be the plugin's **first denying hook**, and that deserves an explicit ruling rather than a quiet
-precedent break.
+`scripts/sensitive-file-guard.sh:9-10` records the convention: never `deny`, because "the user is
+always in the loop". This would be the plugin's first denying hook.
 
-The argument for `deny` over `ask`: **the threat model is an unattended sub-agent.** `swift-reviewer`
-runs a five-specialist panel over untrusted content, and the injection this exists to stop happens
-while nobody is watching the sub-agent's prompts. An `ask` that nobody sees is not a control — it is
-a delay before the same outcome. The precedent's own justification ("the user is always in the loop")
-is exactly the premise that does not hold here.
+**Both arms ruled for `deny`, and codex corrected the argument.** Revision 1 claimed an `ask` nobody
+sees is "a delay before the same outcome". That is wrong — `ask` forces a prompt even in auto mode.
+The correct argument is different: **an out-of-roster spawn is a policy violation, not an operation a
+possibly-compromised sub-agent should be able to escalate for approval.** Rule 1 keeps the operator
+unblocked and `UNLEASHED_SPAWN_GUARD=off` is the kill switch.
 
-Mitigations that keep the operator sovereign: rule 1 never touches the main thread, and a kill
-switch (`UNLEASHED_SPAWN_GUARD=off`) mirrors `sensitive-file-guard`'s.
+### 5.2 Consumer blast radius — the contradiction, resolved
 
-### 5.2 The hook ships to every consumer
+Revision 1 said both "foreign callers are allowed" (rule 2) and "a consumer agent with a scoped grant
+would newly be enforced" (§5.2). Both arms caught it; they cannot both be true.
 
-`hooks/hooks.json` is a plugin asset. This hook will fire in the UnleashedMail app repo and in any
-other install — not only here. Rules 2-4 mean it is inert for every agent that does not declare a
-scoped grant, and **`swift-reviewer` is the only agent in the plugin that does**. So the blast radius
-is intended to be exactly one agent. Reviewers should check that claim rather than accept it: a
-consumer defining its own agent with a scoped grant would newly be enforced, which is arguably
-correct but is a behaviour change they did not ask for.
+**Resolved in favour of rule 2: only agents this plugin defines are enforced.** The reason is
+provenance, measured in §3 row 5 — `agent_type` is bare, so a project agent named `security-reviewer`
+is indistinguishable from the plugin's. Enforcing on a bare name would let a consumer's unrelated
+agent inherit this plugin's policy, and would let a project agent shadow a plugin one. The plugin can
+only speak for frontmatter it ships.
+
+Consequences stated rather than buried: a consumer agent with a scoped grant is **not** enforced;
+"record it" in rule 2 must be a **no-op**, because writing state would make foreign calls
+non-inert; and an opt-in for consumer enforcement is out of scope here and needs its own ticket.
 
 ## 6. Scope
 
-**In scope.** The PreToolUse matcher and `scripts/agent-spawn-guard.sh`; the frontmatter parse
-(shared with the validator's existing `_tool_tokens` model, which is already parenthesis-aware after
-COREDEV-2703); both name spellings; the kill switch; fail-closed behaviour on a malformed payload;
-tests with paired mutants.
+**In scope.** The PreToolUse matcher and `scripts/agent-spawn-guard.sh`; effective-tools computation;
+prefix normalisation on both ends; the kill switch; fail-closed on a malformed payload where the
+caller is identified; tests with paired mutants.
 
-**Out of scope, stated so it is not mistaken for an oversight.**
+**Out of scope, corrected from revision 1.**
 
-* **Transitivity.** `swift-reviewer` -> `security-reviewer` -> a writer is not stopped: the second
-  hop's caller is `security-reviewer`, which declares no `Agent` grant, so rule 3 allows it. Closing
-  it means denying `Agent` to every specialist, which is a separate decision with its own blast
-  radius. **Recorded, not fixed** — and the plan must not claim depth it does not have.
-* **Non-plugin callers** (rule 2). A `general-purpose` agent can spawn anything. The plugin cannot
-  police agents it does not define.
-* **`agents/swift-reviewer.md` is not edited.** The ticket pins it at **688 lines** — plan citations
-  and the §13 scope anchor reference lines in that file. Verified: it is 688 today.
+* **Transitivity is NOT an open gap — revision 1 was wrong.** It recorded `swift-reviewer` →
+  `security-reviewer` → a writer as an unclosed path. agy called that an absolute blocker; codex said
+  it is already closed; **codex is right and it is verified**: all five specialists resolve to
+  `Read, Grep, Glob` and `jira-manager` denies `Agent`, so no declared callee can spawn at all. The
+  second hop is stopped by the runtime before any hook runs. Rule 3 now also denies it in principle.
+  What remains genuinely open is only that a FUTURE callee granted `Agent` would need its own
+  declaration — which rules 3-5 handle by construction.
+* **Non-plugin callers** (rule 2), for the provenance reason in §5.2.
+* **`swift-reviewer`'s bare `Bash`** (§1) — an accepted residual under AGENT_CONTRACTS §9.1. This
+  guard does not close it and does not claim to.
+* **`agents/swift-reviewer.md` is not edited.** It is 688 lines and plan citations pin lines in it.
+  codex is right that this is bookkeeping rather than a boundary; if implementation shows the file
+  must change, the citations move and the pin is not a reason to refuse.
 
 ## 7. Verification — and what would make it vacuous
 
-Every cell pairs with a mutant that reddens it. The specific traps this material invites:
+1. **The hook must actually fire.** Feed the recorded §3 payloads to the script directly, AND assert
+   `hooks/hooks.json` carries a matcher matching the literal `Agent`.
+2. **A deny must be attributable.** A guard that denies everything also passes an "it denied" cell.
+   Each case asserts its verdict AND its paired opposite in the same run: `swift-reviewer` →
+   `jira-manager` ALLOWED where `swift-reviewer` → `ui-engineer` is DENIED.
+3. **The main thread is never denied** — `agent_type` absent must allow a callee that a sub-agent
+   would be denied.
+4. **Both spellings normalise** — `security-reviewer` and `unleashed-mail:security-reviewer` reach
+   the same verdict, in both the caller and callee positions.
+5. **Fail-closed only where the caller is identified.** No `agent_type` is the main thread (allow);
+   an identified caller with unparseable frontmatter is a refusal.
 
-1. **The hook must actually fire.** A matcher typo yields a guard that never runs and a suite that
-   passes. The harness feeds the recorded payloads from §3 to the script directly *and* asserts the
-   `hooks/hooks.json` matcher matches the literal string `Agent`.
-2. **A deny must be attributable.** Asserting "denied" is not enough — a guard that denies
-   *everything* also passes. Each cell asserts the decision AND that the paired allow-case is
-   allowed: `swift-reviewer` -> `jira-manager` must be ALLOWED in the same run where
-   `swift-reviewer` -> `ui-engineer` is DENIED.
-3. **The main thread must never be denied.** A payload with `agent_type` absent must allow, for a
-   callee that would be denied from a sub-agent. This is the cell that fails if rule 1 is dropped.
-4. **Re-derive §3 rather than cite it.** A cell asserts the field names the guard depends on
-   (`agent_type`, `tool_input.subagent_type`) are the ones the recorded payloads actually carry, so
-   a runtime rename fails here rather than silently disabling the guard.
-5. **Fail-closed on malformed input**, but only where the caller is identified: no `agent_type` is
-   the main thread (allow), whereas an `agent_type` present with an unparseable frontmatter is a
-   refusal.
+**Trap 4's claim is withdrawn (codex, r1).** Revision 1 said a runtime that stopped sending
+`agent_type` would "fail loudly". It would not: production would read the event as main-thread and
+**ALLOW**. Static fixtures cannot detect that. This is a **fail-open on schema change**, stated
+plainly, and mitigated only by a startup/CI compatibility probe that asserts a known sub-agent event
+still carries `agent_type` — not by any assertion over fixtures.
 
-Plus the standing local gate (CLAUDE.md's thirteen commands), and `bash -n`/`zsh -n` and shellcheck
-on the new script.
+**One parser, not two (codex, r1).** Revision 1 said the guard "shares `_tool_tokens`". That is not a
+design: `_tool_tokens` is Python and the guard is shell, so CI and runtime could read the same
+declaration differently. The implementation must either invoke one shared parser from both, or pin a
+fixture that both parse and compare — decided at implementation, and named here as a requirement.
 
 ## 8. Risks
 
-* **A false deny breaks the flagship workflow**, and it ships to consumers. This is the dominant
-  risk and it is why rule 5 enforces a declaration rather than a heuristic.
-* **The guard is a plugin-level control over a runtime behaviour that may change.** If a future
-  release enforces the specifier itself, this becomes redundant but not harmful. If a release stops
-  sending `agent_type`, trap 4 fails loudly rather than the guard going quietly inert.
-* **`deny` is a precedent break** (§5.1) and may be overruled. If it is, `ask` plus a
-  `PermissionDenied`-logged record is the fallback, and the plan should say so rather than pretend
-  the control is equivalent.
+* **A false deny breaks the flagship workflow** and ships to consumers. Rule 5 enforces a declaration
+  rather than a heuristic precisely to bound this.
+* **Fail-open on a runtime schema change** (§7). Named, not mitigated by fixtures.
+* **The guard is not a boundary** (§1). If it is ever described as one, that is the defect this
+  ticket's §1 already fixed once.
 * **This plan could become another 29-round gate.** COREDEV-2691 ran nineteen implementation rounds
-  and changed zero shipped lines. Governance, adopted here: score **Q1 = surviving mutants of
-  shipped code** separately from **Q2 = defects in the test scaffolding**; continue on Q1 only;
-  ticket Q2 rather than fixing it in flight; **stop after two consecutive rounds with zero Q1
-  findings.** Applied retroactively to COREDEV-2691 that rule fires at round 10.
+  and changed zero shipped lines. Governance: score **Q1 = surviving mutants of shipped code**
+  separately from **Q2 = defects in the test scaffolding**; continue on Q1 only; ticket Q2; **stop
+  after two consecutive rounds with zero Q1 findings.**
