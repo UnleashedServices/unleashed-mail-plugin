@@ -342,7 +342,18 @@ PLUGIN_WRITER="${SCRIPT_DIR}/../pty-capture.py"
 # THE SESSIONS THAT EXIST BEFORE THE RUN — the effort assertion below binds to the ONE session this
 # invocation creates, by set difference, never to an identifier read out of the transcript.
 SESSIONS_BEFORE="$(ls -d "$HOME"/.kimi-code/sessions/*/session_* 2>/dev/null | LC_ALL=C sort)"
-( cd "$TREE/tree" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
+# PYTHON BYTECODE IS NOT A REVIEWER MUTATION (COREDEV-2650; it voided COREDEV-2711 r1 and r8).
+# A reviewer that IMPORTS a repo module to reproduce a measured claim — the single best thing a
+# reviewer can do, and what this round's prompt asks for — makes CPython write `__pycache__/*.pyc`
+# beside the source. This harness fingerprints the disposable checkout afterwards, so that
+# bytecode read as `ROUND VOID: the reviewer left edits … COREDEV-2607 signature` and threw away a
+# valid review whose finding was independently confirmed by another arm. At r8 it voided TWO of
+# the three arms this way — agy and kimi — leaving the round resting on codex alone. The check
+# is right and
+# keeps its teeth; what was wrong is letting the artefact exist. Suppress it at the source rather
+# than excluding a path from the manifest — an exclusion is a blacklist a real mutation could hide
+# behind, and `scripts/__pycache__/` is exactly where it would hide.
+( cd "$TREE/tree" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" "$OUT" -- \
     kimi -p "$PROMPT_TEXT" --output-format text ) >/dev/null
 STATUS=$?
 
