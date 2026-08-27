@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 9 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 10 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -82,9 +82,12 @@ with `_live_tools` over `agents/*.md`: **13 of 21 can write** — the roster the
 rather than a number anyone keeps — and none of the thirteen is among `swift-reviewer`'s declared
 callees. So a blacklist would not break the workflow today and revision 1's stated reason was wrong.
 (Revision 7 said **twelve**, and so does `validate-plugin-assembly.py:581` in prose beside the
-computed roster. Both were recounted and both were wrong: `swift-reviewer` itself writes via its bare
-`Bash` — §9.1's accepted residual — and `modern-standards-planner` inherits every tool. Neither
-changes the argument; both are the plan citing a count it had not re-derived.)
+computed roster. The single uncounted writer is **`swift-reviewer` itself**, which writes via its bare
+`Bash` — §9.1's accepted residual — and so satisfies neither half of `:581`'s stated predicate,
+"hold `Write`/`Edit` or inherit everything". `modern-standards-planner` is NOT a second cause:
+it omits `tools:`, inherits everything, and is therefore already inside that twelve. Revision 9 named
+both and made the arithmetic 12+2=14; the correction is 12+1=13. Neither changes the argument — this
+is the plan citing a count it had not re-derived, twice.)
 
 It is still the wrong predicate, for a reason that survives (codex, r2): **a blacklist enforces a
 capability class, while the declared policy is an exact caller→callee relation.** A blacklist would
@@ -117,7 +120,11 @@ fixture encodes that error.
 The indirect evidence says **scoped** (`unleashed-mail:<name>`):
 
 * the runtime's persisted subagent metadata records `agentType` as `unleashed-mail:swift-reviewer`
-  ×68 and `unleashed-mail:security-reviewer` ×36 — bare only for the mis-measured probes;
+  ×68 and `unleashed-mail:security-reviewer` ×36. The bare records in that store are NOT only the
+  mis-measured probes — real review runs that resolved to COREDEV-2768's shadows wrote bare
+  spellings too, which is what §1 and the header already say. The evidential force is unchanged and
+  is in the correlation, not the absence: **spawns that resolved to the PLUGIN's assets are recorded
+  scoped**, and bare records track shadow resolution;
 * plugin-only agents appear in the registry **scoped-only, never bare**;
 * `scripts/capture-reviewer-round-start.sh` is a **live SubagentStart hook that strips
   `unleashed-mail:` from `agent_type`** and works; its own comment (COREDEV-2486 audit) states that
@@ -153,8 +160,12 @@ unattestable and this design is dead; the honest alternatives are then (a) remov
 untrusted content is not the spawner. **Do not implement §4 until this is measured.**
 
 **Also unmeasured, and not to be hardcoded:** the prefix *form*. Observed data says two-part
-`<plugin>:<agent>`; the hooks documentation gives **both** a two-part matcher example and a
-three-part `plugin:<plugin>:<agent>` prose form on the same page. Derive the plugin name from
+`<plugin>:<agent>`, and every AGENT example in the documentation is two-part. A three-part
+`plugin:<x>:<y>` spelling does appear on the same page, but revision 9 cited it as an agent-form
+ambiguity without establishing that it applies to agents at all — it is used there for a different
+field. **Treat the ambiguity as unestablished rather than as evidence in either direction**; the
+instruction below is unchanged and is what actually protects the design, since it derives the form
+instead of trusting any reading of the prose. Derive the plugin name from
 `$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json`, pin the separator by measurement, and fail a cell
 if the observed form changes.
 
@@ -205,14 +216,24 @@ citation pin is bookkeeping, not a boundary.
 **P3 DENIES, and revision 4 had the polarity wrong (codex, r4).** An exact `<us>:` prefix IS the
 attestation that the caller is ours. If the matching asset is then missing, that is corruption,
 version skew, or an identifier this build does not understand — **not** a foreign caller. Revision 4
-ALLOWed it, which contradicted §7's own "fail-closed where the caller is identified and ours". P2
-remains the foreign-caller ALLOW, and the two are paired in §7 so neither can drift into the other.
+ALLOWed it, which contradicted the fail-closed principle §7 carried at the time — revision 4's §7.8,
+*"fail-closed only where the caller is identified and ours"*, which revision 9 replaced with the
+P2/P3 pair now at §7.8 (whole-document pass, r10: the quotation outlived the sentence). P2 remains
+the foreign-caller ALLOW, and §7.8 pairs the two so neither can drift into the other.
 
 **And the asset path is pinned, not relative (kimi, r6).** `<name>` arrives inside `agent_type` and
 crosses a trust boundary into a filesystem path, so the guard validates it against the agent-name
 charset (`[A-Za-z0-9_-]+` — no `.`, no `/`) BEFORE joining, and resolves only
 `$CLAUDE_PLUGIN_ROOT/agents/<name>.md`, never a `cwd`-relative `agents/<name>.md`. A traversing name
 fails closed by accident today (no such file -> P3 DENY). Accident is not a control.
+
+**The disposition, which revision 9 left unstated (whole-document pass, r10).** A `<name>` failing
+the charset **DENIES**, with its OWN diagnostic — distinguishable by content from P3's "asset
+missing", because they mean different things: P3 is version skew or corruption, this is a value that
+should never have reached a path join. Stating it matters because the accident and the control are
+observationally identical on today's tree: an implementation that simply omits the charset check
+passes every cell in §7, which is why §7.15 pins it against a traversing name that resolves to an
+asset that EXISTS.
 
 **P1 is a judgment call, recorded as one.** A sub-agent with no `agent_type` should on a strict
 reading fail closed. It ALLOWs because (i) the compiled schema makes it unreachable, so DENY buys
@@ -297,7 +318,11 @@ and then did not — a requirement stated as if it were a decision. Both cases a
   scoped-denial form **unconditionally**, so a validator-clean release cannot ship one. That is a CI
   gate, not a runtime invariant: the guard reads the INSTALLED asset and must not depend on the gate
   having run over it. Both cells ship regardless (§7.9, §7.10).
-* **Unparseable frontmatter on an identified caller DENIES**, per §7.
+* **Unparseable frontmatter on an identified caller DENIES**, per §7.14. *(Revision 4 truncated the
+  §7 cell that carried this and the attribution dangled for six revisions — ten review rounds did not
+  catch it, because it was never in a diff. The outcome is load-bearing: an unparseable asset read
+  naively is "no `tools:` key" -> inherit-all -> a BARE `Agent` -> rule 5' ALLOW at full breadth,
+  the permissive direction §4 names as dangerous.)*
 
 **SCHEMA-INVALID IS NOT ABSENT (codex, r5).** `is_subagent` requires a present, non-empty `agent_id`,
 but revision 5's P0 covered only *absence* — so a successfully parsed object carrying
@@ -374,10 +399,20 @@ spawn, and rule 4' denies it in principle anyway.
 3. **The main thread is never denied, and the cell is PAIRED (codex, r8)** — `agent_type` present
    with `agent_id` **absent** must ALLOW, including a `--agent` session, run in the same execution
    against the byte-identical payload with `agent_id` **present** and an undeclared callee, which
-   must DENY. **This is the cell that fails against revision 3**, and the pairing is what makes it
-   fail against an always-ALLOW guard as well: `agent_id` is the entire predicate here, so a cell
-   asserting only the ALLOW cannot tell a working guard from an absent one. This is where P0's
-   falsifiability lives, which is why P0 is deliberately absent from §7.13.
+   must DENY. **The shared `agent_type` is a scoped `<us>:<name>` naming a shipped asset with a
+   declared `Agent(...)` roster** (kimi, r9/r10) — §3a's replacement fixture pins exactly that, and
+   the DENY arm needs it: against a BARE `agent_type` the second payload would stop at P2 and ALLOW,
+   making the pair unsatisfiable rather than merely weak. **This is the cell that fails against
+   revision 3**, and the pairing is what makes it fail against an always-ALLOW guard as well:
+   `agent_id` is the entire predicate here, so a cell asserting only the ALLOW cannot tell a working
+   guard from an absent one. This is where P0's falsifiability lives, which is why P0 is deliberately
+   absent from §7.13.
+
+   **ACCEPTED RESIDUAL, recorded so it is not "fixed" later (kimi, r10).** This cell falsifies P0's
+   ALLOW/DENY *discrimination*, not the `no state` half of its disposition — after the §7.13
+   retraction, P0's SILENCE is asserted by no cell at all. That is deliberate and must stay that way:
+   any cell asserting "P0 emitted nothing" re-creates the pressure the retraction removed, since the
+   cheapest way to make such an assertion pass is to change what the guard emits at runtime.
 4. **Escalation** — `malicious-plugin:security-reviewer` DENIEs; the declared scoped spelling ALLOWs.
    Stated as an escalation test so no one reintroduces normalisation.
 5. **Bare callees DENY** even for a declared member, paired against the scoped spelling ALLOWing.
@@ -455,6 +490,24 @@ spawn, and rule 4' denies it in principle anyway.
     the defect §7.10 was rewritten to remove, one revision earlier. P0's falsifiability is carried by
     **§7.3**, which is where it already was — revision 8's claim that these outcomes shipped with
     "zero" cells was false for P0 (codex, r8).
+
+14. **Unparseable frontmatter on an identified caller DENIES (whole-document pass, r10)** — an
+    `agent_type` of `<us>:<name>` whose `$CLAUDE_PLUGIN_ROOT/agents/<name>.md` SHIPS but whose
+    frontmatter does not parse must DENY, paired in the same run against the same asset with
+    parseable frontmatter, where a declared scoped callee ALLOWs. §4 asserted this outcome and cited
+    a §7 cell that revision 4 had removed; without the cell, the naive implementation ALLOWs at full
+    breadth, so this is the permissive direction and needs the pair, not a lone DENY.
+15. **The agent-name charset check is asserted, against a name that RESOLVES** — a `<name>`
+    containing `/` or `.` must DENY on the charset rule with its own diagnostic, and the cell must
+    use a traversing name whose target asset EXISTS. A cell whose traversing name resolves to
+    nothing proves only that P3 fires, which is the accident §4 says must stop being one: an
+    implementation omitting the charset check entirely passes it.
+16. **Rule 4' fires two ways and says which** — an identified caller whose asset declares NO
+    `Agent` token at all must DENY, paired against one that declared an `Agent(...)` and had it
+    removed by an `Agent`-family denial, in the same run, with the two diagnostics distinguishable
+    **by content**. §4 makes the two-way diagnostic mandatory and motivates it with COREDEV-2703's
+    week of silence; §7.9's payloads are all the denial-driven variant, so nothing exercised the
+    other arm.
 
 **The fixture must be rebuilt (§3); the r3 one is not evidence.** Capture it with the plugin **proved
 loaded**, commit the registry listing from capture time as that proof, retain `cwd` (structural),
