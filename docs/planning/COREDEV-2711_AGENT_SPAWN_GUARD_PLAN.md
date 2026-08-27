@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 5 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 6 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -11,6 +11,9 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > **r4** `9779436`: agy + kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` — three narrow findings,
 > all verified against the tree and all fixed in revision 5. The findings have stopped being
 > architectural.
+> **r5** `9148a99`: agy `APPROVE`, kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` — two predicate
+> gaps, both verified, both closed in revision 6. codex states the design is "otherwise sound" and
+> that §3a is "honest, sufficient, and correctly blocking".
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -180,8 +183,28 @@ runtime can read the same declaration differently.
 * **parse failure is a distinct outcome**, and because the caller cannot be identified at all it
   ALLOWs like P2 but emits a diagnostic naming the parse failure — silence here would make the guard
   inert on a broken box with nothing to show for it;
-* the plan must also define behaviour for `Agent(*)`, for `Agent` appearing in `disallowedTools`, and
-  for unparseable frontmatter on an identified caller (the last DENIES, per §7).
+**THE PERMISSION GRAMMAR, DEFINED (codex, r5).** Revision 5 said the plan "must also define" these
+and then did not — a requirement stated as if it were a decision. Both cases are measured:
+
+* **`Agent(*)` — and `(**)`, `(/**)`, `(/*)`, `(**/*)` — is FULL BREADTH, not a member named `*`.**
+  `validate-plugin-assembly.py:714-718` already models it that way in as many words: "a full-breadth
+  scope is the bare grant by another spelling". Under a naive 6' it would parse as a one-member list
+  and **deny every real callee**. So a full-breadth scope takes **rule 5' (ALLOW)**, exactly as a
+  bare `Agent` does, and the guard must not invent a stricter reading than the validator's.
+* **A bare `Agent` in `disallowedTools` removes the tool entirely -> rule 4' DENY.** `_live_tools`
+  subtracts EXACT tokens, so measured: `tools: Agent(a, b)` with `disallowedTools: Agent` yields
+  `['Agent(a, b)', 'Read']` — **the scoped token survives the denial**. Taking `_live_tools`'s output
+  at face value would enforce an agent that has no `Agent` tool at all. The guard therefore checks
+  the denial set for a bare `Agent` FIRST, and treats it as removing every `Agent`-family token.
+  (`jira-manager` is exactly this shape today.)
+* **Unparseable frontmatter on an identified caller DENIES**, per §7.
+
+**SCHEMA-INVALID IS NOT ABSENT (codex, r5).** `is_subagent` requires a present, non-empty `agent_id`,
+but revision 5's P0 covered only *absence* — so a successfully parsed object carrying
+`agent_id: ""`, `null`, or a non-string matched **no rule at all**. Same for a malformed
+`agent_type`. This is distinct from malformed JSON. Such a payload **ALLOWs with a diagnostic**,
+consistent with P1/P2: the field is present but unusable, so attribution is impossible, and denying
+on a shape the runtime is not documented to emit would turn a schema change into a global outage.
 
 **Effective tools, token-shape-aware.** `_tool_tokens` keeps parentheses intact, so
 `_live_tools(swift-reviewer)` contains `Agent(security-reviewer, …)` and **not** a bare `Agent` —

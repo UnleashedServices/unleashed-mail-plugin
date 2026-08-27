@@ -1,5 +1,5 @@
 {
-  "_comment": "COREDEV-2711 \u00a73 \u2014 PreToolUse payload shapes for the Agent tool. RETAINED evidence: r2 review blocked because the originals were summarised then deleted.",
+  "_comment": "SUPERSEDED \u2014 see _WITHDRAWN. Retained ONLY so the error is auditable; this file is not evidence for anything and must not be used by any test.",
   "provenance": {
     "claude_code_cli": "2.1.247",
     "plugin_install": "/Users/nick/.claude/plugins/cache/npranson-unleashed-mail-plugin/unleashed-mail/2.8.2",
