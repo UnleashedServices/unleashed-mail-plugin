@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 6 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 7 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -14,6 +14,12 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > **r5** `9148a99`: agy `APPROVE`, kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` — two predicate
 > gaps, both verified, both closed in revision 6. codex states the design is "otherwise sound" and
 > that §3a is "honest, sufficient, and correctly blocking".
+> **r6** `5f60f75`: agy `APPROVE`, kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` — ONE finding,
+> and codex and kimi found it independently in the same paragraph pair: the permission grammar closed
+> over a bare `Agent` denial but not the scoped `Agent(x)` family, while the restored ONE PARSER
+> requirement demanded the very `_live_tools` equivalence that rule requires departing from. Both
+> verified against the tree; closed here. Every other r6 item is an amendment, not a redesign — codex
+> calls the finding "not a new architectural objection", kimi "none of these are architectural".
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -97,6 +103,14 @@ twice by inferring runtime semantics; it will not be wrong a third time.
 plugin-only name such as `unleashed-mail:tester` resolves), spawn the plugin's `swift-reviewer`, have
 it make one `Agent` call, and record `agent_type` verbatim.
 
+**What produces such a session is itself blocked (kimi, r6).** This session cannot supply one: the
+plugin is enabled and installed at 2.8.2 with live `.in_use` markers, and its agents still do not
+resolve (§3). That load failure is **distinct from COREDEV-2768's shadowing** — 2768 is about bare
+names resolving to the WRONG asset, this is scoped names resolving to NOTHING — and it is tracked as
+**COREDEV-2769**. §3a's unblock path runs through that ticket, not around it. The control
+must also demonstrate the resolved callee is **the plugin's own asset file** rather than a same-named
+shadow; the registry listing committed alongside the capture is that proof.
+
 **Design the measurement as ONE complete positive-control event (codex, r4)**, not four separate
 readings: prove a plugin-only name resolves, spawn the scoped `swift-reviewer`, have it invoke a
 DECLARED scoped callee, and correlate its `PreToolUse` with a successful `PostToolUse` by
@@ -127,8 +141,8 @@ if the observed form changes.
                                          NO agent_id.
     P1  is_subagent, agent_type absent -> ALLOW + diagnostic.   (judgment call — see below)
     P2  agent_type lacks the exact prefix "<us>:" -> ALLOW, no state.  NOT OUR PRINCIPAL.
-    P3  "<us>:<name>", agents/<name>.md absent    -> DENY + diagnostic.
-    P4  "<us>:<name>", agents/<name>.md ships     -> ENFORCE:
+    P3  "<us>:<name>", $CLAUDE_PLUGIN_ROOT/agents/<name>.md absent -> DENY + diagnostic.
+    P4  "<us>:<name>", $CLAUDE_PLUGIN_ROOT/agents/<name>.md ships  -> ENFORCE:
           4'  no `Agent` and no `Agent(...)` token in _live_tools(<name>)  -> DENY
           5'  a token exactly `Agent`                                      -> ALLOW
           6'  tokens matching `Agent(...)` -> ALLOW iff the callee matches a declared member
@@ -141,8 +155,13 @@ while `agent_type` is present for a subagent **or** a `--agent` main thread. Rev
 therefore have **denied the operator's own `claude --agent swift-reviewer` session** — violating its
 own first rule.
 
-**RULE 3 AND THE COLLISION SCAN ARE DELETED, not narrowed.** A scoped principal cannot be shadowed,
-because project, user, CLI and managed agents register **bare**. The unenumerable-source problem —
+**RULE 3 AND THE COLLISION SCAN ARE DELETED, not narrowed.** A scoped principal cannot be shadowed
+**while this plugin is the active owner of its namespace**, because project, user, CLI and managed
+agents register **bare**. Two qualifications on that premise, both from r6. codex: a same-name plugin
+loaded via `--plugin-dir` REPLACES an installed plugin for the session, so `<us>:` can name someone
+else's asset — that is an **attestor-liveness** case (§8), not a bare-name collision, and no
+filesystem scan would catch it. kimi: the premise is **asserted, not measured**; it reduces to a
+name-charset question, and §7.11 is the cell that settles it. The unenumerable-source problem —
 `--agents` inline JSON invisible to any filesystem scan, managed settings, undocumented
 same-directory tie-breaks, `cwd`-relative nested roots — never arises. Revision 3's "maintained root
 list" goes with it, along with a §7 cell that compared a constant to a copy of itself.
@@ -160,6 +179,12 @@ version skew, or an identifier this build does not understand — **not** a fore
 ALLOWed it, which contradicted §7's own "fail-closed where the caller is identified and ours". P2
 remains the foreign-caller ALLOW, and the two are paired in §7 so neither can drift into the other.
 
+**And the asset path is pinned, not relative (kimi, r6).** `<name>` arrives inside `agent_type` and
+crosses a trust boundary into a filesystem path, so the guard validates it against the agent-name
+charset (`[A-Za-z0-9_-]+` — no `.`, no `/`) BEFORE joining, and resolves only
+`$CLAUDE_PLUGIN_ROOT/agents/<name>.md`, never a `cwd`-relative `agents/<name>.md`. A traversing name
+fails closed by accident today (no such file -> P3 DENY). Accident is not a control.
+
 **P1 is a judgment call, recorded as one.** A sub-agent with no `agent_type` should on a strict
 reading fail closed. It ALLOWs because (i) the compiled schema makes it unreachable, so DENY buys
 nothing today while adding a way to break every consumer on a schema change; (ii) the payload is
@@ -167,13 +192,22 @@ built by the runtime, not the model, so a prompt-injected sub-agent cannot suppr
 `agent_type` — there is no attacker control to fail closed against; (iii) DENY would contradict P2,
 whose premise is "cannot be shown to be ours → allow".
 
-**ONE PARSER, AND PARSE FAILURE IS ITS OWN STATE (codex, r4).** Revision 4 dropped revision 3's
-single-parser requirement during the rewrite — an accidental deletion, restored here. Enforcement
-reproduces Python `_tool_tokens`/`_live_tools` semantics inside a shell hook, so the two must either
-share one parser or be pinned by an equivalence gate over a committed corpus; otherwise CI and the
-runtime can read the same declaration differently.
+**ONE PARSER — OVER TOKENIZATION, NOT OVER EFFECTIVE TOOLS (kimi + codex, r6).** Revision 4 dropped
+revision 3's single-parser requirement; revision 6 restored it and stated it too broadly. It said
+enforcement "reproduces Python `_tool_tokens`/`_live_tools` semantics", and the permission grammar
+below then requires the guard to **depart** from `_live_tools`. Both cannot be implemented as written, and
+an equivalence gate over `_live_tools` would fail on exactly the divergence the departure exists to
+create. This is the r3 failure class at note severity: fix one section, leave the adjacent
+requirement contradicting it.
 
-**And `hook_str` fails open by design.** `scripts/lib/hook-io.sh:189` states it "return[s] empty
+Scoped correctly: the shared parser — or the equivalence gate over a committed corpus — covers
+**`_tool_tokens`**, the token split that keeps parentheses intact. The guard's effective-tool
+semantics is then defined as **`_live_tools` PLUS the `Agent`-family removal below**, with the
+divergence cases named IN that corpus, so the gate pins the adjustment instead of tripping over it.
+Without one parser, CI and the runtime read the same declaration differently; without this scoping,
+the requirement contradicts the rule it was written to protect.
+
+**And `hook_str` fails open by design.** `scripts/lib/hook-io.sh:193` states it "return[s] empty
 (fail-open) when neither exists" — so malformed JSON, or a box with neither `jq` nor `python3`, is
 **indistinguishable from an absent field**. Under revision 4, P0 would then read a corrupt payload as
 "main thread" and ALLOW. Therefore:
@@ -191,12 +225,27 @@ and then did not — a requirement stated as if it were a decision. Both cases a
   scope is the bare grant by another spelling". Under a naive 6' it would parse as a one-member list
   and **deny every real callee**. So a full-breadth scope takes **rule 5' (ALLOW)**, exactly as a
   bare `Agent` does, and the guard must not invent a stricter reading than the validator's.
-* **A bare `Agent` in `disallowedTools` removes the tool entirely -> rule 4' DENY.** `_live_tools`
-  subtracts EXACT tokens, so measured: `tools: Agent(a, b)` with `disallowedTools: Agent` yields
-  `['Agent(a, b)', 'Read']` — **the scoped token survives the denial**. Taking `_live_tools`'s output
-  at face value would enforce an agent that has no `Agent` tool at all. The guard therefore checks
-  the denial set for a bare `Agent` FIRST, and treats it as removing every `Agent`-family token.
-  (`jira-manager` is exactly this shape today.)
+* **ANY `Agent`-family denial — bare `Agent` OR scoped `Agent(x)` — removes the tool entirely, and
+  takes rule 4' DENY (codex, r6).** Revision 6 closed only the bare spelling. `_live_tools` subtracts
+  EXACT tokens (`validate-plugin-assembly.py:408`), and BOTH spellings escape that subtraction:
+
+      tools: Read, Agent(a, b)   disallowedTools: Agent      ->  ['Agent(a, b)', 'Read']
+      tools: Read, Agent(a, b)   disallowedTools: Agent(a)   ->  ['Agent(a, b)', 'Read']
+
+  In the second case the denial names a member of the very token it fails to remove. Per the measured
+  COREDEV-2703 contract a scoped entry in a DENY list strips the `Agent` tool **entirely** — that is
+  what silently disabled the whole review panel — so taking `_live_tools` at face value would have
+  the guard enforce rule 6' against a caller holding no `Agent` tool at all. **The guard therefore
+  scans `disallowedTools` for ANY `Agent`-family token FIRST — bare or `Agent(...)`, quotes stripped
+  as the validator does — and treats a hit as removing every `Agent`-family token, which lands the
+  caller on rule 4'.** (`jira-manager` is the bare shape today.) The 4' diagnostic must distinguish
+  the two ways it fires — *declares no `Agent` at all* versus *declared one and denied it away* —
+  because the remedies differ, and COREDEV-2703 was a week of silence for want of that distinction.
+
+  **Reachability, stated rather than assumed.** `validate-plugin-assembly.py:644-660` rejects the
+  scoped-denial form **unconditionally**, so a validator-clean release cannot ship one. That is a CI
+  gate, not a runtime invariant: the guard reads the INSTALLED asset and must not depend on the gate
+  having run over it. Both cells ship regardless (§7.9, §7.10).
 * **Unparseable frontmatter on an identified caller DENIES**, per §7.
 
 **SCHEMA-INVALID IS NOT ABSENT (codex, r5).** `is_subagent` requires a present, non-empty `agent_id`,
@@ -218,7 +267,8 @@ on a shape the runtime is not documented to emit would turn a schema change into
 first denying hook. All three arms ruled for `deny` — an out-of-roster spawn is a policy violation,
 not something a possibly-compromised sub-agent should escalate for approval. P0 keeps the operator
 unblocked; `UNLEASHED_SPAWN_GUARD=off` is the kill switch. **`scripts/lib/hook-io.sh` has no `deny`
-emitter today** — only `ask` (:169) and a warn no-op (:172) — so one must be added.
+emitter today** — only `hook_emit_ask` (:166) and the `hook_emit_warn` no-op (:174) — so one must be
+added.
 
 ### 5.2 Consumer blast radius — now trivial
 Revision 3 needed three outcomes and a collision scan. With an attested principal there are two: the
@@ -228,8 +278,10 @@ never enforced. The contradiction r2 found is gone rather than papered over.
 ## 6. Scope
 
 **In scope.** The PreToolUse matcher; `scripts/agent-spawn-guard.sh`; plugin-name derivation from
-`CLAUDE_PLUGIN_ROOT`; the two-field predicate; token-shape-aware effective tools; the shared parser or
-equivalence gate; the `deny` emitter in `hook-io.sh`; the compatibility probe; tests.
+`CLAUDE_PLUGIN_ROOT`; the two-field predicate; token-shape-aware effective tools **including the
+`Agent`-family denial removal**; the shared `_tool_tokens` parser or its equivalence gate; the `deny`
+emitter in `hook-io.sh`; **the `UNLEASHED_SPAWN_GUARD=off` kill switch** — dropped from this list in
+revision 4 while §5.1 and §8 kept relying on it (kimi, r6); the compatibility probe; tests.
 
 **The companion documentation edits are wider than revision 4 said (codex, r4), because shipped
 source-of-truth text still asserts the WITHDRAWN result:**
@@ -239,10 +291,18 @@ source-of-truth text still asserts the WITHDRAWN result:**
 * `AGENT_CONTRACTS.md:404` — "WHAT DOES NOT BOUND THE SPAWN SET … measured".
 * `agents/swift-reviewer.md` **every dispatch path**, not just Step 2's labels — including the
   `jira-manager` call and any recovery path.
-* `scripts/tests/test_validate_plugin_assembly.py:912` — `assertIn(reviewer, scoped[0])` is a
+* `scripts/tests/test_validate_plugin_assembly.py:914` — `assertIn(reviewer, scoped[0])` is a
   **substring test over the whole grant string**, so `"security-reviewer"` matches inside
   `"unleashed-mail:security-reviewer"`. When the bare spellings are dropped it will keep passing
   while asserting a property that no longer holds. It must compare PARSED members, not substrings.
+
+**ORDERING, AND THE FAILURE MODE THE COMPANION EDIT CREATES (kimi, r6).** Dropping the bare
+spellings converts today's SILENT failure into a LOUD one. Bare dispatch currently resolves to
+COREDEV-2768's unrestricted user-scope shadows and reports success; scoped dispatch fails with
+*"Agent type not found"* on any install where the plugin's agents do not resolve — **which is this
+machine right now** (§3). Fail-loud is the posture this plan wants; it is not a posture to deploy
+blind. So the ordering is explicit: **§3a's measurement first; the `swift-reviewer.md` dispatch edit
+only after it proves scoped names resolve**, and COREDEV-2769 before either.
 
 **Out of scope.** COREDEV-2768's shadows (separate, larger); `swift-reviewer`'s bare `Bash` (§9.1
 accepted residual); transitivity — the five specialists resolve to `Read, Grep, Glob` and cannot
@@ -261,10 +321,23 @@ spawn, and rule 4' denies it in principle anyway.
 5. **Bare callees DENY** even for a declared member, paired against the scoped spelling ALLOWing.
 6. **`swift-reviewer` is not denied by rule 4'** — the token-shape regression revision 3 would have
    failed.
-7. **The compatibility probe asserts two things**: a known sub-agent event still carries `agent_id`,
-   and a plugin sub-agent's `agent_type` is still scoped in the measured form. A schema change fails
-   loudly rather than turning the guard silently inert.
+7. **The compatibility probe asserts three things, and the third is the negative (kimi, r6)**: a
+   known sub-agent event still CARRIES `agent_id`; a main-thread event — including `claude --agent X`
+   — still LACKS it; and a plugin sub-agent's `agent_type` is still scoped in the measured form.
+   Without that negative cell a runtime that begins emitting `agent_id` on main-thread events passes
+   the probe while silently restoring revision 3's regression: enforcing against the operator's own
+   session. A schema change must fail loudly rather than turn the guard silently inert.
 8. **Fail-closed only where the caller is identified and ours.**
+9. **The `Agent`-family denial pair (codex, r6)** — an asset with `tools: Read, Agent(a, b)` and
+   `disallowedTools: Agent(a)` DENIES via rule 4', paired in the same run against the identical asset
+   WITHOUT the denial, where callee `a` ALLOWs via 6'. The bare-denial spelling gets the same pair. A
+   cell asserting only the DENY would pass against a guard that denies everything.
+10. **The shipped tree carries zero `Agent`-family denials** — asserted directly over `agents/*.md`
+    by the guard's own suite rather than delegated to the CI validator, because the reachability
+    argument must be checked where the guard reads the asset, not where CI does.
+11. **A colon-bearing agent name cannot be registered at project or user scope (kimi, r6)** — the
+    cell that turns "a scoped principal cannot be shadowed" from an assertion into a measurement. If
+    the runtime accepts one, the attestation is forgeable and §4's premise falls.
 
 **The fixture must be rebuilt (§3); the r3 one is not evidence.** Capture it with the plugin **proved
 loaded**, commit the registry listing from capture time as that proof, retain `cwd` (structural),
