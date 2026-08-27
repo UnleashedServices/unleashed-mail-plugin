@@ -93,5 +93,7 @@
     }
   ],
   "raw_sha256": "48948fed951f333fd8cab3c5cfbb2d3e5c76065fccc3c1fe5fc94dcc54e55291",
-  "raw_event_count": 4
+  "raw_event_count": 4,
+  "_WITHDRAWN": "NOT EVIDENCE \u2014 do not use. Captured in a session where this plugin's agents were NOT LOADED, so every event describing a 'plugin agent' actually measured a user-scope shadow file from ~/.claude/agents/ (see COREDEV-2768). Proof: spawning the plugin-only name 'unleashed-mail:tester' fails in that session, and the runtime's available-agents list contains no 'unleashed-mail:' names and none of the seven plugin-only agents. Retained only so the error is auditable. Plan revision 4 \u00a73 withdraws rows 5-7; \u00a77 specifies the replacement capture, which must prove the plugin is loaded and record outcomes, not just requests.",
+  "_superseded_by": "plan revision 4, \u00a73a \u2014 the blocking measurement"
 }
