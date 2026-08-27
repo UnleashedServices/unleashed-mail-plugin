@@ -85,7 +85,17 @@ Linux-friendly plugin repo — no Xcode).
 
 - **Planning + Plan Review Gate:** any feature/refactor/multi-step change gets a `docs/planning/*_PLAN.md`,
   reviewed by **both** `/unleashed-mail:gemini-review` (Antigravity `agy`, `gemini-3.6-flash-high`) and `/unleashed-mail:codex-review`
-  (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). Route non-TTY runs through `scripts/pty-capture.py`.
+  (`codex exec -c model_reasoning_effort=xhigh -s read-only`) before implementation (the plugin registers its skills namespaced; a bare `/gemini-review` resolves only where the consumer workspace ships local copies). **Drive each arm through its capture wrapper, not the CLI and not `pty-capture.py` directly:**
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/review/capture-codex-review.sh" <ticket> <round> <prompt> <plan> [timeout]`
+  (`capture-gemini-review.sh` takes the same operands plus a trailing `[model]` — that SIXTH operand
+  is the only way to fall back a model, because the wrapper always passes `--model` and therefore
+  overrides `~/.gemini/settings.json`). Each one allocates the transcript, binds BOTH the prompt
+  digest and the plan to it via `bind-prompt.py`, then runs `isolated-<arm>-review.sh`. Skipping the
+  bind is fail-closed, not silent — the arm refuses with `GATE FAILED — no bound plan snapshot`.
+  `pty-capture.py` sits underneath these; it is not the entry point. **Kimi K3 is available as a third
+  arm** via `scripts/review/isolated-kimi-review.sh <prompt> <transcript> <commit> [timeout] [plan]` —
+  it has no `capture-` wrapper, so allocate and bind first, and PASS YOUR PLAN (its plan operand
+  defaults to the COREDEV-2617 plan).
   Iterate until both APPROVE / APPROVE_WITH_NOTES, then run `/unleashed-mail:review-synthesis` to combine
   the two transcripts into a single auditable Combined verdict.
   **Create the feature worktree FIRST**, then create the plan, snapshot, review, synthesize and
