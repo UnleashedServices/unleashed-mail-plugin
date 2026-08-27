@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 8 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 9 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -32,6 +32,18 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > (§2), the P2/P3 pair §4 promised and §7 never contained (§7.8), and a false attribution to §8 (§6).
 > Every one is the same class the review rounds keep finding — a rule moved and the cell beside it
 > did not — which is why the sweep now runs before the reviewers do.
+> **r8** `370714c`: **only ONE of the three arms was admissible.** codex `REQUEST_CHANGES` — two
+> DESIGN findings (revision 8's §7.13 required P0 to emit a diagnostic while §4's P0 row says
+> `ALLOW, no state`, not both satisfiable; and §7.13 dropped the malformed/non-string `agent_type`
+> that §4 covers) plus one NOTE (its claim that these outcomes shipped with "zero" cells was false
+> for P0 — §7.3 was already one). All three are closed here. **The agy and kimi arms were both VOID**
+> on the identical signature: each reviewer imported a repo module to REPRODUCE this plan's measured
+> claims, CPython wrote `scripts/__pycache__/*.pyc`, and each harness's disposable-checkout
+> fingerprint read that bytecode as reviewer tampering. That is COREDEV-2650 — the same false
+> positive voided kimi at r1 — fixed in the same push by suppressing the artefact at source rather
+> than by excluding a path from the fingerprint. The void kimi transcript had reached the P0 finding
+> independently, which is corroboration but not evidence; the void agy transcript had certified the
+> contradiction as *consistent*, which is why a voided arm is not quotable in either direction.
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -237,7 +249,8 @@ already-normalised list on both sides proves the two normalisers agree about not
   empty";
 * **parse failure is a distinct outcome**, and because the caller cannot be identified at all it
   ALLOWs like P2 but emits a diagnostic naming the parse failure — silence here would make the guard
-  inert on a broken box with nothing to show for it;
+  inert on a broken box with nothing to show for it.
+
 **THE PERMISSION GRAMMAR, DEFINED (codex, r5).** Revision 5 said the plan "must also define" these
 and then did not — a requirement stated as if it were a decision. Both cases are measured:
 
@@ -358,8 +371,13 @@ spawn, and rule 4' denies it in principle anyway.
    literal `Agent`.
 2. **Deny is attributable** — every deny cell pairs with an allow in the same run: a declared scoped
    callee ALLOWs where an undeclared one DENIEs.
-3. **The main thread is never denied**, including a `--agent` session — `agent_type` present,
-   `agent_id` absent, must ALLOW. **This is the cell that fails against revision 3.**
+3. **The main thread is never denied, and the cell is PAIRED (codex, r8)** — `agent_type` present
+   with `agent_id` **absent** must ALLOW, including a `--agent` session, run in the same execution
+   against the byte-identical payload with `agent_id` **present** and an undeclared callee, which
+   must DENY. **This is the cell that fails against revision 3**, and the pairing is what makes it
+   fail against an always-ALLOW guard as well: `agent_id` is the entire predicate here, so a cell
+   asserting only the ALLOW cannot tell a working guard from an absent one. This is where P0's
+   falsifiability lives, which is why P0 is deliberately absent from §7.13.
 4. **Escalation** — `malicious-plugin:security-reviewer` DENIEs; the declared scoped spelling ALLOWs.
    Stated as an escalation test so no one reintroduces normalisation.
 5. **Bare callees DENY** even for a declared member, paired against the scoped spelling ALLOWing.
@@ -413,13 +431,30 @@ spawn, and rule 4' denies it in principle anyway.
     otherwise DENIEs must ALLOW, run against the same asset and callee that DENY with it unset. An
     unpaired kill-switch cell passes against a guard that never denies anything, which is the state
     this whole ticket is trying to leave.
-13. **Every remaining predicate outcome carries a payload and an asserted result.** P0 (no
-    `agent_id`), P1 (`agent_id` present, `agent_type` absent), schema-invalid (`agent_id` as `""`,
-    `null`, or a non-string), and parse failure (malformed JSON) each ALLOW — and each must emit its
-    OWN diagnostic, asserted **by content**, so the four are distinguishable in a log. §4 spends four
-    paragraphs justifying these outcomes and revision 7 shipped all four with **zero** cells; since
-    they all ALLOW, an inert guard reproduces every one of them. Only the distinct diagnostic
-    separates "allowed for this stated reason" from "never ran". A rule with no cell is a comment.
+13. **Every DIAGNOSTIC-EMITTING outcome carries a payload and an asserted result.** P1 (`agent_id`
+    present, `agent_type` absent); schema-invalid — `agent_id` as `""`, `null` or a non-string, **and
+    a malformed or non-string `agent_type`**, which §4 covers in the same breath and revision 8's
+    cell dropped (codex, r8); and parse failure (malformed JSON). Each ALLOWs, and each must emit its
+    OWN diagnostic asserted **by content**, so the three are distinguishable in a log. They all
+    ALLOW, so an inert guard reproduces every outcome — only the distinct diagnostic separates
+    "allowed for this stated reason" from "never ran". A rule with no cell is a comment.
+
+    **P0 IS DELIBERATELY NOT IN THAT LIST, and revision 8 put it there (codex, r8; kimi reached it
+    independently in a round its harness then voided).** §4's P0
+    row reads `ALLOW, no state` — the same disposition as P2, written in explicit contrast to
+    P1's `ALLOW + diagnostic`, and §4's parse-failure bullet ("ALLOWs like P2 **but** emits a
+    diagnostic") is incoherent unless "no state" means silent. So the two sections could not both be
+    implemented: build from §4 and the §7.13 suite fails; build from §7.13 and the guard logs on
+    **every main-thread `Agent` call** — surface the P0 row itself declines to add, P0 being the only
+    outcome the table marks `no state` on a path that fires for every main-thread spawn. (Revision 9
+    first attributed that to §4's P1 rationale. It does not say it: P1's three reasons are
+    unreachability, absence of attacker control, and consistency with P2 — and P1's own disposition
+    is `ALLOW + diagnostic`, so it is the outcome that ADDS surface. Caught by the pre-review sweep.)
+    Two retractions were available and §4's row is the one that survives, because amending P0 to
+    `ALLOW + diagnostic` would let a verification cell dictate runtime behaviour: that is precisely
+    the defect §7.10 was rewritten to remove, one revision earlier. P0's falsifiability is carried by
+    **§7.3**, which is where it already was — revision 8's claim that these outcomes shipped with
+    "zero" cells was false for P0 (codex, r8).
 
 **The fixture must be rebuilt (§3); the r3 one is not evidence.** Capture it with the plugin **proved
 loaded**, commit the registry listing from capture time as that proof, retain `cwd` (structural),
