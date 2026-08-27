@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 4 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 5 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -8,6 +8,9 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > **r1** `2f6c5e5`: codex + agy `REQUEST_CHANGES`, kimi voided (false `__pycache__` positive).
 > **r2** `710917d`: all three `REQUEST_CHANGES` — a privilege escalation revision 2 introduced.
 > **r3** `1d9661a`: codex + kimi `REQUEST_CHANGES`, agy `APPROVE`.
+> **r4** `9779436`: agy + kimi `APPROVE_WITH_NOTES`, codex `REQUEST_CHANGES` — three narrow findings,
+> all verified against the tree and all fixed in revision 5. The findings have stopped being
+> architectural.
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -91,6 +94,13 @@ twice by inferring runtime semantics; it will not be wrong a third time.
 plugin-only name such as `unleashed-mail:tester` resolves), spawn the plugin's `swift-reviewer`, have
 it make one `Agent` call, and record `agent_type` verbatim.
 
+**Design the measurement as ONE complete positive-control event (codex, r4)**, not four separate
+readings: prove a plugin-only name resolves, spawn the scoped `swift-reviewer`, have it invoke a
+DECLARED scoped callee, and correlate its `PreToolUse` with a successful `PostToolUse` by
+`tool_use_id`. That single event establishes the caller spelling, the prefix form, a non-empty
+`agent_id`, and scoped-callee viability at once — and the correlation supplies the OUTCOME the
+withdrawn fixture lacked.
+
 **THE FORK, stated now.** If that string is **scoped**, §4 holds. If it is **bare**, the principal is
 unattestable and this design is dead; the honest alternatives are then (a) remove `Agent` from
 `swift-reviewer` and have the main thread fan the panel out, or (b) restructure so the reader of
@@ -114,7 +124,7 @@ if the observed form changes.
                                          NO agent_id.
     P1  is_subagent, agent_type absent -> ALLOW + diagnostic.   (judgment call — see below)
     P2  agent_type lacks the exact prefix "<us>:" -> ALLOW, no state.  NOT OUR PRINCIPAL.
-    P3  "<us>:<name>", agents/<name>.md absent    -> ALLOW + diagnostic.
+    P3  "<us>:<name>", agents/<name>.md absent    -> DENY + diagnostic.
     P4  "<us>:<name>", agents/<name>.md ships     -> ENFORCE:
           4'  no `Agent` and no `Agent(...)` token in _live_tools(<name>)  -> DENY
           5'  a token exactly `Agent`                                      -> ALLOW
@@ -141,12 +151,37 @@ mandatory: **drop the bare spellings from line 13 and make Step 2 spawn scoped n
 "do not edit `swift-reviewer.md`, it is pinned at 688 lines" is withdrawn — codex was right that a
 citation pin is bookkeeping, not a boundary.
 
+**P3 DENIES, and revision 4 had the polarity wrong (codex, r4).** An exact `<us>:` prefix IS the
+attestation that the caller is ours. If the matching asset is then missing, that is corruption,
+version skew, or an identifier this build does not understand — **not** a foreign caller. Revision 4
+ALLOWed it, which contradicted §7's own "fail-closed where the caller is identified and ours". P2
+remains the foreign-caller ALLOW, and the two are paired in §7 so neither can drift into the other.
+
 **P1 is a judgment call, recorded as one.** A sub-agent with no `agent_type` should on a strict
 reading fail closed. It ALLOWs because (i) the compiled schema makes it unreachable, so DENY buys
 nothing today while adding a way to break every consumer on a schema change; (ii) the payload is
 built by the runtime, not the model, so a prompt-injected sub-agent cannot suppress its own
 `agent_type` — there is no attacker control to fail closed against; (iii) DENY would contradict P2,
 whose premise is "cannot be shown to be ours → allow".
+
+**ONE PARSER, AND PARSE FAILURE IS ITS OWN STATE (codex, r4).** Revision 4 dropped revision 3's
+single-parser requirement during the rewrite — an accidental deletion, restored here. Enforcement
+reproduces Python `_tool_tokens`/`_live_tools` semantics inside a shell hook, so the two must either
+share one parser or be pinned by an equivalence gate over a committed corpus; otherwise CI and the
+runtime can read the same declaration differently.
+
+**And `hook_str` fails open by design.** `scripts/lib/hook-io.sh:189` states it "return[s] empty
+(fail-open) when neither exists" — so malformed JSON, or a box with neither `jq` nor `python3`, is
+**indistinguishable from an absent field**. Under revision 4, P0 would then read a corrupt payload as
+"main thread" and ALLOW. Therefore:
+
+* **P0 means `agent_id` absent from a SUCCESSFULLY PARSED object** — never "the extractor returned
+  empty";
+* **parse failure is a distinct outcome**, and because the caller cannot be identified at all it
+  ALLOWs like P2 but emits a diagnostic naming the parse failure — silence here would make the guard
+  inert on a broken box with nothing to show for it;
+* the plan must also define behaviour for `Agent(*)`, for `Agent` appearing in `disallowedTools`, and
+  for unparseable frontmatter on an identified caller (the last DENIES, per §7).
 
 **Effective tools, token-shape-aware.** `_tool_tokens` keeps parentheses intact, so
 `_live_tools(swift-reviewer)` contains `Agent(security-reviewer, …)` and **not** a bare `Agent` —
@@ -170,8 +205,21 @@ never enforced. The contradiction r2 found is gone rather than papered over.
 ## 6. Scope
 
 **In scope.** The PreToolUse matcher; `scripts/agent-spawn-guard.sh`; plugin-name derivation from
-`CLAUDE_PLUGIN_ROOT`; the two-field predicate; token-shape-aware effective tools; the `deny` emitter
-in `hook-io.sh`; the scoped-only edit to `agents/swift-reviewer.md`; the compatibility probe; tests.
+`CLAUDE_PLUGIN_ROOT`; the two-field predicate; token-shape-aware effective tools; the shared parser or
+equivalence gate; the `deny` emitter in `hook-io.sh`; the compatibility probe; tests.
+
+**The companion documentation edits are wider than revision 4 said (codex, r4), because shipped
+source-of-truth text still asserts the WITHDRAWN result:**
+
+* `agents/swift-reviewer.md:14-17` — "a probe sees its own `Agent` entry BARE, so nothing exists to
+  enforce against". That was the mis-measurement (§3). It ships today.
+* `AGENT_CONTRACTS.md:404` — "WHAT DOES NOT BOUND THE SPAWN SET … measured".
+* `agents/swift-reviewer.md` **every dispatch path**, not just Step 2's labels — including the
+  `jira-manager` call and any recovery path.
+* `scripts/tests/test_validate_plugin_assembly.py:912` — `assertIn(reviewer, scoped[0])` is a
+  **substring test over the whole grant string**, so `"security-reviewer"` matches inside
+  `"unleashed-mail:security-reviewer"`. When the bare spellings are dropped it will keep passing
+  while asserting a property that no longer holds. It must compare PARSED members, not substrings.
 
 **Out of scope.** COREDEV-2768's shadows (separate, larger); `swift-reviewer`'s bare `Bash` (§9.1
 accepted residual); transitivity — the five specialists resolve to `Read, Grep, Glob` and cannot
@@ -212,5 +260,11 @@ scoped callee, and one spawning an **undeclared** callee.
 * **The prefix form is documented two ways.** Derive it, pin it by measurement, fail loudly on change.
 * **Not a boundary** (§1). If it is ever described as one, that is the defect COREDEV-2711 §1 already
   fixed once in the frontmatter.
+* **ATTESTOR LIVENESS — the next blind-spot class (codex, r4).** If the plugin or its hook is not
+  loaded, an in-plugin compatibility probe **cannot announce its own absence**. That is precisely the
+  family that invalidated revision 3: the evidence looked fine because the thing that would have
+  contradicted it was not running. §7's probe must therefore be executed INDEPENDENTLY of the plugin
+  — a release check or smoke test that proves registry presence, hook registration, hook firing, and
+  a successful scoped outcome. A self-check that cannot observe its own non-existence is not a check.
 * **Governance.** Q1 = surviving mutants of shipped code, Q2 = scaffolding defects; continue on Q1
   only; ticket Q2; stop after two consecutive zero-Q1 rounds.
