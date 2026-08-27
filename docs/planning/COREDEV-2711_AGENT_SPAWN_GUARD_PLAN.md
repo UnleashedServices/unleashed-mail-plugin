@@ -1,12 +1,18 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 2 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 3 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done — restored `swift-reviewer`'s ability to spawn at all)
 
 > **r1 (frozen `2f6c5e5`): codex and agy both `REQUEST_CHANGES`; kimi `APPROVE_WITH_NOTES` on a round
 > the harness VOIDED for a false positive (it ran a Python script and left `__pycache__`, which the
 > COREDEV-2607 check reads as a reviewer editing the tree — filed on COREDEV-2650).**
-> Three findings were concordant and all three were verified against the tree before acting:
+> **r2 (frozen `710917d`): all three arms `REQUEST_CHANGES`** — kimi's round VALID this time
+> (`TREE=clean`, `EFFORT=max`) after `PYTHONDONTWRITEBYTECODE=1` removed the `__pycache__` void.
+> Both blockers were concordant: **principal misidentification through namespace collision**, and
+> **evidence that was summarised then deleted**. Revision 3 fixes both; §3 now cites a committed
+> fixture rather than a vanished log.
+>
+> Three r1 findings were concordant and all three were verified against the tree before acting:
 > §2's central example was factually wrong, Rule 2 contradicted §5.2, and §3 never measured the one
 > event the design depends on. Revision 2 also corrects two things in the **opposite** direction —
 > §1 claimed a protection that does not exist, and §6 recorded an open gap that is already closed.
@@ -50,8 +56,15 @@ So the honest position: a writer-blacklist would **not** break the flagship work
 revision 1's stated reason for rejecting it was false. It is still the wrong predicate, for reasons
 that survive:
 
-* **It rots.** "Writer" is a derived property of another agent's frontmatter. Add `Write` to a
-  declared callee and the rule silently changes meaning; the declaration does not.
+* **It enforces the wrong kind of thing (codex, r2).** A writer-blacklist enforces a *capability
+  class*; the declared policy is an *exact caller→callee relation*. They are not the same statement,
+  and only one of them is what the frontmatter says. A blacklist would also permit `swift-reviewer`
+  to spawn any non-writing agent it never declared — `enterprise-stakeholder`, say — which violates
+  the allowlist while satisfying the blacklist. **This, not drift, is the sound reason**; r2 led with
+  drift and codex was right that a derived set changing when capabilities change is expected
+  behaviour rather than rot.
+* **Drift is a secondary cost, not the argument.** Add `Write` to a declared callee and a blacklist
+  silently breaks a workflow the caller explicitly authorised.
 * **It answers the wrong question.** The frontmatter already states who may spawn whom. The defect is
   that nothing enforces it — not that we lack a policy.
 * **Counting is contested.** By `Write`/`Edit` the roster is 12; counting `swift-reviewer` itself,
@@ -60,8 +73,9 @@ that survive:
 
 ## 3. What was measured
 
-Three payload facts, all captured with a temporary project-scoped recording hook and a positive
-control, then torn down. Artifact: `~/.claude/handoffs/COREDEV-2711-hook-payload-evidence.json`.
+Seven payload facts, captured with a temporary project-scoped recording hook and a positive control,
+then torn down. Retained artifact, committed beside this plan:
+`docs/planning/COREDEV-2711_hook-payload-fixture.json`.
 
 | event | `agent_type` (CALLER) | `tool_input.subagent_type` (CALLEE) |
 |---|---|---|
@@ -70,8 +84,25 @@ control, then torn down. Artifact: `~/.claude/handoffs/COREDEV-2711-hook-payload
 | `Agent` from the main thread | absent | `'general-purpose'` |
 | **`Agent` from a SUB-AGENT** | **`'general-purpose'`, `agent_id` set** | **`'Explore'`** |
 | `Read` from a plugin sub-agent | **`'security-reviewer'` — BARE** | — |
+| **`Agent` from `swift-reviewer`** — the production shape | **`'swift-reviewer'`, `agent_id` set** | **`'security-reviewer'`** (bare) |
+| `Agent` from a sub-agent, NAMESPACED type requested | `'general-purpose'` | **`'unleashed-mail:security-reviewer'`** — recorded verbatim, then rejected |
 
-**Row 4 is new in revision 2 and both arms required it.** Revision 1 measured a sub-agent's *Bash*
+**THE EVIDENCE IS NOW RETAINED, and r2 blocked because it was not.** Revision 2 summarised these
+probes into the table and deleted the raw logs, so §7's "feed the recorded payloads" could not be
+executed and the rows could not be independently checked. Both arms caught that. The payloads now
+live in `docs/planning/COREDEV-2711_hook-payload-fixture.json`, **committed**, redacted (paths,
+session ids and prompt text removed; structural fields kept), and carrying provenance: Claude Code
+CLI `2.1.247`; plugin install `…/unleashed-mail/2.8.2`, **proved live by `.in_use` markers for PIDs
+3418 and 3420** while markers under 2.2.2 and 2.5.3 are stale; repo basis `2631845`; plus a sha256 of
+the raw capture.
+
+**Rows 6 and 7 are new in revision 3 and close r2's "not production-shaped" blocker.** Row 6 is the
+event the guard actually reads in production — a *plugin* sub-agent with a scoped grant invoking
+`Agent` — which r2 only had by analogy from `general-purpose → Explore`. Row 7 answers the namespaced
+ingress question by measurement: a namespaced type is **recorded verbatim in `tool_input` and only
+then rejected**, because PreToolUse fires before validation.
+
+**Row 4 is from revision 2 and both arms required it.** Revision 1 measured a sub-agent's *Bash*
 call and a main-thread *Agent* call, and inferred the combination. That inference is now a
 measurement: the exact event the guard reads carries **caller and callee together**.
 
@@ -86,28 +117,52 @@ from `.claude/agents/` share one unprefixed namespace. Two consequences:
 
 ## 4. The mechanism — enforce what the frontmatter already declares
 
-    caller = agent_type            (absent -> MAIN THREAD)
-    callee = tool_input.subagent_type
-    both prefix-normalised: strip a leading "<anything>:" before comparing
+    caller = agent_type                     (absent -> MAIN THREAD)
+    callee = tool_input.subagent_type       COMPARED VERBATIM — never normalised
 
-    1. caller absent                        -> ALLOW   (never block the operator)
-    2. caller names no agent this plugin
-       defines                              -> ALLOW   (see §5.2 — provenance, not indifference)
-    3. caller is a plugin agent whose
-       effective tools contain NO Agent      -> DENY    (see below)
-    4. caller declares a BARE Agent grant    -> ALLOW   (declares reach over everything)
-    5. caller declares Agent(a, b, …)        -> ALLOW iff callee is a member, else DENY
+    1. caller absent                                   -> ALLOW  (never block the operator)
+    2. caller's name matches no agent this plugin ships -> ALLOW  (not ours to police; no state written)
+    3. caller's name ALSO matches a project/user agent  -> DENY   (ambiguous principal — see below)
+    4. caller is unambiguously ours, and its effective
+       tools contain no `Agent`                         -> DENY   (zero authority is not full authority)
+    5. caller declares a BARE `Agent` grant              -> ALLOW  (declares reach over everything)
+    6. caller declares `Agent(a, b, …)`                  -> ALLOW iff the callee matches a declared
+                                                            member VERBATIM, else DENY
 
-**Rule 3 is inverted from revision 1, and agy is right about why.** Revision 1 said "declares no
-Agent grant -> ALLOW (nothing was declared to enforce)". That makes **zero declared authority more
-permissive than scoped authority** — an agent granted no spawn capability at all would be unrestricted
-if it ever reached the hook. Denying costs nothing: an agent with no `Agent` in its effective tools
-should never be issuing an `Agent` call, so the rule is unreachable in a healthy tree and correct in
-an unhealthy one.
+**NO PREFIX NORMALISATION. Revision 2 said "strip a leading `<anything>:`" and that was a privilege
+escalation (agy, r2).** Stripping any prefix maps `malicious-plugin:security-reviewer` onto the
+declared `security-reviewer` and **allows** it — i.e. any agent from any installed plugin whose
+basename matches a declared callee. Verbatim comparison closes it at no cost, because
+`agents/swift-reviewer.md:13` **already declares both spellings** of every member
+(`security-reviewer, unleashed-mail:security-reviewer, …`). A foreign spelling matches neither and is
+denied. §3 row 7 measured that a namespaced request arrives in `tool_input` verbatim, so there is a
+distinct string to compare.
 
-**Effective tools, not declared `tools:`** — granted minus `disallowedTools`, the same computation
-`_live_tools` performs. Revision 1's failure to subtract denials is exactly what produced its wrong
-writer roster (§2), and the same mistake here would let a `disallowedTools: Agent` agent pass rule 4.
+**RULE 3 IS NEW AND IT IS THE HARD PART (codex, r2).** `agent_type` is bare (§3 row 5), so a project
+agent at `.claude/agents/security-reviewer.md` is indistinguishable from the plugin's. Revision 2
+resolved the Rule 2 / §5.2 contradiction *in prose* while the mechanism still could not tell the
+principals apart — a project agent would reach rules 4-6 and be judged against **the plugin's**
+declaration, which is precisely the consumer interference §5.2 promises will not happen.
+
+Ambiguity must therefore be its own outcome, and it must **deny**:
+
+* **ALLOW on ambiguity is exploitable.** Anyone who can write `.claude/agents/swift-reviewer.md`
+  could disable enforcement for the real one. A guard switched off by creating a file is not a guard.
+* **DENY on ambiguity is fail-closed and surfaces a real misconfiguration.** Two agents sharing a
+  name in one flat namespace is something the operator should resolve, not something this guard
+  should silently pick a winner for.
+* **The cost is a denial-of-service, not an escalation** — a planted same-name agent breaks the
+  panel rather than widening it — and `UNLEASHED_SPAWN_GUARD=off` is the escape hatch.
+
+**Stated limitation, because it bounds what rule 3 can promise.** The collision check is only as
+complete as the set of agent roots it knows to look in. It must be built from the roots the runtime
+documents (project `.claude/agents/`, user-level, plugin), and if the runtime ever loads from a root
+the guard does not check, the guard could read the wrong declaration without detecting ambiguity.
+That makes the root list a **maintained input**, not a constant, and §7 must pin it.
+
+**Effective tools, not declared `tools:`** — granted minus `disallowedTools`, the computation
+`_live_tools` performs. Revision 1's failure to subtract denials is what produced its wrong writer
+roster (§2), and the same mistake here would let a `disallowedTools: Agent` agent pass rule 5.
 
 ## 5. The decisions this plan is asking reviewers to rule on
 
@@ -133,9 +188,17 @@ is indistinguishable from the plugin's. Enforcing on a bare name would let a con
 agent inherit this plugin's policy, and would let a project agent shadow a plugin one. The plugin can
 only speak for frontmatter it ships.
 
-Consequences stated rather than buried: a consumer agent with a scoped grant is **not** enforced;
-"record it" in rule 2 must be a **no-op**, because writing state would make foreign calls
-non-inert; and an opt-in for consumer enforcement is out of scope here and needs its own ticket.
+**Revision 3 sharpens this, because r2 showed the prose and the mechanism disagreed.** "Only agents
+this plugin defines are enforced" is achievable only when the caller is *unambiguously* ours. Three
+outcomes, not two:
+
+* **unambiguously foreign** (no plugin agent of that name) -> ALLOW, and write no state, or foreign
+  calls are not inert;
+* **unambiguously ours** -> enforced by rules 4-6;
+* **ambiguous** (a project or user agent shares the name) -> **DENY**, per §4 rule 3. This is the
+  case revision 2 had no answer for.
+
+An opt-in for consumer-authored enforcement remains out of scope and needs its own ticket.
 
 ## 6. Scope
 
@@ -168,9 +231,21 @@ caller is identified; tests with paired mutants.
    `jira-manager` ALLOWED where `swift-reviewer` → `ui-engineer` is DENIED.
 3. **The main thread is never denied** — `agent_type` absent must allow a callee that a sub-agent
    would be denied.
-4. **Both spellings normalise** — `security-reviewer` and `unleashed-mail:security-reviewer` reach
-   the same verdict, in both the caller and callee positions.
-5. **Fail-closed only where the caller is identified.** No `agent_type` is the main thread (allow);
+4. **Both DECLARED spellings are accepted; no other is** — `security-reviewer` and
+   `unleashed-mail:security-reviewer` both ALLOW because both are declared, while
+   `malicious-plugin:security-reviewer` DENIES. This is the cell that fails if anyone reintroduces
+   prefix stripping, and it is stated as an escalation test rather than a normalisation test.
+5. **A same-name project agent DENIES with a collision diagnostic**, and the diagnostic names the two
+   paths. A cell that merely asserts "denied" would also pass if the guard denied for the wrong
+   reason. The paired case: with no collision present, the same caller and callee ALLOW.
+6. **The agent-root list is pinned.** §4's limitation is that collision detection is only as complete
+   as the roots it searches. A cell asserts the guard's root list equals the roots the runtime
+   documents, so a runtime that adds one fails here rather than silently reading the wrong
+   declaration.
+7. **The committed fixture drives the cells.** `COREDEV-2711_hook-payload-fixture.json` is the input,
+   so the tests exercise real recorded payloads rather than hand-written approximations — and the
+   fixture's own `raw_sha256` and provenance block are asserted, so a silently edited fixture fails.
+8. **Fail-closed only where the caller is identified.** No `agent_type` is the main thread (allow);
    an identified caller with unparseable frontmatter is a refusal.
 
 **Trap 4's claim is withdrawn (codex, r1).** Revision 1 said a runtime that stopped sending

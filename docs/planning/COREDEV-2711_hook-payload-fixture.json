@@ -1,0 +1,97 @@
+{
+  "_comment": "COREDEV-2711 \u00a73 \u2014 PreToolUse payload shapes for the Agent tool. RETAINED evidence: r2 review blocked because the originals were summarised then deleted.",
+  "provenance": {
+    "claude_code_cli": "2.1.247",
+    "plugin_install": "/Users/nick/.claude/plugins/cache/npranson-unleashed-mail-plugin/unleashed-mail/2.8.2",
+    "plugin_install_proved_by": ".in_use markers for live PIDs 3418 and 3420 under 2.8.2; markers under 2.2.2 and 2.5.3 are stale (PIDs dead)",
+    "plugin_version": "2.8.2",
+    "repo_basis": "2631845",
+    "plan_commit": "710917d",
+    "captured": "2026-08-26",
+    "method": "temporary project-scoped PreToolUse hook on matcher `Agent`, appending raw stdin; removed immediately after capture"
+  },
+  "events": [
+    {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "permission_mode": "auto",
+      "agent_type_present": false,
+      "tool_input": {
+        "subagent_type": "swift-reviewer"
+      },
+      "_redacted": [
+        "cwd",
+        "session_id",
+        "prompt_id",
+        "tool_use_id",
+        "transcript_path",
+        "effort",
+        "tool_input.prompt",
+        "tool_input.description"
+      ]
+    },
+    {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "agent_type": "swift-reviewer",
+      "agent_id": "a17486f219cccb331",
+      "permission_mode": "auto",
+      "agent_type_present": true,
+      "tool_input": {
+        "subagent_type": "security-reviewer"
+      },
+      "_redacted": [
+        "cwd",
+        "session_id",
+        "prompt_id",
+        "tool_use_id",
+        "transcript_path",
+        "effort",
+        "tool_input.prompt",
+        "tool_input.description"
+      ]
+    },
+    {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "permission_mode": "auto",
+      "agent_type_present": false,
+      "tool_input": {
+        "subagent_type": "general-purpose"
+      },
+      "_redacted": [
+        "cwd",
+        "session_id",
+        "prompt_id",
+        "tool_use_id",
+        "transcript_path",
+        "effort",
+        "tool_input.prompt",
+        "tool_input.description"
+      ]
+    },
+    {
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "agent_type": "general-purpose",
+      "agent_id": "aa1f1a587a41a5086",
+      "permission_mode": "auto",
+      "agent_type_present": true,
+      "tool_input": {
+        "subagent_type": "unleashed-mail:security-reviewer"
+      },
+      "_redacted": [
+        "cwd",
+        "session_id",
+        "prompt_id",
+        "tool_use_id",
+        "transcript_path",
+        "effort",
+        "tool_input.prompt",
+        "tool_input.description"
+      ]
+    }
+  ],
+  "raw_sha256": "48948fed951f333fd8cab3c5cfbb2d3e5c76065fccc3c1fe5fc94dcc54e55291",
+  "raw_event_count": 4
+}
