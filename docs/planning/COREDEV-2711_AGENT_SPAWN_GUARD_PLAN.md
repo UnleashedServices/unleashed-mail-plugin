@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 7 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 8 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -20,6 +20,18 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > requirement demanded the very `_live_tools` equivalence that rule requires departing from. Both
 > verified against the tree; closed here. Every other r6 item is an amendment, not a redesign — codex
 > calls the finding "not a new architectural objection", kimi "none of these are architectural".
+> **r7** `2b64191`: agy `APPROVE` ("zero design findings remain"), kimi `APPROVE_WITH_NOTES` ("no
+> design finding remains"), codex `REQUEST_CHANGES` — ONE finding, again found independently by two
+> arms: revision 7's own §7.10 cell contradicted the shipped tree AND pressured a capability
+> escalation. Closed here. Both arms ruled the denial closure, the parser rescoping and the
+> reachability posture sound, and confirmed no third denial spelling exists.
+> **Revision 8 was also swept adversarially BEFORE going to the arms** — five lenses (cross-section
+> contradiction, capability escalation, citation accuracy, reproduced measurements, cell
+> discrimination), each finding then handed to a refuter instructed to reject it. 25 raised, 15
+> refuted, 10 survived, collapsing to four: the missing grant-axis cell (§7.9), the writer miscount
+> (§2), the P2/P3 pair §4 promised and §7 never contained (§7.8), and a false attribution to §8 (§6).
+> Every one is the same class the review rounds keep finding — a rule moved and the cell beside it
+> did not — which is why the sweep now runs before the reviewers do.
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -54,8 +66,13 @@ denying it — both all-or-nothing.
 
 **Do not "deny writer agents".** Revision 1 argued this from a false example: `jira-manager` is not a
 writer — `agents/jira-manager.md:19` denies Write, Edit, NotebookEdit, Bash *and* Agent. Recomputed
-with `_live_tools`: **12 of 21 can write**, none among `swift-reviewer`'s declared callees. So a
-blacklist would not break the workflow today and revision 1's stated reason was wrong.
+with `_live_tools` over `agents/*.md`: **13 of 21 can write** — the roster the validator computes
+rather than a number anyone keeps — and none of the thirteen is among `swift-reviewer`'s declared
+callees. So a blacklist would not break the workflow today and revision 1's stated reason was wrong.
+(Revision 7 said **twelve**, and so does `validate-plugin-assembly.py:581` in prose beside the
+computed roster. Both were recounted and both were wrong: `swift-reviewer` itself writes via its bare
+`Bash` — §9.1's accepted residual — and `modern-standards-planner` inherits every tool. Neither
+changes the argument; both are the plan citing a count it had not re-derived.)
 
 It is still the wrong predicate, for a reason that survives (codex, r2): **a blacklist enforces a
 capability class, while the declared policy is an exact caller→callee relation.** A blacklist would
@@ -143,7 +160,7 @@ if the observed form changes.
     P2  agent_type lacks the exact prefix "<us>:" -> ALLOW, no state.  NOT OUR PRINCIPAL.
     P3  "<us>:<name>", $CLAUDE_PLUGIN_ROOT/agents/<name>.md absent -> DENY + diagnostic.
     P4  "<us>:<name>", $CLAUDE_PLUGIN_ROOT/agents/<name>.md ships  -> ENFORCE:
-          4'  no `Agent` and no `Agent(...)` token in _live_tools(<name>)  -> DENY
+          4'  no `Agent`/`Agent(...)` in the guard-adjusted effective set  -> DENY
           5'  a token exactly `Agent`                                      -> ALLOW
           6'  tokens matching `Agent(...)` -> ALLOW iff the callee matches a declared member
               VERBATIM **and** begins "<us>:", else DENY
@@ -207,6 +224,10 @@ divergence cases named IN that corpus, so the gate pins the adjustment instead o
 Without one parser, CI and the runtime read the same declaration differently; without this scoping,
 the requirement contradicts the rule it was written to protect.
 
+**The corpus starts from RAW frontmatter as authored (codex, r7)** — plain scalar, flow sequence
+(`[a, b]`), block sequence, and single- and double-quoted scalars. An equivalence gate fed an
+already-normalised list on both sides proves the two normalisers agree about nothing.
+
 **And `hook_str` fails open by design.** `scripts/lib/hook-io.sh:193` states it "return[s] empty
 (fail-open) when neither exists" — so malformed JSON, or a box with neither `jq` nor `python3`, is
 **indistinguishable from an absent field**. Under revision 4, P0 would then read a corrupt payload as
@@ -221,10 +242,18 @@ the requirement contradicts the rule it was written to protect.
 and then did not — a requirement stated as if it were a decision. Both cases are measured:
 
 * **`Agent(*)` — and `(**)`, `(/**)`, `(/*)`, `(**/*)` — is FULL BREADTH, not a member named `*`.**
-  `validate-plugin-assembly.py:714-718` already models it that way in as many words: "a full-breadth
-  scope is the bare grant by another spelling". Under a naive 6' it would parse as a one-member list
-  and **deny every real callee**. So a full-breadth scope takes **rule 5' (ALLOW)**, exactly as a
-  bare `Agent` does, and the guard must not invent a stricter reading than the validator's.
+  Under a naive 6' it parses as a one-member list and **denies every real callee**, so a full-breadth
+  scope takes **rule 5' (ALLOW)**, exactly as a bare `Agent` does.
+
+  **The guard DEFINES this; it cannot inherit it (kimi, r7).** Revision 7 appealed to
+  `validate-plugin-assembly.py:714-718` — "a full-breadth scope is the bare grant by another
+  spelling" — but that line sits inside `check_model_reachable_grants` (`:692`), which audits a
+  SKILL's `allowed-tools`. The AGENT path does not model it at all: run the shipped parser and
+  `_agent_specifier_members("Agent(*)")` returns `['*']` (`:387-391`) — a member literally named
+  `*`. The two paths genuinely disagree and the appeal was to the wrong one, so 5' is the guard's
+  OWN rule, not a borrowed one. No shipped asset uses the form (verified tree-wide), so nothing
+  depends on either reading today — which is precisely why it must be written down before something
+  does.
 * **ANY `Agent`-family denial — bare `Agent` OR scoped `Agent(x)` — removes the tool entirely, and
   takes rule 4' DENY (codex, r6).** Revision 6 closed only the bare spelling. `_live_tools` subtracts
   EXACT tokens (`validate-plugin-assembly.py:408`), and BOTH spellings escape that subtraction:
@@ -241,6 +270,15 @@ and then did not — a requirement stated as if it were a decision. Both cases a
   caller on rule 4'.** (`jira-manager` is the bare shape today.) The 4' diagnostic must distinguish
   the two ways it fires — *declares no `Agent` at all* versus *declared one and denied it away* —
   because the remedies differ, and COREDEV-2703 was a week of silence for want of that distinction.
+
+  **The worst shape is INHERIT-ALL plus a scoped denial (kimi, r7), and it is why this rule keys on
+  the DENIAL SET rather than the grant.** With `tools:` omitted `_live_tools` starts from every write
+  vector AND a **bare** `Agent`; a `disallowedTools: Agent(a)` subtracts nothing from it, so the
+  effective set holds bare `Agent` and a naive guard takes **5' (ALLOW) at full breadth**. That is
+  permissive rather than merely mis-modelled — the dangerous direction, and the one shape neither r6
+  finding named. Measured against the shipped parser:
+  `_live_tools({"disallowedTools": "Agent(a)"})` -> `['Agent', 'Bash', 'Edit', 'NotebookEdit',
+  'Write']`. Keying on the denial set catches it whatever the grant looks like.
 
   **Reachability, stated rather than assumed.** `validate-plugin-assembly.py:644-660` rejects the
   scoped-denial form **unconditionally**, so a validator-clean release cannot ship one. That is a CI
@@ -281,7 +319,8 @@ never enforced. The contradiction r2 found is gone rather than papered over.
 `CLAUDE_PLUGIN_ROOT`; the two-field predicate; token-shape-aware effective tools **including the
 `Agent`-family denial removal**; the shared `_tool_tokens` parser or its equivalence gate; the `deny`
 emitter in `hook-io.sh`; **the `UNLEASHED_SPAWN_GUARD=off` kill switch** — dropped from this list in
-revision 4 while §5.1 and §8 kept relying on it (kimi, r6); the compatibility probe; tests.
+revision 4 while §5.1 kept relying on it (kimi, r6), and §7.12 now depends on it; the compatibility
+probe; tests.
 
 **The companion documentation edits are wider than revision 4 said (codex, r4), because shipped
 source-of-truth text still asserts the WITHDRAWN result:**
@@ -291,6 +330,11 @@ source-of-truth text still asserts the WITHDRAWN result:**
 * `AGENT_CONTRACTS.md:404` — "WHAT DOES NOT BOUND THE SPAWN SET … measured".
 * `agents/swift-reviewer.md` **every dispatch path**, not just Step 2's labels — including the
   `jira-manager` call and any recovery path.
+* `scripts/validate-plugin-assembly.py:581` — "the **twelve** that hold `Write`/`Edit` or inherit
+  everything", in prose sitting directly beside the roster the same function COMPUTES. Recounted:
+  thirteen. The computed roster is correct, so nothing behaves wrongly — but this is a shipped
+  source-of-truth sentence that disagrees with the code beneath it, which is what this list is for,
+  and it is where §2's own miscount came from.
 * `scripts/tests/test_validate_plugin_assembly.py:914` — `assertIn(reviewer, scoped[0])` is a
   **substring test over the whole grant string**, so `"security-reviewer"` matches inside
   `"unleashed-mail:security-reviewer"`. When the bare spellings are dropped it will keep passing
@@ -327,17 +371,55 @@ spawn, and rule 4' denies it in principle anyway.
    Without that negative cell a runtime that begins emitting `agent_id` on main-thread events passes
    the probe while silently restoring revision 3's regression: enforcing against the operator's own
    session. A schema change must fail loudly rather than turn the guard silently inert.
-8. **Fail-closed only where the caller is identified and ours.**
-9. **The `Agent`-family denial pair (codex, r6)** — an asset with `tools: Read, Agent(a, b)` and
-   `disallowedTools: Agent(a)` DENIES via rule 4', paired in the same run against the identical asset
-   WITHOUT the denial, where callee `a` ALLOWs via 6'. The bare-denial spelling gets the same pair. A
-   cell asserting only the DENY would pass against a guard that denies everything.
-10. **The shipped tree carries zero `Agent`-family denials** — asserted directly over `agents/*.md`
-    by the guard's own suite rather than delegated to the CI validator, because the reachability
-    argument must be checked where the guard reads the asset, not where CI does.
+8. **P2 and P3 are PAIRED — because §4 says they are.** `agent_type: "<us>:<name>"` with
+   `$CLAUDE_PLUGIN_ROOT/agents/<name>.md` ABSENT must **DENY** (P3), run in the same execution as
+   `agent_type: "other-plugin:<name>"`, which must **ALLOW with no state** (P2). The two payloads
+   differ only in the prefix, which is the entire attestation, so a guard that collapses them passes
+   either cell alone. Revision 7 left this cell as the bare principle *"fail-closed only where the
+   caller is identified and ours"* — a sentence with no payload and no asserted outcome, which an
+   always-ALLOW guard satisfies vacuously, while §4 claimed the pair already lived here. It did not.
+9. **The `Agent`-family denial pairs, on BOTH axes.** *Denial-spelling axis (codex, r6):* an asset
+   with `tools: Read, Agent(a, b)` and `disallowedTools: Agent(a)` DENIES via rule 4', paired in the
+   same run against the identical asset WITHOUT the denial, where callee `a` ALLOWs via 6'; the
+   bare-denial spelling gets the same pair. *Grant axis — the one revision 8 wrote the rule for and
+   nearly failed to test:* an asset that **OMITS `tools:`** and carries `disallowedTools: Agent(a)`
+   must DENY via 4', paired against the identical asset with no denial, where the callee ALLOWs via
+   5' at full breadth.
+
+   **The second pair is the only one that catches the PERMISSIVE failure.** With `tools:` omitted the
+   effective set holds a **bare** `Agent`, so an implementation that reads §4's "removing every
+   `Agent`-family token" as "remove the `Agent(...)`-shaped tokens" passes every explicit-grant cell
+   above — and still ALLOWs this shape at full breadth. A cell asserting only the DENY would pass
+   against a guard that denies everything; a cell set that varies only the denial spelling passes
+   against a guard carrying exactly the hole §4 names as the dangerous direction.
+10. **The shipped tree carries zero SCOPED `Agent(...)` denials — and the two BARE ones are asserted
+    to REMAIN (codex + kimi, r7).** Asserted directly over `agents/*.md` by the guard's own suite
+    rather than delegated to the CI validator, because the reachability argument must be checked
+    where the guard reads the asset and not where CI does.
+
+    Revision 7 wrote this as "zero `Agent`-family denials". §4 defines that family as bare **or**
+    scoped, so the cell contradicted the shipped tree on day one — and worse, it pressured a
+    **capability escalation**. `agents/jira-manager.md:19` and `agents/modern-standards-planner.md:23`
+    each carry a bare `Agent` denial, and each **omits `tools:`**, so both inherit every tool.
+    Measured against the shipped parser: strip that one denial and `Agent` returns to `_live_tools`
+    for both. The denial is the only thing holding them out of the spawn set, so an implementer
+    deleting it to make the cell pass would hand two agents exactly the capability this ticket exists
+    to bound. The cell is therefore **two-sided**: zero scoped denials, AND those two bare denials
+    still present. A one-sided cell here is worse than no cell.
 11. **A colon-bearing agent name cannot be registered at project or user scope (kimi, r6)** — the
     cell that turns "a scoped principal cannot be shadowed" from an assertion into a measurement. If
     the runtime accepts one, the attestation is forgeable and §4's premise falls.
+12. **The kill switch is PAIRED (codex, r7)** — with `UNLEASHED_SPAWN_GUARD=off` set, a cell that
+    otherwise DENIEs must ALLOW, run against the same asset and callee that DENY with it unset. An
+    unpaired kill-switch cell passes against a guard that never denies anything, which is the state
+    this whole ticket is trying to leave.
+13. **Every remaining predicate outcome carries a payload and an asserted result.** P0 (no
+    `agent_id`), P1 (`agent_id` present, `agent_type` absent), schema-invalid (`agent_id` as `""`,
+    `null`, or a non-string), and parse failure (malformed JSON) each ALLOW — and each must emit its
+    OWN diagnostic, asserted **by content**, so the four are distinguishable in a log. §4 spends four
+    paragraphs justifying these outcomes and revision 7 shipped all four with **zero** cells; since
+    they all ALLOW, an inert guard reproduces every one of them. Only the distinct diagnostic
+    separates "allowed for this stated reason" from "never ran". A rule with no cell is a comment.
 
 **The fixture must be rebuilt (§3); the r3 one is not evidence.** Capture it with the plugin **proved
 loaded**, commit the registry listing from capture time as that proof, retain `cwd` (structural),
