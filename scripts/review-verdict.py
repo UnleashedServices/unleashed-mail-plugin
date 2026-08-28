@@ -388,7 +388,7 @@ def _plan_directory_fd(plan: str) -> "int | None":
         raise SystemExit(
             f"review-verdict: refusing to reach plan state through a symlinked path component: "
             f"{directory}: {error}"
-        )
+        ) from error
     return dir_fd
 
 
@@ -1225,7 +1225,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     if not os.path.isfile(plan):
         raise SystemExit(f"review-verdict: plan not found: {plan}")
     digest = _sha256_bytes(plan)
-    dest = _write_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)), digest + "\n")
+    _write_state_file(plan, os.path.basename(_reviewed_sha_sidecar(plan)), digest + "\n")
     print(f"review-verdict: snapshotted reviewed plan digest {digest[:12]}… for {plan}")
     return 0
 
@@ -1400,7 +1400,7 @@ def cmd_write(args: argparse.Namespace) -> int:
         "round": args.round,
         "createdAt": args.created_at or "",   # caller passes an ISO stamp; scripts can't read the clock
     }
-    dest = _write_state_file(
+    _write_state_file(
         plan,
         os.path.basename(_verdict_path(plan)),
         json.dumps(artifact, indent=2, sort_keys=True) + "\n",

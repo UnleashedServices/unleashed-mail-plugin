@@ -40,6 +40,7 @@ import os
 import re
 import stat
 import sys
+from typing import NoReturn
 
 READ_ONLY_GUARD = (
     "READ-ONLY REVIEW — CONSTRAINT, NOT A TASK. You have READ access only: do NOT create, modify, "
@@ -56,7 +57,9 @@ READ_ONLY_GUARD = (
 _PROMPT_BINDING = re.compile(rb"\A([0-9a-f]{64})  (.+)\n\Z")
 
 
-def _refuse(message: str):
+# `NoReturn` because every caller treats a refusal as terminal — it is what lets the code after a
+# refusal read the value that refusal was guarding (`match.group(1)` below) without re-checking it.
+def _refuse(message: str) -> NoReturn:
     print(f"stage-prompt: {message}", file=sys.stderr)
     raise SystemExit(1)
 

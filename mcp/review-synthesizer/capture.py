@@ -280,7 +280,7 @@ def _seen_agent_ids(base: str, agent: str) -> "set[str]":
     """Every subagent id ever recorded for `agent` across ALL rounds under `base`, so a duplicate
     SubagentStop is recognised no matter how many rounds have opened OR how many times a slot was
     reused since (codex PR review)."""
-    seen = set()
+    seen: set[str] = set()
     try:
         names = os.listdir(base)
     except OSError:

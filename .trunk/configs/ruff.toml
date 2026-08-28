@@ -73,6 +73,17 @@ ignore = [
   # for assertRaises.
   "PT009",
   "PT027",
+
+  # Docstring rules that are wrong for THIS repo's Python, which is 66 internal validator and
+  # harness scripts -- not a library with an API surface. D103 (missing docstring in a public
+  # function, 44) would have us document single-purpose helpers whose name already says it;
+  # D205 (blank line after summary, 67) and D209 (closing quotes on their own line, 60) are
+  # pure layout on docstrings nobody renders. D itself stays SELECTED: the rules that catch a
+  # docstring saying something FALSE (D40x mood/content, D41x sections) are the ones with
+  # value here, and those keep firing.
+  "D103",
+  "D205",
+  "D209",
 ]
 
 [lint.per-file-ignores]

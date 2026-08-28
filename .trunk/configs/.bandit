@@ -10,7 +10,8 @@
 # Verified: `skips: B404` removes B404; `skips = ["B404"]` does not. A missing --ini path is
 # likewise silent. Test any change to this file by confirming a finding actually disappears.
 #
-# NOTHING is skipped, anywhere. An earlier revision ignored bandit on the two test directories
+# THREE RULES are skipped (see `skips` below), and nothing else. An earlier revision ignored
+# bandit on the two test directories
 # to silence B101 (assert_used); that was withdrawn once measured -- B101 is only 19 of 559
 # findings repo-wide (17 in tests, 2 in production), so the ignore was discarding 521 real
 # findings, mostly the subprocess family, to suppress 17 assertions. There is no bandit entry
@@ -18,3 +19,18 @@
 # strips bare asserts, which is why plugin-ci.yml carries a gate saying so.
 [bandit]
 exclude: .trunk,.claude,.git,.github/codeql
+
+# The subprocess family, 475 of the repo's findings, is skipped because this repo IS a
+# subprocess orchestrator -- it shells out to git, python3, shellcheck and the review CLIs as
+# its reason to exist. These three are unactionable here rather than merely noisy:
+#   B603 (subprocess_without_shell_equals_true, 261) fires on every `subprocess.run([...])`
+#        with a non-literal argument. The list form is already the SAFE form; the rule wants
+#        proof of input trust that a linter cannot see.
+#   B607 (start_process_with_partial_path, 163) fires on `git` / `python3` / `shellcheck`.
+#        Resolving those through PATH is deliberate -- hard-coding /usr/bin/git would break
+#        the Linux CI legs, Homebrew installs, and every contributor's venv.
+#   B404 (import_subprocess, 51) flags the IMPORT itself. There is no remediation short of
+#        not importing subprocess.
+# Everything else stays on, including B101 (assert_used) -- python3 -O / PYTHONOPTIMIZE strips
+# bare asserts, which is why plugin-ci.yml carries a gate saying so.
+skips: B603,B607,B404

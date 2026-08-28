@@ -211,7 +211,8 @@ class Verdict:
 
 
 def decide_verdict(clusters: list[Cluster], verify: Callable[[Finding], bool]) -> Verdict:
-    confirmed, unconfirmed = [], []
+    confirmed: list[Cluster] = []
+    unconfirmed: list[Cluster] = []
     for c in clusters:
         if c.severity == "blocker":
             # A cluster can hold more than one blocker (cluster-not-collapse), so it
@@ -269,7 +270,8 @@ def synthesize(
 ) -> Review:
     changed_files = {canonical_path(c) for c in changed_files}  # canonical on both sides
     findings = _dedup_exact(findings)  # collapse byte-identical duplicates before scope/cluster (MIN-14)
-    gating, pre = [], []
+    gating: list[Finding] = []
+    pre: list[Finding] = []
     for f in findings:  # single pass — in_gating_scope was computed twice per finding
         (gating if in_gating_scope(f, changed_files) else pre).append(f)
     clusters = cluster_findings(gating, same_defect=same_defect)

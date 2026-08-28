@@ -18,6 +18,10 @@ from dataclasses import dataclass
 SEVERITIES = ("blocker", "warning", "suggestion")
 CONFIDENCES = ("high", "medium", "low")
 SCOPES = ("changeset", "structural-pipeline")
+# The API layer's `required` field list, hoisted beside the enums above so `parse_finding`'s ingest
+# guard iterates it directly — indexing it back out of the heterogeneous schema dict yields `object`.
+REQUIRED_FIELDS = ("severity", "confidence", "sourceAgent", "category",
+                   "file", "line", "lineEnd", "finding", "evidence", "fix")
 
 # category -> family. Families gate dedup: two findings can only be "the same
 # defect" if they share a family (necessary, NOT sufficient — see synthesize.py).
@@ -93,10 +97,7 @@ FINDING_JSON_SCHEMA = {
         "evidence": {"type": "string"},
         "fix": {"type": "string"},
     },
-    "required": [
-        "severity", "confidence", "sourceAgent", "category",
-        "file", "line", "lineEnd", "finding", "evidence", "fix",
-    ],
+    "required": list(REQUIRED_FIELDS),
 }
 
 # A reviewer returns an array of findings (structured-output form).
@@ -229,7 +230,7 @@ def parse_finding(d: dict, *, reject_abs_traversal: bool = False) -> Finding:
     """
     if not isinstance(d, dict):
         raise SchemaError("finding must be a JSON object")
-    missing = [k for k in FINDING_JSON_SCHEMA["required"] if k not in d]
+    missing = [k for k in REQUIRED_FIELDS if k not in d]
     if missing:
         raise SchemaError(f"missing required fields: {missing}")
     for k in ("severity", "confidence", "sourceAgent", "category",

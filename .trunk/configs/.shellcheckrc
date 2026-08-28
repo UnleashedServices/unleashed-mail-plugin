@@ -3,9 +3,19 @@
 # `enable=all` turns on the optional checks (SC2250 brace-your-variables, SC2292 prefer
 # [[ ]], SC2312 unmasked return values, SC2249 default case). Those four alone account for
 # ~3,560 of this repo's findings and CI's `shellcheck -s bash -S warning` never sees them
-# -- keeping them on is a deliberate choice to run Trunk STRICTER than CI and burn the
-# backlog down over time, not an accident.
+# -- keeping the remaining three on is a deliberate choice to run Trunk STRICTER than CI
+# and burn the backlog down over time, not an accident.
 enable=all
+
+# SC2250 (2,509 findings) is the one exception, and it is disabled for a CORRECTNESS reason
+# rather than a taste one. 20 files under scripts/tests/ prove the shell libraries by reading
+# a script's source and doing exact-string `.replace()` on it; 11 of the 15 mutation-anchored
+# files carry SC2250. Rewriting `$var` to `${var}` in those files turns the mutation into a
+# silent NO-OP, and a no-op mutation reads as a SURVIVING MUTANT -- a green-looking suite that
+# has stopped testing anything. This is not hypothetical: `trunk fmt --all` rewrote 191 files
+# and took the suite from clean to 211 failures + 5 errors (COREDEV-2771). Leaving the rule on
+# would park 2,509 findings in the report whose only bulk remedy breaks the suite.
+disable=SC2250
 
 # scripts/lib/ holds 10 sourced libraries. Following `source` directives is what makes
 # SC2154 (referenced-but-not-assigned) accurate instead of a false-positive generator --

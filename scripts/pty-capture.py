@@ -621,7 +621,9 @@ def _parse_timeout_value(val: str) -> float:
     try:
         t = float(val)
     except ValueError:
-        raise SystemExit(f"error: --timeout: invalid number '{val}'")
+        # `from None`: this is a usage diagnostic for the caller, not a bug report -- the
+        # ValueError's own text repeats the token already quoted here.
+        raise SystemExit(f"error: --timeout: invalid number '{val}'") from None
     if not (0 < t < float("inf")):
         # rejects <=0 AND non-finite (nan/inf): `nan <= 0` is False, and with nan the deadline check
         # `elapsed >= timeout` is always False -> the timeout silently no-ops.
@@ -907,7 +909,7 @@ def _mkdir_private_chain(path: str) -> None:
     try:
         anchor = os.lstat(cursor)
     except OSError as error:
-        raise AllocationError(f"existing ancestor {cursor!r} is unreadable: {error}")
+        raise AllocationError(f"existing ancestor {cursor!r} is unreadable: {error}") from error
     unsafe = _unsafe_ancestor_reason(cursor, anchor)
     if unsafe is not None:
         raise AllocationError("existing ancestor " + unsafe)
@@ -915,7 +917,7 @@ def _mkdir_private_chain(path: str) -> None:
     for directory in reversed(missing):
         try:
             os.mkdir(directory, 0o700)
-        except FileExistsError:
+        except FileExistsError as exc:
             # `lstat`, NOT `os.path.isdir` (PR #63 recheck, P2). Another process can win the race by
             # creating a SYMLINK at a component this loop is about to make; `os.path.isdir` follows it
             # and accepts the target, so the supposedly private transcript hierarchy gets built through
@@ -927,7 +929,7 @@ def _mkdir_private_chain(path: str) -> None:
             except OSError as error:
                 raise AllocationError(
                     f"concurrent path {directory!r} vanished during allocation: {error}"
-                )
+                ) from error
             # THE SAME RULE AS THE ANCHOR, not merely "is it a directory" (PR #63 recheck, P2). This
             # branch exists because another process can win the race; requiring only S_ISDIR meant a
             # racer under a sticky world-writable anchor could pre-create this component as their own
@@ -937,7 +939,7 @@ def _mkdir_private_chain(path: str) -> None:
             if unsafe is not None:
                 raise AllocationError(
                     "concurrent path " + unsafe + " (created there mid-allocation)"
-                )
+                ) from exc
 
 
 def _validate_existing_private_directory(path: str, metadata=None) -> None:
