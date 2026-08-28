@@ -28,7 +28,7 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
   would hide in.
 
 ### Added
-- **Trunk lint configuration — 38 linter entries, plus `zizmor` for workflow security** (COREDEV-2771).
+- **Trunk lint configuration — 20 linters across security, correctness, docs and formatting** (COREDEV-2771).
   Config only; wiring it into CI and deciding required-vs-advisory is tracked separately
   (COREDEV-2780), as is remediating the findings it exposes (COREDEV-2787).
 
