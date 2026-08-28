@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 4
+**Status:** Planning, revision 5
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,9 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r4** never launched: the capture wrapper rejected a malformed round operand and failed closed
+> before either reviewer started, so no transcript exists and no round was consumed. Revision 5 then
+> closed §6.1 and §6.3 with maintainer decisions, so round 5 reviews a decision-complete plan.
 > **r3** `8d79fa7`: codex `REQUEST_CHANGES` (4 DESIGN) + agy `REQUEST_CHANGES` (4 DESIGN).
 > **Concordant, and confirmed independently: revision 3's `workflow_dispatch` fix was a job-level
 > `on:`, which GitHub Actions does not have** — the contradiction was relocated, not resolved. codex
@@ -202,13 +205,13 @@ row contradicts**; that claim is withdrawn.
 It **never blocks a commit.** A version-drift detector that fails `git commit` would be a worse
 defect than the one it reports.
 
-**Dependency on §6.3, with BOTH branches specified (agy, r3).** Revision 3 named a caller while
-§6.3 was still open and said only that "CI-only" would need "a different caller" — a hole, not a
-branch, so the plan could not be gated either way. Closing it:
+**§6.3 is DECIDED — wire the hook — so this caller stands and M6 is unconditional.** The reasoning
+below is retained because it is *why* no alternative caller exists, not a live branch:
 
-* **§6.3 = wire the hook** → §3b is built as described, caller `.githooks/pre-commit`.
-* **§6.3 = CI-only, do not wire** → **§3b is DROPPED**, and COREDEV-2801 keeps the §3a diagnostic
-  alone. There is no third caller. The detector must run **from the checkout** (the bootstrap
+* **§6.3 = wire the hook** *(the decision)* → §3b is built as described, caller
+  `.githooks/pre-commit`.
+* **§6.3 = CI-only** *(rejected)* → §3b would have been **dropped** entirely, COREDEV-2801 keeping
+  the §3a diagnostic alone. There is no third caller. The detector must run **from the checkout** (the bootstrap
   constraint) and must read **local machine state** (`~/.claude/plugins/installed_plugins.json`).
   CI satisfies the first and cannot satisfy the second — a runner has no developer install record. A
   plugin-shipped hook satisfies the second and cannot satisfy the first — a session pinned to 2.7.0
@@ -241,9 +244,11 @@ branch, so the plan could not be gated either way. Closing it:
       one strict green and one deliberately red `trunk-check` run observed on a `main` PR *and* on an
       `alpha` PR (cell 12). An unobserved base is an unsatisfiable-context risk, not an assumption.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
-- [ ] **M6** (**conditional on §6.3**) — if the hook is wired, implement §3b with caller
-      `.githooks/pre-commit`, posture per §3a's decision table. **If §6.3 decides CI-only, M6 is not
-      done at all** — §3b has no viable caller (§3b), and COREDEV-2801 keeps the §3a diagnostic alone.
+- [ ] **M5a** (**§6.3 decided**) — wire the diff-scoped trunk check into `.githooks/pre-commit`,
+      blocking on newly introduced findings, never `--all`, with an explicit timeout; update
+      `CLAUDE.md`'s gate list. Independent of M2/M4 — it gates commits, not merges.
+- [ ] **M6** — implement §3b with caller `.githooks/pre-commit` (§6.3 decided: wire it), posture per
+      §3a's decision table. Unconditional as of revision 5.
 
 M3 and M4 are gated on evidence, not schedule.
 
@@ -303,6 +308,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 12. **Both protected bases emit the context** (M4's precondition, codex r3). Observe a real
     `trunk-check` check run on a `main` PR **and** on an `alpha` PR — green and red on each — before
     the context is required. Fails if either base produces no check run.
+13. **The pre-commit hook runs the check diff-scoped, blocks, and is bounded** (§6.3). Assert: a
+    staged file with a new finding **fails the commit**; a staged clean file commits with the 9027
+    backlog present (so the hook is not `--all`); and the check runs under its declared timeout.
+    Fails if the hook is advisory, if it scopes to the whole tree, or if it is unbounded.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -325,7 +334,7 @@ This dissolves the §6.2 hazard rather than deferring it: `Control` targets both
 context would otherwise have demanded something `alpha` could not satisfy — the COREDEV-2767 failure
 aimed at a different branch. **M0 alone does not dissolve it; M0 + M2a do.**
 
-### 6.1 — annotations vs token scope — OPEN (the choice), but option (b) is CONFIRMED implementable
+### 6.1 — annotations vs token scope — **DECIDED 2026-08-28 (maintainer): option (b)**
 
 Keeping `contents: read` does **not** by itself stop the action passing `--github-annotate` on a
 non-fork PR; it would attempt to annotate and fail 403. That is what makes the mechanism, not the
@@ -351,8 +360,12 @@ permission alone, the deciding factor.
   **Note the asymmetry:** this affects the `pull_request` leg only — `push.sh` passes no annotation
   argument at all, so pushes to `main`/`alpha` never annotate under either option.
 
-*Recommendation: (b).* The gate's value is blocking, not annotating. **Open for review**: if inline
-annotations are what make a lint gate usable in practice, (b) is wrong and I would rather be told.
+**DECIDED: (b)** — `contents: read` + `save-annotations: true`. The gate's value is blocking, not
+annotating, and the job's token scope stays minimal. **The accepted cost, restated so it is not
+rediscovered as a defect later:** findings are reachable only from the job log or the
+`trunk-annotations` artifact, never inline on the diff. If that proves to make the gate unusable in
+practice, the remedy is a scope change to option (a) — a one-line permissions edit plus cell 10 —
+not a redesign.
 
 ### 6.2 — Adding a required context to ruleset `Control`
 
@@ -361,12 +374,24 @@ failing required check blocks every merge with no override, and adding a context
 emits check runs previously made `main` unmergeable (COREDEV-2767). M4 is gated on M3's evidence
 **and** on maintainer instruction.
 
-### 6.3 — `.githooks/pre-commit` — OPEN, and §3b now depends on it
+### 6.3 — `.githooks/pre-commit` — **DECIDED 2026-08-28 (maintainer): WIRE IT**
 
 Local diff-scoped check measured at **7s for one changed file**; every current hook validator is
 sub-second. Documenting it in `CLAUDE.md` without wiring the hook would describe something that does
-not run. **§3b's detector names this hook as its caller**, so "CI-only" also sends §3b back for a
-different caller. **Decision needed.**
+not run.
+
+**DECIDED: wire the diff-scoped trunk check into `.githooks/pre-commit`, blocking on failure.** Two
+consequences follow, and both are now settled rather than open:
+
+1. **Lint is a blocker locally as well as in CI**, consistent with this repo's strict posture — the
+   hook fails the commit on a *newly introduced* finding in the staged diff. It must **not** run
+   `--all`: the 9027-issue backlog would block every commit, which is the same trap §1 rejects for CI.
+   Bounded by an explicit timeout, asserted by cell 13.
+2. **§3b's detector has its caller**, so **M6 is unconditional** and COREDEV-2801 keeps its detector.
+   The conditional branch in §3b is retained as the *rationale* for why no other caller exists, not
+   as a live alternative.
+
+**Accepted cost:** ~7s added to each commit, against sub-second today.
 
 ### 6.4 — `markdown-link-check` — RESOLVED as a declared exclusion
 
@@ -389,7 +414,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
-* `.githooks/pre-commit` — the trunk check **if §6.3 says wire it**, and the §3b detector call
+* `.githooks/pre-commit` — the diff-scoped trunk check, blocking, bounded by an explicit timeout
+  (§6.3 decided: wire it), **and** the §3b detector call
 * the §3b detector script
 
 ## §8 — Notes
