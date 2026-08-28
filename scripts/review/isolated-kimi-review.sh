@@ -43,6 +43,19 @@
 # Exit: 0 captured · 1 setup failure · 3 round VOID (tree or staged basis mutated) · 4 effort unassertable
 set -uo pipefail
 
+# NO BYTECODE FROM THIS HARNESS, ANYWHERE (COREDEV-2650; extended after PR #81 review).
+# The reviewer subshell below sets this too — that is the load-bearing one, because a `.pyc` inside
+# the DISPOSABLE checkout is read as reviewer tampering and voids the round. Setting it here as well
+# covers this script's OWN python helpers (containment.py, stage-bound-plan.py, stage-prompt.py),
+# which write into the LIVE checkout's `scripts/review/__pycache__/`.
+# STATED PRECISELY, because the review comment that prompted this inferred more than holds: a live-tree
+# `.pyc` canNOT void a round. `__pycache__/` is gitignored (.gitignore:38) and `tree_fingerprint`
+# hashes HEAD + `status --porcelain` + TRACKED content + git metadata, so an ignored untracked file is
+# invisible to it. Measured: the live fingerprint was byte-identical before, during and after a
+# synthetic `.pyc` was planted. This is hygiene and defence-in-depth, not a fix for an observed void.
+export PYTHONDONTWRITEBYTECODE=1
+
+
 [ "$#" -ge 3 ] || { echo "usage: $0 <prompt-file> <out-transcript> <commit> [timeout] [plan]" >&2; exit 1; }
 PROMPT_REL="$1"; OUT="$2"; COMMIT="$3"; TIMEOUT="${4:-3300}"
 # `${5-...}`, NOT `${5:-...}`: the colon form substitutes the default for an EXPLICITLY EMPTY

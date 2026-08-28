@@ -1,4 +1,4 @@
-# UnleashedMail — Claude Code Plugin v2.8.2
+# UnleashedMail — Claude Code Plugin v2.8.3
 
 A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email client supporting Gmail and Microsoft Graph, built with Swift 6, SwiftUI, AppKit, WKWebView, GRDB.swift (SQLCipher), and MVVM architecture.
 
@@ -7,6 +7,32 @@ A multi-agent development plugin for **UnleashedMail**, a native macOS 15+ email
 > v2.2.0 introduces [`AGENT_CONTRACTS.md`](AGENT_CONTRACTS.md) — the source of truth for cross-agent boundaries (release contract, plan-implement gate, data→logic→ui handoff, AI pipeline ownership, code review pipeline, CI pinning, MCP tool prefixes, mandatory project gates). When two agents disagree about a boundary, the contracts doc wins.
 
 ## What's New
+
+### v2.8.3
+
+- **Review harness: Python bytecode is no longer mistaken for reviewer tampering (`COREDEV-2650`).**
+  The isolated review wrappers fingerprint their disposable checkout afterwards and void the round if
+  it changed — the COREDEV-2607 defence against a reviewer that once *implemented* the plan it was
+  sent to review. But a reviewer that imported a repo module to **reproduce a measured claim** made
+  CPython write `__pycache__/*.pyc` beside the source, and that bytecode read as tampering. It threw
+  away three valid rounds on `COREDEV-2711` — kimi at r1, then both agy and kimi at r8, leaving that
+  round resting on a single arm.
+
+  `PYTHONDONTWRITEBYTECODE=1` is now exported in the reviewed process, and at the top of each wrapper
+  so the harness's own Python helpers stop writing bytecode into the live checkout too. The
+  fingerprint is deliberately **unchanged**: excluding `__pycache__` would be a blacklist in exactly
+  the directory a real mutation would hide in.
+
+- **Trunk lint configuration — 20 linters across security, correctness, docs and formatting (`COREDEV-2771`).**
+  Configuration only. Wiring it into CI and deciding required-vs-advisory is `COREDEV-2780`;
+  remediating the findings it exposes is `COREDEV-2787`.
+
+- **`COREDEV-2711` §2 design gated (documentation only — the guard is NOT implemented).** The
+  agent-spawn-guard plan, its §3a measurement and the fixture payloads are committed under
+  `docs/planning/`. The measurement settled the fact the whole design rested on: a plugin sub-agent
+  reports a **scoped** `agent_type` to `PreToolUse`. The captured evidence also shows the runtime
+  permitting `swift-reviewer` to spawn a type absent from its own declared `Agent(...)` roster —
+  which is what §4 exists to stop, and has not been built yet.
 
 ### v2.8.2
 
