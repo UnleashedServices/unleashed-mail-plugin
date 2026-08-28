@@ -1,0 +1,18 @@
+# Aggressive shellcheck config.
+#
+# `enable=all` turns on the optional checks (SC2250 brace-your-variables, SC2292 prefer
+# [[ ]], SC2312 unmasked return values, SC2249 default case). Those four alone account for
+# ~3,560 of this repo's findings and CI's `shellcheck -s bash -S warning` never sees them
+# -- keeping them on is a deliberate choice to run Trunk STRICTER than CI and burn the
+# backlog down over time, not an accident.
+enable=all
+
+# scripts/lib/ holds 10 sourced libraries. Following `source` directives is what makes
+# SC2154 (referenced-but-not-assigned) accurate instead of a false-positive generator --
+# without it, every variable defined in a sourced lib looks unassigned to the caller.
+source-path=SCRIPTDIR
+external-sources=true
+
+# NOTE: SC2154 was disabled in the previous config. It is enabled now (by `enable=all`
+# plus external-sources). If it proves noisy for the dynamic `local`-in-caller pattern this
+# repo uses, re-add `disable=SC2154` here rather than dropping external-sources.

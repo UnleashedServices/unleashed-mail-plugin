@@ -1,0 +1,20 @@
+# Aggressive bandit config. Trunk ALWAYS invokes bandit as
+#   bandit --exit-zero --ini .bandit --format json --output <tmp> <targets>
+# so this file is always consulted -- it is not optional.
+#
+# FORMAT WARNING, learned the hard way: `--ini` is documented as "path to a .bandit file
+# that supplies command line arguments". It is an INI file whose keys are CLI option names
+# and whose values are BARE, comma-separated. Bandit's other config format (the YAML one
+# used by `-c/--configfile`) spells this `exclude_dirs: [...]` -- and if you write that
+# list-of-strings form here, bandit parses the file, honours nothing, and reports NO error.
+# Verified: `skips: B404` removes B404; `skips = ["B404"]` does not. A missing --ini path is
+# likewise silent. Test any change to this file by confirming a finding actually disappears.
+#
+# NOTHING is skipped, anywhere. An earlier revision ignored bandit on the two test directories
+# to silence B101 (assert_used); that was withdrawn once measured -- B101 is only 19 of 559
+# findings repo-wide (17 in tests, 2 in production), so the ignore was discarding 521 real
+# findings, mostly the subprocess family, to suppress 17 assertions. There is no bandit entry
+# in trunk.yaml's lint.ignore any more. B101 matters here because `python3 -O` / PYTHONOPTIMIZE
+# strips bare asserts, which is why plugin-ci.yml carries a gate saying so.
+[bandit]
+exclude: .trunk,.claude,.git,.github/codeql

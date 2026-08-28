@@ -1,0 +1,10 @@
+[codespell]
+# Every word below was VERIFIED as correct English in this repo's prose before being
+# ignored -- they are codespell dictionary false positives, not accepted misspellings.
+# "unparseable" is the standard spelling in a parsing context; "disjointness" is the
+# mathematical term (codespell wants the unrelated "disjointedness").
+ignore-words-list = unparseable,disjointness,pre-empts,pre-empt,re-declaring,re-use,re-uses,ba,nd,fo,alle,ans,te,som,parms,inout,shs,crate,tread,ist,nin,fpr,strat,caf,anc,ody,afile,ue,fo,dout,nwe
+# Fixture corpora are deliberately near-miss character soup; spell-checking them is noise.
+skip = ./.git,./.trunk/tools,./.trunk/logs,./.claude,*.lock,./mcp/review-synthesizer/redactor_fixture.py
+# Do not auto-"fix" prose. A wrong autocorrect in a shipped agent asset is worse than a typo.
+check-filenames =

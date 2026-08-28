@@ -1,0 +1,14 @@
+# zizmor configuration. Trunk discovers this at .github/zizmor.yml (a `direct_config`).
+#
+# Deliberately EMPTY of ignores. zizmor runs under the `auditor` persona (set in the
+# command override in .trunk/trunk.yaml), which is its most aggressive mode -- false
+# positives are accepted in exchange for catching everything. Findings are meant to be
+# fixed in the workflows or suppressed one at a time HERE, with a reason, rather than
+# silenced wholesale by lowering the persona.
+#
+# Suppression syntax, when a finding is genuinely not applicable:
+#   rules:
+#     template-injection:
+#       ignore:
+#         - plugin-ci.yml:503:25   # matrix.os is workflow-controlled, not attacker input
+rules: {}
