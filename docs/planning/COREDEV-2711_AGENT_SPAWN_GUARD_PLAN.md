@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 13 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 15 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done), COREDEV-2769 (done — it was the blocker) · **Blocks on:** nothing measurable
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -174,8 +174,9 @@ restored byte-identically afterwards (`cmp` clean). The `agent_id` in the payloa
 `Agent` tool returned for that sub-agent, which is an independent cross-check that the record belongs
 to the spawn it claims to.
 
-**WHAT THE FOUR PAYLOADS DO NOT PROVE (codex, r12).** Two things in this section rest on evidence of
-different weight, and the distinction is load-bearing:
+**WHAT THE EIGHT PAYLOADS DO NOT PROVE (codex, r12; recounted r15).** Two things in this section rest
+on evidence of different weight, and the distinction is load-bearing. The count is eight — four per
+event — and revision 14 left this paragraph, and §7's `cwd` row, still saying four:
 
 * **Demonstrated by the committed artifact:** the caller and callee spellings, `agent_id` present /
   absent, the `tool_use_id` correlation, the `completed` outcomes, the 2-part form, and the
@@ -199,9 +200,10 @@ checker was wrong, for the seventh time on this ticket. Had it been trusted, thi
 been declared dead by its own fork. It was caught only because "absent" contradicted a field visible
 two lines above in the raw record.
 
-**THE FIXTURE IS NOW COMPLETE (revision 13).** §7 requires two events and both are captured. Event 2
+**THE FIXTURE IS NOW COMPLETE (captured for revision 13, restated r15).** §7 requires two events and
+both are captured. Event 2
 — `swift-reviewer` spawning `unleashed-mail:ui-engineer`, **undeclared** and holding `Write`/`Edit`/
-`Bash` — returned `completed` with no refusal and no prompt, which evidences §2's central claim on a
+`Bash` — returned `completed` with no refusal, which evidences §2's central claim on a
 real payload for the first time. Revision 11's first draft named this as the ONLY outstanding item
 when the artifact was also uncommitted and carried no registry listing; all three are now closed. What
 remains genuinely unexercised is narrower and still stated in §8: `PostToolUseFailure`, and every
@@ -590,7 +592,7 @@ was itself an overclaim (measurement audit, r11):
 |---|---|
 | captured with the plugin **proved loaded** | **met** — `unleashed-mail:tester`, plugin-only with no shadow, resolved |
 | the registry listing committed as that proof | **met** — `registry_listing_at_capture` in the artifact below |
-| `cwd` retained (structural) | **met** — present in all four payloads |
+| `cwd` retained (structural) | **met** — present in all **eight** payloads (verified) |
 | the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `23220fb4d343a192` |
 | outcomes recorded via `PostToolUse` correlated by `tool_use_id` | **met** — both pairs matched, outcome `completed` |
 | event 1: a plugin sub-agent spawning a **declared** scoped callee | **met** — §3a |
@@ -599,7 +601,11 @@ was itself an overclaim (measurement audit, r11):
 **Event 2 does more than complete the fixture — it demonstrates the premise.** `swift-reviewer`
 spawned `unleashed-mail:ui-engineer`, a type absent from its own declared `Agent(...)` roster which
 holds `Write`, `Edit` and `Bash`, and the runtime returned `completed` — **the roster was not
-enforced.** (Revision 13 also said "no prompt". Withdrawn as unprovable from this evidence, kimi r14:
+enforced.** (Revision 13 also said "no prompt". Withdrawn as unprovable from this evidence, kimi r14 —
+and revision 14 withdrew it HERE while leaving it asserted in §3a, so for one revision the document
+contradicted itself about its own withdrawal. codex r15 caught that. It is the FIFTH instance in a
+single day of a fix landing in one section while an adjacent one keeps the old claim, which is why
+§7's own discipline — a rule with no cell is a comment — applies to prose as much as to cells:
 the payload records `permission_mode: "auto"`, under which no prompt would be expected anyway, and a
 payload cannot demonstrate a UI negative. The claim that carries the design — roster not enforced,
 `completed`, no refusal — is fully demonstrated and is what remains.)

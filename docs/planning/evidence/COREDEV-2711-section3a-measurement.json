@@ -260,7 +260,8 @@
         "Bash"
       ],
       "outcome": "completed",
-      "significance": "the runtime PERMITTED a scoped spawn of a type absent from the caller's own declared Agent(...) list, with no refusal and no prompt \u2014 the declaration is not a runtime control. This is the gap COREDEV-2711 \u00a72 exists to close, and it is now evidenced by a real payload rather than asserted."
+      "significance": "the runtime PERMITTED a scoped spawn of a type absent from the caller's own declared Agent(...) list, with no refusal \u2014 the declaration is not a runtime control. This is the gap COREDEV-2711 \u00a72 exists to close, and it is now evidenced by a real payload rather than asserted.",
+      "not_demonstrated": "'no prompt' is NOT demonstrated by these payloads and was withdrawn in plan revision 15: the capture records permission_mode='auto', under which no prompt would be expected anyway, and a payload cannot demonstrate a UI negative. What IS demonstrated: the declared roster was not enforced, and the spawn returned completed with no refusal."
     }
   },
   "raw_payloads_event_2": [
