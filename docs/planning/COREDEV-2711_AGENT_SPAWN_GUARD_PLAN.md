@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 15 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 16 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done), COREDEV-2769 (done — it was the blocker) · **Blocks on:** nothing measurable
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -156,7 +156,8 @@ refused to infer a third time. It no longer has to.
 Captured 2026-08-27 against plugin 2.8.2, plan HEAD `09f7719`, in a session where
 `unleashed-mail:tester` — the plugin-ONLY name with no user-scope shadow — resolved and returned
 correctly. Raw payloads, committed: `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`
-(sha256 `23220fb4d343a192`). All three r12 arms found this line still naming the pre-commit
+(digest recorded once in §7's fixture table — deliberately NOT restated here, see below). All three
+r12 arms found this line still naming the pre-commit
 `~/.claude/handoffs/` copy — the very "uncommitted raw" §7's fixture rule rejects.
 
 | field | measured | what it settles |
@@ -187,10 +188,11 @@ event — and revision 14 left this paragraph, and §7's `cwd` row, still saying
   reproducible — the method is stated above precisely enough to repeat — but a reader should know
   which half they are taking on trust.
 
-**AND THE SCOPE IS NARROWER THAN "A PLUGIN SUB-AGENT" (codex, r12).** This is ONE session, ONE
-install, ONE plugin version (2.8.2), ONE caller, ONE **declared** callee, and ONE **successful**
-outcome. `PostToolUseFailure` is not exercised at all, so §7's fixture requirement naming it is met
-only on its success half. The generalisation the design actually needs is narrow — that the runtime
+**AND THE SCOPE IS NARROWER THAN "A PLUGIN SUB-AGENT" (codex, r12; recounted r16).** This is ONE
+session, ONE install, ONE plugin version (2.8.2), ONE caller, and TWO callees — one declared, one
+undeclared — across TWO **successful** outcomes. (Revision 15 left this saying "ONE declared callee,
+ONE successful outcome"; it predated event 2 by two revisions.) `PostToolUseFailure` is not exercised
+at all, so §7's fixture requirement naming it is met only on its success half. The generalisation the design actually needs is narrow — that the runtime
 scopes `agent_type` for plugin sub-agents — and §7.7's probe, not this capture, is what keeps it true.
 
 **One correction, recorded because this plan's history is made of exactly this.** The first analysis
@@ -581,6 +583,18 @@ spawn, and rule 4' denies it in principle anyway.
     week of silence; §7.9's payloads are all the denial-driven variant, so nothing exercised the
     other arm.
 
+17. **The plan's cited artifact digest matches the artifact.** Recompute the sha256 of
+    `docs/planning/evidence/COREDEV-2711-section3a-measurement.json` and assert it equals the value in
+    §7's fixture table — and assert that value appears EXACTLY ONCE in the plan.
+
+    **This cell exists because the failure it catches happened three times.** The digest drifted when
+    event 2 was merged (r13), again when the artifact's `significance` was corrected (r15), and the
+    stale value survived a whole-document sweep both times. The mechanism was duplication: the digest
+    was stated in two places, so every artifact edit needed two updates and got at most one. Revision
+    16 removes the duplication and this cell enforces it. A derived value restated in prose is a stale
+    value waiting to happen; §7's own doctrine — a rule with no cell is a comment — applies to the
+    plan's own bookkeeping.
+
 **The fixture must be rebuilt (§3); the r3 one is not evidence. IT NOW EXISTS IN FULL.** Capture it
 with the plugin **proved loaded**, commit the registry listing from capture time as that proof, retain
 `cwd` (structural), hash **the committed artifact** rather than an uncommitted raw, and record
@@ -593,7 +607,7 @@ was itself an overclaim (measurement audit, r11):
 | captured with the plugin **proved loaded** | **met** — `unleashed-mail:tester`, plugin-only with no shadow, resolved |
 | the registry listing committed as that proof | **met** — `registry_listing_at_capture` in the artifact below |
 | `cwd` retained (structural) | **met** — present in all **eight** payloads (verified) |
-| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `23220fb4d343a192` |
+| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `3eef3d1176ebd11a` — **this is the ONLY place the digest is stated** |
 | outcomes recorded via `PostToolUse` correlated by `tool_use_id` | **met** — both pairs matched, outcome `completed` |
 | event 1: a plugin sub-agent spawning a **declared** scoped callee | **met** — §3a |
 | event 2: one spawning an **UNDECLARED** callee | **met** — captured 2026-08-27 |
