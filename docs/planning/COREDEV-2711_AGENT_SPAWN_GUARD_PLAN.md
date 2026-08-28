@@ -579,7 +579,7 @@ spawn, and rule 4' denies it in principle anyway.
     week of silence; §7.9's payloads are all the denial-driven variant, so nothing exercised the
     other arm.
 
-**The fixture must be rebuilt (§3); the r3 one is not evidence. HALF OF IT NOW EXISTS.** Capture it
+**The fixture must be rebuilt (§3); the r3 one is not evidence. IT NOW EXISTS IN FULL.** Capture it
 with the plugin **proved loaded**, commit the registry listing from capture time as that proof, retain
 `cwd` (structural), hash **the committed artifact** rather than an uncommitted raw, and record
 **outcomes** by registering `PostToolUse`/`PostToolUseFailure` on `Agent` and correlating by
@@ -598,10 +598,20 @@ was itself an overclaim (measurement audit, r11):
 
 **Event 2 does more than complete the fixture — it demonstrates the premise.** `swift-reviewer`
 spawned `unleashed-mail:ui-engineer`, a type absent from its own declared `Agent(...)` roster which
-holds `Write`, `Edit` and `Bash`, and the runtime returned `completed`: **no refusal, no prompt.**
+holds `Write`, `Edit` and `Bash`, and the runtime returned `completed` — **the roster was not
+enforced.** (Revision 13 also said "no prompt". Withdrawn as unprovable from this evidence, kimi r14:
+the payload records `permission_mode: "auto"`, under which no prompt would be expected anyway, and a
+payload cannot demonstrate a UI negative. The claim that carries the design — roster not enforced,
+`completed`, no refusal — is fully demonstrated and is what remains.)
 The declared list is not a runtime control. §2 and `validate-plugin-assembly.py:615-626` have said so
-since COREDEV-2703; this is the first time it is evidenced by a payload rather than asserted. Every
-DENY cell in §7 now has a real caller/callee pair to run against instead of synthetic input.
+since COREDEV-2703; this is the first time it is evidenced by a payload rather than asserted.
+
+**Exactly ONE real caller/callee pair now exists — not one per cell (kimi, r14).** Revision 13 said
+"every DENY cell in §7 now has a real pair to run against", which overreached. This pair grounds the
+undeclared-callee denial specifically. Cells that vary the caller PREFIX (§7.4, §7.8), the asset
+SHAPE (§7.9, §7.14) or the name CHARSET (§7.15) still construct their payloads synthetically, and
+that is legitimate — but it is not what "a real payload" means, and the distinction is the difference
+between a suite grounded in one observation and a suite grounded in seven.
 
 ## 8. Risks
 
