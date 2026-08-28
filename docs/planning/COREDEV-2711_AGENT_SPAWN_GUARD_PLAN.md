@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 16 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 17 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done), COREDEV-2769 (done — it was the blocker) · **Blocks on:** nothing measurable
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -585,7 +585,15 @@ spawn, and rule 4' denies it in principle anyway.
 
 17. **The plan's cited artifact digest matches the artifact.** Recompute the sha256 of
     `docs/planning/evidence/COREDEV-2711-section3a-measurement.json` and assert it equals the value in
-    §7's fixture table — and assert that value appears EXACTLY ONCE in the plan.
+    §7's fixture table — the value MUST be the full 64-hex digest, matched with exact string equality,
+    NOT a prefix — and assert that value appears EXACTLY ONCE in the plan.
+
+    **This cell was RED when revision 16 introduced it (codex, r17).** It demanded exact sha256
+    equality while the fixture row stored a 16-character prefix and labelled it `sha256`, so any
+    literal implementation had to fail or invent prefix semantics. A cell that cannot PASS is the
+    mirror of a cell that cannot FAIL, and equally worthless. Worse, the author's own check reported
+    it green — it compared prefix to prefix, testing the intent rather than the specification, which
+    is the same defect one level up.
 
     **This cell exists because the failure it catches happened three times.** The digest drifted when
     event 2 was merged (r13), again when the artifact's `significance` was corrected (r15), and the
@@ -607,7 +615,7 @@ was itself an overclaim (measurement audit, r11):
 | captured with the plugin **proved loaded** | **met** — `unleashed-mail:tester`, plugin-only with no shadow, resolved |
 | the registry listing committed as that proof | **met** — `registry_listing_at_capture` in the artifact below |
 | `cwd` retained (structural) | **met** — present in all **eight** payloads (verified) |
-| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `3eef3d1176ebd11a` — **this is the ONLY place the digest is stated** |
+| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `3eef3d1176ebd11af59b33390a0996558affdb7e6ac4309487e2f2fbc0f1c586` — **this is the ONLY place the digest is stated, and it is the FULL 64-hex value: §7.17 requires exact equality, which a prefix cannot satisfy** |
 | outcomes recorded via `PostToolUse` correlated by `tool_use_id` | **met** — both pairs matched, outcome `completed` |
 | event 1: a plugin sub-agent spawning a **declared** scoped callee | **met** — §3a |
 | event 2: one spawning an **UNDECLARED** callee | **met** — captured 2026-08-27 |
@@ -642,6 +650,16 @@ between a suite grounded in one observation and a suite grounded in seven.
   and permanent: the measurement pins TODAY's runtime. §7.7's probe is what turns a future change
   from a silent inversion into a loud failure, and it is now the only thing standing between this
   design and a runtime that starts reporting bare.
+* **DUPLICATED DERIVED VALUES, inventoried rather than eliminated (codex, r17).** The artifact digest
+  was de-duplicated in revision 16 because it had gone stale three times. These remain stated in more
+  than one place and are currently CONSISTENT — a value stated twice is the defect waiting, not the
+  defect yet, and each must be updated in lockstep or not at all: the payload count (eight) and the
+  two-events/two-callees/two-outcomes counts, across §3a, §7's table and §8; the capture metadata
+  (`2026-08-27`, plugin `2.8.2`, captured plan head `09f7719`); the current-tree counts (13-of-21
+  writers; zero scoped and two bare `Agent` denials); the live line pins `agents/swift-reviewer.md:13`,
+  `agents/jira-manager.md:19` and `validate-plugin-assembly.py:581`; and the evidence-artifact path,
+  which appears three times. Repeated revision numbers and commit shas are immutable history and do
+  not belong on this list.
 * **The fixture is complete (§7) — but `PostToolUseFailure` is not exercised.** Both required events
   are captured, including the undeclared-callee spawn that the runtime permitted with no refusal. The
   residual gap is narrow: every captured outcome is `completed`, so no cell has ever seen the failure
