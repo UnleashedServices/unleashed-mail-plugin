@@ -240,5 +240,219 @@
       "spawned": "unleashed-mail:tester",
       "result": "RESOLVED, returned HEAD 09f7719"
     }
-  }
+  },
+  "events": {
+    "event_1_declared_callee": {
+      "status": "captured 2026-08-27",
+      "caller": "unleashed-mail:swift-reviewer",
+      "callee": "unleashed-mail:security-reviewer",
+      "callee_in_declared_roster": true,
+      "outcome": "completed"
+    },
+    "event_2_undeclared_callee": {
+      "status": "captured 2026-08-27",
+      "caller": "unleashed-mail:swift-reviewer",
+      "callee": "unleashed-mail:ui-engineer",
+      "callee_in_declared_roster": false,
+      "callee_holds_write_vectors": [
+        "Write",
+        "Edit",
+        "Bash"
+      ],
+      "outcome": "completed",
+      "significance": "the runtime PERMITTED a scoped spawn of a type absent from the caller's own declared Agent(...) list, with no refusal and no prompt \u2014 the declaration is not a runtime control. This is the gap COREDEV-2711 \u00a72 exists to close, and it is now evidenced by a real payload rather than asserted."
+    }
+  },
+  "raw_payloads_event_2": [
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin",
+      "prompt_id": "c3cb2d80-2743-450a-892f-5f7100d3f00c",
+      "permission_mode": "auto",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "COREDEV-2711 fixture event 2",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so a PreToolUse hook can record the payload. This captures the second half of the COREDEV-2711 \u00a77 fixture \u2014 the UNDECLARED-callee event.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:ui-engineer` \u2014 that exact scoped spelling, verbatim. This type is deliberately NOT in your declared `Agent(...)` roster; that is the entire point of the capture. Give it this prompt verbatim:\n\n       Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. One Agent call, then the two lines.",
+        "subagent_type": "unleashed-mail:swift-reviewer",
+        "run_in_background": false
+      },
+      "tool_use_id": "toolu_015Lviqsd5daGMVfLCg6eQaf",
+      "_captured_at": "2026-08-28T00:59:21.410522+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin",
+      "prompt_id": "c3cb2d80-2743-450a-892f-5f7100d3f00c",
+      "permission_mode": "auto",
+      "agent_id": "aacfe288774a16ef8",
+      "agent_type": "unleashed-mail:swift-reviewer",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "Undeclared callee probe",
+        "prompt": "Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.",
+        "subagent_type": "unleashed-mail:ui-engineer",
+        "run_in_background": false
+      },
+      "tool_use_id": "toolu_019AkgfdrPnK7i79LLw6ZfLR",
+      "_captured_at": "2026-08-28T00:59:25.470476+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin",
+      "prompt_id": "c3cb2d80-2743-450a-892f-5f7100d3f00c",
+      "permission_mode": "auto",
+      "agent_id": "aacfe288774a16ef8",
+      "agent_type": "unleashed-mail:swift-reviewer",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "Undeclared callee probe",
+        "prompt": "Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.",
+        "subagent_type": "unleashed-mail:ui-engineer",
+        "run_in_background": false
+      },
+      "tool_response": {
+        "status": "completed",
+        "prompt": "Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.",
+        "agentId": "ac31c46787344f8af",
+        "agentType": "unleashed-mail:ui-engineer",
+        "harnessNoteCount": 0,
+        "harnessTailCount": 0,
+        "harnessSectionHash": "9b09ed1b1caca2c4",
+        "content": [
+          {
+            "type": "text",
+            "text": "UNDECLARED OK"
+          }
+        ],
+        "resolvedModel": "claude-opus-5[1m]",
+        "totalDurationMs": 1869,
+        "totalTokens": 24550,
+        "totalToolUseCount": 0,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 22134,
+          "cache_read_input_tokens": 2403,
+          "output_tokens": 11,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 22134
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 11,
+              "cache_read_input_tokens": 2403,
+              "cache_creation_input_tokens": 22134,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 22134,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        }
+      },
+      "tool_use_id": "toolu_019AkgfdrPnK7i79LLw6ZfLR",
+      "duration_ms": 3201,
+      "_captured_at": "2026-08-28T00:59:30.001384+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin",
+      "prompt_id": "c3cb2d80-2743-450a-892f-5f7100d3f00c",
+      "permission_mode": "auto",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "COREDEV-2711 fixture event 2",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so a PreToolUse hook can record the payload. This captures the second half of the COREDEV-2711 \u00a77 fixture \u2014 the UNDECLARED-callee event.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:ui-engineer` \u2014 that exact scoped spelling, verbatim. This type is deliberately NOT in your declared `Agent(...)` roster; that is the entire point of the capture. Give it this prompt verbatim:\n\n       Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. One Agent call, then the two lines.",
+        "subagent_type": "unleashed-mail:swift-reviewer",
+        "run_in_background": false
+      },
+      "tool_response": {
+        "status": "completed",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so a PreToolUse hook can record the payload. This captures the second half of the COREDEV-2711 \u00a77 fixture \u2014 the UNDECLARED-callee event.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:ui-engineer` \u2014 that exact scoped spelling, verbatim. This type is deliberately NOT in your declared `Agent(...)` roster; that is the entire point of the capture. Give it this prompt verbatim:\n\n       Reply with exactly the two words: UNDECLARED OK. Do not read any file, do not write or edit any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. One Agent call, then the two lines.",
+        "agentId": "aacfe288774a16ef8",
+        "agentType": "unleashed-mail:swift-reviewer",
+        "harnessNoteCount": 0,
+        "harnessTailCount": 0,
+        "harnessSectionHash": "9a81891bf2e0f974",
+        "content": [
+          {
+            "type": "text",
+            "text": "CALLEE REPLIED: UNDECLARED OK\nCALLS MADE: 1"
+          }
+        ],
+        "resolvedModel": "claude-opus-5[1m]",
+        "totalDurationMs": 8613,
+        "totalTokens": 43994,
+        "totalToolUseCount": 1,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 8872,
+          "cache_read_input_tokens": 35087,
+          "output_tokens": 33,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 8872
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 33,
+              "cache_read_input_tokens": 35087,
+              "cache_creation_input_tokens": 8872,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 8872,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        }
+      },
+      "tool_use_id": "toolu_015Lviqsd5daGMVfLCg6eQaf",
+      "duration_ms": 9961,
+      "_captured_at": "2026-08-28T00:59:32.805087+00:00"
+    }
+  ]
 }

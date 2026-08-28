@@ -1,6 +1,6 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 11 — **§3a MEASURED** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
+**Status:** Planning, revision 13 — **§3a MEASURED, FIXTURE COMPLETE** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
 **Depends on:** COREDEV-2703 (done), COREDEV-2769 (done — it was the blocker) · **Blocks on:** nothing measurable
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
@@ -156,7 +156,7 @@ refused to infer a third time. It no longer has to.
 Captured 2026-08-27 against plugin 2.8.2, plan HEAD `09f7719`, in a session where
 `unleashed-mail:tester` — the plugin-ONLY name with no user-scope shadow — resolved and returned
 correctly. Raw payloads, committed: `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`
-(sha256 `3f573fc52aec8d87`). All three r12 arms found this line still naming the pre-commit
+(sha256 `23220fb4d343a192`). All three r12 arms found this line still naming the pre-commit
 `~/.claude/handoffs/` copy — the very "uncommitted raw" §7's fixture rule rejects.
 
 | field | measured | what it settles |
@@ -199,14 +199,13 @@ checker was wrong, for the seventh time on this ticket. Had it been trusted, thi
 been declared dead by its own fork. It was caught only because "absent" contradicted a field visible
 two lines above in the raw record.
 
-**STILL OUTSTANDING — the fixture's second event.** §7 requires **two**; only the DECLARED-callee
-event is captured. The **undeclared**-callee event is not, and until it is, no cell exercises the DENY
-side against a real payload. It is cheap — re-register the same temporary hook and have the plugin's
-`swift-reviewer` spawn a type absent from its declared list (e.g. `unleashed-mail:ui-engineer`) — but
-it has not been done. §7 carries the full status table; **"the measurement is taken" must not be read
-as "the fixture is complete"**, and revision 11's first draft made exactly that error by naming this
-as the only outstanding item when the artifact was also uncommitted and carried no registry listing.
-Both of those are now closed; this one is not.
+**THE FIXTURE IS NOW COMPLETE (revision 13).** §7 requires two events and both are captured. Event 2
+— `swift-reviewer` spawning `unleashed-mail:ui-engineer`, **undeclared** and holding `Write`/`Edit`/
+`Bash` — returned `completed` with no refusal and no prompt, which evidences §2's central claim on a
+real payload for the first time. Revision 11's first draft named this as the ONLY outstanding item
+when the artifact was also uncommitted and carried no registry listing; all three are now closed. What
+remains genuinely unexercised is narrower and still stated in §8: `PostToolUseFailure`, and every
+generalisation beyond this one session, install and plugin version.
 
 **Design the measurement as ONE complete positive-control event (codex, r4)**, not four separate
 readings: prove a plugin-only name resolves, spawn the scoped `swift-reviewer`, have it invoke a
@@ -592,14 +591,17 @@ was itself an overclaim (measurement audit, r11):
 | captured with the plugin **proved loaded** | **met** — `unleashed-mail:tester`, plugin-only with no shadow, resolved |
 | the registry listing committed as that proof | **met** — `registry_listing_at_capture` in the artifact below |
 | `cwd` retained (structural) | **met** — present in all four payloads |
-| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `3f573fc52aec8d87` |
+| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `23220fb4d343a192` |
 | outcomes recorded via `PostToolUse` correlated by `tool_use_id` | **met** — both pairs matched, outcome `completed` |
 | event 1: a plugin sub-agent spawning a **declared** scoped callee | **met** — §3a |
-| event 2: one spawning an **UNDECLARED** callee | **MISSING** |
+| event 2: one spawning an **UNDECLARED** callee | **met** — captured 2026-08-27 |
 
-Until event 2 exists no cell exercises the DENY side against a real payload, and every DENY assertion
-in §7 runs on synthetic input. Do not read "§3a is measured" as "the fixture is complete": the half
-that is captured settles the DESIGN; the half that is missing is what the SUITE needs.
+**Event 2 does more than complete the fixture — it demonstrates the premise.** `swift-reviewer`
+spawned `unleashed-mail:ui-engineer`, a type absent from its own declared `Agent(...)` roster which
+holds `Write`, `Edit` and `Bash`, and the runtime returned `completed`: **no refusal, no prompt.**
+The declared list is not a runtime control. §2 and `validate-plugin-assembly.py:615-626` have said so
+since COREDEV-2703; this is the first time it is evidenced by a payload rather than asserted. Every
+DENY cell in §7 now has a real caller/callee pair to run against instead of synthetic input.
 
 ## 8. Risks
 
@@ -610,8 +612,10 @@ that is captured settles the DESIGN; the half that is missing is what the SUITE 
   and permanent: the measurement pins TODAY's runtime. §7.7's probe is what turns a future change
   from a silent inversion into a loud failure, and it is now the only thing standing between this
   design and a runtime that starts reporting bare.
-* **The fixture is half-built (§7).** The undeclared-callee event is uncaptured, so every DENY cell
-  currently runs on synthetic input. Cheap to close; not closed.
+* **The fixture is complete (§7) — but `PostToolUseFailure` is not exercised.** Both required events
+  are captured, including the undeclared-callee spawn that the runtime permitted with no refusal. The
+  residual gap is narrow: every captured outcome is `completed`, so no cell has ever seen the failure
+  path its own fixture rule names.
 * **The prefix form is measured, not guaranteed.** Derive it, pin it by measurement, fail loudly on
   change — unchanged by having measured it once.
 * **Not a boundary** (§1). If it is ever described as one, that is the defect COREDEV-2711 §1 already
