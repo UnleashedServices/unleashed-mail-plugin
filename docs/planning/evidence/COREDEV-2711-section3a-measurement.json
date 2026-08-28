@@ -1,0 +1,244 @@
+{
+  "ticket": "COREDEV-2711",
+  "section": "3a",
+  "captured_at": "2026-08-27T23:35:14.884592+00:00",
+  "plugin_version": "2.8.2",
+  "plan_head": "09f7719",
+  "resolution_proof": "unleashed-mail:tester (plugin-only, no user-scope shadow) resolved and returned HEAD 09f7719",
+  "result": {
+    "plugin_subagent_agent_type_at_PreToolUse": "unleashed-mail:swift-reviewer",
+    "form": "2-part <plugin>:<agent>",
+    "verdict": "SCOPED \u2014 section 4 holds"
+  },
+  "raw_payloads": [
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin/.claude/worktrees/spawnguard",
+      "prompt_id": "d8a51349-5721-4704-9b54-274a8b3e8f72",
+      "permission_mode": "auto",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "COREDEV-2711 \u00a73a positive control",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your normal panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so that a PreToolUse hook can record the payload. This is the blocking measurement for COREDEV-2711 \u00a73a.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:security-reviewer` (use that exact scoped spelling, verbatim, do not shorten it to the bare name). Give it this prompt verbatim:\n\n       Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. Do not offer findings. One Agent call, then the two lines.",
+        "subagent_type": "unleashed-mail:swift-reviewer",
+        "run_in_background": false
+      },
+      "tool_use_id": "toolu_01Lrm4twxoMJTnmGxfuHJzXe",
+      "_captured_at": "2026-08-27T23:34:05.671584+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin/.claude/worktrees/spawnguard",
+      "prompt_id": "d8a51349-5721-4704-9b54-274a8b3e8f72",
+      "permission_mode": "auto",
+      "agent_id": "ad9622e20033905b5",
+      "agent_type": "unleashed-mail:swift-reviewer",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PreToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "Control probe",
+        "prompt": "Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.",
+        "subagent_type": "unleashed-mail:security-reviewer",
+        "run_in_background": false
+      },
+      "tool_use_id": "toolu_01N5MQ6YxWT217QJrDeF7qA1",
+      "_captured_at": "2026-08-27T23:34:09.608625+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin/.claude/worktrees/spawnguard",
+      "prompt_id": "d8a51349-5721-4704-9b54-274a8b3e8f72",
+      "permission_mode": "auto",
+      "agent_id": "ad9622e20033905b5",
+      "agent_type": "unleashed-mail:swift-reviewer",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "Control probe",
+        "prompt": "Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.",
+        "subagent_type": "unleashed-mail:security-reviewer",
+        "run_in_background": false
+      },
+      "tool_response": {
+        "status": "completed",
+        "prompt": "Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.",
+        "agentId": "a1577ab90021c1c75",
+        "agentType": "unleashed-mail:security-reviewer",
+        "harnessNoteCount": 0,
+        "harnessTailCount": 0,
+        "harnessSectionHash": "071af63a4923ece3",
+        "content": [
+          {
+            "type": "text",
+            "text": "CONTROL OK"
+          }
+        ],
+        "resolvedModel": "claude-opus-5[1m]",
+        "totalDurationMs": 2996,
+        "totalTokens": 23404,
+        "totalToolUseCount": 0,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 23393,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 9,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 23393
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 9,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 23393,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 23393,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        }
+      },
+      "tool_use_id": "toolu_01N5MQ6YxWT217QJrDeF7qA1",
+      "duration_ms": 4339,
+      "_captured_at": "2026-08-27T23:34:15.332149+00:00"
+    },
+    {
+      "session_id": "eaaa7e66-807f-4725-ac9d-a8cb34d59df9",
+      "transcript_path": "/Users/nick/.claude/projects/-Users-nick-Developer-Mail-unleashed-mail-plugin/eaaa7e66-807f-4725-ac9d-a8cb34d59df9.jsonl",
+      "cwd": "/Users/nick/Developer/Mail/unleashed-mail-plugin/.claude/worktrees/spawnguard",
+      "prompt_id": "d8a51349-5721-4704-9b54-274a8b3e8f72",
+      "permission_mode": "auto",
+      "effort": {
+        "level": "xhigh"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Agent",
+      "tool_input": {
+        "description": "COREDEV-2711 \u00a73a positive control",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your normal panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so that a PreToolUse hook can record the payload. This is the blocking measurement for COREDEV-2711 \u00a73a.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:security-reviewer` (use that exact scoped spelling, verbatim, do not shorten it to the bare name). Give it this prompt verbatim:\n\n       Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. Do not offer findings. One Agent call, then the two lines.",
+        "subagent_type": "unleashed-mail:swift-reviewer",
+        "run_in_background": false
+      },
+      "tool_response": {
+        "status": "completed",
+        "prompt": "MEASUREMENT PROBE \u2014 this is NOT a code review. Do not review anything, do not read the repo, do not run your normal panel, do not write or edit any file.\n\nYou exist for one purpose in this invocation: to make exactly ONE `Agent` tool call so that a PreToolUse hook can record the payload. This is the blocking measurement for COREDEV-2711 \u00a73a.\n\nDO EXACTLY THIS, NOTHING ELSE:\n\n1. Make ONE call to the Agent tool with subagent_type `unleashed-mail:security-reviewer` (use that exact scoped spelling, verbatim, do not shorten it to the bare name). Give it this prompt verbatim:\n\n       Reply with exactly the two words: CONTROL OK. Do not read any file, do not run any command, do not investigate anything.\n\n2. When it returns, reply with exactly these two lines and nothing else:\n\n       CALLEE REPLIED: <whatever it said>\n       CALLS MADE: 1\n\nDo NOT make any other tool call of any kind \u2014 no Read, no Grep, no Bash, no second Agent call. Do not spawn jira-manager. Do not summarise. Do not offer findings. One Agent call, then the two lines.",
+        "agentId": "ad9622e20033905b5",
+        "agentType": "unleashed-mail:swift-reviewer",
+        "harnessNoteCount": 0,
+        "harnessTailCount": 0,
+        "harnessSectionHash": "0c5657d7c70ac74e",
+        "content": [
+          {
+            "type": "text",
+            "text": "CALLEE REPLIED: CONTROL OK\nCALLS MADE: 1"
+          }
+        ],
+        "resolvedModel": "claude-opus-5[1m]",
+        "totalDurationMs": 10114,
+        "totalTokens": 43958,
+        "totalToolUseCount": 1,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 8860,
+          "cache_read_input_tokens": 35065,
+          "output_tokens": 31,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 8860
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 31,
+              "cache_read_input_tokens": 35065,
+              "cache_creation_input_tokens": 8860,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 8860,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        }
+      },
+      "tool_use_id": "toolu_01Lrm4twxoMJTnmGxfuHJzXe",
+      "duration_ms": 11516,
+      "_captured_at": "2026-08-27T23:34:18.487285+00:00"
+    }
+  ],
+  "registry_listing_at_capture": {
+    "note": "plugin-scoped agent names available in the capturing session; unleashed-mail:tester (plugin-only, no user-scope shadow) was spawned successfully as proof of load",
+    "plugin_agents_on_disk": [
+      "accessibility-auditor",
+      "ai-engineer",
+      "ci-engineer",
+      "code-simplifier",
+      "concurrency-reviewer",
+      "db-engineer",
+      "docs-engineer",
+      "enterprise-stakeholder",
+      "graph-api-debugger",
+      "jira-manager",
+      "logic-engineer",
+      "modern-standards-planner",
+      "prompt-review",
+      "release-manager",
+      "security-reviewer",
+      "smb-entrepreneur",
+      "swift-reviewer",
+      "tester",
+      "ui-engineer",
+      "ux-perf-reviewer",
+      "xcode-build-fixer"
+    ],
+    "plugin_only_names_with_no_user_scope_shadow": [
+      "tester",
+      "ai-engineer",
+      "code-simplifier",
+      "release-manager",
+      "prompt-review",
+      "ci-engineer",
+      "docs-engineer"
+    ],
+    "resolution_probe": {
+      "spawned": "unleashed-mail:tester",
+      "result": "RESOLVED, returned HEAD 09f7719"
+    }
+  }
+}

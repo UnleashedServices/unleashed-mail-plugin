@@ -1,7 +1,7 @@
 # COREDEV-2711 §2 — enforcing the spawn allowlist the runtime discards
 
-**Status:** Planning, revision 10 · **Basis:** `2631845` (origin/main) · **Ticket:** COREDEV-2711
-**Depends on:** COREDEV-2703 (done) · **Blocks on:** one unmeasured fact, §3a
+**Status:** Planning, revision 11 — **§3a MEASURED** · **Basis:** `2631845` · **Ticket:** COREDEV-2711
+**Depends on:** COREDEV-2703 (done), COREDEV-2769 (done — it was the blocker) · **Blocks on:** nothing measurable
 **Found while writing this:** **COREDEV-2768** — stale user-scope agents shadow this plugin's
 read-only reviewers with unrestricted copies, and real runs have used them.
 
@@ -44,6 +44,14 @@ read-only reviewers with unrestricted copies, and real runs have used them.
 > than by excluding a path from the fingerprint. The void kimi transcript had reached the P0 finding
 > independently, which is corroboration but not evidence; the void agy transcript had certified the
 > contradiction as *consistent*, which is why a voided arm is not quotable in either direction.
+>
+> **r9/r10** `d9f0d19`: unanimous `APPROVE` on all three admissible arms, r10 a reproduction on
+> byte-identical input — six admissible approvals. **r11** `09f7719` (revision 10): agy + kimi
+> `APPROVE`; **the codex arm was not run for that round.**
+> **THEN §3a WAS MEASURED** (2026-08-27, revision 11). COREDEV-2769 turned out to be a *session*
+> property, not a machine one: a Claude Code restart made the plugin's agents resolve, and the
+> measurement took minutes. **`agent_type` for a plugin sub-agent at PreToolUse is SCOPED.** The fork
+> is resolved in §4's favour. Eleven rounds of design review rested on a string nobody had read.
 >
 > **Revision 4 exists because r3 exposed that revision 3's central measurement was of the wrong
 > thing.** §3 concluded "a plugin agent's identity is reported BARE". It was captured in a session
@@ -95,26 +103,31 @@ also permit spawning any non-writing agent never declared. Drift is a secondary 
 
 ## 3. What was measured — and the correction that forced revision 4
 
-**Revision 3's §3 measured the wrong agents.** Re-run while writing this: spawning
-`unleashed-mail:tester` — a **plugin-only** agent with no user-scope copy — fails with *"Agent type
-not found"*, and the runtime's available list contains **no `unleashed-mail:` names and none of the
-seven plugin-only agents** (`tester`, `ai-engineer`, `code-simplifier`, `release-manager`,
-`prompt-review`, `ci-engineer`, `docs-engineer`). The plugin is *enabled*
-(`~/.claude/settings.json` → `unleashed-mail@npranson-unleashed-mail-plugin: true`) and installed at
-2.8.2 with live `.in_use` markers, yet **its agents do not resolve in this session**.
+**Revision 3's §3 measured the wrong agents, and the reason is now understood.** When revision 4 was
+written, spawning `unleashed-mail:tester` — a **plugin-only** agent with no user-scope copy — failed
+with *"Agent type not found"*, and the runtime's available list contained **no `unleashed-mail:`
+names**, though the plugin was enabled and installed at 2.8.2 with live `.in_use` markers. So every
+revision-3 row about "a plugin agent" measured a **user-scope shadow**, and the committed fixture
+encodes that error.
 
-So every revision-3 row about "a plugin agent" measured a **user-scope shadow**, and the committed
-fixture encodes that error.
+**That state was a SESSION property, not a machine one (COREDEV-2769, resolved 2026-08-27).** A
+Claude Code restart made all 21 plugin-scoped names resolve, with no configuration change. This plan
+said for six revisions that the measurement "cannot be taken on this machine"; that was wrong, and
+the wording sent the reader after a hardware problem that never existed. **The hazard that remains is
+the one worth carrying: the state is SILENT.** Nothing announces that a session lacks the plugin's
+agents — bare names keep working by resolving to COREDEV-2768's shadows, so a probe returns
+plausible data about the wrong asset. That is precisely how revision 3's central measurement was
+invalidated. Hence §7's standing requirement to commit the registry listing from capture time.
 
 | row | claim | status |
 |---|---|---|
 | Bash from a sub-agent / main thread | `agent_type` present / absent | **stands** (built-ins) |
 | `Agent` from a sub-agent | caller and callee both present | **stands** |
-| "a plugin agent's identity is BARE" | — | **WITHDRAWN — measured a shadow** |
-| "`unleashed-mail:…` is not a valid type" | — | **WITHDRAWN — plugin not loaded** |
-| `swift-reviewer → security-reviewer` "production shape" | — | **WITHDRAWN — both shadows** |
+| "a plugin agent's identity is BARE" | — | **WITHDRAWN — measured a shadow**, and now **DISPROVED**: it is scoped (§3a) |
+| "`unleashed-mail:…` is not a valid type" | — | **WITHDRAWN — plugin not loaded**, and now **DISPROVED**: it resolves and spawns |
+| `swift-reviewer → security-reviewer` "production shape" | — | **WITHDRAWN — both shadows**; re-measured for real in §3a |
 
-### 3a. THE BLOCKING MEASUREMENT — not taken, and not takeable in this session
+### 3a. THE BLOCKING MEASUREMENT — **TAKEN, 2026-08-27. The fork resolved SCOPED.**
 
 **All of §4 turns on one fact: the exact `agent_type` a PLUGIN sub-agent reports to PreToolUse.**
 The indirect evidence says **scoped** (`unleashed-mail:<name>`):
@@ -131,21 +144,49 @@ The indirect evidence says **scoped** (`unleashed-mail:<name>`):
   plugin sub-agents surface scoped;
 * `hooks/hooks.json` ships `(unleashed-mail:)?(…)` matchers for exactly this reason.
 
-**None of that is the measurement.** Every item is one step removed, and the only *directly* observed
-PreToolUse `agent_type` in this family is **bare** — the mis-measured probe. This plan has been wrong
-twice by inferring runtime semantics; it will not be wrong a third time.
+**None of that was the measurement.** Every item was one step removed, and the only *directly*
+observed PreToolUse `agent_type` in this family was **bare** — the mis-measured probe. The plan
+refused to infer a third time. It no longer has to.
 
-**Required before implementation:** in a session where the plugin is **proved loaded** (a
-plugin-only name such as `unleashed-mail:tester` resolves), spawn the plugin's `swift-reviewer`, have
-it make one `Agent` call, and record `agent_type` verbatim.
+**THE RESULT.**
 
-**What produces such a session is itself blocked (kimi, r6).** This session cannot supply one: the
-plugin is enabled and installed at 2.8.2 with live `.in_use` markers, and its agents still do not
-resolve (§3). That load failure is **distinct from COREDEV-2768's shadowing** — 2768 is about bare
-names resolving to the WRONG asset, this is scoped names resolving to NOTHING — and it is tracked as
-**COREDEV-2769**. §3a's unblock path runs through that ticket, not around it. The control
-must also demonstrate the resolved callee is **the plugin's own asset file** rather than a same-named
-shadow; the registry listing committed alongside the capture is that proof.
+    a PLUGIN sub-agent's agent_type at PreToolUse  ->  "unleashed-mail:swift-reviewer"
+                                                       SCOPED, 2-part <plugin>:<agent>
+
+Captured 2026-08-27 against plugin 2.8.2, plan HEAD `09f7719`, in a session where
+`unleashed-mail:tester` — the plugin-ONLY name with no user-scope shadow — resolved and returned
+correctly. Raw payloads: `~/.claude/handoffs/COREDEV-2711-section3a-measurement.json`.
+
+| field | measured | what it settles |
+|---|---|---|
+| caller `agent_type` (plugin sub-agent) | `unleashed-mail:swift-reviewer` | **the fork — §4 holds** |
+| caller `agent_id` (plugin sub-agent) | `ad9622e20033905b5`, non-empty | `is_subagent` is decidable |
+| caller `agent_id` (main thread, same capture) | **absent** | P0, confirmed from the other side |
+| callee `tool_input.subagent_type` | `unleashed-mail:security-reviewer` | rule 6' compares a real value |
+| Pre/Post correlation | both pairs matched on `tool_use_id`, outcome `completed` | the outcome mechanism works |
+
+**Method, stated so it can be repeated or attacked.** A temporary `PreToolUse`/`PostToolUse` hook on
+`Agent` recorded payloads verbatim and exited 0 emitting nothing, so it could not influence what it
+measured; it was verified to record both valid and malformed input *before* use; local settings were
+restored byte-identically afterwards (`cmp` clean). The `agent_id` in the payload matches the id the
+`Agent` tool returned for that sub-agent, which is an independent cross-check that the record belongs
+to the spawn it claims to.
+
+**One correction, recorded because this plan's history is made of exactly this.** The first analysis
+script reported `agent_type` **ABSENT** and correlation **FAILED** — both artifacts of the script
+reading `pre[0]` (the main-thread call) and pooling two distinct call-pairs. The data was right; the
+checker was wrong, for the seventh time on this ticket. Had it been trusted, this plan would have
+been declared dead by its own fork. It was caught only because "absent" contradicted a field visible
+two lines above in the raw record.
+
+**STILL OUTSTANDING — the fixture's second event.** §7 requires **two**; only the DECLARED-callee
+event is captured. The **undeclared**-callee event is not, and until it is, no cell exercises the DENY
+side against a real payload. It is cheap — re-register the same temporary hook and have the plugin's
+`swift-reviewer` spawn a type absent from its declared list (e.g. `unleashed-mail:ui-engineer`) — but
+it has not been done. §7 carries the full status table; **"the measurement is taken" must not be read
+as "the fixture is complete"**, and revision 11's first draft made exactly that error by naming this
+as the only outstanding item when the artifact was also uncommitted and carried no registry listing.
+Both of those are now closed; this one is not.
 
 **Design the measurement as ONE complete positive-control event (codex, r4)**, not four separate
 readings: prove a plugin-only name resolves, spawn the scoped `swift-reviewer`, have it invoke a
@@ -154,12 +195,18 @@ DECLARED scoped callee, and correlate its `PreToolUse` with a successful `PostTo
 `agent_id`, and scoped-callee viability at once — and the correlation supplies the OUTCOME the
 withdrawn fixture lacked.
 
-**THE FORK, stated now.** If that string is **scoped**, §4 holds. If it is **bare**, the principal is
-unattestable and this design is dead; the honest alternatives are then (a) remove `Agent` from
-`swift-reviewer` and have the main thread fan the panel out, or (b) restructure so the reader of
-untrusted content is not the spawner. **Do not implement §4 until this is measured.**
+**THE FORK, RESOLVED.** It said: if the string is **scoped**, §4 holds; if **bare**, the principal is
+unattestable and this design is dead, with alternatives (a) remove `Agent` from `swift-reviewer` and
+fan the panel out from the main thread, or (b) restructure so the reader of untrusted content is not
+the spawner. **It measured scoped. §4 holds and the alternatives are not needed.** The fork is kept
+here rather than deleted because it is the record of what this design was willing to lose, and
+because a future runtime change that makes the string bare re-arms it — which is what §7.7's
+compatibility probe exists to detect.
 
-**Also unmeasured, and not to be hardcoded:** the prefix *form*. Observed data says two-part
+**The prefix form is now MEASURED as two-part — and is still not to be hardcoded.** The capture above
+reads `unleashed-mail:swift-reviewer`: one separator, `<plugin>:<agent>`. That settles the observation
+and changes nothing about the instruction, because a measurement pins what the runtime does *today*,
+not what it will do. Prior reasoning, retained: observed data says two-part
 `<plugin>:<agent>`, and every AGENT example in the documentation is two-part. A three-part
 `plugin:<x>:<y>` spelling does appear on the same page, but revision 9 cited it as an agent-form
 ambiguity without establishing that it applies to agents at all — it is used there for a different
@@ -381,10 +428,14 @@ source-of-truth text still asserts the WITHDRAWN result:**
 **ORDERING, AND THE FAILURE MODE THE COMPANION EDIT CREATES (kimi, r6).** Dropping the bare
 spellings converts today's SILENT failure into a LOUD one. Bare dispatch currently resolves to
 COREDEV-2768's unrestricted user-scope shadows and reports success; scoped dispatch fails with
-*"Agent type not found"* on any install where the plugin's agents do not resolve — **which is this
-machine right now** (§3). Fail-loud is the posture this plan wants; it is not a posture to deploy
+*"Agent type not found"* on any install where the plugin's agents do not resolve — **which was the
+state of this machine until COREDEV-2769 was resolved on 2026-08-27, and which can silently recur**
+(§3). Fail-loud is the posture this plan wants; it is not a posture to deploy
 blind. So the ordering is explicit: **§3a's measurement first; the `swift-reviewer.md` dispatch edit
-only after it proves scoped names resolve**, and COREDEV-2769 before either.
+only after it proves scoped names resolve**, and COREDEV-2769 before either. **Both are now
+satisfied** (2026-08-27): 2769 is resolved and §3a measured scoped, so the `swift-reviewer.md`
+dispatch edit is unblocked — and its fail-loud posture is now the *safe* one, since scoped names
+demonstrably resolve on a healthy session.
 
 **Out of scope.** COREDEV-2768's shadows (separate, larger); `swift-reviewer`'s bare `Bash` (§9.1
 accepted residual); transitivity — the five specialists resolve to `Read, Grep, Glob` and cannot
@@ -509,21 +560,40 @@ spawn, and rule 4' denies it in principle anyway.
     week of silence; §7.9's payloads are all the denial-driven variant, so nothing exercised the
     other arm.
 
-**The fixture must be rebuilt (§3); the r3 one is not evidence.** Capture it with the plugin **proved
-loaded**, commit the registry listing from capture time as that proof, retain `cwd` (structural),
-hash **the committed artifact** rather than an uncommitted raw, and record **outcomes** by registering
-`PostToolUse`/`PostToolUseFailure` on `Agent` and correlating by `tool_use_id`. It must contain the
-two events this ticket exists for and currently lacks: a plugin sub-agent spawning a **declared**
-scoped callee, and one spawning an **undeclared** callee.
+**The fixture must be rebuilt (§3); the r3 one is not evidence. HALF OF IT NOW EXISTS.** Capture it
+with the plugin **proved loaded**, commit the registry listing from capture time as that proof, retain
+`cwd` (structural), hash **the committed artifact** rather than an uncommitted raw, and record
+**outcomes** by registering `PostToolUse`/`PostToolUseFailure` on `Agent` and correlating by
+`tool_use_id`. Each requirement, with its true status — revision 11 first claimed only ONE was outstanding, which
+was itself an overclaim (measurement audit, r11):
+
+| requirement | status |
+|---|---|
+| captured with the plugin **proved loaded** | **met** — `unleashed-mail:tester`, plugin-only with no shadow, resolved |
+| the registry listing committed as that proof | **met** — `registry_listing_at_capture` in the artifact below |
+| `cwd` retained (structural) | **met** — present in all four payloads |
+| the **committed** artifact hashed, not an uncommitted raw | **met** — `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`, sha256 `3f573fc52aec8d87` |
+| outcomes recorded via `PostToolUse` correlated by `tool_use_id` | **met** — both pairs matched, outcome `completed` |
+| event 1: a plugin sub-agent spawning a **declared** scoped callee | **met** — §3a |
+| event 2: one spawning an **UNDECLARED** callee | **MISSING** |
+
+Until event 2 exists no cell exercises the DENY side against a real payload, and every DENY assertion
+in §7 runs on synthetic input. Do not read "§3a is measured" as "the fixture is complete": the half
+that is captured settles the DESIGN; the half that is missing is what the SUITE needs.
 
 ## 8. Risks
 
 * **Inert for bare-name callers** (§1). Honest, testable, and strictly better than revision 3 — which
   was a no-op in production *and* would have denied both the operator's `--agent` session and
   `swift-reviewer`'s own panel.
-* **§3a is unmeasured and blocking.** If `agent_type` is bare for plugin sub-agents this design is
-  dead, and §3a names the two alternatives.
-* **The prefix form is documented two ways.** Derive it, pin it by measurement, fail loudly on change.
+* **§3a — DISCHARGED 2026-08-27.** It read scoped; §4 holds. What replaces it as a risk is narrower
+  and permanent: the measurement pins TODAY's runtime. §7.7's probe is what turns a future change
+  from a silent inversion into a loud failure, and it is now the only thing standing between this
+  design and a runtime that starts reporting bare.
+* **The fixture is half-built (§7).** The undeclared-callee event is uncaptured, so every DENY cell
+  currently runs on synthetic input. Cheap to close; not closed.
+* **The prefix form is measured, not guaranteed.** Derive it, pin it by measurement, fail loudly on
+  change — unchanged by having measured it once.
 * **Not a boundary** (§1). If it is ever described as one, that is the defect COREDEV-2711 §1 already
   fixed once in the frontmatter.
 * **ATTESTOR LIVENESS — the next blind-spot class (codex, r4).** If the plugin or its hook is not
