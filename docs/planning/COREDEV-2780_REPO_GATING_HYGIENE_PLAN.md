@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 8
+**Status:** Planning, revision 9
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,16 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r8** `0e02bfe`: codex `REQUEST_CHANGES` ([SUBJECT] 4, [DOCUMENT] 4) + agy `REQUEST_CHANGES`
+> ([SUBJECT] 3, [DOCUMENT] 2). **The r7 allowlist closed the caller's door and left three others
+> open**, all verified at the pinned SHA: `setup/locate_trunk.sh` prefers a *checked-out*
+> `.trunk/bin/trunk`, `tools/trunk` or `./trunk` before downloading; `action.yaml:289` runs a
+> checked-out `.trunk/setup-ci` via `uses:`; and job/step `env:` reaches the action's scripts. **A PR
+> could supply the tool that tests it.** Separately, `determine_check_mode.sh` maps `merge_group` to
+> no branch at all, so it falls to `check_mode=none` — every step skipped, composite action
+> **succeeds** — which made r7's "conditionally add `merge_group`" the exact false success cell 11
+> forbids. **Maintainer decision (2026-08-28): keep the pinned action and close the doors**, rather
+> than dropping to a hash-pinned CLI invocation; the action's linter caching is worth the enumeration.
 > **r7** `fe5281a`: codex `REQUEST_CHANGES` (5 DESIGN + 5 COMPLETENESS) + agy `REQUEST_CHANGES`
 > (1 DESIGN + 3 COMPLETENESS, marking Q1/Q4/Q5 **CLOSED & SOUND**). codex found the prohibition set
 > was a **blacklist**: the pinned action takes a caller-supplied `trunk-path` — *the launcher it
@@ -136,8 +146,9 @@ distinction the GitHub doc actually draws is what the two kinds of filter skip o
 
 **No `if:` on the job, and none on the Trunk step** — see cell 11 for the full prohibition set.
 
-This does not change the context name: required checks name **jobs**, not workflows, so the context
-stays `trunk-check`. It does mean the repo now has two workflows that must not both define a job by
+This does not change the context name: a required check names a job's **effective check name** — its
+`name:` where present, else the job id (cell 14) — never the workflow, so the context stays
+`trunk-check`. It does mean the repo now has two workflows that must not both define a job by
 that name — see cell 14's uniqueness census.
 
 If a manual full-tree run is ever wanted it belongs in the scheduled COREDEV-2787 report, under its
@@ -150,14 +161,53 @@ own non-required context.
   this action have moved, which is exactly why §6 requires SHAs. Dependabot updates the pin.)
 * **SHA-pinned `actions/checkout`** in the job. The action does not check out the caller's repo
   itself; its internal checkout is conditional on a separate target-checkout mode (codex, r2).
-* **The action's inputs are an ALLOWLIST, not an omit-list (codex, r7).** Only `arguments`,
-  `save-annotations`, and optionally `cache`/`cache-key` may appear; **everything else is absent** —
-  including `check-mode`, `post-annotations`, `check-all-mode`, `upload-series`, `setup-deps`,
-  `debug`, `timeout-seconds`, `lfs-checkout`, `label`, `trunk-token`, and above all **`trunk-path`**
-  (which names the executed launcher) and **`post-init`** (the action's own docs: "caller-controlled
-  escape hatch"). No custom `--upstream` and no `--fix` reach Trunk, because `arguments` is pinned to
-  §6.4's literal. Cell 11 enforces the allowlist and fails on any unlisted key, so an input added by
-  a future action version is denied the day it appears rather than the day someone notices.
+* **THE WORKFLOW CONTRACT — stated here once, and referenced (never restated) everywhere else.**
+  Revision 8 copied the event set and the input allowlist into §1, M2, cell 11 and §7, **and they had
+  already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
+  authority; cell 11 asserts these clauses by name.
+
+  **C1 — events.** Exactly `pull_request` and `push`. Not a prohibition of two triggers: an exact
+  set, so a trigger nobody thought of is excluded by default. **`merge_group` is NOT permitted** —
+  see C6.
+
+  **C2 — branches.** `branches:` present on both events, equal to the ruleset's target set.
+  **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
+
+  **C3 — nothing skips or masks.** No `if:` on the job or on the Trunk step; no `needs:`; no
+  `strategy.matrix`; no `continue-on-error` at job or Trunk-step level. Exactly one unconditional
+  Trunk invocation.
+
+  **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's literal),
+  `save-annotations` (§6.1), and optionally `cache`/`cache-key`. Everything else absent — notably
+  **`trunk-path`** (it names the executed launcher) and **`post-init`** (the action's own docs:
+  "caller-controlled escape hatch").
+
+  **C5 — no `env:` on the job or on the step (agy, r8).** The action's scripts read `TRUNK_PATH`,
+  `POST_INIT` and friends from the environment, so a `with:` allowlist alone does not constrain them:
+  `env: {TRUNK_PATH: /bin/true}` satisfies every input rule and redirects execution to a binary that
+  exits 0. Forbidding `env:` outright at both levels closes it without depending on the precedence
+  between job `env:` and `GITHUB_ENV`.
+
+  **C6 — the REPOSITORY may not supply the tool that tests it (codex, r8).** Verified at the pinned
+  SHA: `setup/locate_trunk.sh` uses a checked-out `.trunk/bin/trunk`, `tools/trunk` or `./trunk` in
+  preference to downloading, and `action.yaml:289` *executes* a checked-out `.trunk/setup-ci` as a
+  composite action, which can rewrite `TRUNK_PATH` through `GITHUB_ENV`. A PR adding any of those
+  greens its own required gate. **The job therefore carries a guard step, before the action, that
+  fails if any of those four paths exists in the checked-out tree.**
+
+  **C7 — a merge queue is a STOP, not a configuration (codex, r8).** Revision 8 let M4 add
+  `merge_group` if the preflight found a queue. At the pinned SHA that is the forbidden false
+  success: `determine_check_mode.sh` matches `merge_group` in **no** branch, so it falls through to
+  `check_mode=none`, every real step is skipped, and the composite action **succeeds** — and C4
+  forbids forcing `check-mode` to repair it. So if M4's preflight finds a merge queue on `Control`,
+  **stop and redesign** — a compatible action revision, or an explicitly validated mode, chosen and
+  tested before the context is required. Never add the trigger and hope.
+
+  **Residual risks, named rather than implied.** *(a)* This contract enumerates the extension points
+  that exist **at the pinned SHA**; a future version may add another, so a Dependabot pin bump must
+  re-run cell 11's mutants rather than being merged as routine. *(b)* For `pull_request` events the
+  workflow file itself comes from the PR, so a same-repo PR can edit the gate — inherent to Actions
+  gating, mitigated by review/CODEOWNERS on `.github/`, and **out of scope here** but real.
 * **`arguments:` is GOVERNED, and its value is DECLARED (agy r3; corrected codex r5).** Verified at
   the pinned SHA: `INPUT_ARGUMENTS` is word-split into the `trunk check` command line in **both**
   `pull_request.sh` and `push.sh`, so §6.4's exclusion necessarily travels through this input.
@@ -247,8 +297,10 @@ compares `~/.claude/plugins/installed_plugins.json` against the repo's
 version claim about to be committed" — so it must read the **staged** manifest,
 `git show :.claude-plugin/plugin.json`, not the worktree file. Reading the worktree would warn, or
 stay silent, about bytes that are not being committed, and it is the same index-versus-worktree
-confusion cell 13 already forbids for the trunk check. The `SessionStart` surface has no index to
-consult and correctly reads the worktree, since what it reports on is the *running* session.
+confusion cell 13 already forbids for the trunk check. The `SessionStart` surface reads the
+**worktree**, because that is what the live editing session observes — **not** because it lacks an
+index; a normal checkout has one, and revision 8's rationale was simply false even though the
+behaviour it justified is right (codex, r8).
 
 **Reachability is a PRECONDITION, not a property (codex, r3).** The hook runs only where
 `git config core.hooksPath .githooks` has been set — a **manual, per-clone** step documented at
@@ -275,7 +327,7 @@ final catch-all makes exhaustiveness structural too.
 | 1 | `expected` cannot be read, or the manifest is malformed | **silent**, record — with no expected value there is nothing to compare against (codex, r7) |
 | 2 | the record is unreadable, or its schema is unrecognised | **silent**, record the observed shape |
 | 3 | the entry is absent | **silent** |
-| 4 | either version is present but **not comparable** (not valid SemVer) | **silent**, record — revision 7 assumed comparability and left this unassigned (codex, r7) |
+| 4 | either version is present but **not comparable** | **silent**, record — revision 7 assumed comparability and left this unassigned (codex, r7). **Comparable means parseable under SemVer 2.0.0**, and rows 5–7 order by its precedence rules, so pre-release and build-metadata forms (`2.8.3-alpha`, `2.8.3+build`) have defined behaviour rather than ambiguous behaviour (agy, r8) |
 | 5 | `installed == expected` | **silent** — the healthy state is not a warning |
 | 6 | `installed < expected` | **warn** — the drift this detector exists for |
 | 7 | otherwise (`installed > expected`) | **silent** — a locally newer install is not drift; warning here fires on every development clone |
@@ -288,15 +340,15 @@ The hook warns if **any** entry reaches row 6, and never blocks.
 | # | condition | establishes |
 |---|---|---|
 | 1 | the command exits **nonzero** | **update-failure** — first, so a partial mutation followed by a failure is never read as success. Containment **not** established |
-| 2 | the record is unreadable, its schema is unrecognised, a targeted entry is **absent**, or a version is **not comparable** | **no outcome**; record the observed shape. Revision 7 had no row for absent or incomparable entries (codex + agy, r7) |
+| 2 | the record is unreadable, its schema is unrecognised, **either `u` or `p` is absent**, or **either** version is not comparable | **no outcome**; record the observed shape. "Either", explicitly: revision 8 said "a targeted entry", which left `u == expected` with `p` absent falling to a catch-all whose description was false (codex, r8) |
 | 3 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
 | 4 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
-| 5 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
-| 6 | `p` moved while `u` did not | **the update acted on a scope it did not target** — the strongest root-cause signal here, which is why it outranks the rows below rather than overlapping them (codex + agy, r7) |
+| 5 | **`p` changed at all** — in either direction, and **regardless of whether `u` also moved** | **the update acted on a scope it did not target.** The experiment touches user scope only, so *any* movement in `p` is the strongest root-cause signal available and must be recorded as such. Revision 8 wrote this as "`p` moved while `u` did not", so a run where **both** moved fell through to the rows below and was reported as the *expected shape* (agy, r8); and a `p` that moved past `expected` was swallowed by the `> expected` row above it (codex, r8). Evaluating it here, unconditionally, fixes both |
+| 6 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
 | 7 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
 | 8 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
 | 9 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
-| 10 | otherwise (`u` unchanged and `< expected`) | the update **did not act on the scope it targeted**. Containment **not** established |
+| 10 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–9, so its description is now true of everything that reaches it |
 
 **The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
 exhaustive nor mutually exclusive):
@@ -348,14 +400,29 @@ only fires when someone commits, which may be hours or days into that session, o
 exists. The detector is read-only, non-blocking and cheap, so it is wired to **both** surfaces:
 
 * **`SessionStart`** — catches the live stale session, the defect as actually reported. **Its
-  contract, which revision 7 left unspecified (codex, r7):** both the hook entry and the script path
-  are resolved through **`${CLAUDE_PROJECT_DIR}`**, because hooks run in the *current* directory and
-  not necessarily the project root; the matcher set is chosen deliberately (`SessionStart` can fire
-  on startup, resume, clear, compact and fork — repeating the same warning on every compaction is
-  its own alert-fatigue defect, so the warning is **deduplicated per session**); and the hook
-  declares a **small explicit timeout**, since the default for a synchronous command hook is **600
-  seconds** and a detector that can hang a session start for ten minutes is worse than the drift it
-  reports. Cell 8 exercises the timeout against a sleeping detector;
+  contract, specified rather than gestured at** (codex r7 and r8; agy r8):
+  * **Paths** — both the hook entry in `.claude/settings.json` and the script it names are resolved
+    through **`${CLAUDE_PROJECT_DIR}`**; hooks run in the *current* directory, not necessarily the
+    project root.
+  * **Matchers** — `startup` and `resume` **only**. `SessionStart` can also fire on `clear`,
+    `compact` and `fork`; a drift warning repeated on every compaction is its own alert-fatigue
+    defect, and the install cannot change mid-session, so the extra sources add noise and no signal.
+  * **Deduplication** — one warning per session. The `session_id` arrives in the hook's JSON stdin;
+    the marker is a file named for it under the plugin state directory, created with `O_EXCL` so two
+    concurrent invocations cannot both warn, and swept on a age threshold rather than accumulating.
+  * **Output protocol** — the warning is emitted as **`{"systemMessage": "…"}`**, not bare stdout
+    (agy, r8). A `SessionStart` hook's plain stdout is injected into the **agent's context**, so a
+    warning printed that way is read by the model and never seen by the developer — a detector whose
+    output only the assistant can see does not warn anyone.
+  * **Timeout** — a small explicit value. The default for a synchronous command hook is **600
+    seconds**, and a detector that can hang a session start for ten minutes is worse than the drift
+    it reports.
+  * **Mode selection** — the detector takes an explicit mode operand (`--index` for the pre-commit
+    surface, `--worktree` for this one) rather than inferring it from the environment; the two
+    surfaces read different bytes on purpose, and inference is how they would silently converge.
+
+  Cell 8 exercises the matcher set, the timeout against a sleeping detector, the dedup marker under
+  concurrent invocation, and the `systemMessage` shape;
 * **`.githooks/pre-commit`** — catches a version claim about to be committed, and covers the case
   where hooks are disabled in the session but not in git.
 
@@ -383,7 +450,10 @@ alternative turned out to be complementary rather than competing.
       only to `main` never executes for an `alpha` PR: `alpha` would carry the config but emit no
       `trunk-check` check run. Requiring the context at M4 would then make it **unsatisfiable on
       `alpha`** — COREDEV-2767's exact failure, aimed at the other protected base.
-- [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`** — revision 5 said only
+- [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`**. **Cell 11's C3 assertion
+      lands HERE, not at M2** (codex, r8): M2 deliberately ships `continue-on-error: true` while C3
+      forbids it, so asserting C3 at M2 would make the suite intentionally red. The cell is written
+      at M2 and enabled at M3, with M2's advisory window explicitly exempted. — revision 5 said only
       "remove `continue-on-error`" while M2a had landed the *advisory* job on `alpha`, so the second
       base would have stayed advisory forever and cell 12 would have blocked M4 rather than
       completing the rollout (codex, r5). Then observe **one genuinely strict green run and one
@@ -406,11 +476,13 @@ alternative turned out to be complementary rather than competing.
       confirm that app is GitHub Actions, write that integer, then **read the rule back and compare**.
       Cell 14's census governs this repo's workflows; it cannot govern what the *rule* accepts.
 
-      **Preflight two conditions the four internal-PR observations never exercise:** whether `Control`
-      requires a **merge queue** — if so the workflow needs `merge_group`, and the pinned action's
-      event-mode resolution must be tested for it, or the context is permanently pending in the queue
-      (codex + agy, r6) — and the repository's **fork-approval policy**, since a fork PR awaiting
-      approval produces no completed context.
+      **Preflight two conditions the four internal-PR observations never exercise.** First, whether
+      `Control` requires a **merge queue**: if it does, **M4 STOPS** — per §1's C7, adding
+      `merge_group` at the pinned SHA yields `check_mode=none`, a skipped-but-successful action, and
+      the precise false pass this plan exists to prevent; and without the trigger the context is
+      permanently pending in the queue. Either outcome is a redesign, not a configuration tweak.
+      Second, the repository's **fork-approval policy**, since a fork PR awaiting approval produces no
+      completed context.
 
       **Immediately before the ruleset edit, re-fetch both base tips** and confirm each still carries
       a byte-equivalent strict job. **"Immediately before" is still a read/edit race**, so verify
@@ -463,7 +535,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    expectation out of `.trunk/trunk.yaml` — **making a silently reduced configuration authoritative
    over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
    instead carries **the 19 expected linter names as literals** (20 enabled, minus
-   `markdown-link-check`), with a per-linter positive control. Fails if any of the 19 is missing, if
+   `markdown-link-check`). Fails if any of the 19 is missing, if
    an unlisted linter appears, or if the exclusion list grows — **and it fails when
    `.trunk/trunk.yaml` is reduced**, which the revision-5 wording could not.
 
@@ -534,30 +606,25 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 11. **There is no state in which `trunk-check` reports a *merge-satisfying* conclusion without the
     real Trunk having run.** GitHub counts **`success`, `skipped` and `neutral`** as satisfying a
     required check (codex, r7) — revision 7 said "success", which is narrower than the set that
-    actually lets a merge through. The full assertion set:
-    * **triggers — an exact set, not a blacklist**: the event keys are **exactly** `pull_request` and
-      `push` (plus `merge_group` *only* if M4's preflight finds a merge queue, and only once tested).
-      Prohibiting two named triggers leaves every other trigger permitted. `branches:` present and
-      equal to the ruleset's target set; **no `paths:`/`paths-ignore:`** (§1);
-    * **nothing that skips** — no job-level `if:`, **no `if:` on the Trunk step**, no `needs:` (a
-      failed dependency skips the job, and a skipped job reports success), no `strategy.matrix`;
-    * **nothing that masks** — **no `continue-on-error` at job level or on the Trunk step**; a
-      step-level `continue-on-error` turns a *failed* Trunk run into a successful job, which is the
-      original bypass wearing different clothes;
-    * **exactly one, unconditional Trunk invocation**, whose own step outcome is what cell 12
-      observes;
-    * **the action's inputs are an ALLOWLIST** — only `arguments` (§6.4's literal) and
-      `save-annotations: true` (§6.1) may be present, plus optional `cache`/`cache-key`. **Every
-      other input must be absent**, and two of them are why this must be an allowlist rather than a
-      longer blacklist (codex, r7, verified at the pinned SHA):
-      * **`trunk-path`** names *the launcher the action executes* — `"${TRUNK_PATH}" check …` in
-        `pull_request.sh` and `push.sh`. A no-op script that exits 0 satisfies **every** prohibition
-        above while running no linter at all.
-      * **`post-init`** is described in the action's own definition as *"Trusted shell to run after
-        auto-init / before check (caller-controlled escape hatch)"*.
+    actually lets a merge through.
 
-      This repo has paid for blacklists before: enumerate what is permitted, and fail on anything
-      unlisted, so an input invented in a later action version is denied on the day it appears.
+    **This cell asserts §1's contract clause by clause — C1 through C7 — and does not restate their
+    values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
+    mutant per clause, each a configuration that satisfies every *other* clause:
+    * **C1** add a third trigger · **C2** drop `branches:`, or add `paths:` · **C3** an `if:` on the
+      Trunk step, a `needs:` whose dependency fails, `continue-on-error` at either level ·
+      **C4** any unlisted `with:` key, `trunk-path` and `post-init` specifically ·
+      **C5** `env: {TRUNK_PATH: /bin/true}` at job level and at step level ·
+      **C6** each of the four repository paths in turn, each a no-op executable exiting 0 ·
+      **C7** `merge_group` present at all.
+
+    Each mutant must produce a **red cell**, and — per the lesson of cells 6 and 7 — must be shown to
+    do so for **its own reason**, not through a sibling clause.
+
+    The C6 mutants matter most, because they are the ones a **pull request** can introduce: the
+    guard step must fail on a checked-out `.trunk/bin/trunk`, `tools/trunk`, `./trunk` or
+    `.trunk/setup-ci`, and each must be exercised separately — a guard that catches three of four is
+    a gate with one door open.
 
     **Scope the claim honestly.** Cancellation, job timeout and setup failure *do* report conclusions
     without Trunk running — `cancelled`, `timed_out`, `failure` — but every one of them **blocks**
@@ -566,14 +633,14 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     `skipped` and `neutral` also satisfy. The property is **no merge-satisfying conclusion without a
     real Trunk run**.
 
-    **This cell has been wrong twice, in opposite directions, and both failures were in what it
-    ASSERTED rather than in the design it tested.** Revision 3 asserted the prose property "the job
-    is unreachable on dispatch", which an unsupported job-level `on:` satisfied. Revision 4 asserted
-    the literal `if:` guard — which is *present and correct* on a job that a dispatch skips into a
-    **reported Success** against the required context, so the cell would have certified the bypass.
-    **Three times now the cell asserted a mechanism and the mechanism moved.** The property — no
-    merge-satisfying conclusion without a real Trunk run — is what it asserts, and every clause above
-    exists because some *specific* configuration satisfies the previous wording while defeating it.
+    **This cell has now been wrong three times, and every failure was in what it ASSERTED rather
+    than in the design it tested.** Revision 3 asserted the prose property "the job is unreachable on
+    dispatch", which an unsupported job-level `on:` satisfied. Revision 4 asserted the literal `if:`
+    guard — present and correct on a job that a dispatch skips into a **reported Success**, so the
+    cell would have certified the bypass. Revision 7 asserted a **blacklist** of caller inputs, which
+    a repository-supplied launcher walks straight past. Each time the cell described a *mechanism*,
+    and the mechanism moved. It now asserts the **property**, and every clause of §1's contract
+    exists because some specific configuration satisfied the previous wording while defeating it.
 12. **Both protected bases emit the context, from the intended producer** (M4's precondition, codex
     r3 + r5). Observe a real `trunk-check` check run on a `main` PR **and** on an `alpha` PR — green
     and red on each — before the context is required. Fails if either base produces no check run.
@@ -747,7 +814,9 @@ required gate that fails on someone else's outage is worse — but it is a real 
   without a real Trunk run. SHA-pinned action + checkout, no
   `check-mode`/`post-annotations`/custom upstream, `arguments:` set to §6.4's declared literal
   (stated there, not here), `save-annotations: true` with `contents: read` (§6.1's decision), and an
-  explicit empty-diff guard step (cell 1).
+  explicit empty-diff guard step (cell 1), **and the C6 repository-supplied-launcher guard step** —
+  which fails, before the action runs, if the checked-out tree contains `.trunk/bin/trunk`,
+  `tools/trunk`, `./trunk` or `.trunk/setup-ci`. **No `env:` on the job or the step** (C5).
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
@@ -762,15 +831,36 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * **`.claude/settings.json`** — a project `SessionStart` hook invoking that detector, the surface
   that fires while a stale install is actually running (§3b)
 * **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11 and 14 (workflow parsing, the
-  frozen 19-linter set, the `arguments:` literal, the producer census)
+  frozen membership set (cell 4 holds the names and the count — this list does not restate them),
+  the `arguments:` literal, the producer census)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
   and exit-aggregation controls
+* **`scripts/tests/test_trunk_upstream_parity.py`** — cell 1's instrumented-launcher harness, which
+  had no owning file in revision 8 (codex, r8): it runs the pinned action against per-event fixtures
+  with `trunk-path` pointed at a recording launcher and compares the captured range byte-for-byte
+  against the guard step's output. *(The harness is the one legitimate use of `trunk-path`; §1's C4
+  forbids it in the shipped workflow.)*
+* **`scripts/tests/test_session_start_drift_hook.py`** — §3b's `SessionStart` contract: matcher set,
+  `${CLAUDE_PROJECT_DIR}` resolution, the `O_EXCL` dedup marker under concurrent invocation, the
+  `systemMessage` output shape, and the timeout against a sleeping detector (cell 8)
 
 ## §8 — Notes
 
 **Revision 1's largest defect was not technical.** It was written without reading COREDEV-2771's
 planning document, which contains a section addressed to this ticket handing over six reviewed
 defects. Both reviewers re-derived that work. Grep `docs/planning/` for the predecessor first.
+
+**Revision 8's largest defect was closing one door on a hallway.** The r7 allowlist correctly
+constrained what the *caller* passes — and the action takes its launcher from three other places the
+caller never mentions: a checked-out `.trunk/bin/trunk`, `tools/trunk` or `./trunk`; a checked-out
+`.trunk/setup-ci` that it *executes*; and `TRUNK_PATH` from the job or step `env:`. **A pull request
+could supply the tool that tests it** — for a required merge gate, the gate handing its own authority
+to the thing under test.
+
+The general lesson, now paid for three rounds running: **an allowlist over one input channel is not
+an allowlist over the execution.** Ask what the tool will actually *run*, and enumerate every place
+that answer can come from — caller inputs, environment, and the repository being tested. The last of
+those is the one that felt unthinkable and is the one an attacker controls.
 
 **Revision 7's largest defect was that its prohibition set was a BLACKLIST.** Cell 11 named
 everything it could think of that would let the job report green without linting — triggers,
