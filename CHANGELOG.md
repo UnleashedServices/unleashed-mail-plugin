@@ -13,6 +13,8 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+## [2.8.3] — 2026-08-28
+
 ### Fixed
 - **Review harness: Python bytecode is no longer mistaken for reviewer tampering** (COREDEV-2650).
   The isolated review wrappers fingerprint their disposable checkout afterwards and void the round

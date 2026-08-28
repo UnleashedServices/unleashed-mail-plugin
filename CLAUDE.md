@@ -106,8 +106,22 @@ Linux-friendly plugin repo — no Xcode).
   dedicated `.claude/worktrees/<name>` worktree — never flip the main checkout's branch.
 - **Commits:** `type(COREDEV-XXXX): description` — ticket is **mandatory**. Types: `feat`, `fix`, `chore`,
   `refactor`, `test`, `docs`.
-- **Versioning:** `plugin.json` `version` (e.g. `2.4.2`) must stay in sync with the README H1 / What's-New
-  heading and the asset counts — enforced by `validate-version-sync.sh`. Bump + CHANGELOG on release.
+- **Versioning — BUMP ON EVERY CHANGE THAT SHIPS, not on release.** `.claude-plugin/marketplace.json`
+  carries **no version field**; it points at this repo, so `plugin.json` `version` is the *only* signal
+  a consumer install has that anything changed. **An unbumped fix is a fix nobody receives** — it sits
+  on `main` and no installed plugin ever pulls it. This is why the rule differs from ordinary release
+  practice, and it has already bitten: a merged harness fix stayed undelivered because the version had
+  not moved.
+
+  A bump touches **four** places, all asserted by `validate-version-sync.sh` (`strict` in CI, `warn` in
+  pre-commit — so a partial bump passes locally and fails CI):
+  1. `.claude-plugin/plugin.json` `version` — the anchor
+  2. `README.md` H1 — `… Plugin vX.Y.Z`
+  3. `README.md` newest `### vX.Y.Z` What's-New section
+  4. `README.md` bold asset counts — `**N agents · N skills · N commands · N MCP server(s)**`
+
+  Plus a `CHANGELOG.md` `## [X.Y.Z] — YYYY-MM-DD` section. The plugin uses plain `MAJOR.MINOR.PATCH`
+  — **not** the UnleashedMail *app's* `MAJOR.MINOR|STATE.YYMMBB` scheme; the two repos differ.
 - **CI actions are SHA-pinned** (AGENT_CONTRACTS §6) — never `@vN` tags; Dependabot updates the pins.
 - **Trunk:** `main` is the integration trunk; the canonical remote is `UnleashedServices/unleashed-mail-plugin`.
 
