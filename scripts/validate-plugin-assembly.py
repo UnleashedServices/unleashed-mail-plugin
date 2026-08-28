@@ -361,7 +361,8 @@ def _tool_tokens(value: str) -> "set[str]":
     could not represent the form the runtime actually documents. Commas inside parentheses are now
     type separators; only top-level commas separate tokens.
     """
-    tokens, current, depth = [], [], 0
+    current: list[str] = []
+    tokens, depth = [], 0
     for ch in value:
         if ch == "(":
             depth += 1
@@ -601,7 +602,8 @@ def check_spawner_denies_every_writer(root: Path, problems: list[str]) -> None:
     `Bash`, so the previous explicit-list-only detection skipped every inherit-all agent — a spawner
     nobody had to declare was a spawner nobody checked.
     """
-    writers, spawners, scoped_spawners = [], [], []
+    writers, spawners = [], []
+    scoped_spawners: list[tuple[Path, str]] = []
     for path in sorted((root / "agents").glob("*.md")):
         frontmatter = parse_frontmatter(path.read_text(encoding="utf-8")) or {}
         if not frontmatter:
@@ -1183,7 +1185,10 @@ def check_reviewer_roster(root: Path, agent_names: set[str], problems: list[str]
             hooks = {}
         for ev in ("SubagentStart", "SubagentStop"):
             got: "set[str] | None" = None
-            entries = hooks.get(ev) if isinstance(hooks.get(ev), list) else []
+            # Bind before the `isinstance`: the guard has to test the SAME object that is iterated,
+            # not a second `.get` call that only happens to return the same value.
+            raw_entries = hooks.get(ev)
+            entries = raw_entries if isinstance(raw_entries, list) else []
             for entry in entries:
                 matcher = entry.get("matcher", "") if isinstance(entry, dict) else ""
                 mm = re.search(r"\(([a-z0-9-]+(?:\|[a-z0-9-]+)+)\)", matcher)

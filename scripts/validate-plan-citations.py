@@ -228,7 +228,8 @@ def check_external(text, repo, problems, flat):
             if not os.path.exists(full):
                 problems.append(f"[cite-external] {label}: {relpath} does not exist in this tree")
                 continue
-            doc = open(full, encoding="utf-8", errors="replace").read()
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                doc = fh.read()
             # A top-level heading is `## 4` and may end the line; a sub-section is `### 4.1 — …`.
             if re.search(rf"^#{{2,4}} {re.escape(sec)}(?:[ .—-]|$)", doc, re.M):
                 continue
@@ -257,7 +258,8 @@ def check_cross_file(repo, problems, joined):
         if not os.path.exists(full):
             problems.append(f"[cite-file] {label}: {relpath} does not exist in this tree")
             continue
-        lines = open(full, encoding="utf-8", errors="replace").read().split("\n")
+        with open(full, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\n")
         for m in re.finditer(cite_pat, joined):
             checked += 1
             n = int(m.group(1))
@@ -266,8 +268,8 @@ def check_cross_file(repo, problems, joined):
                 problems.append(f"[cite-file] {label}: cites {relpath}:{n}, file has {len(lines)} lines")
                 continue
             window = lines[n - 1: max(n, min(end, len(lines)))]
-            if not any(re.search(expect, l) for l in window):
-                real = [i + 1 for i, l in enumerate(lines) if re.search(expect, l)]
+            if not any(re.search(expect, ln) for ln in window):
+                real = [i + 1 for i, ln in enumerate(lines) if re.search(expect, ln)]
                 problems.append(f"[cite-file] {label}: cites {relpath}:{n}"
                                 f"{f'-{end}' if end != n else ''} — content is at {real or 'nowhere'}")
     return checked
@@ -321,11 +323,12 @@ def check_family(problems, flat):
 
 def fix_citations(plan):
     """Repair intra-plan line numbers from the CONTENT they claim. Refuses on an ambiguous anchor."""
-    text = open(plan, encoding="utf-8").read()
+    with open(plan, encoding="utf-8") as fh:
+        text = fh.read()
     lines = text.split("\n")
     changed, unresolved = [], []
     for label, cite_pat, expect in INTERNAL_RULES:
-        hits = [i + 1 for i, l in enumerate(lines) if re.search(expect, l, re.M)]
+        hits = [i + 1 for i, ln in enumerate(lines) if re.search(expect, ln, re.M)]
         if len(hits) != 1:
             unresolved.append(f"{label}: expected pattern matches {len(hits)} lines {hits[:5]} — need "
                               f"exactly 1; nothing rewritten")
@@ -347,15 +350,17 @@ def fix_citations(plan):
             return new
 
         text = re.sub(cite_pat, _sub, text)
-    open(plan, "w", encoding="utf-8").write(text)
+    with open(plan, "w", encoding="utf-8") as fh:
+        fh.write(text)
     return changed, unresolved
 
 
 def lint(plan, repo, section_head="### 4.2a — ", section_end="### 4.3 — "):
-    text = open(plan, encoding="utf-8").read()
+    with open(plan, encoding="utf-8") as fh:
+        text = fh.read()
     lines = text.split("\n")
-    start = next((i for i, l in enumerate(lines) if l.startswith(section_head)), 0)
-    end = next((i for i, l in enumerate(lines) if l.startswith(section_end)), len(lines))
+    start = next((i for i, ln in enumerate(lines) if ln.startswith(section_head)), 0)
+    end = next((i for i, ln in enumerate(lines) if ln.startswith(section_end)), len(lines))
     body = "\n".join(lines[start:end])
     joined, flat = _join_wraps(text), _flatten(text)
     problems: list[str] = []
@@ -405,10 +410,11 @@ SEEDS = [
 
 
 def _anchor_uniqueness(plan):
-    lines = open(plan, encoding="utf-8").read().split("\n")
+    with open(plan, encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
     bad = []
     for label, _cite, expect in INTERNAL_RULES:
-        hits = [i + 1 for i, l in enumerate(lines) if re.search(expect, l, re.M)]
+        hits = [i + 1 for i, ln in enumerate(lines) if re.search(expect, ln, re.M)]
         if len(hits) != 1:
             bad.append(f"  ANCHOR {label}: matches {len(hits)} lines {hits[:5]}, need exactly 1")
     return bad
@@ -427,13 +433,15 @@ def selftest(plan, repo):
     try:
         for name, mutate in SEEDS:
             probe = os.path.join(tmp, "probe.md")
-            src = open(plan, encoding="utf-8").read()
+            with open(plan, encoding="utf-8") as fh:
+                src = fh.read()
             mutated = mutate(src)
             if mutated == src:
                 print(f"  SEED {name}: ANCHOR NOT FOUND — the seed mutated nothing, so it proves nothing")
                 ok = False
                 continue
-            open(probe, "w", encoding="utf-8").write(mutated)
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write(mutated)
             probs, _ = lint(probe, repo)
             new = [p for p in probs if p not in base and p.startswith(f"[{name}]")]
             if new:

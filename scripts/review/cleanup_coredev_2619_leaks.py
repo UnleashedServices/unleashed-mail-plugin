@@ -275,10 +275,10 @@ def _preflight_directories(
         lexical = root.joinpath(*_pure_relative_path(relative_path).parts)
         try:
             metadata = os.lstat(str(lexical))
-        except FileNotFoundError:
+        except FileNotFoundError as error:
             if allow_absent:
                 continue
-            raise CleanupError("manifest directory is unavailable: " + relative_path)
+            raise CleanupError("manifest directory is unavailable: " + relative_path) from error
         except OSError as error:
             raise CleanupError("manifest directory is unavailable: " + relative_path) from error
         resolved = _resolve_beneath(root, relative_path)
@@ -331,11 +331,11 @@ def _preflight_files(root: Path, allow_absent: bool = False) -> Tuple[Dict[str, 
         lexical = root.joinpath(*_pure_relative_path(entry.relative_path).parts)
         try:
             metadata = os.lstat(str(lexical))
-        except FileNotFoundError:
+        except FileNotFoundError as error:
             if allow_absent:
                 already_absent.append(entry.relative_path)
                 continue
-            raise CleanupError("manifest target is unavailable: " + entry.relative_path)
+            raise CleanupError("manifest target is unavailable: " + entry.relative_path) from error
         except OSError as error:
             raise CleanupError("manifest target is unavailable: " + entry.relative_path) from error
         resolved = _resolve_beneath(root, entry.relative_path)

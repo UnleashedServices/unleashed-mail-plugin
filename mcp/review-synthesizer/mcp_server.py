@@ -298,7 +298,11 @@ def main() -> int:
     # (then json.loads drops the line) rather than crashing readline().
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            # The ignore below is narrow on purpose: `reconfigure` exists on TextIOWrapper, not on
+            # the `TextIO` that sys.std* are declared as. Narrowing with isinstance(TextIOWrapper)
+            # would CHANGE behaviour -- the tests swap these streams, and a stand-in that implements
+            # reconfigure is meant to be reconfigured. The except clause below is the real guard.
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
         except (AttributeError, ValueError):  # not a TextIOWrapper / already detached
             pass
     _log("ready (stdio)")

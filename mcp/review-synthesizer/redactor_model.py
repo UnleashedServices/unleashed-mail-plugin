@@ -86,9 +86,13 @@ PERTURB = F.UNICODE_WS + F.NOT_WS + [chr(0x212A), chr(0x0131), chr(0x017F), "é"
 
 
 def shell_redact(value: str) -> str:
+    # check=False deliberately: stdout IS the datum a caller compares against the Python side, so a
+    # non-zero status must surface as a divergence rather than as an exception that hides it.
+    # NOTE this single-value helper is NOT on the parity run's path -- that goes through
+    # shell_redact_batch (:180), and test_redactor_parity.py defines its own copy of this one.
     return subprocess.run(
         ["bash", "-c", f'. "{HOOK_IO}"; hook_redact_pii "$1"', "_", value],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     ).stdout
 
 
@@ -100,7 +104,10 @@ def shell_redact_batch(values: list[str]) -> list[str]:
     """
     script = f'. "{HOOK_IO}"\nwhile IFS= read -r -d "" v; do printf "%s\\0" "$(hook_redact_pii "$v")"; done'
     payload = "".join(v + "\0" for v in values)
-    out = subprocess.run(["bash", "-c", script], input=payload, capture_output=True, text=True).stdout
+    # check=False deliberately: a truncated or failed batch is caught by the desync check below,
+    # whose message names both counts; CalledProcessError would replace that diagnostic.
+    out = subprocess.run(["bash", "-c", script], input=payload, capture_output=True, text=True,
+                         check=False).stdout
     parts = out.split("\0")[:-1]
     if len(parts) != len(values):  # pragma: no cover - defensive
         raise RuntimeError(f"batch desync: sent {len(values)}, got {len(parts)}")

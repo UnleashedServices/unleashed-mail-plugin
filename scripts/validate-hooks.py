@@ -264,6 +264,7 @@ def validate_matcher(event: str, matcher: str, where: str,
         res = subprocess.run(
             [node, "-e", "new RegExp(process.env.HOOK_MATCHER)"],
             capture_output=True, text=True, env={**os.environ, "HOOK_MATCHER": matcher},
+            check=False,  # a non-zero exit is the finding, reported from res.returncode below
         )
     except OSError:
         return
@@ -426,7 +427,9 @@ def main() -> int:
             if not (_is_shell_script(spath) or spath in shell_targets):
                 continue
             try:
-                res = subprocess.run([bash, "-n", str(spath)], capture_output=True, text=True)
+                # check=False: a non-zero exit is the finding, reported from res.returncode below
+                res = subprocess.run([bash, "-n", str(spath)], capture_output=True, text=True,
+                                     check=False)
             except OSError as exc:
                 problems.append(f"{rel}: could not run bash -n ({exc})")
                 continue
