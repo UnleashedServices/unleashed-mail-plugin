@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 6
+**Status:** Planning, revision 7
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r6** `e16daff`: codex `REQUEST_CHANGES` (5 DESIGN + 5 COMPLETENESS) + agy `REQUEST_CHANGES`
+> (5 DESIGN + 2 COMPLETENESS), **both confirming 19 is the right frozen linter count** by parsing the
+> config independently. Removing the trigger was necessary but **not sufficient** — cell 11 asserted
+> four structural keys while claiming a property about *all* paths, and a step-level `if:` or
+> `continue-on-error` on the Trunk step still reports a conclusion without Trunk running. Revision 6
+> also introduced a **fresh self-contradiction** (`push` "to the gated bases" vs a blanket ban on
+> filters) and left **revision 4's `if:` guard described as current in §8**.
 > **r5** `7b7a459`: codex `REQUEST_CHANGES` (5 DESIGN + 6 COMPLETENESS) + agy `REQUEST_CHANGES`
 > (2 DESIGN + 4 COMPLETENESS). **codex inverted revision 4's central fix**: a job skipped by an `if:`
 > reports **Success** to a required context, so the guard *created* the bypass it was meant to close,
@@ -105,11 +112,22 @@ have *certified* the bypass. The same doc gives the general rule directly: **"Av
 workflows that can be skipped."**
 
 **Resolution: `trunk-check` moves to its own workflow file, `.github/workflows/trunk-check.yml`,
-whose `on:` contains `pull_request` and `push` to the gated bases and *no* `workflow_dispatch`.**
-The job is then unreachable on dispatch by construction rather than by condition, so there is no
-skipped-success state to exploit. **No `if:` guard on the job, and no path filters** — the same doc
-notes a workflow skipped by path/branch filtering leaves checks **Pending, which blocks merging**, so
-filters would trade a false pass for a permanent block.
+whose `on:` contains `pull_request` and `push` and *no* `workflow_dispatch`.** The job is then
+unreachable on dispatch by construction rather than by condition, so there is no skipped-success
+state to exploit.
+
+**BRANCH filters are required; PATH filters are prohibited (codex, r6).** Revision 6 said `push` was
+scoped "to the gated bases" *and* banned every filter — **authorising no configuration at all**. The
+distinction the GitHub doc actually draws is what the two kinds of filter skip on:
+
+* **`branches: [main, alpha]`** — REQUIRED, on both `pull_request` and `push`, and it must match the
+  ruleset's target set exactly. A PR into an ungated base does not need the context, so nothing is
+  left pending; a mismatch in either direction is the COREDEV-2767 shape.
+* **`paths:` / `paths-ignore:`** — PROHIBITED. These skip on *changed files*, so a PR into a gated
+  base that touches only excluded paths requires a context the workflow never produces, leaving it
+  **Pending, which blocks merging** — a false pass traded for a permanent block.
+
+**No `if:` on the job, and none on the Trunk step** — see cell 11 for the full prohibition set.
 
 This does not change the context name: required checks name **jobs**, not workflows, so the context
 stays `trunk-check`. It does mean the repo now has two workflows that must not both define a job by
@@ -134,13 +152,9 @@ own non-required context.
   `markdown-link-check` *runs* in the required job); and §6.4 never declared the literal bytes cell 9
   was told to match, so **the cell could not be executed as written**.
 
-  **The contract, with the literal declared exactly once (§6.4 is the single source):**
-
-  ```yaml
-  arguments: --filter=-markdown-link-check
-  ```
-
-  `arguments:` **must be present and must equal that scalar**, asserted by cell 9 as a whole-string
+  **The contract:** `arguments:` **must be present and must equal §6.4's declared literal** — whose
+  bytes are stated *only* in §6.4, so this section does not restate them (a derived value written
+  twice goes stale, and two stale copies agree with each other). Asserted by cell 9 as a whole-string
   match — never a substring or a "contains `--filter`" test, both of which an appended argument would
   still satisfy. **Absence is a failure**, not a permitted variant.
 * **Stable job + context name** — `trunk-check`, so the ruleset context is nameable and cannot drift.
@@ -219,33 +233,53 @@ compares `~/.claude/plugins/installed_plugins.json` against the repo's
 one. Revision 3 also called these "two files it can always read", which **its own unreadable-state
 row contradicts**; that claim is withdrawn.
 
-**Decision table, so §3a's outcome selects the posture rather than reopening the design:**
+**Two tables, because revision 6 conflated two different things** (agy, r6). One maps the *one-time
+§3a experiment* to what it establishes; the other maps a *runtime comparison* to what the detector
+does. Revision 6's single table had "both entries advance and stay advanced → **warn**", which under
+its own directionality rule is a false positive: if every entry equals the expected version there is
+nothing to warn about.
 
-| §3a outcome | detector posture |
+**Table A — the detector at runtime.** Evaluated per scope entry; `expected` is the repo's
+`.claude-plugin/plugin.json` version at the time of the run.
+
+| observed | detector |
 |---|---|
-| both entries advance and stay advanced | **warn** — drift is operator-recoverable; the hook surfaces it |
-| a 2.7.0 entry reappears | **warn + record**; the reappearance is the root-cause signal, and COREDEV-2801 stays open with the detector as the instrument |
-| **user advances, project stays stale** | **warn** — and this is the *expected* shape: §3a updates **user scope only**, while the record holds separate user and project entries both at `2.7.0`. Revision 3's table omitted the outcome its own experiment was most likely to produce (codex, r3) |
-| **project advances, user stays stale** | **warn + record** — the inverse was omitted too (codex + agy, r5); it would mean the update did not act on the scope it was aimed at, which is a *stronger* root-cause signal than the expected shape |
-| **nothing advances / the update fails** | **warn + record**, and §3a's containment claim is **not** established; COREDEV-2801 keeps the remedy blocked |
-| the record's shape is not as expected (schema drift, entries absent) | **silent no-op**, and record the observed shape — an unrecognised record is not evidence of drift |
-| entries cannot be read at all | **silent no-op** — never fail a commit on absent plugin state |
+| `installed == expected` | **silent** — this is the healthy state, not a warning |
+| `installed < expected` | **warn** — the drift this detector exists for |
+| `installed > expected` | **silent** — a locally newer install is not drift; warning here fires on every development clone |
+| the entry is absent | **silent** |
+| the record is unreadable, or its schema is unrecognised | **silent**, and record the observed shape — an unparsed record is not evidence of drift |
 
-**The table's terms, defined so two rows cannot both match** (codex + agy, r5 — revision 5's rows
-were neither exhaustive nor mutually exclusive):
+The hook warns if **any** entry satisfies the warn row, and never blocks.
 
-* **"advance"** means the entry equals **the exact version expected** — the repo's
-  `.claude-plugin/plugin.json` at the time of the run — not merely "changed" and not "greater".
-* **Comparison is directional**: `installed < expected` is drift and warns; `installed > expected`
-  (a locally newer install) is **not** drift and must not warn, or every development clone reports a
-  false positive.
-* **The update command's exit code takes precedence over the record**: a nonzero result classifies
-  as *update-failure* even if some entry moved, so a partial mutation followed by a failure is not
-  read as success.
-* **"stay advanced"** is observed over a **named interval**, recorded with the run; an outcome with
-  no stated interval is not evidence of persistence.
+**Table B — what the §3a experiment establishes.** The experiment runs `claude plugin update` at
+**user scope** and re-reads the record; `u` and `p` are the user and project entries.
+
+| outcome | establishes |
+|---|---|
+| the command exits **nonzero** | **update-failure** — evaluated *first*, so a partial mutation followed by a failure is never read as success. Containment **not** established |
+| `u == expected`, `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
+| `u == expected`, `p == expected` | containment established for both, though the experiment only aimed at one |
+| `u` moved but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established |
+| `u < expected` and did not move | the update **did not act on the scope it targeted** — a stronger root-cause signal than any stale-entry row |
+| `p` advanced while `u` did not | same class, stronger still: a scope nobody updated moved |
+| any entry `> expected` | **not drift**; record it and treat the run as non-evidence rather than as a result |
+| after an advance is observed, an entry **reverts** to any lower version | **the root-cause signal** — COREDEV-2801 stays open with the detector as the instrument. **Temporal precedence**: this row is only reachable *after* an advance, so it cannot overlap the stale rows; and it covers reversion to *any* older version, not only `2.7.0` |
+| the persistence interval has not yet elapsed | **PENDING — not an outcome.** No row may be claimed until the interval completes |
+| the record is unreadable or its schema is unrecognised | **no outcome**; record the shape |
+
+**The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
+exhaustive nor mutually exclusive):
+
+* **"advance"** means the entry equals **the exact version expected** — not merely "changed", and
+  not "greater". "Moved but short of expected" is its own outcome, not an advance.
+* **Comparison is directional**, per Table A: below expected is drift, above it is not.
+* **The command's exit code outranks the record** — the first row of Table B, evaluated before any
+  entry is compared.
+* **Persistence needs a named interval**, recorded with the run; before it elapses the result is
+  *pending*, which is why Table B carries an explicit interim row rather than leaving a gap.
 * The **record's readability and schema** are captured on every run, so an unrecognised shape is
-  distinguishable from drift.
+  distinguishable from drift in both tables.
 
 It **never blocks a commit.** A version-drift detector that fails `git commit` would be a worse
 defect than the one it reports.
@@ -264,15 +298,30 @@ mechanism"** meeting both constraints — run **from the checkout** (the bootstr
 asserting impossibility where a comparison was owed is itself the defect, even though the conclusion
 survives:
 
-| candidate | from the checkout? | reads local state? | disposition |
-|---|---|---|---|
-| `.githooks/pre-commit` | yes | yes | **CHOSEN** — fires exactly when a version claim is about to be committed; precondition is a manual per-clone `core.hooksPath` |
-| project `.claude/settings.json` `SessionStart` hook | **yes** — committed config, command runs from the tree | **yes** | **viable, rejected on cost** — silently inert wherever the project's settings are untrusted, and fires per *session* rather than per commit |
-| a CI job | yes | **no** — a runner has no developer install record | eliminated |
-| a plugin-shipped hook | **no** — a 2.7.0-pinned session runs 2.7.0's copy | yes | eliminated: it *is* the defect |
+| candidate | from the checkout? | reads local state? | fires when | disablement / bypass |
+|---|---|---|---|---|
+| `.githooks/pre-commit` | yes | yes | a commit is made | needs a manual per-clone `core.hooksPath`; an executable hook; and **`git commit --no-verify` bypasses it outright** |
+| project `.claude/settings.json` `SessionStart` hook | **yes** — committed config, command runs from the tree | **yes** | **a session starts** | inert under `disableAllHooks`, under an untrusted project, or under managed `allowManagedHooksOnly` |
+| a CI job | yes | **no** — a runner has no developer install record | — | eliminated |
+| a plugin-shipped hook | **no** — a 2.7.0-pinned session runs 2.7.0's copy | yes | — | eliminated: it *is* the defect |
 
-Both surviving candidates carry a reachability precondition, so the choice is a trade, not a
-necessity. **M6 is unconditional** because §6.3 is decided, not because no alternative existed.
+**Both surviving candidates are advisory, not enforceable.** Revision 6 recorded only the
+`SessionStart` candidate's trust cost while presenting `pre-commit` as the sound choice; codex r6
+noted the asymmetry — a pre-commit hook is skippable with `--no-verify` and needs a manual
+`core.hooksPath`. Neither is a policy boundary; both are local conveniences, and the plan says so.
+
+**Use BOTH, because they fire at different moments and the defect lives at the other one (agy, r6).**
+COREDEV-2801's actual failure is a **stale install running in an active session** — and `pre-commit`
+only fires when someone commits, which may be hours or days into that session, or never. The
+`SessionStart` hook fires *when the stale code begins running*, which is the moment the defect
+exists. The detector is read-only, non-blocking and cheap, so it is wired to **both** surfaces:
+
+* **`SessionStart`** — catches the live stale session, the defect as actually reported;
+* **`.githooks/pre-commit`** — catches a version claim about to be committed, and covers the case
+  where hooks are disabled in the session but not in git.
+
+**M6 is unconditional** because §6.3 is decided, not because no alternative existed — and the
+alternative turned out to be complementary rather than competing.
 
 ## §4 — Milestones
 
@@ -304,17 +353,36 @@ necessity. **M6 is unconditional** because §6.3 is decided, not because no alte
       **M0 + M2a + M3 together** make true; no one of them suffices. **Evidence required on BOTH
       bases**: one strict green and one deliberately red `trunk-check` run on a `main` PR *and* on an
       `alpha` PR, each bound to its workflow path, job id, head SHA and conclusion (cell 12). An
-      unobserved base is an unsatisfiable-context risk, not an assumption. **Immediately before the
-      ruleset edit, re-fetch both base tips** and confirm each still carries a byte-equivalent strict
-      job — evidence gathered earlier does not describe bytes that have since drifted.
+      unobserved base is an unsatisfiable-context risk, not an assumption.
+
+      **Constrain the SOURCE, not just the name (codex, r6).** A required status check matched by
+      name alone can be satisfied by *anything* with write access posting that context. The rule must
+      pin the expected integration (GitHub Actions) via the ruleset's `integration_id`; cell 14's
+      census governs this repo's workflows, but it cannot govern what the *rule* accepts.
+
+      **Preflight two conditions the four internal-PR observations never exercise:** whether `Control`
+      requires a **merge queue** — if so the workflow needs `merge_group`, and the pinned action's
+      event-mode resolution must be tested for it, or the context is permanently pending in the queue
+      (codex + agy, r6) — and the repository's **fork-approval policy**, since a fork PR awaiting
+      approval produces no completed context.
+
+      **Immediately before the ruleset edit, re-fetch both base tips** and confirm each still carries
+      a byte-equivalent strict job. **"Immediately before" is still a read/edit race**, so verify
+      again *after* the edit — both tips, the effective job name, the required context and its
+      expected integration — and roll the rule back if either tip moved.
+
+      **Open PRs predating M2/M2a** will not have produced the context and will sit pending until
+      rebased or updated (agy, r6). Enumerate and rebase them as part of the change, not after it.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
 - [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
       (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
       macOS-portable timeout, and **exit-code aggregation that cannot mask an earlier hook
       failure**. Blocking on newly introduced findings, never `--all`. Update `CLAUDE.md`'s gate
       list. Independent of M2/M4 — it gates commits, not merges. Cell 13 carries the controls.
-- [ ] **M6** — implement §3b with caller `.githooks/pre-commit` (§6.3 decided: wire it), posture per
-      §3a's decision table. Unconditional as of revision 5.
+- [ ] **M6** — implement §3b's detector and wire it to **both** surfaces (§3b): the project
+      `SessionStart` hook, which fires when a stale install starts running — the defect as actually
+      reported — and `.githooks/pre-commit` (§6.3 decided: wire it). Runtime behaviour per **Table
+      A**; the §3a experiment is read against **Table B**. Unconditional as of revision 5.
 
 M3 and M4 are gated on evidence, not schedule.
 
@@ -327,7 +395,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    **The mechanism was missing in revision 3 (agy, r3, in part):** `trunk check` exits **0** when the
    resolved diff matches no files, so the action alone reports green having checked nothing — which
    *is* inherited defect 3. The job therefore carries an explicit step that resolves the diff and
-   **fails when it is empty**, before the action runs. (agy paired this with a claimed "§1 prohibition
+   **fails when it is empty**, before the action runs. **That step's computed range must be proven
+   identical to the range the pinned action passes to Trunk** (codex, r6) — two independently
+   correct-looking resolvers drift, and a guard that checks a *different* range than the one linted
+   asserts nothing about the lint. (agy paired this with a claimed "§1 prohibition
    on custom step wrappers" — **no such prohibition exists in this document**; §1 constrains the
    action's *inputs*, not the job's steps. The mechanism gap was real, the contradiction was not.)
 2. **The gate bites.** A deliberately bad changed file fails the job.
@@ -342,6 +413,18 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    `markdown-link-check`), with a per-linter positive control. Fails if any of the 19 is missing, if
    an unlisted linter appears, or if the exclusion list grows — **and it fails when
    `.trunk/trunk.yaml` is reduced**, which the revision-5 wording could not.
+
+   **What this cell does and does not prove (codex + agy, r6).** It is a *membership* oracle over the
+   configuration, not proof that each linter executes: a static parse cannot show that `shellcheck`
+   actually diagnosed anything. The claim is scoped to membership accordingly, and the per-linter
+   positive controls are named as a separate, explicitly listed set of fixtures rather than implied.
+
+   **Maintenance rule, without which the freeze becomes the defect.** A frozen oracle fails on every
+   *legitimate* linter change, and the obvious repair — regenerate it from the config — restores the
+   very coupling the freeze removed. So: an intentional add, removal or rename updates the frozen 19
+   **in the same commit, under review, with the reason recorded**; a **version-only** bump does not
+   touch the oracle, because the oracle holds names, not versions. A coordinated edit to config and
+   oracle together is out of this cell's reach by construction — that is what review is for.
 5. **No autofix.** The job never mutates the tree.
 6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
    reason** (codex + agy, r5). Prepend to `CHANGELOG.md` → green with no edit. Then: content change →
@@ -376,8 +459,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    what; a mutation test demanding green could never pass. **A cell that cannot pass is the mirror of
    one that cannot fail, and worth as little.** The observable is the *presence or absence of the
    specific diagnostic*, which isolates the assertion under test from everything else in the case.
-8. **The detector fires from `.githooks/pre-commit`**, not from a direct unit call — and **never
-   blocks the commit**, asserted by a mismatch case whose commit still succeeds.
+8. **The detector fires from BOTH real entry points**, not from a direct unit call: from
+   `.githooks/pre-commit`, and from the project `SessionStart` hook (§3b). Assert each surface
+   invokes it, that a mismatch **never blocks** — a mismatch case whose commit still succeeds, and a
+   session that still starts — and that Table A's silent rows produce **no output at all**, so an
+   equal or locally-newer install cannot train people to ignore the warning.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
    absent-or-false, no custom `--upstream`, no `--fix`, `actions/checkout` SHA-pinned — and
    **`arguments:` PRESENT and equal to §6.4's declared literal as a whole string** (§1) — absence is
@@ -389,9 +475,24 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     artifact is produced, uploaded by the action's own SHA-pinned `actions/upload-artifact` step
     under `if: always() && env.TRUNK_UPLOAD_ANNOTATIONS == 'true'`. **No added token scope**: the
     upload uses the Actions runtime, not `GITHUB_TOKEN` permissions, so `contents: read` stands.
-11. **`trunk-check`'s workflow cannot be dispatched, and its job never skips.** Assert that the
-    workflow defining `trunk-check` has **no `workflow_dispatch` trigger**, **no `workflow_call`
-    trigger**, and **no path/branch filters**; and that the job carries **no `if:`** at all.
+11. **There is no state in which `trunk-check` reports a *success* without Trunk having run.**
+    Revision 6 asserted four structural keys and claimed that property; codex r6 enumerated seven
+    further paths it did not cover. The full assertion set:
+    * **triggers** — no `workflow_dispatch`, no `workflow_call`; `branches:` present and equal to the
+      ruleset's target set; **no `paths:`/`paths-ignore:`** (§1);
+    * **nothing that skips** — no job-level `if:`, **no `if:` on the Trunk step**, no `needs:` (a
+      failed dependency skips the job, and a skipped job reports success), no `strategy.matrix`;
+    * **nothing that masks** — **no `continue-on-error` at job level or on the Trunk step**; a
+      step-level `continue-on-error` turns a *failed* Trunk run into a successful job, which is the
+      original bypass wearing different clothes;
+    * **exactly one, unconditional Trunk invocation**, whose own step outcome is what cell 12
+      observes.
+
+    **Scope the claim honestly.** Cancellation, job timeout and setup failure *do* report conclusions
+    without Trunk running — `cancelled`, `timed_out`, `failure` — but every one of them **blocks**
+    rather than satisfies, so they are outside this cell's property. Revision 6 claimed no conclusion
+    could be reported at all, which is false; the property that matters is that none of them can
+    report **success**.
 
     **This cell has been wrong twice, in opposite directions, and both failures were in what it
     ASSERTED rather than in the design it tested.** Revision 3 asserted the prose property "the job
@@ -405,8 +506,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     r3 + r5). Observe a real `trunk-check` check run on a `main` PR **and** on an `alpha` PR — green
     and red on each — before the context is required. Fails if either base produces no check run.
 
-    **Each observation is bound to its provenance**, not merely to the context name: the workflow
-    **file path**, the job id, the exact head **SHA**, and the reported **conclusion**. Without that
+    **The red observation is bound to the Trunk STEP, not the job** (codex, r6). A job conclusion of
+    `failure` proves only that *something* failed — suppress Trunk's failure and let an unrelated
+    fixture step fail and the cell still sees red. The evidence must name the Trunk step's own failed
+    outcome and its expected diagnostic. **Each observation is bound to its provenance**: the
+    workflow **file path**, the job id, the exact head **SHA**, and the reported **conclusion**. Without that
     binding a duplicate `trunk-check` defined elsewhere (cell 14) could supply the evidence while the
     intended job never ran. **And the evidence must come from the STRICT job**: re-fetch both base
     tips immediately before M4 and confirm each still contains a byte-equivalent strict job, since
@@ -427,11 +531,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
     Fails if the hook is advisory, scopes to the whole tree, checks the worktree instead of the
     index, mutates either, is unbounded, or swallows a prior failure.
-14. **Exactly one producer defines `trunk-check`, repo-wide** (codex, r5). Census every file under
-    `.github/workflows/` and assert exactly one job with that id. A second definition would let cell
-    9 validate the intended job while a duplicate satisfies the required context, and GitHub's own
-    protected-branch guidance warns that same-named required jobs across workflows produce ambiguous
-    results. Fails on zero producers or more than one.
+14. **Exactly one producer emits the context name `trunk-check`, repo-wide** (codex, r5 + r6).
+    Census every file under `.github/workflows/` and assert exactly one job whose **effective check
+    name** is `trunk-check` — that is, its explicit `name:` where present, **otherwise** its job id.
+    **Keying on the job id alone is the wrong identifier** (codex, r6): a job declared
+    `jobs.something-else` with `name: trunk-check` produces exactly the same required context, so an
+    id-only census reports one producer while two exist. A second producer would let cell 9 validate
+    the intended job while a duplicate satisfies the rule, and GitHub's protected-branch guidance
+    warns that same-named required checks across workflows give ambiguous results. Fails on zero
+    producers or more than one.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -553,9 +661,9 @@ required gate that fails on someone else's outage is worse — but it is a real 
   (§1): `on:` is `pull_request` + `push` to the gated bases, with **no `workflow_dispatch`, no
   `workflow_call`, no path filters, and no job-level `if:`** — each of those reintroduces a state in
   which the context reports a conclusion without Trunk running. SHA-pinned action + checkout, no
-  `check-mode`/`post-annotations`/custom upstream, `arguments: --filter=-markdown-link-check`
-  (§6.4's literal), `save-annotations: true` with `contents: read` (§6.1's decision), and an explicit
-  empty-diff guard step (cell 1).
+  `check-mode`/`post-annotations`/custom upstream, `arguments:` set to §6.4's declared literal
+  (stated there, not here), `save-annotations: true` with `contents: read` (§6.1's decision), and an
+  explicit empty-diff guard step (cell 1).
 * `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
   which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
@@ -567,6 +675,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
   check (§6.3 decided: wire it), **and** the §3b detector call
 * **`scripts/detect-plugin-version-drift.sh`** — the §3b detector, named here rather than left as
   "the detector script" (codex, r5), so cell 8 has a concrete entry point
+* **`.claude/settings.json`** — a project `SessionStart` hook invoking that detector, the surface
+  that fires while a stale install is actually running (§3b)
 * **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11 and 14 (workflow parsing, the
   frozen 19-linter set, the `arguments:` literal, the producer census)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
@@ -602,7 +712,10 @@ That is the recurring shape in this repo — **derive the family, do not fix wha
 exist at job scope, so the job stayed reachable on dispatch and the cell that was supposed to catch
 that asserted a prose property no parser could evaluate. **A fix expressed in a construct the platform
 does not have is not a fix, and a cell phrased as prose cannot tell the difference.** Both arms caught
-it; the guard is now a literal `if:` expression and cell 11 asserts that literal.
+it. **That fix was itself superseded in revision 6** — the literal `if:` guard reported Success on a
+skip, so the trigger was removed instead. This sentence described a design two revisions dead until
+agy r6 caught it: **a correction written into the notes is not a correction to the design**, and
+prose about superseded mechanisms is exactly where stale text hides from a diff.
 
 **Revision 3's second defect was a negative control that reds for the wrong reason.** Cell 7's
 restored-legacy-source case trips an independent check before reaching the assertion under test —
