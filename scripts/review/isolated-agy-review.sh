@@ -33,6 +33,19 @@
 #       wrote anything else there (a reviewer in agent mode is the COREDEV-2607 signature)
 set -uo pipefail
 
+# NO BYTECODE FROM THIS HARNESS, ANYWHERE (COREDEV-2650; extended after PR #81 review).
+# The reviewer subshell below sets this too — that is the load-bearing one, because a `.pyc` inside
+# the DISPOSABLE checkout is read as reviewer tampering and voids the round. Setting it here as well
+# covers this script's OWN python helpers (containment.py, stage-bound-plan.py, stage-prompt.py),
+# which write into the LIVE checkout's `scripts/review/__pycache__/`.
+# STATED PRECISELY, because the review comment that prompted this inferred more than holds: a live-tree
+# `.pyc` canNOT void a round. `__pycache__/` is gitignored (.gitignore:38) and `tree_fingerprint`
+# hashes HEAD + `status --porcelain` + TRACKED content + git metadata, so an ignored untracked file is
+# invisible to it. Measured: the live fingerprint was byte-identical before, during and after a
+# synthetic `.pyc` was planted. This is hygiene and defence-in-depth, not a fix for an observed void.
+export PYTHONDONTWRITEBYTECODE=1
+
+
 _sha256() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
 
 [ "$#" -ge 2 ] || { echo "usage: $0 <prompt-file> <allocated-path> [timeout]" >&2; exit 1; }

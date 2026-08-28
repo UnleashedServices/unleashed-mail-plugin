@@ -13,6 +13,29 @@ from the host app's `MAJOR.MINORRELEASE.YYMMBB` scheme in `docs/VERSIONING.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **Review harness: Python bytecode is no longer mistaken for reviewer tampering** (COREDEV-2650).
+  The isolated review wrappers fingerprint their disposable checkout afterwards and void the round
+  if it changed — the COREDEV-2607 defence. A reviewer that imported a repo module to *reproduce a
+  measured claim* made CPython write `__pycache__/*.pyc` beside the source, and that bytecode read
+  as tampering. It voided three rounds on COREDEV-2711 (kimi at r1; agy and kimi at r8, leaving that
+  round resting on a single arm). `PYTHONDONTWRITEBYTECODE=1` is now exported in the reviewed
+  process, and — after the PR #81 review — at the top of each wrapper so the harness's own Python
+  helpers stop writing bytecode into the live checkout too. The fingerprint itself is deliberately
+  unchanged: excluding `__pycache__` would be a blacklist in exactly the directory a real mutation
+  would hide in.
+
+### Added
+- **Trunk lint configuration — 38 linter entries, plus `zizmor` for workflow security** (COREDEV-2771).
+  Config only; wiring it into CI and deciding required-vs-advisory is tracked separately
+  (COREDEV-2780), as is remediating the findings it exposes (COREDEV-2787).
+
+### Documentation
+- **COREDEV-2711 §2 plan gated** — the agent-spawn-guard design, with its §3a measurement and
+  fixture evidence committed under `docs/planning/evidence/`. `review-verdict.py verify` returns
+  GATE OK (codex + gemini APPROVE) bound to the plan's digest. The guard itself is **not**
+  implemented; this records the approved design and the payloads it rests on.
+
 ## [2.8.2] — 2026-08-24
 
 ### Fixed
