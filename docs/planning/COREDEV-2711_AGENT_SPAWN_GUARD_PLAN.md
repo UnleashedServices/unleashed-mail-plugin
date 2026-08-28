@@ -155,7 +155,9 @@ refused to infer a third time. It no longer has to.
 
 Captured 2026-08-27 against plugin 2.8.2, plan HEAD `09f7719`, in a session where
 `unleashed-mail:tester` — the plugin-ONLY name with no user-scope shadow — resolved and returned
-correctly. Raw payloads: `~/.claude/handoffs/COREDEV-2711-section3a-measurement.json`.
+correctly. Raw payloads, committed: `docs/planning/evidence/COREDEV-2711-section3a-measurement.json`
+(sha256 `3f573fc52aec8d87`). All three r12 arms found this line still naming the pre-commit
+`~/.claude/handoffs/` copy — the very "uncommitted raw" §7's fixture rule rejects.
 
 | field | measured | what it settles |
 |---|---|---|
@@ -163,7 +165,7 @@ correctly. Raw payloads: `~/.claude/handoffs/COREDEV-2711-section3a-measurement.
 | caller `agent_id` (plugin sub-agent) | `ad9622e20033905b5`, non-empty | `is_subagent` is decidable |
 | caller `agent_id` (main thread, same capture) | **absent** | P0, confirmed from the other side |
 | callee `tool_input.subagent_type` | `unleashed-mail:security-reviewer` | rule 6' compares a real value |
-| Pre/Post correlation | both pairs matched on `tool_use_id`, outcome `completed` | the outcome mechanism works |
+| Pre/Post correlation | both pairs matched on `tool_use_id`, outcome `completed` | the SUCCESS outcome path works |
 
 **Method, stated so it can be repeated or attacked.** A temporary `PreToolUse`/`PostToolUse` hook on
 `Agent` recorded payloads verbatim and exited 0 emitting nothing, so it could not influence what it
@@ -171,6 +173,24 @@ measured; it was verified to record both valid and malformed input *before* use;
 restored byte-identically afterwards (`cmp` clean). The `agent_id` in the payload matches the id the
 `Agent` tool returned for that sub-agent, which is an independent cross-check that the record belongs
 to the spawn it claims to.
+
+**WHAT THE FOUR PAYLOADS DO NOT PROVE (codex, r12).** Two things in this section rest on evidence of
+different weight, and the distinction is load-bearing:
+
+* **Demonstrated by the committed artifact:** the caller and callee spellings, `agent_id` present /
+  absent, the `tool_use_id` correlation, the `completed` outcomes, the 2-part form, and the
+  `agent_id` ↔ `Agent`-tool-return cross-check. All independently re-derived by all three r12 arms.
+* **Operational attestations, NOT demonstrated by the payloads:** that the hook exited silently, that
+  it was verified against malformed input before use, and that settings were restored
+  byte-identically. Those are claims about the METHOD; the artifact cannot corroborate them. They are
+  reproducible — the method is stated above precisely enough to repeat — but a reader should know
+  which half they are taking on trust.
+
+**AND THE SCOPE IS NARROWER THAN "A PLUGIN SUB-AGENT" (codex, r12).** This is ONE session, ONE
+install, ONE plugin version (2.8.2), ONE caller, ONE **declared** callee, and ONE **successful**
+outcome. `PostToolUseFailure` is not exercised at all, so §7's fixture requirement naming it is met
+only on its success half. The generalisation the design actually needs is narrow — that the runtime
+scopes `agent_type` for plugin sub-agents — and §7.7's probe, not this capture, is what keeps it true.
 
 **One correction, recorded because this plan's history is made of exactly this.** The first analysis
 script reported `agent_type` **ABSENT** and correlation **FAILED** — both artifacts of the script
