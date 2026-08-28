@@ -1,0 +1,105 @@
+# This file controls the behavior of Trunk: https://docs.trunk.io/cli
+# To learn more about the format of this file, see https://docs.trunk.io/reference/trunk-yaml
+version: 0.1
+cli:
+  version: 1.25.0
+# Trunk provides extensibility via plugins. (https://docs.trunk.io/plugins)
+plugins:
+  sources:
+    - id: trunk
+      ref: v1.11.0
+      uri: https://github.com/trunk-io/plugins
+# Many linters and tools depend on runtimes - configure them here. (https://docs.trunk.io/runtimes)
+runtimes:
+  enabled:
+    - go@1.21.0
+    - node@22.16.0
+    - python@3.14.4
+# This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
+lint:
+  enabled:
+    # --- security ---------------------------------------------------------------
+    - zizmor@1.29.0 # GitHub Actions static analysis (auditor persona, see definitions)
+    - gitleaks@8.30.1
+    - trufflehog@3.96.0
+    - bandit@1.9.4
+    - checkov@3.3.11
+    # --- correctness ------------------------------------------------------------
+    - mypy@2.3.1 # static types for the 66 Python files; pinned to py39, the CI floor
+    - ruff@0.16.3
+    - shellcheck@0.11.0
+    - actionlint@1.7.12
+    - pinact@4.1.1 # keeps CI actions SHA-pinned (AGENT_CONTRACTS.md §6)
+    - git-diff-check
+    # --- docs -------------------------------------------------------------------
+    - markdownlint@0.49.1
+    - markdown-link-check@3.15.0 # the automated half of the cross-reference check
+    - codespell@2.4.3
+    # --- formatting -------------------------------------------------------------
+    - black@26.5.1
+    - isort@8.0.1
+    - prettier@3.9.6
+    - shfmt@3.13.1
+    - taplo@0.10.0
+    - yamllint@1.38.0
+
+  definitions:
+    # zizmor's default `regular` persona minimises false positives. This repo would rather
+    # see everything and suppress case by case in .github/zizmor.yml, so run the most
+    # aggressive persona. `auditor` explicitly accepts false positives.
+    - name: zizmor
+      commands:
+        - name: lint
+          output: sarif
+          run: zizmor --persona=auditor --format=sarif ${target}
+          success_codes: [0]
+          batch: true
+          cache_results: true
+          is_security: true
+
+    # Trunk invokes `gitleaks detect --no-git --source=<target>` with NO --config flag, and
+    # scans a sandboxed COPY of the targets -- so the repo's carefully tuned .gitleaks.toml
+    # (the one CI's history-aware scan uses) was never being read, and its allowlists for the
+    # redactor's synthetic fixture corpus never applied. Point gitleaks at the real file.
+    - name: gitleaks
+      environment:
+        - name: GITLEAKS_CONFIG
+          value: ${workspace}/.gitleaks.toml
+
+    # Trunk invokes markdown-link-check with no -c, so it had no config at all: no retry on
+    # 429, no timeout, and no way to exempt the deliberate cross-repo links into the sibling
+    # app repo. Pass the config explicitly.
+    - name: markdown-link-check
+      commands:
+        - name: lint
+          output: sarif
+          run:
+            markdown-link-check -q -c "${workspace}/.trunk/configs/markdown-link-check.json"
+            "${target}"
+          success_codes: [0, 1]
+          cache_results: false
+          read_output_from: stdout
+          parser:
+            runtime: python
+            run: python3 ${plugin}/linters/markdown-link-check/parse.py --target="${target}"
+
+  ignore:
+    # trufflehog on the test corpora: all 26 findings were synthetic secret-shaped strings that
+    # tests need in order to assert redaction/parsing. Scoped by PATH and by LINTER, so every
+    # detector -- Lob included -- stays live everywhere else in the repo.
+    - linters: [trufflehog]
+      paths:
+        - scripts/tests/**
+        - mcp/review-synthesizer/tests/**
+    # Local-only trees: git worktrees (excluded in .git/info/exclude) and Trunk's own state.
+    - linters: [ALL]
+      paths:
+        - .claude/**
+        - .trunk/**
+actions:
+  disabled:
+    - trunk-announce
+    - trunk-check-pre-push
+    - trunk-fmt-pre-commit
+  enabled:
+    - trunk-upgrade-available

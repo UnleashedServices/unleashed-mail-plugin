@@ -1,0 +1,92 @@
+# Aggressive ruff config for the unleashed-mail plugin repo.
+#
+# target-version is the load-bearing setting here. CI byte-compiles the load-bearing
+# scripts on Python 3.9 (the macOS stock runtime) precisely to catch "PEP-604 / match /
+# walrus regressions" -- see the py39 job in .github/workflows/plugin-ci.yml. Pinning ruff
+# to py39 moves that gate left: the UP/FA rules now flag 3.10+ syntax at lint time instead
+# of at the tail of a CI run.
+target-version = "py39"
+line-length = 100
+
+[lint]
+# Broad by design. Two families are deliberately NOT selected because another enabled
+# linter already owns them, and running both reports every finding twice:
+#   S  -> bandit is enabled (and configured in .trunk/configs/.bandit)
+#   I  -> isort is enabled (and configured in .trunk/configs/.isort.cfg)
+select = [
+  "F",     # pyflakes -- real bugs
+  "E",     # pycodestyle errors
+  "W",     # pycodestyle warnings
+  "N",     # pep8-naming
+  "D",     # pydocstyle
+  "UP",    # pyupgrade (bounded by target-version = py39)
+  "YTT",   # sys.version misuse
+  "ASYNC", # async correctness
+  "BLE",   # blind except
+  "FBT",   # boolean trap
+  "B",     # bugbear
+  "A",     # builtin shadowing
+  "C4",    # comprehensions
+  "DTZ",   # naive datetimes
+  "T10",   # stray debugger
+  "EXE",   # shebang / exec-bit agreement -- this repo ships 42 executable scripts
+  "FA",    # missing `from __future__ import annotations` (py39 + PEP 604)
+  "ISC",   # implicit string concat
+  "ICN",   # import conventions
+  "LOG",   # logging correctness
+  "G",     # logging format
+  "INP",   # implicit namespace packages
+  "PIE",
+  "PYI",
+  "PT",    # pytest style
+  "Q",     # quote consistency
+  "RSE",
+  "RET",   # return-path simplification
+  "SLF",   # private member access across objects
+  "SIM",   # simplification
+  "TID",   # tidy imports
+  "TC",    # type-checking blocks
+  "ARG",   # unused arguments
+  "PTH",   # os.path -> pathlib
+  "PGH",   # blanket `noqa` / blanket `type: ignore`
+  "PL",    # pylint
+  "TRY",   # tryceratops
+  "FLY",
+  "PERF",
+  "FURB",
+  "RUF",
+]
+
+ignore = [
+  "E501",   # line length is the formatter's job (black)
+  "D203",   # mutually exclusive with D211; ruff recommends keeping D211
+  "D213",   # mutually exclusive with D212; ruff recommends keeping D212
+  "COM812", # trailing-comma rules fight the formatter
+  "ISC001", # single-line implicit concat fights the formatter
+  "Q000",   # quote style is black's job; ruff and black disagree and black wins
+
+  # This is a UNITTEST codebase -- CI runs `python3 -m unittest discover`, not pytest.
+  # PT009 (4,005 findings) wants every `self.assertEqual` rewritten to a bare `assert`,
+  # which is the precise change plugin-ci.yml warns against: "No bare `assert`: python3 -O /
+  # PYTHONOPTIMIZE strips those and the step would exit 0 over a red suite." Obeying this
+  # rule would CREATE the failure mode the repo keeps a gate for. PT027 is the same mistake
+  # for assertRaises.
+  "PT009",
+  "PT027",
+]
+
+[lint.per-file-ignores]
+# Test suites legitimately do things production code should not.
+"scripts/tests/*" = [
+  "D",       # test names are the documentation
+  "PLR2004", # magic values are the point of a fixture
+  "SLF001",  # tests reach into privates deliberately
+  "ARG",     # unittest signatures carry unused args
+  "N802",    # this suite CAPITALISES for emphasis on purpose
+             # (test_the_anchor_is_NOT_widened), and unittest's own setUp/tearDown
+             # are camelCase by API contract. N802 stays ON for production code.
+]
+"mcp/review-synthesizer/tests/*" = ["D", "PLR2004", "SLF001", "ARG", "N802"]
+
+[lint.pydocstyle]
+convention = "google"
