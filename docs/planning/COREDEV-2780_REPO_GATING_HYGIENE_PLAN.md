@@ -192,6 +192,27 @@ checked nothing:
 
 These change the repo's security or merge posture. **None is taken unilaterally.**
 
+### 6.0 — DECIDED 2026-08-28 (maintainer): the alpha base
+
+r2 established that `alpha` is a protected base under ruleset `Control` with **no trunk config**
+(`.trunk/trunk.yaml` ABSENT on `origin/alpha`), and is **611 commits behind `main`, 0 ahead**. So the
+job cannot diff there, and COREDEV-2771 requires that landing to be its own PR.
+
+**Maintainer decision — all three, in this order:**
+
+1. **Bring `alpha` up to date with `main`** (611 commits). This is a protected-branch operation on a
+   long-diverged base and is a discrete piece of work, not a step inside M2.
+2. **Land the trunk configuration on `alpha`** as its own PR, per COREDEV-2771's separate-PR
+   requirement. Only meaningful after (1) — config measured against `main`'s tree does not describe a
+   tree 611 commits older.
+3. **Gate `main`.** The required context proceeds for `main`.
+
+This resolves the M2 blocker and removes the §6.2 hazard where a ruleset targeting both bases would
+require a context `alpha` could not satisfy — after (1) and (2), it can.
+
+**Sequencing consequence to carry into revision 3:** M2 gains an explicit precondition on (1) and (2),
+and M4's ruleset change must state which bases the required context applies to at the time it is added.
+
 ### 6.1 — `checks: write` on the CI workflow
 
 The workflow is `contents: read` today. To annotate PRs the action needs `checks: write`.
