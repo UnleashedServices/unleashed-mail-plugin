@@ -155,7 +155,18 @@ fi
 # with a Markdown bullet ("- item") would otherwise be parsed as a flag and fail the round after a
 # leaf was allocated and the checkout built (2026-08-17 audit, AF-11).
 # stdout only is silenced; pty-capture's stderr diagnostics pass through (AF-10) — see the agy arm.
-( cd "$TREE" && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
+# PYTHON BYTECODE IS NOT A REVIEWER MUTATION (COREDEV-2650; it voided COREDEV-2711 r1 and r8).
+# A reviewer that IMPORTS a repo module to reproduce a measured claim — the single best thing a
+# reviewer can do, and what this round's prompt asks for — makes CPython write `__pycache__/*.pyc`
+# beside the source. This harness fingerprints the disposable checkout afterwards, so that
+# bytecode read as `ROUND VOID: the reviewer left edits … COREDEV-2607 signature` and threw away a
+# valid review whose finding was independently confirmed by another arm. At r8 it voided TWO of
+# the three arms this way — agy and kimi — leaving the round resting on codex alone. The check
+# is right and
+# keeps its teeth; what was wrong is letting the artefact exist. Suppress it at the source rather
+# than excluding a path from the manifest — an exclusion is a blacklist a real mutation could hide
+# behind, and `scripts/__pycache__/` is exactly where it would hide.
+( cd "$TREE" && export PYTHONDONTWRITEBYTECODE=1 && python3 "$PLUGIN_WRITER" --timeout "$TIMEOUT" --allocated "$OUT" -- \
     codex exec -c model_reasoning_effort=xhigh -s read-only -- "$(cat "$TREE/$PROMPT_REL")" ) >/dev/null
 RC=$?
 
