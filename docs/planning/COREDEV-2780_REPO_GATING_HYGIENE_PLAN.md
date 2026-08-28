@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 5
+**Status:** Planning, revision 6
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r5** `7b7a459`: codex `REQUEST_CHANGES` (5 DESIGN + 6 COMPLETENESS) + agy `REQUEST_CHANGES`
+> (2 DESIGN + 4 COMPLETENESS). **codex inverted revision 4's central fix**: a job skipped by an `if:`
+> reports **Success** to a required context, so the guard *created* the bypass it was meant to close,
+> and cell 11 would have certified it. Verified against GitHub's own troubleshooting doc. Revision 6
+> moves the job to its own workflow with no `workflow_dispatch` trigger. codex also found the r4
+> cell-7 repair **impossible as written**, cell 6 confounded the same way cell 7 was, and §3b's
+> "only mechanism" claim false.
 > **r4** never launched: the capture wrapper rejected a malformed round operand and failed closed
 > before either reviewer started, so no transcript exists and no round was consumed. Revision 5 then
 > closed §6.1 and §6.3 with maintainer decisions, so round 5 reviews a decision-complete plan.
@@ -81,24 +88,35 @@ The pinned action **autodetects `workflow_dispatch` as `check-mode=all`**
 (`determine_check_mode.sh` @ `e1234e67`). That would re-litigate all 9027 findings and directly
 contradict this section's central claim.
 
-**Resolution: a job-level `if:` guard.** Revision 3 wrote this as a job-level `on:` — **a key
-GitHub Actions does not support at job scope.** `on:` is a workflow key; `plugin-ci.yml:10` declares
-it with `workflow_dispatch:` under it at `:20`, so *every* job in that file is reachable on dispatch.
-Revision 3 therefore relocated the contradiction into a construct that cannot exist. Both arms caught
-it (codex + agy, r3), and it was confirmed against the workflow directly.
+**This hazard has now defeated two fixes, each in a different way. The third does not guard the
+job — it removes the trigger.**
 
-The mechanism:
+* **Revision 3** wrote a job-level `on:`. **GitHub has no such key at job scope**, so the job stayed
+  reachable on dispatch and the contradiction was merely relocated (codex + agy, r3).
+* **Revision 4** replaced it with `if: github.event_name != 'workflow_dispatch'`. Valid syntax — and
+  **strictly worse**, because it converts the hazard into a *silent pass* (codex, r5).
 
-```yaml
-jobs:
-  trunk-check:
-    if: github.event_name != 'workflow_dispatch'
-```
+**Why the `if:` guard is a bypass, not a fix.** GitHub's own troubleshooting documentation states
+that when *"a job is skipped by a conditional"*, **"the job reports 'Success'"** — and a required
+context is satisfied by that success. `workflow_dispatch` can be aimed at any branch, so dispatching
+`plugin-ci.yml` at an internal PR's head branch would attach a **successful, skipped** `trunk-check`
+to that PR's head SHA **without Trunk ever running**. Cell 11, asserting the literal `if:`, would
+have *certified* the bypass. The same doc gives the general rule directly: **"Avoid requiring
+workflows that can be skipped."**
 
-Cell 11 asserts **that exact guard expression on `jobs.trunk-check`** — not the prose property "not
-reachable on dispatch", which no parser can check and which revision 3's wording would have satisfied
-with an unsupported key. If a manual full-tree run is ever wanted it belongs in the scheduled
-COREDEV-2787 report, under its own non-required context.
+**Resolution: `trunk-check` moves to its own workflow file, `.github/workflows/trunk-check.yml`,
+whose `on:` contains `pull_request` and `push` to the gated bases and *no* `workflow_dispatch`.**
+The job is then unreachable on dispatch by construction rather than by condition, so there is no
+skipped-success state to exploit. **No `if:` guard on the job, and no path filters** — the same doc
+notes a workflow skipped by path/branch filtering leaves checks **Pending, which blocks merging**, so
+filters would trade a false pass for a permanent block.
+
+This does not change the context name: required checks name **jobs**, not workflows, so the context
+stays `trunk-check`. It does mean the repo now has two workflows that must not both define a job by
+that name — see cell 14's uniqueness census.
+
+If a manual full-tree run is ever wanted it belongs in the scheduled COREDEV-2787 report, under its
+own non-required context.
 
 ### The job contract
 
@@ -108,13 +126,23 @@ COREDEV-2787 report, under its own non-required context.
 * **SHA-pinned `actions/checkout`** in the job. The action does not check out the caller's repo
   itself; its internal checkout is conditional on a separate target-checkout mode (codex, r2).
 * **Omitted:** `check-mode`, `post-annotations`, any custom `--upstream`, any `--fix`.
-* **`arguments:` is GOVERNED, not merely unmentioned (agy, r3).** Verified at the pinned SHA:
-  `INPUT_ARGUMENTS` is word-split into the `trunk check` command line in **both** `pull_request.sh`
-  and `push.sh`, so §6.4's exclusion necessarily travels through this input — and revision 3's
-  contract never named it, leaving cell 9 unable to distinguish the authorised filter from an
-  arbitrary one. **The contract: `arguments:` is either absent, or *exactly* §6.4's declared
-  exclusion filter** — asserted by cell 9 as a literal whole-string match, never a substring or a
-  "contains `--filter`" test, both of which an added argument would still satisfy.
+* **`arguments:` is GOVERNED, and its value is DECLARED (agy r3; corrected codex r5).** Verified at
+  the pinned SHA: `INPUT_ARGUMENTS` is word-split into the `trunk check` command line in **both**
+  `pull_request.sh` and `push.sh`, so §6.4's exclusion necessarily travels through this input.
+  Revision 5 governed the input but left two holes codex found: it permitted `arguments:` to be
+  **absent**, which after §6.4 was decided is no longer an authorised implementation (absent means
+  `markdown-link-check` *runs* in the required job); and §6.4 never declared the literal bytes cell 9
+  was told to match, so **the cell could not be executed as written**.
+
+  **The contract, with the literal declared exactly once (§6.4 is the single source):**
+
+  ```yaml
+  arguments: --filter=-markdown-link-check
+  ```
+
+  `arguments:` **must be present and must equal that scalar**, asserted by cell 9 as a whole-string
+  match — never a substring or a "contains `--filter`" test, both of which an appended argument would
+  still satisfy. **Absence is a failure**, not a permitted variant.
 * **Stable job + context name** — `trunk-check`, so the ruleset context is nameable and cannot drift.
   Runner `ubuntu-latest`, explicit `timeout-minutes`.
 * **No autofix.** `trunk fmt` / `trunk-fmt-pre-commit` stays disabled, per COREDEV-2771.
@@ -198,9 +226,26 @@ row contradicts**; that claim is withdrawn.
 | both entries advance and stay advanced | **warn** — drift is operator-recoverable; the hook surfaces it |
 | a 2.7.0 entry reappears | **warn + record**; the reappearance is the root-cause signal, and COREDEV-2801 stays open with the detector as the instrument |
 | **user advances, project stays stale** | **warn** — and this is the *expected* shape: §3a updates **user scope only**, while the record holds separate user and project entries both at `2.7.0`. Revision 3's table omitted the outcome its own experiment was most likely to produce (codex, r3) |
+| **project advances, user stays stale** | **warn + record** — the inverse was omitted too (codex + agy, r5); it would mean the update did not act on the scope it was aimed at, which is a *stronger* root-cause signal than the expected shape |
 | **nothing advances / the update fails** | **warn + record**, and §3a's containment claim is **not** established; COREDEV-2801 keeps the remedy blocked |
 | the record's shape is not as expected (schema drift, entries absent) | **silent no-op**, and record the observed shape — an unrecognised record is not evidence of drift |
 | entries cannot be read at all | **silent no-op** — never fail a commit on absent plugin state |
+
+**The table's terms, defined so two rows cannot both match** (codex + agy, r5 — revision 5's rows
+were neither exhaustive nor mutually exclusive):
+
+* **"advance"** means the entry equals **the exact version expected** — the repo's
+  `.claude-plugin/plugin.json` at the time of the run — not merely "changed" and not "greater".
+* **Comparison is directional**: `installed < expected` is drift and warns; `installed > expected`
+  (a locally newer install) is **not** drift and must not warn, or every development clone reports a
+  false positive.
+* **The update command's exit code takes precedence over the record**: a nonzero result classifies
+  as *update-failure* even if some entry moved, so a partial mutation followed by a failure is not
+  read as success.
+* **"stay advanced"** is observed over a **named interval**, recorded with the run; an outcome with
+  no stated interval is not evidence of persistence.
+* The **record's readability and schema** are captured on every run, so an unrecognised shape is
+  distinguishable from drift.
 
 It **never blocks a commit.** A version-drift detector that fails `git commit` would be a worse
 defect than the one it reports.
@@ -211,12 +256,23 @@ below is retained because it is *why* no alternative caller exists, not a live b
 * **§6.3 = wire the hook** *(the decision)* → §3b is built as described, caller
   `.githooks/pre-commit`.
 * **§6.3 = CI-only** *(rejected)* → §3b would have been **dropped** entirely, COREDEV-2801 keeping
-  the §3a diagnostic alone. There is no third caller. The detector must run **from the checkout** (the bootstrap
-  constraint) and must read **local machine state** (`~/.claude/plugins/installed_plugins.json`).
-  CI satisfies the first and cannot satisfy the second — a runner has no developer install record. A
-  plugin-shipped hook satisfies the second and cannot satisfy the first — a session pinned to 2.7.0
-  would run 2.7.0's copy, which is the very defect. **Git hooks are the only mechanism that is both**,
-  so "a different caller" does not exist, and M6 is conditional rather than merely unscheduled.
+  the §3a diagnostic alone.
+
+**Alternatives compared, not dismissed (codex, r5).** Revision 5 claimed git hooks were **"the only
+mechanism"** meeting both constraints — run **from the checkout** (the bootstrap constraint) and read
+**local machine state** (`~/.claude/plugins/installed_plugins.json`). **That claim is false**, and
+asserting impossibility where a comparison was owed is itself the defect, even though the conclusion
+survives:
+
+| candidate | from the checkout? | reads local state? | disposition |
+|---|---|---|---|
+| `.githooks/pre-commit` | yes | yes | **CHOSEN** — fires exactly when a version claim is about to be committed; precondition is a manual per-clone `core.hooksPath` |
+| project `.claude/settings.json` `SessionStart` hook | **yes** — committed config, command runs from the tree | **yes** | **viable, rejected on cost** — silently inert wherever the project's settings are untrusted, and fires per *session* rather than per commit |
+| a CI job | yes | **no** — a runner has no developer install record | eliminated |
+| a plugin-shipped hook | **no** — a 2.7.0-pinned session runs 2.7.0's copy | yes | eliminated: it *is* the defect |
+
+Both surviving candidates carry a reachability precondition, so the choice is a trade, not a
+necessity. **M6 is unconditional** because §6.3 is decided, not because no alternative existed.
 
 ## §4 — Milestones
 
@@ -227,26 +283,36 @@ below is retained because it is *why* no alternative caller exists, not a live b
       second step was therefore redundant work on an already-satisfied precondition.
 - [ ] **M1** (independent of M0/M2) — COREDEV-2798 class-specific content-addressing, anchors
       demoted, `:342`/`:355` updated, cells 6–7 with negative controls.
-- [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true`,
-      with the §1 `if:` dispatch guard.
+- [ ] **M2** (**after M0**) — add the `trunk-check` job, diff-scoped, `continue-on-error: true`, in
+      its **own workflow file** `.github/workflows/trunk-check.yml` with no `workflow_dispatch` and
+      no path filters (§1). Not a job inside `plugin-ci.yml`, and **no `if:` guard** — see §1 for why
+      both of those were bypasses.
 - [ ] **M2a** (**after M2 — the step revision 3 was missing entirely, codex r3**) — land the job on
       `alpha` too. GitHub runs the workflow **version present at the event's ref**, so a job merged
       only to `main` never executes for an `alpha` PR: `alpha` would carry the config but emit no
       `trunk-check` check run. Requiring the context at M4 would then make it **unsatisfiable on
       `alpha`** — COREDEV-2767's exact failure, aimed at the other protected base.
-- [ ] **M3** — remove `continue-on-error`, then observe **one genuinely strict green run and one
-      deliberately red run**. *Revision 1 would have promoted a context observed only while failures
+- [ ] **M3** — remove `continue-on-error` **on `main` and on `alpha`** — revision 5 said only
+      "remove `continue-on-error`" while M2a had landed the *advisory* job on `alpha`, so the second
+      base would have stayed advisory forever and cell 12 would have blocked M4 rather than
+      completing the rollout (codex, r5). Then observe **one genuinely strict green run and one
+      deliberately red run on each base**. *Revision 1 would have promoted a context observed only while failures
       were suppressed — one that had never been able to fail.*
-- [ ] **M4** — add the required context to ruleset `Control`, **only after M3's red run**, and only
-      with explicit maintainer instruction (§6.2). **State the bases at the time of the change**:
-      `Control` targets `main` and `alpha`, and the context must be satisfiable on both — which M0
-      **and M2a together** make true, not M0 alone. **Evidence required on BOTH bases before M4**:
-      one strict green and one deliberately red `trunk-check` run observed on a `main` PR *and* on an
-      `alpha` PR (cell 12). An unobserved base is an unsatisfiable-context risk, not an assumption.
+- [ ] **M4** — add the required context to ruleset `Control`, **only after M3's red runs on both
+      bases**, and only with explicit maintainer instruction (§6.2). **This gates `main` AND `alpha`
+      simultaneously** — `Control` targets both — so the context must be satisfiable on both, which
+      **M0 + M2a + M3 together** make true; no one of them suffices. **Evidence required on BOTH
+      bases**: one strict green and one deliberately red `trunk-check` run on a `main` PR *and* on an
+      `alpha` PR, each bound to its workflow path, job id, head SHA and conclusion (cell 12). An
+      unobserved base is an unsatisfiable-context risk, not an assumption. **Immediately before the
+      ruleset edit, re-fetch both base tips** and confirm each still carries a byte-equivalent strict
+      job — evidence gathered earlier does not describe bytes that have since drifted.
 - [ ] **M5** — run §3a; record the outcome on COREDEV-2801 as containment.
-- [ ] **M5a** (**§6.3 decided**) — wire the diff-scoped trunk check into `.githooks/pre-commit`,
-      blocking on newly introduced findings, never `--all`, with an explicit timeout; update
-      `CLAUDE.md`'s gate list. Independent of M2/M4 — it gates commits, not merges.
+- [ ] **M5a** (**§6.3 decided**) — wire the trunk check into `.githooks/pre-commit`: **`--index`**
+      (the staged content, not the worktree), **`--no-fix`**, §6.4's exclusion literal, a
+      macOS-portable timeout, and **exit-code aggregation that cannot mask an earlier hook
+      failure**. Blocking on newly introduced findings, never `--all`. Update `CLAUDE.md`'s gate
+      list. Independent of M2/M4 — it gates commits, not merges. Cell 13 carries the controls.
 - [ ] **M6** — implement §3b with caller `.githooks/pre-commit` (§6.3 decided: wire it), posture per
       §3a's decision table. Unconditional as of revision 5.
 
@@ -268,12 +334,27 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 3. **The gate does not over-reach.** (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
-4. **The linter set is the configured set minus the declared exclusions** — and no more. Per-linter
-   positive controls; fails if any non-excluded linter is missing, or if the exclusion list grows.
+4. **The linter set is FROZEN in the test, not derived from the configuration under test**
+   (codex, r5). Revision 5 said "the configured set minus the declared exclusions", which reads the
+   expectation out of `.trunk/trunk.yaml` — **making a silently reduced configuration authoritative
+   over the assertion meant to detect it**, the exact shape this plan's Overview names. The cell
+   instead carries **the 19 expected linter names as literals** (20 enabled, minus
+   `markdown-link-check`), with a per-linter positive control. Fails if any of the 19 is missing, if
+   an unlisted linter appears, or if the exclusion list grows — **and it fails when
+   `.trunk/trunk.yaml` is reduced**, which the revision-5 wording could not.
 5. **No autofix.** The job never mutates the tree.
-6. **quote-keep — relocation passes, and three wrong implementations fail.** Prepend to
-   `CHANGELOG.md` → green with no edit. Then: content change → red; **duplicate source line → red**
-   (kills "at least one"); and the `:342`/`:355` dependencies still hold.
+6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
+   reason** (codex + agy, r5). Prepend to `CHANGELOG.md` → green with no edit. Then: content change →
+   red; **duplicate source line → red** (kills "at least one"); and the `:342`/`:355` dependencies
+   still hold.
+
+   **Two of those three controls were confounded exactly as cell 7's was, and revision 4 fixed only
+   cell 7.** A content change can red through the independent missing-literal census even with the
+   exact-hash assertion deleted; a duplicated source literal can red as an unexpected observed site
+   even against an "at least one" implementation. Both **reach** the branch under test without
+   **proving** it caused the failure. So, as in cell 7: assert the **specific diagnostic** for each
+   case, **or** mutate the zero-count and duplicate-count branches directly and show the diagnostic
+   disappears.
 7. **rewrite — relocation passes, and three wrong implementations fail.** Prepend to `README.md` →
    green. Then: payload change → red; **duplicate destination block → red**; and the
    restored-legacy-source control, **which revision 3 got wrong**.
@@ -288,30 +369,69 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
    **The control as it must be written:** assert the **specific diagnostic** `legacy source payload
    survives` is emitted — not merely that the case is red — **and** mutation-test the deletion of
-   that branch directly, confirming the case goes green without it.
+   that branch by requiring **the diagnostic disappears**.
+
+   **Not "the case goes green" — that is impossible here, and revision 4 wrote it (codex, r5).** The
+   independent `:326` census still fires after the branch is deleted, so the case stays red no matter
+   what; a mutation test demanding green could never pass. **A cell that cannot pass is the mirror of
+   one that cannot fail, and worth as little.** The observable is the *presence or absence of the
+   specific diagnostic*, which isolates the assertion under test from everything else in the case.
 8. **The detector fires from `.githooks/pre-commit`**, not from a direct unit call — and **never
    blocks the commit**, asserted by a mismatch case whose commit still succeeds.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
    absent-or-false, no custom `--upstream`, no `--fix`, `actions/checkout` SHA-pinned — and
-   **`arguments:` absent or matching §6.4's declared filter as a whole string** (§1), so an appended
-   argument cannot pass a substring test.
+   **`arguments:` PRESENT and equal to §6.4's declared literal as a whole string** (§1) — absence is
+   a failure, not a permitted variant (codex, r5), and an appended argument cannot pass a substring
+   test.
 10. **The chosen §6.1 annotation mechanism is present and works** on a non-fork PR — no 403. Under
     option (b) that is checkable rather than merely observed: assert the run takes the
     `--github-annotate-file` branch (**not** `--github-annotate`) and that the `trunk-annotations`
     artifact is produced, uploaded by the action's own SHA-pinned `actions/upload-artifact` step
     under `if: always() && env.TRUNK_UPLOAD_ANNOTATIONS == 'true'`. **No added token scope**: the
     upload uses the Actions runtime, not `GITHUB_TOKEN` permissions, so `contents: read` stands.
-11. **The job carries the literal dispatch guard.** Assert `jobs.trunk-check.if` is exactly
-    `github.event_name != 'workflow_dispatch'`. **Asserting the prose property instead — "the job is
-    unreachable on dispatch" — is what let revision 3 satisfy this cell with a job-level `on:` that
-    GitHub ignores.** The cell must fail if the key is absent, renamed, or expressed as `on:`.
-12. **Both protected bases emit the context** (M4's precondition, codex r3). Observe a real
-    `trunk-check` check run on a `main` PR **and** on an `alpha` PR — green and red on each — before
-    the context is required. Fails if either base produces no check run.
-13. **The pre-commit hook runs the check diff-scoped, blocks, and is bounded** (§6.3). Assert: a
-    staged file with a new finding **fails the commit**; a staged clean file commits with the 9027
-    backlog present (so the hook is not `--all`); and the check runs under its declared timeout.
-    Fails if the hook is advisory, if it scopes to the whole tree, or if it is unbounded.
+11. **`trunk-check`'s workflow cannot be dispatched, and its job never skips.** Assert that the
+    workflow defining `trunk-check` has **no `workflow_dispatch` trigger**, **no `workflow_call`
+    trigger**, and **no path/branch filters**; and that the job carries **no `if:`** at all.
+
+    **This cell has been wrong twice, in opposite directions, and both failures were in what it
+    ASSERTED rather than in the design it tested.** Revision 3 asserted the prose property "the job
+    is unreachable on dispatch", which an unsupported job-level `on:` satisfied. Revision 4 asserted
+    the literal `if:` guard — which is *present and correct* on a job that a dispatch skips into a
+    **reported Success** against the required context, so the cell would have certified the bypass.
+    The property that actually matters is **the absence of any state in which `trunk-check` reports a
+    conclusion without running Trunk**: no dispatch trigger (no skipped-success), no path filter (no
+    permanently-pending block), no conditional (nothing to skip).
+12. **Both protected bases emit the context, from the intended producer** (M4's precondition, codex
+    r3 + r5). Observe a real `trunk-check` check run on a `main` PR **and** on an `alpha` PR — green
+    and red on each — before the context is required. Fails if either base produces no check run.
+
+    **Each observation is bound to its provenance**, not merely to the context name: the workflow
+    **file path**, the job id, the exact head **SHA**, and the reported **conclusion**. Without that
+    binding a duplicate `trunk-check` defined elsewhere (cell 14) could supply the evidence while the
+    intended job never ran. **And the evidence must come from the STRICT job**: re-fetch both base
+    tips immediately before M4 and confirm each still contains a byte-equivalent strict job, since
+    the plan otherwise permits drift between the observation and the ruleset change (codex, r5).
+13. **The pre-commit hook runs the check against the INDEX, blocks, mutates nothing, and is
+    bounded** (§6.3). Assert:
+    * a **staged** file with a new finding **fails the commit** — and, as its discriminating pair, a
+      file that is *bad in the worktree but clean in the index* **does not**, proving `--index` and
+      not the worktree is what is checked;
+    * a staged clean file commits with the 9027 backlog present (so the hook is not `--all`);
+    * `--no-fix` is passed, and **neither the index nor the worktree is modified** by the hook — this
+      Trunk version applies fixes automatically otherwise (codex, r5);
+    * the check runs under its declared timeout, using a **macOS-portable** mechanism, exercised
+      against a sleeping fake `trunk` on the PATH;
+    * the hook's **exit code aggregates**, asserted by making an *earlier* hook command fail while
+      the trunk check succeeds — appending a passing command after `.githooks/pre-commit:7` would
+      otherwise mask its nonzero result.
+
+    Fails if the hook is advisory, scopes to the whole tree, checks the worktree instead of the
+    index, mutates either, is unbounded, or swallows a prior failure.
+14. **Exactly one producer defines `trunk-check`, repo-wide** (codex, r5). Census every file under
+    `.github/workflows/` and assert exactly one job with that id. A second definition would let cell
+    9 validate the intended job while a duplicate satisfies the required context, and GitHub's own
+    protected-branch guidance warns that same-named required jobs across workflows produce ambiguous
+    results. Fails on zero producers or more than one.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -319,7 +439,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
 `alpha` is a protected base under ruleset `Control`, has **no** `.trunk/trunk.yaml`, and is **611
 commits behind `main`, 0 ahead**. Decision, in order: **(1)** bring `alpha` up to date with `main`;
-**(2)** land the trunk configuration there as its own PR; **(3)** gate `main`.
+**(2)** land the trunk configuration there as its own PR; **(3)** gate `main`. *(That is the
+decision as taken, recorded verbatim; steps (2) and (3) are corrected immediately below — read the
+refinement, not this line, as the plan of record.)*
 
 **Refined in r3, against what the repo actually contains — the decision stands, two of its steps
 change.** Step (2) is **subsumed by step (1)**: `.trunk/trunk.yaml` is already on `origin/main`, so
@@ -328,7 +450,13 @@ the `trunk-check` **job** must also reach `alpha` (M2a), because GitHub runs the
 the event's ref — syncing `alpha` *before* M2 brings the config but not the job.
 
 So the sequence is: **(1)** sync `alpha` to `main` (lands the config) → **(2)** add the job on `main`
-(M2) → **(3)** land the job on `alpha` (M2a) → **(4)** gate `main`, with evidence from both bases.
+(M2, in its own workflow) → **(3)** land the job on `alpha` (M2a) → **(4)** make both bases strict
+(M3) → **(5)** add the required context to ruleset `Control`, with evidence from both bases.
+
+**Step (5) is not "gate `main`" (codex + agy, r5).** `Control` targets `main` *and* `alpha`, so
+adding the context gates **both** simultaneously — which is precisely why steps (2)–(4) exist. The
+"gate `main`" shorthand is stale wording from a revision that had not yet established the second
+base, and it understates what the final step does.
 
 This dissolves the §6.2 hazard rather than deferring it: `Control` targets both bases, so a required
 context would otherwise have demanded something `alpha` could not satisfy — the COREDEV-2767 failure
@@ -399,30 +527,75 @@ Revision 2's recommendation contradicted §1. Under §1's corrected rule (no *un
 resolution is a **declared, enumerated, cell-enforced exclusion**: `markdown-link-check` is excluded
 from the required job and runs in the scheduled advisory job (COREDEV-2778).
 
+**THE DECLARED LITERAL — stated here once, and referenced everywhere else** (codex + agy, r5: §1 and
+cell 9 both demanded a whole-string match against a value no section ever defined, so the cell was
+unexecutable):
+
+```
+--filter=-markdown-link-check
+```
+
+That exact scalar is the whole permitted value of the job's `arguments:` input. §1 and cell 9 point
+at this declaration rather than restating it — a derived value stated twice goes stale, and two stale
+copies agree with each other.
+
+**The local pre-commit check (§6.3) excludes it too**, for the same reason and one more: a network
+round-trip per commit, failing on someone else's outage, is exactly the "gate red by default" trap
+§1 rejects. Link-checking stays in the scheduled job on both surfaces.
+
 **Losing cost, previously unstated (codex, r2): no merge-time detection of newly broken links.** A
 PR may introduce a dead link and merge; the scheduled job reports it afterwards. Accepted, because a
 required gate that fails on someone else's outage is worse — but it is a real loss, not a free win.
 
 ## §7 — Files Changed
 
-* `.github/workflows/plugin-ci.yml` — `trunk-check` job: SHA-pinned action + checkout, no
-  `check-mode`/`post-annotations`/custom upstream, `arguments:` absent or exactly §6.4's filter, an
-  explicit empty-diff guard step (cell 1), and `if: github.event_name != 'workflow_dispatch'`
-  (**a job-level `if:`, never a job-level `on:` — GitHub has no such key**)
+* **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow
+  (§1): `on:` is `pull_request` + `push` to the gated bases, with **no `workflow_dispatch`, no
+  `workflow_call`, no path filters, and no job-level `if:`** — each of those reintroduces a state in
+  which the context reports a conclusion without Trunk running. SHA-pinned action + checkout, no
+  `check-mode`/`post-annotations`/custom upstream, `arguments: --filter=-markdown-link-check`
+  (§6.4's literal), `save-annotations: true` with `contents: read` (§6.1's decision), and an explicit
+  empty-diff guard step (cell 1).
+* `.github/workflows/plugin-ci.yml` — unchanged by this ticket; it keeps its `workflow_dispatch`,
+  which is exactly why `trunk-check` may not live in it
 * `scripts/tests/test_transcript_path_inventory.py` — class-specific content-addressing; `:342` and
   `:355` updated
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
-* `.githooks/pre-commit` — the diff-scoped trunk check, blocking, bounded by an explicit timeout
-  (§6.3 decided: wire it), **and** the §3b detector call
-* the §3b detector script
+* `.githooks/pre-commit` — the `--index`-scoped, `--no-fix`, bounded, exit-code-aggregating trunk
+  check (§6.3 decided: wire it), **and** the §3b detector call
+* **`scripts/detect-plugin-version-drift.sh`** — the §3b detector, named here rather than left as
+  "the detector script" (codex, r5), so cell 8 has a concrete entry point
+* **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11 and 14 (workflow parsing, the
+  frozen 19-linter set, the `arguments:` literal, the producer census)
+* **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
+  and exit-aggregation controls
 
 ## §8 — Notes
 
 **Revision 1's largest defect was not technical.** It was written without reading COREDEV-2771's
 planning document, which contains a section addressed to this ticket handing over six reviewed
 defects. Both reviewers re-derived that work. Grep `docs/planning/` for the predecessor first.
+
+**Revision 5's largest defect was that its fix made the hazard WORSE, silently.** Revision 4
+replaced an unsupported job-level `on:` with a valid `if:` guard — and a job skipped by a conditional
+**reports Success to a required context**. So the guard converted "the job runs in the wrong mode on
+dispatch" into "the job reports green without running at all", and cell 11 asserted the guard, which
+means **the cell certified the bypass**. Two revisions in a row, the cell tested the *mechanism I had
+chosen* rather than *the property the mechanism was for*. The property — no state in which
+`trunk-check` reports a conclusion without running Trunk — is what cell 11 now asserts, and it is
+satisfied by removing the trigger rather than by guarding against it.
+
+**Revision 4 also replaced a confounded control with an impossible one.** Told that cell 7's
+restored-legacy-source case reds through an independent check, I required a mutation test showing the
+case "goes green" without the assertion under test — which that same independent check makes
+unreachable. **A cell that cannot pass is the mirror of one that cannot fail.** The observable had to
+be the specific diagnostic, not the case outcome.
+
+**And the fix was applied to one member of a family.** Cell 7's confounding was repaired; cell 6 had
+the identical defect in two of its three controls and was left alone, because the finding named 7.
+That is the recurring shape in this repo — **derive the family, do not fix what the finding named.**
 
 **Revision 3's largest defect was fixing a contradiction into an impossibility.** Told that
 `workflow_dispatch` forces `check-mode=all`, revision 3 wrote a job-level `on:` — a key that does not
