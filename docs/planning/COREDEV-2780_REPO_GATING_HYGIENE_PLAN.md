@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 16
+**Status:** Planning, revision 17
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,12 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r16** `3c739ec`: **BOTH ARMS `APPROVE`** — the campaign's first double approval — and the
+> **REPRODUCTION on byte-identical input (r17) FAILED**: codex flipped to `REQUEST_CHANGES` and found
+> **three [SUBJECT] defects the approving run had certified clean**, one of them a cell that *cannot
+> pass*. agy held `APPROVE` across both. **This is the third time on this project that a double
+> approval did not survive reproduction** — one approving round is not a gate pass, and the rule has
+> now paid for itself three times.
 > **r15** `e305caf`: **agy `APPROVE`** (fifth approving verdict) + codex `REQUEST_CHANGES`
 > ([SUBJECT] 2, [DOCUMENT] 2). codex's finding completes revision 15's own idea: the registry typed
 > the **target** but not the **mutation case**, while several obligations need more than one mutation
@@ -286,8 +292,9 @@ own non-required context.
   a hand-written registry checked against hand-written mutant *names* recreates exactly the drift the
   meta-assertion was supposed to remove. With a structured source there is nothing to parse and
   nothing to keep in step:
-  * cell 11 **generates one mutant per registry entry**, so under-coverage is impossible by
-    construction rather than by assertion;
+  * cell 11 **generates one mutant per mutation CASE** (§1's cases are first-class; several
+    obligations declare more than one), so under-coverage is impossible by construction rather than
+    by assertion;
   * the clause prose below is **rendered from the registry** and a lint fails if the rendered text
     and the registry disagree — the two cannot drift because only one of them is written by hand;
   * adding an obligation means adding a registry entry, which *automatically* produces its mutant.
@@ -631,7 +638,10 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     path needs no plugin identity and matches the convention this repo already uses for review
     transcripts. It is created with `O_EXCL` **before** the warning is
     emitted, so two concurrent invocations cannot both warn and a crash between create and emit fails
-    silent rather than warning twice. Markers older than **7 days** are swept on entry.
+    silent rather than warning twice. **Cleanup removes markers from any PRIOR window**, which is not the
+    same statement as "older than 7 days" (codex, r17): just after a bucket boundary a marker seconds
+    old belongs to the previous window and is swept. The window-comparison form is the implementable
+    one; the age phrasing described a mechanism this design deliberately does not use.
   * **Output protocol** — the warning is emitted as **`{"systemMessage": "…"}`**, not bare stdout
     (agy, r8). A `SessionStart` hook's plain stdout is injected into the **agent's context**, so a
     warning printed that way is read by the model and never seen by the developer — a detector whose
@@ -857,7 +867,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      before that step**, and §7 leaves the workflow unchanged — so any "real entry point" assertion there would be a parser or
      emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly**:
      CI asserts the *declaration* (matcher set, `${CLAUDE_PROJECT_DIR}` resolution, `timeout`, the
-     `systemMessage` shape, the `O_EXCL` marker under concurrent invocation **and under aged-marker
+     `systemMessage` shape, **a filename-hostile `session_id`** — one containing `/` and one exceeding
+     a path component's length limit, with a mutation that removes the hashing — because the contract
+     requires `sha256(session_id)` precisely since the identifier is opaque, and revision 16 tested
+     the requirement nowhere: an implementation using the raw id passes the matcher, concurrency and
+     aged-marker cases and then **fails open** (codex, r17); the `O_EXCL` marker under concurrent
+     invocation **and under aged-marker
      resumption** — a session whose marker was swept past the retention window warns again, which is
      exactly why the promise is per-window rather than per-session (codex, r11). **The retention
      constant is discriminated, not merely exercised**: a time-controlled case just *under* seven days
@@ -899,12 +914,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     entries makes under-coverage impossible by construction**, and the rendering lint keeps the prose
     honest to the registry rather than the other way round.
 
-    Concretely, one mutant per ATOMIC rule (codex, r9: a single mutant cannot exercise the
-    independent parser paths inside a multi-part clause). **Each mutant must fail with its OWN
-    diagnostic — not "satisfy every other clause", which is impossible** (codex, r14): the clauses
-    overlap by design, so `if: false` violates C3 *and* C8's complete-step mapping, and a tagged action
-    violates C9 *and* C8. Identifying the diagnostic is what proves discrimination; demanding
-    non-overlap would make most mutants unconstructible. The generator must at minimum produce:
+    Concretely, one mutant per declared **case** (codex, r9: a single mutant cannot exercise the
+    independent parser paths inside a multi-part clause; codex, r15: one per *entry* under-covers any
+    obligation needing several). **Each mutant must be constructible, must change the intended
+    property, and must fail with its OWN diagnostic.** It need not satisfy every other clause — the
+    clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
+    action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
+    (codex, r14). The generator must at minimum produce:
     * **C1** — a third trigger added; and, separately, a *required* trigger missing.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
       present; `paths-ignore:` present.
@@ -927,9 +943,18 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       to `$GITHUB_PATH`** (codex r11 and r12: freezing the sequence never constrained what the allowed
       steps *do*, and `$GITHUB_PATH` was prohibited without ever being mutated); on
       `actions/checkout`, each of `sparse-checkout`, `ref`, `repository`, `path`, **`filter`, and one
-      arbitrary key outside the allowlist**; on **each of the four steps** an `if: false`, a
-      `continue-on-error: true` and a changed `shell`; and a `defaults.run` at workflow and at job
-      level.
+      arbitrary key outside the allowlist**; on **each of the four steps** an `if: false` and a
+      `continue-on-error: true`; on the **two `run:` steps only**, a changed `shell` **and a changed
+      `working-directory`**; and a `defaults.run` at workflow and at job level.
+
+      **`shell` is valid only on `run:` steps** (codex, r17): `actions/checkout` and the Trunk action
+      are `uses:` steps, where `actionlint` rejects `shell` as an unexpected key — so revision 16's
+      "each of the four steps" produced two mutants that fail **schema validation** instead of with
+      their own contract diagnostic, breaking this cell's own case-validity requirement and making
+      **cell 11 unable to pass at M2**. The `uses:` steps are mutated through valid keys instead
+      (their `with:` inputs and an added `env:`). And `working-directory` is frozen by C8 while
+      revision 16 mutated it nowhere, so a validator that checks the body digest, `if`,
+      `continue-on-error` and `shell` but *forgets* `working-directory` passed every case.
     * **C9** — the action referenced by tag; the action referenced by a different SHA.
 
     Each mutant must produce a **red cell** and — per the lesson of cells 6 and 7 — must be shown to
