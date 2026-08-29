@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 15
+**Status:** Planning, revision 16
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,12 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r15** `e305caf`: **agy `APPROVE`** (fifth approving verdict) + codex `REQUEST_CHANGES`
+> ([SUBJECT] 2, [DOCUMENT] 2). codex's finding completes revision 15's own idea: the registry typed
+> the **target** but not the **mutation case**, while several obligations need more than one mutation
+> (C1 add *and* remove a trigger; C2 diverge each side; C8's two steps in four forms). "One mutant per
+> entry" therefore still under-covered. Cases are now first-class and the generator **iterates cases,
+> not entries**.
 > **r14** `b0353ae`: **agy `APPROVE_WITH_NOTES` with [SUBJECT] 0** — it found nothing that would ship
 > wrong — and codex `REQUEST_CHANGES` ([SUBJECT] 3, [DOCUMENT] 3), down from 5/1. The two arms were
 > **concordant on exactly one item**, a §7 inventory line. codex's substantive finding: the registry's
@@ -245,14 +251,35 @@ own non-required context.
   | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block) | edit the bytes while preserving the surrounding shape |
   | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
 
-  Every entry also declares **its own expected diagnostic**, so each generated mutant is checked to be
-  *valid*, to change *the intended property*, and to fail with *its own* message.
+  **Mutation CASES are first-class, and the generator iterates cases rather than entries**
+  (codex, r15). One mutant per *entry* still under-covers, because several obligations need more than
+  one mutation to be exercised: C1 must both **add** a trigger and **remove** a required one; C2 must
+  diverge the **local** side and the **remote** side separately; C8's two run steps need **four forms
+  each**; and a generic `content_digest` byte edit passes while a validator that *normalises away*
+  `$GITHUB_PATH` lines before hashing survives — only an independently encoded `$GITHUB_PATH` case
+  kills that one.
 
-  **What this does NOT prove, stated plainly:** cell 15 compares the rendered prose against the
-  registry, and both derive from the same authority — so it catches drift between them but **cannot
-  catch a registry that is simply wrong** (codex, r14). Nothing mechanical can. What guards that is
-  the registry being small, diffable and reviewed, and every mutant executing against a real workflow
-  rather than a model of one.
+  Each case declares its **operator and side**, its **target**, its **payload or fixture**, a
+  **validity check**, and its **own expected diagnostic** — so every generated mutant is checked to be
+  constructible, to change the intended property, and to fail with its own message. Two cases need
+  more than a key edit and say so: C3's `needs:` case **declares the failing support job** it
+  requires, and `remote_relation`'s remote-side case mutates an **injected ruleset observation**, never
+  the live ruleset. Exact fixture bytes stay an implementation detail.
+
+  **What this does NOT prove, drawn at the right boundary.** Cell 15 compares the rendered prose
+  against the registry, and both derive from the same authority, so it **cannot prove the registry is
+  semantically complete** — it cannot know an obligation nobody wrote down. Revision 15 said "nothing
+  mechanical can catch a wrong registry", which is **overbroad** (codex, r15): a *specific* wrong
+  registry is catchable, and two things do catch one —
+
+  * **a survivor corpus**, maintained *independently of the rendered authority*: every mutant that has
+    ever survived a round of this gate stays in a corpus that must keep failing. A registry edit that
+    silently drops an obligation reddens the corpus even though the rendering lint is happy;
+  * **the end-to-end behaviour cells** (1, 2, 3, 5, 12), which observe real runs and do not consult
+    the registry at all.
+
+  What remains genuinely unmechanisable is *arbitrary* completeness, and what guards that is the
+  registry being small, diffable and reviewed.
 
   **Revision 13 said the mutant set was "derived from the clause text" — which is not a mechanism**
   (codex, r13). C1–C9 were unrestricted prose; no test can discover an obligation it cannot parse, and
@@ -499,7 +526,7 @@ The hook warns if **any** entry reaches row 7, and never blocks.
 | # | condition | establishes |
 |---|---|---|
 | 1 | the command exits **nonzero** | **update-failure** — first, so a partial mutation followed by a failure is never read as success. Containment **not** established |
-| 2 | the record is unreadable, its schema is unrecognised, **either `u` or `p` is absent**, or **either** version is not comparable | **no outcome**; record the observed shape. "Either", explicitly: revision 8 said "a targeted entry", which left `u == expected` with `p` absent falling to a catch-all whose description was false (codex, r8) |
+| 2 | **any of the three versions — `u`, `p` or `expected` — is unreadable, absent, malformed or not comparable, in EITHER the before or the after observation**; or the record's schema is unrecognised | **no outcome**; record the observed shape. Three widenings, each from a round that found the previous wording too narrow: "either entry" rather than "a targeted entry" (codex, r8); **`expected` itself**, which Table A row 1 covers and Table B did not, so an unreadable manifest left every later comparison unevaluable with no row owning it; and **the before observation**, so a `u` that was absent or malformed pre-update and is merely below `expected` after is not forced into "moved upward" or "did not move", neither of which is true of it (both codex, r15) |
 | 3 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
 | 4 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal (codex, r9; the row it then collided with was **revision 7's** row 5, not this table's — codex, r11). Record both facts; classify here |
 | 5 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
@@ -861,7 +888,9 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
     mutant per clause, each a configuration that satisfies every *other* clause:
     **The mutant set is GENERATED from the contract registry** (`COREDEV-2780-contract.yaml`, §1) —
-    one mutant per atomic obligation, keyed by its id. Every round since r9 found the same gap
+    one mutant per **mutation case**, keyed by its id; iterating *entries* still under-covered any
+    obligation needing more than one mutation (codex, r15). **The survivor corpus runs alongside it**
+    and must keep failing. Every round since r9 found the same gap
     somewhere new (`$GITHUB_PATH` declared but unmutated; checkout's `filter` named but unmutated; no
     arbitrary-unlisted-key case), because a hand-written list always drifts from the list it mirrors.
     Revision 13's answer — derive them from the clause *text* — was not a mechanism (codex, r13):
@@ -1099,10 +1128,17 @@ required gate that fails on someone else's outage is worse — but it is a real 
 ## §7 — Files Changed
 
 * **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
-  per atomic obligation, with a stable id, the YAML path it constrains, and its required or prohibited
-  value. §1's C1–C9 prose is rendered from it, cell 11's mutants are generated from it, and cell 15
-  asserts the two agree. It exists because "derived from the clause text" is not a mechanism when the
-  clause text is prose (codex, r13).
+  per atomic obligation, each with a stable id, a **typed target kind** (`yaml`, `repo_fixture`,
+  `content_digest`, `remote_relation`) and **one or more mutation cases** — operator and side, target,
+  payload or fixture, validity check, and expected diagnostic. §1's C1–C9 prose is rendered from it,
+  cell 11's mutants are generated by iterating its **cases**, and cell 15 asserts prose and registry
+  agree. It exists because "derived from the clause text" is not a mechanism when the clause text is
+  prose (codex, r13); it is typed and case-bearing because a flat `(id, path, value)` schema could not
+  express C6's fixtures, C2's remote relation or C8's digests (codex, r14–r15). *This description was
+  itself stale at revision 15 — it still recited the flat schema (codex, r15).*
+* **`docs/planning/COREDEV-2780-survivors.yaml` — NEW.** The survivor corpus: every mutant that has
+  survived a round of this gate, maintained **independently of the registry** so that a registry edit
+  silently dropping an obligation reddens something the rendering lint cannot see (§1).
 * **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow and
   satisfies **§1's contract, clauses C1–C9** — the event set, the branch filters, the absence of
   anything that skips or masks, the `with:` allowlist, the `env:` prohibition, the
