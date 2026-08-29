@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 19
+**Status:** Planning, revision 20
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r20** `e831240`: agy `APPROVE`, codex `REQUEST_CHANGES` (5 [SUBJECT], 1 [DOCUMENT]). Two matter.
+> **Cross-event range substitution**: one workflow emitted the *same* required context for
+> `pull_request` and `push`, so a PR could be satisfied by the `push` run on its head SHA — which
+> lints `before..head`, not the larger PR range. The push leg now lives in its own **non-required**
+> workflow. **And §7 omitted the mandatory version bump** — this repo's own rule that every shipping
+> change moves `plugin.json`, both README sites and `CHANGELOG.md`, without which no install ever
+> pulls the fix.
 > **r19** `41c709c`: agy `APPROVE`, codex `REQUEST_CHANGES` (4 [SUBJECT], **0 [DOCUMENT]** — the
 > document itself is now clean). All four are the *sensor* lesson recurring one level deeper: an event
 > mapping allowlisted by name but not by option (`push.tags` is still permitted); an M2 assertion on a
@@ -319,9 +326,18 @@ own non-required context.
   already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
   authority; cell 11 asserts these clauses by name.
 
-  **C1 — events, and each event's OPTIONS, are allowlists.** Exactly `pull_request` and `push`, and
-  within each mapping **only `branches:`** — no `tags:`, no `tags-ignore:`, no `types:`/activity
-  filters, no other option. Revision 18 allowlisted the event *names* and left their *mappings* open
+  **C1 — one event, and its OPTIONS are an allowlist.** `.github/workflows/trunk-check.yml` is
+  `pull_request` **only**, and within that mapping **only `branches:`** — no `tags:`, no
+  `tags-ignore:`, no `types:`/activity filters, no other option.
+
+  **The `push` leg moved OUT of the required context (codex, r20).** Revision 19 emitted the same
+  `trunk-check` context for both events, and required checks match on SHA and expected app — *not* on
+  the triggering event. So a `main`→`alpha` PR could be satisfied by the **push** run on its head SHA,
+  which lints `before..head` rather than the wider `alpha..head` PR range: a green required check over
+  a strictly smaller diff. Cell 1 proved each range correct independently and could never prove *which
+  run* satisfied the rule. The push leg is now `.github/workflows/trunk-check-push.yml` with job id
+  **`trunk-check-push`** — a different context name, deliberately **not required**, kept as a
+  post-merge canary. Only a pull request can satisfy `trunk-check`. Revision 18 allowlisted the event *names* and left their *mappings* open
   (codex, r19): `push.tags` sits happily beside `branches:`, a force-updated tag carries a **nonzero
   `before`** so the empty-diff guard accepts it, and Trunk then greens a *tag* range against a SHA
   that may be a PR head — required checks match on SHA and expected app, not on the ref type that
@@ -564,11 +580,11 @@ evidence artifact by a human-run measurement. The per-session detector has no si
 | 8 | `u` changed to a version of **equal precedence but different identity** (`2.8.2+old` → `2.8.2+new`) **and `u != expected`** | **no outcome**; record. It moved, so the final row's "did not move" is false of it; it did not advance, so no advance row is true either. Revision 10 left this input matching **nothing** (codex, r10), the mirror of Table A's row 5. The
 `u != expected` qualifier is load-bearing: without it the row **stole a genuine containment result**
 — if `expected` itself carries build metadata, `u` arriving exactly at it is an equal-precedence
-identity change *and* a success, and row 7 would have reported "no outcome" (codex, r11) |
+identity change *and* a success, and row 8 would have reported "no outcome" (codex, r11) |
 | 9 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
 | 10 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
 | 11 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
-| 12 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 7 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
+| 12 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 8 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
 | 13 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–12, so its description is true of everything that reaches it |
 
 **The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
@@ -966,7 +982,12 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     clauses overlap by design, so `if: false` violates C3 *and* C8's mapping freeze, and a tagged
     action violates C9 *and* C8; demanding non-overlap would make most mutants unconstructible
     (codex, r14). The generator must at minimum produce:
-    * **C1** — a third trigger added; and, separately, a *required* trigger missing.
+    * **C1** — a third trigger added; a *required* trigger missing; **a valid `push.tags` mapping
+      option**; **a `types:` activity filter**; and **one arbitrary unlisted mapping option** — the
+      clause's option allowlist arrived in revision 19 with no cases opposite it, so a validator
+      checking event names and required `branches` while ignoring extra mapping keys passed every
+      listed case (codex, r20). *Generation cannot invent an absent registry case*: a clause and its
+      cases must land together.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
       present; `paths-ignore:` present.
     * **C3** — job-level `if:`; Trunk-step `if:`; `needs:` with a failing dependency;
@@ -1031,8 +1052,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
 
     **The red observation is bound to the Trunk STEP, not the job** (codex, r6). A job conclusion of
     `failure` proves only that *something* failed — suppress Trunk's failure and let an unrelated
-    fixture step fail and the cell still sees red. The evidence must name the Trunk step's own failed
-    outcome and its expected diagnostic. **Each observation is bound to its provenance**: the
+    fixture step fail and the cell still sees red. The evidence must name the Trunk step's own
+    **API-reported `conclusion`** and its expected diagnostic. **`conclusion`, not `outcome`**
+    (codex, r20): the workflow-jobs API exposes the former and never the latter, so revision 19's
+    wording — fixed for cell 2 and left standing here and in §7 — asked for an artifact field that
+    cannot be produced. The same sibling-instance miss as cells 6/7, three revisions on. **Each observation is bound to its provenance**: the
     workflow **file path**, the **effective check name** (cell 14's identifier — *not* the YAML job id,
     which the check-run API does not expose; revision 7 said "job id" in this cell while cell 14
     correctly used the effective name, and the two must agree — agy, r7), the exact head **SHA**, and
@@ -1066,6 +1090,14 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     the intended job while a duplicate satisfies the rule, and GitHub's protected-branch guidance
     warns that same-named required checks across workflows give ambiguous results. Fails on zero
     producers or more than one.
+
+    **Those alternatives need FIXTURES, not prose (codex, r20).** Against the intended repository —
+    whose job id *is* `trunk-check` — an id-only census passes, so the cell as described never kills
+    the implementation it calls wrong. The controls are built: a second workflow declaring
+    `jobs.something-else.name: trunk-check`; a reusable-workflow caller producing
+    `<caller> / <reusable>`; **zero** producers; and an expression-valued `name:` that must
+    **fail closed**. Note the census now counts producers of **`trunk-check`** only — the push leg's
+    `trunk-check-push` is a different context and deliberately outside it (C1).
 
     **Two cases the simple formula still gets wrong (codex, r7).** A job that calls a **reusable
     workflow** is reported as `<caller job name> / <reusable job name>`, so its effective context is
@@ -1224,6 +1256,14 @@ required gate that fails on someone else's outage is worse — but it is a real 
 * `docs/planning/COREDEV-2619_TRANSCRIPT_PATH_INVENTORY.json` — `line`, `destination.line` and both
   anchor lines demoted to hints for prepend-only sites
 * `CLAUDE.md` — gate-list update
+* **`.claude-plugin/plugin.json`, `README.md` (H1 + newest `### vX.Y.Z` + bold asset counts), and
+  `CHANGELOG.md` — THE VERSION BUMP, which revision 19 omitted entirely** (codex, r20). This repo's
+  rule is that **every change that ships bumps the version**, because `marketplace.json` carries no
+  version field and `plugin.json` is the only signal an installed plugin has that anything changed —
+  an unbumped fix is a fix nobody receives. The `.githooks/pre-commit` and detector changes here are
+  exactly that kind of change, and as planned they could have landed without the signal consumers use
+  to pull them. `validate-version-sync.sh` asserts all four sites (`warn` in pre-commit, `strict` in
+  CI, so a partial bump commits cleanly and fails CI).
 * `.githooks/pre-commit` — the `--index`-scoped, `--no-fix`, bounded, exit-code-aggregating trunk
   check (§6.3 decided: wire it), **and** the §3b detector call
 * **`scripts/detect-plugin-version-drift.sh`** — the §3b detector, named here rather than left as
@@ -1241,7 +1281,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
   **not** own cells 2 or 3's observed outcomes; the ownership table below is authoritative, and
   revision 17's inventory contradicted it (codex, r18)
 * **`docs/planning/evidence/COREDEV-2780-rollout.json`** — **new**: cells 10 and 12, **cell 2's M2
-  step-outcome and M3 job-conclusion observations, cell 3's observed PR outcomes, C2's live-ruleset
+  step-**conclusion** and M3 job-conclusion observations (the workflow-jobs API exposes `conclusion`,
+  never `outcome` — codex, r20), cell 3's observed PR outcomes, C2's live-ruleset
   half**, and cell 8's real `SessionStart` invocation. Provenance-bound observations of things a real
   run **reports** — never runner-local state that vanishes with the job, which is why cell 5's
   post-invocation hash moved to the harness (codex, r18)
@@ -1273,7 +1314,7 @@ and must not be assumed. So C2 splits: the Python owner asserts the local shape 
 non-empty; the **authenticated evidence artifact** asserts equality against the ruleset as read at
 rollout time, alongside cell 12's other provenance-bound observations.
 
-Applying it moves **cell 2** (both its M2 step-outcome half and its M3 job-conclusion half) and the
+Applying it moves **cell 2** (both its M2 step-*conclusion* half and its M3 job-conclusion half) and the
 observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 and 12:
 
 | cell | owner |
