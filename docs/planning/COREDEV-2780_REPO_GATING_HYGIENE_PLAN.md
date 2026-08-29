@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 12
+**Status:** Planning, revision 13
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r12** `dd24ff8`: **agy `APPROVE`** (third consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 6,
+> [DOCUMENT] 1). Two genuine design gaps — C3 constrained the job and the *Trunk* step but not the
+> two **guard** steps (an `if: false` on a guard preserves the sequence and the body digest), and
+> Table B still lacked Table A's equal-precedence-versus-`expected` classification. **The other four
+> were gaps between a prohibition and its mutant, or between a cell and an owner that cannot observe
+> it — so revision 13 closes those two CLASSES structurally**: the mutant set is now *derived* from
+> the clause list, and ownership follows a stated rule rather than a per-cell assignment.
 > **r11** `63d7b7b`: **agy `APPROVE`** (second consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 4,
 > [DOCUMENT] 5). The remaining hole was the same shape one level in: C5 forbids YAML `env:`, but the
 > **permitted `run:` bodies can write `TRUNK_PATH` to `$GITHUB_ENV`** — the guard checks paths, not
@@ -218,9 +225,12 @@ own non-required context.
   **C2 — branches.** `branches:` present on both events, equal to the ruleset's target set.
   **No `paths:`/`paths-ignore:`** — path filtering leaves a required context Pending, which blocks.
 
-  **C3 — nothing skips or masks.** No `if:` on the job or on the Trunk step; no `needs:`; no
-  `strategy.matrix`; no `continue-on-error` at job or Trunk-step level. Exactly one unconditional
-  Trunk invocation.
+  **C3 — nothing skips or masks, on ANY step.** No `if:` and no `continue-on-error` on the job or on
+  **any of the four steps** — revision 12 named only the job and the Trunk step, so `if: false` on a
+  *guard* step preserved both the frozen sequence and the frozen body digest while removing the guard
+  entirely (codex, r12). No `needs:`; no `strategy.matrix`; **no workflow- or job-level
+  `defaults.run`**, which can redirect `shell` or `working-directory` for every step at once. Exactly
+  one unconditional Trunk invocation.
 
   **C4 — the action's `with:` inputs are an allowlist.** Only `arguments` (§6.4's literal),
   `save-annotations` (§6.1), and optionally `cache`/`cache-key`. Everything else absent — notably
@@ -233,8 +243,8 @@ own non-required context.
   spawns. All three scopes — workflow, job and step — or the clause is decorative. The action's scripts read `TRUNK_PATH`,
   `POST_INIT` and friends from the environment, so a `with:` allowlist alone does not constrain them:
   `env: {TRUNK_PATH: /bin/true}` satisfies every input rule and redirects execution to a binary that
-  exits 0. Forbidding `env:` outright at both levels closes it without depending on the precedence
-  between job `env:` and `GITHUB_ENV`.
+  exits 0. Forbidding `env:` outright at **all three scopes** closes it without depending on the
+  precedence between job `env:` and `GITHUB_ENV`.
 
   **C6 — the REPOSITORY may not supply the tool that tests it (codex, r8).** Verified at the pinned
   SHA: `setup/locate_trunk.sh` uses a checked-out `.trunk/bin/trunk`, `tools/trunk` or `./trunk` in
@@ -267,7 +277,10 @@ own non-required context.
   *do*. Either may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the C6 guard
   inspects paths, not inherited runner state — so the action would resolve a no-op launcher while
   every clause C1–C9 passed. **Each run body is pinned by digest, and neither may write to
-  `$GITHUB_ENV` or `$GITHUB_PATH` at all.** Changing either step is then a reviewed change, which is
+  `$GITHUB_ENV` or `$GITHUB_PATH` at all.** And it is the **complete step mapping** that is frozen,
+  not the `run:` body alone (codex, r12): `shell`, `working-directory`, `if`, `continue-on-error`,
+  `env` and every other key on each of the four steps, so a step cannot be neutralised by a sibling
+  key while its body hashes unchanged. Changing either step is then a reviewed change, which is
   the same standing the workflow itself has. Revision 9
   banned `env:` but nothing stopped an *extra step* from appending to `GITHUB_PATH`, setting
   `BASH_ENV` through `GITHUB_ENV`, or creating one of C6's prohibited paths **after** the guard had
@@ -438,7 +451,8 @@ identity change *and* a success, and row 7 would have reported "no outcome" (cod
 | 8 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
 | 9 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
 | 10 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
-| 11 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–9, so its description is now true of everything that reaches it |
+| 11 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 7 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
+| 12 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–9, so its description is now true of everything that reaches it |
 
 **The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
 exhaustive nor mutually exclusive):
@@ -734,8 +748,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
      CI asserts the *declaration* (matcher set, `${CLAUDE_PROJECT_DIR}` resolution, `timeout`, the
      `systemMessage` shape, the `O_EXCL` marker under concurrent invocation **and under aged-marker
      resumption** — a session whose marker was swept past the retention window warns again, which is
-     exactly why the promise is per-window rather than per-session (codex, r11) — and the mode
-     operand) against the documented stdin contract; and the *real* session-start invocation is recorded once as a
+     exactly why the promise is per-window rather than per-session (codex, r11). **The retention
+     constant is discriminated, not merely exercised**: a time-controlled case just *under* seven days
+     must NOT sweep and just *over* it must, and the constant itself is mutated — an aged-marker test
+     alone is satisfied by a detector that sweeps at six days, so it covers the line without covering
+     its operand (codex, r12) — and the mode operand) against the documented stdin contract; and the *real* session-start invocation is recorded once as a
      **committed evidence artifact**, the same standing cells 10 and 12 have. Claiming a CI proof this
      repo's pipeline cannot produce would be a cell that cannot pass.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
@@ -759,8 +776,17 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     **This cell asserts §1's contract clause by clause — C1 through C9 — and does not restate their
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
     mutant per clause, each a configuration that satisfies every *other* clause:
-    **One mutant per ATOMIC rule, not per clause** (codex, r9: a single mutant cannot exercise the
-    independent parser paths inside a multi-part clause):
+    **The mutant set is DERIVED from §1's clauses, not enumerated beside them** (codex, r12). Every
+    round since r9 has found the same gap in a different place: a prohibition stated in §1 with no
+    mutant opposite it — `$GITHUB_PATH` declared but unmutated, checkout's `filter` named but
+    unmutated, an arbitrary unlisted key never tried. **A hand-written list will always drift from
+    the list it is supposed to mirror**, so the mutant set is generated from the clause text and a
+    **meta-assertion fails the suite if any prohibition named in C1–C9 has no corresponding mutant,
+    or any mutant no corresponding prohibition.** That is the only form that cannot silently
+    under-cover.
+
+    Concretely, one mutant per ATOMIC rule (codex, r9: a single mutant cannot exercise the
+    independent parser paths inside a multi-part clause) — the derivation must at minimum produce:
     * **C1** — a third trigger added; and, separately, a *required* trigger missing.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
       present; `paths-ignore:` present.
@@ -779,9 +805,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     * **C8** — an extra step inserted before the action; the C6 guard moved away from its adjacency;
       **a mutation inside a permitted `run:` step** — in **both** permitted steps, and in three
       forms: creating one of C6's paths (the case revision 10's ordering made unkillable), writing
-      `TRUNK_PATH=/bin/true` to `$GITHUB_ENV`, and writing `BASH_ENV=…` to `$GITHUB_ENV` (codex, r11:
-      freezing the sequence never constrained what the allowed steps *do*); and, on `actions/checkout`, each of `sparse-checkout`,
-      `ref`, `repository` and `path` in turn.
+      `TRUNK_PATH=/bin/true` to `$GITHUB_ENV`, writing `BASH_ENV=…` to `$GITHUB_ENV`, and **writing
+      to `$GITHUB_PATH`** (codex r11 and r12: freezing the sequence never constrained what the allowed
+      steps *do*, and `$GITHUB_PATH` was prohibited without ever being mutated); on
+      `actions/checkout`, each of `sparse-checkout`, `ref`, `repository`, `path`, **`filter`, and one
+      arbitrary key outside the allowlist**; on **each of the four steps** an `if: false`, a
+      `continue-on-error: true` and a changed `shell`; and a `defaults.run` at workflow and at job
+      level.
     * **C9** — the action referenced by tag; the action referenced by a different SHA.
 
     Each mutant must produce a **red cell** and — per the lesson of cells 6 and 7 — must be shown to
@@ -854,6 +884,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     neither name alone; and a `name:` containing an **expression** cannot be resolved by a static
     census at all. The census must model the reusable-workflow form and **fail closed** — never
     silently count zero — on any name it cannot resolve statically.
+15. **The job's runner and timeout are what §1 requires** (codex, r12). Assert `runs-on:
+    ubuntu-latest` and an explicit `timeout-minutes`. §1 has required both since revision 2 and
+    **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
+    hang until the platform's six-hour ceiling while the required context sits pending.
 
 ## §6 — STRUCTURAL DECISIONS
 
@@ -996,7 +1030,8 @@ required gate that fails on someone else's outage is worse — but it is a real 
   that fires while a stale install is actually running (§3b)
 * **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11 and 14 (workflow parsing, the
   frozen membership set (cell 4 holds the names and the count — this list does not restate them),
-  the `arguments:` literal, the producer census)
+  the `arguments:` literal, the producer census, the runner and timeout, and the **derived** mutant
+  set with its completeness meta-assertion)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
   and exit-aggregation controls, and cell 8's pre-commit entry point
 * **`scripts/tests/test_trunk_check_behaviour.py`** — **new**: cells 2, 3 and 5, the observed-run
@@ -1014,14 +1049,26 @@ required gate that fails on someone else's outage is worse — but it is a real 
   `${CLAUDE_PROJECT_DIR}` resolution, the `O_EXCL` dedup marker under concurrent invocation, the
   `systemMessage` output shape, and the timeout against a sleeping detector (cell 8, SessionStart half)
 
-**Every cell's owner, stated explicitly** — revision 9 claimed each cell had one and **five did not**
-(both arms, r9: cells 2, 3, 5, 10 and 12 were unassigned, and 6–7 only implied):
+**Ownership follows a RULE, and the table below applies it** — revision 9 claimed every cell had an
+owner and five did not; revision 12 gave cell 2 an owner that **cannot observe what the cell
+asserts** (codex, r12: a Python test cannot see a GitHub step outcome or a job's final conclusion).
+Assigning owners one at a time reproduces that error, so the rule is stated first:
+
+> **A cell asserting the outcome of a real GitHub run — a step conclusion, a job conclusion, a check
+> run — is owned by the provenance-bound rollout evidence artifact. A cell asserting file or
+> configuration content is owned by a Python test. No cell may be owned by something that cannot
+> observe the thing it asserts.**
+
+Applying it moves **cell 2** (both its M2 step-outcome half and its M3 job-conclusion half) and the
+observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 and 12:
 
 | cell | owner |
 |---|---|
 | 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
-| 2, 3, 5 | `test_trunk_check_behaviour.py` — **new**: the gate bites, does not over-reach, and mutates no tracked file. These are *observed-run* cells, not parse cells, and revision 9 left them ownerless |
-| 4, 9, 11, 14 | `test_trunk_check_workflow.py` (parse + census + mutants) |
+| 2 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: both halves assert a real run's outcome (the Trunk step at M2, the job conclusion at M3), which no Python test can observe |
+| 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
+| 5 | `test_trunk_check_behaviour.py` — **new**: byte-comparison of a deliberately fixable staged file, which *is* file content and so stays with a Python test |
+| 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + derived mutants + runner/timeout) |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
 | 10, 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
