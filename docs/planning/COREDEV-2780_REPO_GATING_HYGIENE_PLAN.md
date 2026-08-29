@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 14
+**Status:** Planning, revision 15
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r14** `b0353ae`: **agy `APPROVE_WITH_NOTES` with [SUBJECT] 0** — it found nothing that would ship
+> wrong — and codex `REQUEST_CHANGES` ([SUBJECT] 3, [DOCUMENT] 3), down from 5/1. The two arms were
+> **concordant on exactly one item**, a §7 inventory line. codex's substantive finding: the registry's
+> schema (id, path, mode, value) can express ordinary YAML obligations but **not** C6's repository
+> fixtures, C2's live-remote relation, or C8's digest and run-body semantics — so iterating entries
+> did not make under-coverage impossible after all. Revision 15 gives the registry **typed kinds and
+> mutation recipes**.
 > **r13** `6caaea6`: **agy `APPROVE`** (fourth consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 5,
 > [DOCUMENT] 1) — and it went after revision 13's two new *mechanisms*, as asked, holing both.
 > **The derivation was asserted, not defined**: C1–C9 are unrestricted prose, so nothing can generate
@@ -222,8 +229,30 @@ own non-required context.
   itself; its internal checkout is conditional on a separate target-checkout mode (codex, r2).
 * **THE WORKFLOW CONTRACT IS A STRUCTURED REGISTRY, and the clauses below are RENDERED FROM IT.**
   `docs/planning/COREDEV-2780-contract.yaml` is the authority: one entry per **atomic obligation**,
-  each with a stable id (`C3.step-if`, `C8.checkout-inputs`, …), the YAML path it constrains, whether
-  the value is required or prohibited, and the value itself.
+  each with a stable id (`C3.step-if`, `C8.checkout-inputs`, …), a **typed target kind**, and the
+  mutation recipe that kind implies.
+
+  **The kinds exist because revision 14's flat schema could not express three of its own obligations**
+  (codex, r14). `(id, yaml-path, required|prohibited, value)` covers ordinary workflow keys and
+  nothing else, so C6's repository fixtures, C2's live-remote comparison and C8's digest semantics
+  would have silently received a YAML-shaped mutant or none — under-coverage by *construction*, which
+  is what the registry was meant to abolish:
+
+  | kind | obligation it carries | how its mutant is built |
+  |---|---|---|
+  | `yaml` | a workflow key that must be present with a value, or absent | set / clear / alter the key at its path |
+  | `repo_fixture` | a path that must not exist in the checked-out tree (C6) | materialise it — and for `.trunk/setup-ci`, as a **valid composite action that exits green**, not a bare executable |
+  | `content_digest` | bytes that must hash to a pinned value (C8's run bodies, cell 4's `lint:` block) | edit the bytes while preserving the surrounding shape |
+  | `remote_relation` | local content that must equal live remote state (C2) | diverge the local half, and separately the remote half |
+
+  Every entry also declares **its own expected diagnostic**, so each generated mutant is checked to be
+  *valid*, to change *the intended property*, and to fail with *its own* message.
+
+  **What this does NOT prove, stated plainly:** cell 15 compares the rendered prose against the
+  registry, and both derive from the same authority — so it catches drift between them but **cannot
+  catch a registry that is simply wrong** (codex, r14). Nothing mechanical can. What guards that is
+  the registry being small, diffable and reviewed, and every mutant executing against a real workflow
+  rather than a model of one.
 
   **Revision 13 said the mutant set was "derived from the clause text" — which is not a mechanism**
   (codex, r13). C1–C9 were unrestricted prose; no test can discover an obligation it cannot parse, and
@@ -556,7 +585,18 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     marker, and B's `O_EXCL` create then succeeds, so both warn in the same new window. Encoding the
     window in the **name** means a live marker is never unlinked at all: the sweep removes only buckets
     strictly older than the current one, and the decision is a single `O_EXCL` create with no
-    unlink-then-create sequence to lose. *Hashed*: `session_id` is documented as an opaque identifier
+    unlink-then-create sequence to lose.
+
+    **`window` is `floor(unix_time / 604800)`** — fixed seven-day buckets from the epoch, declared
+    because revision 14 named the field without defining it, and *daily* buckets under a seven-day
+    cleanup would have passed every stated test while warning the same session **every day**
+    (codex, r14). Cleanup removes markers whose window is strictly less than the current one.
+    **Accepted boundary behaviour, stated rather than discovered later:** a session live across a
+    bucket boundary may warn twice, seconds apart. That is the honest reading of "at most one warning
+    per session per retention window", and the alternative — a rolling window anchored on the marker's
+    own creation — reintroduces the unlink-then-create race this design exists to remove. Cell 8 tests
+    repeated invocation *within* a bucket (one warning) and *across* a boundary at well under seven
+    elapsed days (a second warning, expected). *Hashed*: `session_id` is documented as an opaque identifier
     with **no filename-safety contract**, so using it raw makes marker creation fail on a `/` or an
     over-long component — and this dedup fails **open**, warning on every invocation. — **not**
     `${CLAUDE_PLUGIN_DATA}`, which revision 10 used and which is scoped to *plugin*-associated hooks
@@ -741,6 +781,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    files proves nothing — autofix would produce no byte change there either, so the cell *reaches* the
    wrong implementation without killing it. The case therefore stages a file a formatter would
    certainly rewrite (mis-indented, unsorted imports) and asserts it is **byte-identical afterwards**.
+
+   **This is a hybrid under §7's rule, and revision 14 left it whole** (codex, r14): the claim is
+   about what *the real run* did, which a Python test cannot observe. Python constructs and hashes the
+   fixture; the **evidence artifact** carries the post-invocation comparison.
    Cell 9's static `--fix` prohibition is a separate, weaker check on the configuration; this one is
    about what the run did.
 6. **quote-keep — relocation passes, and three wrong implementations fail, each for the RIGHT
@@ -827,7 +871,11 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     honest to the registry rather than the other way round.
 
     Concretely, one mutant per ATOMIC rule (codex, r9: a single mutant cannot exercise the
-    independent parser paths inside a multi-part clause) — the derivation must at minimum produce:
+    independent parser paths inside a multi-part clause). **Each mutant must fail with its OWN
+    diagnostic — not "satisfy every other clause", which is impossible** (codex, r14): the clauses
+    overlap by design, so `if: false` violates C3 *and* C8's complete-step mapping, and a tagged action
+    violates C9 *and* C8. Identifying the diagnostic is what proves discrimination; demanding
+    non-overlap would make most mutants unconstructible. The generator must at minimum produce:
     * **C1** — a third trigger added; and, separately, a *required* trigger missing.
     * **C2** — `branches:` absent; `branches:` present but unequal to the ruleset set; `paths:`
       present; `paths-ignore:` present.
@@ -844,7 +892,7 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       still appearing to be caught.
     * **C7** — `merge_group` present at all.
     * **C8** — an extra step inserted before the action; the C6 guard moved away from its adjacency;
-      **a mutation inside a permitted `run:` step** — in **both** permitted steps, and in three
+      **a mutation inside a permitted `run:` step** — in **both** permitted steps, and in four
       forms: creating one of C6's paths (the case revision 10's ordering made unkillable), writing
       `TRUNK_PATH=/bin/true` to `$GITHUB_ENV`, writing `BASH_ENV=…` to `$GITHUB_ENV`, and **writing
       to `$GITHUB_PATH`** (codex r11 and r12: freezing the sequence never constrained what the allowed
@@ -1076,10 +1124,10 @@ required gate that fails on someone else's outage is worse — but it is a real 
   "the detector script" (codex, r5), so cell 8 has a concrete entry point
 * **`.claude/settings.json`** — a project `SessionStart` hook invoking that detector, the surface
   that fires while a stale install is actually running (§3b)
-* **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11 and 14 (workflow parsing, the
+* **`scripts/tests/test_trunk_check_workflow.py`** — cells 4, 9, 11, 14 **and 15** (workflow parsing, the
   frozen membership set (cell 4 holds the names and the count — this list does not restate them),
-  the `arguments:` literal, the producer census, the runner and timeout, and the **derived** mutant
-  set with its completeness meta-assertion)
+  the `arguments:` literal, the producer census, cell 15's runner/timeout and its registry-vs-rendered
+  comparison, and the **generated** mutant set)
 * **`scripts/tests/test_precommit_trunk_gate.py`** — cell 13's index/worktree, `--no-fix`, timeout
   and exit-aggregation controls, and cell 8's pre-commit entry point
 * **`scripts/tests/test_trunk_check_behaviour.py`** — **new**: cells 2, 3 and 5, the observed-run
@@ -1123,7 +1171,7 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 | 1 | `test_trunk_upstream_parity.py` (range parity, empty diff, the zero-before-sha subdomain) |
 | 2 | `evidence/COREDEV-2780-rollout.json` — **by the rule**: both halves assert a real run's outcome (the Trunk step at M2, the job conclusion at M3), which no Python test can observe |
 | 3 | `evidence/COREDEV-2780-rollout.json` for the observed PR outcomes; `test_trunk_check_behaviour.py` for the fixture construction |
-| 5 | `test_trunk_check_behaviour.py` — **new**: byte-comparison of a deliberately fixable staged file, which *is* file content and so stays with a Python test |
+| 5 | **hybrid**: `test_trunk_check_behaviour.py` constructs and hashes the deliberately fixable fixture; `evidence/COREDEV-2780-rollout.json` carries the post-invocation byte comparison, since the claim is about what the real run did (codex, r14) |
 | 4, 9, 11, 14, 15 | `test_trunk_check_workflow.py` (parse + census + derived mutants + runner/timeout) |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
 | 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
