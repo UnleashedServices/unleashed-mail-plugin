@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 13
+**Status:** Planning, revision 14
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,13 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r13** `6caaea6`: **agy `APPROVE`** (fourth consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 5,
+> [DOCUMENT] 1) — and it went after revision 13's two new *mechanisms*, as asked, holing both.
+> **The derivation was asserted, not defined**: C1–C9 are unrestricted prose, so nothing can generate
+> mutants from them, and a hand-written registry compared against mutant names just moves the drift up
+> one level. **The ownership rule had no case for hybrids**: C2 compares local YAML against the *live*
+> ruleset, which the Python owner cannot see. Revision 14 makes the contract a **structured registry
+> that §1 renders**, so there is no prose to parse and nothing to drift from.
 > **r12** `dd24ff8`: **agy `APPROVE`** (third consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 6,
 > [DOCUMENT] 1). Two genuine design gaps — C3 constrained the job and the *Trunk* step but not the
 > two **guard** steps (an `if: false` on a guard preserves the sequence and the body digest), and
@@ -213,7 +220,25 @@ own non-required context.
   this action have moved, which is exactly why §6 requires SHAs. Dependabot updates the pin.)
 * **SHA-pinned `actions/checkout`** in the job. The action does not check out the caller's repo
   itself; its internal checkout is conditional on a separate target-checkout mode (codex, r2).
-* **THE WORKFLOW CONTRACT — stated here once, and referenced (never restated) everywhere else.**
+* **THE WORKFLOW CONTRACT IS A STRUCTURED REGISTRY, and the clauses below are RENDERED FROM IT.**
+  `docs/planning/COREDEV-2780-contract.yaml` is the authority: one entry per **atomic obligation**,
+  each with a stable id (`C3.step-if`, `C8.checkout-inputs`, …), the YAML path it constrains, whether
+  the value is required or prohibited, and the value itself.
+
+  **Revision 13 said the mutant set was "derived from the clause text" — which is not a mechanism**
+  (codex, r13). C1–C9 were unrestricted prose; no test can discover an obligation it cannot parse, and
+  a hand-written registry checked against hand-written mutant *names* recreates exactly the drift the
+  meta-assertion was supposed to remove. With a structured source there is nothing to parse and
+  nothing to keep in step:
+  * cell 11 **generates one mutant per registry entry**, so under-coverage is impossible by
+    construction rather than by assertion;
+  * the clause prose below is **rendered from the registry** and a lint fails if the rendered text
+    and the registry disagree — the two cannot drift because only one of them is written by hand;
+  * adding an obligation means adding a registry entry, which *automatically* produces its mutant.
+
+  The clauses read as follows.
+
+* **The rendered clauses — do not edit these by hand; edit the registry.**
   Revision 8 copied the event set and the input allowlist into §1, M2, cell 11 and §7, **and they had
   already diverged** — only cell 11 permitted `merge_group` (codex, r8). This block is the single
   authority; cell 11 asserts these clauses by name.
@@ -270,7 +295,13 @@ own non-required context.
   well-meaning sparse-checkout optimisation can leave changed files **absent from disk** while git
   metadata still yields a non-empty range — so the empty-diff guard passes and Trunk lints files that
   are not there. That is an *accident*, squarely inside §0's threat model. Only `fetch-depth` may be
-  set; every other input must be absent.
+  set **and `lfs: true`**; every other input must be absent.
+
+  **`lfs` is required, not merely permitted (codex, r13).** `actions/checkout` defaults it to
+  `false`, so a PR that legitimately introduces `.gitattributes` with an LFS-tracked source checks out
+  the **pointer file** rather than its content: the diff stays non-empty, the guard passes, and Trunk
+  lints a 130-byte pointer and reports green. That is an accident, not an attack — squarely §0's
+  threat model — and it is the one checkout input whose *default* is the hazard.
 
   **And the two permitted `run:` steps are frozen BY CONTENT, not merely by position (codex, r11).**
   Freezing the sequence stopped a *new* step being added; it did nothing about what the allowed steps
@@ -452,7 +483,7 @@ identity change *and* a success, and row 7 would have reported "no outcome" (cod
 | 9 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
 | 10 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
 | 11 | **either `u` or `p` is of equal precedence to `expected` but not identical to it** (`expected = 2.8.3+repo`, entry `2.8.3+local`) | **no outcome**; record. Table A row 5 classifies this for the *detector*; revision 12 gave Table B no equivalent, so an unchanged `u = 2.8.3+local` fell through to the final row, whose "`u < expected`" is false of it (codex, r12). Row 7 covers an identity change *relative to the previous value*; this one covers the relationship *to `expected`* — different questions |
-| 12 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–9, so its description is now true of everything that reaches it |
+| 12 | otherwise — `u` is `< expected` and did not move, `p` unchanged | the update **did not act on the scope it targeted**. Containment **not** established. Reachable only after rows 1–11, so its description is true of everything that reaches it |
 
 **The terms both tables depend on** (codex + agy, r5 and r6 — earlier versions were neither
 exhaustive nor mutually exclusive):
@@ -518,7 +549,16 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
     concurrent session can sweep a live session's marker. Markers cannot be retained forever, so the
     promise is stated as what the mechanism can actually deliver. Cell 8 exercises the aged-marker
     resumption case, not only the concurrent-create case. The `session_id` arrives in the hook's JSON stdin. The marker is
-    `${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/drift-warned/<session_id>` — **not**
+    `${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/drift-warned/<sha256(session_id)>.<window>`
+    — **time-bucketed and hashed**, for two reasons codex found in r13. *Bucketed*: revision 13 swept
+    aged markers by unlinking them, which races with itself — two invocations of the same session both
+    stat an aged marker, A unlinks and recreates it, B's already-decided unlink removes A's *fresh*
+    marker, and B's `O_EXCL` create then succeeds, so both warn in the same new window. Encoding the
+    window in the **name** means a live marker is never unlinked at all: the sweep removes only buckets
+    strictly older than the current one, and the decision is a single `O_EXCL` create with no
+    unlink-then-create sequence to lose. *Hashed*: `session_id` is documented as an opaque identifier
+    with **no filename-safety contract**, so using it raw makes marker creation fail on a `/` or an
+    over-long component — and this dedup fails **open**, warning on every invocation. — **not**
     `${CLAUDE_PLUGIN_DATA}`, which revision 10 used and which is scoped to *plugin*-associated hooks
     while this hook deliberately lives in project `.claude/settings.json` (codex, r10). The chosen
     path needs no plugin identity and matches the convention this repo already uses for review
@@ -776,14 +816,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     **This cell asserts §1's contract clause by clause — C1 through C9 — and does not restate their
     values** (codex, r8: revision 8's copies had already diverged from §1 on `merge_group`). One
     mutant per clause, each a configuration that satisfies every *other* clause:
-    **The mutant set is DERIVED from §1's clauses, not enumerated beside them** (codex, r12). Every
-    round since r9 has found the same gap in a different place: a prohibition stated in §1 with no
-    mutant opposite it — `$GITHUB_PATH` declared but unmutated, checkout's `filter` named but
-    unmutated, an arbitrary unlisted key never tried. **A hand-written list will always drift from
-    the list it is supposed to mirror**, so the mutant set is generated from the clause text and a
-    **meta-assertion fails the suite if any prohibition named in C1–C9 has no corresponding mutant,
-    or any mutant no corresponding prohibition.** That is the only form that cannot silently
-    under-cover.
+    **The mutant set is GENERATED from the contract registry** (`COREDEV-2780-contract.yaml`, §1) —
+    one mutant per atomic obligation, keyed by its id. Every round since r9 found the same gap
+    somewhere new (`$GITHUB_PATH` declared but unmutated; checkout's `filter` named but unmutated; no
+    arbitrary-unlisted-key case), because a hand-written list always drifts from the list it mirrors.
+    Revision 13's answer — derive them from the clause *text* — was not a mechanism (codex, r13):
+    unrestricted prose cannot be parsed, and a hand-written registry compared against hand-written
+    mutant names moves the drift up a level rather than removing it. **Generating from structured
+    entries makes under-coverage impossible by construction**, and the rendering lint keeps the prose
+    honest to the registry rather than the other way round.
 
     Concretely, one mutant per ATOMIC rule (codex, r9: a single mutant cannot exercise the
     independent parser paths inside a multi-part clause) — the derivation must at minimum produce:
@@ -884,8 +925,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
     neither name alone; and a `name:` containing an **expression** cannot be resolved by a static
     census at all. The census must model the reusable-workflow form and **fail closed** — never
     silently count zero — on any name it cannot resolve statically.
-15. **The job's runner and timeout are what §1 requires** (codex, r12). Assert `runs-on:
-    ubuntu-latest` and an explicit `timeout-minutes`. §1 has required both since revision 2 and
+15. **The job's runner and timeout are what §1 requires, and §1 matches its registry.** Assert
+    `runs-on: ubuntu-latest` and an explicit `timeout-minutes`; **and assert the rendered C1–C9 prose
+    agrees with `COREDEV-2780-contract.yaml`**, so the registry cannot silently diverge from the
+    document that explains it. §1 has required both since revision 2 and
     **nothing asserted either** — omitting them passed every other cell, and a job with no timeout can
     hang until the platform's six-hour ceiling while the required context sits pending.
 
@@ -1007,6 +1050,11 @@ required gate that fails on someone else's outage is worse — but it is a real 
 
 ## §7 — Files Changed
 
+* **`docs/planning/COREDEV-2780-contract.yaml` — NEW.** The structured contract registry: one entry
+  per atomic obligation, with a stable id, the YAML path it constrains, and its required or prohibited
+  value. §1's C1–C9 prose is rendered from it, cell 11's mutants are generated from it, and cell 15
+  asserts the two agree. It exists because "derived from the clause text" is not a mechanism when the
+  clause text is prose (codex, r13).
 * **`.github/workflows/trunk-check.yml` — NEW.** The `trunk-check` job lives in its own workflow and
   satisfies **§1's contract, clauses C1–C9** — the event set, the branch filters, the absence of
   anything that skips or masks, the `with:` allowlist, the `env:` prohibition, the
@@ -1056,8 +1104,16 @@ Assigning owners one at a time reproduces that error, so the rule is stated firs
 
 > **A cell asserting the outcome of a real GitHub run — a step conclusion, a job conclusion, a check
 > run — is owned by the provenance-bound rollout evidence artifact. A cell asserting file or
-> configuration content is owned by a Python test. No cell may be owned by something that cannot
-> observe the thing it asserts.**
+> configuration content is owned by a Python test. A cell asserting a relationship between local
+> content and REMOTE state is a HYBRID: it is split, and each half owned by whichever can observe it.
+> No cell may be owned by something that cannot observe the thing it asserts.**
+
+**The hybrid case was missing and C2 is one (codex, r13):** it requires the workflow's `branches:` to
+*equal the live ruleset's target set*, and the workflow-parsing Python test can see the YAML but not
+the remote ruleset — while this plan elsewhere insists those target conditions are live configuration
+and must not be assumed. So C2 splits: the Python owner asserts the local shape and that the set is
+non-empty; the **authenticated evidence artifact** asserts equality against the ruleset as read at
+rollout time, alongside cell 12's other provenance-bound observations.
 
 Applying it moves **cell 2** (both its M2 step-outcome half and its M3 job-conclusion half) and the
 observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 and 12:
@@ -1079,6 +1135,16 @@ observed-run parts of **cell 3** to the evidence artifact, alongside cells 10 an
 **Revision 1's largest defect was not technical.** It was written without reading COREDEV-2771's
 planning document, which contains a section addressed to this ticket handing over six reviewed
 defects. Both reviewers re-derived that work. Grep `docs/planning/` for the predecessor first.
+
+**Revision 13's two new mechanisms were both holed by the round that reviewed them — and that is
+the mechanisms working, not failing.** Asked to attack the derivation and the ownership rule directly
+rather than hunt one more missing mutant, codex found that "derived from the clause text" **is not a
+mechanism at all** when the clause text is unrestricted prose, and that the ownership rule had no case
+for a **hybrid** assertion comparing local YAML to live remote state. Both are now closed by making
+the contract *structured*: there is no prose to parse, mutants are generated rather than listed, and
+the rendered clauses are linted against their source. **A rule that a reviewer can hole in one round
+is better than a list that quietly under-covers for five** — the previous five rounds each found a
+different missing mutant, and none of them found the reason there would always be another.
 
 **Revision 10 is where the two arms stopped agreeing, and that was the point.** agy returned the
 campaign's first `APPROVE`, walking clause by clause through C1–C9 and pronouncing the contract
