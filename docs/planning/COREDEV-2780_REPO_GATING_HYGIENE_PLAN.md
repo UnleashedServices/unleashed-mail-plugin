@@ -1,6 +1,6 @@
 # Repo Gating Hygiene Plan — trunk in CI, pin drift, and stale install resolution
 
-**Status:** Planning, revision 11
+**Status:** Planning, revision 12
 **Created:** 2026-08-28
 **Last Updated:** 2026-08-28
 **Basis:** `c913303` (origin/main, plugin 2.8.3) · **Tickets:** COREDEV-2780, COREDEV-2798, COREDEV-2801
@@ -11,6 +11,12 @@
 > on the alpha landing precondition and on §6.1 option (b) being unimplementable as written. codex
 > read the pinned action's **source at its SHA** and found two self-contradictions in this plan.
 > Revision 3 closed all nine.
+> **r11** `63d7b7b`: **agy `APPROVE`** (second consecutive) + codex `REQUEST_CHANGES` ([SUBJECT] 4,
+> [DOCUMENT] 5). The remaining hole was the same shape one level in: C5 forbids YAML `env:`, but the
+> **permitted `run:` bodies can write `TRUNK_PATH` to `$GITHUB_ENV`** — the guard checks paths, not
+> runner state. C8 now freezes those bodies. codex repeated its `action.yaml:289` citation claim
+> (line 266 in r9, 267 in r11); **refuted again, this time from two independent fetches that are
+> byte-identical — the line is 289.**
 > **r10** `c5b40d4`: **agy `APPROVE`** — the campaign's first — and codex `REQUEST_CHANGES`
 > ([SUBJECT] 7, [DOCUMENT] 3). **codex explicitly accepted §0's scope** ("I did not count the three
 > COREDEV-2803 supply-chain issues or variants"), so the threat model held and the findings are now
@@ -24,7 +30,10 @@
 > and three of its findings (unverified launcher download, linter-plugin provenance, GHA cache
 > provenance) are **properties of the tool, not defects in this plan**. Those are now **out of scope
 > and tracked as COREDEV-2803**, under the threat model stated in §0. One codex claim was **refuted**:
-> `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited.
+> `uses: ./.trunk/setup-ci` is at `action.yaml:289` at the pinned SHA, exactly as cited — **it
+> repeated the claim in r11 with a third number (266, then 267), and the citation was re-verified
+> from two independent fetches (the contents API and `raw.githubusercontent.com`) that are
+> byte-identical. The line is 289.**
 > **r8** `0e02bfe`: codex `REQUEST_CHANGES` ([SUBJECT] 4, [DOCUMENT] 4) + agy `REQUEST_CHANGES`
 > ([SUBJECT] 3, [DOCUMENT] 2). **The r7 allowlist closed the caller's door and left three others
 > open**, all verified at the pinned SHA: `setup/locate_trunk.sh` prefers a *checked-out*
@@ -221,7 +230,7 @@ own non-required context.
   **C5 — no `env:` at workflow, job OR step scope (agy r8; scope corrected codex r10).**
   Revision 10 named only job and step. **Workflow-level `env:` is inherited by every step in every
   job**, so it reached the action untouched — a `BASH_ENV` there alters every Bash process the action
-  spawns. All three scopes, or the clause is decorative. The action's scripts read `TRUNK_PATH`,
+  spawns. All three scopes — workflow, job and step — or the clause is decorative. The action's scripts read `TRUNK_PATH`,
   `POST_INIT` and friends from the environment, so a `with:` allowlist alone does not constrain them:
   `env: {TRUNK_PATH: /bin/true}` satisfies every input rule and redirects execution to a binary that
   exits 0. Forbidding `env:` outright at both levels closes it without depending on the precedence
@@ -251,7 +260,15 @@ own non-required context.
   well-meaning sparse-checkout optimisation can leave changed files **absent from disk** while git
   metadata still yields a non-empty range — so the empty-diff guard passes and Trunk lints files that
   are not there. That is an *accident*, squarely inside §0's threat model. Only `fetch-depth` may be
-  set; every other input must be absent. Revision 9
+  set; every other input must be absent.
+
+  **And the two permitted `run:` steps are frozen BY CONTENT, not merely by position (codex, r11).**
+  Freezing the sequence stopped a *new* step being added; it did nothing about what the allowed steps
+  *do*. Either may write `TRUNK_PATH=/bin/true` or `BASH_ENV=…` to `$GITHUB_ENV`, and the C6 guard
+  inspects paths, not inherited runner state — so the action would resolve a no-op launcher while
+  every clause C1–C9 passed. **Each run body is pinned by digest, and neither may write to
+  `$GITHUB_ENV` or `$GITHUB_PATH` at all.** Changing either step is then a reviewed change, which is
+  the same standing the workflow itself has. Revision 9
   banned `env:` but nothing stopped an *extra step* from appending to `GITHUB_PATH`, setting
   `BASH_ENV` through `GITHUB_ENV`, or creating one of C6's prohibited paths **after** the guard had
   already run (codex, r9). Freezing the sequence closes the ordering hole and the injection hole
@@ -368,7 +385,9 @@ confusion cell 13 already forbids for the trunk check. The `SessionStart` surfac
 index; a normal checkout has one, and revision 8's rationale was simply false even though the
 behaviour it justified is right (codex, r8).
 
-**Reachability is a PRECONDITION, not a property (codex, r3).** The hook runs only where
+**Reachability is a PRECONDITION, not a property (codex, r3)** — *for the pre-commit surface*; the
+`SessionStart` surface has its own, different preconditions, recorded in the alternatives table
+(codex, r11). The **pre-commit hook** runs only where
 `git config core.hooksPath .githooks` has been set — a **manual, per-clone** step documented at
 `CLAUDE.md:78`, not a repo-wide setting; it is set in the working clone today and unset in any fresh
 one. Revision 3 also called these "two files it can always read", which **its own unreadable-state
@@ -409,10 +428,13 @@ The hook warns if **any** entry reaches row 7, and never blocks.
 | 1 | the command exits **nonzero** | **update-failure** — first, so a partial mutation followed by a failure is never read as success. Containment **not** established |
 | 2 | the record is unreadable, its schema is unrecognised, **either `u` or `p` is absent**, or **either** version is not comparable | **no outcome**; record the observed shape. "Either", explicitly: revision 8 said "a targeted entry", which left `u == expected` with `p` absent falling to a catch-all whose description was false (codex, r8) |
 | 3 | the persistence interval has not elapsed | **PENDING — not an outcome.** No later row may be claimed yet |
-| 4 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal it calls strongest (codex, r9). Record both facts; classify here |
+| 4 | **`p` changed at all** — either direction, whether or not `u` moved | **the update acted on a scope it did not target.** Evaluated before the reversion row because a *downward* move in `p` is both, and revision 9's ordering recorded it only as a reversion, losing the untargeted-scope signal (codex, r9; the row it then collided with was **revision 7's** row 5, not this table's — codex, r11). Record both facts; classify here |
 | 5 | any entry moved **downward** from a previously observed value | **reversion — the root-cause signal.** COREDEV-2801 stays open with the detector as its instrument. Covers reversion to *any* lower version, not only `2.7.0`, and by ordering it can no longer collide with row 5 as it did in revision 7 |
 | 6 | any entry is `> expected` | **not drift**; the run is non-evidence rather than a result |
-| 7 | `u` changed to a version of **equal precedence but different identity** (`2.8.2+old` → `2.8.2+new`) | **no outcome**; record. It moved, so the final row's "did not move" is false of it; it did not advance, so no advance row is true either. Revision 10 left this input matching **nothing** (codex, r10), the mirror of Table A's row 5 |
+| 7 | `u` changed to a version of **equal precedence but different identity** (`2.8.2+old` → `2.8.2+new`) **and `u != expected`** | **no outcome**; record. It moved, so the final row's "did not move" is false of it; it did not advance, so no advance row is true either. Revision 10 left this input matching **nothing** (codex, r10), the mirror of Table A's row 5. The
+`u != expected` qualifier is load-bearing: without it the row **stole a genuine containment result**
+— if `expected` itself carries build metadata, `u` arriving exactly at it is an equal-precedence
+identity change *and* a success, and row 7 would have reported "no outcome" (codex, r11) |
 | 8 | `u == expected` and `p == expected` | containment established for both, though the experiment aimed at one |
 | 9 | `u == expected` and `p < expected` | the **expected shape**, since only user scope was updated. Containment established **for user scope only** |
 | 10 | `u` moved **upward** but is still `< expected` | **partial advance** — it changed without arriving. Containment **not** established. *Upward* is explicit: revision 7 classified a downward move as a partial advance (codex, r7) |
@@ -475,8 +497,13 @@ exists. The detector is read-only, non-blocking and cheap, so it is wired to **b
   * **Matchers** — `startup` and `resume` **only**. `SessionStart` can also fire on `clear`,
     `compact` and `fork`; a drift warning repeated on every compaction is its own alert-fatigue
     defect, and the install cannot change mid-session, so the extra sources add noise and no signal.
-  * **Deduplication** — one warning per session, with the literals declared rather than gestured at
-    (codex, r9). The `session_id` arrives in the hook's JSON stdin. The marker is
+  * **Deduplication** — **at most one warning per session per retention window**, with the literals
+    declared rather than gestured at (codex, r9). The window qualifier is not pedantry: "one warning
+    per session" and an unconditional sweep are **jointly impossible** (codex, r11) — a session
+    resumed after the retention period finds its marker swept and warns a second time, and a
+    concurrent session can sweep a live session's marker. Markers cannot be retained forever, so the
+    promise is stated as what the mechanism can actually deliver. Cell 8 exercises the aged-marker
+    resumption case, not only the concurrent-create case. The `session_id` arrives in the hook's JSON stdin. The marker is
     `${XDG_STATE_HOME:-$HOME/.local/state}/unleashed-mail/drift-warned/<session_id>` — **not**
     `${CLAUDE_PLUGIN_DATA}`, which revision 10 used and which is scoped to *plugin*-associated hooks
     while this hook deliberately lives in project `.claude/settings.json` (codex, r10). The chosen
@@ -610,7 +637,13 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    in the shipped workflow, where §1's allowlist forbids it.)* *(An r3 finding claimed §1 prohibited custom step wrappers, which was false at the time; note that
    **§1's C8 now does freeze the step sequence**, so the historical rebuttal no longer describes this
    plan — codex, r10.)*
-2. **The gate bites.** A deliberately bad changed file fails the job.
+2. **The gate bites — asserted at the level each milestone can actually deliver** (codex, r11). A
+   deliberately bad changed file must produce a failure. But at **M2** the job ships
+   `continue-on-error: true`, so the *job* still concludes green: an unqualified "fails the job" is a
+   cell that **cannot pass at M2**, and revision 11 exempted only cell 11 from that window. So:
+   * **at M2** — assert the **Trunk step's own outcome** is `failure`;
+   * **from M3** — assert the **job's conclusion** is `failure`, which is the property that actually
+     blocks a merge.
 3. **The gate does not over-reach.** (a) A PR touching one clean file passes with the 9027-issue
    backlog present. (b) A PR touching a **historically dirty** file passes for its pre-existing
    findings while still failing for newly introduced ones.
@@ -694,13 +727,15 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
    * **pre-commit** is proved in CI: a real `git commit` runs the hook, a mismatch **never blocks**
      (the commit still succeeds), and Table A's silent rows produce **no output at all**, so an equal
      or locally-newer install cannot train people to ignore the warning.
-   * **`SessionStart`** cannot be proved by the planned suite (codex, r10): the Python tests run
-     *before* Claude Code is installed in `plugin-ci.yml`, the Darwin leg does not install it, and §7
-     leaves that workflow unchanged — so any "real entry point" assertion there would be a parser or
+   * **`SessionStart`** cannot be proved by the planned suite (codex, r10, refined r11): the
+     repository *does* install Claude Code later in `plugin-ci.yml`, but **the Python suites run
+     before that step**, and §7 leaves the workflow unchanged — so any "real entry point" assertion there would be a parser or
      emulator, which is precisely the direct-unit-call this cell forbids. **Split the claim honestly**:
      CI asserts the *declaration* (matcher set, `${CLAUDE_PROJECT_DIR}` resolution, `timeout`, the
-     `systemMessage` shape, the `O_EXCL` marker under concurrent invocation, the mode operand) against
-     the documented stdin contract; and the *real* session-start invocation is recorded once as a
+     `systemMessage` shape, the `O_EXCL` marker under concurrent invocation **and under aged-marker
+     resumption** — a session whose marker was swept past the retention window warns again, which is
+     exactly why the promise is per-window rather than per-session (codex, r11) — and the mode
+     operand) against the documented stdin contract; and the *real* session-start invocation is recorded once as a
      **committed evidence artifact**, the same standing cells 10 and 12 have. Claiming a CI proof this
      repo's pipeline cannot produce would be a cell that cannot pass.
 9. **The job block prohibits what COREDEV-2771 measured.** `check-mode` absent, `post-annotations`
@@ -742,8 +777,10 @@ Cells 1–3 exist because of inherited defect 3 — a gate over an empty diff pa
       still appearing to be caught.
     * **C7** — `merge_group` present at all.
     * **C8** — an extra step inserted before the action; the C6 guard moved away from its adjacency;
-      **a mutation inside the permitted empty-diff step that creates one of C6's paths** (the case
-      revision 10's ordering made unkillable); and, on `actions/checkout`, each of `sparse-checkout`,
+      **a mutation inside a permitted `run:` step** — in **both** permitted steps, and in three
+      forms: creating one of C6's paths (the case revision 10's ordering made unkillable), writing
+      `TRUNK_PATH=/bin/true` to `$GITHUB_ENV`, and writing `BASH_ENV=…` to `$GITHUB_ENV` (codex, r11:
+      freezing the sequence never constrained what the allowed steps *do*); and, on `actions/checkout`, each of `sparse-checkout`,
       `ref`, `repository` and `path` in turn.
     * **C9** — the action referenced by tag; the action referenced by a different SHA.
 
@@ -986,7 +1023,7 @@ required gate that fails on someone else's outage is worse — but it is a real 
 | 2, 3, 5 | `test_trunk_check_behaviour.py` — **new**: the gate bites, does not over-reach, and mutates no tracked file. These are *observed-run* cells, not parse cells, and revision 9 left them ownerless |
 | 4, 9, 11, 14 | `test_trunk_check_workflow.py` (parse + census + mutants) |
 | 6, 7 | `scripts/tests/test_transcript_path_inventory.py` — the existing suite, named here rather than implied |
-| 8 | `test_session_start_drift_hook.py` (SessionStart half) + `test_precommit_trunk_gate.py` (pre-commit entry point) |
+| 8 | `test_session_start_drift_hook.py` (SessionStart *declaration*) + `test_precommit_trunk_gate.py` (pre-commit entry point) + `evidence/COREDEV-2780-rollout.json` (the one real session-start invocation — the runtime half, which no test file can carry; codex, r11) |
 | 10, 12 | `docs/planning/evidence/COREDEV-2780-rollout.json` — **evidence, not a unit test**: the annotation artifact and the dual-base provenance-bound check runs are observations of real runs, recorded as a committed artifact the way COREDEV-2711 §3a's measurement was. Saying so is what makes them ownable |
 | 13 | `test_precommit_trunk_gate.py` |
 
